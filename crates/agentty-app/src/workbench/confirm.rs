@@ -1,5 +1,4 @@
-//! "Close this?" confirmation for panes, tabs and workspaces that were used. Untouched ones
-//! (a new terminal or agent nobody typed into) close right away.
+//! "Close this?" confirmation for panes, tabs and workspaces (unless turned off in settings).
 
 use super::{Pane, Workbench};
 use crate::i18n::{t, tf};
@@ -43,14 +42,12 @@ impl Workbench {
         ws.dormant.is_none() && ws.tabs.iter().flat_map(|t| t.root.leaves()).all(|leaf| panes.contains(&leaf))
     }
 
-    /// Closes right away when nothing would be lost or the user opted out; asks otherwise.
-    /// Closing the last tab of a workspace always asks, since the workspace is removed with it.
+    /// Asks before closing unless the user turned confirmations off in settings.
     pub(super) fn request_close(&mut self, target: CloseTarget, window: &mut Window, cx: &mut Context<Self>) {
-        let removes_workspace = !matches!(target, CloseTarget::Workspace(_)) && self.empties_workspace(&target);
-        let used = self.target_panes(&target).iter().any(|p| p.read(cx).has_activity());
-        if !settings(cx).confirm_close || !(used || removes_workspace) {
+        if !settings(cx).confirm_close {
             return self.perform_close(target, window, cx);
         }
+        let removes_workspace = !matches!(target, CloseTarget::Workspace(_)) && self.empties_workspace(&target);
         self.close_confirm = Some(CloseConfirm { target, dont_ask: false, removes_workspace });
         cx.notify();
     }
@@ -65,7 +62,7 @@ impl Workbench {
         self.request_close(CloseTarget::Tabs(panes), window, cx);
     }
 
-    fn perform_close(&mut self, target: CloseTarget, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn perform_close(&mut self, target: CloseTarget, window: &mut Window, cx: &mut Context<Self>) {
         match target {
             CloseTarget::Workspace(id) => self.close_workspace(id, window, cx),
             other => {

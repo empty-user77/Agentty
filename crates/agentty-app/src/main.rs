@@ -100,6 +100,13 @@ fn sanitize_environment() {
 
 actions!(agentty, [HideApp, HideOthers, ShowAll, MinimizeWindow, ZoomWindow]);
 
+/// Reopens a recently closed window (its saved slot).
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = agentty, no_json)]
+pub struct ReopenWindow {
+    pub slot: usize,
+}
+
 /// Resumes one of the sessions listed under History (index into [`RECENT_SESSIONS`]).
 #[derive(Clone, PartialEq, gpui::Action)]
 #[action(namespace = agentty, no_json)]
@@ -147,14 +154,34 @@ fn recent_session_items(cx: &App) -> Vec<MenuItem> {
 const WINDOW_MENU_INDEX: usize = 5;
 
 pub fn set_app_menus(cx: &mut App) {
-    // Dock icon right-click: AppKit lists the open windows above these items.
-    cx.set_dock_menu(vec![MenuItem::action(t(cx, "new.window"), NewWindow)]);
+    // Dock icon right-click: AppKit lists the open windows above these items; recently closed
+    // windows follow so they can be reopened.
+    let closed_windows = workbench::ClosedWindows::load().windows;
+    let closed_items = || -> Vec<MenuItem> {
+        closed_windows
+            .iter()
+            .map(|w| {
+                let title = if w.title.is_empty() { "Agentty".to_string() } else { format!("{} — Agentty", w.title) };
+                MenuItem::action(title, ReopenWindow { slot: w.slot })
+            })
+            .collect()
+    };
+    let mut dock = closed_items();
+    if !dock.is_empty() {
+        dock.push(MenuItem::separator());
+    }
+    dock.push(MenuItem::action(t(cx, "new.window"), NewWindow));
+    cx.set_dock_menu(dock);
     let mut history = vec![
         MenuItem::action(t(cx, "menu.show_sessions"), workbench::ShowSessions),
         MenuItem::action(t(cx, "shortcuts.search_sessions"), workbench::SearchSessions),
         MenuItem::separator(),
     ];
     history.extend(recent_session_items(cx));
+    if !closed_windows.is_empty() {
+        history.push(MenuItem::separator());
+        history.push(MenuItem::submenu(Menu { name: t(cx, "menu.closed_windows").into(), items: closed_items() }));
+    }
     cx.set_menus(vec![
         Menu {
             name: "Agentty".into(),
@@ -254,6 +281,7 @@ fn register_app_actions(cx: &mut App) {
             let _ = handle.update(cx, |_, window, _| window.minimize_window());
         }
     });
+    cx.on_action(|action: &ReopenWindow, cx| reopen_window(action.slot, cx));
     cx.on_action(|_: &ZoomWindow, cx| {
         if let Some(handle) = cx.active_window() {
             let _ = handle.update(cx, |_, window, _| window.zoom_window());
@@ -415,8 +443,9 @@ fn main() {
         // Windows that were open at the last quit.
         for slot in workbench::saved_window_slots() {
             open_window(slot, cx);
-            NEXT_WINDOW_SLOT.fetch_max(slot + 1, std::sync::atomic::Ordering::Relaxed);
         }
+        // New windows never take the slot of a saved (open or recently closed) one.
+        NEXT_WINDOW_SLOT.fetch_max(workbench::next_free_window_slot(), std::sync::atomic::Ordering::Relaxed);
         cx.on_action(|_: &NewWindow, cx| new_window(cx));
         metrics::start_uploads(cx);
         metrics::track(cx, "app_launched", serde_json::json!({ "windows": workbenches(cx).len() }));
@@ -583,6 +612,20 @@ pub fn new_window(cx: &mut App) {
         }
         None => eprintln!("agentty: could not open window {slot}"),
     }
+}
+
+/// Opens a recently closed window again, or brings it forward if it is already open.
+fn reopen_window(slot: usize, cx: &mut App) {
+    if let Some(open) = workbenches(cx).into_iter().find(|w| w.read(cx).is_ok_and(|wb| wb.slot == slot)) {
+        let _ = open.update(cx, |_, window, _| window.activate_window());
+        return;
+    }
+    workbench::ClosedWindows::reopen(slot);
+    if let Some(window) = open_window(slot, cx) {
+        let _ = window.update(cx, |_, window, _| window.activate_window());
+        cx.activate(true);
+    }
+    set_app_menus(cx);
 }
 
 /// Agentty windows, main window first.

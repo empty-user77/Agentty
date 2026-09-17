@@ -8,11 +8,11 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg"></a>
-  <img alt="Rust 1.88+" src="https://img.shields.io/badge/rust-1.88%2B-orange.svg">
+  <img alt="Rust 1.98" src="https://img.shields.io/badge/rust-1.98-orange.svg">
   <img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-lightgrey.svg">
 </p>
 
-Agentty (**Cos**mica + **Term**inal) is a native, GPU-rendered terminal for running shells, **Claude Code** and
+Agentty is a native, GPU-rendered terminal for running shells, **Claude Code** and
 **Codex** side by side. Workspaces, tabs and split panes keep many agent sessions organized; the sidebar shows what
 each agent is doing and highlights the ones that need you.
 
@@ -62,12 +62,12 @@ each agent is doing and highlights the ones that need you.
 Download the notarized DMG from [agentty-releases](https://github.com/empty-user77/agentty-releases/releases), or build from source:
 
 ```sh
-git clone https://github.com/empty-user77/agentty.git
-cd agentty
+git clone https://github.com/empty-user77/Agentty.git
+cd Agentty
 cargo run --release -p agentty-app
 ```
 
-Requirements: macOS 13+, Rust 1.88+, Xcode command line tools. `claude` and/or `codex` on your `PATH` for agent tabs.
+Requirements: macOS 13+, Rust 1.98 (pinned in `rust-toolchain.toml`), Xcode command line tools. `claude` and/or `codex` on your `PATH` for agent tabs.
 Packaging, signing and notarization: see [docs/release.md](docs/release.md).
 
 ## Keyboard shortcuts
@@ -90,9 +90,9 @@ Packaging, signing and notarization: see [docs/release.md](docs/release.md).
 | Go to workspace / tab 1–9 | ⌘1…⌘9 / ⌃1…⌃9 |
 | Search local sessions | ⇧⌘O |
 | Git page: commit / push / fetch / refresh | ⌘↩ / ⌘P / ⇧⌘T / ⌘R |
+| Copy / paste / select all / clear | ⌘C / ⌘V / ⌘A / ⌘K |
 
 The full list is in **Settings → Keyboard Shortcuts**.
-| Copy / paste / select all / clear | ⌘C / ⌘V / ⌘A / ⌘K |
 
 Double-click the title bar to zoom the window; double-click empty space in the tab strip to open a new tab.
 

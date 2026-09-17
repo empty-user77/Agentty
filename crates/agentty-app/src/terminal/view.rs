@@ -221,8 +221,6 @@ pub struct TerminalView {
     pub subagent_files: (usize, usize),
     /// Latest tool call of the main agent: (tool, target).
     pub last_tool: Option<(String, Option<String>)>,
-    /// The user typed, pasted or dropped something here (closing it may lose work).
-    pub user_typed: bool,
     /// When anything last happened in this pane (output from an agent turn, input, status).
     pub last_activity_ms: u64,
     pub live_cwd: Option<PathBuf>,
@@ -328,7 +326,6 @@ impl TerminalView {
             session_id_live: None,
             subagent_files: (0, 0),
             last_activity_ms: crate::ui::now_ms(),
-            user_typed: false,
             live_cwd: None,
             git_branch: None,
             git_dirty: false,
@@ -625,11 +622,6 @@ impl TerminalView {
     /// Running, or about to start on first paint.
     pub fn is_running(&self) -> bool {
         self.backend.is_some() || (!self.spawned && self.error.is_none())
-    }
-
-    /// Whether closing the pane could interrupt or lose something (it was used, or an agent works).
-    pub fn has_activity(&self) -> bool {
-        self.user_typed || matches!(self.status, AgentStatus::Working) || self.status.needs_user()
     }
 
     pub fn is_agent(&self) -> bool {
@@ -968,7 +960,6 @@ impl TerminalView {
 
     /// Input typed by the user: snaps the viewport back to the prompt and drops any selection.
     fn write_user_input(&mut self, bytes: Vec<u8>) {
-        self.user_typed = true;
         self.last_activity_ms = crate::ui::now_ms();
         if let Some(backend) = &self.backend {
             let mut term = backend.term.lock();

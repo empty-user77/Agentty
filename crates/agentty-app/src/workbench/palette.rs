@@ -118,7 +118,7 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
 impl Workbench {
     pub(super) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let items = self.palette_items(cx);
-        let input = cx.new(|cx| TextInput::new("", t(cx, "palette.placeholder"), window, cx));
+        let input = cx.new(|cx| TextInput::localized("", "palette.placeholder", window, cx));
         let subscription = cx.subscribe_in(&input, window, |this, input, event: &TextInputEvent, window, cx| {
             let query = input.read(cx).text().to_string();
             let Some(palette) = this.palette.as_mut() else { return };

@@ -62,7 +62,7 @@ impl Focusable for BranchPicker {
 
 impl BranchPicker {
     pub fn new(repo: PathBuf, current: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| TextInput::new("", t(cx, "git.search_branches"), window, cx));
+        let query = cx.new(|cx| TextInput::localized("", "git.search_branches", window, cx));
         let subscription = cx.subscribe(&query, |this, _, event: &TextInputEvent, cx| match event {
             TextInputEvent::Changed => this.query_changed(cx),
             TextInputEvent::Confirmed => {
@@ -257,7 +257,7 @@ impl BranchPicker {
     }
 
     fn open_new_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = cx.new(|cx| TextInput::new(self.query.read(cx).text().to_string(), t(cx, "git.new_branch_name"), window, cx));
+        let input = cx.new(|cx| TextInput::localized(self.query.read(cx).text().to_string(), "git.new_branch_name", window, cx));
         cx.subscribe(&input, |this, input, event: &TextInputEvent, cx| match event {
             TextInputEvent::Confirmed => {
                 let name = input.read(cx).text().trim().to_string();

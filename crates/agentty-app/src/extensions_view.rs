@@ -78,7 +78,7 @@ pub struct ExtensionsView {
 impl EventEmitter<ExtensionsEvent> for ExtensionsView {}
 
 fn input(window: &mut Window, cx: &mut Context<ExtensionsView>, placeholder: &'static str) -> Entity<TextInput> {
-    cx.new(|cx| TextInput::new("", t(cx, placeholder), window, cx))
+    cx.new(|cx| TextInput::localized("", placeholder, window, cx))
 }
 
 impl ExtensionsView {
@@ -249,8 +249,8 @@ impl ExtensionsView {
             transport: McpTransport::Stdio,
             scope: McpScope::User,
         };
-        let secret = cx.new(|cx| TextInput::new("", t(cx, "ext.conn_secret"), window, cx).masked());
-        let catalog_token = cx.new(|cx| TextInput::new("", t(cx, "ext.catalog_token"), window, cx).masked());
+        let secret = cx.new(|cx| TextInput::localized("", "ext.conn_secret", window, cx).masked());
+        let catalog_token = cx.new(|cx| TextInput::localized("", "ext.catalog_token", window, cx).masked());
         let connector = ConnectorForm {
             name: input(window, cx, "ext.conn_name"),
             base_url: input(window, cx, "ext.conn_base"),

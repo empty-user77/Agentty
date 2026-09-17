@@ -110,6 +110,12 @@ pub fn saved_window_slots() -> Vec<usize> {
     LayoutState::saved_window_slots()
 }
 
+pub fn next_free_window_slot() -> usize {
+    LayoutState::next_free_slot()
+}
+
+pub use persist::ClosedWindows;
+
 pub struct Tab {
     pub root: PaneNode<Pane>,
     pub active: Pane,
@@ -224,6 +230,8 @@ pub struct Workbench {
     sidebar_focus: FocusHandle,
     /// The new-workspace start page is open (with an optional name).
     new_workspace: Option<(Entity<TextInput>, Subscription)>,
+    /// Group the workspace being created on the start page goes into.
+    new_workspace_group: Option<u64>,
     /// Launcher opened with a right-click at this position.
     launcher_at: Option<gpui::Point<Pixels>>,
     /// Settings revision already acknowledged, and the toast shown for a newer one.
@@ -274,7 +282,7 @@ impl Focusable for Workbench {
 
 impl Workbench {
     pub fn new(slot: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let session_search = cx.new(|cx| TextInput::new("", crate::i18n::t(cx, "sessions.search"), window, cx));
+        let session_search = cx.new(|cx| TextInput::localized("", "sessions.search", window, cx));
         let session_search_subscription = cx.subscribe(&session_search, |this, _, event: &crate::text_input::TextInputEvent, cx| {
             if matches!(event, crate::text_input::TextInputEvent::Changed) {
                 this.search_session_contents(cx);
@@ -324,6 +332,7 @@ impl Workbench {
             dismissed_menu: None,
             sidebar_focus: cx.focus_handle(),
             new_workspace: None,
+            new_workspace_group: None,
             launcher_at: None,
             settings_seen: 0,
             toast: None,
@@ -398,12 +407,22 @@ impl Workbench {
         })
         .detach();
         // With the menu bar item on, closing the main window hides it; Agentty keeps running there.
-        // Additional windows close for good (and are not reopened next time).
+        // Additional windows close, but stay in the recent list (Dock and History menus) to reopen.
         let entity = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             if slot > 0 {
-                let _ = entity.update(cx, |this, _| this.closed = true);
-                LayoutState::remove(slot);
+                let _ = entity.update(cx, |this, cx| {
+                    this.persist(cx);
+                    let names: Vec<String> = this.workspaces.iter().map(|ws| this.workspace_title(ws, cx)).collect();
+                    let title = match names.as_slice() {
+                        [] => String::new(),
+                        [one] => one.clone(),
+                        [first, rest @ ..] => format!("{first} +{}", rest.len()),
+                    };
+                    ClosedWindows::remember(slot, title, !names.is_empty());
+                    this.closed = true;
+                });
+                crate::set_app_menus(cx);
                 return true;
             }
             if !crate::settings::settings(cx).menu_bar {
@@ -598,11 +617,16 @@ impl Workbench {
         let pane = self.spawn_pane(spec, cx);
         let id = self.next_id();
         // A name typed on the new-workspace page.
+        let group = if self.new_workspace.is_some() {
+            self.new_workspace_group.take().filter(|g| self.groups.iter().any(|x| x.id == *g))
+        } else {
+            None
+        };
         let name = self.new_workspace.take().map(|(input, _)| input.read(cx).text().trim().to_string()).filter(|n| !n.is_empty());
         self.workspaces.push(Workspace {
             id,
             name,
-            group: None,
+            group,
             cwd,
             tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane }],
             active_tab: 0,
@@ -961,6 +985,20 @@ impl Workbench {
     }
 
     /// Moves group `dragged` to the position of `target`.
+    /// Moves tab `from` of workspace `workspace` to position `to`, keeping the selected tab selected.
+    pub(super) fn reorder_tab(&mut self, workspace: u64, from: usize, to: usize, cx: &mut Context<Self>) {
+        let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace) else { return };
+        if from == to || from >= ws.tabs.len() || to >= ws.tabs.len() {
+            return;
+        }
+        let active = ws.tabs[ws.active_tab].active.clone();
+        let tab = ws.tabs.remove(from);
+        ws.tabs.insert(to, tab);
+        ws.active_tab = ws.tabs.iter().position(|t| t.active == active).unwrap_or(0);
+        self.persist(cx);
+        cx.notify();
+    }
+
     fn move_group(&mut self, dragged: u64, target: u64, cx: &mut Context<Self>) {
         let (Some(from), Some(to)) = (self.groups.iter().position(|g| g.id == dragged), self.groups.iter().position(|g| g.id == target))
         else {
@@ -1424,10 +1462,16 @@ impl Render for Workbench {
 impl Workbench {
     /// The start page, for a new workspace: pick what to run, optionally name it first.
     pub(super) fn open_new_workspace_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_new_workspace_page_in(None, window, cx);
+    }
+
+    /// The start page for a new workspace that goes into `group`.
+    pub(super) fn open_new_workspace_page_in(&mut self, group: Option<u64>, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_workspace_group = group;
         self.page = None;
         self.session_viewer = None;
         self.launcher_open = false;
-        let input = cx.new(|cx| TextInput::new("", t(cx, "welcome.name_placeholder"), window, cx));
+        let input = cx.new(|cx| TextInput::localized("", "welcome.name_placeholder", window, cx));
         let subscription = cx.subscribe_in(&input, window, |this, _, event: &TextInputEvent, window, cx| match event {
             TextInputEvent::Confirmed => this.request_launch(PaneKind::Shell, LaunchTarget::NewWorkspace, window, cx),
             TextInputEvent::Cancelled => {
@@ -1823,6 +1867,15 @@ impl Workbench {
                 let layout: Vec<String> = self.workspaces.iter().map(|w| format!("{}:{}", w.id, w.tabs.len())).collect();
                 eprintln!("workspaces: {layout:?} active={}", self.active_workspace);
             }
+            "tab-order" => {
+                // `tab-order <from> <to>` in the active workspace.
+                let mut parts = argument.split_whitespace().filter_map(|v| v.parse::<usize>().ok());
+                if let (Some(from), Some(to), Some(ws)) =
+                    (parts.next(), parts.next(), self.workspaces.get(self.active_workspace).map(|w| w.id))
+                {
+                    self.reorder_tab(ws, from, to, cx);
+                }
+            }
             "tab-menu" => self.open_tab_menu(argument.parse().unwrap_or(0), gpui::point(gpui::px(420.), gpui::px(60.)), cx),
             "resume-here" => {
                 if let Some(pane) = self.active_pane() {
@@ -1880,7 +1933,7 @@ impl Workbench {
                 }
             }
             // `click x y [right]`, `key cmd-n`, `text 한글abc`: synthetic input, dispatched after this update.
-            "click" | "move" | "key" | "text" => {
+            "click" | "move" | "drag" | "scroll" | "key" | "text" => {
                 let (command, argument) = (command.to_string(), argument.to_string());
                 if let Some(ns) = crate::native::ns_window(window) {
                     cx.spawn(async move |_, _| crate::debug::synthetic_input(ns, &command, &argument)).detach();
@@ -1929,6 +1982,20 @@ impl Workbench {
             ),
             "select-workspace" => self.activate_workspace(argument.parse().unwrap_or(0), window, cx),
             "select-tab" => self.activate_tab(argument.parse().unwrap_or(0), window, cx),
+            "close-tab" => self.request_close_tabs(&[argument.parse().unwrap_or(0)], window, cx),
+            "close-confirm" => {
+                if let Some(confirm) = self.close_confirm.take() {
+                    eprintln!("layout: confirming removes_workspace={}", confirm.removes_workspace);
+                    self.perform_close(confirm.target, window, cx);
+                }
+            }
+            "layout" => {
+                for ws in &self.workspaces {
+                    let panes: Vec<usize> = ws.tabs.iter().map(|t| t.root.leaves().len()).collect();
+                    eprintln!("layout: ws={} tabs={panes:?} active_tab={}", ws.id, ws.active_tab);
+                }
+                eprintln!("layout: confirm={}", self.close_confirm.is_some());
+            }
             "workspace" => self.create_workspace(LaunchSpec::new(kind(argument), home_dir()), window, cx),
             "picker" => self.open_picker(kind(argument).into(), LaunchTarget::NewTab, window, cx),
             "split" => self.split(if argument == "down" { Axis::Vertical } else { Axis::Horizontal }, window, cx),

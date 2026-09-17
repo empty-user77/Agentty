@@ -136,7 +136,7 @@ impl Workbench {
         }
         shortcuts.truncate(MAX_SHORTCUTS);
 
-        let input = cx.new(|cx| TextInput::new("", t(cx, "picker.placeholder"), window, cx));
+        let input = cx.new(|cx| TextInput::localized("", "picker.placeholder", window, cx));
         let subscription = cx.subscribe_in(&input, window, |this, input, event: &TextInputEvent, window, cx| {
             let query = input.read(cx).text().to_string();
             let Some(picker) = this.picker.as_mut() else { return };
@@ -243,7 +243,7 @@ impl Workbench {
             let base = picker.shortcuts.get(picker.selected).map(|(p, _)| p.clone()).unwrap_or_else(home_dir);
             picker.navigate(base, cx);
         }
-        let input = cx.new(|cx| TextInput::new("", t(cx, "picker.new_folder_name"), window, cx));
+        let input = cx.new(|cx| TextInput::localized("", "picker.new_folder_name", window, cx));
         let subscription = cx.subscribe_in(&input, window, |this, input, event: &TextInputEvent, window, cx| match event {
             TextInputEvent::Confirmed => {
                 let name = input.read(cx).text().to_string();

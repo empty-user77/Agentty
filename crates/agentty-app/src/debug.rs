@@ -141,6 +141,48 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                 mouse(if right { 3 } else { 1 }, x, y, modifiers);
                 mouse(if right { 4 } else { 2 }, x, y, modifiers);
             }
+            // `drag x1 y1 x2 y2` and `scroll x y lines` (negative lines scroll up).
+            ("drag", (Some(x), Some(y))) => {
+                let rest: Vec<f64> = argument.split_whitespace().skip(2).filter_map(|v| v.parse().ok()).collect();
+                if let [x2, y2] = rest[..] {
+                    mouse(5, x, y, 0);
+                    mouse(1, x, y, 0);
+                    for step in 1..=8 {
+                        let t = step as f64 / 8.0;
+                        mouse(6, x + (x2 - x) * t, y + (y2 - y) * t, 0);
+                    }
+                    mouse(2, x2, y2, 0);
+                }
+            }
+            ("scroll", (Some(x), Some(y))) => {
+                let lines: i32 = argument.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(-5);
+                mouse(5, x, y, 0);
+                let content_origin: NSPoint = msg_send![ns_window, convertPointToScreen: NSPoint::new(x, frame.size.height - y)];
+                let screen_height = core_graphics::display::CGDisplay::main().bounds().size.height;
+                #[link(name = "ApplicationServices", kind = "framework")]
+                extern "C" {
+                    fn CGEventCreateScrollWheelEvent2(
+                        source: *const std::ffi::c_void,
+                        units: u32,
+                        count: u32,
+                        w1: i32,
+                        w2: i32,
+                        w3: i32,
+                    ) -> *mut std::ffi::c_void;
+                    fn CGEventSetLocation(event: *mut std::ffi::c_void, location: core_graphics::geometry::CGPoint);
+                    fn CFRelease(object: *const std::ffi::c_void);
+                }
+                // Units: 0 = pixels, 1 = lines.
+                let event = CGEventCreateScrollWheelEvent2(std::ptr::null(), 1, 1, lines, 0, 0);
+                if !event.is_null() {
+                    CGEventSetLocation(event, core_graphics::geometry::CGPoint::new(content_origin.x, screen_height - content_origin.y));
+                    let ns: id = msg_send![class!(NSEvent), eventWithCGEvent: event];
+                    if ns != nil {
+                        let () = msg_send![ns_window, sendEvent: ns];
+                    }
+                    CFRelease(event);
+                }
+            }
             ("key", _) | ("text", _) => {
                 // Key events are only handled by the key window; this doesn't activate the app.
                 let () = msg_send![ns_window, makeKeyWindow];

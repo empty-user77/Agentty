@@ -205,7 +205,7 @@ pub struct BrowserSettings {
 impl Default for BrowserSettings {
     fn default() -> Self {
         Self {
-            home: "https://www.raylee.app/".into(),
+            home: "https://www.agentty.run".into(),
             width: 560.,
             search_engine: SearchEngine::Google,
             javascript: true,

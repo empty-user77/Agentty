@@ -104,8 +104,7 @@ impl EventEmitter<GitEvent> for GitView {}
 
 impl GitView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input =
-            |key: &'static str, window: &mut Window, cx: &mut Context<Self>| cx.new(|cx| TextInput::new("", t(cx, key), window, cx));
+        let input = |key: &'static str, window: &mut Window, cx: &mut Context<Self>| cx.new(|cx| TextInput::localized("", key, window, cx));
         let filter = input("git.filter", window, cx);
         let summary = input("git.summary", window, cx);
         let description = input("git.description", window, cx);

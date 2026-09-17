@@ -146,6 +146,19 @@ impl Backend {
 
 impl Drop for Backend {
     fn drop(&mut self) {
+        // Closing the pane ends what runs in it. Some agents (Claude Code, Codex) ignore the hangup
+        // the closed terminal sends and would keep running without a terminal, so signal the
+        // foreground job and the shell's group directly.
+        #[cfg(unix)]
+        unsafe {
+            let foreground = libc::tcgetpgrp(self.tty_fd);
+            for group in [foreground, self.child_pid as libc::pid_t] {
+                if group > 1 {
+                    libc::killpg(group, libc::SIGHUP);
+                    libc::killpg(group, libc::SIGTERM);
+                }
+            }
+        }
         let _ = self.notifier.0.send(Msg::Shutdown);
     }
 }

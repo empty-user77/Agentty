@@ -79,8 +79,8 @@ impl LayoutState {
         std::fs::read(Self::path(slot)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
 
-    /// Extra windows saved at the last quit, to reopen them.
-    pub fn saved_window_slots() -> Vec<usize> {
+    /// Every extra window with a saved layout (open at the last quit or recently closed).
+    fn all_window_slots() -> Vec<usize> {
         let Ok(entries) = std::fs::read_dir(agentty_bridge::fsutil::data_dir()) else { return Vec::new() };
         let mut slots: Vec<usize> = entries
             .flatten()
@@ -91,8 +91,18 @@ impl LayoutState {
         slots
     }
 
-    /// Forgets a window that was closed on purpose.
-    pub fn remove(slot: usize) {
+    /// Extra windows that were open at the last quit, to reopen them.
+    pub fn saved_window_slots() -> Vec<usize> {
+        let closed = ClosedWindows::load();
+        Self::all_window_slots().into_iter().filter(|slot| !closed.contains(*slot)).collect()
+    }
+
+    /// First slot no saved window uses.
+    pub fn next_free_slot() -> usize {
+        Self::all_window_slots().last().map_or(1, |slot| slot + 1)
+    }
+
+    fn remove(slot: usize) {
         if slot > 0 {
             let _ = std::fs::remove_file(Self::path(slot));
         }
@@ -107,6 +117,72 @@ impl LayoutState {
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(tmp, path)?;
         Ok(())
+    }
+}
+
+/// A window closed on purpose, kept so it can be reopened (Dock menu, History menu).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedWindow {
+    pub slot: usize,
+    pub title: String,
+    pub closed_at_ms: u64,
+}
+
+/// `~/.agentty/closed-windows.json`, most recently closed first.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClosedWindows {
+    pub windows: Vec<ClosedWindow>,
+}
+
+impl ClosedWindows {
+    const LIMIT: usize = 10;
+
+    fn path() -> PathBuf {
+        agentty_bridge::fsutil::data_dir().join("closed-windows.json")
+    }
+
+    pub fn load() -> Self {
+        std::fs::read(Self::path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    fn save(&self) {
+        if let Ok(bytes) = serde_json::to_vec_pretty(self) {
+            let _ = std::fs::write(Self::path(), bytes);
+        }
+    }
+
+    pub fn contains(&self, slot: usize) -> bool {
+        self.windows.iter().any(|w| w.slot == slot)
+    }
+
+    /// Adds `window` at the front; windows pushed past the limit are forgotten with their layout.
+    fn push(&mut self, window: ClosedWindow) -> Vec<usize> {
+        self.windows.retain(|w| w.slot != window.slot);
+        self.windows.insert(0, window);
+        self.windows.split_off(self.windows.len().min(Self::LIMIT)).into_iter().map(|w| w.slot).collect()
+    }
+
+    /// Remembers a closed window (its layout is already saved); empty windows are just deleted.
+    pub fn remember(slot: usize, title: String, has_workspaces: bool) {
+        if slot == 0 {
+            return;
+        }
+        if !has_workspaces {
+            LayoutState::remove(slot);
+            return;
+        }
+        let mut closed = Self::load();
+        let dropped = closed.push(ClosedWindow { slot, title, closed_at_ms: crate::ui::now_ms() });
+        dropped.into_iter().for_each(LayoutState::remove);
+        closed.save();
+    }
+
+    /// Marks a window as open again.
+    pub fn reopen(slot: usize) {
+        let mut closed = Self::load();
+        closed.windows.retain(|w| w.slot != slot);
+        closed.save();
     }
 }
 
@@ -169,6 +245,20 @@ impl PartialEq for PaneSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_windows_keep_the_most_recent() {
+        let mut closed = ClosedWindows::default();
+        for slot in 1..=12 {
+            let dropped = closed.push(ClosedWindow { slot, title: format!("w{slot}"), closed_at_ms: slot as u64 });
+            assert_eq!(dropped, if slot > 10 { vec![slot - 10] } else { vec![] });
+        }
+        assert_eq!(closed.windows.first().map(|w| w.slot), Some(12));
+        closed.push(ClosedWindow { slot: 5, title: "again".into(), closed_at_ms: 99 });
+        assert_eq!(closed.windows.len(), 10);
+        assert_eq!(closed.windows[0].title, "again");
+        assert!(closed.contains(5) && !closed.contains(1));
+    }
 
     #[test]
     fn layout_roundtrip() {

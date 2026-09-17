@@ -484,8 +484,8 @@ impl Workbench {
 
     fn alias_form(&mut self, window: &mut Window, cx: &mut Context<Self>) -> &mut AliasForm {
         if self.alias_form.is_none() {
-            let keyword = cx.new(|cx| TextInput::new("", t(cx, "settings.alias_keyword"), window, cx));
-            let expansion = cx.new(|cx| TextInput::new("", t(cx, "settings.alias_expansion"), window, cx));
+            let keyword = cx.new(|cx| TextInput::localized("", "settings.alias_keyword", window, cx));
+            let expansion = cx.new(|cx| TextInput::localized("", "settings.alias_expansion", window, cx));
             let on_event =
                 |this: &mut Workbench, _: &Entity<TextInput>, event: &TextInputEvent, _: &mut Window, cx: &mut Context<Workbench>| {
                     if matches!(event, TextInputEvent::Confirmed) {

@@ -28,6 +28,14 @@ pub struct DraggedWorkspace {
     pub title: SharedString,
 }
 
+/// A tab of the active workspace being dragged (to reorder it or move it to another workspace).
+#[derive(Clone)]
+pub struct DraggedTab {
+    pub workspace: u64,
+    pub index: usize,
+    pub title: SharedString,
+}
+
 #[derive(Clone)]
 pub struct DraggedGroup {
     pub id: u64,
@@ -137,10 +145,21 @@ impl Workbench {
     pub(super) fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let item =
             |id: &'static str, glyph: &'static str, active: bool, tooltip: &'static str, on_click: ViewAction, cx: &mut Context<Self>| {
-                let _ = tooltip;
+                // Panel titles are upper-case headings; the tooltip uses the menu names.
+                let (key, shortcut) = match tooltip {
+                    "panel.workspaces" => ("menu.show_workspaces", "⇧⌘E"),
+                    "panel.sessions" => ("menu.show_sessions", "⇧⌘S"),
+                    "page.git" => (tooltip, "⇧⌘G"),
+                    "page.flow" => (tooltip, "⇧⌘F"),
+                    "page.usage" => (tooltip, "⌥⌘U"),
+                    "page.extensions" => (tooltip, "⇧⌘X"),
+                    "page.settings" => (tooltip, "⌘,"),
+                    _ => (tooltip, ""),
+                };
                 div()
                     .id(id)
                     .group(id)
+                    .tooltip(crate::ui::Tooltip::text(t(cx, key), (!shortcut.is_empty()).then_some(shortcut)))
                     .w_full()
                     .h(px(48.))
                     .flex()
@@ -352,7 +371,7 @@ impl Workbench {
 
     fn render_workspaces_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut list = div().flex().flex_col().px_2().pt_1().gap_px();
-        if self.workspaces.is_empty() {
+        if self.workspaces.is_empty() && self.groups.is_empty() {
             return list.child(hint(t(cx, "hint.no_workspaces")));
         }
 
@@ -372,7 +391,27 @@ impl Workbench {
                 continue;
             }
             if members.is_empty() {
-                list = list.child(div().ml_4().child(hint(t(cx, "drop.here"))));
+                let gid = group.id;
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("group-empty-add-{gid}")))
+                        .ml_3()
+                        .px_2()
+                        .py_1p5()
+                        .rounded_md()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .t_small()
+                        .cursor_pointer()
+                        .text_color(hex(Chrome::MUTED))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+                        .child(icon("plus", IconSize::INLINE, hex(Chrome::MUTED)))
+                        .child(t(cx, "group.add_workspace"))
+                        .on_click(
+                            cx.listener(move |this, _: &ClickEvent, window, cx| this.open_new_workspace_page_in(Some(gid), window, cx)),
+                        ),
+                );
             }
             for index in members {
                 list = list.child(div().pl_3().child(self.render_workspace_row(index, window, cx)));
@@ -441,6 +480,17 @@ impl Workbench {
                         .flex()
                         .invisible()
                         .group_hover("group-header", |s| s.visible())
+                        .child(
+                            icon_only(
+                                SharedString::from(format!("group-add-{gid}")),
+                                "plus",
+                                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_new_workspace_page_in(Some(gid), window, cx);
+                                }),
+                            )
+                            .tooltip(crate::ui::Tooltip::text(t(cx, "group.add_workspace"), None)),
+                        )
                         .child(icon_only(
                             SharedString::from(format!("group-rename-{gid}")),
                             "pencil",
@@ -515,6 +565,21 @@ impl Workbench {
             // Dropping another workspace here puts it just above this one (and in this group).
             .drag_over::<DraggedWorkspace>(|style, _, _, _| style.border_t_2().border_color(hex(Chrome::BLUE)))
             .on_drop(cx.listener(move |this, dragged: &DraggedWorkspace, _, cx| this.move_workspace(dragged.id, id, cx)))
+            .drag_over::<DraggedTab>(
+                move |style, dragged, _, _| {
+                    if dragged.workspace == id {
+                        style
+                    } else {
+                        style.bg(hex_alpha(Chrome::ACCENT, 0.3))
+                    }
+                },
+            )
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                let source = this.workspaces.get(this.active_workspace).map(|w| w.id);
+                if dragged.workspace != id && source == Some(dragged.workspace) {
+                    this.move_tab(dragged.index, Some(id), window, cx);
+                }
+            }))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if let Some(i) = this.workspaces.iter().position(|w| w.id == id) {
                     if event.click_count() >= 2 || matches!(&this.rename, Some(r) if r.target == RenameTarget::Workspace(id)) {
@@ -1027,6 +1092,22 @@ impl Workbench {
                             }),
                         )
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.activate_tab(index, window, cx)))
+                        // Drag a tab onto another to reorder, or onto a workspace in the sidebar to move it.
+                        .on_drag(DraggedTab { workspace: ws.id, index, title: view.display_title().into() }, |dragged, _, _, cx| {
+                            cx.new(|_| DragPreview { title: dragged.title.clone() })
+                        })
+                        .drag_over::<DraggedTab>(move |style, dragged, _, _| {
+                            if dragged.index == index {
+                                style
+                            } else if dragged.index > index {
+                                style.border_l_2().border_color(hex(Chrome::ACCENT))
+                            } else {
+                                style.border_r_2().border_color(hex(Chrome::ACCENT))
+                            }
+                        })
+                        .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                            this.reorder_tab(dragged.workspace, dragged.index, index, cx)
+                        }))
                         .child(crate::brand::avatar(view.tool_id(), 16.))
                         .child(div().truncate().child(view.display_title()))
                         .when(leaves.len() > 1, |d| {
@@ -1086,6 +1167,39 @@ impl Workbench {
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .child(tabs)
+            // New tab / agent / workspace: right after the last tab, and pinned at the end of the
+            // strip once the tabs scroll.
+            .child(
+                div()
+                    .id("launcher-toggle")
+                    .flex_shrink_0()
+                    .ml_1()
+                    .size(px(crate::ui::ICON_BUTTON))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .when(self.launcher_open, |d| d.bg(hex(Chrome::SELECTED)))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.new"), Some("⌘T")))
+                    .child(icon("plus", IconSize::BUTTON, hex(Chrome::FOREGROUND)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                        if this.just_dismissed("launcher") {
+                            return;
+                        }
+                        this.launcher_open = !this.launcher_open;
+                        // The menu opens below the button.
+                        let position = event.position();
+                        this.launcher_at = Some(gpui::point(position.x - px(12.), position.y + px(20.)));
+                        this.notices_open = false;
+                        if this.launcher_open {
+                            this.detect_agents(cx);
+                        }
+                        cx.notify();
+                    })),
+            )
             // Empty strip space: double-click opens a new tab, like VS Code.
             .child(
                 div()
@@ -1190,38 +1304,6 @@ impl Workbench {
                 (t(cx, "split.down"), Some("⇧⌘D")),
                 cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
             ))
-            // New tab / agent / workspace.
-            .child(
-                div()
-                    .id("launcher-toggle")
-                    .flex_shrink_0()
-                    .my_auto()
-                    .ml_1()
-                    .size(px(crate::ui::ICON_BUTTON))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    // Same tone as the other icons; a light outline marks it as the main action.
-                    .when(self.launcher_open, |d| d.bg(hex(Chrome::SELECTED)))
-                    .border_1()
-                    .border_color(hex_alpha(0xffffff, 0.22))
-                    .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(0xffffff, 0.35)))
-                    .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.new"), Some("⌘T")))
-                    .child(icon("plus", IconSize::BUTTON, hex(Chrome::BRIGHT)))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        if this.just_dismissed("launcher") {
-                            return;
-                        }
-                        this.launcher_open = !this.launcher_open;
-                        this.launcher_at = None;
-                        if this.launcher_open {
-                            this.detect_agents(cx);
-                        }
-                        cx.notify();
-                    })),
-            )
     }
 
     pub(super) fn render_launcher(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1425,6 +1507,45 @@ impl Workbench {
         }
     }
 
+    /// "Group: none / A / B" chips on the new-workspace page (only when groups exist).
+    fn render_group_choice(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if self.groups.is_empty() {
+            return None;
+        }
+        let chip = |id: SharedString, label: String, selected: bool, group: Option<u64>, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .border_1()
+                .t_small()
+                .cursor_pointer()
+                .border_color(hex(if selected { Chrome::ACCENT } else { Chrome::BORDER }))
+                .bg(if selected { hex_alpha(Chrome::ACCENT, 0.2) } else { hex_alpha(0, 0.) })
+                .text_color(hex(if selected { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
+                .hover(|s| s.border_color(hex_alpha(Chrome::ACCENT, 0.7)))
+                .child(label)
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.new_workspace_group = group;
+                    cx.notify();
+                }))
+        };
+        let mut row = div().pt_1().flex().flex_wrap().items_center().gap_1();
+        row = row.child(div().t_small().text_color(hex(Chrome::MUTED)).mr_1().child(t(cx, "welcome.group_label")));
+        row = row.child(chip("new-ws-group-none".into(), t(cx, "ungrouped").to_string(), self.new_workspace_group.is_none(), None, cx));
+        for group in &self.groups {
+            row = row.child(chip(
+                SharedString::from(format!("new-ws-group-{}", group.id)),
+                group.name.clone(),
+                self.new_workspace_group == Some(group.id),
+                Some(group.id),
+                cx,
+            ));
+        }
+        Some(row)
+    }
+
     /// First-run screen, and the start page of a new workspace (with a name field and cancel).
     pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let starting = self.new_workspace.as_ref().map(|(input, _)| input.clone());
@@ -1510,7 +1631,8 @@ impl Workbench {
                                 .t_body()
                                 .text_color(hex(Chrome::BRIGHT))
                                 .child(input),
-                        ),
+                        )
+                        .children(self.render_group_choice(cx)),
                 )
             })
             .child(buttons)

@@ -2,7 +2,6 @@
 //! Links open here or in the default browser, per Settings → General.
 
 use super::Workbench;
-use crate::i18n::t;
 use crate::settings::{settings, LinkOpener};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, Chrome};
@@ -65,7 +64,7 @@ impl Workbench {
     /// Materializes a requested panel and keeps the native view in sync; called from render.
     pub(super) fn prepare_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(url) = self.browser_request.take() {
-            let address = cx.new(|cx| TextInput::new(url.clone(), t(cx, "browser.address"), window, cx));
+            let address = cx.new(|cx| TextInput::localized(url.clone(), "browser.address", window, cx));
             let subscription = cx.subscribe(&address, |this, input, event: &TextInputEvent, cx| {
                 if matches!(event, TextInputEvent::Confirmed) {
                     let url = browser_url(input.read(cx).text(), cx);

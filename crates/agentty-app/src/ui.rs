@@ -312,8 +312,11 @@ pub fn menu_item(
         .child(label.into())
 }
 
+/// Floating panel for menus and dropdowns. It blocks the mouse for what's underneath, so hovering
+/// and scrolling it never reach the terminal or list behind it.
 pub fn popover() -> Div {
     div()
+        .occlude()
         .p_1()
         .flex()
         .flex_col()

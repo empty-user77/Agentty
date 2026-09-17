@@ -22,7 +22,7 @@ impl Workbench {
             return;
         }
         self.close_find(window, cx);
-        let input = cx.new(|cx| TextInput::new("", t(cx, "find.placeholder"), window, cx));
+        let input = cx.new(|cx| TextInput::localized("", "find.placeholder", window, cx));
         let subscription = cx.subscribe_in(&input, window, |this, input, event: &TextInputEvent, window, cx| {
             let Some(pane) = this.find_bar.as_ref().map(|b| b.pane.clone()) else { return };
             match event {

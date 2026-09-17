@@ -52,6 +52,8 @@ pub struct TextInput {
     focus_handle: FocusHandle,
     content: SharedString,
     placeholder: SharedString,
+    /// i18n key of the placeholder, looked up at paint so it follows language changes.
+    placeholder_key: Option<&'static str>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -86,6 +88,7 @@ impl TextInput {
             focus_handle,
             content,
             placeholder: placeholder.into(),
+            placeholder_key: None,
             selected_range: 0..len,
             selection_reversed: false,
             marked_range: None,
@@ -95,6 +98,13 @@ impl TextInput {
             masked: false,
             _blur: Some(blur),
         }
+    }
+
+    /// Like [`TextInput::new`] with a translated placeholder (`key` in `i18n.rs`).
+    pub fn localized(content: impl Into<SharedString>, key: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(content, crate::i18n::t(cx, key), window, cx);
+        input.placeholder_key = Some(key);
+        input
     }
 
     pub fn masked(mut self) -> Self {
@@ -429,7 +439,8 @@ impl Element for TextElement {
         let style = window.text_style();
         let masked = input.masked && !content.is_empty();
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), hex_alpha(Chrome::FOREGROUND, 0.4))
+            let placeholder = input.placeholder_key.map_or_else(|| input.placeholder.clone(), |key| crate::i18n::t(cx, key).into());
+            (placeholder, hex_alpha(Chrome::FOREGROUND, 0.4))
         } else if masked {
             (SharedString::from("•".repeat(content.chars().count())), style.color)
         } else {
