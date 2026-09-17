@@ -752,7 +752,12 @@ impl Workbench {
                             t(cx, "settings.notify_when_focused"),
                             toggle("notify-focused", prefs.notify_when_focused, |s| s.notify_when_focused = !s.notify_when_focused, cx),
                         ))
-                        .child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx))),
+                        .child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
+                        .child(row_with_hint(
+                            t(cx, "settings.usage_analytics"),
+                            t(cx, "settings.usage_analytics_hint"),
+                            toggle("usage-analytics", prefs.usage_analytics, |s| s.usage_analytics = !s.usage_analytics, cx),
+                        )),
                 )
                 .child(aliases)
                 .into_any_element(),

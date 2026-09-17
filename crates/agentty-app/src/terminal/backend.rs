@@ -152,8 +152,13 @@ impl Drop for Backend {
         #[cfg(unix)]
         unsafe {
             let foreground = libc::tcgetpgrp(self.tty_fd);
-            for group in [foreground, self.child_pid as libc::pid_t] {
-                if group > 1 {
+            // The shell's pid is only signalled while it still leads its own group: once it exited and
+            // was reaped, the pid (and group id) may belong to an unrelated process.
+            let shell = self.child_pid as libc::pid_t;
+            let shell_group = if libc::getpgid(shell) == shell { shell } else { -1 };
+            let own = libc::getpgrp();
+            for group in [foreground, shell_group] {
+                if group > 1 && group != own {
                     libc::killpg(group, libc::SIGHUP);
                     libc::killpg(group, libc::SIGTERM);
                 }

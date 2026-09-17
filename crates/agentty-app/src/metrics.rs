@@ -17,9 +17,9 @@ fn os_version() -> &'static str {
     })
 }
 
-/// Queues `event` (dropped unless analytics is built in and allowed).
-pub fn track(_cx: &App, event: &'static str, props: Value) {
-    if !agentty_bridge::metrics::enabled() {
+/// Queues `event` (dropped unless analytics is built in and allowed by the environment and settings).
+pub fn track(cx: &App, event: &'static str, props: Value) {
+    if !agentty_bridge::metrics::enabled() || !crate::settings::settings(cx).usage_analytics {
         return;
     }
     if let Some(event) = agentty_bridge::metrics::event(event, &props, env!("CARGO_PKG_VERSION"), os_version()) {

@@ -289,7 +289,7 @@ fn looks_like_token(value: &str) -> bool {
         && !value.contains('/')
 }
 
-/// Hides credentials in command arguments shown in the UI: `--api-key=x`, `--token x`, bare tokens.
+/// Hides credentials in command arguments shown in the UI: `--api-key=x`, `--token x`, headers, bare tokens.
 pub fn redact_args(args: &[&str]) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut hide_next = false;
@@ -299,6 +299,11 @@ pub fn redact_args(args: &[&str]) -> String {
             hide_next = false;
         } else if let Some((name, _)) = arg.split_once('=').filter(|(name, _)| looks_secret_name(name)) {
             out.push(format!("{name}=••••"));
+        } else if let Some((name, _)) =
+            arg.split_once(':').filter(|(name, _)| !name.is_empty() && !name.contains(['/', ' ']) && looks_secret_name(name))
+        {
+            // HTTP header values such as `Authorization: Bearer …` or `X-Api-Key: …`.
+            out.push(format!("{name}: ••••"));
         } else if arg.starts_with('-') && looks_secret_name(arg) {
             out.push(arg.to_string());
             hide_next = true;
@@ -723,6 +728,10 @@ mod tests {
             "-y figma-developer-mcp --figma-api-key=•••• --stdio"
         );
         assert_eq!(redact_args(&["--token", "abc", "--port", "8080"]), "--token •••• --port 8080");
+        assert_eq!(
+            redact_args(&["-H", "Authorization: Bearer example-not-a-real-token", "-H", "Accept: text/plain"]),
+            "-H Authorization: •••• -H Accept: text/plain"
+        );
         assert_eq!(redact_args(&["sk1234567890abcdefghijklmnop"]), "••••");
         assert_eq!(
             redact_args(&["@modelcontextprotocol/server-filesystem", "/Users/me/projects"]),

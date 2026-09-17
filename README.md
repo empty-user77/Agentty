@@ -113,9 +113,15 @@ the pieces fit together.
 
 ## Privacy
 
-Agentty reads agent transcripts **locally** to list sessions, compute usage and build handoffs. Nothing is uploaded.
-Agent status hooks talk to a per-process Unix socket in your private temporary directory (mode 0600). The Git page runs
-your own `git` with your existing configuration and credentials.
+Agentty reads agent transcripts **locally** to list sessions, compute usage and build handoffs. Transcripts, prompts,
+output, paths and repository data are never uploaded. Agent status hooks talk to a per-process Unix socket in your
+private temporary directory (mode 0600). The Git page runs your own `git` with your existing configuration and
+credentials.
+
+Official release builds send **anonymous usage statistics** (event names such as `pane_opened` with the agent name, the
+app and macOS version, and a random install ID) — see [docs/metrics.md](docs/metrics.md) for the full list. Turn it off
+in **Settings → General → Send anonymous usage statistics** or with `DO_NOT_TRACK=1`. Builds from source send nothing.
+The update check downloads the release manifest from GitHub.
 
 ## Contributing
 

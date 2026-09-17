@@ -147,8 +147,12 @@ impl ClosedWindows {
     }
 
     fn save(&self) {
+        let path = Self::path();
+        let tmp = path.with_extension("json.tmp");
         if let Ok(bytes) = serde_json::to_vec_pretty(self) {
-            let _ = std::fs::write(Self::path(), bytes);
+            if std::fs::write(&tmp, bytes).is_ok() {
+                let _ = std::fs::rename(tmp, path);
+            }
         }
     }
 

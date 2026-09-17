@@ -1083,7 +1083,9 @@ impl TerminalView {
             }
             let row = &grid[point.line];
             if let Some(link) = row[point.column].hyperlink() {
-                return Some(LinkTarget::Url(link.uri().to_string()));
+                // The visible text of an OSC 8 link can differ from its target, so only web links
+                // are opened (no file://, custom app schemes, …).
+                return is_web_link(link.uri()).then(|| LinkTarget::Url(link.uri().to_string()));
             }
             (0..grid.columns()).map(|c| row[Column(c)].c).collect()
         };
@@ -1851,7 +1853,17 @@ fn resolve_color(color: AnsiColor, colors: &Colors, theme: &TerminalTheme, bold:
 
 #[cfg(test)]
 mod tests {
-    use super::is_symbol_glyph;
+    use super::{is_symbol_glyph, is_web_link};
+
+    #[test]
+    fn opens_only_web_hyperlinks() {
+        assert!(is_web_link("https://agentty.run"));
+        assert!(is_web_link("HTTP://example.com"));
+        assert!(is_web_link("mailto:someone@example.com"));
+        assert!(!is_web_link("file:///etc/passwd"));
+        assert!(!is_web_link("x-example-app://run?cmd=1"));
+        assert!(!is_web_link("javascript:alert(1)"));
+    }
 
     #[test]
     fn shortens_shell_titles() {
@@ -2025,6 +2037,12 @@ pub fn path_at(line: &[char], column: usize, cwd: &std::path::Path) -> Option<Pa
         None => cwd.join(candidate),
     };
     expanded.exists().then_some(expanded)
+}
+
+/// `http(s)://` and `mailto:` targets, the only schemes opened from OSC 8 hyperlinks.
+fn is_web_link(uri: &str) -> bool {
+    let lower = uri.trim_start().to_ascii_lowercase();
+    ["https://", "http://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme))
 }
 
 /// A URL (http, https, file) covering `column` in a line of text.

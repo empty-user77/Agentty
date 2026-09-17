@@ -84,6 +84,7 @@ cp "$ROOT/crates/agentty-app/assets/brand/Agentty.icns" "$APP/Contents/Resources
 sed -e "s/@VERSION@/$VERSION/" -e "s/@BUILD@/$BUILD/" "$ROOT/packaging/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE.txt"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
+python3 "$ROOT/scripts/third-party-licenses.py" "$APP/Contents/Resources/THIRD_PARTY_LICENSES.txt" >/dev/null || die "Could not collect third-party licenses"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null || die "Info.plist is invalid"
 ok "Bundle assembled: $APP"
 

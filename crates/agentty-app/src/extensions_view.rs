@@ -83,12 +83,15 @@ fn input(window: &mut Window, cx: &mut Context<ExtensionsView>, placeholder: &'s
 
 impl ExtensionsView {
     fn open_detail(&mut self, item: Extension, cx: &mut Context<Self>) {
-        let path = item.path.clone();
+        // MCP servers live in shared agent config files that can hold other servers' credentials, so
+        // only the redacted command/URL is shown, never the file.
+        let path = item.path.clone().filter(|_| item.kind != ExtensionKind::Mcp);
+        let redacted = (item.kind == ExtensionKind::Mcp).then(|| item.detail.clone().unwrap_or_default());
         self.detail = Some((item, None));
         self.detail_scroll = gpui::ScrollHandle::new();
         cx.notify();
         let Some(path) = path else {
-            self.detail.as_mut().unwrap().1 = Some(String::new());
+            self.detail.as_mut().unwrap().1 = Some(redacted.unwrap_or_default());
             return;
         };
         let task = cx.background_spawn(async move { read_definition(&path) });

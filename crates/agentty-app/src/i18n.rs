@@ -445,6 +445,8 @@ strings! {
     "settings.agent_bar" => ["AI CLI status bar", "AI CLI 상태바", "AI CLI ステータスバー", "AI CLI 状态栏"],
     "settings.agent_bar_hint" => ["Shows status and branch switching while an AI CLI runs.", "AI CLI 실행 시 상태 및 브랜치 전환 상태바를 노출합니다.", "AI CLI の実行中に状態とブランチ切り替えのバーを表示します。", "运行 AI CLI 时显示状态与分支切换栏。"],
     "settings.confirm_close" => ["Ask before closing a used tab, pane or workspace", "탭/분할창/워크스페이스 닫을 때 묻기", "使用中のタブ・ペイン・ワークスペースを閉じる前に確認", "关闭使用过的标签页/窗格/工作区前询问"],
+    "settings.usage_analytics" => ["Send anonymous usage statistics", "익명 사용 통계 보내기", "匿名の利用統計を送信", "发送匿名使用统计"],
+    "settings.usage_analytics_hint" => ["Only feature and agent names with a random install ID — never paths, commands, prompts or output.", "기능·에이전트 이름과 임의의 설치 ID만 보냅니다. 경로, 명령어, 프롬프트, 출력은 절대 보내지 않습니다.", "機能名・エージェント名とランダムなインストールIDのみを送信します。パス、コマンド、プロンプト、出力は送信しません。", "仅发送功能和智能体名称及随机安装 ID，绝不发送路径、命令、提示词或输出。"],
     "settings.terminal" => ["Terminal", "터미널", "ターミナル", "终端"],
     "settings.theme" => ["Color theme", "색상 테마", "カラーテーマ", "颜色主题"],
     "settings.import_theme" => ["Import .itermcolors…", ".itermcolors 가져오기…", ".itermcolors を読み込む…", "导入 .itermcolors…"],

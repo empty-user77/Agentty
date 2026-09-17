@@ -19,6 +19,8 @@ We aim to acknowledge reports within 3 business days and to ship a fix or mitiga
 ## Security model (summary)
 
 - Agentty runs locally. Agent transcripts are read from disk and never uploaded.
-- Agent status hooks connect to a per-process Unix socket under `~/.agentty/run/`.
-- Agentty does not modify Claude Code or Codex configuration files; hooks are passed per launch.
-- Secrets for external connectors (planned) are encrypted at rest with a key held in the macOS Keychain.
+- Agent status hooks connect to a per-process Unix socket (mode 0600) in the user's private temporary directory.
+- Agentty does not rewrite Claude Code or Codex configuration files; hooks and the statusline wrapper are passed per
+  launch, and the wrapper still runs the user's own statusline.
+- API connector credentials are stored in the macOS Keychain, never in `connectors.json`, agent configs or logs.
+- Release builds send anonymous usage events (no paths, commands, prompts or output); see `docs/metrics.md`.

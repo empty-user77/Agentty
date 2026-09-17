@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.98"
 license = "GPL-3.0-or-later"
 authors = ["Agentty contributors"]
 repository = "https://github.com/empty-user77/agentty"
