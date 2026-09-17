@@ -1,0 +1,36 @@
+name: Bug report
+description: Something isn't working as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include screenshots or a screen recording if the issue is visual.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open a Claude Code tab\n2. …"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+  - type: input
+    id: version
+    attributes:
+      label: Agentty version / commit
+  - type: input
+    id: os
+    attributes:
+      label: macOS version and hardware
+      placeholder: macOS 26.0, Apple M4
+  - type: textarea
+    id: shell
+    attributes:
+      label: Shell and prompt setup
+      description: e.g. zsh + Powerlevel10k, fish + Starship

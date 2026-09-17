@@ -1,0 +1,13 @@
+/target
+/dist
+.DS_Store
+*.profraw
+.env.*
+!.env.example
+# Credentials — never commit
+.env
+*.pem
+*.p12
+*.key
+*.cer
+*.mobileprovision

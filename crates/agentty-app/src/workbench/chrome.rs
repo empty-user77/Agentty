@@ -1,0 +1,1597 @@
+//! Title bar, activity bar, side bar (workspaces / local sessions), tab strip, launcher and status bar.
+
+use super::{other_agent, status_label, LaunchTarget, Page, RenameTarget, SessionFilter, SidePanel, Workbench, Workspace};
+use crate::i18n::{t, tf};
+use crate::launch::{LaunchChoice, PaneKind};
+use crate::settings::settings;
+use crate::terminal::AgentStatus;
+use crate::theme::{hex, hex_alpha, Chrome};
+use crate::ui::TypeScale;
+use crate::ui::{action_button, chip, hint, icon, icon_only, menu_item, now_ms, popover, relative_time, tilde, IconSize};
+use agentty_bridge::model::Agent;
+use gpui::{
+    div, prelude::*, px, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, MouseButton, MouseDownEvent, SharedString, Window,
+};
+
+type WindowAction = Box<dyn Fn(&mut Workbench, &mut Window, &mut Context<Workbench>)>;
+type ViewAction = Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)>;
+
+pub const TITLE_BAR_HEIGHT: f32 = 36.;
+pub const ACTIVITY_BAR_WIDTH: f32 = 48.;
+const TAB_HEIGHT: f32 = 35.;
+const STATUS_BAR_HEIGHT: f32 = 22.;
+const SESSION_ROW_HEIGHT: f32 = 96.;
+
+#[derive(Clone)]
+pub struct DraggedWorkspace {
+    pub id: u64,
+    pub title: SharedString,
+}
+
+#[derive(Clone)]
+pub struct DraggedGroup {
+    pub id: u64,
+    pub title: SharedString,
+}
+
+pub struct DragPreview {
+    title: SharedString,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_1p5()
+            .rounded_md()
+            .bg(hex(Chrome::ACCENT))
+            .t_body()
+            .text_color(hex(Chrome::BRIGHT))
+            .shadow_lg()
+            .child(self.title.clone())
+    }
+}
+
+/// Icon-only button in the tab strip, with a delayed name + shortcut tooltip.
+fn header_icon(
+    id: &'static str,
+    glyph: &'static str,
+    active: bool,
+    tooltip: (&str, Option<&'static str>),
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .tooltip(crate::ui::Tooltip::text(tooltip.0.to_string(), tooltip.1))
+        .flex_shrink_0()
+        .my_auto()
+        .size(px(crate::ui::ICON_BUTTON))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .cursor_pointer()
+        .when(active, |d| d.bg(hex(Chrome::SELECTED)))
+        .hover(|s| s.bg(hex(Chrome::HOVER)))
+        .on_click(on_click)
+        .child(icon(glyph, IconSize::BUTTON, hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND })))
+}
+
+/// Aggregated AI state of a workspace for its sidebar row.
+struct WorkspaceSummary {
+    label: String,
+    color: u32,
+    attention: usize,
+    panes: usize,
+}
+
+impl Workbench {
+    fn summarize(&self, ws: &Workspace, cx: &gpui::App) -> WorkspaceSummary {
+        let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
+        let attention = panes.iter().filter(|p| p.read(cx).attention).count();
+        // Most urgent agent state wins: needs input > finished > working > idle.
+        let rank = |status: &AgentStatus| match status {
+            AgentStatus::Permission(_) | AgentStatus::Question(_) => 3,
+            AgentStatus::Finished(_) => 2,
+            AgentStatus::Working => 1,
+            AgentStatus::Interrupted | AgentStatus::Idle => 0,
+        };
+        let agent = panes.iter().map(|p| p.read(cx)).filter(|v| v.is_agent()).max_by_key(|v| rank(&v.status) * 2 + v.attention as usize);
+        match (agent, panes.first()) {
+            (Some(view), _) => {
+                let (label, color) = status_label(view, cx);
+                WorkspaceSummary { label, color, attention, panes: panes.len() }
+            }
+            (None, Some(pane)) => {
+                // Plain shells only report problems; "Shell" on every row is noise.
+                let view = pane.read(cx);
+                let label = if view.is_running() { String::new() } else { status_label(view, cx).0 };
+                WorkspaceSummary { label, color: Chrome::MUTED, attention, panes: panes.len() }
+            }
+            (None, None) => WorkspaceSummary { label: String::new(), color: Chrome::MUTED, attention: 0, panes: 0 },
+        }
+    }
+
+    pub(super) fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = self.workspaces.get(self.active_workspace).map(|ws| self.workspace_title(ws, cx)).unwrap_or_default();
+        div()
+            .id("title-bar")
+            .h(px(TITLE_BAR_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(hex(Chrome::ACTIVITY_BAR))
+            .border_b_1()
+            .border_color(hex(Chrome::BORDER))
+            .t_small()
+            .text_color(hex(Chrome::MUTED))
+            .on_mouse_down(MouseButton::Left, |event: &MouseDownEvent, window, _| {
+                if event.click_count == 2 {
+                    window.titlebar_double_click();
+                }
+            })
+            .child(if title.is_empty() { "Agentty".to_string() } else { format!("{title} — Agentty") })
+    }
+
+    pub(super) fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let item =
+            |id: &'static str, glyph: &'static str, active: bool, tooltip: &'static str, on_click: ViewAction, cx: &mut Context<Self>| {
+                let _ = tooltip;
+                div()
+                    .id(id)
+                    .group(id)
+                    .w_full()
+                    .h(px(48.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .border_l_2()
+                    .border_color(if active { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)))
+                    .child(
+                        icon(glyph, IconSize::ACTIVITY, if active { hex(Chrome::BRIGHT) } else { hex(0x858585) })
+                            .group_hover(id, |s| s.text_color(hex(Chrome::BRIGHT))),
+                    )
+            };
+        // One active item at a time: an open page wins over the side panel's item.
+        let sidebar = |panel| self.page.is_none() && self.sidebar_open && self.panel == panel;
+        div()
+            .w(px(ACTIVITY_BAR_WIDTH))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_between()
+            .bg(hex(Chrome::ACTIVITY_BAR))
+            .border_r_1()
+            .border_color(hex(Chrome::BORDER))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(item(
+                        "activity-workspaces",
+                        "layout-panel-left",
+                        sidebar(SidePanel::Workspaces),
+                        "panel.workspaces",
+                        Box::new(|this, cx| this.show_panel(SidePanel::Workspaces, cx)),
+                        cx,
+                    ))
+                    .child(item(
+                        "activity-sessions",
+                        "history",
+                        sidebar(SidePanel::Sessions),
+                        "panel.sessions",
+                        Box::new(|this, cx| this.show_panel(SidePanel::Sessions, cx)),
+                        cx,
+                    ))
+                    .child(item(
+                        "activity-git",
+                        "git-branch",
+                        self.page == Some(Page::Git),
+                        "page.git",
+                        Box::new(|this, cx| this.open_page(Page::Git, cx)),
+                        cx,
+                    ))
+                    .child(item(
+                        "activity-flow",
+                        "workflow",
+                        self.page == Some(Page::Flow),
+                        "page.flow",
+                        Box::new(|this, cx| this.open_page(Page::Flow, cx)),
+                        cx,
+                    ))
+                    .child(item(
+                        "activity-usage",
+                        "chart-column",
+                        self.page == Some(Page::Usage),
+                        "page.usage",
+                        Box::new(|this, cx| this.open_page(Page::Usage, cx)),
+                        cx,
+                    ))
+                    .child(item(
+                        "activity-extensions",
+                        "blocks",
+                        self.page == Some(Page::Extensions),
+                        "page.extensions",
+                        Box::new(|this, cx| this.open_page(Page::Extensions, cx)),
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    // The sidebar (with its update badge) is hidden on pages; keep the update reachable.
+                    .when(self.page.is_some() && matches!(self.updates.state, super::update::UpdateState::Available(_)), |d| {
+                        d.child(
+                            div()
+                                .id("activity-update")
+                                .w_full()
+                                .h(px(48.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.updates.popup = true;
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .size(px(26.))
+                                        .rounded_full()
+                                        .bg(hex(Chrome::ACCENT))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(icon("arrow-down", IconSize::INLINE, hex(Chrome::BRIGHT))),
+                                ),
+                        )
+                    })
+                    .child(item(
+                        "activity-settings",
+                        "settings",
+                        self.page == Some(Page::Settings),
+                        "page.settings",
+                        Box::new(|this, cx| this.open_page(Page::Settings, cx)),
+                        cx,
+                    )),
+            )
+    }
+
+    pub(super) fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let width = settings(cx).sidebar_width;
+        let (title, body): (&str, AnyElement) = match self.panel {
+            SidePanel::Workspaces => (t(cx, "panel.workspaces"), self.render_workspaces_panel(window, cx).into_any_element()),
+            SidePanel::Sessions => (t(cx, "panel.sessions"), self.render_sessions_panel(cx).into_any_element()),
+        };
+        let collapse = icon_only(
+            "sidebar-collapse",
+            "panel-left-close",
+            cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.sidebar_open = false;
+                this.focus_active(window, cx);
+                cx.notify();
+            }),
+        )
+        .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.hide_sidebar"), Some("⌘B")));
+        let actions = match self.panel {
+            SidePanel::Workspaces => div()
+                .flex()
+                .gap_0p5()
+                .child(
+                    icon_only(
+                        "sidebar-new-group",
+                        "folder-plus",
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.create_group(window, cx);
+                        }),
+                    )
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "new.group"), None)),
+                )
+                .child(
+                    icon_only(
+                        "sidebar-new-workspace",
+                        "plus",
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.open_new_workspace_page(window, cx)),
+                    )
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "new.workspace"), Some("⌘N"))),
+                )
+                .child(collapse),
+            SidePanel::Sessions => div()
+                .flex()
+                .gap_0p5()
+                .child(if self.sessions_loading {
+                    div()
+                        .size(px(crate::ui::ICON_BUTTON))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(crate::ui::spinner(IconSize::BUTTON, hex(Chrome::FOREGROUND)))
+                        .into_any_element()
+                } else {
+                    icon_only("sidebar-refresh", "refresh-cw", cx.listener(|this, _: &ClickEvent, _, cx| this.refresh_sessions(cx)))
+                        .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.refresh"), None))
+                        .into_any_element()
+                })
+                .child(collapse),
+        };
+
+        div()
+            .id("side-bar")
+            .key_context("Sidebar")
+            .track_focus(&self.sidebar_focus)
+            // Clicking the list gives it keyboard focus (⌘N then makes a workspace).
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, _| window.focus(&this.sidebar_focus)))
+            .relative()
+            .w(px(width))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(hex(Chrome::SIDE_BAR))
+            .border_r_1()
+            .border_color(hex(Chrome::BORDER))
+            .child(
+                div()
+                    .h(px(35.))
+                    .flex_shrink_0()
+                    .pl_4()
+                    .pr_2()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .t_small()
+                    .text_color(hex(Chrome::MUTED))
+                    .child(title)
+                    .child(actions),
+            )
+            .child(match self.panel {
+                // Sessions manage their own virtualized scrolling.
+                SidePanel::Sessions => div().flex_1().min_h_0().child(body).into_any_element(),
+                SidePanel::Workspaces => div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(div().id("sidebar-scroll").size_full().overflow_y_scroll().track_scroll(&self.sidebar_scroll).pb_4().child(body))
+                    .child(crate::ui::scrollbar(self.sidebar_scroll.clone()))
+                    .into_any_element(),
+            })
+            .children(self.render_update_badge(cx))
+            .child(
+                div()
+                    .id("sidebar-resize")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(-3.))
+                    .w(px(6.))
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .hover(|s| s.bg(hex_alpha(Chrome::ACCENT, 0.6)))
+                    .when(self.sidebar_resizing, |d| d.bg(hex(Chrome::ACCENT)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.sidebar_resizing = true;
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
+            )
+    }
+
+    fn render_workspaces_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut list = div().flex().flex_col().px_2().pt_1().gap_px();
+        if self.workspaces.is_empty() {
+            return list.child(hint(t(cx, "hint.no_workspaces")));
+        }
+
+        let ungrouped: Vec<usize> = (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group.is_none()).collect();
+        // The "ungrouped" header matters once groups exist and something is (or is being dragged) outside them.
+        let dragging = cx.has_active_drag();
+        if !self.groups.is_empty() && (!ungrouped.is_empty() || dragging) {
+            list = list.child(self.render_group_header(None, t(cx, "ungrouped").into(), false, ungrouped.len(), window, cx));
+        }
+        for index in ungrouped {
+            list = list.child(self.render_workspace_row(index, window, cx));
+        }
+        for group in &self.groups {
+            let members: Vec<usize> = (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group == Some(group.id)).collect();
+            list = list.child(self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, members.len(), window, cx));
+            if group.collapsed {
+                continue;
+            }
+            if members.is_empty() {
+                list = list.child(div().ml_4().child(hint(t(cx, "drop.here"))));
+            }
+            for index in members {
+                list = list.child(div().pl_3().child(self.render_workspace_row(index, window, cx)));
+            }
+        }
+        list
+    }
+
+    fn render_group_header(
+        &self,
+        group: Option<u64>,
+        name: String,
+        collapsed: bool,
+        count: usize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let id = SharedString::from(format!("group-header-{}", group.unwrap_or(0)));
+        let renaming = matches!((&self.rename, group), (Some(r), Some(g)) if r.target == RenameTarget::Group(g));
+        let drag_title: SharedString = name.clone().into();
+        div()
+            .id(id)
+            .group("group-header")
+            .mt_1p5()
+            .px_2()
+            .py_0p5()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .rounded_md()
+            .t_small()
+            .text_color(hex(Chrome::MUTED))
+            .when(group.is_some(), |d| d.cursor_pointer())
+            .drag_over::<DraggedWorkspace>(|style, _, _, _| style.bg(hex_alpha(Chrome::ACCENT, 0.3)))
+            .on_drop(cx.listener(move |this, dragged: &DraggedWorkspace, _, cx| this.move_to_group(dragged.id, group, cx)))
+            .when_some(group, |d, gid| {
+                // Groups reorder by dragging their headers onto each other.
+                d.on_drag(DraggedGroup { id: gid, title: drag_title.clone() }, |dragged, _, _, cx| {
+                    cx.new(|_| DragPreview { title: dragged.title.clone() })
+                })
+                .drag_over::<DraggedGroup>(|style, _, _, _| style.border_t_2().border_color(hex(Chrome::ACCENT)))
+                .on_drop(cx.listener(move |this, dragged: &DraggedGroup, _, cx| this.move_group(dragged.id, gid, cx)))
+            })
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                let Some(gid) = group else { return };
+                if event.click_count() == 2 {
+                    return this.start_rename(RenameTarget::Group(gid), window, cx);
+                }
+                if let Some(g) = this.groups.iter_mut().find(|g| g.id == gid) {
+                    g.collapsed = !g.collapsed;
+                }
+                this.persist(cx);
+                cx.notify();
+            }))
+            .when(group.is_some(), |d| d.child(if collapsed { "▸" } else { "▾" }))
+            .child(match (&self.rename, renaming) {
+                (Some(rename), true) => {
+                    div().flex_1().t_body().text_color(hex(Chrome::BRIGHT)).child(rename.input.clone()).into_any_element()
+                }
+                _ => div().flex_1().truncate().font_weight(FontWeight::SEMIBOLD).child(name.to_uppercase()).into_any_element(),
+            })
+            .child(div().child(count.to_string()))
+            .when_some(group, |d, gid| {
+                d.child(
+                    div()
+                        .flex()
+                        .invisible()
+                        .group_hover("group-header", |s| s.visible())
+                        .child(icon_only(
+                            SharedString::from(format!("group-rename-{gid}")),
+                            "pencil",
+                            cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.start_rename(RenameTarget::Group(gid), window, cx);
+                            }),
+                        ))
+                        .child(icon_only(
+                            SharedString::from(format!("group-delete-{gid}")),
+                            "x",
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.delete_group(gid, cx);
+                            }),
+                        )),
+                )
+            })
+    }
+
+    fn render_workspace_row(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let ws = &self.workspaces[index];
+        let id = ws.id;
+        let active = index == self.active_workspace && self.page.is_none_or(Workbench::page_keeps_sidebar) && self.session_viewer.is_none();
+        let title = self.workspace_title(ws, cx);
+        let summary = self.summarize(ws, cx);
+        let renaming = matches!(&self.rename, Some(r) if r.target == RenameTarget::Workspace(id));
+        let sub_color = if active { hex(0xe0e0e0) } else { hex(Chrome::MUTED) };
+        let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
+        // Tools in use, AI agents first: shown as overlapping logos.
+        let mut tools: Vec<&'static str> = Vec::new();
+        for pane in &panes {
+            let tool = pane.read(cx).tool_id();
+            if !tools.contains(&tool) {
+                tools.push(tool);
+            }
+        }
+        tools.sort_by_key(|t| *t == "shell");
+        if tools.is_empty() {
+            tools.push("shell");
+        }
+        let last_activity = panes.iter().map(|p| p.read(cx).last_activity_ms).max();
+        let counts = {
+            let tabs = ws.tabs.len();
+            let mut parts = Vec::new();
+            if tabs > 1 {
+                parts.push(tf(cx, "count.tabs", &[("n", &tabs.to_string())]));
+            }
+            if summary.panes > tabs.max(1) {
+                parts.push(tf(cx, "count.panes", &[("n", &summary.panes.to_string())]));
+            }
+            parts.join(" · ")
+        };
+        let path = tilde(&ws.tabs.get(ws.active_tab).map(|t| t.active.read(cx).display_cwd()).unwrap_or_else(|| ws.cwd.clone()));
+        let detail = if counts.is_empty() { path } else { format!("{path} · {counts}") };
+
+        let row = div()
+            .id(("workspace", id as usize))
+            .group("workspace-row")
+            .relative()
+            .px_2p5()
+            .py_1p5()
+            .rounded_md()
+            .cursor_pointer()
+            .border_1()
+            .border_color(if summary.attention > 0 && !active { hex(Chrome::ATTENTION) } else { hex_alpha(0, 0.) })
+            .bg(if active { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
+            .when(!active, |d| d.hover(|s| s.bg(hex(Chrome::HOVER))))
+            .on_drag(DraggedWorkspace { id, title: title.clone().into() }, |dragged, _, _, cx| {
+                cx.new(|_| DragPreview { title: dragged.title.clone() })
+            })
+            // Dropping another workspace here puts it just above this one (and in this group).
+            .drag_over::<DraggedWorkspace>(|style, _, _, _| style.border_t_2().border_color(hex(Chrome::BLUE)))
+            .on_drop(cx.listener(move |this, dragged: &DraggedWorkspace, _, cx| this.move_workspace(dragged.id, id, cx)))
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if let Some(i) = this.workspaces.iter().position(|w| w.id == id) {
+                    if event.click_count() >= 2 || matches!(&this.rename, Some(r) if r.target == RenameTarget::Workspace(id)) {
+                        return;
+                    }
+                    if this.page == Some(Page::Git) {
+                        // AgentGit stays open and switches to this workspace's repositories.
+                        this.select_workspace_for_page(i, cx);
+                    } else {
+                        this.activate_workspace(i, window, cx);
+                    }
+                    // Stay in the list: ⌘N here makes a workspace, a click in a pane focuses it.
+                    window.focus(&this.sidebar_focus);
+                }
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(crate::brand::avatar_stack(&tools, 18., 2, if active { Chrome::ACCENT } else { Chrome::SIDE_BAR }))
+                    .child(if renaming {
+                        div()
+                            .flex_1()
+                            .t_body()
+                            .text_color(hex(Chrome::BRIGHT))
+                            .children(self.rename.as_ref().map(|r| r.input.clone()))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .id(("workspace-title", id as usize))
+                            .flex_1()
+                            .min_w(px(60.))
+                            .truncate()
+                            .t_body()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hex(Chrome::BRIGHT))
+                            // Double-click the name to rename (handled on mouse down so the first
+                            // click's focus change can't end the edit).
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    if event.click_count >= 2 {
+                                        cx.stop_propagation();
+                                        this.start_rename(RenameTarget::Workspace(id), window, cx);
+                                    }
+                                }),
+                            )
+                            .child(title)
+                            .into_any_element()
+                    })
+                    .when(summary.attention > 0, |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .min_w(px(16.))
+                                .h(px(16.))
+                                .px_1()
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(hex(if active { Chrome::BRIGHT } else { Chrome::ATTENTION }))
+                                .text_color(hex(if active { Chrome::ACCENT } else { Chrome::BRIGHT }))
+                                .t_caption()
+                                .child(summary.attention.to_string()),
+                        )
+                    })
+                    // Last activity, like the session history; the menu button takes its place on hover.
+                    .child(
+                        div()
+                            .relative()
+                            .flex_shrink_0()
+                            .min_w(px(26.))
+                            .h(px(20.))
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .children(last_activity.map(|at| {
+                                div()
+                                    .group_hover("workspace-row", |s| s.invisible())
+                                    .t_caption()
+                                    .text_color(sub_color)
+                                    .child(relative_time(now_ms(), at))
+                            }))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(-3.))
+                                    .right(px(-4.))
+                                    .invisible()
+                                    .group_hover("workspace-row", |s| s.visible())
+                                    .child(icon_only(
+                                        ("workspace-menu", id as usize),
+                                        "ellipsis",
+                                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            if this.just_dismissed("workspace-menu") {
+                                                return;
+                                            }
+                                            this.workspace_menu = if this.workspace_menu == Some(id) { None } else { Some(id) };
+                                            cx.notify();
+                                        }),
+                                    )),
+                            ),
+                    ),
+            )
+            .when(!summary.label.is_empty(), |d| {
+                d.child(
+                    div()
+                        .pl(px(28.))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .t_small()
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .size(px(6.))
+                                .rounded_full()
+                                .bg(hex(summary.color))
+                                .when(active, |d| d.bg(hex(Chrome::BRIGHT))),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_color(if active { hex(Chrome::BRIGHT) } else { hex(summary.color) })
+                                .child(summary.label.clone()),
+                        ),
+                )
+            })
+            .child(div().pl(px(28.)).truncate().t_small().text_color(sub_color).child(detail))
+            .children(self.render_port_chips(ws, active, cx));
+
+        let menu_open = self.workspace_menu == Some(id);
+        div().relative().child(row).when(menu_open, |d| d.child(self.render_workspace_menu(id, window, cx)))
+    }
+
+    /// `:3000 :5173` chips for servers started in the workspace; a click opens them.
+    fn render_port_chips(&self, ws: &Workspace, active: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let mut ports: Vec<u16> =
+            ws.tabs.iter().flat_map(|t| t.root.leaves()).filter_map(|p| self.ports.get(&p.read(cx).pane_id)).flatten().copied().collect();
+        ports.sort_unstable();
+        ports.dedup();
+        if ports.is_empty() {
+            return None;
+        }
+        let mut row = div().pl(px(28.)).pt_0p5().flex().flex_wrap().gap_1();
+        for port in ports.into_iter().take(6) {
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("port-{}-{port}", ws.id)))
+                    .px_1p5()
+                    .rounded_sm()
+                    .t_caption()
+                    .cursor_pointer()
+                    .bg(if active { hex_alpha(0xffffff, 0.18) } else { hex(0x2d2d30) })
+                    .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
+                    .hover(|s| s.bg(hex(Chrome::SELECTED)))
+                    .child(format!(":{port}"))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.open_link(format!("http://localhost:{port}"), cx);
+                    })),
+            );
+        }
+        Some(row.into_any_element())
+    }
+
+    fn render_workspace_menu(&self, id: u64, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let current_group = self.workspaces.iter().find(|w| w.id == id).and_then(|w| w.group);
+        let mut menu = popover()
+            .id("workspace-menu")
+            .absolute()
+            .top(px(28.))
+            .right(px(4.))
+            .w(px(220.))
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if this.workspace_menu.take().is_some() {
+                    this.note_dismissed("workspace-menu");
+                }
+                cx.notify();
+            }))
+            .child(menu_item(
+                "wm-rename",
+                t(cx, "rename"),
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.start_rename(RenameTarget::Workspace(id), window, cx)),
+            ));
+        if !self.groups.is_empty() {
+            menu = menu.child(div().px_3().pt_2().pb_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "move.to.group")));
+            for group in &self.groups {
+                let gid = group.id;
+                let label = if current_group == Some(gid) { format!("✓ {}", group.name) } else { group.name.clone() };
+                menu = menu.child(menu_item(
+                    SharedString::from(format!("wm-group-{gid}")),
+                    label,
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.move_to_group(id, Some(gid), cx)),
+                ));
+            }
+        }
+        menu.child(menu_item(
+            "wm-new-group",
+            format!("+ {}", t(cx, "new.group")),
+            cx.listener(move |this, _: &ClickEvent, window, cx| {
+                let gid = this.create_group(window, cx);
+                this.move_to_group(id, Some(gid), cx);
+            }),
+        ))
+        .when(current_group.is_some(), |d| {
+            d.child(menu_item(
+                "wm-ungroup",
+                t(cx, "remove.from.group"),
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.move_to_group(id, None, cx)),
+            ))
+        })
+        .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+        .child(menu_item(
+            "wm-close",
+            t(cx, "close.workspace"),
+            cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.workspace_menu = None;
+                this.request_close(super::confirm::CloseTarget::Workspace(id), window, cx)
+            }),
+        ))
+    }
+
+    /// Sessions visible under the current filter, favorites first.
+    pub(super) fn visible_sessions(&self, cx: &gpui::App) -> Vec<usize> {
+        let favorites = &settings(cx).favorite_sessions;
+        let query = self.session_query(cx);
+        let hits = self.session_content_hits.as_ref().filter(|(q, _)| *q == query).map(|(_, hits)| hits);
+        let mut indices: Vec<usize> = (0..self.sessions.len())
+            .filter(|&i| match self.session_filter {
+                SessionFilter::All => true,
+                SessionFilter::Only(agent) => self.sessions[i].agent == agent,
+            })
+            .filter(|&i| {
+                let session = &self.sessions[i];
+                query.is_empty()
+                    || session.title.to_lowercase().contains(&query)
+                    || session.cwd.as_deref().is_some_and(|c| c.to_lowercase().contains(&query))
+                    || session.id.to_lowercase().starts_with(&query)
+                    || hits.is_some_and(|h| h.contains(&session.path))
+            })
+            .collect();
+        // Stable sort keeps recency order within favorites and non-favorites.
+        indices.sort_by_key(|&i| !favorites.contains(&session_key(&self.sessions[i])));
+        indices
+    }
+
+    fn render_sessions_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let filter_chip = |id: &'static str, label: &str, filter: SessionFilter, cx: &mut Context<Self>| {
+            chip(
+                id,
+                label.to_string(),
+                self.session_filter == filter,
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.session_filter = filter;
+                    cx.notify();
+                }),
+            )
+        };
+        let chips = div()
+            .flex_shrink_0()
+            .flex()
+            .gap_1()
+            .px_3()
+            .pb_2()
+            .child(filter_chip("filter-all", t(cx, "filter.all"), SessionFilter::All, cx))
+            .child(filter_chip("filter-claude", "Claude", SessionFilter::Only(Agent::Claude), cx))
+            .child(filter_chip("filter-codex", "Codex", SessionFilter::Only(Agent::Codex), cx));
+        let searching = self.session_content_hits.as_ref().is_none_or(|(q, _)| *q != self.session_query(cx))
+            && self.session_query(cx).chars().count() >= 2;
+        let search = div().flex_shrink_0().px_3().pb_2().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(hex(Chrome::BORDER))
+                .bg(hex(0x1a1a1a))
+                .child(icon("search", IconSize::INLINE, hex(Chrome::MUTED)))
+                .child(div().flex_1().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(self.session_search.clone()))
+                .when(searching, |d| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).child("…"))),
+        );
+
+        let visible = self.visible_sessions(cx);
+        let body: AnyElement = if self.sessions_loading && self.sessions.is_empty() {
+            hint(t(cx, "sessions.scanning")).into_any_element()
+        } else if visible.is_empty() {
+            hint(t(cx, "sessions.empty")).into_any_element()
+        } else {
+            // Virtualized: only rows in view are built, so long histories scroll smoothly.
+            let handle = self.sessions_scroll.clone();
+            let base = handle.0.borrow().base_handle.clone();
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    gpui::uniform_list(
+                        "sessions-list",
+                        visible.len(),
+                        cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                            let rows = this.visible_sessions(cx);
+                            range.filter_map(|i| rows.get(i).copied()).map(|index| this.render_session_row(index, cx)).collect::<Vec<_>>()
+                        }),
+                    )
+                    .track_scroll(handle)
+                    .size_full()
+                    .px_2(),
+                )
+                .child(crate::ui::scrollbar(base))
+                .into_any_element()
+        };
+        div().size_full().flex().flex_col().child(search).child(chips).child(body)
+    }
+
+    fn render_session_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let session = &self.sessions[index];
+        let now = now_ms();
+        let to = other_agent(session.agent);
+        let cwd = session.cwd.as_ref().map(|c| tilde(std::path::Path::new(c))).unwrap_or_default();
+        let key = session_key(session);
+        let favorite = settings(cx).favorite_sessions.contains(&key);
+        let (resume, migrate, view) = (session.clone(), session.clone(), session.clone());
+        let selected = self.session_viewer.as_ref().is_some_and(|v| v.session.path == session.path);
+        let summary = super::resume_hint::session_summary(session);
+        div()
+            .id(("session", index))
+            .group("session-row")
+            .h(px(SESSION_ROW_HEIGHT))
+            .px_3()
+            .py_2()
+            .mb_1()
+            .rounded_md()
+            .cursor_pointer()
+            .when(selected, |d| d.bg(hex(Chrome::SELECTED)))
+            .when(!selected, |d| d.hover(|s| s.bg(hex(Chrome::HOVER))))
+            // A click shows the conversation; the buttons below continue it.
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_session_viewer(view.clone(), cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(crate::brand::avatar(crate::brand::kind_id(session.agent.into()), 16.))
+                    .child(div().flex_1().min_w_0().truncate().t_body().text_color(hex(Chrome::FOREGROUND)).child(session.title.clone()))
+                    .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(relative_time(now, session.updated_at)))
+                    .child(
+                        div()
+                            .id(("session-favorite", index))
+                            .flex_shrink_0()
+                            .size(px(20.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .when(!favorite, |d| d.invisible().group_hover("session-row", |s| s.visible()))
+                            .hover(|s| s.bg(hex_alpha(0xffffff, 0.08)))
+                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                let key = key.clone();
+                                crate::settings::update_settings(cx, move |s| {
+                                    if let Some(i) = s.favorite_sessions.iter().position(|k| k == &key) {
+                                        s.favorite_sessions.remove(i);
+                                    } else {
+                                        s.favorite_sessions.insert(0, key);
+                                    }
+                                });
+                            }))
+                            .child(icon("star", IconSize::INLINE, hex(if favorite { Chrome::FAVORITE } else { Chrome::MUTED }))),
+                    ),
+            )
+            .child(div().pl(px(24.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(cwd))
+            .child(div().pl(px(24.)).truncate().t_small().text_color(hex(0xa8a8a8)).child(summary.unwrap_or_default()))
+            .child(
+                div()
+                    .pl(px(24.))
+                    .pt_1()
+                    .flex()
+                    .gap_1()
+                    .child(action_button(
+                        ("session-resume", index),
+                        t(cx, "sessions.resume"),
+                        cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.resume_session(&resume, window, cx)
+                        }),
+                    ))
+                    .child(action_button(
+                        ("session-migrate", index),
+                        tf(cx, "sessions.migrate", &[("name", to.display_name())]),
+                        cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.migrate_session(migrate.clone(), window, cx)
+                        }),
+                    )),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Tabs take the room they need (scrolling when crowded); the spacer gets the rest.
+        let mut tabs = div().id("tabs").flex().flex_shrink().min_w_0().h_full().overflow_x_scroll();
+        if let Some(page) = self.page {
+            let label = match page {
+                Page::Git => t(cx, "page.git"),
+                Page::Flow => t(cx, "page.flow"),
+                Page::Usage => t(cx, "page.usage"),
+                Page::Settings => t(cx, "page.settings"),
+                Page::Extensions => t(cx, "page.extensions"),
+            };
+            tabs = tabs.child(
+                div()
+                    .id("page-tab")
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .pl_3()
+                    .pr_2()
+                    .bg(hex(Chrome::EDITOR))
+                    .border_t_1()
+                    .border_r_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .t_body()
+                    .text_color(hex(Chrome::BRIGHT))
+                    .child(label)
+                    .child(icon_only(
+                        "page-close",
+                        "x",
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.page = None;
+                            this.focus_active(window, cx);
+                            cx.notify();
+                        }),
+                    )),
+            );
+        } else if let Some(ws) = self.workspaces.get(self.active_workspace) {
+            for (index, tab) in ws.tabs.iter().enumerate() {
+                let view = tab.active.read(cx);
+                let active = index == ws.active_tab;
+                let leaves = tab.root.leaves();
+                let attention = leaves.iter().any(|p| p.read(cx).attention);
+                // Session links in this tab (from the Session Flow), shown as a link mark.
+                let ids: Vec<u64> = leaves.iter().map(|p| p.read(cx).pane_id).collect();
+                let linked =
+                    self.flow.edges().iter().filter(|e| ids.contains(&e.from) || ids.contains(&e.to)).map(|e| e.live).reduce(|a, b| a || b);
+                tabs = tabs.child(
+                    div()
+                        .id(("tab", index))
+                        .group("tab")
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pl_3()
+                        .pr_1()
+                        .max_w(px(240.))
+                        .flex_shrink_0()
+                        .cursor_pointer()
+                        .border_r_1()
+                        .border_color(hex(Chrome::BORDER))
+                        .bg(if active { hex(Chrome::EDITOR) } else { hex(Chrome::TAB_INACTIVE) })
+                        .when(active, |d| d.border_t_1().border_color(hex(Chrome::ACCENT)))
+                        .t_body()
+                        .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::MUTED) })
+                        .on_mouse_down(
+                            MouseButton::Middle,
+                            cx.listener(move |this, _, window, cx| this.request_close_tabs(&[index], window, cx)),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.open_tab_menu(index, event.position, cx);
+                            }),
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.activate_tab(index, window, cx)))
+                        .child(crate::brand::avatar(view.tool_id(), 16.))
+                        .child(div().truncate().child(view.display_title()))
+                        .when(leaves.len() > 1, |d| {
+                            d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("⊞{}", leaves.len())))
+                        })
+                        .when_some(linked, |d, live| d.child(icon("link", 12., hex(if live { Chrome::ATTENTION } else { Chrome::BLUE }))))
+                        .when(attention, |d| d.child(div().size(px(7.)).rounded_full().bg(hex(Chrome::ATTENTION))))
+                        .child(
+                            div()
+                                .id(("tab-close", index))
+                                .size(px(20.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_sm()
+                                .when(!active, |d| d.invisible().group_hover("tab", |s| s.visible()))
+                                .hover(|s| s.bg(hex_alpha(0xffffff, 0.1)))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.request_close_tabs(&[index], window, cx);
+                                }))
+                                .child(icon("x", IconSize::INLINE, hex(Chrome::FOREGROUND))),
+                        ),
+                );
+            }
+        }
+
+        let _header_button =
+            |id: &'static str, glyph: &'static str, label: String, active: bool, on_click: WindowAction, cx: &mut Context<Self>| {
+                div()
+                    .id(id)
+                    .h_full()
+                    .px_2p5()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .flex_shrink_0()
+                    .cursor_pointer()
+                    .child(icon(glyph, IconSize::BUTTON, hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND })))
+                    .t_small()
+                    .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::FOREGROUND) })
+                    .when(active, |d| d.bg(hex(Chrome::SELECTED)))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
+                    .when(!label.is_empty(), |d| d.child(label))
+            };
+
+        div()
+            .id("tab-strip")
+            .h(px(TAB_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .pr_1()
+            .gap_0p5()
+            .bg(hex(Chrome::TAB_INACTIVE))
+            .border_b_1()
+            .border_color(hex(Chrome::BORDER))
+            .child(tabs)
+            // Empty strip space: double-click opens a new tab, like VS Code.
+            .child(
+                div()
+                    .id("tab-strip-empty")
+                    .flex_1()
+                    .min_w(px(24.))
+                    .h_full()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            if event.click_count == 2 {
+                                this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, window, cx);
+                            }
+                        }),
+                    )
+                    // Right-click: the same menu as the + button, where the click was.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.launcher_at = Some(event.position);
+                            this.launcher_open = true;
+                            this.notices_open = false;
+                            this.detect_agents(cx);
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .child({
+                let unread = self.unread_count();
+                div()
+                    .id("header-notices")
+                    .my_auto()
+                    .h(px(crate::ui::ICON_BUTTON))
+                    .rounded_md()
+                    .px_1p5()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .cursor_pointer()
+                    .t_small()
+                    .text_color(hex(if unread > 0 { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
+                    .when(self.notices_open, |d| d.bg(hex(Chrome::SELECTED)))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.notices"), Some("⇧⌘U")))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if this.just_dismissed("notices") {
+                            return;
+                        }
+                        this.notices_open = !this.notices_open;
+                        this.launcher_open = false;
+                        cx.notify();
+                    }))
+                    .child(icon(
+                        if unread > 0 { "bell-dot" } else { "bell" },
+                        IconSize::BUTTON,
+                        hex(if unread > 0 { Chrome::BRIGHT } else { Chrome::FOREGROUND }),
+                    ))
+                    .when(unread > 0, |d| {
+                        d.child(
+                            div()
+                                .min_w(px(16.))
+                                .h(px(16.))
+                                .px_1()
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(hex(Chrome::ATTENTION))
+                                .t_caption()
+                                .text_color(hex(Chrome::BRIGHT))
+                                .child(unread.to_string()),
+                        )
+                    })
+            })
+            // cmux-style quick actions: icons only.
+            .child(header_icon(
+                "header-browser",
+                "globe",
+                self.browser.is_some(),
+                (t(cx, "tooltip.browser"), Some("⇧⌘B")),
+                cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
+            ))
+            .child(header_icon(
+                "header-mini",
+                "picture-in-picture-2",
+                false,
+                (t(cx, "mini.enter"), Some("⌃⌘M")),
+                cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
+            ))
+            .child(header_icon(
+                "header-split-right",
+                "columns-2",
+                false,
+                (t(cx, "split.right"), Some("⌘D")),
+                cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
+            ))
+            .child(header_icon(
+                "header-split-down",
+                "rows-2",
+                false,
+                (t(cx, "split.down"), Some("⇧⌘D")),
+                cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
+            ))
+            // New tab / agent / workspace: the primary action, so it stands out a little.
+            .child(
+                div()
+                    .id("launcher-toggle")
+                    .flex_shrink_0()
+                    .my_auto()
+                    .ml_1()
+                    .size(px(crate::ui::ICON_BUTTON))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(if self.launcher_open { hex(Chrome::ACCENT) } else { hex_alpha(Chrome::ACCENT, 0.22) })
+                    .border_1()
+                    .border_color(hex_alpha(Chrome::ACCENT, 0.6))
+                    .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.new"), Some("⌘T")))
+                    .child(icon("plus", IconSize::BUTTON, hex(Chrome::BRIGHT)))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if this.just_dismissed("launcher") {
+                            return;
+                        }
+                        this.launcher_open = !this.launcher_open;
+                        this.launcher_at = None;
+                        if this.launcher_open {
+                            this.detect_agents(cx);
+                        }
+                        cx.notify();
+                    })),
+            )
+    }
+
+    pub(super) fn render_launcher(&self, cx: &mut Context<Self>) -> AnyElement {
+        let entry = |id: SharedString,
+                     logo: Option<&'static str>,
+                     label: String,
+                     shortcut: &'static str,
+                     action: WindowAction,
+                     cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| action(this, window, cx)))
+                .child(match logo {
+                    Some(logo) => crate::brand::avatar(logo, 18.),
+                    None => div().flex_shrink_0().size(px(18.)).flex().items_center().justify_center().child(icon(
+                        "square-plus",
+                        IconSize::INLINE,
+                        hex(Chrome::MUTED),
+                    )),
+                })
+                .child(div().flex_1().min_w_0().truncate().t_body().child(label))
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(shortcut))
+        };
+        // Model shortcuts under an agent: "Opus · Sonnet · Haiku".
+        let models = |kind: PaneKind, models: Vec<(String, String)>, cx: &mut Context<Self>| {
+            let mut row = div().flex().flex_wrap().gap_1().pl(px(28.)).pr_2().pb_1();
+            for (index, (model, label)) in models.into_iter().enumerate() {
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("launch-model-{kind:?}-{index}")))
+                        .px_1p5()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(hex(Chrome::OVERLAY_BORDER))
+                        .t_small()
+                        .text_color(hex(Chrome::MUTED))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)).border_color(hex(Chrome::ACCENT)))
+                        .child(label)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.request_launch(LaunchChoice::Model(kind, model.clone()), LaunchTarget::NewTab, window, cx)
+                        })),
+                );
+            }
+            row
+        };
+        let installed = self.installed.clone().unwrap_or_default();
+        let detected = self.installed.is_some();
+
+        let mut menu = popover()
+            .id("launcher")
+            .w(px(300.))
+            .max_h(px(560.))
+            .overflow_y_scroll()
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if std::mem::take(&mut this.launcher_open) {
+                    this.note_dismissed("launcher");
+                }
+                cx.notify();
+            }))
+            .child(entry(
+                "launch-shell".into(),
+                Some("shell"),
+                t(cx, "new.terminal").into(),
+                "⌘T",
+                Box::new(|this, w, cx| this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, w, cx)),
+                cx,
+            ));
+        if self.is_installed("claude") {
+            menu = menu
+                .child(entry(
+                    "launch-claude".into(),
+                    Some("claude"),
+                    t(cx, "new.claude").into(),
+                    "⌥⌘C",
+                    Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, LaunchTarget::NewTab, w, cx)),
+                    cx,
+                ))
+                .child(models(PaneKind::Claude, installed.claude_models.clone(), cx));
+        }
+        if self.is_installed("codex") {
+            menu = menu.child(entry(
+                "launch-codex".into(),
+                Some("codex"),
+                t(cx, "new.codex").into(),
+                "⌥⌘X",
+                Box::new(|this, w, cx| this.request_launch(PaneKind::Codex, LaunchTarget::NewTab, w, cx)),
+                cx,
+            ));
+            if !installed.codex_models.is_empty() {
+                menu = menu.child(models(PaneKind::Codex, installed.codex_models.iter().map(|m| (m.clone(), m.clone())).collect(), cx));
+            }
+        }
+        let agent_entry = |agent: &'static crate::agents::AgentCli, cx: &mut Context<Self>| {
+            let (title, command) = (agent.name.to_string(), agent.binary.to_string());
+            entry(
+                SharedString::from(format!("launch-agent-{}", agent.id)),
+                Some(agent.id),
+                agent.name.into(),
+                "",
+                Box::new(move |this, w, cx| {
+                    this.request_launch(
+                        LaunchChoice::Command { title: title.clone(), command: command.clone() },
+                        LaunchTarget::NewTab,
+                        w,
+                        cx,
+                    )
+                }),
+                cx,
+            )
+        };
+        for agent in installed.other_agents().filter(|a| a.primary) {
+            menu = menu.child(agent_entry(agent, cx));
+        }
+        let more: Vec<_> = installed.other_agents().filter(|a| !a.primary).collect();
+        if !more.is_empty() || !installed.ollama_models.is_empty() {
+            let open = self.launcher_more;
+            menu = menu.child(
+                div()
+                    .id("launch-more")
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .child(icon(if open { "chevron-down" } else { "chevron-right" }, IconSize::INLINE, hex(Chrome::MUTED)))
+                    .child(div().flex_1().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "launcher.more_models")))
+                    .child(
+                        div()
+                            .t_small()
+                            .text_color(hex(Chrome::MUTED))
+                            .child((more.len() + installed.ollama_models.len().min(8)).to_string()),
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.launcher_more = !this.launcher_more;
+                        cx.notify();
+                    })),
+            );
+            if open {
+                let mut list = div().pl_4().flex().flex_col();
+                for agent in more {
+                    list = list.child(agent_entry(agent, cx));
+                }
+                for model in installed.ollama_models.iter().take(8) {
+                    let (title, command) = (format!("Ollama · {model}"), format!("ollama run {}", crate::launch::shell_quote(model)));
+                    list = list.child(entry(
+                        SharedString::from(format!("launch-ollama-{model}")),
+                        Some("ollama"),
+                        format!("Ollama · {model}"),
+                        "",
+                        Box::new(move |this, w, cx| {
+                            this.request_launch(
+                                LaunchChoice::Command { title: title.clone(), command: command.clone() },
+                                LaunchTarget::NewTab,
+                                w,
+                                cx,
+                            )
+                        }),
+                        cx,
+                    ));
+                }
+                menu = menu.child(list);
+            }
+        }
+        if detected && !installed.has("claude") && !installed.has("codex") && installed.other_agents().next().is_none() {
+            menu = menu.child(hint(t(cx, "launcher.no_agents")));
+        }
+        let menu = menu.child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER))).child(entry(
+            "launch-workspace".into(),
+            None,
+            t(cx, "new.workspace").into(),
+            "⌘N",
+            Box::new(|this, w, cx| this.open_new_workspace_page(w, cx)),
+            cx,
+        ));
+        // Right-clicked on the tab strip: open where the click was; else under the + button.
+        match self.launcher_at {
+            Some(position) => gpui::deferred(
+                gpui::anchored().position(position).snap_to_window_with_margin(px(8.)).child(crate::ui::fade_in("launcher-fade", menu)),
+            )
+            .with_priority(3)
+            .into_any_element(),
+            None => {
+                div().absolute().top(px(TAB_HEIGHT + 4.)).right(px(8.)).child(crate::ui::fade_in("launcher-fade", menu)).into_any_element()
+            }
+        }
+    }
+
+    /// First-run screen, and the start page of a new workspace (with a name field and cancel).
+    pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let starting = self.new_workspace.as_ref().map(|(input, _)| input.clone());
+        let launch = |id: SharedString, logo: &'static str, label: String, choice: LaunchChoice, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .w(px(280.))
+                .flex()
+                .items_center()
+                .gap_3()
+                .px_4()
+                .py_2()
+                .rounded_md()
+                .cursor_pointer()
+                .border_1()
+                .border_color(hex(Chrome::BORDER))
+                .t_body()
+                .text_color(hex(Chrome::FOREGROUND))
+                .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(Chrome::ACCENT, 0.7)).text_color(hex(Chrome::BRIGHT)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.request_launch(choice.clone(), LaunchTarget::NewWorkspace, window, cx)
+                }))
+                .child(crate::brand::avatar(logo, 22.))
+                .child(label)
+        };
+        let mut buttons = div().flex().flex_col().gap_2().items_center();
+        buttons = buttons.child(launch("welcome-shell".into(), "shell", t(cx, "new.terminal").into(), PaneKind::Shell.into(), cx));
+        if self.is_installed("claude") {
+            buttons = buttons.child(launch("welcome-claude".into(), "claude", t(cx, "new.claude").into(), PaneKind::Claude.into(), cx));
+        }
+        if self.is_installed("codex") {
+            buttons = buttons.child(launch("welcome-codex".into(), "codex", t(cx, "new.codex").into(), PaneKind::Codex.into(), cx));
+        }
+        for agent in self.installed.iter().flat_map(|i| i.other_agents()).filter(|a| a.primary) {
+            let choice = LaunchChoice::Command { title: agent.name.to_string(), command: agent.binary.to_string() };
+            buttons = buttons.child(launch(
+                SharedString::from(format!("welcome-{}", agent.id)),
+                agent.id,
+                tf(cx, "new.agent", &[("name", agent.name)]),
+                choice,
+                cx,
+            ));
+        }
+        let more = self.installed.as_ref().is_some_and(|i| i.other_agents().any(|a| !a.primary) || !i.ollama_models.is_empty());
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .bg(hex(Chrome::EDITOR))
+            .child(gpui::img("brand/logo.png").size(px(56.)))
+            .child(
+                div().text_size(px(30.)).font_weight(FontWeight::LIGHT).text_color(hex(Chrome::FOREGROUND)).child(if starting.is_some() {
+                    t(cx, "new.workspace").to_string()
+                } else {
+                    "Agentty".to_string()
+                }),
+            )
+            .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "tagline")))
+            .child(div().t_small().text_color(hex(Chrome::MUTED)).pb_3().child(t(cx, "welcome.subtitle")))
+            .when_some(starting.clone(), |d, input| {
+                d.child(
+                    div()
+                        .w(px(280.))
+                        .mb_2()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "welcome.name_label")))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1p5()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(hex(Chrome::ACCENT))
+                                .bg(hex(0x1a1a1a))
+                                .t_body()
+                                .text_color(hex(Chrome::BRIGHT))
+                                .child(input),
+                        ),
+                )
+            })
+            .child(buttons)
+            .when(more, |d| {
+                d.child(
+                    div()
+                        .id("welcome-more")
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_4()
+                        .py_2()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .t_small()
+                        .text_color(hex(Chrome::MUTED))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+                        .child(t(cx, "launcher.more_models"))
+                        .child(icon("chevron-down", IconSize::INLINE, hex(Chrome::MUTED)))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.launcher_open = true;
+                            this.launcher_more = true;
+                            this.detect_agents(cx);
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(starting.is_some() && !self.workspaces.is_empty(), |d| {
+                d.child(
+                    div()
+                        .id("welcome-cancel")
+                        .mt_2()
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .t_small()
+                        .text_color(hex(Chrome::MUTED))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+                        .child(t(cx, "confirm.cancel"))
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.new_workspace = None;
+                            this.focus_active(window, cx);
+                            cx.notify();
+                        })),
+                )
+            })
+    }
+
+    pub(super) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.active_pane().map(|p| p.read(cx));
+        let kind = active.map(|v| match v.display_kind() {
+            PaneKind::Shell => t(cx, "status.shell").to_string(),
+            PaneKind::Claude => "Claude Code".into(),
+            PaneKind::Codex => "Codex".into(),
+        });
+        let cwd = active.map(|v| tilde(&v.display_cwd()));
+        // The workspace being looked at, not every workspace.
+        let terminals =
+            self.workspaces.get(self.active_workspace).map_or(0, |ws| ws.tabs.iter().map(|tab| tab.root.leaves().len()).sum::<usize>());
+        div()
+            .h(px(STATUS_BAR_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap_4()
+            .px_3()
+            .bg(hex(Chrome::STATUS_BAR))
+            .border_t_1()
+            .border_color(hex(Chrome::BORDER))
+            .t_small()
+            .text_color(hex(Chrome::MUTED))
+            .child(div().text_color(hex(Chrome::SUCCESS)).child("● Agentty"))
+            .children(kind)
+            .children(cwd)
+            .child(div().flex_1().min_w_0().truncate().children(self.status.clone()))
+            .children(self.render_status_icons(cx))
+            .child(tf(cx, "count.terminals", &[("n", &terminals.to_string())]))
+    }
+}
+
+/// Stable identifier for favorites: `claude:<id>` / `codex:<id>`.
+fn session_key(session: &agentty_bridge::model::SessionInfo) -> String {
+    format!("{}:{}", if session.agent == Agent::Claude { "claude" } else { "codex" }, session.id)
+}

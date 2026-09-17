@@ -1,0 +1,3 @@
+Brand logos from Simple Icons (https://simpleicons.org), released under CC0 1.0 Universal.
+The logos are trademarks of their respective owners and are used only to identify the
+corresponding tools. See https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md

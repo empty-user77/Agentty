@@ -1,0 +1,385 @@
+//! User settings (`~/.agentty/settings.json`), held in a GPUI global so every view reads the
+//! same values and re-renders when they change.
+
+use crate::theme::{load_themes, TerminalTheme, DEFAULT_THEME, LEGACY_DEFAULT_THEME};
+use gpui::{App, BorrowAppContext, Global};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    /// Follow the macOS language (English when it isn't supported).
+    System,
+    En,
+    Ko,
+    Ja,
+    Zh,
+}
+
+impl Language {
+    pub const ALL: [Language; 5] = [Language::System, Language::En, Language::Ko, Language::Ja, Language::Zh];
+
+    /// The concrete language to show: `System` resolves to the macOS setting (read once).
+    pub fn resolved(self) -> Language {
+        static SYSTEM: std::sync::OnceLock<Language> = std::sync::OnceLock::new();
+        match self {
+            Language::System => *SYSTEM.get_or_init(Language::detect),
+            other => other,
+        }
+    }
+
+    pub fn native_name(self) -> &'static str {
+        match self {
+            Language::System => "System",
+            Language::En => "English",
+            Language::Ko => "한국어",
+            Language::Ja => "日本語",
+            Language::Zh => "中文",
+        }
+    }
+
+    /// First preferred macOS language, falling back to `LANG`, then English.
+    fn detect() -> Self {
+        let preferred = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleLanguages"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .and_then(|s| s.lines().nth(1).map(|l| l.trim().trim_matches(|c| c == '"' || c == ',').to_string()))
+            .or_else(|| std::env::var("LANG").ok())
+            .unwrap_or_default();
+        Self::from_code(&preferred)
+    }
+
+    /// `ko-KR` → Korean; unsupported languages → English.
+    pub fn from_code(code: &str) -> Self {
+        match code.to_lowercase().get(..2) {
+            Some("ko") => Language::Ko,
+            Some("ja") => Language::Ja,
+            Some("zh") => Language::Zh,
+            _ => Language::En,
+        }
+    }
+}
+
+/// Where links (⌘-click in terminals) open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkOpener {
+    #[default]
+    External,
+    InApp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorShapeSetting {
+    Block,
+    Beam,
+    Underline,
+}
+
+/// A reserved word: when `keyword` is passed as a whole argument to `command`, it is replaced by
+/// `expansion` (e.g. `zzzz` → `--dangerously-skip-permissions` for `claude`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandAlias {
+    pub keyword: String,
+    pub expansion: String,
+    pub command: String,
+}
+
+pub const SETTINGS_VERSION: u32 = 2;
+
+pub const BUNDLED_FONT: &str = "JetBrains Mono";
+/// Nerd Font-patched JetBrains Mono, used for Powerline / Nerd Font glyphs. (The symbols-only font
+/// cannot be used: GPUI skips fonts without an `m` glyph.)
+pub const SYMBOLS_FONT: &str = "JetBrainsMono Nerd Font Mono";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Settings {
+    /// Format version, for migrations. Missing in old files (→ 0).
+    #[serde(default)]
+    pub settings_version: u32,
+    pub language: Language,
+    pub theme: String,
+    pub font_family: String,
+    pub font_size: f32,
+    pub line_height: f32,
+    pub cursor_shape: CursorShapeSetting,
+    pub cursor_blink: bool,
+    pub padding: f32,
+    pub option_as_meta: bool,
+    pub scrollback: usize,
+    pub sidebar_width: f32,
+    /// Ask for a starting folder whenever a new workspace is opened.
+    pub ask_directory: bool,
+    /// Also ask for new tabs (otherwise they open in the current tab's folder).
+    pub ask_directory_for_tabs: bool,
+    pub recent_dirs: Vec<PathBuf>,
+    pub aliases: Vec<CommandAlias>,
+    /// macOS notifications when an agent finishes or needs input while Agentty is in the background.
+    pub system_notifications: bool,
+    /// Local sessions pinned to the top (`claude:<id>`, `codex:<id>`).
+    pub favorite_sessions: Vec<String>,
+    /// Notify even while Agentty is the focused app.
+    pub notify_when_focused: bool,
+    /// Menu bar icon; closing the window keeps Agentty running there.
+    pub menu_bar: bool,
+    pub link_opener: LinkOpener,
+    pub browser: BrowserSettings,
+    /// Offer earlier AI sessions when a terminal enters their folder.
+    pub resume_bar: bool,
+    /// Status bar (model, context, branch) above AI CLI panes.
+    pub agent_bar: bool,
+    /// Ask before closing a pane, tab or workspace that was used.
+    pub confirm_close: bool,
+    pub metrics: MetricsSettings,
+}
+
+/// Anonymous usage metrics: opt-in; see docs/metrics.md.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MetricsSettings {
+    pub enabled: bool,
+    /// Where to upload events (HTTPS); empty keeps them local only.
+    pub endpoint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchEngine {
+    #[default]
+    Google,
+    DuckDuckGo,
+    Bing,
+}
+
+impl SearchEngine {
+    pub const ALL: [SearchEngine; 3] = [Self::Google, Self::DuckDuckGo, Self::Bing];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Google => "Google",
+            Self::DuckDuckGo => "DuckDuckGo",
+            Self::Bing => "Bing",
+        }
+    }
+
+    /// Search URL prefix; the encoded query is appended.
+    pub fn query_prefix(self) -> &'static str {
+        match self {
+            Self::Google => "https://www.google.com/search?q=",
+            Self::DuckDuckGo => "https://duckduckgo.com/?q=",
+            Self::Bing => "https://www.bing.com/search?q=",
+        }
+    }
+}
+
+/// Unknown or removed engines in older settings fall back to the default instead of failing the file.
+fn lenient_search_engine<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<SearchEngine, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        "duckDuckGo" => SearchEngine::DuckDuckGo,
+        "bing" => SearchEngine::Bing,
+        _ => SearchEngine::Google,
+    })
+}
+
+/// In-app browser preferences.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BrowserSettings {
+    /// Page the browser opens with.
+    pub home: String,
+    /// Panel width in points.
+    pub width: f32,
+    #[serde(deserialize_with = "lenient_search_engine")]
+    pub search_engine: SearchEngine,
+    pub javascript: bool,
+    /// Let pages open windows (pop-ups) without a click.
+    pub popups: bool,
+    /// Page zoom (1.0 = 100%).
+    pub zoom: f32,
+    /// Ask sites for their mobile layout.
+    pub mobile: bool,
+    /// Don't keep cookies, cache or history on disk.
+    pub private_mode: bool,
+    /// Allow Safari's Web Inspector (Develop menu) to attach.
+    pub inspectable: bool,
+    /// Give Claude Code / Codex started in Agentty tools to control this browser (MCP).
+    pub agent_tools: bool,
+}
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self {
+            home: "https://www.raylee.app/".into(),
+            width: 560.,
+            search_engine: SearchEngine::Google,
+            javascript: true,
+            popups: false,
+            zoom: 1.0,
+            mobile: false,
+            private_mode: false,
+            inspectable: false,
+            agent_tools: true,
+        }
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            settings_version: SETTINGS_VERSION,
+            language: Language::System,
+            theme: DEFAULT_THEME.into(),
+            font_family: BUNDLED_FONT.into(),
+            font_size: 13.0,
+            line_height: 1.0,
+            cursor_shape: CursorShapeSetting::Block,
+            cursor_blink: true,
+            padding: 8.0,
+            option_as_meta: false,
+            scrollback: 10_000,
+            sidebar_width: 280.0,
+            ask_directory: true,
+            ask_directory_for_tabs: false,
+            recent_dirs: Vec::new(),
+            aliases: Vec::new(),
+            system_notifications: true,
+            notify_when_focused: false,
+            menu_bar: true,
+            link_opener: LinkOpener::External,
+            browser: BrowserSettings::default(),
+            favorite_sessions: Vec::new(),
+            resume_bar: true,
+            agent_bar: true,
+            confirm_close: true,
+            metrics: MetricsSettings::default(),
+        }
+    }
+}
+
+impl Settings {
+    pub fn path() -> PathBuf {
+        agentty_bridge::fsutil::data_dir().join("settings.json")
+    }
+
+    fn load() -> Self {
+        match std::fs::read(Self::path()) {
+            Ok(bytes) => serde_json::from_slice::<Settings>(&bytes).map(Settings::migrate).unwrap_or_default(),
+            Err(_) => Settings::default(),
+        }
+    }
+
+    fn migrate(mut self) -> Self {
+        if self.settings_version < 2 {
+            // v2: Ghostty-like defaults. Line height became a multiple of the font's natural height.
+            if self.theme == LEGACY_DEFAULT_THEME {
+                self.theme = DEFAULT_THEME.into();
+            }
+            self.line_height = 1.0;
+        }
+        self.settings_version = SETTINGS_VERSION;
+        self
+    }
+
+    pub fn remember_dir(&mut self, dir: PathBuf) {
+        self.recent_dirs.retain(|d| d != &dir);
+        self.recent_dirs.insert(0, dir);
+        self.recent_dirs.truncate(10);
+    }
+}
+
+pub struct SettingsStore {
+    pub settings: Settings,
+    /// Bumped on every change, so views can react to "settings were updated".
+    pub revision: u64,
+    pub themes: Vec<TerminalTheme>,
+}
+
+impl Global for SettingsStore {}
+
+impl SettingsStore {
+    pub fn init(cx: &mut App) {
+        let store = SettingsStore { settings: Settings::load(), revision: 0, themes: load_themes() };
+        let _ = store.save();
+        if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases) {
+            eprintln!("agentty: shell integration unavailable: {err:#}");
+        }
+        cx.set_global(store);
+    }
+
+    fn save(&self) -> anyhow::Result<()> {
+        let path = Settings::path();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.settings)?)?;
+        std::fs::rename(tmp, path)?;
+        Ok(())
+    }
+
+    pub fn theme(&self) -> &TerminalTheme {
+        self.themes.iter().find(|t| t.name == self.settings.theme).unwrap_or(&self.themes[0])
+    }
+}
+
+/// Read from the settings file (launch specs are built without an `App`).
+pub fn browser_tools_enabled() -> bool {
+    std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.browser.agent_tools)
+}
+
+pub fn settings(cx: &App) -> &Settings {
+    &cx.global::<SettingsStore>().settings
+}
+
+pub fn terminal_theme(cx: &App) -> &TerminalTheme {
+    cx.global::<SettingsStore>().theme()
+}
+
+/// Applies a change, persists it and repaints every window.
+pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
+    cx.update_global::<SettingsStore, _>(|store, _| {
+        let aliases_before = store.settings.aliases.clone();
+        change(&mut store.settings);
+        store.revision += 1;
+        let _ = store.save();
+        if store.settings.aliases != aliases_before {
+            let _ = crate::shell_integration::write_files(&store.settings.aliases);
+        }
+    });
+    cx.refresh_windows();
+}
+
+pub fn reload_themes(cx: &mut App) {
+    cx.update_global::<SettingsStore, _>(|store, _| store.themes = load_themes());
+    cx.refresh_windows();
+}
+
+#[cfg(test)]
+mod browser_settings_tests {
+    use super::*;
+
+    #[test]
+    fn system_language_codes() {
+        assert_eq!(Language::from_code("ko-KR"), Language::Ko);
+        assert_eq!(Language::from_code("ja"), Language::Ja);
+        assert_eq!(Language::from_code("zh-Hans-CN"), Language::Zh);
+        assert_eq!(Language::from_code("fr-FR"), Language::En);
+        assert_eq!(Language::from_code(""), Language::En);
+        let parsed: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed.language, Language::System);
+    }
+
+    #[test]
+    fn removed_search_engine_falls_back() {
+        let parsed: BrowserSettings = serde_json::from_str(r#"{"searchEngine":"naver","zoom":1.2}"#).unwrap();
+        assert_eq!((parsed.search_engine, parsed.zoom), (SearchEngine::Google, 1.2));
+        let parsed: BrowserSettings = serde_json::from_str(r#"{"searchEngine":"bing"}"#).unwrap();
+        assert_eq!(parsed.search_engine, SearchEngine::Bing);
+    }
+}

@@ -1,0 +1,28 @@
+# Third-Party Notices
+
+Agentty is licensed under GPL-3.0-or-later. It bundles or links the following components under their own licenses,
+all compatible with GPLv3.
+
+## Bundled fonts (`crates/agentty-app/assets/fonts/`)
+
+| Component | License | Notes |
+|---|---|---|
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) 2.304 | SIL Open Font License 1.1 | `JetBrainsMono-OFL.txt` |
+| [JetBrainsMono Nerd Font Mono](https://github.com/ryanoasis/nerd-fonts) 3.5.1 (Regular) | SIL OFL 1.1 (font); MIT (patcher); icon sets under MIT, OFL-1.1, Apache-2.0, CC BY 4.0 | `NerdFonts-LICENSE.txt`, `NerdFonts-JetBrainsMono-README.md` |
+
+Nerd Fonts icon set attribution: Codicons (Microsoft, CC BY 4.0), Font Awesome (Fonticons, CC BY 4.0), Material Design
+Icons (Apache 2.0), Octicons (GitHub, MIT), Devicons (MIT), Powerline symbols (MIT), Pomicons (OFL 1.1), Weather Icons
+(OFL 1.1), Seti UI (MIT), Font Logos (Unlicense), Font Awesome Extension (MIT), Hack extra glyphs (MIT),
+IEC Power Symbols (MIT).
+
+## Major Rust dependencies
+
+| Crate | License |
+|---|---|
+| [gpui](https://github.com/zed-industries/zed) | Apache-2.0 |
+| [alacritty_terminal](https://github.com/alacritty/alacritty) | Apache-2.0 |
+| serde, serde_json, anyhow, futures, uuid, chrono, dirs, libc, clap | MIT OR Apache-2.0 |
+| plist | MIT |
+| unicode-segmentation | MIT OR Apache-2.0 |
+
+Run `cargo about` or `cargo license` for a complete, generated list of transitive dependencies.

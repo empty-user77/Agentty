@@ -1,0 +1,598 @@
+//! Mini background mode: the main window folds into a small always-on-top panel at the right
+//! edge of the screen that lists agent panes. Finished or waiting agents pop up as speech
+//! bubbles; clicking a bubble, a row or the expand button brings the full window back.
+
+use super::{status_label, Workbench};
+use crate::i18n::{t, tf};
+use crate::launch::PaneKind;
+use crate::native::{self, Frame};
+use crate::terminal::{AgentStatus, NoticeKind};
+use crate::theme::{hex, hex_alpha, Chrome};
+use crate::ui::TypeScale;
+use gpui::{
+    div, prelude::*, px, size, AnyWindowHandle, App, Bounds, ClickEvent, Context, Entity, FontWeight, Subscription, WeakEntity, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+};
+use std::time::{Duration, Instant};
+
+pub const MINI_WIDTH: f32 = 300.;
+const MARGIN: f64 = 16.;
+const HEADER: f32 = 40.;
+const ROW: f32 = 46.;
+const BUBBLE: f32 = 64.;
+const MAX_BUBBLES: usize = 3;
+/// Idle agents listed before "More" (working and waiting ones are always listed).
+const RECENT_ROWS: usize = 5;
+const MAX_ROWS: usize = 16;
+const MORE_ROW: f32 = 30.;
+
+/// One agent pane as the mini panel and the menu bar show it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentSummary {
+    pub pane_id: u64,
+    pub kind: PaneKind,
+    /// Brand id for the logo.
+    pub tool: &'static str,
+    /// Waiting for a permission or an answer.
+    pub needs_user: bool,
+    pub last_activity_ms: u64,
+    pub title: String,
+    pub workspace: String,
+    pub status: String,
+    pub color: u32,
+    pub working: bool,
+    pub waiting: bool,
+    pub elapsed: Option<u64>,
+}
+
+#[derive(Clone)]
+struct Bubble {
+    pane_id: u64,
+    title: String,
+    text: String,
+    color: u32,
+    at: Instant,
+}
+
+pub struct MiniState {
+    pub handle: WindowHandle<MiniView>,
+    pub view: Entity<MiniView>,
+    /// Main window frame to restore.
+    pub saved_frame: Option<Frame>,
+}
+
+pub struct MiniView {
+    workbench: WeakEntity<Workbench>,
+    main_window: AnyWindowHandle,
+    bubbles: Vec<Bubble>,
+    height: f32,
+    /// "More" pressed: every agent is listed and the panel grows.
+    expanded: bool,
+    _observe: Subscription,
+}
+
+impl MiniView {
+    fn new(workbench: &Entity<Workbench>, main_window: AnyWindowHandle, cx: &mut Context<Self>) -> Self {
+        // Elapsed times tick while agents work.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            if this.update(cx, |_, cx| cx.notify()).is_err() {
+                break;
+            }
+        })
+        .detach();
+        Self {
+            workbench: workbench.downgrade(),
+            main_window,
+            bubbles: Vec::new(),
+            height: 0.,
+            expanded: false,
+            _observe: cx.observe(workbench, |_, _, cx| cx.notify()),
+        }
+    }
+
+    pub fn push_bubble(&mut self, pane_id: u64, title: String, text: String, kind: NoticeKind, cx: &mut Context<Self>) {
+        let color = match kind {
+            NoticeKind::Finished => Chrome::SUCCESS,
+            NoticeKind::Permission | NoticeKind::Question => Chrome::ATTENTION,
+            _ => Chrome::PURPLE,
+        };
+        self.bubbles.retain(|b| b.pane_id != pane_id);
+        self.bubbles.insert(0, Bubble { pane_id, title, text, color, at: Instant::now() });
+        self.bubbles.truncate(MAX_BUBBLES);
+        cx.notify();
+    }
+
+    fn restore(&mut self, focus: Option<u64>, cx: &mut Context<Self>) {
+        let main = self.main_window;
+        // Deferred: the restore closes this window, which can't happen inside its own update.
+        cx.defer(move |cx| {
+            let _ = main.update(cx, |root, window, cx| {
+                if let Ok(workbench) = root.downcast::<Workbench>() {
+                    workbench.update(cx, |wb, cx| wb.exit_mini(focus, window, cx));
+                }
+            });
+        });
+    }
+
+    fn desired_height(rows: usize, bubbles: usize, more: bool) -> f32 {
+        let rows = rows.clamp(1, MAX_ROWS);
+        bubbles as f32 * (BUBBLE + 8.) + HEADER + rows as f32 * ROW + if more { MORE_ROW } else { 0. } + 10.
+    }
+
+    /// Working and waiting agents first, then the most recently active; `hidden` = how many "More" reveals.
+    fn arrange(mut agents: Vec<AgentSummary>, expanded: bool) -> (Vec<AgentSummary>, usize) {
+        agents.sort_by_key(|a| (!a.working, !a.needs_user, std::cmp::Reverse(a.last_activity_ms)));
+        let busy = agents.iter().filter(|a| a.working || a.needs_user).count();
+        let limit = if expanded { MAX_ROWS } else { (busy + RECENT_ROWS).min(MAX_ROWS) };
+        let hidden = agents.len().saturating_sub(limit);
+        agents.truncate(limit);
+        (agents, if expanded { 0 } else { hidden })
+    }
+}
+
+impl Render for MiniView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(workbench) = self.workbench.upgrade() else { return div().into_any_element() };
+        let all = workbench.read(cx).agent_summaries(cx);
+        let live: Vec<u64> = all.iter().map(|a| a.pane_id).collect();
+        self.bubbles.retain(|b| live.contains(&b.pane_id));
+        let total = all.len();
+        let working = all.iter().filter(|a| a.working).count();
+        let (agents, hidden) = Self::arrange(all, self.expanded);
+        let can_collapse = self.expanded && total > agents.len().min(RECENT_ROWS);
+
+        let height = Self::desired_height(agents.len(), self.bubbles.len(), hidden > 0 || can_collapse);
+        if (height - self.height).abs() > 0.5 {
+            self.height = height;
+            if let Some(ns) = native::ns_window(window) {
+                // After this frame: resizing synchronously re-enters the window we're rendering.
+                cx.spawn(async move |_, _| {
+                    let frame = native::frame(ns);
+                    native::set_frame(ns, frame.with_height_from_top(height as f64), true);
+                })
+                .detach();
+            }
+        }
+
+        let summary = if total == 0 {
+            t(cx, "mini.no_agents").to_string()
+        } else if working > 0 {
+            tf(cx, "mini.working", &[("n", &working.to_string())])
+        } else {
+            tf(cx, "mini.agents", &[("n", &total.to_string())])
+        };
+
+        let mut bubbles = div().flex().flex_col().gap_2();
+        for (index, bubble) in self.bubbles.clone().into_iter().enumerate() {
+            let (pane_id, color) = (bubble.pane_id, bubble.color);
+            let ago = crate::ui::relative_time(bubble.at.elapsed().as_millis() as u64, 0);
+            bubbles = bubbles.child(
+                div()
+                    .id(("mini-bubble", index))
+                    .relative()
+                    .h(px(BUBBLE))
+                    .px_3()
+                    .py_2()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .gap_0p5()
+                    .rounded_xl()
+                    .bg(hex(Chrome::OVERLAY))
+                    .border_1()
+                    .border_color(hex_alpha(bubble.color, 0.7))
+                    .shadow_lg()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::SELECTED)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(Some(pane_id), cx)))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .t_small()
+                            .child(div().size(px(7.)).rounded_full().bg(hex(bubble.color)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .child(bubble.title),
+                            )
+                            .child(div().text_color(hex(Chrome::MUTED)).child(ago)),
+                    )
+                    .child(div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(bubble.text))
+                    // Tail pointing down at the panel.
+                    .child(
+                        gpui::canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                let (x, y) = (bounds.origin.x, bounds.origin.y);
+                                let mut path = gpui::PathBuilder::fill();
+                                path.move_to(gpui::point(x, y));
+                                path.line_to(gpui::point(x + px(14.), y));
+                                path.line_to(gpui::point(x + px(7.), y + px(7.)));
+                                path.close();
+                                if let Ok(path) = path.build() {
+                                    window.paint_path(path, hex_alpha(color, 0.7));
+                                }
+                            },
+                        )
+                        .absolute()
+                        .bottom(px(-8.))
+                        .right(px(26.))
+                        .w(px(14.))
+                        .h(px(8.)),
+                    ),
+            );
+        }
+
+        let mut rows = div().flex().flex_col();
+        if agents.is_empty() {
+            rows = rows.child(
+                div().h(px(ROW)).px_3().flex().items_center().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "mini.empty_hint")),
+            );
+        }
+        for agent in agents.iter() {
+            let pane_id = agent.pane_id;
+            let status = match agent.elapsed.filter(|_| agent.working) {
+                Some(seconds) => format!("{} · {}", agent.status, super::layout::format_elapsed(seconds)),
+                None => agent.status.clone(),
+            };
+            rows = rows.child(
+                div()
+                    .id(("mini-row", pane_id as usize))
+                    .h(px(ROW))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(Some(pane_id), cx)))
+                    .child(
+                        div()
+                            .relative()
+                            .child(crate::brand::avatar(agent.tool, 22.))
+                            // Busy ring: working (orange) or waiting for the user (attention).
+                            .when(agent.working || agent.needs_user, |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .bottom(px(-1.))
+                                        .right(px(-1.))
+                                        .size(px(8.))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(hex(Chrome::SIDE_BAR))
+                                        .bg(hex(if agent.needs_user { Chrome::ATTENTION } else { Chrome::ORANGE })),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().t_small().truncate().text_color(hex(Chrome::BRIGHT)).child(agent.title.clone()))
+                            .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(agent.workspace.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .max_w(px(120.))
+                            .truncate()
+                            .t_caption()
+                            .text_color(hex(agent.color))
+                            .when(agent.needs_user, |d| d.px_1p5().rounded_sm().bg(hex_alpha(Chrome::ATTENTION, 0.18)))
+                            .child(status),
+                    ),
+            );
+        }
+        if hidden > 0 || can_collapse {
+            let label = if hidden > 0 { tf(cx, "mini.more", &[("n", &hidden.to_string())]) } else { t(cx, "mini.less").to_string() };
+            rows = rows.child(
+                div()
+                    .id("mini-more")
+                    .h(px(MORE_ROW))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_1()
+                    .cursor_pointer()
+                    .t_caption()
+                    .text_color(hex(Chrome::BLUE))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .child(label)
+                    .child(crate::ui::icon(if hidden > 0 { "chevron-down" } else { "chevron-up" }, 12., hex(Chrome::BLUE)))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.expanded = !this.expanded;
+                        cx.notify();
+                    })),
+            );
+        }
+
+        let panel = div()
+            .flex()
+            .flex_col()
+            .rounded_xl()
+            .bg(hex(Chrome::SIDE_BAR))
+            .border_1()
+            .border_color(hex(Chrome::OVERLAY_BORDER))
+            .shadow_lg()
+            .overflow_hidden()
+            .child(
+                div()
+                    .h(px(HEADER))
+                    .pl_3()
+                    .pr_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .child(
+                        div().relative().child(gpui::img("brand/logo.png").size(px(20.))).child(
+                            div()
+                                .absolute()
+                                .bottom(px(-1.))
+                                .right(px(-2.))
+                                .size(px(7.))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(hex(Chrome::SIDE_BAR))
+                                .bg(hex(if working > 0 { Chrome::ORANGE } else { Chrome::SUCCESS })),
+                        ),
+                    )
+                    .child(div().t_small().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child("Agentty"))
+                    .child(div().flex_1().min_w_0().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(summary))
+                    .child(crate::ui::icon_only(
+                        "mini-expand",
+                        "arrow-up-right",
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.restore(None, cx)),
+                    )),
+            )
+            .child(rows);
+
+        div().size_full().flex().flex_col().gap_2().p(px(4.)).child(bubbles).child(panel).into_any_element()
+    }
+}
+
+impl Workbench {
+    pub fn agent_summaries(&self, cx: &App) -> Vec<AgentSummary> {
+        let mut out = Vec::new();
+        for ws in &self.workspaces {
+            let workspace = self.workspace_title(ws, cx);
+            for tab in &ws.tabs {
+                for pane in tab.root.leaves() {
+                    let view = pane.read(cx);
+                    if view.tool_id() == "shell" || !view.is_running() {
+                        continue;
+                    }
+                    let (status, color) = status_label(view, cx);
+                    out.push(AgentSummary {
+                        pane_id: view.pane_id,
+                        kind: view.display_kind(),
+                        tool: view.tool_id(),
+                        needs_user: view.status.needs_user(),
+                        last_activity_ms: view.last_activity_ms,
+                        title: view.display_title(),
+                        workspace: workspace.clone(),
+                        status,
+                        color,
+                        working: matches!(view.status, AgentStatus::Working),
+                        waiting: view.attention,
+                        elapsed: view.working_since.map(|t| t.elapsed().as_secs()),
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    pub fn tray_state(&self, cx: &App) -> crate::status_item::TrayState {
+        crate::status_item::TrayState {
+            panes: self
+                .agent_summaries(cx)
+                .into_iter()
+                .map(|a| crate::status_item::TrayPane {
+                    id: a.pane_id,
+                    label: format!("{} — {} · {}", a.title, a.workspace, a.status),
+                    working: a.working,
+                    waiting: a.waiting,
+                })
+                .collect(),
+            show_label: t(cx, "tray.show").into(),
+            mini_label: t(cx, "mini.enter").into(),
+            quit_label: t(cx, "tray.quit").into(),
+            empty_label: t(cx, "mini.no_agents").into(),
+            mini: self.mini.is_some(),
+            usage_title: t(cx, "tray.usage_title").into(),
+            usage_lines: self.account_usage.iter().map(|u| u.menu_line(cx)).collect(),
+        }
+    }
+
+    pub fn handle_tray(&mut self, action: crate::status_item::TrayAction, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::status_item::TrayAction;
+        match action {
+            TrayAction::Show | TrayAction::Focus(_) if self.mini.is_some() => {
+                let focus = if let TrayAction::Focus(id) = action { Some(id) } else { None };
+                self.exit_mini(focus, window, cx);
+            }
+            TrayAction::Show => {
+                window.activate_window();
+                cx.activate(true);
+            }
+            TrayAction::Focus(id) => {
+                window.activate_window();
+                cx.activate(true);
+                self.jump_to_pane_id(id, window, cx);
+            }
+            TrayAction::ToggleMini => self.toggle_mini(window, cx),
+            TrayAction::OpenUsage => {
+                if self.mini.is_some() {
+                    self.exit_mini(None, window, cx);
+                }
+                window.activate_window();
+                cx.activate(true);
+                self.page = Some(super::Page::Usage);
+                cx.notify();
+            }
+            TrayAction::Quit => cx.quit(),
+        }
+    }
+
+    pub fn is_mini(&self) -> bool {
+        self.mini.is_some()
+    }
+
+    pub fn toggle_mini(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "mini" }));
+        if self.mini.is_some() {
+            self.exit_mini(None, window, cx);
+        } else {
+            self.enter_mini(window, cx);
+        }
+    }
+
+    /// Folds the window into the top-right corner, then shows the mini panel there.
+    pub fn enter_mini(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mini.is_some() || self.mini_opening {
+            return;
+        }
+        let Some(main) = native::ns_window(window) else { return };
+        let saved = native::frame(main);
+        let visible = native::is_visible(main);
+        let area = native::visible_frame(main).unwrap_or(saved);
+        let rows = self.agent_summaries(cx).len().min(RECENT_ROWS);
+        let height = MiniView::desired_height(rows, 0, false) as f64;
+        // Each Agentty window gets its own mini panel, side by side from the right edge.
+        let shift = self.slot as f64 * (MINI_WIDTH as f64 + 12.);
+        let mut target = Frame::top_right(area, MINI_WIDTH as f64, height, MARGIN);
+        target.x -= shift;
+        // GPUI window bounds are top-left based on the window's display.
+        let display = window.display(cx);
+        let display_bounds =
+            display.as_ref().map(|d| d.bounds()).unwrap_or_else(|| Bounds::new(gpui::point(px(0.), px(0.)), size(px(1440.), px(900.))));
+        let top_inset = (f32::from(display_bounds.size.height) as f64 - (area.y + area.height)).max(0.);
+        let origin = gpui::point(
+            display_bounds.origin.x + display_bounds.size.width - px(MINI_WIDTH + MARGIN as f32 + shift as f32),
+            display_bounds.origin.y + px((top_inset + MARGIN) as f32),
+        );
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(origin, size(px(MINI_WIDTH), px(height as f32))))),
+            titlebar: None,
+            focus: false,
+            show: true,
+            kind: WindowKind::PopUp,
+            is_movable: true,
+            is_resizable: false,
+            is_minimizable: false,
+            display_id: display.as_ref().map(|d| d.id()),
+            window_background: WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        };
+        let workbench = cx.entity();
+        let main_handle = window.window_handle();
+        self.mini_opening = true;
+        // Outside this update: the fold animation re-enters the window, and the mini panel's
+        // first frame reads the workbench.
+        cx.spawn(async move |this, cx| {
+            if visible {
+                native::set_frame(main, target, true);
+            }
+            let opened = cx.update(|cx| {
+                let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<MiniView>>>> = Default::default();
+                let captured = slot.clone();
+                let handle = cx.open_window(options, move |_, cx| {
+                    let view = cx.new(|cx| MiniView::new(&workbench, main_handle, cx));
+                    *captured.borrow_mut() = Some(view.clone());
+                    view
+                });
+                let view = slot.borrow_mut().take();
+                (handle, view)
+            });
+            let Ok((Ok(handle), Some(view))) = opened else {
+                native::set_frame(main, saved, false);
+                let _ = this.update(cx, |this, _| this.mini_opening = false);
+                return;
+            };
+            native::order_out(main);
+            native::set_frame(main, saved, false);
+            let _ = this.update(cx, |this, cx| {
+                this.mini_opening = false;
+                this.mini = Some(MiniState { handle, view, saved_frame: Some(saved) });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Closes the mini panel and grows the main window back from it.
+    pub fn exit_mini(&mut self, focus: Option<u64>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mini) = self.mini.take() else { return };
+        let mini_frame = mini.handle.update(cx, |_, w, _| native::ns_window(w).map(native::frame)).ok().flatten();
+        let _ = mini.handle.update(cx, |_, w, _| w.remove_window());
+        if let Some(main) = native::ns_window(window) {
+            let saved = mini.saved_frame.unwrap_or_else(|| native::frame(main));
+            if let Some(from) = mini_frame {
+                native::set_frame(main, from, false);
+            }
+            window.activate_window();
+            cx.activate(true);
+            // Grow back after this update (the animation re-enters the window).
+            cx.spawn(async move |_, _| native::set_frame(main, saved, true)).detach();
+        } else {
+            window.activate_window();
+            cx.activate(true);
+        }
+        match focus {
+            Some(pane_id) => {
+                self.jump_to_pane_id(pane_id, window, cx);
+            }
+            None => self.focus_active(window, cx),
+        }
+        cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MiniView;
+
+    #[test]
+    fn height_grows_with_rows_and_bubbles() {
+        let base = MiniView::desired_height(0, 0, false);
+        assert_eq!(base, MiniView::desired_height(1, 0, false));
+        assert!(MiniView::desired_height(3, 1, false) > MiniView::desired_height(3, 0, false));
+        assert_eq!(MiniView::desired_height(50, 0, false), MiniView::desired_height(super::MAX_ROWS, 0, false));
+    }
+
+    #[test]
+    fn working_agents_first_then_recent_five() {
+        let agent = |id: u64, working: bool, needs_user: bool, at: u64| super::AgentSummary {
+            pane_id: id,
+            kind: crate::launch::PaneKind::Claude,
+            tool: "claude",
+            needs_user,
+            last_activity_ms: at,
+            title: String::new(),
+            workspace: String::new(),
+            status: String::new(),
+            color: 0,
+            working,
+            waiting: false,
+            elapsed: None,
+        };
+        let agents = (1..=9).map(|i| agent(i, i == 7, i == 3, i * 10)).collect();
+        let (shown, hidden) = MiniView::arrange(agents, false);
+        assert_eq!(shown.iter().map(|a| a.pane_id).collect::<Vec<_>>(), vec![7, 3, 9, 8, 6, 5, 4]);
+        assert_eq!(hidden, 2);
+        let agents = (1..=9).map(|i| agent(i, false, false, i)).collect();
+        assert_eq!(MiniView::arrange(agents, true).1, 0);
+    }
+}

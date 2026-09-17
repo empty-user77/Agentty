@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+authors = ["Agentty contributors"]
+repository = "https://github.com/empty-user77/agentty"
+homepage = "https://agentty.run"
+keywords = ["terminal", "ai", "claude", "codex", "gpui"]
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
