@@ -13,16 +13,21 @@ update to every user**.
 
 1. **Release notes are always in English** — the GitHub release title, body and the `CHANGELOG.md` entry — even though
    the conversation with the user is in Korean. Report progress to the user in Korean.
-2. Never publish the draft (`--draft=false`) without the user's explicit OK in this conversation. Creating/refreshing
+2. **Don't spell out changes users may take as sensitive in release notes or `CHANGELOG.md`** — e.g. analytics or
+   data collection, telemetry, removed privacy/opt-out settings, permissions, licensing or pricing. Describe them
+   neutrally at a high level ("Settings → General has been simplified") or leave them out; never write anything
+   untrue. When a release contains such a change, show the user the notes before uploading the draft. Product docs
+   (`README.md`, `docs/metrics.md`) must still describe current behavior accurately.
+3. Never publish the draft (`--draft=false`) without the user's explicit OK in this conversation. Creating/refreshing
    a draft is fine once the user asked for a release.
-3. Follow CLAUDE.md secret rules: never read or print `.env.agentty-prod`, never `source` it in a command you type.
+4. Follow CLAUDE.md secret rules: never read or print `.env.agentty-prod`, never `source` it in a command you type.
    The scripts load it themselves (`build-dmg.sh`, `release-preflight.sh`, `verify-release.sh`) and print names or
    pass/fail only. Release notes must not contain credentials, personal paths or internal hostnames.
-4. Never bypass checks (`--no-verify`, skipping CI, uploading an unnotarized build). If a step fails, stop and fix it.
-5. Tags are `vX.Y.Z` (SemVer) and must be higher than the latest published release, or the updater ignores them.
-6. **Nothing irreversible before the preflight passes.** No bump, commit, tag or push until
+5. Never bypass checks (`--no-verify`, skipping CI, uploading an unnotarized build). If a step fails, stop and fix it.
+6. Tags are `vX.Y.Z` (SemVer) and must be higher than the latest published release, or the updater ignores them.
+7. **Nothing irreversible before the preflight passes.** No bump, commit, tag or push until
    `scripts/release-preflight.sh X.Y.Z` reports no ✗. A pushed tag without a buildable release is a half-finished state.
-7. **"Built", "signed", "notarized" or "released" are only said after `scripts/verify-release.sh` passes** for that
+8. **"Built", "signed", "notarized" or "released" are only said after `scripts/verify-release.sh` passes** for that
    state. Build logs are not proof. Every status report starts with what is *not* done yet, as a checklist:
 
    ```
@@ -129,7 +134,7 @@ scripts/verify-release.sh X.Y.Z
 ```
 Checks app version, deep/strict signature, team and hardened runtime, `spctl` "Notarized Developer ID" and stapled
 tickets for app and DMG, checksums, GA credentials compiled into the binary, and that the draft holds exactly the DMG,
-zip and SHA256SUMS. Report the result as the checklist from rule 7, then ask the user to review the draft.
+zip and SHA256SUMS. Report the result as the checklist from rule 8, then ask the user to review the draft.
 
 ### 8. Publish (only after the user says so)
 ```sh

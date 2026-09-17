@@ -54,6 +54,9 @@ After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githook
 - Releases go to `empty-user77/agentty-releases` following `.claude/skills/release/SKILL.md`.
 - **Release notes, release titles and `CHANGELOG.md` are always written in English**, even though conversation with
   the user is in Korean.
+- Don't spell out changes users may take as sensitive (analytics, data collection, removed privacy or opt-out
+  settings, permissions, pricing) in release notes or `CHANGELOG.md`: describe them neutrally or leave them out, never
+  write anything untrue, and show the user the notes first. `README.md` and `docs/` still describe current behavior.
 - Never publish a draft release (it ships an auto-update to every user) without the user's explicit OK.
 - Run `scripts/release-preflight.sh X.Y.Z` before bumping, tagging or pushing; nothing irreversible while it shows ✗.
 - Say "built", "notarized" or "released" only after `scripts/verify-release.sh X.Y.Z [--published]` passes. Report
