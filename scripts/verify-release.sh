@@ -75,7 +75,7 @@ else
 fi
 
 # ─── GitHub release ───
-json="$(gh release view "v$VERSION" -R "$RELEASE_REPO" --json isDraft,assets 2>/dev/null)"
+json="$(gh release view "v$VERSION" -R "$RELEASE_REPO" --json isDraft,isPrerelease,assets 2>/dev/null)"
 if [[ -z "$json" ]]; then
   fail "release v$VERSION not found on $RELEASE_REPO"
 else
@@ -85,7 +85,10 @@ else
   [[ "$assets" == "$expected" ]] && pass "release assets: $assets" || fail "release assets are '$assets', expected '$expected'"
   if [[ "$PUBLISHED" == "true" ]]; then
     [[ "$draft" == "false" ]] && pass "release is published" || fail "release is still a draft"
-    latest="$(gh api "repos/$RELEASE_REPO/releases/latest" --jq .tag_name 2>/dev/null)"
+    [[ "$(jq -r .isPrerelease <<<"$json")" == "false" ]] && pass "release is not a pre-release" \
+      || fail "release is marked pre-release (the update feed ignores it)"
+    latest="$(gh api "repos/$RELEASE_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
+    [[ "$latest" == v* ]] || latest=""
     [[ "$latest" == "v$VERSION" ]] && pass "update feed serves v$VERSION" || fail "update feed serves '${latest:-nothing}'"
     tmp="$(mktemp -d)"
     if gh release download "v$VERSION" -R "$RELEASE_REPO" -p "*.dmg" -p "*SHA256SUMS.txt" -D "$tmp" >/dev/null 2>&1 \

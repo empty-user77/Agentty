@@ -138,8 +138,12 @@ zip and SHA256SUMS. Report the result as the checklist from rule 8, then ask the
 
 ### 8. Publish (only after the user says so)
 ```sh
-gh release edit vX.Y.Z -R empty-user77/agentty-releases --draft=false --latest
+gh release edit vX.Y.Z -R empty-user77/agentty-releases --draft=false --prerelease=false
+gh release edit vX.Y.Z -R empty-user77/agentty-releases --latest
 ```
+Two separate calls: combining `--draft=false --latest` fails with HTTP 422 ("Latest release cannot be draft or
+prerelease") and has left the release published as a **pre-release**, which the update feed ignores. Always check with
+step 9.
 
 ### 9. Verify the update feed
 ```sh
