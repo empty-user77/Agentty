@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-18
+
+### Fixed
+- Reserved words (Settings → Reserved Words) now also work in the shell that opens after Claude Code or Codex exits in
+  an agent tab.
+
 ## [0.1.3] - 2026-09-18
 
 ### Changed
