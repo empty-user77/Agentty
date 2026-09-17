@@ -122,17 +122,42 @@ pub fn checksum_for(listing: &str, name: &str) -> Option<String> {
     })
 }
 
+fn copy_with_progress(
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    total: Option<u64>,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<u64> {
+    let mut buffer = [0u8; 64 * 1024];
+    let mut copied = 0u64;
+    progress(0, total);
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err.into()),
+        };
+        writer.write_all(&buffer[..read])?;
+        copied += read as u64;
+        progress(copied, total);
+    }
+    Ok(copied)
+}
+
 /// Downloads the release DMG into `dir` and verifies its SHA-256 against the published checksums.
-pub fn download(release: &Release, dir: &Path, current: &str) -> Result<std::path::PathBuf> {
+/// `progress` receives the bytes written so far and the total size when the server reports one.
+pub fn download(release: &Release, dir: &Path, current: &str, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<std::path::PathBuf> {
     let (Some(url), Some(name)) = (&release.dmg_url, &release.dmg_name) else { bail!("this release has no DMG for your Mac") };
     ensure!(trusted_url(url), "untrusted download location");
     ensure!(!name.contains('/') && !name.contains(".."), "invalid asset name");
     std::fs::create_dir_all(dir)?;
     let path = dir.join(name);
     let response = agent().get(url).set("User-Agent", &format!("Agentty/{current}")).call().context("download failed")?;
+    let total = response.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).filter(|&n| n > 0);
     let mut reader = response.into_reader().take(MAX_DOWNLOAD + 1);
     let mut file = std::fs::File::create(&path)?;
-    let copied = std::io::copy(&mut reader, &mut file)?;
+    let copied = copy_with_progress(&mut reader, &mut file, total, progress)?;
     file.flush()?;
     ensure!(copied <= MAX_DOWNLOAD, "download is unexpectedly large");
 
@@ -151,6 +176,21 @@ pub fn download(release: &Release, dir: &Path, current: &str) -> Result<std::pat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_copy_reports_progress() {
+        let data = vec![7u8; 200 * 1024];
+        let mut out = Vec::new();
+        let mut seen = Vec::new();
+        let copied =
+            copy_with_progress(&mut data.as_slice(), &mut out, Some(data.len() as u64), &mut |done, total| seen.push((done, total)))
+                .unwrap();
+        assert_eq!(copied, data.len() as u64);
+        assert_eq!(out, data);
+        assert_eq!(seen.first(), Some(&(0, Some(data.len() as u64))));
+        assert_eq!(seen.last(), Some(&(data.len() as u64, Some(data.len() as u64))));
+        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0));
+    }
 
     #[test]
     fn compares_versions() {

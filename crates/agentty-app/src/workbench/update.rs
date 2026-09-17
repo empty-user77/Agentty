@@ -10,6 +10,8 @@ use agentty_bridge::update::{self, Release};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, FontWeight, Window};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -26,6 +28,57 @@ pub enum UpdateState {
     Failed(String),
 }
 
+/// Install progress shared between the background installer and the popup.
+#[derive(Default)]
+pub struct InstallProgress {
+    stage: AtomicU8,
+    downloaded: AtomicU64,
+    /// 0 while the size is unknown.
+    total: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallStage {
+    Downloading,
+    Verifying,
+    Restarting,
+}
+
+impl InstallProgress {
+    fn reset(&self) {
+        self.set_stage(InstallStage::Downloading);
+        self.downloaded.store(0, Ordering::Relaxed);
+        self.total.store(0, Ordering::Relaxed);
+    }
+
+    fn set_stage(&self, stage: InstallStage) {
+        self.stage.store(stage as u8, Ordering::Relaxed);
+    }
+
+    fn set_bytes(&self, downloaded: u64, total: Option<u64>) {
+        self.downloaded.store(downloaded, Ordering::Relaxed);
+        self.total.store(total.unwrap_or(0), Ordering::Relaxed);
+    }
+
+    pub fn stage(&self) -> InstallStage {
+        match self.stage.load(Ordering::Relaxed) {
+            1 => InstallStage::Verifying,
+            2 => InstallStage::Restarting,
+            _ => InstallStage::Downloading,
+        }
+    }
+
+    /// Bytes downloaded and the total size, when known.
+    pub fn bytes(&self) -> (u64, Option<u64>) {
+        let total = self.total.load(Ordering::Relaxed);
+        (self.downloaded.load(Ordering::Relaxed), (total > 0).then_some(total))
+    }
+}
+
+fn megabytes(bytes: u64) -> String {
+    format!("{:.1}", bytes as f64 / (1024.0 * 1024.0))
+}
+
 #[derive(Default)]
 pub struct Updates {
     pub state: UpdateState,
@@ -33,6 +86,7 @@ pub struct Updates {
     pub popup: bool,
     /// Version already announced by popup this run, so hourly checks don't nag.
     announced: Option<String>,
+    progress: Arc<InstallProgress>,
 }
 
 /// The `.app` bundle this process runs from, if any.
@@ -55,11 +109,13 @@ fn run(command: &mut Command) -> anyhow::Result<String> {
 }
 
 /// Downloads, verifies and stages the new bundle next to the current one; returns the staged path.
-fn prepare_install(release: &Release) -> anyhow::Result<(PathBuf, PathBuf)> {
+fn prepare_install(release: &Release, progress: &InstallProgress) -> anyhow::Result<(PathBuf, PathBuf)> {
     anyhow::ensure!(current_bundle().is_some(), "updates install only into the Agentty app bundle");
     let work = std::env::temp_dir().join(format!("agentty-update-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
-    let dmg = update::download(release, &work, CURRENT_VERSION)?;
+    progress.reset();
+    let dmg = update::download(release, &work, CURRENT_VERSION, &mut |done, total| progress.set_bytes(done, total))?;
+    progress.set_stage(InstallStage::Verifying);
     let staged = stage_from_dmg(&dmg, &work);
     let _ = std::fs::remove_file(&dmg);
     staged
@@ -194,10 +250,33 @@ impl Workbench {
         }
         self.updates.state = UpdateState::Installing(release.clone());
         self.updates.popup = true;
+        self.updates.progress.reset();
         cx.notify();
-        let task = cx.background_spawn(async move { prepare_install(&release) });
+        let progress = self.updates.progress.clone();
+        let task = cx.background_spawn(async move { prepare_install(&release, &progress) });
+        // Repaint the progress bar while the installer runs.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            let installing = this
+                .update(cx, |this, cx| {
+                    cx.notify();
+                    matches!(this.updates.state, UpdateState::Installing(_))
+                })
+                .unwrap_or(false);
+            if !installing {
+                break;
+            }
+        })
+        .detach();
+        let progress = self.updates.progress.clone();
         cx.spawn(async move |this, cx| {
             let result = task.await.and_then(|(current, staged)| spawn_relauncher(&current, &staged));
+            if result.is_ok() {
+                // Let the "restarting" state show before the window disappears.
+                progress.set_stage(InstallStage::Restarting);
+                let _ = this.update(cx, |_, cx| cx.notify());
+                cx.background_executor().timer(Duration::from_millis(800)).await;
+            }
             let _ = this.update(cx, |this, cx| match result {
                 Ok(()) => cx.quit(),
                 Err(err) => {
@@ -294,7 +373,7 @@ impl Workbench {
             UpdateState::Installing(release) => (
                 tf(cx, "update.available_title", &[("version", &release.version)]),
                 t(cx, "update.installing_body").into(),
-                div().into_any_element(),
+                self.render_install_progress(cx),
             ),
             UpdateState::Checking => (
                 t(cx, "update.checking").into(),
@@ -361,8 +440,52 @@ impl Workbench {
                                 .child(notes),
                         )
                     })
-                    .child(div().flex().justify_end().child(actions)),
+                    .child(match self.updates.state {
+                        UpdateState::Installing(_) => actions,
+                        _ => div().flex().justify_end().child(actions).into_any_element(),
+                    }),
             )
+    }
+
+    /// Stage label, progress bar and "12.3 / 45.6 MB · 27%" while an update installs.
+    fn render_install_progress(&self, cx: &mut Context<Self>) -> AnyElement {
+        let progress = &self.updates.progress;
+        let stage = progress.stage();
+        let (done, total) = progress.bytes();
+        let fraction = match stage {
+            InstallStage::Downloading => total.map(|total| (done as f32 / total as f32).clamp(0.0, 1.0)),
+            InstallStage::Verifying | InstallStage::Restarting => Some(1.0),
+        };
+        let label = match stage {
+            InstallStage::Downloading => t(cx, "update.stage_downloading"),
+            InstallStage::Verifying => t(cx, "update.stage_verifying"),
+            InstallStage::Restarting => t(cx, "update.stage_restarting"),
+        };
+        let detail = match (stage, total) {
+            (InstallStage::Downloading, Some(total)) => {
+                format!("{} / {} MB · {}%", megabytes(done), megabytes(total), (fraction.unwrap_or(0.0) * 100.0).floor() as u32)
+            }
+            (InstallStage::Downloading, None) => format!("{} MB", megabytes(done)),
+            _ => String::new(),
+        };
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(crate::ui::spinner(IconSize::BUTTON, hex(Chrome::MUTED)))
+                    .child(div().flex_1().t_small().text_color(hex(Chrome::FOREGROUND)).child(label))
+                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(detail)),
+            )
+            .child(div().w_full().h(px(6.)).rounded_full().overflow_hidden().bg(hex(0x2d2d30)).when_some(fraction, |d, fraction| {
+                d.child(div().h_full().rounded_full().bg(hex(Chrome::ACCENT)).w(gpui::relative(fraction)))
+            }))
+            .into_any_element()
     }
 }
 

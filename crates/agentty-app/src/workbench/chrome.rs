@@ -1686,8 +1686,8 @@ impl Workbench {
         let active = self.active_pane().map(|p| p.read(cx));
         let kind = active.map(|v| match v.display_kind() {
             PaneKind::Shell => t(cx, "status.shell").to_string(),
-            PaneKind::Claude => "Claude Code".into(),
-            PaneKind::Codex => "Codex".into(),
+            PaneKind::Claude => with_version("Claude Code", self.installed.as_ref().and_then(|i| i.version("claude"))),
+            PaneKind::Codex => with_version("Codex", self.installed.as_ref().and_then(|i| i.version("codex"))),
         });
         let cwd = active.map(|v| tilde(&v.display_cwd()));
         // The workspace being looked at, not every workspace.
@@ -1705,13 +1705,19 @@ impl Workbench {
             .border_color(hex(Chrome::BORDER))
             .t_small()
             .text_color(hex(Chrome::MUTED))
-            .child(div().text_color(hex(Chrome::SUCCESS)).child("● Agentty"))
+            .child(div().text_color(hex(Chrome::SUCCESS)).child(format!("● Agentty v{}", super::update::CURRENT_VERSION)))
             .children(kind)
+            .children(self.render_advisor_chip(cx))
             .children(cwd)
             .child(div().flex_1().min_w_0().truncate().children(self.status.clone()))
             .children(self.render_status_icons(cx))
             .child(tf(cx, "count.terminals", &[("n", &terminals.to_string())]))
     }
+}
+
+/// "Claude Code v2.1.274", or just the name while the CLI version is unknown.
+fn with_version(name: &str, version: Option<&str>) -> String {
+    version.map_or_else(|| name.to_string(), |v| format!("{name} v{v}"))
 }
 
 /// Stable identifier for favorites: `claude:<id>` / `codex:<id>`.

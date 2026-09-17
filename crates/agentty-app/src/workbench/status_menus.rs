@@ -4,6 +4,7 @@
 use super::{Page, Workbench};
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
+use crate::settings::AdvisorChoice;
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, IconSize, TypeScale};
 use agentty_bridge::context::ContextSnapshot;
@@ -19,6 +20,7 @@ pub enum StatusMenu {
     Skills,
     Agents,
     Mcp,
+    Advisor,
 }
 
 type Key = (Agent, PathBuf);
@@ -29,6 +31,7 @@ fn status_menu_key(menu: StatusMenu) -> &'static str {
         StatusMenu::Skills => "status-skills",
         StatusMenu::Agents => "status-agents",
         StatusMenu::Mcp => "status-mcp",
+        StatusMenu::Advisor => "status-advisor",
     }
 }
 /// Result of `mcp list`: `None` while it runs.
@@ -76,6 +79,9 @@ impl Workbench {
             return cx.notify();
         }
         self.status_menu = Some(menu);
+        if menu == StatusMenu::Advisor {
+            return cx.notify();
+        }
         if menu == StatusMenu::Context {
             self.load_context(cx);
             return cx.notify();
@@ -124,6 +130,7 @@ impl Workbench {
                 StatusMenu::Skills => t(cx, "status.skills"),
                 StatusMenu::Agents => t(cx, "status.agents"),
                 StatusMenu::Mcp => t(cx, "status.mcp"),
+                StatusMenu::Advisor => t(cx, "advisor.title"),
             };
             div()
                 .id(id)
@@ -138,7 +145,7 @@ impl Workbench {
                 .child(icon(glyph, 13., hex(if open { Chrome::BRIGHT } else { Chrome::MUTED })))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_status_menu(menu, cx)))
         };
-        let menu = self.status_menu.map(|menu| self.render_status_menu(menu, &key, cx));
+        let menu = self.status_menu.filter(|m| *m != StatusMenu::Advisor).map(|menu| self.render_status_menu(menu, &key, cx));
         Some(
             div()
                 .relative()
@@ -160,7 +167,7 @@ impl Workbench {
             return self.render_context_menu(agent, cx);
         }
         let title = match menu {
-            StatusMenu::Context => t(cx, "context.title"),
+            StatusMenu::Context | StatusMenu::Advisor => t(cx, "context.title"),
             StatusMenu::Skills => t(cx, "status.skills"),
             StatusMenu::Agents => t(cx, "status.agents"),
             StatusMenu::Mcp => t(cx, "status.mcp"),
@@ -184,7 +191,7 @@ impl Workbench {
                 .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(meta))
         };
         match menu {
-            StatusMenu::Context => {}
+            StatusMenu::Context | StatusMenu::Advisor => {}
             StatusMenu::Skills | StatusMenu::Agents => {
                 let kind = if menu == StatusMenu::Skills { ExtensionKind::Skill } else { ExtensionKind::Agent };
                 match items {
@@ -293,5 +300,86 @@ impl Workbench {
             .right_0()
             .child(gpui::deferred(crate::ui::fade_in("status-menu-fade", panel)).with_priority(3))
             .into_any_element()
+    }
+}
+
+impl Workbench {
+    /// Restarts the active Claude tab with `advisor`, resuming its conversation.
+    pub(super) fn set_pane_advisor(&mut self, advisor: AdvisorChoice, cx: &mut Context<Self>) {
+        self.status_menu = None;
+        let Some(pane) = self.active_pane() else { return cx.notify() };
+        let view = pane.read(cx);
+        if view.advisor().is_none() {
+            self.set_status(t(cx, "advisor.not_claude"), cx);
+        } else if view.advisor() == Some(advisor) {
+            cx.notify();
+        } else if view.is_busy() {
+            self.set_status(t(cx, "advisor.busy"), cx);
+        } else if pane.update(cx, |view, cx| view.restart_with_advisor(advisor, cx)) {
+            self.set_status(tf(cx, "advisor.restarted", &[("advisor", t(cx, advisor.label_key()))]), cx);
+        }
+        cx.notify();
+    }
+
+    /// "Advisor: Opus" in the status bar for a Claude tab; opens a menu to switch it.
+    pub(super) fn render_advisor_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let current = self.active_pane()?.read(cx).advisor()?;
+        let open = self.status_menu == Some(StatusMenu::Advisor);
+        let active = current.model().is_some();
+        let chip = div()
+            .id("status-advisor")
+            .tooltip(crate::ui::Tooltip::text(t(cx, "advisor.tooltip"), None))
+            .h_full()
+            .px_1p5()
+            .flex()
+            .items_center()
+            .gap_1()
+            .cursor_pointer()
+            .when(open, |d| d.bg(hex(Chrome::SELECTED)))
+            .hover(|s| s.bg(hex(Chrome::HOVER)))
+            .child(icon("message-circle-question", 13., hex(if active { Chrome::BLUE } else { Chrome::MUTED })))
+            .child(div().text_color(hex(if active { Chrome::FOREGROUND } else { Chrome::MUTED })).child(format!(
+                "{} · {}",
+                t(cx, "advisor.title"),
+                t(cx, current.label_key())
+            )))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_status_menu(StatusMenu::Advisor, cx)));
+        let menu = open.then(|| {
+            let mut list = div().flex().flex_col();
+            for choice in AdvisorChoice::ALL {
+                let selected = choice == current;
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("advisor-choice-{choice:?}")))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .t_small()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hex(Chrome::HOVER)))
+                        .child(div().w(px(14.)).flex_shrink_0().when(selected, |d| d.child(icon("check", 12., hex(Chrome::BLUE)))))
+                        .child(div().flex_1().text_color(hex(Chrome::BRIGHT)).child(t(cx, choice.label_key())))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_pane_advisor(choice, cx))),
+                );
+            }
+            let panel = popover()
+                .w(px(300.))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    if this.status_menu == Some(StatusMenu::Advisor) {
+                        this.status_menu = None;
+                        this.note_dismissed(status_menu_key(StatusMenu::Advisor));
+                    }
+                    cx.notify();
+                }))
+                .child(div().px_2().pt_1().pb_1p5().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "advisor.menu_title")))
+                .child(list)
+                .child(div().h(px(1.)).my_1().bg(hex(Chrome::OVERLAY_BORDER)))
+                .child(div().px_2().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "advisor.menu_hint")));
+            div().absolute().bottom(px(24.)).left_0().child(gpui::deferred(crate::ui::fade_in("advisor-menu-fade", panel)).with_priority(3))
+        });
+        Some(div().relative().h_full().flex().items_center().child(chip).children(menu).into_any_element())
     }
 }

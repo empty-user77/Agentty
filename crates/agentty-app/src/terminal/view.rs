@@ -4,8 +4,9 @@ use super::backend::{Backend, GridSize, SpawnOptions};
 use super::keys;
 use crate::agent_signal::{SignalKind, SignalSocket};
 use crate::launch::{next_pane_id, LaunchSpec, PaneKind};
-use crate::settings::{settings, terminal_theme, CursorShapeSetting, SYMBOLS_FONT};
+use crate::settings::{settings, terminal_theme, AdvisorChoice, CursorShapeSetting, SYMBOLS_FONT};
 use crate::theme::{hex, Chrome, TerminalTheme};
+use agentty_bridge::model::Agent;
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::Direction;
@@ -256,8 +257,12 @@ impl Focusable for TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(spec: LaunchSpec, cx: &mut Context<Self>) -> Self {
+    pub fn new(mut spec: LaunchSpec, cx: &mut Context<Self>) -> Self {
         let pane_id = next_pane_id();
+        if spec.kind == PaneKind::Claude {
+            // Fixed at launch, so the status bar shows what this tab actually runs with.
+            spec.advisor.get_or_insert(settings(cx).advisor);
+        }
         let blink = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
             let alive = this.update(cx, |view, cx| {
@@ -620,6 +625,62 @@ impl TerminalView {
     }
 
     /// Running, or about to start on first paint.
+    /// The advisor a launched Claude tab runs with (not for Claude started by hand in a shell).
+    pub fn advisor(&self) -> Option<AdvisorChoice> {
+        (self.spec.kind == PaneKind::Claude && !self.agent_exited).then(|| self.spec.advisor.unwrap_or_default())
+    }
+
+    /// Whether the agent is in the middle of a turn or waiting on the user, so a restart would
+    /// lose work.
+    pub fn is_busy(&self) -> bool {
+        matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_))
+    }
+
+    /// Restarts a Claude tab with another advisor, resuming the same conversation (a session with
+    /// no transcript yet starts fresh under the same id). Returns false when it can't right now.
+    pub fn restart_with_advisor(&mut self, advisor: AdvisorChoice, cx: &mut Context<Self>) -> bool {
+        if self.spec.kind != PaneKind::Claude || self.agent_exited || self.is_busy() {
+            return false;
+        }
+        let id = self.session_id_live.clone().or_else(|| self.spec.session_id.clone());
+        let mut spec = match id {
+            Some(id) if agentty_bridge::claude::exists(&id) => {
+                LaunchSpec::resume(Agent::Claude, id, self.spec.title.clone(), self.spec.cwd.clone())
+            }
+            _ => {
+                let mut spec = LaunchSpec::new(PaneKind::Claude, self.spec.cwd.clone());
+                spec.title = self.spec.title.clone();
+                spec.session_id = self.spec.session_id.clone().or(spec.session_id);
+                spec
+            }
+        };
+        spec.model = self.spec.model.clone();
+        spec.advisor = Some(advisor);
+        self.spec = spec;
+        // Dropping the backend ends the running agent; the next paint spawns the new one.
+        self.backend = None;
+        self._events = None;
+        self.spawned = false;
+        self.error = None;
+        self.pending_input.clear();
+        self.agent_seen = false;
+        self.forget_agent_state();
+        self.session_id_live = None;
+        self.search = None;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SPAWN_FALLBACK_DELAY).await;
+            let _ = this.update(cx, |view, cx| {
+                if !view.spawned {
+                    view.spawn(last_grid_size(), cx);
+                }
+            });
+        })
+        .detach();
+        cx.emit(TerminalEvent::StatusChanged);
+        cx.notify();
+        true
+    }
+
     pub fn is_running(&self) -> bool {
         self.backend.is_some() || (!self.spawned && self.error.is_none())
     }

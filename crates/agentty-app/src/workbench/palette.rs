@@ -183,6 +183,12 @@ impl Workbench {
         push(t(cx, "split.right"), general, Some("⌘D"), Rc::new(|this, window, cx| this.split(super::Axis::Horizontal, window, cx)));
         push(t(cx, "split.down"), general, Some("⇧⌘D"), Rc::new(|this, window, cx| this.split(super::Axis::Vertical, window, cx)));
         push(t(cx, "notice.jump"), general, Some("⇧⌘U"), Rc::new(|this, window, cx| this.jump_to_unread(window, cx)));
+        if self.active_pane().is_some_and(|p| p.read(cx).advisor().is_some()) {
+            for choice in crate::settings::AdvisorChoice::ALL {
+                let label = format!("{}: {}", t(cx, "advisor.palette"), t(cx, choice.label_key()));
+                push(&label, general, None, Rc::new(move |this, _, cx| this.set_pane_advisor(choice, cx)));
+            }
+        }
         push(
             t(cx, "new.group"),
             general,

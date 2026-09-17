@@ -2,7 +2,7 @@
 //! Detection goes through the login shell once (PATH from nvm, brew, … matches the user's terminal).
 
 use crate::launch::shell_quote;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A command-line agent Agentty can launch in a terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,11 +48,17 @@ pub struct Installed {
     pub codex_models: Vec<String>,
     /// Claude Code models as (value for `--model`, label): configured default, then recently used.
     pub claude_models: Vec<(String, String)>,
+    /// CLI versions by binary (`claude`, `codex`), e.g. "2.1.274".
+    pub versions: BTreeMap<String, String>,
 }
 
 impl Installed {
     pub fn has(&self, binary: &str) -> bool {
         self.binaries.contains(binary)
+    }
+
+    pub fn version(&self, binary: &str) -> Option<&str> {
+        self.versions.get(binary).map(String::as_str)
     }
 
     pub fn other_agents(&self) -> impl Iterator<Item = &'static AgentCli> + '_ {
@@ -65,15 +71,28 @@ fn probe_script() -> String {
     let list = binaries.iter().map(|b| shell_quote(b)).collect::<Vec<_>>().join(" ");
     // Shims living inside other apps' bundles (e.g. cmux's `grok`) are not real installs.
     format!(
-        "for b in {list}; do p=$(command -v \"$b\" 2>/dev/null) || continue; case \"$p\" in *.app/Contents/*) ;; *) echo \"bin:$b\";; esac; done; command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | sed 's/^/ollama:/'; true"
+        "for b in {list}; do p=$(command -v \"$b\" 2>/dev/null) || continue; case \"$p\" in *.app/Contents/*) ;; *) echo \"bin:$b\";; esac; done; for b in claude codex; do command -v \"$b\" >/dev/null 2>&1 && echo \"version:$b:$(\"$b\" --version 2>/dev/null </dev/null | head -n 1)\"; done; command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | sed 's/^/ollama:/'; true"
     )
 }
 
-pub fn parse_probe(output: &str) -> (BTreeSet<String>, Vec<String>) {
+/// "2.1.274 (Claude Code)", "codex-cli 0.154.0" → the version number.
+fn parse_version(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|word| word.trim_start_matches(['v', 'V']))
+        .find(|word| word.starts_with(|c: char| c.is_ascii_digit()) && word.contains('.'))
+        .map(str::to_string)
+}
+
+pub fn parse_probe(output: &str) -> (BTreeSet<String>, Vec<String>, BTreeMap<String, String>) {
     let mut binaries = BTreeSet::new();
     let mut models = Vec::new();
+    let mut versions = BTreeMap::new();
     for line in output.lines() {
-        if let Some(bin) = line.strip_prefix("bin:") {
+        if let Some((bin, text)) = line.strip_prefix("version:").and_then(|rest| rest.split_once(':')) {
+            if let Some(version) = parse_version(text) {
+                versions.insert(bin.to_string(), version);
+            }
+        } else if let Some(bin) = line.strip_prefix("bin:") {
             binaries.insert(bin.trim().to_string());
         } else if let Some(row) = line.strip_prefix("ollama:") {
             // `ollama list`: NAME ID SIZE MODIFIED, with a header row.
@@ -82,7 +101,7 @@ pub fn parse_probe(output: &str) -> (BTreeSet<String>, Vec<String>) {
             }
         }
     }
-    (binaries, models)
+    (binaries, models, versions)
 }
 
 /// Model names from Codex's config (`model = "…"`) first, then from recent rollouts.
@@ -144,10 +163,10 @@ pub fn detect() -> Installed {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-    let (binaries, ollama_models) = parse_probe(&output);
+    let (binaries, ollama_models, versions) = parse_probe(&output);
     let codex_models = if binaries.contains("codex") { codex_models() } else { Vec::new() };
     let claude_models = if binaries.contains("claude") { claude_models() } else { Vec::new() };
-    Installed { binaries, ollama_models, codex_models, claude_models }
+    Installed { binaries, ollama_models, codex_models, claude_models, versions }
 }
 
 #[cfg(test)]
@@ -156,8 +175,11 @@ mod tests {
 
     #[test]
     fn parses_probe_output() {
-        let out = "bin:claude\nbin:gemini\nollama:NAME            ID    SIZE   MODIFIED\nollama:llama3.2:latest  a80c  2.0 GB 3 days ago\n";
-        let (bins, models) = parse_probe(out);
+        let out = "bin:claude\nbin:gemini\nversion:claude:2.1.274 (Claude Code)\nversion:codex:codex-cli 0.154.0\nversion:gemini:\nollama:NAME            ID    SIZE   MODIFIED\nollama:llama3.2:latest  a80c  2.0 GB 3 days ago\n";
+        let (bins, models, versions) = parse_probe(out);
+        assert_eq!(versions.get("claude").map(String::as_str), Some("2.1.274"));
+        assert_eq!(versions.get("codex").map(String::as_str), Some("0.154.0"));
+        assert!(!versions.contains_key("gemini"));
         assert!(bins.contains("claude") && bins.contains("gemini") && !bins.contains("codex"));
         assert_eq!(models, vec!["llama3.2:latest"]);
     }

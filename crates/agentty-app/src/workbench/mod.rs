@@ -258,6 +258,8 @@ pub struct Workbench {
     /// Listening TCP ports by pane id.
     ports: HashMap<u64, Vec<u16>>,
     installed_fonts: Option<Vec<String>>,
+    /// Settings: the "more fonts" list of every installed family is expanded.
+    font_list_open: bool,
     sessions_scroll: gpui::UniformListScrollHandle,
     sidebar_scroll: gpui::ScrollHandle,
     settings_scroll: gpui::ScrollHandle,
@@ -353,6 +355,7 @@ impl Workbench {
             find_bar: None,
             ports: HashMap::new(),
             installed_fonts: None,
+            font_list_open: false,
             sessions_scroll: gpui::UniformListScrollHandle::new(),
             sidebar_scroll: gpui::ScrollHandle::new(),
             settings_scroll: gpui::ScrollHandle::new(),

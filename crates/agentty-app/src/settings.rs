@@ -137,6 +137,42 @@ pub struct Settings {
     pub confirm_close: bool,
     /// Anonymous usage statistics (release builds only; see docs/metrics.md).
     pub usage_analytics: bool,
+    /// Claude Code advisor for new Claude tabs.
+    pub advisor: AdvisorChoice,
+}
+
+/// Claude Code's advisor tool (a stronger model Claude consults at key moments) for a Claude tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AdvisorChoice {
+    /// No flag: whatever Claude Code itself is configured with (`/advisor`, `advisorModel`).
+    #[default]
+    Inherit,
+    Off,
+    Opus,
+    Fable,
+}
+
+impl AdvisorChoice {
+    pub const ALL: [AdvisorChoice; 4] = [Self::Inherit, Self::Off, Self::Opus, Self::Fable];
+
+    /// Alias for `claude --advisor`.
+    pub fn model(self) -> Option<&'static str> {
+        match self {
+            Self::Opus => Some("opus"),
+            Self::Fable => Some("fable"),
+            Self::Inherit | Self::Off => None,
+        }
+    }
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Inherit => "advisor.inherit",
+            Self::Off => "advisor.off",
+            Self::Opus => "advisor.opus",
+            Self::Fable => "advisor.fable",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -250,6 +286,7 @@ impl Default for Settings {
             agent_bar: true,
             confirm_close: true,
             usage_analytics: true,
+            advisor: AdvisorChoice::Inherit,
         }
     }
 }
@@ -323,6 +360,14 @@ impl SettingsStore {
 /// Read from the settings file (launch specs are built without an `App`).
 pub fn browser_tools_enabled() -> bool {
     std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.browser.agent_tools)
+}
+
+/// The advisor for new Claude tabs, read from the settings file like [`browser_tools_enabled`].
+pub fn advisor_default() -> AdvisorChoice {
+    std::fs::read(Settings::path())
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+        .map_or_else(AdvisorChoice::default, |s| s.advisor)
 }
 
 pub fn settings(cx: &App) -> &Settings {

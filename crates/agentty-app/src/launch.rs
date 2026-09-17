@@ -5,6 +5,7 @@
 //! needs input) to Agentty's local socket — Claude Code via `--settings` hooks, Codex via its
 //! `notify` program. The user's own configuration files are never modified.
 
+use crate::settings::AdvisorChoice;
 use agentty_bridge::model::Agent;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -61,6 +62,8 @@ pub struct LaunchSpec {
     pub session_id: Option<String>,
     /// Model override (`claude --model`, `codex -m`).
     pub model: Option<String>,
+    /// Claude Code advisor; `None` takes the setting for new tabs.
+    pub advisor: Option<AdvisorChoice>,
 }
 
 /// What the user picked in the launcher.
@@ -126,11 +129,11 @@ impl LaunchSpec {
             PaneKind::Codex => "Codex".to_string(),
         };
         let session_id = (kind == PaneKind::Claude).then(|| uuid::Uuid::new_v4().to_string());
-        Self { kind, title, cwd, start: Start::New, session_id, model: None }
+        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None }
     }
 
     pub fn shell_command(command: String, title: String, cwd: PathBuf) -> Self {
-        Self { kind: PaneKind::Shell, title, cwd, start: Start::Command(command), session_id: None, model: None }
+        Self { kind: PaneKind::Shell, title, cwd, start: Start::Command(command), session_id: None, model: None, advisor: None }
     }
 
     pub fn resume(agent: Agent, id: String, title: String, cwd: PathBuf) -> Self {
@@ -138,7 +141,7 @@ impl LaunchSpec {
             let line = agent.resume_args(&id).iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
             return Self::shell_command(line, title, cwd);
         }
-        Self { kind: agent.into(), title, cwd, session_id: Some(id.clone()), start: Start::Resume(id), model: None }
+        Self { kind: agent.into(), title, cwd, session_id: Some(id.clone()), start: Start::Resume(id), model: None, advisor: None }
     }
 
     pub fn with_prompt(agent: Agent, prompt: String, title: String, cwd: PathBuf) -> Self {
@@ -158,6 +161,11 @@ impl LaunchSpec {
         match self.kind {
             PaneKind::Shell => return None,
             PaneKind::Claude => {
+                let advisor = self.advisor.unwrap_or_else(crate::settings::advisor_default);
+                if advisor == AdvisorChoice::Off {
+                    // `--advisor` has no "off"; this also overrides an `advisorModel` setting.
+                    args.extend(["env".into(), "CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1".into()]);
+                }
                 args.push("claude".into());
                 match &self.start {
                     Start::Resume(id) => args.extend(["--resume".into(), id.clone()]),
@@ -169,6 +177,9 @@ impl LaunchSpec {
                 }
                 if let Some(model) = &self.model {
                     args.extend(["--model".into(), model.clone()]);
+                }
+                if let Some(model) = advisor.model() {
+                    args.extend(["--advisor".into(), model.into()]);
                 }
                 args.extend(["--settings".into(), claude_hook_settings()]);
                 if crate::settings::browser_tools_enabled() {
@@ -324,12 +335,32 @@ mod tests {
 
     #[test]
     fn claude_gets_session_id_and_hooks() {
-        let spec = LaunchSpec::new(PaneKind::Claude, PathBuf::from("/tmp"));
+        let mut spec = LaunchSpec::new(PaneKind::Claude, PathBuf::from("/tmp"));
+        spec.advisor = Some(AdvisorChoice::Inherit);
         let args = spec.command().unwrap();
         assert_eq!(args[..2], ["claude", "--session-id"]);
         assert_eq!(args[2], spec.session_id.clone().unwrap());
         let settings: serde_json::Value = serde_json::from_str(&args[4]).unwrap();
         assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().contains("AGENTTY_SOCKET"));
+    }
+
+    #[test]
+    fn claude_advisor_arguments() {
+        let mut spec = LaunchSpec::new(PaneKind::Claude, PathBuf::from("/tmp"));
+        spec.advisor = Some(AdvisorChoice::Opus);
+        let args = spec.command().unwrap();
+        assert_eq!(args[0], "claude");
+        assert!(args.windows(2).any(|w| w == ["--advisor", "opus"]));
+
+        spec.advisor = Some(AdvisorChoice::Off);
+        let args = spec.command().unwrap();
+        assert_eq!(args[..3], ["env", "CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1", "claude"]);
+        assert!(!args.iter().any(|a| a == "--advisor"));
+
+        spec.advisor = Some(AdvisorChoice::Inherit);
+        let args = spec.command().unwrap();
+        assert_eq!(args[0], "claude");
+        assert!(!args.iter().any(|a| a == "--advisor"));
     }
 
     #[test]

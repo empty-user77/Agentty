@@ -144,6 +144,14 @@ fn render_shortcuts(cx: &mut Context<Workbench>) -> Div {
     list
 }
 
+/// Installed font families for the full list: sorted, deduplicated, without hidden system faces.
+fn installed_font_families(mut names: Vec<String>) -> Vec<String> {
+    names.retain(|name| !name.is_empty() && !name.starts_with('.'));
+    names.sort_by_key(|name| name.to_lowercase());
+    names.dedup();
+    names
+}
+
 const FONT_CHOICES: &[&str] =
     &[BUNDLED_FONT, "Menlo", "SF Mono", "Monaco", "Fira Code", "Cascadia Code", "Hack", "Source Code Pro", "D2Coding"];
 
@@ -666,7 +674,7 @@ impl Workbench {
 
         let mut fonts = div().flex().gap_1().justify_end();
         // Enumerating system fonts is slow; do it once per app run.
-        let installed = self.installed_fonts.get_or_insert_with(|| cx.text_system().all_font_names()).clone();
+        let installed = self.installed_fonts.get_or_insert_with(|| installed_font_families(cx.text_system().all_font_names())).clone();
         for (index, family) in FONT_CHOICES.iter().enumerate() {
             if *family != BUNDLED_FONT && !installed.iter().any(|name| name == family) {
                 continue;
@@ -681,6 +689,86 @@ impl Workbench {
                     let family = family.clone();
                     update_settings(cx, move |s| s.font_family = family);
                 }),
+            ));
+        }
+        // A font picked from the full list shows as its own chip next to the suggestions.
+        let custom_font = !FONT_CHOICES.contains(&prefs.font_family.as_str());
+        if custom_font {
+            fonts = fonts.child(chip("font-custom", prefs.font_family.clone(), true, |_, _, _| {}));
+        }
+        let font_list_open = self.font_list_open;
+        fonts = fonts.child(chip(
+            "font-more",
+            format!("{} {}", t(cx, "settings.font_more"), if font_list_open { "▴" } else { "▾" }),
+            font_list_open,
+            cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.font_list_open = !this.font_list_open;
+                cx.notify();
+            }),
+        ));
+        let font_list = font_list_open.then(|| {
+            let mut list = div()
+                .id("font-list")
+                .max_h(px(260.))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .p_1()
+                .rounded_md()
+                .border_1()
+                .border_color(hex(Chrome::OVERLAY_BORDER))
+                .bg(hex(0x1a1a1a));
+            for (index, family) in installed.iter().enumerate() {
+                let active = prefs.font_family == *family;
+                let target = family.clone();
+                list = list.child(
+                    div()
+                        .id(("font-item", index))
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .when(active, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.25)))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)))
+                        .child(
+                            div()
+                                .w(px(220.))
+                                .flex_shrink_0()
+                                .truncate()
+                                .t_small()
+                                .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::FOREGROUND) })
+                                .child(family.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(family.clone())
+                                .t_body()
+                                .text_color(hex(Chrome::MUTED))
+                                .child("AaBb 0O1l 한글 -> =>"),
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            let family = target.clone();
+                            this.font_list_open = false;
+                            update_settings(cx, move |s| s.font_family = family);
+                        })),
+                );
+            }
+            list
+        });
+
+        let mut advisors = div().flex().gap_1();
+        for choice in crate::settings::AdvisorChoice::ALL {
+            advisors = advisors.child(chip(
+                SharedString::from(format!("advisor-{choice:?}")),
+                t(cx, choice.label_key()),
+                prefs.advisor == choice,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.advisor = choice)),
             ));
         }
 
@@ -712,6 +800,7 @@ impl Workbench {
                         .gap_3()
                         .pb_6()
                         .child(row(t(cx, "settings.language"), languages))
+                        .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
                         .child(row(
                             t(cx, "settings.ask_dir"),
                             toggle("ask-dir", prefs.ask_directory, |s| s.ask_directory = !s.ask_directory, cx),
@@ -788,6 +877,7 @@ impl Workbench {
                 .child(
                     section(t(cx, "settings.font"))
                         .child(row(t(cx, "settings.font"), fonts))
+                        .children(font_list)
                         .child(row(
                             t(cx, "settings.font_size"),
                             stepper(
@@ -925,5 +1015,16 @@ impl Workbench {
                 ),
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn font_list_is_sorted_without_hidden_faces() {
+        let names = ["Menlo", ".SF NS Mono", "d2coding", "Andale Mono", "Menlo", ""].map(String::from).to_vec();
+        assert_eq!(installed_font_families(names), ["Andale Mono", "d2coding", "Menlo"]);
     }
 }

@@ -33,7 +33,8 @@ pub fn to_escape(keystroke: &Keystroke, mode: TermMode, option_as_meta: bool) ->
 
     let bytes = match key {
         "enter" => {
-            if m.alt {
+            // Shift+Enter inserts a newline in agent prompts, like Option+Enter (Meta-Return).
+            if m.alt || m.shift {
                 b"\x1b\r".to_vec()
             } else {
                 b"\r".to_vec()
@@ -128,6 +129,13 @@ mod tests {
         assert_eq!(to_escape(&ks("up"), TermMode::empty(), false), Some(b"\x1b[A".to_vec()));
         assert_eq!(to_escape(&ks("up"), TermMode::APP_CURSOR, false), Some(b"\x1bOA".to_vec()));
         assert_eq!(to_escape(&ks("shift-up"), TermMode::empty(), false), Some(b"\x1b[1;2A".to_vec()));
+    }
+
+    #[test]
+    fn shift_enter_is_a_newline_not_submit() {
+        assert_eq!(to_escape(&ks("enter"), TermMode::empty(), false), Some(b"\r".to_vec()));
+        assert_eq!(to_escape(&ks("shift-enter"), TermMode::empty(), false), Some(b"\x1b\r".to_vec()));
+        assert_eq!(to_escape(&ks("alt-enter"), TermMode::empty(), false), Some(b"\x1b\r".to_vec()));
     }
 
     #[test]
