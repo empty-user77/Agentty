@@ -6,6 +6,7 @@ mod browser;
 mod browser_control;
 mod chrome;
 mod confirm;
+mod context_menu;
 mod find;
 pub mod flow;
 mod layout;
@@ -226,6 +227,8 @@ pub struct Workbench {
     /// Settings revision already acknowledged, and the toast shown for a newer one.
     settings_seen: u64,
     toast: Option<(SharedString, u64)>,
+    /// Title last given to the native window (the Dock and Window menus list windows by it).
+    native_title: String,
     /// Spend and limit resets per agent, for the menu bar.
     account_usage: Vec<account_usage::AccountUsage>,
     /// Subagents / session links popover of a pane.
@@ -321,6 +324,7 @@ impl Workbench {
             launcher_at: None,
             settings_seen: 0,
             toast: None,
+            native_title: String::new(),
             account_usage: Vec::new(),
             agent_panel: None,
             session_viewer: None,
@@ -604,6 +608,23 @@ impl Workbench {
         self.persist(cx);
     }
 
+    /// Opens `folder` (picked from the Dock's recent list or Finder): switches to a workspace
+    /// already there, otherwise starts a terminal workspace in it.
+    pub fn open_folder(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mini.is_some() {
+            self.exit_mini(None, window, cx);
+        }
+        // Test runs (`AGENTTY_BACKGROUND=1`) don't take focus from the app in use.
+        if std::env::var("AGENTTY_BACKGROUND").as_deref() != Ok("1") {
+            window.activate_window();
+            cx.activate(true);
+        }
+        match self.workspaces.iter().position(|ws| ws.cwd == folder) {
+            Some(index) => self.activate_workspace(index, window, cx),
+            None => self.create_workspace(LaunchSpec::new(PaneKind::Shell, folder), window, cx),
+        }
+    }
+
     pub fn open_tab(&mut self, spec: LaunchSpec, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspaces.is_empty() {
             return self.create_workspace(spec, window, cx);
@@ -625,6 +646,7 @@ impl Workbench {
             return;
         }
         self.active_workspace = index;
+        crate::native::note_recent_folder(&self.workspaces[index].cwd);
         self.page = None;
         self.session_viewer = None;
         self.new_workspace = None;
@@ -809,6 +831,7 @@ impl Workbench {
         cx.spawn(async move |this, cx| {
             let sessions = task.await;
             let _ = this.update(cx, |this, cx| {
+                crate::set_recent_sessions(&sessions, cx);
                 this.sessions = sessions;
                 this.sessions_loading = false;
                 if let Some(picker) = this.picker.as_mut() {
@@ -1158,6 +1181,16 @@ impl Render for Workbench {
         }
         self.prepare_browser(window, cx);
         self.check_settings_toast(cx);
+        // Name the window after what it shows, so several Agentty windows can be told apart in the
+        // Dock menu and Mission Control.
+        let title = match self.workspaces.get(self.active_workspace).map(|ws| self.workspace_title(ws, cx)) {
+            Some(name) if !name.is_empty() => format!("{name} — Agentty"),
+            _ => "Agentty".to_string(),
+        };
+        if title != self.native_title {
+            window.set_window_title(&title);
+            self.native_title = title;
+        }
         let main: gpui::AnyElement = match self.page {
             Some(Page::Usage) => {
                 let usage = self.usage.get_or_insert_with(|| cx.new(UsageView::new)).clone();
@@ -1292,6 +1325,12 @@ impl Render for Workbench {
             }))
             .on_action(cx.listener(|this, _: &InstallUpdate, _, cx| this.install_update(cx)))
             .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| this.jump_to_unread(window, cx)))
+            .on_action(cx.listener(|this, action: &crate::OpenRecentSession, window, cx| {
+                let session = crate::RECENT_SESSIONS.lock().ok().and_then(|recent| recent.get(action.index).cloned());
+                if let Some(session) = session {
+                    this.resume_session(&session, window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleZoom, window, cx| {
                 if let Some(pane) = this.active_pane() {
                     this.toggle_zoom(&pane, window, cx);
@@ -1354,7 +1393,15 @@ impl Render for Workbench {
                                     }),
                             )
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
-                            .when(self.notices_open, |d| d.child(self.render_notices(cx))),
+                            .when(self.notices_open, |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(39.))
+                                        .right(px(8.))
+                                        .child(gpui::deferred(self.render_notices(cx)).with_priority(3)),
+                                )
+                            }),
                     ),
             )
             .child(self.render_status_bar(cx))
@@ -1363,6 +1410,7 @@ impl Render for Workbench {
             .children(self.render_tab_menu(cx))
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
+            .children((!self.updates.popup).then(|| self.render_update_badge(cx)).flatten())
             .children(self.render_close_confirm(cx))
             .children(self.render_toast())
     }
@@ -1470,7 +1518,7 @@ impl Workbench {
 
     fn open_page(&mut self, page: Page, cx: &mut Context<Self>) {
         let feature = match page {
-            Page::Git => "cosgit",
+            Page::Git => "agentgit",
             Page::Flow => "flow",
             Page::Usage => "usage",
             Page::Settings => "settings",
@@ -1478,6 +1526,11 @@ impl Workbench {
         };
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
         self.page = if self.page == Some(page) { None } else { Some(page) };
+        // AgentGit and Session Flow work with workspaces: always show that list next to them.
+        if self.page.is_some_and(Self::page_keeps_sidebar) {
+            self.panel = SidePanel::Workspaces;
+            self.sidebar_open = true;
+        }
         self.launcher_open = false;
         cx.notify();
     }
@@ -1588,7 +1641,8 @@ fn reveal_in_finder(path: &std::path::Path) {
 pub fn other_agent(agent: Agent) -> Agent {
     match agent {
         Agent::Claude => Agent::Codex,
-        Agent::Codex => Agent::Claude,
+        // Sessions of other CLIs are handed to Claude Code.
+        _ => Agent::Claude,
     }
 }
 
@@ -1650,7 +1704,7 @@ impl Workbench {
                 .detach();
             }
             "page" => {
-                self.page = match argument {
+                let page = match argument {
                     "flow" => Some(Page::Flow),
                     "usage" => Some(Page::Usage),
                     "settings" => Some(Page::Settings),
@@ -1658,6 +1712,11 @@ impl Workbench {
                     "git" => Some(Page::Git),
                     _ => None,
                 };
+                match page {
+                    Some(page) if self.page != Some(page) => self.open_page(page, cx),
+                    Some(_) => {}
+                    None => self.page = None,
+                }
             }
             "panel" => self.show_panel(if argument == "sessions" { SidePanel::Sessions } else { SidePanel::Workspaces }, cx),
             "git" => {
@@ -1781,6 +1840,7 @@ impl Workbench {
                 match argument {
                     "agents" => status_menus::StatusMenu::Agents,
                     "mcp" => status_menus::StatusMenu::Mcp,
+                    "context" => status_menus::StatusMenu::Context,
                     _ => status_menus::StatusMenu::Skills,
                 },
                 cx,
@@ -1832,6 +1892,11 @@ impl Workbench {
             "tray" => {
                 let state = self.tray_state(cx);
                 eprintln!("tray: {} {:?}", state.usage_title, state.usage_lines);
+            }
+            "hover" => {
+                if let Some(pane) = self.active_pane() {
+                    eprintln!("hover: {:?}", pane.read(cx).debug_hover());
+                }
             }
             "focus-info" => {
                 let alias = self

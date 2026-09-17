@@ -176,9 +176,6 @@ impl Workbench {
 
         popover()
             .id("notices")
-            .absolute()
-            .top(px(39.))
-            .right(px(8.))
             .w(px(360.))
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {

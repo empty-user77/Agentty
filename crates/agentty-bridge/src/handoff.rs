@@ -89,7 +89,7 @@ fn write_document(from: Agent, id: &str, to: Agent, cwd: Option<&str>, turns: &[
 fn agent_slug(agent: Agent) -> &'static str {
     match agent {
         Agent::Claude => "claude",
-        Agent::Codex => "codex",
+        other => other.id(),
     }
 }
 

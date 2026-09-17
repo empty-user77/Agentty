@@ -162,6 +162,9 @@ pub fn classify_screen(lines: &[String]) -> ScreenState {
 /// Cell metrics and origin captured during prepaint, used for mouse and IME hit testing.
 #[derive(Clone, Copy)]
 struct Layout {
+    /// Top-left of the element (the text origin adds padding).
+    bounds_origin: Point<Pixels>,
+    bounds_height: Pixels,
     origin: Point<Pixels>,
     cell_width: Pixels,
     line_height: Pixels,
@@ -199,6 +202,8 @@ pub struct TerminalView {
     press_cell: Option<GridPoint>,
     /// Link under the pointer: (grid line, start column, end column).
     hover_link: Option<(i32, usize, usize)>,
+    /// What the underlined link opens, for the hint shown next to it.
+    hover_target: Option<LinkTarget>,
     cursor_visible: bool,
     /// Agent detected in the foreground (also when started by hand in a shell pane).
     pub live_agent: Option<PaneKind>,
@@ -312,6 +317,7 @@ impl TerminalView {
             last_mouse_cell: None,
             press_cell: None,
             hover_link: None,
+            hover_target: None,
             cursor_visible: true,
             live_agent: None,
             live_tool: None,
@@ -560,6 +566,7 @@ impl TerminalView {
             let id = known.or_else(|| match agent {
                 agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent(&cwd, since),
                 agentty_bridge::model::Agent::Codex => agentty_bridge::codex::find_recent(&cwd, since),
+                _ => None,
             })?;
             let subagents =
                 if agent == agentty_bridge::model::Agent::Claude { agentty_bridge::claude::subagent_activity(&id) } else { (0, 0) };
@@ -1132,17 +1139,8 @@ impl TerminalView {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        // Underline the link under the pointer (when no button is held).
-        if event.pressed_button.is_none() && !self.mouse_captured(event.modifiers.shift) {
-            let hovered = self.grid_point(event.position).and_then(|(point, _)| {
-                let target = self.link_at(point)?;
-                Some((point, target))
-            });
-            let range = hovered.as_ref().and_then(|(point, _)| self.word_range(*point));
-            if range != self.hover_link {
-                self.hover_link = range;
-                cx.notify();
-            }
+        if event.pressed_button.is_none() {
+            self.update_hover(event.position, event.modifiers.platform, cx);
         }
         if self.mouse_reporting && event.pressed_button == Some(MouseButton::Left) {
             let mode = self.mode();
@@ -1164,6 +1162,48 @@ impl TerminalView {
             }
         }
         cx.notify();
+    }
+
+    /// With ⌘ held, underlines the link under the pointer and shows where a click goes (also over
+    /// full-screen apps that take the mouse, like Claude Code).
+    fn update_hover(&mut self, position: Point<Pixels>, command: bool, cx: &mut Context<Self>) {
+        let found = command.then(|| self.grid_point(position)).flatten().and_then(|(point, _)| {
+            let target = self.link_at(point)?;
+            let range = match &target {
+                LinkTarget::Url(_) => self.url_range(point).or_else(|| self.word_range(point)),
+                LinkTarget::Path(_) => self.word_range(point),
+            }?;
+            Some((range, target))
+        });
+        let (range, target) = match found {
+            Some((range, target)) => (Some(range), Some(target)),
+            None => (None, None),
+        };
+        if range != self.hover_link || target != self.hover_target {
+            self.hover_link = range;
+            self.hover_target = target;
+            cx.notify();
+        }
+    }
+
+    pub fn debug_hover(&self) -> (Option<(i32, usize, usize)>, Option<LinkTarget>) {
+        (self.hover_link, self.hover_target.clone())
+    }
+
+    fn on_modifiers_changed(&mut self, event: &gpui::ModifiersChangedEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_hover(window.mouse_position(), event.modifiers.platform, cx);
+    }
+
+    /// Column range of the URL covering `point`.
+    fn url_range(&self, point: GridPoint) -> Option<(i32, usize, usize)> {
+        let backend = self.backend.as_ref()?;
+        let term = backend.term.lock();
+        let grid = term.grid();
+        let text: Vec<char> = (0..grid.columns()).map(|c| grid[point.line][Column(c)].c).collect();
+        url_ranges(&text)
+            .into_iter()
+            .find(|(start, end)| (*start..*end).contains(&point.column.0))
+            .map(|(start, end)| (point.line.0, start, end))
     }
 
     /// Line and column range of the non-blank word at `point` (for the link underline).
@@ -1264,10 +1304,53 @@ impl Render for TerminalView {
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !hovered && this.hover_link.take().is_some() {
+                    this.hover_target = None;
+                    cx.notify();
+                }
+            }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .relative()
             .child(TerminalElement { view: cx.entity(), focus: self.focus_handle.clone() })
+            .children(self.render_link_hint(cx))
+    }
+}
+
+impl TerminalView {
+    /// "⌘-click to open" label under the link the pointer is on.
+    fn render_link_hint(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let (layout, (line, start, _), target) = (self.layout?, self.hover_link?, self.hover_target.as_ref()?);
+        let row = line + layout.display_offset as i32;
+        let x = layout.origin.x - layout.bounds_origin.x + layout.cell_width * start as f32;
+        let below = layout.origin.y - layout.bounds_origin.y + layout.line_height * (row + 1) as f32 + px(2.);
+        // Above the link when it sits on the last rows.
+        let y = if below + px(24.) > layout.bounds_height { below - layout.line_height - px(26.) } else { below };
+        let label = match target {
+            LinkTarget::Url(_) => crate::i18n::t(cx, "terminal.open_link"),
+            LinkTarget::Path(path) if path.is_dir() => crate::i18n::t(cx, "terminal.open_folder"),
+            LinkTarget::Path(_) => crate::i18n::t(cx, "terminal.reveal_file"),
+        };
+        Some(
+            div()
+                .absolute()
+                .left(x.max(px(4.)))
+                .top(y.max(px(0.)))
+                .px_2()
+                .py(px(3.))
+                .rounded_md()
+                .bg(hex(Chrome::OVERLAY))
+                .border_1()
+                .border_color(hex(Chrome::OVERLAY_BORDER))
+                .shadow_md()
+                .text_size(px(crate::ui::Type::SMALL))
+                .font_family(".SystemUIFont")
+                .text_color(hex(Chrome::BRIGHT))
+                .child(label),
+        )
     }
 }
 
@@ -1604,7 +1687,8 @@ impl Element for TerminalElement {
                 }
             }
 
-            if indexed.point == cursor_point && cursor_shape != CursorShape::Hidden && cursor_visible {
+            // While composing (IME), the underlined composition stands in for the cursor.
+            if indexed.point == cursor_point && cursor_shape != CursorShape::Hidden && cursor_visible && marked_text.is_none() {
                 let cursor_bounds = Bounds::new(
                     point(origin.x + cell_width * col as f32, origin.y + line_height * row as f32),
                     size(cell_width * width as f32, line_height),
@@ -1647,13 +1731,22 @@ impl Element for TerminalElement {
             };
             let shaped = text_system.shape_line(text.into(), font_size, &[run], None);
             let pos = point(origin.x + cell_width * (cursor_col + pending.unwrap_or(0)) as f32, origin.y + line_height * cursor_row as f32);
-            let backdrop = fill(Bounds::new(pos, size(shaped.width, line_height)), hex(theme.selection));
+            // Plain background (hides the cells underneath) with just an underline, like other terminals.
+            let backdrop = fill(Bounds::new(pos, size(shaped.width, line_height)), hex(theme.background));
             frame.marked = Some((backdrop, pos, shaped));
         }
         drop(term);
 
         view.update(cx, |view, _| {
-            view.layout = Some(Layout { origin, cell_width, line_height, display_offset, cursor: (cursor_col, cursor_row) });
+            view.layout = Some(Layout {
+                bounds_origin: bounds.origin,
+                bounds_height: bounds.size.height,
+                origin,
+                cell_width,
+                line_height,
+                display_offset,
+                cursor: (cursor_col, cursor_row),
+            });
             view.focused = focused;
             if pending.is_none() {
                 view.commit_anchor = None;
@@ -1673,7 +1766,8 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) {
         window.handle_input(&self.focus, ElementInputHandler::new(bounds, self.view.clone()), cx);
-        window.set_cursor_style(CursorStyle::IBeam, &frame.hitbox);
+        let over_link = self.view.read(cx).hover_link.is_some();
+        window.set_cursor_style(if over_link { CursorStyle::PointingHand } else { CursorStyle::IBeam }, &frame.hitbox);
 
         window.paint_layer(bounds, |window| {
             for quad in frame.backgrounds.drain(..) {

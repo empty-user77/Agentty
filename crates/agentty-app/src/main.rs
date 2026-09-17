@@ -97,27 +97,87 @@ fn sanitize_environment() {
     }
 }
 
+actions!(agentty, [HideApp, HideOthers, ShowAll, MinimizeWindow, ZoomWindow]);
+
+/// Resumes one of the sessions listed under History (index into [`RECENT_SESSIONS`]).
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = agentty, no_json)]
+pub struct OpenRecentSession {
+    pub index: usize,
+}
+
+/// Most recent local sessions shown in the History menu.
+pub static RECENT_SESSIONS: std::sync::Mutex<Vec<agentty_bridge::model::SessionInfo>> = std::sync::Mutex::new(Vec::new());
+const RECENT_MENU_LIMIT: usize = 10;
+
+/// Refreshes the History menu from a freshly loaded session list (newest first).
+pub fn set_recent_sessions(sessions: &[agentty_bridge::model::SessionInfo], cx: &mut App) {
+    let recent: Vec<_> = sessions.iter().take(RECENT_MENU_LIMIT).cloned().collect();
+    let changed = {
+        let Ok(mut current) = RECENT_SESSIONS.lock() else { return };
+        let same = current.len() == recent.len() && current.iter().zip(&recent).all(|(a, b)| a.id == b.id && a.title == b.title);
+        if !same {
+            *current = recent;
+        }
+        !same
+    };
+    if changed {
+        set_app_menus(cx);
+    }
+}
+
+fn recent_session_items(cx: &App) -> Vec<MenuItem> {
+    let Ok(recent) = RECENT_SESSIONS.lock() else { return Vec::new() };
+    recent
+        .iter()
+        .enumerate()
+        .map(|(index, session)| {
+            let mut title: String = session.title.chars().take(60).collect();
+            if session.title.chars().count() > 60 {
+                title.push('…');
+            }
+            MenuItem::action(format!("{} — {title}", session.agent.display_name()), OpenRecentSession { index })
+        })
+        .chain(recent.is_empty().then(|| MenuItem::action(t(cx, "menu.no_recent"), workbench::ShowSessions)))
+        .collect()
+}
+
+// Position of the Window menu, registered with AppKit (see `native::register_windows_menu`).
+const WINDOW_MENU_INDEX: usize = 5;
+
 pub fn set_app_menus(cx: &mut App) {
+    // Dock icon right-click: AppKit lists the open windows above these items.
+    cx.set_dock_menu(vec![MenuItem::action(t(cx, "new.window"), NewWindow)]);
+    let mut history = vec![
+        MenuItem::action(t(cx, "menu.show_sessions"), workbench::ShowSessions),
+        MenuItem::action(t(cx, "shortcuts.search_sessions"), workbench::SearchSessions),
+        MenuItem::separator(),
+    ];
+    history.extend(recent_session_items(cx));
     cx.set_menus(vec![
         Menu {
             name: "Agentty".into(),
             items: vec![
                 MenuItem::action(t(cx, "about.menu"), workbench::ShowAbout),
-                MenuItem::separator(),
                 MenuItem::action(t(cx, "update.check_menu"), workbench::CheckForUpdates),
                 MenuItem::action(t(cx, "update.install_menu"), workbench::InstallUpdate),
                 MenuItem::separator(),
-                MenuItem::action(t(cx, "page.settings"), workbench::OpenSettings),
+                MenuItem::action(t(cx, "menu.settings"), workbench::OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action(t(cx, "menu.hide"), HideApp),
+                MenuItem::action(t(cx, "menu.hide_others"), HideOthers),
+                MenuItem::action(t(cx, "menu.show_all"), ShowAll),
                 MenuItem::separator(),
                 MenuItem::action(t(cx, "menu.quit"), Quit),
             ],
         },
         Menu {
-            name: t(cx, "menu.terminal").into(),
+            name: t(cx, "menu.file").into(),
             items: vec![
                 MenuItem::action(t(cx, "new.terminal"), workbench::NewTerminalTab),
                 MenuItem::action(t(cx, "new.claude"), workbench::NewClaudeTab),
                 MenuItem::action(t(cx, "new.codex"), workbench::NewCodexTab),
+                MenuItem::separator(),
                 MenuItem::action(t(cx, "new.workspace"), workbench::NewWorkspace),
                 MenuItem::action(t(cx, "new.window"), NewWindow),
                 MenuItem::separator(),
@@ -129,20 +189,82 @@ pub fn set_app_menus(cx: &mut App) {
             ],
         },
         Menu {
+            name: t(cx, "menu.edit").into(),
+            items: vec![
+                MenuItem::os_action(t(cx, "menu.cut"), terminal::Copy, gpui::OsAction::Cut),
+                MenuItem::os_action(t(cx, "menu.copy"), terminal::Copy, gpui::OsAction::Copy),
+                MenuItem::os_action(t(cx, "menu.paste"), terminal::Paste, gpui::OsAction::Paste),
+                MenuItem::os_action(t(cx, "menu.select_all"), terminal::SelectAll, gpui::OsAction::SelectAll),
+                MenuItem::separator(),
+                MenuItem::action(t(cx, "menu.find"), workbench::FindInTerminal),
+                MenuItem::action(t(cx, "shortcuts.clear"), terminal::Clear),
+                MenuItem::separator(),
+                MenuItem::action(t(cx, "shortcuts.palette"), workbench::OpenPalette),
+            ],
+        },
+        Menu {
             name: t(cx, "menu.view").into(),
             items: vec![
-                MenuItem::action(t(cx, "panel.workspaces"), workbench::ShowWorkspaces),
-                MenuItem::action(t(cx, "panel.sessions"), workbench::ShowSessions),
+                MenuItem::action(t(cx, "menu.toggle_sidebar"), workbench::ToggleSidebar),
+                MenuItem::action(t(cx, "menu.show_workspaces"), workbench::ShowWorkspaces),
+                MenuItem::separator(),
+                MenuItem::action(t(cx, "page.git"), workbench::OpenGit),
                 MenuItem::action(t(cx, "page.flow"), workbench::OpenFlow),
                 MenuItem::action(t(cx, "page.usage"), workbench::OpenUsage),
                 MenuItem::action(t(cx, "page.extensions"), workbench::OpenExtensions),
-                MenuItem::action(t(cx, "page.git"), workbench::OpenGit),
+                MenuItem::separator(),
+                MenuItem::action(t(cx, "menu.browser"), workbench::ToggleBrowser),
+                MenuItem::action(t(cx, "menu.zoom_pane"), workbench::ToggleZoom),
+                MenuItem::separator(),
+                MenuItem::action(t(cx, "menu.font_bigger"), workbench::ZoomIn),
+                MenuItem::action(t(cx, "menu.font_smaller"), workbench::ZoomOut),
+                MenuItem::action(t(cx, "menu.font_reset"), workbench::ZoomReset),
+            ],
+        },
+        Menu { name: t(cx, "menu.history").into(), items: history },
+        Menu {
+            name: t(cx, "menu.window").into(),
+            items: vec![
+                MenuItem::action(t(cx, "menu.minimize"), MinimizeWindow),
+                MenuItem::action(t(cx, "menu.zoom"), ZoomWindow),
                 MenuItem::action(t(cx, "mini.enter"), workbench::ToggleMini),
                 MenuItem::separator(),
-                MenuItem::action(t(cx, "menu.toggle_sidebar"), workbench::ToggleSidebar),
+                MenuItem::action(t(cx, "new.window"), NewWindow),
+                MenuItem::separator(),
+                MenuItem::action(t(cx, "menu.next_tab"), workbench::NextTab),
+                MenuItem::action(t(cx, "menu.previous_tab"), workbench::PreviousTab),
+                MenuItem::action(t(cx, "menu.next_workspace"), workbench::NextWorkspace),
+                MenuItem::action(t(cx, "menu.previous_workspace"), workbench::PreviousWorkspace),
             ],
         },
     ]);
+    // GPUI only registers a menu literally named "Window"; register the localized one so AppKit
+    // lists open windows there and in the Dock menu.
+    native::register_windows_menu(WINDOW_MENU_INDEX);
+}
+
+fn register_app_actions(cx: &mut App) {
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &HideApp, cx| cx.hide());
+    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+    cx.on_action(|_: &MinimizeWindow, cx| {
+        if let Some(handle) = cx.active_window() {
+            let _ = handle.update(cx, |_, window, _| window.minimize_window());
+        }
+    });
+    cx.on_action(|_: &ZoomWindow, cx| {
+        if let Some(handle) = cx.active_window() {
+            let _ = handle.update(cx, |_, window, _| window.zoom_window());
+        }
+    });
+    // Load the History menu once at launch; the sessions panel keeps it fresh afterwards.
+    let task = cx.background_executor().spawn(async { agentty_bridge::list(None, RECENT_MENU_LIMIT) });
+    cx.spawn(async move |cx| {
+        let sessions = task.await;
+        let _ = cx.update(|cx| set_recent_sessions(&sessions, cx));
+    })
+    .detach();
 }
 
 fn bind_keys(cx: &mut App) {
@@ -257,6 +379,12 @@ fn main() {
 
     let app = Application::new().with_assets(assets::Assets);
     // Clicking the Dock icon brings the window back (after closing to the menu bar or mini mode).
+    app.on_open_urls(|urls| {
+        let folders = urls.iter().filter_map(|url| file_url_path(url)).filter(|path| path.is_dir());
+        if let Ok(mut queue) = OPENED_FOLDERS.lock() {
+            queue.extend(folders);
+        }
+    });
     app.on_reopen(|cx| with_workbench(cx, |wb, window, cx| wb.handle_tray(status_item::TrayAction::Show, window, cx)));
     app.run(|cx: &mut App| {
         if let Err(err) = cx.text_system().add_fonts(FONTS.iter().map(|f| Cow::Borrowed(*f)).collect()) {
@@ -276,7 +404,7 @@ fn main() {
 
         notifications::prepare();
         bind_keys(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        register_app_actions(cx);
         set_app_menus(cx);
 
         let Some(_) = open_window(0, cx) else {
@@ -296,6 +424,15 @@ fn main() {
         cx.spawn(async move |cx| loop {
             cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
             let alive = cx.update(|cx| {
+                let opened = OPENED_FOLDERS.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default();
+                for folder in opened {
+                    // The frontmost Agentty window, else the main one.
+                    let windows = workbenches(cx);
+                    let active = cx.active_window().and_then(|w| w.downcast::<Workbench>());
+                    if let Some(target) = active.or(windows.first().copied()) {
+                        let _ = target.update(cx, |workbench, window, cx| workbench.open_folder(folder, window, cx));
+                    }
+                }
                 for dropped in file_drop::drain() {
                     for window in workbenches(cx) {
                         let _ = window.update(cx, |workbench, window, cx| {
@@ -406,6 +543,32 @@ fn main() {
     });
 }
 
+/// Folders macOS asked us to open (Dock recent list, Finder "Open With"), handled by the app loop.
+static OPENED_FOLDERS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// `file:///Users/me/My%20Project/` → `/Users/me/My Project`.
+fn file_url_path(url: &str) -> Option<std::path::PathBuf> {
+    let encoded = url.strip_prefix("file://")?;
+    let encoded = encoded.strip_prefix("localhost").unwrap_or(encoded);
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                decoded.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[i]);
+        i += 1;
+    }
+    let path = String::from_utf8(decoded).ok()?;
+    let trimmed = path.trim_end_matches('/');
+    Some(std::path::PathBuf::from(if trimmed.is_empty() { "/" } else { trimmed }))
+}
+
 static NEXT_WINDOW_SLOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
 /// Opens another Agentty window with its own workspaces.
@@ -457,4 +620,18 @@ fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench
 fn with_workbench(cx: &mut App, f: impl FnOnce(&mut Workbench, &mut gpui::Window, &mut gpui::Context<Workbench>)) {
     let Some(handle) = workbenches(cx).into_iter().next() else { return };
     let _ = handle.update(cx, |workbench, window, cx| f(workbench, window, cx));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_url_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn decodes_file_urls() {
+        assert_eq!(file_url_path("file:///Users/me/My%20Project/"), Some(PathBuf::from("/Users/me/My Project")));
+        assert_eq!(file_url_path("file://localhost/tmp/%ED%95%9C"), Some(PathBuf::from("/tmp/한")));
+        assert_eq!(file_url_path("file:///"), Some(PathBuf::from("/")));
+        assert_eq!(file_url_path("https://agentty.run"), None);
+    }
 }

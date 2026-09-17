@@ -1,16 +1,22 @@
 //! Local Claude Code / Codex session discovery and cross-agent context handoff.
 
+pub mod agy;
+pub mod amp;
 pub mod claude;
 pub mod codex;
 pub mod connectors;
+pub mod context;
 pub mod extensions;
 pub mod fsutil;
+pub mod gemini;
 pub mod git;
 pub mod handoff;
+pub mod kimi;
 pub mod limits;
 pub mod metrics;
 pub mod model;
 pub mod pricing;
+pub mod protobuf;
 pub mod service_status;
 pub mod update;
 pub mod usage;
@@ -27,6 +33,18 @@ pub fn list(agent: Option<Agent>, limit: usize) -> Vec<SessionInfo> {
     if agent.is_none_or(|a| a == Agent::Codex) {
         sessions.extend(codex::list(limit));
     }
+    if agent.is_none_or(|a| a == Agent::Agy) {
+        sessions.extend(agy::list(limit));
+    }
+    if agent.is_none_or(|a| a == Agent::Amp) {
+        sessions.extend(amp::list(limit));
+    }
+    if agent.is_none_or(|a| a == Agent::Gemini) {
+        sessions.extend(gemini::list(limit));
+    }
+    if agent.is_none_or(|a| a == Agent::Kimi) {
+        sessions.extend(kimi::list(limit));
+    }
     sessions.sort_by_key(|a| std::cmp::Reverse(a.updated_at));
     sessions.truncate(limit);
     sessions
@@ -37,6 +55,10 @@ pub fn load(agent: Agent, id: &str) -> Result<(Option<String>, Vec<Turn>)> {
     match agent {
         Agent::Claude => claude::transcript(&claude::find(id)?),
         Agent::Codex => codex::transcript(&codex::find(id)?),
+        Agent::Agy => agy::transcript(&agy::find(id)?),
+        Agent::Amp => amp::transcript(&amp::find(id)?),
+        Agent::Gemini => gemini::transcript(&gemini::find(id)?),
+        Agent::Kimi => kimi::transcript(&kimi::find(id)?),
     }
 }
 
@@ -75,6 +97,7 @@ pub fn session_stats(agent: Agent, id: &str) -> Option<SessionStats> {
     let path = match agent {
         Agent::Claude => claude::find(id).ok()?,
         Agent::Codex => codex::find(id).ok()?,
+        _ => return None,
     };
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
@@ -120,6 +143,7 @@ pub fn session_stats(agent: Agent, id: &str) -> Option<SessionStats> {
                 }
             }
         }
+        _ => {}
     }
     Some(stats)
 }
@@ -129,6 +153,7 @@ pub fn last_turn_interrupted(agent: Agent, id: &str) -> bool {
     let path = match agent {
         Agent::Claude => claude::find(id),
         Agent::Codex => codex::find(id),
+        _ => return false,
     };
     let Ok(path) = path else { return false };
     turn_interrupted(agent, fsutil::tail_lines_rev(&path, 96 * 1024).iter().map(String::as_str))
@@ -157,6 +182,7 @@ fn turn_interrupted<'a>(agent: Agent, lines: impl Iterator<Item = &'a str>) -> b
                     return false;
                 }
             }
+            _ => return false,
         }
     }
     false

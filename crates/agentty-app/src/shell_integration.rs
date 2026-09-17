@@ -101,7 +101,8 @@ unset AGENTTY_USER_ZDOTDIR
 [[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]] && source "${ZDOTDIR:-$HOME}/.zshenv"
 if [[ -o interactive && -n "$AGENTTY_SHELL_DIR" ]]; then
   _agentty_load_aliases() { [[ -r "$AGENTTY_SHELL_DIR/aliases.zsh" ]] && source "$AGENTTY_SHELL_DIR/aliases.zsh" }
-  autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _agentty_load_aliases
+  # Before each prompt and right before each command, so words added in Settings apply at once.
+  autoload -Uz add-zsh-hook 2>/dev/null && { add-zsh-hook precmd _agentty_load_aliases; add-zsh-hook preexec _agentty_load_aliases; }
 fi
 "#;
 
@@ -112,7 +113,10 @@ elif [ -f "$HOME/.bash_login" ]; then . "$HOME/.bash_login"
 elif [ -f "$HOME/.profile" ]; then . "$HOME/.profile"
 fi
 [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
-[ -r "$AGENTTY_SHELL_DIR/aliases.bash" ] && . "$AGENTTY_SHELL_DIR/aliases.bash"
+_agentty_load_aliases() { [ -r "$AGENTTY_SHELL_DIR/aliases.bash" ] && . "$AGENTTY_SHELL_DIR/aliases.bash"; }
+_agentty_load_aliases
+# Words added in Settings apply from the next prompt.
+PROMPT_COMMAND="_agentty_load_aliases${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 "#;
 
 /// Writes the integration files. Called at startup and whenever aliases change.

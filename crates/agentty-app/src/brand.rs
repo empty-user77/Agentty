@@ -58,7 +58,9 @@ pub fn logo_paths() -> impl Iterator<Item = &'static str> {
 /// Round avatar with the tool's logo (or first letter / terminal glyph), `size` px wide.
 pub fn avatar(id: &str, size: f32) -> gpui::Div {
     let brand = brand(id);
-    let inner = size * 0.62;
+    let inner = size * 0.64;
+    // Lighter than every panel background, with a brand-colored rim, so it reads on dark and
+    // selected (blue) rows alike.
     let base = div()
         .flex_shrink_0()
         .size(px(size))
@@ -66,12 +68,12 @@ pub fn avatar(id: &str, size: f32) -> gpui::Div {
         .flex()
         .items_center()
         .justify_center()
-        .bg(hex(0x1b1b1c))
+        .bg(hex(0x333438))
         .border_1()
-        .border_color(hex_alpha(brand.color, 0.45));
+        .border_color(hex_alpha(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, 0.85));
     match (brand.logo, brand.id) {
         (Some(path), _) => base.child(svg().path(SharedString::from(path)).size(px(inner)).text_color(hex(brand.color))),
-        (None, "shell") => base.child(crate::ui::icon("terminal", inner, hex(Chrome::MUTED))),
+        (None, "shell") => base.child(crate::ui::icon("terminal", inner, hex(Chrome::BRIGHT))),
         (None, _) => base.child(
             div()
                 .text_size(px((size * 0.52).max(7.)))
@@ -91,7 +93,17 @@ pub fn avatar_stack(ids: &[&'static str], size: f32, max: usize, ring: u32) -> A
     let width = size + step * shown.saturating_sub(1) as f32 + if more { size * 0.9 } else { 0. };
     let mut row = div().relative().flex_shrink_0().w(px(width)).h(px(size));
     for (index, id) in ids.iter().take(max).enumerate() {
-        row = row.child(avatar(id, size).absolute().top_0().left(px(step * index as f32)).border_color(hex(ring)).border_1());
+        // A ring in the row's color separates overlapping avatars without hiding their rim.
+        row = row.child(
+            div()
+                .absolute()
+                .top(px(-1.5))
+                .left(px(step * index as f32 - 1.5))
+                .p(px(1.5))
+                .rounded_full()
+                .bg(hex(ring))
+                .child(avatar(id, size)),
+        );
     }
     if ids.len() > max {
         row = row.child(
@@ -106,9 +118,9 @@ pub fn avatar_stack(ids: &[&'static str], size: f32, max: usize, ring: u32) -> A
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(hex(0x3a3a3c))
+                .bg(hex(0x46474c))
                 .border_1()
-                .border_color(hex(ring))
+                .border_color(hex_alpha(0xffffff, 0.35))
                 .text_size(px((size * 0.45).max(8.)))
                 .text_color(hex(Chrome::BRIGHT))
                 .child(format!("+{}", ids.len() - max)),

@@ -834,7 +834,12 @@ impl GitView {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_repo(Some(target.clone()), cx))),
             );
         }
-        div().absolute().top(px(52.)).left_0().child(crate::ui::fade_in("git-repo-menu-fade", menu)).into_any_element()
+        div()
+            .absolute()
+            .top(px(52.))
+            .left_0()
+            .child(gpui::deferred(crate::ui::fade_in("git-repo-menu-fade", menu)).with_priority(3))
+            .into_any_element()
     }
 
     fn render_branch_menu(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -875,7 +880,12 @@ impl GitView {
             .child(tabs)
             .child(div().p_1().child(picker.clone()))
             .when(!current.is_empty(), |d| d.child(footer));
-        div().absolute().top(px(52.)).left(px(SIDEBAR_WIDTH)).child(crate::ui::fade_in("git-branch-menu-fade", menu)).into_any_element()
+        div()
+            .absolute()
+            .top(px(52.))
+            .left(px(SIDEBAR_WIDTH))
+            .child(gpui::deferred(crate::ui::fade_in("git-branch-menu-fade", menu)).with_priority(3))
+            .into_any_element()
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> Div {

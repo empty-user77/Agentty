@@ -7,7 +7,7 @@ use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, IconSize, TypeScale};
 use agentty_bridge::update::{self, Release};
-use gpui::{div, prelude::*, px, ClickEvent, Context, FontWeight, Window};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, FontWeight, Window};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -210,39 +210,49 @@ impl Workbench {
     }
 
     /// "Update available: x.y.z" at the bottom of the sidebar.
-    pub(super) fn render_update_badge(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    /// Floating pill in the bottom-left corner while an update waits: "Update available: 0.2.0".
+    /// A click opens the update popup.
+    pub(super) fn render_update_badge(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (label, busy) = match &self.updates.state {
             UpdateState::Available(release) => (tf(cx, "update.available_short", &[("version", &release.version)]), false),
             UpdateState::Installing(_) => (t(cx, "update.installing").to_string(), true),
             _ => return None,
         };
+        let pill = div()
+            .id("update-badge")
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .pl_2p5()
+            .pr_3()
+            .rounded_full()
+            .bg(hex(Chrome::ACCENT))
+            .border_1()
+            .border_color(hex_alpha(0xffffff, 0.18))
+            .shadow_lg()
+            .text_color(hex(Chrome::BRIGHT))
+            .t_small()
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .hover(|s| s.bg(hex(0x1a8ae6)))
+            .child(if busy {
+                crate::ui::spinner(IconSize::INLINE, hex(Chrome::BRIGHT)).into_any_element()
+            } else {
+                icon("package", IconSize::INLINE, hex(Chrome::BRIGHT)).into_any_element()
+            })
+            .child(label)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.updates.popup = true;
+                cx.notify();
+            }));
         Some(
-            div().flex_shrink_0().p_2().child(
-                div()
-                    .id("update-badge")
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .px_2p5()
-                    .py_1()
-                    .rounded_full()
-                    .bg(hex(Chrome::ACCENT))
-                    .text_color(hex(Chrome::BRIGHT))
-                    .t_small()
-                    .font_weight(FontWeight::MEDIUM)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hex(0x1a8ae6)))
-                    .child(if busy {
-                        crate::ui::spinner(IconSize::INLINE, hex(Chrome::BRIGHT)).into_any_element()
-                    } else {
-                        icon("arrow-down", IconSize::INLINE, hex(Chrome::BRIGHT)).into_any_element()
-                    })
-                    .child(div().truncate().child(label))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.updates.popup = true;
-                        cx.notify();
-                    })),
-            ),
+            div()
+                .absolute()
+                .left(px(super::chrome::ACTIVITY_BAR_WIDTH + 12.))
+                .bottom(px(super::chrome::STATUS_BAR_HEIGHT + 12.))
+                .child(crate::ui::fade_in("update-badge-fade", pill))
+                .into_any_element(),
         )
     }
 

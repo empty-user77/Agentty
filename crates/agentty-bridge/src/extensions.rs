@@ -140,6 +140,7 @@ pub fn discover(agent: Agent, project: Option<&Path>) -> Vec<Extension> {
     let mut items = match agent {
         Agent::Claude => claude(project),
         Agent::Codex => codex(project),
+        _ => Vec::new(),
     };
     items.sort_by(|a, b| {
         (a.kind as u8, scope_rank(&a.scope), a.name.to_lowercase()).cmp(&(b.kind as u8, scope_rank(&b.scope), b.name.to_lowercase()))
@@ -677,6 +678,7 @@ pub fn mcp_add_command(agent: Agent, spec: &McpServerSpec) -> anyhow::Result<Vec
                 }
             }
         }
+        other => anyhow::bail!("{} MCP servers are not managed here", other.display_name()),
     }
     Ok(argv)
 }
@@ -692,6 +694,7 @@ pub fn mcp_remove_command(agent: Agent, name: &str, scope: &Scope) -> anyhow::Re
             ["claude", "mcp", "remove", name, "--scope", scope].map(String::from).to_vec()
         }
         Agent::Codex => ["codex", "mcp", "remove", name].map(String::from).to_vec(),
+        other => anyhow::bail!("{} MCP servers are not managed here", other.display_name()),
     })
 }
 

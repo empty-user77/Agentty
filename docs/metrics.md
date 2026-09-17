@@ -1,38 +1,40 @@
-# Usage metrics
+# Usage analytics
 
-Agentty can record anonymous usage statistics to help decide what to improve. It is **off by
-default** and nothing is collected until you turn it on in **Settings → General → Privacy**.
+Release builds send anonymous usage events to **Google Analytics 4** through the
+[Measurement Protocol](https://developers.google.com/analytics/devguides/collection/protocol/ga4).
 
-## Rules
+## Setup
 
-- **Opt-in.** Disabled unless you enable it.
-- **`DO_NOT_TRACK=1`** (also `true` / `yes`) in Agentty's environment disables it regardless of the setting.
-- **No content.** Never paths, file names, repository or branch names, commands, prompts, agent
-  output, environment variables or credentials. Properties are checked against an allow-list and
-  must be short identifiers (`claude`, `cosgit`), so free text cannot slip through.
-- **Local first.** Events are appended to `~/.agentty/metrics/events-YYYY-MM.jsonl`, which you can
-  open from the settings page. They are uploaded only if an endpoint is configured.
-- **No keys in the repository.** There is no built-in collection service. An endpoint is set with
-  `metrics.endpoint` in `~/.agentty/settings.json` or `AGENTTY_METRICS_ENDPOINT` (HTTPS, or
-  `localhost` for testing). Pending events are posted as a JSON array every 15 minutes; failures
-  are silent and retried later.
-- **Resettable ID.** A random install ID (not derived from hardware or account) is created when
-  the first event is recorded. "Reset anonymous ID" deletes it.
+1. In GA4, create a property with a **Web** data stream (any URL, e.g. `https://agentty.run`).
+2. Stream details → copy the **Measurement ID** (`G-…`).
+3. Stream details → **Measurement Protocol API secrets** → create a secret.
+4. Put both in `.env.agentty-prod` (never committed):
 
-## Events (schema v1)
+   ```sh
+   AGENTTY_GA_MEASUREMENT_ID="G-…"
+   AGENTTY_GA_API_SECRET="…"
+   ```
 
-| Event | Properties |
+`scripts/build-dmg.sh prod` loads that file before `cargo build`, so the values are compiled into
+the release binary. Builds without them (dev builds, CI) send nothing. To check events arrive,
+use GA's **Realtime** report or **DebugView**.
+
+## What is sent
+
+| Event | Parameters |
 |---|---|
-| `app_launched` | `windows` (number) |
+| `app_launched` | `windows` |
 | `window_opened` | — |
 | `pane_opened` | `tool`: `shell`, `claude`, `codex`, `gemini`, `agy`, … or `command` |
 | `agent_turn_finished` | `tool` |
-| `feature_used` | `feature`: `cosgit`, `flow`, `usage`, `settings`, `extensions`, `mini`, `browser_api` |
+| `feature_used` | `feature`: `agentgit`, `flow`, `usage`, `settings`, `extensions`, `mini`, `browser_api` |
 
-Every record also has `v` (schema version), `ts` (epoch ms), `install_id`, `app_version` and
-`os` (macOS version).
+Every event also carries `app_version`, `os_version` and a random install ID (`client_id`, stored
+in `~/.agentty/install_id`). Parameters are checked against an allow-list and must be short
+identifiers — paths, commands, prompts, output, repository and branch names are never sent.
+Events are queued and sent once a minute. `DO_NOT_TRACK=1` in the environment turns it off.
 
 ## Implementation
 
-`crates/agentty-bridge/src/metrics.rs` (allow-list, local log, upload) and
-`crates/agentty-app/src/metrics.rs` (call sites respect the setting and `DO_NOT_TRACK`).
+`crates/agentty-bridge/src/metrics.rs` (allow-list, GA request) and
+`crates/agentty-app/src/metrics.rs` (queue and call sites).

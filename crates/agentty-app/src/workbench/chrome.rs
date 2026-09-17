@@ -19,7 +19,7 @@ type ViewAction = Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)>;
 pub const TITLE_BAR_HEIGHT: f32 = 36.;
 pub const ACTIVITY_BAR_WIDTH: f32 = 48.;
 const TAB_HEIGHT: f32 = 35.;
-const STATUS_BAR_HEIGHT: f32 = 22.;
+pub const STATUS_BAR_HEIGHT: f32 = 22.;
 const SESSION_ROW_HEIGHT: f32 = 96.;
 
 #[derive(Clone)]
@@ -220,46 +220,14 @@ impl Workbench {
                         cx,
                     )),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    // The sidebar (with its update badge) is hidden on pages; keep the update reachable.
-                    .when(self.page.is_some() && matches!(self.updates.state, super::update::UpdateState::Available(_)), |d| {
-                        d.child(
-                            div()
-                                .id("activity-update")
-                                .w_full()
-                                .h(px(48.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.updates.popup = true;
-                                    cx.notify();
-                                }))
-                                .child(
-                                    div()
-                                        .size(px(26.))
-                                        .rounded_full()
-                                        .bg(hex(Chrome::ACCENT))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(icon("arrow-down", IconSize::INLINE, hex(Chrome::BRIGHT))),
-                                ),
-                        )
-                    })
-                    .child(item(
-                        "activity-settings",
-                        "settings",
-                        self.page == Some(Page::Settings),
-                        "page.settings",
-                        Box::new(|this, cx| this.open_page(Page::Settings, cx)),
-                        cx,
-                    )),
-            )
+            .child(div().flex().flex_col().child(item(
+                "activity-settings",
+                "settings",
+                self.page == Some(Page::Settings),
+                "page.settings",
+                Box::new(|this, cx| this.open_page(Page::Settings, cx)),
+                cx,
+            )))
     }
 
     pub(super) fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -360,7 +328,6 @@ impl Workbench {
                     .child(crate::ui::scrollbar(self.sidebar_scroll.clone()))
                     .into_any_element(),
             })
-            .children(self.render_update_badge(cx))
             .child(
                 div()
                     .id("sidebar-resize")
@@ -683,7 +650,16 @@ impl Workbench {
             .children(self.render_port_chips(ws, active, cx));
 
         let menu_open = self.workspace_menu == Some(id);
-        div().relative().child(row).when(menu_open, |d| d.child(self.render_workspace_menu(id, window, cx)))
+        // Deferred so the menu paints above the rows below it (e.g. the selected workspace).
+        div().relative().child(row).when(menu_open, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .top(px(28.))
+                    .right(px(4.))
+                    .child(gpui::deferred(self.render_workspace_menu(id, window, cx)).with_priority(3)),
+            )
+        })
     }
 
     /// `:3000 :5173` chips for servers started in the workspace; a click opens them.
@@ -721,9 +697,6 @@ impl Workbench {
         let current_group = self.workspaces.iter().find(|w| w.id == id).and_then(|w| w.group);
         let mut menu = popover()
             .id("workspace-menu")
-            .absolute()
-            .top(px(28.))
-            .right(px(4.))
             .w(px(220.))
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -817,9 +790,15 @@ impl Workbench {
             .gap_1()
             .px_3()
             .pb_2()
+            .flex_wrap()
             .child(filter_chip("filter-all", t(cx, "filter.all"), SessionFilter::All, cx))
-            .child(filter_chip("filter-claude", "Claude", SessionFilter::Only(Agent::Claude), cx))
-            .child(filter_chip("filter-codex", "Codex", SessionFilter::Only(Agent::Codex), cx));
+            // One chip per agent that has local sessions.
+            .children(
+                Agent::ALL
+                    .into_iter()
+                    .filter(|a| self.sessions.iter().any(|s| s.agent == *a))
+                    .map(|agent| filter_chip(agent.id(), agent.short_name(), SessionFilter::Only(agent), cx)),
+            );
         let searching = self.session_content_hits.as_ref().is_none_or(|(q, _)| *q != self.session_query(cx))
             && self.session_query(cx).chars().count() >= 2;
         let search = div().flex_shrink_0().px_3().pb_2().child(
@@ -898,7 +877,7 @@ impl Workbench {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(crate::brand::avatar(crate::brand::kind_id(session.agent.into()), 16.))
+                    .child(crate::brand::avatar(session.agent.id(), 16.))
                     .child(div().flex_1().min_w_0().truncate().t_body().text_color(hex(Chrome::FOREGROUND)).child(session.title.clone()))
                     .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(relative_time(now, session.updated_at)))
                     .child(
@@ -1196,7 +1175,7 @@ impl Workbench {
                 (t(cx, "split.down"), Some("⇧⌘D")),
                 cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
             ))
-            // New tab / agent / workspace: the primary action, so it stands out a little.
+            // New tab / agent / workspace.
             .child(
                 div()
                     .id("launcher-toggle")
@@ -1209,10 +1188,11 @@ impl Workbench {
                     .justify_center()
                     .rounded_md()
                     .cursor_pointer()
-                    .bg(if self.launcher_open { hex(Chrome::ACCENT) } else { hex_alpha(Chrome::ACCENT, 0.22) })
+                    // Same tone as the other icons; a light outline marks it as the main action.
+                    .when(self.launcher_open, |d| d.bg(hex(Chrome::SELECTED)))
                     .border_1()
-                    .border_color(hex_alpha(Chrome::ACCENT, 0.6))
-                    .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                    .border_color(hex_alpha(0xffffff, 0.22))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(0xffffff, 0.35)))
                     .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.new"), Some("⌘T")))
                     .child(icon("plus", IconSize::BUTTON, hex(Chrome::BRIGHT)))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -1299,7 +1279,7 @@ impl Workbench {
             .child(entry(
                 "launch-shell".into(),
                 Some("shell"),
-                t(cx, "new.terminal").into(),
+                t(cx, "welcome.terminal").into(),
                 "⌘T",
                 Box::new(|this, w, cx| this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, w, cx)),
                 cx,
@@ -1309,7 +1289,7 @@ impl Workbench {
                 .child(entry(
                     "launch-claude".into(),
                     Some("claude"),
-                    t(cx, "new.claude").into(),
+                    "Claude Code".into(),
                     "⌥⌘C",
                     Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, LaunchTarget::NewTab, w, cx)),
                     cx,
@@ -1320,7 +1300,7 @@ impl Workbench {
             menu = menu.child(entry(
                 "launch-codex".into(),
                 Some("codex"),
-                t(cx, "new.codex").into(),
+                "Codex".into(),
                 "⌥⌘X",
                 Box::new(|this, w, cx| this.request_launch(PaneKind::Codex, LaunchTarget::NewTab, w, cx)),
                 cx,
@@ -1421,9 +1401,12 @@ impl Workbench {
             )
             .with_priority(3)
             .into_any_element(),
-            None => {
-                div().absolute().top(px(TAB_HEIGHT + 4.)).right(px(8.)).child(crate::ui::fade_in("launcher-fade", menu)).into_any_element()
-            }
+            None => div()
+                .absolute()
+                .top(px(TAB_HEIGHT + 4.))
+                .right(px(8.))
+                .child(gpui::deferred(crate::ui::fade_in("launcher-fade", menu)).with_priority(3))
+                .into_any_element(),
         }
     }
 
@@ -1431,8 +1414,10 @@ impl Workbench {
     pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let starting = self.new_workspace.as_ref().map(|(input, _)| input.clone());
         let launch = |id: SharedString, logo: &'static str, label: String, choice: LaunchChoice, cx: &mut Context<Self>| {
+            let group = id.clone();
             div()
                 .id(id)
+                .group(group.clone())
                 .w(px(280.))
                 .flex()
                 .items_center()
@@ -1450,25 +1435,26 @@ impl Workbench {
                     this.request_launch(choice.clone(), LaunchTarget::NewWorkspace, window, cx)
                 }))
                 .child(crate::brand::avatar(logo, 22.))
-                .child(label)
+                .child(div().flex_1().child(label))
+                // The arrow says "start" without repeating a word on every row.
+                .child(div().invisible().group_hover(group, |s| s.visible()).child(icon(
+                    "chevron-right",
+                    IconSize::INLINE,
+                    hex(Chrome::MUTED),
+                )))
         };
         let mut buttons = div().flex().flex_col().gap_2().items_center();
-        buttons = buttons.child(launch("welcome-shell".into(), "shell", t(cx, "new.terminal").into(), PaneKind::Shell.into(), cx));
+        buttons = buttons.child(launch("welcome-shell".into(), "shell", t(cx, "welcome.terminal").into(), PaneKind::Shell.into(), cx));
         if self.is_installed("claude") {
-            buttons = buttons.child(launch("welcome-claude".into(), "claude", t(cx, "new.claude").into(), PaneKind::Claude.into(), cx));
+            buttons = buttons.child(launch("welcome-claude".into(), "claude", "Claude Code".into(), PaneKind::Claude.into(), cx));
         }
         if self.is_installed("codex") {
-            buttons = buttons.child(launch("welcome-codex".into(), "codex", t(cx, "new.codex").into(), PaneKind::Codex.into(), cx));
+            buttons = buttons.child(launch("welcome-codex".into(), "codex", "Codex".into(), PaneKind::Codex.into(), cx));
         }
         for agent in self.installed.iter().flat_map(|i| i.other_agents()).filter(|a| a.primary) {
             let choice = LaunchChoice::Command { title: agent.name.to_string(), command: agent.binary.to_string() };
-            buttons = buttons.child(launch(
-                SharedString::from(format!("welcome-{}", agent.id)),
-                agent.id,
-                tf(cx, "new.agent", &[("name", agent.name)]),
-                choice,
-                cx,
-            ));
+            buttons =
+                buttons.child(launch(SharedString::from(format!("welcome-{}", agent.id)), agent.id, agent.name.to_string(), choice, cx));
         }
         let more = self.installed.as_ref().is_some_and(|i| i.other_agents().any(|a| !a.primary) || !i.ollama_models.is_empty());
         div()
@@ -1593,5 +1579,5 @@ impl Workbench {
 
 /// Stable identifier for favorites: `claude:<id>` / `codex:<id>`.
 fn session_key(session: &agentty_bridge::model::SessionInfo) -> String {
-    format!("{}:{}", if session.agent == Agent::Claude { "claude" } else { "codex" }, session.id)
+    format!("{}:{}", session.agent.id(), session.id)
 }

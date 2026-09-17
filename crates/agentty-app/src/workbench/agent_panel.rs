@@ -135,7 +135,7 @@ impl Workbench {
             row = row.child(
                 chip(
                     SharedString::from(format!("collab-agents-{pane_id}")),
-                    "users",
+                    "bot",
                     label,
                     if running > 0 { Chrome::ORANGE } else { Chrome::MUTED },
                     open == Some(PanelTab::Agents),
@@ -153,7 +153,7 @@ impl Workbench {
 
     fn render_agent_panel(&self, pane: &Pane, panel: &AgentPanel, cx: &mut Context<Self>) -> AnyElement {
         let body = match panel.tab {
-            PanelTab::Agents => self.render_subagents(panel, cx),
+            PanelTab::Agents => self.render_subagents(pane, panel, cx),
             PanelTab::Links => self.render_links(pane, cx),
         };
         let popover = crate::ui::popover()
@@ -182,13 +182,64 @@ impl Workbench {
             .into_any_element()
     }
 
-    fn render_subagents(&self, panel: &AgentPanel, cx: &mut Context<Self>) -> AnyElement {
+    fn render_subagents(&self, pane: &Pane, panel: &AgentPanel, cx: &mut Context<Self>) -> AnyElement {
         let now = now_ms();
         let Some(agents) = &panel.subagents else {
             return crate::ui::loading_row(t(cx, "collab.loading")).into_any_element();
         };
         if agents.is_empty() {
-            return crate::ui::hint(t(cx, "collab.no_agents")).into_any_element();
+            // No transcripts (yet): list what the hooks reported, so the count on the chip matches.
+            let runs = pane.read(cx).subagents.clone();
+            if runs.is_empty() {
+                return crate::ui::hint(t(cx, "collab.no_agents")).into_any_element();
+            }
+            let mut list = div().flex().flex_col().gap_0p5().p_1().w(px(420.));
+            for (index, run) in runs.iter().enumerate().rev() {
+                let seconds = run.finished.unwrap_or_else(std::time::Instant::now).duration_since(run.started).as_secs();
+                list = list.child(
+                    div()
+                        .id(("subagent-run", index))
+                        .p_2()
+                        .rounded_md()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .t_small()
+                                .child(if run.finished.is_some() {
+                                    icon("circle-check", IconSize::INLINE, hex(Chrome::SUCCESS)).into_any_element()
+                                } else {
+                                    crate::ui::spinner(IconSize::INLINE, hex(Chrome::ORANGE)).into_any_element()
+                                })
+                                .child(
+                                    div().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(if run.kind.is_empty() {
+                                        "agent".to_string()
+                                    } else {
+                                        run.kind.clone()
+                                    }),
+                                )
+                                .child(div().flex_1())
+                                .child(div().text_color(hex(Chrome::MUTED)).child(super::layout::format_elapsed(seconds))),
+                        )
+                        .children(run.last_tool.as_ref().map(|(tool, target)| {
+                            div()
+                                .t_caption()
+                                .truncate()
+                                .text_color(hex(Chrome::MUTED))
+                                .child(crate::terminal::tool_label(tool, target.as_deref()))
+                        })),
+                );
+            }
+            return div()
+                .flex()
+                .flex_col()
+                .child(div().px_3().pt_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "collab.no_log")))
+                .child(list)
+                .into_any_element();
         }
         let running = agents.iter().filter(|a| !a.finished).count();
         let mut list =
@@ -284,7 +335,7 @@ impl Workbench {
                     .gap_2()
                     .border_b_1()
                     .border_color(hex(Chrome::OVERLAY_BORDER))
-                    .child(icon("users", IconSize::INLINE, hex(Chrome::FOREGROUND)))
+                    .child(icon("bot", IconSize::INLINE, hex(Chrome::FOREGROUND)))
                     .child(div().t_body().font_weight(FontWeight::SEMIBOLD).child(t(cx, "collab.agents")))
                     .child(div().t_small().text_color(hex(Chrome::MUTED)).child(tf(
                         cx,

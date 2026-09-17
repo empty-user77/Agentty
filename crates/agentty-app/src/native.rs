@@ -106,6 +106,45 @@ pub fn window_number(window: Id) -> isize {
     unsafe { msg_send![window, windowNumber] }
 }
 
+/// Registers the top-level menu at `index` as NSApp's Window menu, so AppKit lists open windows
+/// there and in the Dock menu.
+pub fn register_windows_menu(index: usize) {
+    unsafe {
+        let app: Id = msg_send![objc::class!(NSApplication), sharedApplication];
+        let main: Id = msg_send![app, mainMenu];
+        if main.is_null() {
+            return;
+        }
+        let count: isize = msg_send![main, numberOfItems];
+        if index as isize >= count {
+            return;
+        }
+        let item: Id = msg_send![main, itemAtIndex: index as isize];
+        let menu: Id = msg_send![item, submenu];
+        if !menu.is_null() {
+            let _: () = msg_send![app, setWindowsMenu: menu];
+        }
+    }
+}
+
+/// Adds a folder to the app's recent documents, which the Dock lists (also while Agentty is not
+/// running) and which reopen through `on_open_urls`.
+pub fn note_recent_folder(path: &std::path::Path) {
+    use cocoa::base::nil;
+    use cocoa::foundation::NSString;
+    let Some(path) = path.to_str() else { return };
+    unsafe {
+        let string = NSString::alloc(nil).init_str(path);
+        let url: Id = msg_send![objc::class!(NSURL), fileURLWithPath: string isDirectory: YES];
+        let _: () = msg_send![string, release];
+        if url.is_null() {
+            return;
+        }
+        let controller: Id = msg_send![objc::class!(NSDocumentController), sharedDocumentController];
+        let _: () = msg_send![controller, noteNewRecentDocumentURL: url];
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Frame;

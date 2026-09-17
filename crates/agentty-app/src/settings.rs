@@ -67,8 +67,8 @@ impl Language {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LinkOpener {
-    #[default]
     External,
+    #[default]
     InApp,
 }
 
@@ -135,16 +135,6 @@ pub struct Settings {
     pub agent_bar: bool,
     /// Ask before closing a pane, tab or workspace that was used.
     pub confirm_close: bool,
-    pub metrics: MetricsSettings,
-}
-
-/// Anonymous usage metrics: opt-in; see docs/metrics.md.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct MetricsSettings {
-    pub enabled: bool,
-    /// Where to upload events (HTTPS); empty keeps them local only.
-    pub endpoint: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -251,13 +241,12 @@ impl Default for Settings {
             system_notifications: true,
             notify_when_focused: false,
             menu_bar: true,
-            link_opener: LinkOpener::External,
+            link_opener: LinkOpener::InApp,
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
             resume_bar: true,
             agent_bar: true,
             confirm_close: true,
-            metrics: MetricsSettings::default(),
         }
     }
 }

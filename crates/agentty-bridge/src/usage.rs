@@ -55,6 +55,8 @@ pub fn root_dir(agent: Agent) -> PathBuf {
     match agent {
         Agent::Claude => fsutil::home().join(".claude").join("projects"),
         Agent::Codex => fsutil::home().join(".codex").join("sessions"),
+        // No local token accounting for the other CLIs.
+        _ => PathBuf::new(),
     }
 }
 
@@ -75,6 +77,7 @@ impl UsageScanner {
                 let usage = match agent {
                     Agent::Claude => parse_claude(&path, &prices),
                     Agent::Codex => parse_codex(&path, &prices),
+                    _ => FileUsage::default(),
                 };
                 self.cache.insert(path.clone(), (stamp.0, stamp.1, usage));
             }

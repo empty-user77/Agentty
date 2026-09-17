@@ -86,7 +86,7 @@ impl Workbench {
             .gap_3()
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
-            .child(crate::brand::avatar(crate::brand::kind_id(session.agent.into()), 28.))
+            .child(crate::brand::avatar(session.agent.id(), 28.))
             .child(
                 div()
                     .flex_1()

@@ -76,6 +76,7 @@ pub fn latest(agent: Agent, now_ms: u64) -> Option<AgentLimits> {
     let mut limits = match agent {
         Agent::Claude => serde_json::from_slice::<AgentLimits>(&std::fs::read(claude_file()).ok()?).ok()?,
         Agent::Codex => codex_latest()?,
+        _ => return None,
     };
     let now = (now_ms / 1000) as i64;
     limits.session = limits.session.filter(|w| w.resets_at > now);

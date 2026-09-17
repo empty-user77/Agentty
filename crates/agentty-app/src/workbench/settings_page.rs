@@ -482,40 +482,6 @@ impl Workbench {
             )
     }
 
-    /// Opt-in anonymous usage metrics.
-    fn render_privacy(&self, cx: &mut Context<Self>) -> Div {
-        let prefs = settings(cx).clone();
-        let blocked = agentty_bridge::metrics::do_not_track();
-        section(t(cx, "settings.privacy"))
-            .child(row_with_hint(
-                t(cx, "settings.metrics"),
-                if blocked { t(cx, "settings.metrics_dnt") } else { t(cx, "settings.metrics_hint") },
-                toggle("metrics-enabled", prefs.metrics.enabled && !blocked, |s| s.metrics.enabled = !s.metrics.enabled, cx),
-            ))
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(action_button(
-                        "metrics-open-log",
-                        t(cx, "settings.metrics_open"),
-                        cx.listener(|_, _: &ClickEvent, _, cx| {
-                            let dir = agentty_bridge::metrics::local_dir();
-                            let _ = std::fs::create_dir_all(&dir);
-                            cx.open_with_system(&dir);
-                        }),
-                    ))
-                    .child(action_button(
-                        "metrics-reset-id",
-                        t(cx, "settings.metrics_reset"),
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            agentty_bridge::metrics::reset_install_id();
-                            this.show_toast(t(cx, "settings.metrics_reset_done"), cx);
-                        }),
-                    )),
-            )
-    }
-
     fn alias_form(&mut self, window: &mut Window, cx: &mut Context<Self>) -> &mut AliasForm {
         if self.alias_form.is_none() {
             let keyword = cx.new(|cx| TextInput::new("", t(cx, "settings.alias_keyword"), window, cx));
@@ -789,7 +755,6 @@ impl Workbench {
                         .child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx))),
                 )
                 .child(aliases)
-                .child(self.render_privacy(cx))
                 .into_any_element(),
             SettingsSection::Appearance => div()
                 .flex()

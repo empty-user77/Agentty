@@ -133,7 +133,7 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
             let () = msg_send![ns_window, sendEvent: event];
         };
         match (command, coords) {
-            ("move", (Some(x), Some(y))) => mouse(5, x, y, 0),
+            ("move", (Some(x), Some(y))) => mouse(5, x, y, flags(argument)),
             ("click", (Some(x), Some(y))) => {
                 let right = argument.contains("right");
                 let modifiers = flags(argument);

@@ -19,6 +19,8 @@ pub enum CloseTarget {
 pub struct CloseConfirm {
     pub target: CloseTarget,
     pub dont_ask: bool,
+    /// Closing it leaves the workspace empty, so the workspace goes away too.
+    pub removes_workspace: bool,
 }
 
 impl Workbench {
@@ -32,13 +34,24 @@ impl Workbench {
         }
     }
 
+    /// True when closing the panes of `target` empties the workspace they belong to.
+    fn empties_workspace(&self, target: &CloseTarget) -> bool {
+        let panes = self.target_panes(target);
+        let Some(first) = panes.first() else { return false };
+        let Some((w, _)) = self.locate(first) else { return false };
+        let ws = &self.workspaces[w];
+        ws.dormant.is_none() && ws.tabs.iter().flat_map(|t| t.root.leaves()).all(|leaf| panes.contains(&leaf))
+    }
+
     /// Closes right away when nothing would be lost or the user opted out; asks otherwise.
+    /// Closing the last tab of a workspace always asks, since the workspace is removed with it.
     pub(super) fn request_close(&mut self, target: CloseTarget, window: &mut Window, cx: &mut Context<Self>) {
+        let removes_workspace = !matches!(target, CloseTarget::Workspace(_)) && self.empties_workspace(&target);
         let used = self.target_panes(&target).iter().any(|p| p.read(cx).has_activity());
-        if !used || !settings(cx).confirm_close {
+        if !settings(cx).confirm_close || !(used || removes_workspace) {
             return self.perform_close(target, window, cx);
         }
-        self.close_confirm = Some(CloseConfirm { target, dont_ask: false });
+        self.close_confirm = Some(CloseConfirm { target, dont_ask: false, removes_workspace });
         cx.notify();
     }
 
@@ -68,6 +81,7 @@ impl Workbench {
     pub(super) fn render_close_confirm(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let confirm = self.close_confirm.as_ref()?;
         let (title, body) = match &confirm.target {
+            _ if confirm.removes_workspace => (t(cx, "confirm.close_last_tab"), t(cx, "confirm.close_last_tab_body").to_string()),
             CloseTarget::Pane(_) => (t(cx, "confirm.close_pane"), t(cx, "confirm.close_pane_body").to_string()),
             CloseTarget::Tabs(panes) => (t(cx, "confirm.close_tab"), tf(cx, "confirm.close_tab_body", &[("n", &panes.len().to_string())])),
             CloseTarget::Workspace(id) => (

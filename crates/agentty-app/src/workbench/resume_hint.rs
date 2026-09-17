@@ -68,7 +68,7 @@ impl Workbench {
             .border_color(hex_alpha(Chrome::ACCENT, 0.35))
             .t_small()
             .child(icon("history", IconSize::INLINE, hex(Chrome::BLUE)))
-            .child(crate::brand::avatar(crate::brand::kind_id(latest.agent.into()), 16.))
+            .child(crate::brand::avatar(latest.agent.id(), 16.))
             .child(div().flex_shrink().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(tf(
                 cx,
                 "resume.hint",
@@ -154,7 +154,7 @@ impl Workbench {
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                             this.resume_in_pane(&session_pane, chosen.clone(), window, cx)
                         }))
-                        .child(div().pt_0p5().child(crate::brand::avatar(crate::brand::kind_id(session.agent.into()), 18.)))
+                        .child(div().pt_0p5().child(crate::brand::avatar(session.agent.id(), 18.)))
                         .child(
                             div()
                                 .flex_1()

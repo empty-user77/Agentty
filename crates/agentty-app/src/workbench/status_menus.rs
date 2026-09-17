@@ -6,6 +6,7 @@ use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, IconSize, TypeScale};
+use agentty_bridge::context::ContextSnapshot;
 use agentty_bridge::extensions::{discover, parse_claude_mcp_list, parse_codex_mcp_list, Extension, ExtensionKind, McpHealth, McpStatus};
 use agentty_bridge::model::Agent;
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString};
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StatusMenu {
+    Context,
     Skills,
     Agents,
     Mcp,
@@ -23,6 +25,7 @@ type Key = (Agent, PathBuf);
 
 fn status_menu_key(menu: StatusMenu) -> &'static str {
     match menu {
+        StatusMenu::Context => "status-context",
         StatusMenu::Skills => "status-skills",
         StatusMenu::Agents => "status-agents",
         StatusMenu::Mcp => "status-mcp",
@@ -35,6 +38,8 @@ type McpCheck = Option<Result<Vec<McpStatus>, String>>;
 pub struct AgentInventory {
     items: Option<(Key, Vec<Extension>)>,
     mcp: Option<(Key, Instant, McpCheck)>,
+    /// Context of a session (agent, session id): `None` while it loads or when it can't be read.
+    pub(super) context: Option<((Agent, String), bool, Option<ContextSnapshot>)>,
 }
 
 const MCP_TTL: Duration = Duration::from_secs(60);
@@ -71,6 +76,10 @@ impl Workbench {
             return cx.notify();
         }
         self.status_menu = Some(menu);
+        if menu == StatusMenu::Context {
+            self.load_context(cx);
+            return cx.notify();
+        }
         let Some(key) = self.active_agent(cx) else { return cx.notify() };
         if self.inventory.items.as_ref().is_none_or(|(k, _)| *k != key) {
             let (agent, cwd) = key.clone();
@@ -111,6 +120,7 @@ impl Workbench {
         let button = |id: &'static str, glyph: &'static str, menu: StatusMenu, cx: &mut Context<Self>| {
             let open = self.status_menu == Some(menu);
             let label = match menu {
+                StatusMenu::Context => t(cx, "context.title"),
                 StatusMenu::Skills => t(cx, "status.skills"),
                 StatusMenu::Agents => t(cx, "status.agents"),
                 StatusMenu::Mcp => t(cx, "status.mcp"),
@@ -135,6 +145,7 @@ impl Workbench {
                 .h_full()
                 .flex()
                 .items_center()
+                .child(button("status-context", "brain", StatusMenu::Context, cx))
                 .child(button("status-skills", "sparkles", StatusMenu::Skills, cx))
                 .child(button("status-agents", "bot", StatusMenu::Agents, cx))
                 .child(button("status-mcp", "blocks", StatusMenu::Mcp, cx))
@@ -145,7 +156,11 @@ impl Workbench {
 
     fn render_status_menu(&self, menu: StatusMenu, key: &Key, cx: &mut Context<Self>) -> AnyElement {
         let agent = key.0;
+        if menu == StatusMenu::Context {
+            return self.render_context_menu(agent, cx);
+        }
         let title = match menu {
+            StatusMenu::Context => t(cx, "context.title"),
             StatusMenu::Skills => t(cx, "status.skills"),
             StatusMenu::Agents => t(cx, "status.agents"),
             StatusMenu::Mcp => t(cx, "status.mcp"),
@@ -169,6 +184,7 @@ impl Workbench {
                 .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(meta))
         };
         match menu {
+            StatusMenu::Context => {}
             StatusMenu::Skills | StatusMenu::Agents => {
                 let kind = if menu == StatusMenu::Skills { ExtensionKind::Skill } else { ExtensionKind::Agent };
                 match items {

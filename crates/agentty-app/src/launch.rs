@@ -33,6 +33,8 @@ impl From<Agent> for PaneKind {
         match agent {
             Agent::Claude => PaneKind::Claude,
             Agent::Codex => PaneKind::Codex,
+            // Other CLIs run as commands in shell panes.
+            _ => PaneKind::Shell,
         }
     }
 }
@@ -132,6 +134,10 @@ impl LaunchSpec {
     }
 
     pub fn resume(agent: Agent, id: String, title: String, cwd: PathBuf) -> Self {
+        if !agent.is_first_class() {
+            let line = agent.resume_args(&id).iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
+            return Self::shell_command(line, title, cwd);
+        }
         Self { kind: agent.into(), title, cwd, session_id: Some(id.clone()), start: Start::Resume(id), model: None }
     }
 

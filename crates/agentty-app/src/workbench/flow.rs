@@ -259,6 +259,7 @@ impl Workbench {
             let id = match from_agent {
                 Agent::Claude => known_id.or_else(|| agentty_bridge::claude::find_recent(&cwd, launched)),
                 Agent::Codex => known_id.or_else(|| agentty_bridge::codex::find_recent(&cwd, launched)),
+                _ => None,
             }
             .ok_or_else(|| anyhow::anyhow!(no_transcript.clone()))?;
             let mut loaded = agentty_bridge::load(from_agent, &id).map_err(|_| anyhow::anyhow!(no_transcript.clone()))?;
