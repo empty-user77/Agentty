@@ -366,7 +366,8 @@ impl Workbench {
     }
 }
 
-pub const AUTHOR: &str = "이용범 (yongyongdev@gmail.com)";
+pub const AUTHOR: &str = "Ray Lee";
+pub const AUTHOR_EMAIL: &str = "yongyongdev@gmail.com";
 pub const AUTHOR_URL: &str = "https://github.com/empty-user77";
 pub const WEBSITE: &str = "https://agentty.run";
 
@@ -379,25 +380,25 @@ impl Workbench {
         });
         div().id("about-overlay").absolute().inset_0().flex().items_center().justify_center().bg(hex_alpha(0x000000, 0.45)).occlude().child(
             div()
-                .w(px(300.))
-                .p_5()
+                .w(px(400.))
+                .p_6()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_4()
                 .rounded_xl()
                 .bg(hex(Chrome::OVERLAY))
                 .border_1()
                 .border_color(hex(Chrome::OVERLAY_BORDER))
                 .shadow_lg()
-                .child(gpui::img("brand/logo.png").size(px(64.)))
+                .child(gpui::img("brand/logo.png").size(px(80.)))
                 .child(
                     div()
-                        .t_title()
+                        .t_heading()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(hex(Chrome::BRIGHT))
                         .child(format!("Agentty v{CURRENT_VERSION}")),
                 )
-                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "tagline")))
+                .child(div().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, "tagline")))
                 .child(
                     div()
                         .id("about-website")
@@ -407,8 +408,16 @@ impl Workbench {
                         .child("agentty.run")
                         .on_click(|_, _, cx| cx.open_url(WEBSITE)),
                 )
-                .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(format!("{}: {AUTHOR}", t(cx, "about.author"))))
-                .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(AUTHOR_URL))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .t_body()
+                        .whitespace_nowrap()
+                        .child(div().text_color(hex(Chrome::MUTED)).child(t(cx, "about.author")))
+                        .child(div().text_color(hex(Chrome::FOREGROUND)).child(AUTHOR))
+                        .child(div().text_color(hex(Chrome::MUTED)).child(AUTHOR_EMAIL)),
+                )
                 .child(
                     div()
                         .pt_1()
@@ -418,7 +427,7 @@ impl Workbench {
                             div()
                                 .id("about-ok")
                                 .flex_1()
-                                .py_1p5()
+                                .py_2()
                                 .flex()
                                 .justify_center()
                                 .rounded_md()
@@ -434,7 +443,7 @@ impl Workbench {
                             div()
                                 .id("about-github")
                                 .flex_1()
-                                .py_1p5()
+                                .py_2()
                                 .flex()
                                 .justify_center()
                                 .rounded_md()

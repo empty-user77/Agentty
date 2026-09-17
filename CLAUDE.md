@@ -48,3 +48,10 @@ After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githook
 - After pushing, check the CI run (`gh run list` / `gh run watch`) and fix it if it fails.
 - Every user-facing string goes through `i18n.rs` in all four languages (en / ko / ja / zh).
 - Reply to the user in Korean.
+
+## Releases
+
+- Releases go to `empty-user77/agentty-releases` following `.claude/skills/release/SKILL.md`.
+- **Release notes, release titles and `CHANGELOG.md` are always written in English**, even though conversation with
+  the user is in Korean.
+- Never publish a draft release (it ships an auto-update to every user) without the user's explicit OK.

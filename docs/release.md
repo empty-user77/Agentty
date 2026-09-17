@@ -38,7 +38,11 @@ security find-identity -v -p codesigning | grep "Developer ID Application"
 ## Publishing
 
 `publish` requires an authenticated `gh` CLI. It creates (or refreshes) a **draft** release `v<version>` on
-`empty-user77/agentty-releases` with the DMG, zip and checksums. Review the notes on GitHub, then publish.
+`empty-user77/agentty-releases` with the DMG, zip and checksums. `AGENTTY_RELEASE_NOTES=<file.md>` sets the release
+notes. Review the draft on GitHub, then publish.
+
+**Release notes are always written in English.** The full procedure (version bump, changelog, tag, notes, draft,
+publish, update-feed check) is in [`.claude/skills/release/SKILL.md`](../.claude/skills/release/SKILL.md).
 
 ## Troubleshooting
 

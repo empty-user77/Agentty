@@ -6,6 +6,7 @@
 #   ./scripts/build-dmg.sh            # dev: ad-hoc (or "Cosmica Dev" self-signed) signature, no notarization
 #   ./scripts/build-dmg.sh prod       # prod: Developer ID signature + notarization + stapling
 #   ./scripts/build-dmg.sh publish    # prod + upload to GitHub release feed (draft)
+#                                     # AGENTTY_RELEASE_NOTES=<file.md> sets the (English) release notes
 #
 # Prod credentials (never committed) come from the environment or `.env.agentty-prod`:
 #   AGENTTY_IDENTITY        "NAME (TEAMID)"  (the part after "Developer ID Application: ")
@@ -190,6 +191,12 @@ if [[ "$PUBLISH" == "true" ]]; then
   else
     gh release create "$TAG" --repo "$RELEASE_REPO" --draft --title "Agentty $TAG" --notes "Agentty $TAG" >/dev/null
     ok "Draft release $TAG created"
+  fi
+  # Release notes are written in English (see .claude/skills/release/SKILL.md).
+  if [[ -n "${AGENTTY_RELEASE_NOTES:-}" ]]; then
+    [[ -s "$AGENTTY_RELEASE_NOTES" ]] || die "release notes file '$AGENTTY_RELEASE_NOTES' is missing or empty"
+    gh release edit "$TAG" --repo "$RELEASE_REPO" --notes-file "$AGENTTY_RELEASE_NOTES" >/dev/null
+    ok "Release notes set from $AGENTTY_RELEASE_NOTES"
   fi
   gh release upload "$TAG" --repo "$RELEASE_REPO" --clobber "$DMG" "$ZIP" "$DIST/$APP_NAME-$VERSION-SHA256SUMS.txt"
   ok "Uploaded to https://github.com/$RELEASE_REPO/releases (draft — review notes, then publish)"
