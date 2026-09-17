@@ -80,7 +80,7 @@ impl UsageView {
     }
 }
 
-fn card() -> Div {
+pub(crate) fn card() -> Div {
     div().rounded_lg().border_1().border_color(hex(Chrome::BORDER)).bg(hex(0x232323))
 }
 
@@ -90,7 +90,7 @@ fn panel(title: &str, color: u32) -> Div {
     )
 }
 
-fn kpi(label: &str, value: String, sub: String, color: u32) -> Div {
+pub(crate) fn kpi(label: &str, value: String, sub: String, color: u32) -> Div {
     card()
         .flex_1()
         .min_w(px(140.))

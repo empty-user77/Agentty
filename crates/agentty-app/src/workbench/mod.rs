@@ -16,6 +16,7 @@ mod palette;
 pub mod panes;
 mod persist;
 mod picker;
+mod processes;
 pub mod resume_hint;
 mod service_status;
 mod session_viewer;
@@ -142,6 +143,7 @@ pub enum Page {
     Git,
     Flow,
     Usage,
+    Processes,
     Settings,
     Extensions,
 }
@@ -240,6 +242,7 @@ pub struct Workbench {
     resume_dismissed: std::collections::HashSet<(u64, PathBuf)>,
     resume_menu: Option<u64>,
     status_menu: Option<status_menus::StatusMenu>,
+    processes: processes::ProcessMonitor,
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
@@ -334,6 +337,7 @@ impl Workbench {
             resume_dismissed: Default::default(),
             resume_menu: None,
             status_menu: None,
+            processes: Default::default(),
             inventory: Default::default(),
             browser: None,
             browser_request: None,
@@ -1196,6 +1200,7 @@ impl Render for Workbench {
                 let usage = self.usage.get_or_insert_with(|| cx.new(UsageView::new)).clone();
                 gpui::AnyView::from(usage).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
+            Some(Page::Processes) => self.render_processes(cx).into_any_element(),
             Some(Page::Settings) => self.render_settings(window, cx).into_any_element(),
             Some(Page::Extensions) => gpui::AnyView::from(self.extensions_view(window, cx))
                 .cached(gpui::StyleRefinement::default().size_full())
@@ -1521,6 +1526,7 @@ impl Workbench {
             Page::Git => "agentgit",
             Page::Flow => "flow",
             Page::Usage => "usage",
+            Page::Processes => "processes",
             Page::Settings => "settings",
             Page::Extensions => "extensions",
         };
@@ -1707,6 +1713,7 @@ impl Workbench {
                 let page = match argument {
                     "flow" => Some(Page::Flow),
                     "usage" => Some(Page::Usage),
+                    "processes" => Some(Page::Processes),
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
                     "git" => Some(Page::Git),

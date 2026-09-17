@@ -3,6 +3,7 @@
 
 mod agent_signal;
 mod agents;
+mod ai_processes;
 mod assets;
 mod branch_picker;
 mod brand;

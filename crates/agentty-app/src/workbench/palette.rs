@@ -194,6 +194,7 @@ impl Workbench {
         for (page, key, shortcut) in [
             (Page::Flow, "page.flow", "⇧⌘F"),
             (Page::Usage, "page.usage", "⌥⌘U"),
+            (Page::Processes, "page.processes", ""),
             (Page::Extensions, "page.extensions", "⇧⌘X"),
             (Page::Settings, "page.settings", "⌘,"),
         ] {

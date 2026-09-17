@@ -206,7 +206,7 @@ impl Workbench {
                     .child(item(
                         "activity-usage",
                         "chart-column",
-                        self.page == Some(Page::Usage),
+                        matches!(self.page, Some(Page::Usage | Page::Processes)),
                         "page.usage",
                         Box::new(|this, cx| this.open_page(Page::Usage, cx)),
                         cx,
@@ -938,39 +938,54 @@ impl Workbench {
         // Tabs take the room they need (scrolling when crowded); the spacer gets the rest.
         let mut tabs = div().id("tabs").flex().flex_shrink().min_w_0().h_full().overflow_x_scroll();
         if let Some(page) = self.page {
-            let label = match page {
-                Page::Git => t(cx, "page.git"),
-                Page::Flow => t(cx, "page.flow"),
-                Page::Usage => t(cx, "page.usage"),
-                Page::Settings => t(cx, "page.settings"),
-                Page::Extensions => t(cx, "page.extensions"),
+            // AI Usage and AI processes are two tabs of one page.
+            let pages: Vec<(Page, &str)> = match page {
+                Page::Usage | Page::Processes => vec![(Page::Usage, t(cx, "page.usage")), (Page::Processes, t(cx, "page.processes"))],
+                Page::Git => vec![(page, t(cx, "page.git"))],
+                Page::Flow => vec![(page, t(cx, "page.flow"))],
+                Page::Settings => vec![(page, t(cx, "page.settings"))],
+                Page::Extensions => vec![(page, t(cx, "page.extensions"))],
             };
-            tabs = tabs.child(
-                div()
-                    .id("page-tab")
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .pl_3()
-                    .pr_2()
-                    .bg(hex(Chrome::EDITOR))
-                    .border_t_1()
-                    .border_r_1()
-                    .border_color(hex(Chrome::BORDER))
-                    .t_body()
-                    .text_color(hex(Chrome::BRIGHT))
-                    .child(label)
-                    .child(icon_only(
-                        "page-close",
-                        "x",
-                        cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.page = None;
-                            this.focus_active(window, cx);
-                            cx.notify();
+            for (tab_page, label) in pages {
+                let active = tab_page == page;
+                tabs = tabs.child(
+                    div()
+                        .id(SharedString::from(format!("page-tab-{label}")))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pl_3()
+                        .pr(if active { px(8.) } else { px(12.) })
+                        .border_t_1()
+                        .border_r_1()
+                        .border_color(hex(Chrome::BORDER))
+                        .t_body()
+                        .when(active, |d| d.bg(hex(Chrome::EDITOR)).text_color(hex(Chrome::BRIGHT)))
+                        .when(!active, |d| {
+                            d.bg(hex(Chrome::TAB_INACTIVE))
+                                .text_color(hex(Chrome::MUTED))
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.page = Some(tab_page);
+                                    cx.notify();
+                                }))
+                        })
+                        .child(label.to_string())
+                        .when(active, |d| {
+                            d.child(icon_only(
+                                "page-close",
+                                "x",
+                                cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.page = None;
+                                    this.focus_active(window, cx);
+                                    cx.notify();
+                                }),
+                            ))
                         }),
-                    )),
-            );
+                );
+            }
         } else if let Some(ws) = self.workspaces.get(self.active_workspace) {
             for (index, tab) in ws.tabs.iter().enumerate() {
                 let view = tab.active.read(cx);
