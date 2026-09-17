@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-17
+
+### Added
+- Claude advisor (experimental Claude Code feature): choose a default for new Claude tabs in Settings → General, and
+  switch it for a running tab from the status bar or the command palette. Switching restarts Claude Code and resumes
+  the same conversation; global Claude Code settings are not changed.
+- Status bar shows the Agentty version and the installed Claude Code and Codex CLI versions.
+- Settings → Font: a "More" list with every font installed on the Mac, each previewed in its own typeface.
+
+### Changed
+- The update dialog shows download progress (size and percentage), signature verification and restart steps instead
+  of closing without feedback.
+
+### Fixed
+- Shift+Enter inserts a new line in agent prompts instead of sending them.
+
 ## [0.1.1] - 2026-09-17
 
 First public release.
