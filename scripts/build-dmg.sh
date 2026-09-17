@@ -48,6 +48,11 @@ case "$MODE" in
       log "Loading credentials from .env.agentty-prod"
       set -a; source "$ROOT/.env.agentty-prod"; set +a
     fi
+    # Older credential files use the COSTERM_* names.
+    for n in IDENTITY TEAM_ID APPLE_ID APPLE_PASSWORD; do
+      legacy="COSTERM_$n"; current="AGENTTY_$n"
+      if [[ -z "${!current:-}" && -n "${!legacy:-}" ]]; then export "$current=${!legacy}"; fi
+    done
     : "${AGENTTY_IDENTITY:?Set AGENTTY_IDENTITY (or create .env.agentty-prod)}"
     : "${AGENTTY_TEAM_ID:?Set AGENTTY_TEAM_ID}"
     : "${AGENTTY_APPLE_ID:?Set AGENTTY_APPLE_ID}"
@@ -56,6 +61,9 @@ case "$MODE" in
     security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_ID" || die "Certificate '$SIGN_ID' not found in keychain"
     NOTARIZE="true"
     if [[ "$PUBLISH" == "true" ]]; then
+      # Published builds must carry analytics; option_env! compiles them in, so a missing value is silent otherwise.
+      [[ -n "${AGENTTY_GA_MEASUREMENT_ID:-}" && -n "${AGENTTY_GA_API_SECRET:-}" ]] \
+        || die "AGENTTY_GA_MEASUREMENT_ID / AGENTTY_GA_API_SECRET are empty; refusing to publish a build without analytics"
       command -v gh >/dev/null || die "gh CLI not installed (brew install gh)"
       gh auth status >/dev/null 2>&1 || die "gh CLI not authenticated (gh auth login)"
     fi

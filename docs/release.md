@@ -5,6 +5,9 @@
 ./scripts/build-dmg.sh prod      # Developer ID signature + notarization + stapling + Gatekeeper check
 ./scripts/build-dmg.sh publish   # prod + draft release on empty-user77/agentty-releases
 ./scripts/bump-version.sh patch  # 0.1.0 → 0.1.1 (minor | major | x.y.z)
+./scripts/release-preflight.sh 0.1.3        # before bumping/tagging: repo, gh, CI, credentials, certificate, tools
+./scripts/verify-release.sh 0.1.3           # after the build: signature, notarization, checksums, GA, draft assets
+./scripts/verify-release.sh 0.1.3 --published  # after publishing: update feed and downloaded DMG checksum
 ```
 
 ## What `prod` does
@@ -19,7 +22,10 @@
 
 ## Credentials
 
-Set these in the environment or in `.env.agentty-prod` (gitignored; see `.env.example`):
+Set these in the environment or in `.env.agentty-prod` in the repository root (gitignored, `chmod 600`; see
+`.env.example`). The file does not move with a fresh clone or a renamed checkout — copy it over, then run
+`release-preflight.sh`. Legacy `COSTERM_*` names are still accepted. `publish` refuses to run without
+`AGENTTY_GA_MEASUREMENT_ID` and `AGENTTY_GA_API_SECRET`, which are compiled into the binary.
 
 | Variable | Value |
 |---|---|

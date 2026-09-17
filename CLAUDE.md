@@ -55,3 +55,7 @@ After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githook
 - **Release notes, release titles and `CHANGELOG.md` are always written in English**, even though conversation with
   the user is in Korean.
 - Never publish a draft release (it ships an auto-update to every user) without the user's explicit OK.
+- Run `scripts/release-preflight.sh X.Y.Z` before bumping, tagging or pushing; nothing irreversible while it shows ✗.
+- Say "built", "notarized" or "released" only after `scripts/verify-release.sh X.Y.Z [--published]` passes. Report
+  release status as a ✅/❌/⏳ checklist that leads with what is not done.
+- If a release command is denied, don't retry variants or edit permission files: give the user the exact `!` line.

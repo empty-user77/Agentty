@@ -1,6 +1,6 @@
 ---
 name: release
-description: Release a new Agentty version to github.com/empty-user77/agentty-releases — version bump, changelog, CI checks, tag, signed/notarized DMG, English release notes, draft release, publish and update-feed verification. Use when the user asks to release, ship, publish or cut a version (출시, 배포, 릴리즈).
+description: Release a new Agentty version to github.com/empty-user77/agentty-releases — preflight, version bump, changelog, CI checks, tag, signed/notarized DMG, English release notes, draft release, independent verification, publish and update-feed check. Use when the user asks to release, ship, publish or cut a version (출시, 배포, 릴리즈).
 ---
 
 # Releasing Agentty
@@ -15,26 +15,63 @@ update to every user**.
    the conversation with the user is in Korean. Report progress to the user in Korean.
 2. Never publish the draft (`--draft=false`) without the user's explicit OK in this conversation. Creating/refreshing
    a draft is fine once the user asked for a release.
-3. Follow CLAUDE.md secret rules: never read or print `.env.agentty-prod`; only `source` it inside the build command.
-   Release notes must not contain credentials, personal paths or internal hostnames.
+3. Follow CLAUDE.md secret rules: never read or print `.env.agentty-prod`, never `source` it in a command you type.
+   The scripts load it themselves (`build-dmg.sh`, `release-preflight.sh`, `verify-release.sh`) and print names or
+   pass/fail only. Release notes must not contain credentials, personal paths or internal hostnames.
 4. Never bypass checks (`--no-verify`, skipping CI, uploading an unnotarized build). If a step fails, stop and fix it.
 5. Tags are `vX.Y.Z` (SemVer) and must be higher than the latest published release, or the updater ignores them.
+6. **Nothing irreversible before the preflight passes.** No bump, commit, tag or push until
+   `scripts/release-preflight.sh X.Y.Z` reports no ✗. A pushed tag without a buildable release is a half-finished state.
+7. **"Built", "signed", "notarized" or "released" are only said after `scripts/verify-release.sh` passes** for that
+   state. Build logs are not proof. Every status report starts with what is *not* done yet, as a checklist:
+
+   ```
+   - ✅ 소스 커밋·태그·푸시, CI 통과
+   - ❌ DMG 빌드·서명·공증 — <이유>
+   - ⏳ draft 업로드 대기
+   - ⬜ 게시 (사용자 확인 필요)
+   ```
+   A `cargo build --release` from the CI checks is not a release build — never list it as "build done".
+
+## Permissions and long-running commands
+
+- Run the scripts as plain commands (`./scripts/build-dmg.sh publish`), not wrapped in `bash -c 'source …'`. Commands
+  that source production credentials inline are what the permission classifier blocks.
+- If Claude Code denies a release command, **do not retry variants or try to edit permission files** (that is blocked
+  as self-modification too). Stop and tell the user, in one short message, the exact line to run themselves with the
+  `!` prefix, or to switch out of auto mode (Shift+Tab) so the command gets an approval prompt.
+- Every command you hand the user must be zsh-safe: no bare globs that may match nothing (`rm -rf dist/Agentty*` fails
+  in zsh when nothing matches). Prefer the scripts, which handle cleanup themselves.
+- The build takes 5–15 minutes (compile, sign, notarize). Run it with `run_in_background` and a log file in the
+  scratchpad; read the log with `tail` when notified. Don't chain `sleep` calls.
 
 ## Procedure
 
-### 1. Preflight
+### 1. Preflight (before touching anything)
 ```sh
-git status --short            # must be clean, on main, up to date with origin
-gh auth status
-gh run list --branch main --limit 1   # latest CI must be green
-gh release list -R empty-user77/agentty-releases --limit 5
+scripts/release-preflight.sh X.Y.Z
 ```
+It checks: on `main`, up to date, tag free, secret-scanning hooks installed, the active `gh` account can push to both
+repos, latest CI green, version newer than the published one, `.env.agentty-prod` present/private/gitignored with all
+signing, notarization and GA variables set, the Developer ID certificate in the keychain, and the build tools.
+
+Common fixes:
+| ✗ | Fix |
+|---|---|
+| git hooks not installed | `scripts/install-hooks.sh` |
+| `.env.agentty-prod` missing | Ask the user to copy it from the previous checkout (e.g. `! cp -p <old repo>/.env.agentty-prod .`). Never create it from values you saw elsewhere. |
+| account cannot push | `gh auth switch -u empty-user77` |
+| certificate not in keychain | unlock the login keychain |
+
+Uncommitted feature work is only a warning: commit it (conventional message, with the Co-Authored-By trailer) before
+step 2 so the release commit contains only the bump and changelog.
+
 If `agentty-releases` has no commits yet (first release), it needs one before a tag can exist: add a short English
 `README.md` (what Agentty is, download link to the latest release, link to the source repo) with
 `gh api -X PUT repos/empty-user77/agentty-releases/contents/README.md -f message="docs: add README" -f content="$(base64 < README.md)"`.
 
 ### 2. Version and changelog
-- Pick the version with the user (first release: the current `0.1.0`; otherwise `scripts/bump-version.sh patch|minor|major|x.y.z`).
+- Pick the version with the user (`scripts/bump-version.sh patch|minor|major|x.y.z`).
 - In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` (today's date) and add a fresh empty
   `## [Unreleased]` above it. Keep Keep-a-Changelog sections (Added / Changed / Fixed / Security).
 - Cross-check against `git log <previous tag>..HEAD --oneline` so nothing user-visible is missing.
@@ -54,7 +91,7 @@ git commit -am "chore: release vX.Y.Z"      # with the Co-Authored-By trailer
 git tag -a vX.Y.Z -m "Agentty vX.Y.Z"
 git push origin main && git push origin vX.Y.Z
 ```
-Watch CI (`gh run watch`) and fix failures before building.
+Watch CI (`gh run watch <id> --exit-status`) and fix failures before building.
 
 ### 5. Release notes (English)
 Write `dist/release-notes-vX.Y.Z.md` (dist/ is gitignored) from the changelog entry, for end users:
@@ -70,7 +107,7 @@ Write `dist/release-notes-vX.Y.Z.md` (dist/ is gitignored) from the changelog en
 - ...
 
 ## Install
-Download `Agentty-X.Y.Z-release<build>-arm64.dmg`, open it and drag **Agentty** into Applications.
+Download `Agentty-X.Y.Z-release<build>-arm64.dmg` below, open it and drag **Agentty** into Applications.
 Requires macOS 13+ on Apple silicon. Signed with Developer ID and notarized by Apple.
 Existing installs update automatically.
 
@@ -80,36 +117,32 @@ Existing installs update automatically.
 Plain, factual English; no Korean, no internal jargon, no secrets. Show the notes to the user before publishing.
 
 ### 6. Build, notarize and upload a draft
-`.env.agentty-prod` may still use legacy `COSTERM_*` names for the Apple credentials; map them without printing:
 ```sh
-rm -rf dist/Agentty*          # old artifacts; keep the notes file
-bash -c 'set -a; source ./.env.agentty-prod; set +a
-for n in IDENTITY TEAM_ID APPLE_ID APPLE_PASSWORD; do l="COSTERM_$n"; c="AGENTTY_$n"
-  if [ -z "${!c:-}" ] && [ -n "${!l:-}" ]; then export "$c=${!l}"; fi; done
-AGENTTY_RELEASE_NOTES=dist/release-notes-vX.Y.Z.md ./scripts/build-dmg.sh publish' > <scratchpad>/release.log 2>&1
+AGENTTY_RELEASE_NOTES=dist/release-notes-vX.Y.Z.md ./scripts/build-dmg.sh publish > <scratchpad>/release.log 2>&1
 ```
-Check the log ends with `Notarized and stapled`, `source=Notarized Developer ID` and the upload line. Confirm GA
-analytics credentials are present (`[ -n "$AGENTTY_GA_MEASUREMENT_ID" ]` after sourcing, never echo the values).
+(background; `build-dmg.sh` loads `.env.agentty-prod`, maps legacy `COSTERM_*` names and refuses to publish without
+GA credentials.) The log should end with `Notarized and stapled`, `Uploaded to …` and `Done`, but that is not the proof:
 
-Verify the draft:
+### 7. Verify the draft independently
 ```sh
-gh release view vX.Y.Z -R empty-user77/agentty-releases --json isDraft,name,body,assets \
-  --jq '{isDraft, name, assets: [.assets[].name]}'
+scripts/verify-release.sh X.Y.Z
 ```
-Assets must be exactly: the `-arm64.dmg`, the `-arm64.zip` and `-SHA256SUMS.txt`, all with version `X.Y.Z`.
+Checks app version, deep/strict signature, team and hardened runtime, `spctl` "Notarized Developer ID" and stapled
+tickets for app and DMG, checksums, GA credentials compiled into the binary, and that the draft holds exactly the DMG,
+zip and SHA256SUMS. Report the result as the checklist from rule 7, then ask the user to review the draft.
 
-### 7. Publish (only after the user says so)
+### 8. Publish (only after the user says so)
 ```sh
 gh release edit vX.Y.Z -R empty-user77/agentty-releases --draft=false --latest
 ```
 
-### 8. Verify the update feed
+### 9. Verify the update feed
 ```sh
-gh api repos/empty-user77/agentty-releases/releases/latest --jq '.tag_name, [.assets[].name]'
-curl -sL -o /tmp/agentty.dmg "<dmg browser_download_url>" && shasum -a 256 /tmp/agentty.dmg   # matches SHA256SUMS
+scripts/verify-release.sh X.Y.Z --published
 ```
-Then report to the user (in Korean): version, release URL, asset names, and that installed apps will pick it up within
-an hour (or at next launch).
+Adds: release is public, `releases/latest` serves vX.Y.Z, and the downloaded DMG matches the published checksums.
+Then report (in Korean): version, release URL, asset names, and that installed apps pick it up within an hour (or at
+next launch).
 
 ## Rollback
 If a published release is broken: mark it as a draft again (`gh release edit vX.Y.Z --draft=true`) so the updater
