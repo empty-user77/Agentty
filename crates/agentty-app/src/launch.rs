@@ -211,7 +211,7 @@ impl LaunchSpec {
         let shell = Self::shell_program();
         if let Start::Command(line) = &self.start {
             // User-defined command lines are shell syntax by design; run them as written.
-            let script = format!("{line}; exec {} -l", shell_quote(&shell));
+            let script = format!("{line}; {}", fallback_shell(&shell));
             return (shell, vec!["-l".into(), "-i".into(), "-c".into(), script]);
         }
         match self.command() {
@@ -223,10 +223,32 @@ impl LaunchSpec {
             None => (shell, vec!["-l".into()]),
             Some(args) => {
                 let line = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
-                let script = format!("{line}; exec {} -l", shell_quote(&shell));
+                let script = format!("{line}; {}", fallback_shell(&shell));
                 (shell, vec!["-l".into(), "-i".into(), "-c".into(), script])
             }
         }
+    }
+}
+
+/// The interactive shell a pane falls back to when its command exits. The first shell's generated
+/// `.zshenv` restores the user's `ZDOTDIR`, so the integration environment is passed again here;
+/// otherwise reserved words would be missing after an agent exits.
+fn fallback_shell(shell: &str) -> String {
+    use crate::shell_integration::{flavor, integration_dir, ShellFlavor};
+    let quoted = shell_quote(shell);
+    match flavor(shell) {
+        ShellFlavor::Zsh => {
+            let env = crate::shell_integration::environment(shell)
+                .iter()
+                .map(|(key, value)| shell_quote(&format!("{key}={value}")))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("exec env {env} {quoted} -l")
+        }
+        ShellFlavor::Bash => {
+            format!("exec {quoted} --rcfile {} -i", shell_quote(&integration_dir().join("rc.bash").display().to_string()))
+        }
+        ShellFlavor::Other => format!("exec {quoted} -l"),
     }
 }
 
@@ -456,5 +478,15 @@ mod tests {
         assert_eq!(args[..3], ["-l", "-i", "-c"]);
         assert!(args[3].starts_with("codex -c "));
         assert!(args[3].contains("; exec "));
+    }
+
+    #[test]
+    fn fallback_shell_keeps_reserved_words() {
+        let zsh = fallback_shell("/bin/zsh");
+        assert!(zsh.starts_with("exec env "), "{zsh}");
+        assert!(zsh.contains("ZDOTDIR="), "{zsh}");
+        assert!(zsh.ends_with("/bin/zsh -l"), "{zsh}");
+        assert!(fallback_shell("/bin/bash").contains("--rcfile"));
+        assert_eq!(fallback_shell("/usr/local/bin/fish"), "exec /usr/local/bin/fish -l");
     }
 }
