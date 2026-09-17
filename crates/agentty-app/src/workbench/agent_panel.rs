@@ -158,7 +158,12 @@ impl Workbench {
         };
         let popover = crate::ui::popover()
             .id("agent-panel")
-            .w(px(if panel.tab == PanelTab::Agents { 760. } else { 520. }))
+            .w(px(match panel.tab {
+                // List + log side by side only when there are transcripts; the hook-reported runs are a short list.
+                PanelTab::Agents if panel.subagents.as_ref().is_some_and(|a| !a.is_empty()) => 760.,
+                PanelTab::Agents => 380.,
+                PanelTab::Links => 520.,
+            }))
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 if this.agent_panel.take().is_some() {
@@ -193,7 +198,7 @@ impl Workbench {
             if runs.is_empty() {
                 return crate::ui::hint(t(cx, "collab.no_agents")).into_any_element();
             }
-            let mut list = div().flex().flex_col().gap_0p5().p_1().w(px(420.));
+            let mut list = div().flex().flex_col().gap_0p5().p_1().w_full();
             for (index, run) in runs.iter().enumerate().rev() {
                 let seconds = run.finished.unwrap_or_else(std::time::Instant::now).duration_since(run.started).as_secs();
                 list = list.child(

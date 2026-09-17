@@ -11,8 +11,7 @@ case "${1:-patch}" in
   [0-9]*.[0-9]*.[0-9]*) next="$1" ;;
   *) echo "usage: $0 patch|minor|major|x.y.z" >&2; exit 1 ;;
 esac
-sed -i '' -E "0,/^version = \"$current\"/s//version = \"$next\"/" "$ROOT/Cargo.toml" 2>/dev/null || \
-  python3 - "$ROOT/Cargo.toml" "$current" "$next" <<'PY'
+python3 - "$ROOT/Cargo.toml" "$current" "$next" <<'PY'
 import sys; p, cur, nxt = sys.argv[1:]
 s = open(p).read(); s = s.replace(f'version = "{cur}"', f'version = "{nxt}"', 1); open(p, 'w').write(s)
 PY

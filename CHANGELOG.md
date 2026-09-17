@@ -5,7 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-17
+
+First public release.
+
 ### Added
+- Session context panel (brain icon in the pane status bar): memory files, skills, files in context, compaction summary
+  and usage breakdown for Claude Code and Codex sessions.
+- AI processes page next to AI usage: CPU, memory and disk I/O of local agent process trees with active / idle /
+  stopped status and the pane each one runs in.
+- macOS menus (File, Edit, View, History, Window) and a Dock menu; recently closed windows can be reopened, and
+  folders opened with Agentty appear in the Dock's recent items.
+- Tab drag and drop: reorder tabs, or drop a tab on a sidebar workspace to move it there.
+- Workspace groups can be created before any workspace, and new workspaces can be created directly in a group.
+- Activity bar tooltips with keyboard shortcuts; a "+" button right after the last tab.
+- Anonymous usage statistics in release builds, with a switch in Settings → General (see docs/metrics.md).
 - Native GPU-rendered terminal (GPUI + alacritty_terminal) with IME, selection, scrollback and Nerd Font symbols.
 - Workspaces → tabs → split panes, workspace groups with drag and drop, renaming and layout restore.
 - Live agent status for Claude Code and Codex, attention borders and sidebar badges.
@@ -46,3 +60,11 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - Scroll wheel in Claude Code panes cycled prompt history instead of scrolling.
 - Terminal count in the status bar counted every workspace.
+- Scrolling or dragging inside popovers also moved the terminal behind them.
+- Closing a pane now also ends agents (Claude Code, Codex) that ignored the terminal hang-up.
+- Missing translations in several placeholders and menus.
+
+### Security
+- OSC 8 terminal hyperlinks only open http(s) and mailto targets.
+- MCP server details show the redacted command instead of the shared agent configuration file; credential headers in
+  MCP arguments are redacted.
