@@ -1,0 +1,4 @@
+# Same toolchain locally and in CI, so formatting and clippy results match.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

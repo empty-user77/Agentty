@@ -27,7 +27,7 @@ pub fn list(agent: Option<Agent>, limit: usize) -> Vec<SessionInfo> {
     if agent.is_none_or(|a| a == Agent::Codex) {
         sessions.extend(codex::list(limit));
     }
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sessions.sort_by_key(|a| std::cmp::Reverse(a.updated_at));
     sessions.truncate(limit);
     sessions
 }

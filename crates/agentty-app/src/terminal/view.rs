@@ -405,7 +405,7 @@ impl TerminalView {
             self.live_cwd = cwd;
             changed = true;
         }
-        if self.probe_ticks % 3 == 0 {
+        if self.probe_ticks.is_multiple_of(3) {
             self.probe_git(cx);
         }
         self.probe_ticks = self.probe_ticks.wrapping_add(1);

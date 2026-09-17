@@ -40,7 +40,7 @@ pub fn newest(mut files: Vec<PathBuf>, limit: usize) -> Vec<(PathBuf, u64)> {
             (p, t)
         })
         .collect();
-    with_time.sort_by(|a, b| b.1.cmp(&a.1));
+    with_time.sort_by_key(|a| std::cmp::Reverse(a.1));
     with_time.truncate(limit);
     with_time
 }

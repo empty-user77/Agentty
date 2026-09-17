@@ -41,6 +41,10 @@ After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githook
 ## Project conventions
 
 - Rust workspace: `crates/agentty-app` (GPUI UI) and `crates/agentty-bridge` (sessions, usage, git, connectors).
-- Before handing work back: `cargo fmt --all`, `cargo clippy --all-targets` (0 warnings), `cargo test`.
+- The Rust toolchain is pinned in `rust-toolchain.toml` (used locally and in CI). Never work with an older local toolchain.
+- Before handing work back or pushing, run exactly what CI runs and make it pass:
+  `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
+  `cargo build --release -p agentty-app`, `python3 scripts/check-secrets.py --all`.
+- After pushing, check the CI run (`gh run list` / `gh run watch`) and fix it if it fails.
 - Every user-facing string goes through `i18n.rs` in all four languages (en / ko / ja / zh).
 - Reply to the user in Korean.

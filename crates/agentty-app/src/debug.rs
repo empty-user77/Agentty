@@ -52,7 +52,7 @@ pub fn capture_own_window(path: &Path) -> Result<()> {
     let mut rgba = Vec::with_capacity(width * height * 4);
     for y in 0..height {
         let row = &bytes[y * stride..y * stride + width * 4];
-        for px in row.chunks_exact(4) {
+        for px in row.as_chunks::<4>().0 {
             rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
         }
     }
