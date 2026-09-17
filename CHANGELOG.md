@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Removed
+- The "Send anonymous usage statistics" switch in Settings → General. `DO_NOT_TRACK=1` still turns analytics off.
+
 ## [0.1.2] - 2026-09-17
 
 ### Added

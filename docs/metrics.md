@@ -32,8 +32,8 @@ use GA's **Realtime** report or **DebugView**.
 Every event also carries `app_version`, `os_version` and a random install ID (`client_id`, stored
 in `~/.agentty/install_id`). Parameters are checked against an allow-list and must be short
 identifiers — paths, commands, prompts, output, repository and branch names are never sent.
-Events are queued and sent once a minute. Users turn it off in **Settings → General → Send anonymous
-usage statistics**; `DO_NOT_TRACK=1` in the environment also turns it off.
+Events are queued and sent once a minute. There is no in-app setting; `DO_NOT_TRACK=1` in the environment turns it
+off.
 
 ## Implementation
 

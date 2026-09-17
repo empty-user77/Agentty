@@ -135,8 +135,6 @@ pub struct Settings {
     pub agent_bar: bool,
     /// Ask before closing a pane, tab or workspace that was used.
     pub confirm_close: bool,
-    /// Anonymous usage statistics (release builds only; see docs/metrics.md).
-    pub usage_analytics: bool,
     /// Claude Code advisor for new Claude tabs.
     pub advisor: AdvisorChoice,
 }
@@ -285,7 +283,6 @@ impl Default for Settings {
             resume_bar: true,
             agent_bar: true,
             confirm_close: true,
-            usage_analytics: true,
             advisor: AdvisorChoice::Inherit,
         }
     }
