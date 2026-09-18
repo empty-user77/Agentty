@@ -43,3 +43,29 @@
 - Supabase 연동(프로젝트 생성·키를 Vercel 환경변수로), 커스텀 도메인
 - 아이디어 페이지 여러 줄 편집기(현재는 붙여넣기로 여러 줄 입력)
 - 진행 상황 시각화(PLAN.md 체크리스트를 패널에 표시)
+
+## Supabase 연동 (🔧 진행 중)
+
+### 확인한 CLI 동작 (supabase 2.117.0, npm 패키지 `supabase`)
+
+| 상황 | 결과 |
+|---|---|
+| 파이프(TTY 없음)로 `supabase login` | `LegacyLoginMissingTokenError` — "non-TTY에서는 자동 로그인 불가, `--token` 또는 `SUPABASE_ACCESS_TOKEN` 필요" |
+| `script -q /dev/null supabase login --no-browser` (가짜 TTY) | 에이전트 환경 감지(`CLAUDECODE` 등)로 JSON 출력 모드 → `NonInteractiveError` |
+| 가짜 TTY + `--agent no --output-format text` | 로그인 링크 출력 (`https://supabase.com/dashboard/cli/login?session_id=…&token_name=…&public_key=…`) 후 브라우저에 표시되는 **인증 코드 입력 대기** |
+
+→ gh/vercel과 달리 **코드를 사용자가 입력**해야 함: 패널에 링크 열기 + 코드 입력칸(`input`) → 가짜 TTY 프로세스 stdin으로 전달.
+
+### 설계 초안
+
+1. 표시 조건: `@supabase/supabase-js` 의존성, `supabase/` 폴더, `*SUPABASE*` 환경변수 중 하나 — 아니면 "데이터베이스 추가" 버튼만
+2. CLI: PATH 또는 `<dataDir>/tools`에 `npm install supabase`
+3. 로그인: 위 방식(링크 → 코드 입력). 토큰은 CLI가 자체 저장, 플러그인은 읽지 않음
+4. 프로젝트: `supabase projects list -o json`으로 기존 프로젝트 선택 또는 새로 만들기(`projects create --org-id --region --db-password`, 비밀번호는 무작위 생성 후 `.env.local`의 `SUPABASE_DB_PASSWORD`에만 저장). 무료 플랜 2개 제한 오류는 쉬운 말로 안내. 생성 후 `ACTIVE_HEALTHY`까지 대기
+5. 키: `projects api-keys -o json` → `.env.local`에 URL + anon 키만 (`NEXT_PUBLIC_…` / Vite면 `VITE_…`). service_role 키는 쓰지 않음
+6. 스키마: `supabase/migrations/*.sql`이 있으면 `link` + `db push --yes` ("데이터베이스 변경 적용" 버튼)
+7. "에이전트에게 Supabase 연결 맡기기": 샘플 데이터 → supabase-js 클라이언트 + RLS 정책이 있는 마이그레이션 작성 요청 → 끝나면 6번
+8. 기존 환경변수 단계가 `.env.local`을 읽어 Vercel에 등록 → 배포 시 반영
+9. 아이디어 BUILD_GUIDE의 데이터 절에 위 규칙(환경변수 이름, 마이그레이션 위치, RLS) 추가
+
+남은 확인: 인증 코드 입력 후 실제 로그인 완료, `projects create`/`api-keys`의 JSON 형식, `db push`의 비대화형 동작
