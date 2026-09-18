@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-18
+
+### Changed
+- The subagent list shows what each subagent was asked to do, what it is working on and its answer, and no longer
+  lists Claude Code's internal background tasks.
+
+### Fixed
+- Updates download on networks that inspect HTTPS with their own root certificate (for example some company VPNs),
+  when that certificate is trusted by macOS.
+
 ## [0.1.5] - 2026-09-18
 
 ### Added
