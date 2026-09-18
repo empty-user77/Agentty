@@ -228,23 +228,35 @@ impl Workbench {
                                 } else {
                                     crate::ui::spinner(IconSize::INLINE, hex(Chrome::ORANGE)).into_any_element()
                                 })
-                                .child(
-                                    div().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(if run.kind.is_empty() {
-                                        "agent".to_string()
-                                    } else {
-                                        run.kind.clone()
-                                    }),
-                                )
+                                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(run.kind.clone()))
                                 .child(div().flex_1())
                                 .child(div().text_color(hex(Chrome::MUTED)).child(super::layout::format_elapsed(seconds))),
                         )
-                        .children(run.last_tool.as_ref().map(|(tool, target)| {
-                            div()
-                                .t_caption()
-                                .truncate()
-                                .text_color(hex(Chrome::MUTED))
-                                .child(crate::terminal::tool_label(tool, target.as_deref()))
-                        })),
+                        .children(run.task.clone().map(|task| div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(task)))
+                        // Finished: what it answered; running: what it is doing now.
+                        .children(match (&run.result, &run.last_tool) {
+                            (Some(result), _) if run.finished.is_some() => Some(
+                                div()
+                                    .flex()
+                                    .items_start()
+                                    .gap_1()
+                                    .t_caption()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .child(icon("message-square", 11., hex(Chrome::MUTED)))
+                                    .child(div().min_w_0().line_clamp(2).child(result.clone())),
+                            ),
+                            (_, Some((tool, target))) => Some(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .t_caption()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .child(icon("square-terminal", 11., hex(Chrome::MUTED)))
+                                    .child(div().truncate().child(crate::terminal::tool_label(tool, target.as_deref()))),
+                            ),
+                            _ => None,
+                        }),
                 );
             }
             return div()

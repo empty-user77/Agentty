@@ -110,10 +110,14 @@ impl AgentStatus {
 pub struct SubagentRun {
     pub id: String,
     pub kind: String,
+    /// The task it was given (the `description` of the Agent tool call that started it).
+    pub task: Option<String>,
     pub started: Instant,
     pub finished: Option<Instant>,
     /// Most recent tool call inside the subagent: (tool, target).
     pub last_tool: Option<(String, Option<String>)>,
+    /// First line of its final answer.
+    pub result: Option<String>,
 }
 
 /// What an agent's TUI shows right now, read from the bottom of the screen.
@@ -238,6 +242,8 @@ pub struct TerminalView {
     quiet_ticks: u8,
     /// Subagents of the current session, newest last.
     pub subagents: Vec<SubagentRun>,
+    /// Descriptions of Agent tool calls whose subagent has not reported `SubagentStart` yet.
+    pending_subagent_tasks: std::collections::VecDeque<Option<String>>,
     /// Session id of the agent in the foreground (launched with it, or found from its transcript).
     pub session_id_live: Option<String>,
     /// Subagent transcripts of that session: (total, written in the last few seconds).
@@ -349,6 +355,7 @@ impl TerminalView {
             esc_at: None,
             quiet_ticks: 0,
             subagents: Vec::new(),
+            pending_subagent_tasks: Default::default(),
             last_tool: None,
             session_id_live: None,
             subagent_files: (0, 0),
@@ -498,6 +505,7 @@ impl TerminalView {
         self.quiet_ticks = 0;
         self.last_tool = None;
         self.subagents.clear();
+        self.pending_subagent_tasks.clear();
     }
 
     /// The cursor's cell as the painter sees it: (column, row from the top of the viewport).
@@ -814,6 +822,13 @@ impl TerminalView {
                         run.last_tool = Some((tool, detail.target.clone()));
                     }
                 } else if let Some(tool) = detail.tool.clone() {
+                    if matches!(tool.as_str(), "Agent" | "Task") {
+                        // Subagents start in call order; SubagentStart does not repeat the task.
+                        self.pending_subagent_tasks.push_back(detail.target.clone());
+                        if self.pending_subagent_tasks.len() > 8 {
+                            self.pending_subagent_tasks.pop_front();
+                        }
+                    }
                     self.last_tool = Some((tool, detail.target.clone()));
                 }
                 self.status = AgentStatus::Working;
@@ -866,9 +881,19 @@ impl TerminalView {
                 notice = Some(NoticeKind::Message);
             }
             SignalKind::SubagentStart => {
-                if let Some((id, agent_type)) = detail.subagent {
+                // Claude Code's own background helpers report no agent type; they are not the user's subagents.
+                if let Some((id, agent_type)) = detail.subagent.filter(|(_, kind)| !kind.is_empty()) {
+                    let task = self.pending_subagent_tasks.pop_front().flatten();
                     self.subagents.retain(|r| r.id != id);
-                    self.subagents.push(SubagentRun { id, kind: agent_type, started: Instant::now(), finished: None, last_tool: None });
+                    self.subagents.push(SubagentRun {
+                        id,
+                        kind: agent_type,
+                        task,
+                        started: Instant::now(),
+                        finished: None,
+                        last_tool: None,
+                        result: None,
+                    });
                     // Keep the list bounded for long sessions.
                     if self.subagents.len() > 40 {
                         self.subagents.remove(0);
@@ -878,15 +903,20 @@ impl TerminalView {
                 self.working_since.get_or_insert_with(Instant::now);
             }
             SignalKind::SubagentStop => {
-                if let Some((id, agent_type)) = detail.subagent {
+                if let Some((id, agent_type)) = detail.subagent.filter(|(_, kind)| !kind.is_empty()) {
                     match self.subagents.iter_mut().find(|r| r.id == id) {
-                        Some(run) => run.finished = Some(Instant::now()),
+                        Some(run) => {
+                            run.finished = Some(Instant::now());
+                            run.result = message.clone();
+                        }
                         None => self.subagents.push(SubagentRun {
                             id,
                             kind: agent_type,
+                            task: None,
                             started: Instant::now(),
                             finished: Some(Instant::now()),
                             last_tool: None,
+                            result: message.clone(),
                         }),
                     }
                 }

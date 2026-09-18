@@ -223,8 +223,17 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(s.detail.notification_type.as_deref(), Some("idle_prompt"));
-        let s = parse_line(&format!("2\tsubagent_stop\t{}", r#"{"agent_id":"a1","agent_type":"Explore"}"#)).unwrap();
+        let s = parse_line(&format!(
+            "2\tsubagent_stop\t{}",
+            r#"{"agent_id":"a1","agent_type":"Explore","last_assistant_message":"\nFound 3 call sites.\nDetails follow."}"#
+        ))
+        .unwrap();
         assert_eq!(s.detail.subagent, Some(("a1".into(), "Explore".into())));
+        assert_eq!(s.message.as_deref(), Some("Found 3 call sites."));
+        let s =
+            parse_line(&format!("2\tworking\t{}", r#"{"tool_name":"Agent","tool_input":{"description":"Find call sites","prompt":"…"}}"#))
+                .unwrap();
+        assert_eq!((s.detail.tool.as_deref(), s.detail.target.as_deref()), (Some("Agent"), Some("Find call sites")));
     }
 
     #[test]
