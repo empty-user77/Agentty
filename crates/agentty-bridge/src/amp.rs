@@ -108,8 +108,10 @@ mod tests {
 
     #[test]
     fn reads_thread_fields() {
-        let thread = serde_json::json!({ "env": { "initial": { "trees": [{ "uri": "file:///Users/me/app" }] } } });
-        assert_eq!(cwd(&thread).as_deref(), Some("/Users/me/app"));
+        let (uri, path) =
+            if cfg!(windows) { ("file:///C:/Users/me/app", r"C:\Users\me\app") } else { ("file:///Users/me/app", "/Users/me/app") };
+        let thread = serde_json::json!({ "env": { "initial": { "trees": [{ "uri": uri }] } } });
+        assert_eq!(cwd(&thread).as_deref(), Some(path));
         let message = serde_json::json!({ "content": [{ "type": "thinking" }, { "type": "text", "text": "hello" }] });
         assert_eq!(message_text(&message).as_deref(), Some("hello"));
     }

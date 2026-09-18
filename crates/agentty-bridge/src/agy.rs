@@ -125,7 +125,12 @@ mod tests {
     #[test]
     fn parses_times_and_workspaces() {
         assert_eq!(parse_time("2026-09-17 10:49:08.21223+00:00"), 1_789_642_148_212);
-        assert_eq!(workspace(r#"["file:///Users/me/my%20app"]"#).as_deref(), Some("/Users/me/my app"));
+        // File URLs name a drive on Windows.
+        if cfg!(windows) {
+            assert_eq!(workspace(r#"["file:///C:/Users/me/my%20app"]"#).as_deref(), Some(r"C:\Users\me\my app"));
+        } else {
+            assert_eq!(workspace(r#"["file:///Users/me/my%20app"]"#).as_deref(), Some("/Users/me/my app"));
+        }
         assert_eq!(hex("0a01"), Some(vec![0x0a, 0x01]));
     }
 }

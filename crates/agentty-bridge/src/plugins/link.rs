@@ -114,12 +114,16 @@ mod tests {
 
     #[test]
     fn parses_prompt_and_store_links() {
-        let Link::Prompt(request) = parse("agentty://prompt?text=Fix+the+build&agent=codex&cwd=%2Ftmp&title=Build").unwrap() else {
+        // An absolute folder of this platform (`C:\…` on Windows, `/…` elsewhere).
+        let folder = std::env::temp_dir();
+        let encoded: String = url::form_urlencoded::byte_serialize(folder.display().to_string().as_bytes()).collect();
+        let Link::Prompt(request) = parse(&format!("agentty://prompt?text=Fix+the+build&agent=codex&cwd={encoded}&title=Build")).unwrap()
+        else {
             panic!("not a prompt link")
         };
         assert_eq!(request.text, "Fix the build");
         assert_eq!(request.agent.as_deref(), Some("codex"));
-        assert_eq!(request.cwd, Some(PathBuf::from("/tmp")));
+        assert_eq!(request.cwd, Some(folder));
         assert!(request.submit);
         assert!(parse("agentty://prompt?text=").is_err());
         assert!(parse("agentty://prompt?file=%2Fetc%2Fpasswd").is_err());
