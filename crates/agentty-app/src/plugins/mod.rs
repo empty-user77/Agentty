@@ -18,9 +18,6 @@ const LOG_LINES: usize = 400;
 /// Longest log line kept, and the total the log may take.
 const LOG_LINE_CHARS: usize = 2_000;
 const LOG_BYTES: usize = 256 * 1024;
-/// For a minute after a link reached a plugin, its prompts go through the "Send to…" dialog and it
-/// may not type into terminals — whatever the user clicks in the panel that link opened.
-const LINK_GUARD: Duration = Duration::from_secs(60);
 /// A plugin sending more messages than this in a second is stopped: it would freeze the window.
 const MAX_MESSAGES_PER_SECOND: u32 = 240;
 /// Windows are refreshed at most this often, however many messages arrive.
@@ -45,7 +42,9 @@ pub struct Runtime {
     /// Bumped on every start, so events from an old process are ignored.
     generation: u64,
     stopping: bool,
-    link_at: Option<Instant>,
+    /// A link reached this plugin, so what it asks for next may be the link author's wish rather
+    /// than the user's. Set for the rest of the process's life — see [`Runtime::link_guarded`].
+    link_tainted: bool,
     /// Messages seen in the current second, for the flood limit.
     rate_window: Option<(Instant, u32)>,
     /// When this plugin last showed a notification.
@@ -64,7 +63,7 @@ impl Runtime {
             process: None,
             generation: 0,
             stopping: false,
-            link_at: None,
+            link_tainted: false,
             rate_window: None,
             notified_at: None,
             log_bytes: 0,
@@ -84,10 +83,15 @@ impl Runtime {
         }
     }
 
-    /// A link reached this plugin less than [`LINK_GUARD`] ago. Clicks in the panel the link opened
-    /// don't lift it: the user clicking "Continue" there is not consent to type into a terminal.
+    /// A link reached this plugin, so it may be acting for whoever wrote the link — any website can
+    /// open one. While this holds, the plugin cannot type into a terminal and its prompts have to
+    /// go through the "Send to…" dialog.
+    ///
+    /// Nothing lifts it while the process runs: a click in the panel the link opened is not consent
+    /// to type into a terminal, and neither is waiting, which a plugin can simply do (`setTimeout`)
+    /// before acting on the text the link gave it. Restarting the plugin clears it.
     fn link_guarded(&self) -> bool {
-        self.link_at.is_some_and(|link| link.elapsed() < LINK_GUARD)
+        self.link_tainted
     }
 
     /// Counts a message and reports whether the plugin is flooding Agentty.
@@ -257,6 +261,7 @@ fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
     let runtime = host.runtimes.entry(id.to_string()).or_insert_with(Runtime::new);
     runtime.generation += 1;
     runtime.stopping = false;
+    runtime.link_tainted = false;
     runtime.state = RunState::Starting;
     runtime.log(format!("— starting {} {} —", plugin.name(), plugin.manifest.as_ref().map_or("", |m| m.version.as_str())));
     let generation = runtime.generation;
@@ -313,7 +318,7 @@ pub fn open_link(
         return false;
     }
     if let Some(runtime) = host_mut(cx).runtimes.get_mut(id) {
-        runtime.link_at = Some(Instant::now());
+        runtime.link_tainted = true;
         runtime.log(format!("link: {path}"));
     }
     notify_plugin(id, "url/open", json!({ "path": path, "query": query, "url": url, "context": context }), cx)
@@ -391,7 +396,13 @@ pub fn handle(envelope: Envelope, cx: &mut App) {
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
                 runtime.log(format!("error: {error}"));
                 runtime.state = RunState::Failed(error);
-                runtime.process = None;
+                // The process may still be alive and writing (a flood the reader gave up on):
+                // let it go through `stop`, which asks, then signals, rather than dropping it.
+                if let Some(process) = runtime.process.take() {
+                    runtime.stopping = true;
+                    runtime.generation += 1;
+                    process.stop();
+                }
             }
             touch(cx);
         }
@@ -490,17 +501,19 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&path).spawn();
                 reply(Ok(Value::Null), cx)
             } else {
-                reply(Err((codes::INVALID_PARAMS, "path does not exist".into())), cx)
+                // Same answer whether the path is missing or not absolute: a plugin has no
+                // business mapping the disk one probe at a time.
+                reply(Err((codes::INVALID_PARAMS, "that path cannot be revealed".into())), cx)
             }
         }
-        "terminal/send" if guarded => reply(
-            Err((codes::PERMISSION_DENIED, "typing into terminals right after a link is blocked until the user uses the plugin".into())),
-            cx,
-        ),
+        "terminal/send" if guarded => {
+            reply(Err((codes::PERMISSION_DENIED, "a plugin that a link reached may not type into terminals; restart it first".into())), cx)
+        }
         _ => {
             if method == "prompt/inject" && guarded {
-                // Whatever a link asks for, the user picks where it goes.
+                // Whatever a link asks for, the user picks where it goes and presses Enter.
                 params["target"] = serde_json::to_value(PromptTarget::Ask).unwrap_or_default();
+                params["submit"] = Value::Bool(false);
             }
             let unanswered = request_id.clone();
             let request = PluginCall {
@@ -572,13 +585,12 @@ mod tests {
     }
 
     #[test]
-    fn the_link_guard_holds_through_clicks() {
+    fn the_link_guard_holds_through_clicks_and_waiting() {
         let mut runtime = Runtime::new();
         assert!(!runtime.link_guarded());
-        runtime.link_at = Some(Instant::now());
-        assert!(runtime.link_guarded(), "a link just arrived");
-        // Clicking in the panel the link opened is not consent to type into a terminal.
-        runtime.link_at = Some(Instant::now() - LINK_GUARD);
-        assert!(!runtime.link_guarded(), "the guard ends on its own");
+        runtime.link_tainted = true;
+        // Neither a click in the panel the link opened nor simply waiting is consent to type into
+        // a terminal; a plugin can wait as easily as the user can click.
+        assert!(runtime.link_guarded(), "a link arrived and nothing since then lifts the guard");
     }
 }

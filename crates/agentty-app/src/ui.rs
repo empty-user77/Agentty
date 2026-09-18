@@ -188,10 +188,21 @@ pub fn icon_only(
     name: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    icon_only_sized(id, name, ICON_BUTTON, IconSize::BUTTON, on_click)
+}
+
+/// An icon button at a chosen hit area and glyph size, for rows that are smaller than a toolbar.
+pub fn icon_only_sized(
+    id: impl Into<ElementId>,
+    name: &'static str,
+    button: f32,
+    glyph: f32,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex_shrink_0()
-        .size(px(ICON_BUTTON))
+        .size(px(button))
         .flex()
         .items_center()
         .justify_center()
@@ -199,7 +210,7 @@ pub fn icon_only(
         .cursor_pointer()
         .hover(|s| s.bg(hex(Chrome::HOVER)))
         .on_click(on_click)
-        .child(icon(name, IconSize::BUTTON, hex(Chrome::FOREGROUND)))
+        .child(icon(name, glyph, hex(Chrome::FOREGROUND)))
 }
 
 /// Hover tooltip for icon-only buttons: a short name and its shortcut, shown after ~1.2 s.

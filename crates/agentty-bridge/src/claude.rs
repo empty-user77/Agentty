@@ -392,6 +392,15 @@ pub fn peer_session(session_id: &str) -> Option<PeerSession> {
     peer_sessions().into_iter().find(|p| p.session_id == session_id)
 }
 
+/// The session a running Claude Code process is writing right now.
+///
+/// Every session registers itself under its own pid, so this is the only way to tell two sessions
+/// in the same folder apart, and it keeps up with `/clear` and resumes, which give the same process
+/// a new session id.
+pub fn session_of_pid(pid: u32) -> Option<String> {
+    peer_sessions().into_iter().find(|p| p.pid == pid).map(|p| p.session_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

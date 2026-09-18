@@ -13,6 +13,10 @@ use std::sync::{Mutex, OnceLock};
 
 /// Longest protocol line accepted from a plugin.
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+/// Messages a second at which the reader stops reading at all. The window checks the same thing
+/// once messages reach it, but only as it drains them on the main thread: a plugin can queue far
+/// more than that in the meantime, so the flood has to be stopped where it is read.
+const READ_CEILING_PER_SECOND: u32 = 480;
 
 #[derive(Debug)]
 pub enum ProcessEvent {
@@ -83,11 +87,22 @@ impl PluginProcess {
                 std::thread::spawn(move || {
                     let mut reader = BufReader::new(stdout);
                     let mut line = Vec::new();
+                    let mut window = (std::time::Instant::now(), 0u32);
                     loop {
                         line.clear();
                         match read_line_limited(&mut reader, &mut line) {
                             Ok(0) => break,
                             Ok(_) => {
+                                if window.0.elapsed() >= std::time::Duration::from_secs(1) {
+                                    window = (std::time::Instant::now(), 0);
+                                }
+                                window.1 += 1;
+                                if window.1 > READ_CEILING_PER_SECOND {
+                                    // Closing stdout here is the backpressure: nothing more is
+                                    // parsed or queued, and the plugin's next write fails.
+                                    events(ProcessEvent::Failed(format!("sent more than {READ_CEILING_PER_SECOND} messages a second")));
+                                    break;
+                                }
                                 let text = String::from_utf8_lossy(&line);
                                 match Incoming::parse(&text) {
                                     Some(message) => events(ProcessEvent::Message(message)),

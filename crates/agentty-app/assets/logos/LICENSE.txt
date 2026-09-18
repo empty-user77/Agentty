@@ -1,3 +1,6 @@
 Brand logos from Simple Icons (https://simpleicons.org), released under CC0 1.0 Universal.
 The logos are trademarks of their respective owners and are used only to identify the
 corresponding tools. See https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md
+
+antigravity.svg is Google Antigravity's own mark, reduced to a single shape so it can be tinted
+like the others, and is likewise used only to identify that tool.

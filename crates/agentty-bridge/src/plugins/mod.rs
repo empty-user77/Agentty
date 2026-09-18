@@ -20,7 +20,9 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("ui/setBadge", None),
     ("host/info", None),
     ("host/openUrl", None),
-    ("host/revealPath", None),
+    // Reveals a file in Finder, and tells the plugin whether a path exists: that is the user's
+    // folders, so it needs the same permission as reading them.
+    ("host/revealPath", Some("workspace.read")),
     ("context/get", None),
     ("prompt/inject", Some("prompt.inject")),
     ("terminal/send", Some("terminal.write")),
@@ -202,6 +204,8 @@ mod tests {
     #[test]
     fn permissions_per_method() {
         assert_eq!(required_permission("ui/setPanel"), Some(None));
+        // Anything that reaches the user's files or terminals needs a declared permission.
+        assert_eq!(required_permission("host/revealPath"), Some(Some("workspace.read")));
         assert_eq!(required_permission("session/get"), Some(Some("session.read")));
         assert!(required_permission("fs/deleteEverything").is_none());
         for (_, permission) in HOST_METHODS {

@@ -196,6 +196,8 @@ pub struct Workbench {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
     pub groups: Vec<Group>,
+    /// The "ungrouped" section folds away like any group does.
+    pub ungrouped_collapsed: bool,
     panel: SidePanel,
     sidebar_open: bool,
     page: Option<Page>,
@@ -286,6 +288,7 @@ pub struct Workbench {
     plugin_panel: Option<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
     plugin_scroll: gpui::ScrollHandle,
+    welcome_scroll: gpui::ScrollHandle,
     /// Context last sent to plugins (serialized), to send only changes.
     plugin_context_key: String,
     prompt_dialog: Option<prompt_dialog::PromptDialog>,
@@ -320,6 +323,7 @@ impl Workbench {
             workspaces: Vec::new(),
             active_workspace: 0,
             groups: Vec::new(),
+            ungrouped_collapsed: false,
             panel: SidePanel::Workspaces,
             sidebar_open: true,
             page: None,
@@ -394,6 +398,7 @@ impl Workbench {
             plugin_panel: None,
             plugin_inputs: HashMap::new(),
             plugin_scroll: gpui::ScrollHandle::new(),
+            welcome_scroll: gpui::ScrollHandle::new(),
             plugin_context_key: String::new(),
             prompt_dialog: None,
             welcome: false,
@@ -1183,6 +1188,7 @@ impl Workbench {
             groups: self.groups.iter().map(|g| GroupSnapshot { id: g.id, name: g.name.clone(), collapsed: g.collapsed }).collect(),
             workspaces,
             active_workspace: self.active_workspace,
+            ungrouped_collapsed: self.ungrouped_collapsed,
         };
         if self.closed {
             return;
@@ -1195,6 +1201,7 @@ impl Workbench {
     fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = LayoutState::load(self.slot);
         self.groups = state.groups.iter().map(|g| Group { id: g.id, name: g.name.clone(), collapsed: g.collapsed }).collect();
+        self.ungrouped_collapsed = state.ungrouped_collapsed;
         for snapshot in state.workspaces {
             self.next_id = self.next_id.max(snapshot.id + 1);
             self.workspaces.push(Workspace {
@@ -2150,6 +2157,21 @@ impl Workbench {
                 if let Some(pane) = self.active_pane() {
                     let bytes = crate::debug::unescape(argument).into_bytes();
                     pane.update(cx, |view, _| view.write(bytes));
+                }
+            }
+            // Drives the input-method path the way macOS does: `mark:<text>` shows a composition,
+            // `commit:<text>` replaces it with committed text. Korean composes character by
+            // character, so this is the only way to test it without a keyboard.
+            "ime" => {
+                use gpui::EntityInputHandler;
+                if let Some(pane) = self.active_pane() {
+                    let (kind, text) = argument.split_once(':').unwrap_or(("mark", argument));
+                    let text = text.to_string();
+                    pane.update(cx, |view, cx| match kind {
+                        "commit" => view.replace_text_in_range(None, &text, window, cx),
+                        "unmark" => view.unmark_text(window, cx),
+                        _ => view.replace_and_mark_text_in_range(None, &text, None, window, cx),
+                    });
                 }
             }
             "group" => {

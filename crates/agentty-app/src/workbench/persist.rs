@@ -62,6 +62,8 @@ pub struct LayoutState {
     pub workspaces: Vec<WorkspaceSnapshot>,
     #[serde(default)]
     pub active_workspace: usize,
+    #[serde(default)]
+    pub ungrouped_collapsed: bool,
 }
 
 impl LayoutState {

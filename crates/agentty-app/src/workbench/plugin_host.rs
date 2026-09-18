@@ -409,6 +409,9 @@ impl Workbench {
             Ok(Link::Store { plugin }) => self.open_plugins_page(plugin, cx),
             Ok(Link::Prompt(mut request)) => {
                 request.target = PromptTarget::Ask;
+                // Any website can open a link: the text is typed in for the user to read and send
+                // themselves, unless they tick "send right away" in the dialog.
+                request.submit = false;
                 request.source.get_or_insert_with(|| t(cx, "plugins.link_source").to_string());
                 self.open_prompt_dialog(request, window, cx);
             }

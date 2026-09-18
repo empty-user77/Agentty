@@ -134,7 +134,8 @@ plugin.start(); // after registering handlers
 | `notify(message, kind)` — `info` · `success` · `warning` · `error` | |
 | `setBadge(text)` — short text on the plugin's tab-strip button | |
 | `getContext()` | |
-| `openUrl(url)` (http/https) · `revealPath(path)` (Finder) | |
+| `openUrl(url)` (http/https) | |
+| `revealPath(path)` — show a file in Finder | `workspace.read` |
 | `injectPrompt(request)` — see [Sending prompts](#sending-prompts) | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
 | `getSession({ paneId, maxTurns })` | `session.read` |

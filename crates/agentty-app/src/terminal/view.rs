@@ -500,6 +500,14 @@ impl TerminalView {
         self.subagents.clear();
     }
 
+    /// The cursor's cell as the painter sees it: (column, row from the top of the viewport).
+    fn cursor_cell(&self) -> Option<(usize, usize)> {
+        let term = self.backend.as_ref()?.term.lock();
+        let cursor = term.grid().cursor.point;
+        let row = (cursor.line.0 + term.grid().display_offset() as i32).max(0) as usize;
+        Some((cursor.column.0, row))
+    }
+
     /// The last `rows` lines of the live screen (ignores scrollback position).
     pub fn screen_lines(&self, rows: usize) -> Vec<String> {
         let Some(backend) = &self.backend else { return Vec::new() };
@@ -532,7 +540,9 @@ impl TerminalView {
                 self.status = AgentStatus::Working;
                 self.working_since.get_or_insert_with(Instant::now);
             }
-        } else if screen.question && matches!(self.status, AgentStatus::Working | AgentStatus::Question(_)) {
+        // A turn that went quiet reads as `Thinking`, and a question often comes after exactly that
+        // pause: it has to count here too, or the pane waits on the user with nothing said.
+        } else if screen.question && matches!(self.status, AgentStatus::Working | AgentStatus::Thinking | AgentStatus::Question(_)) {
             self.quiet_ticks = 0;
             if !matches!(self.status, AgentStatus::Question(_)) {
                 self.enter_waiting(AgentStatus::Question(None), NoticeKind::Question, None, cx);
@@ -592,18 +602,28 @@ impl TerminalView {
         if self.model_probe.is_some() {
             return;
         }
-        let known = if self.spec.kind == PaneKind::Claude { self.spec.session_id.clone() } else { None };
+        // The session the pane was launched with, for a resumed session of either agent.
+        let known = self.spec.session_id.clone();
+        // Claude Code registers itself under its pid, which is the only thing that tells two
+        // sessions in the same folder apart.
+        let agent_pid = self
+            .backend
+            .as_ref()
+            .filter(|_| agent == agentty_bridge::model::Agent::Claude)
+            .and_then(|backend| crate::procinfo::foreground_pid(backend.tty_fd));
         let cwd = self.display_cwd();
         let since = self.launched_at_ms;
         let task = cx.background_spawn(async move {
+            let registered = agent_pid.and_then(agentty_bridge::claude::session_of_pid);
             let recent = match agent {
                 agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent(&cwd, since),
                 agentty_bridge::model::Agent::Codex => agentty_bridge::codex::find_recent(&cwd, since),
                 _ => None,
             };
-            // `/clear` and a resume fork the agent into a new transcript, so the id the pane
-            // launched with can stop growing: follow whichever file is still being written.
-            let id = agentty_bridge::live_session_id(agent, known, recent)?;
+            // The running process is the truth. Failing that (Codex, or a Claude Code too old to
+            // register itself): `/clear` and a resume fork the agent into a new transcript, so the
+            // id the pane launched with can stop growing — follow whichever file is still written.
+            let id = registered.or_else(|| agentty_bridge::live_session_id(agent, known, recent))?;
             let subagents =
                 if agent == agentty_bridge::model::Agent::Claude { agentty_bridge::claude::subagent_activity(&id) } else { (0, 0) };
             Some((id.clone(), agentty_bridge::session_stats(agent, &id), subagents))
@@ -1460,10 +1480,13 @@ impl EntityInputHandler for TerminalView {
 
     fn replace_text_in_range(&mut self, _: Option<Range<usize>>, text: &str, _: &mut Window, cx: &mut Context<Self>) {
         self.marked_text = None;
-        if let Some(layout) = self.layout {
+        // Where the cursor is *now*, not where the last frame drew it: typing faster than the
+        // program echoes would otherwise anchor the next composition to a stale cell, and it would
+        // be drawn on top of the text that was committed a moment ago.
+        if let Some(cell) = self.cursor_cell().or_else(|| self.layout.map(|l| l.cursor)) {
             let width: usize = text.chars().map(cell_width).sum();
-            let previous = self.commit_anchor.filter(|(at, _)| *at == layout.cursor).map_or(0, |(_, w)| w);
-            self.commit_anchor = Some((layout.cursor, previous + width));
+            let previous = self.commit_anchor.filter(|(at, _)| *at == cell).map_or(0, |(_, w)| w);
+            self.commit_anchor = Some((cell, previous + width));
         }
         self.write_user_input(text.as_bytes().to_vec());
         cx.notify();
@@ -1504,13 +1527,18 @@ struct TerminalElement {
     focus: FocusHandle,
 }
 
+/// Shaped pieces of text with the place each one is painted.
+type PositionedGlyphs = Vec<(Point<Pixels>, ShapedLine)>;
+
 struct Frame {
     hitbox: Hitbox,
     backgrounds: Vec<PaintQuad>,
     lines: Vec<(Point<Pixels>, ShapedLine)>,
     cursor: Option<PaintQuad>,
     cursor_text: Option<(Point<Pixels>, ShapedLine)>,
-    marked: Option<(PaintQuad, Point<Pixels>, ShapedLine)>,
+    /// IME composition: the backdrop that hides the cells under it, then one shaped glyph per
+    /// cell position (the composition sits on the terminal grid, like everything else).
+    marked: Option<(PaintQuad, PositionedGlyphs)>,
     line_height: Pixels,
 }
 
@@ -1807,19 +1835,37 @@ impl Element for TerminalElement {
         let pending = commit_anchor.filter(|(at, _)| *at == (cursor_col, cursor_row)).map(|(_, w)| w);
         if let Some(text) = marked_text {
             let fg = hex(theme.foreground);
-            let run = TextRun {
-                len: text.len(),
-                font: base_font.clone(),
-                color: fg,
-                background_color: None,
-                underline: Some(UnderlineStyle { color: Some(fg), thickness: px(1.), wavy: false }),
-                strikethrough: None,
-            };
-            let shaped = text_system.shape_line(text.into(), font_size, &[run], None);
-            let pos = point(origin.x + cell_width * (cursor_col + pending.unwrap_or(0)) as f32, origin.y + line_height * cursor_row as f32);
+            // `cell_width` is the grid's pixel width here; the character-width helper is the
+            // module-level function of the same name.
+            let cell_width_px = cell_width;
+            let start = cursor_col + pending.unwrap_or(0);
+            let top = origin.y + line_height * cursor_row as f32;
+            // A composition is terminal text: it has to sit on the same grid, or a Hangul syllable
+            // (two cells wide, but narrower than that in the font) drifts left and lands on top of
+            // the text the program already echoed.
+            let mut glyphs = Vec::new();
+            let mut cells = 0usize;
+            for ch in text.chars() {
+                let width = self::cell_width(ch);
+                let run = TextRun {
+                    len: ch.len_utf8(),
+                    font: base_font.clone(),
+                    color: fg,
+                    background_color: None,
+                    underline: Some(UnderlineStyle { color: Some(fg), thickness: px(1.), wavy: false }),
+                    strikethrough: None,
+                };
+                let force = (width == 1).then_some(cell_width_px);
+                let shaped = text_system.shape_line(SharedString::from(ch.to_string()), font_size, &[run], force);
+                // Wide glyphs are centered in their two cells, the way the grid draws them.
+                let slack = if width > 1 { ((cell_width_px * width as f32) - shaped.width).max(px(0.)) / 2. } else { px(0.) };
+                glyphs.push((point(origin.x + cell_width_px * (start + cells) as f32 + slack, top), shaped));
+                cells += width;
+            }
             // Plain background (hides the cells underneath) with just an underline, like other terminals.
-            let backdrop = fill(Bounds::new(pos, size(shaped.width, line_height)), hex(theme.background));
-            frame.marked = Some((backdrop, pos, shaped));
+            let pos = point(origin.x + cell_width_px * start as f32, top);
+            let backdrop = fill(Bounds::new(pos, size(cell_width_px * cells as f32, line_height)), hex(theme.background));
+            frame.marked = Some((backdrop, glyphs));
         }
         drop(term);
 
@@ -1868,9 +1914,11 @@ impl Element for TerminalElement {
             if let Some((origin, line)) = &frame.cursor_text {
                 let _ = line.paint(*origin, frame.line_height, window, cx);
             }
-            if let Some((backdrop, origin, line)) = frame.marked.take() {
+            if let Some((backdrop, glyphs)) = frame.marked.take() {
                 window.paint_quad(backdrop);
-                let _ = line.paint(origin, frame.line_height, window, cx);
+                for (origin, line) in glyphs {
+                    let _ = line.paint(origin, frame.line_height, window, cx);
+                }
             }
         });
     }

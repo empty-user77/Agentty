@@ -162,6 +162,7 @@ impl Workbench {
                 if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
                     self.flow.edges.push(FlowEdge::new(from, to));
                 }
+                // `share` leaves a direct link alone: those sessions message each other already.
                 self.share(from, to, cx);
             }
         }
@@ -396,7 +397,12 @@ impl Workbench {
     }
 
     /// Writes the source conversation to a handoff file and submits a prompt to the target.
+    /// Hands the target session the source's conversation. Sessions on a direct link talk to each
+    /// other themselves, so there is nothing to hand over.
     fn share(&mut self, from: u64, to: u64, cx: &mut Context<Self>) {
+        if self.flow.edges.iter().any(|e| e.from == from && e.to == to && e.mode == LinkMode::Direct) {
+            return;
+        }
         self.share_with(from, to, ShareMode::Full, cx);
     }
 
@@ -803,10 +809,10 @@ impl Workbench {
                 .child(crate::ui::icon_only(
                     SharedString::from(format!("edge-remove-{from}-{to}")),
                     "x",
-                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.flow.edges.retain(|e| !(e.from == from && e.to == to));
-                        cx.notify();
-                    }),
+                    // Through `flow_disconnect`, so a direct link also tells both sessions to stop
+                    // messaging each other — dropping the edge alone would leave them talking with
+                    // nothing left in Agentty to stop them.
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.flow_disconnect(from, to, cx)),
                 )),
         )
     }

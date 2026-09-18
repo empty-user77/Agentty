@@ -43,8 +43,8 @@ impl Workbench {
             (PromptTarget::NewTab, _) if !self.workspaces.is_empty() => Destination::NewTab,
             _ => Destination::NewWorkspace,
         };
-        self.prompt_dialog =
-            Some(PromptDialog { request, kind, cwd, destination, submit: true, error: None, scroll: gpui::ScrollHandle::new() });
+        let submit = request.submit;
+        self.prompt_dialog = Some(PromptDialog { request, kind, cwd, destination, submit, error: None, scroll: gpui::ScrollHandle::new() });
         self.launcher_open = false;
         self.notices_open = false;
         cx.notify();

@@ -50,7 +50,7 @@ when you don't care.
 | `context/get` | | `{}` | context |
 | `host/info` | | `{}` | `{ version, apiVersion, language }` |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
-| `host/revealPath` | | `{ path }` (absolute, existing) | `null` |
+| `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |

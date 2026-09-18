@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Antigravity CLI has its own logo instead of a letter avatar.
 - Plugins: a Plugins page to install, enable, restart and remove plugins, install from a folder or a Git repository,
   and create a new plugin that Claude Code builds for you. Plugins can fill a panel next to the terminals, add buttons
   above agent panes and command palette entries, and send prompts to a new workspace, a new tab or an open workspace
@@ -13,6 +14,8 @@ All notable changes to this project are documented here. The format follows
 - Cosmica plugin (built in): search Cosmica notes and use them as prompts, continue a note from Cosmica's
   "Continue in Agentty" menu, and save an AI summary or the conversation log of a session into Cosmica.
 - `agentty://` links let other apps hand work to Agentty (plugin links, prompts, the Plugins page).
+  A prompt that arrives this way is typed in for you to read and send, and a plugin a link reached
+  keeps going through that dialog until it is restarted.
 - Plugin SDK for Node.js, developer guide, protocol reference and a prompt for building plugins with AI agents. The
   guide opens inside Agentty.
 - Session links from the terminal: the link button above an agent pane connects it to another session without going to
@@ -22,6 +25,9 @@ All notable changes to this project are documented here. The format follows
 - Tabs and split panes can be rearranged by dragging: a tab dropped into another tab joins its layout where you choose,
   and a split pane moves to another position (or another tab) when dragged by the icon in its header.
 - First launch opens what Agentty can do next to the start page.
+- The "Ungrouped" section of the sidebar folds away like a group, group names are easier to read, and
+  a group's buttons no longer crowd its row or push the workspace count off the edge.
+- The start page scrolls in a short window instead of running under its own footer.
 - The start page is reachable again once workspaces exist (the house button in the sidebar header), Claude Code and
   Codex are always offered with a link to their install guide when they are missing, and the page has a footer with the
   website, release notes and GitHub.
@@ -32,6 +38,17 @@ All notable changes to this project are documented here. The format follows
   a half goes back to "Ready", so a missing Stop hook cannot leave "Thinking…" up for good.
 
 ### Fixed
+- Closing a session link from the Session Flow page now also tells both sessions to stop messaging
+  each other, as closing it from the terminal already did.
+- Reconnecting two sessions that already message each other no longer hands one a copy of the
+  other's conversation.
+- A pane follows the session its agent is actually running, so two agents in the same folder no
+  longer show each other's model, context and subagents.
+- An agent that asks a question after a long pause is reported again instead of staying quiet.
+- Korean and other composed text is drawn on the terminal's own grid while the input method is still
+  composing, so a syllable no longer lands on top of the text that was just committed.
+- A workspace where one pane finished while another keeps working now says "Working" in the sidebar
+  instead of "Done"; the finished pane still shows its own state and keeps its unread mark.
 - The model, context meter and subagent count of a pane keep updating after `/clear` or a resume, which start a new
   transcript; they used to freeze at the numbers from the moment the session was forked.
 - Text sent to a terminal by a plugin or a link can no longer end the bracketed paste early, which could run the rest of

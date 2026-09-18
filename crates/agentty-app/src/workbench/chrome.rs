@@ -7,7 +7,7 @@ use crate::settings::settings;
 use crate::terminal::AgentStatus;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
-use crate::ui::{action_button, chip, hint, icon, icon_only, menu_item, now_ms, popover, relative_time, tilde, IconSize};
+use crate::ui::{action_button, chip, hint, icon, icon_only, icon_only_sized, menu_item, now_ms, popover, relative_time, tilde, IconSize};
 use agentty_bridge::model::Agent;
 use gpui::{
     div, prelude::*, px, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, MouseButton, MouseDownEvent, SharedString, Window,
@@ -93,6 +93,13 @@ fn header_icon(
         .child(icon(glyph, IconSize::BUTTON, hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND })))
 }
 
+/// Strip along the bottom of the start page holding its links.
+const FOOTER_HEIGHT: f32 = 44.0;
+
+/// Group headers are a single line of text, so their buttons are smaller than a toolbar's.
+const GROUP_ICON_BUTTON: f32 = 20.0;
+const GROUP_ICON: f32 = 12.0;
+
 /// Aggregated AI state of a workspace for its sidebar row.
 struct WorkspaceSummary {
     label: String,
@@ -105,12 +112,13 @@ impl Workbench {
     fn summarize(&self, ws: &Workspace, cx: &gpui::App) -> WorkspaceSummary {
         let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
         let attention = panes.iter().filter(|p| p.read(cx).attention).count();
-        // Most urgent agent state wins: needs input > finished > working > idle.
+        // Most urgent agent state wins: needs input > still working > finished > idle. A workspace
+        // where one pane finished while another keeps going is still working, and the finished pane
+        // is not lost: it keeps its attention mark and its own row says so.
         let rank = |status: &AgentStatus| match status {
             AgentStatus::Permission(_) | AgentStatus::Question(_) => 3,
-            AgentStatus::Finished(_) => 2,
-            AgentStatus::Working => 1,
-            AgentStatus::Thinking => 1,
+            AgentStatus::Working | AgentStatus::Thinking => 2,
+            AgentStatus::Finished(_) => 1,
             AgentStatus::Interrupted | AgentStatus::Idle => 0,
         };
         let agent = panes.iter().map(|p| p.read(cx)).filter(|v| v.is_agent()).max_by_key(|v| rank(&v.status) * 2 + v.attention as usize);
@@ -400,11 +408,16 @@ impl Workbench {
         let ungrouped: Vec<usize> = (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group.is_none()).collect();
         // The "ungrouped" header matters once groups exist and something is (or is being dragged) outside them.
         let dragging = cx.has_active_drag();
+        let mut ungrouped_open = true;
         if !self.groups.is_empty() && (!ungrouped.is_empty() || dragging) {
-            list = list.child(self.render_group_header(None, t(cx, "ungrouped").into(), false, ungrouped.len(), window, cx));
+            ungrouped_open = !self.ungrouped_collapsed;
+            let label = t(cx, "ungrouped").into();
+            list = list.child(self.render_group_header(None, label, self.ungrouped_collapsed, ungrouped.len(), window, cx));
         }
-        for index in ungrouped {
-            list = list.child(self.render_workspace_row(index, window, cx));
+        if ungrouped_open {
+            for index in ungrouped {
+                list = list.child(self.render_workspace_row(index, window, cx));
+            }
         }
         for group in &self.groups {
             let members: Vec<usize> = (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group == Some(group.id)).collect();
@@ -466,7 +479,7 @@ impl Workbench {
             .rounded_md()
             .t_small()
             .text_color(hex(Chrome::MUTED))
-            .when(group.is_some(), |d| d.cursor_pointer())
+            .cursor_pointer()
             .drag_over::<DraggedWorkspace>(|style, _, _, _| style.bg(hex_alpha(Chrome::ACCENT, 0.3)))
             .on_drop(cx.listener(move |this, dragged: &DraggedWorkspace, _, cx| this.move_to_group(dragged.id, group, cx)))
             .when_some(group, |d, gid| {
@@ -478,7 +491,12 @@ impl Workbench {
                 .on_drop(cx.listener(move |this, dragged: &DraggedGroup, _, cx| this.move_group(dragged.id, gid, cx)))
             })
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                let Some(gid) = group else { return };
+                let Some(gid) = group else {
+                    // "Ungrouped" has no name to rename, but it folds away like the rest.
+                    this.ungrouped_collapsed = !this.ungrouped_collapsed;
+                    this.persist(cx);
+                    return cx.notify();
+                };
                 if event.click_count() == 2 {
                     return this.start_rename(RenameTarget::Group(gid), window, cx);
                 }
@@ -488,14 +506,13 @@ impl Workbench {
                 this.persist(cx);
                 cx.notify();
             }))
-            .when(group.is_some(), |d| d.child(if collapsed { "▸" } else { "▾" }))
+            .child(if collapsed { "▸" } else { "▾" })
             .child(match (&self.rename, renaming) {
                 (Some(rename), true) => {
                     div().flex_1().t_body().text_color(hex(Chrome::BRIGHT)).child(rename.input.clone()).into_any_element()
                 }
-                _ => div().flex_1().truncate().font_weight(FontWeight::SEMIBOLD).child(name.to_uppercase()).into_any_element(),
+                _ => div().flex_1().truncate().t_body().font_weight(FontWeight::SEMIBOLD).child(name.to_uppercase()).into_any_element(),
             })
-            .child(div().child(count.to_string()))
             .when_some(group, |d, gid| {
                 d.child(
                     div()
@@ -503,9 +520,11 @@ impl Workbench {
                         .invisible()
                         .group_hover("group-header", |s| s.visible())
                         .child(
-                            icon_only(
+                            icon_only_sized(
                                 SharedString::from(format!("group-add-{gid}")),
                                 "plus",
+                                GROUP_ICON_BUTTON,
+                                GROUP_ICON,
                                 cx.listener(move |this, _: &ClickEvent, window, cx| {
                                     cx.stop_propagation();
                                     this.open_new_workspace_page_in(Some(gid), window, cx);
@@ -513,17 +532,21 @@ impl Workbench {
                             )
                             .tooltip(crate::ui::Tooltip::text(t(cx, "group.add_workspace"), None)),
                         )
-                        .child(icon_only(
+                        .child(icon_only_sized(
                             SharedString::from(format!("group-rename-{gid}")),
                             "pencil",
+                            GROUP_ICON_BUTTON,
+                            GROUP_ICON,
                             cx.listener(move |this, _: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
                                 this.start_rename(RenameTarget::Group(gid), window, cx);
                             }),
                         ))
-                        .child(icon_only(
+                        .child(icon_only_sized(
                             SharedString::from(format!("group-delete-{gid}")),
                             "x",
+                            GROUP_ICON_BUTTON,
+                            GROUP_ICON,
                             cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
                                 this.delete_group(gid, cx);
@@ -531,6 +554,9 @@ impl Workbench {
                         )),
                 )
             })
+            // Last, so the count sits at the right edge of every header: a group's buttons take
+            // their space even while hidden, and would otherwise push the number off the edge.
+            .child(div().child(count.to_string()))
     }
 
     fn render_workspace_row(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1645,14 +1671,16 @@ impl Workbench {
                 buttons.child(launch(SharedString::from(format!("welcome-{}", agent.id)), agent.id, agent.name.to_string(), choice, cx));
         }
         let more = self.installed.as_ref().is_some_and(|i| i.other_agents().any(|a| !a.primary) || !i.ollama_models.is_empty());
-        div()
-            .size_full()
+        // A short window scrolls rather than stacking the page on top of its own footer.
+        let page = div()
+            .w_full()
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
             .gap_2()
-            .bg(hex(Chrome::EDITOR))
+            .px_4()
+            .py_8()
             .child(gpui::img("brand/logo.png").size(px(56.)))
             .child(
                 div().text_size(px(30.)).font_weight(FontWeight::LIGHT).text_color(hex(Chrome::FOREGROUND)).child(if starting.is_some() {
@@ -1748,7 +1776,25 @@ impl Workbench {
                         .child(t(cx, "welcome.back"))
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close_welcome(window, cx))),
                 )
-            })
+            });
+        div()
+            .size_full()
+            .relative()
+            .bg(hex(Chrome::EDITOR))
+            .child(
+                div()
+                    .id("welcome-scroll")
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.welcome_scroll)
+                    // Room for the footer, which sits over the bottom of the page.
+                    .pb(px(FOOTER_HEIGHT))
+                    .child(page),
+            )
+            .child(crate::ui::scrollbar(self.welcome_scroll.clone()))
             .child(self.render_welcome_footer(cx))
     }
 
@@ -1766,9 +1812,11 @@ impl Workbench {
         };
         div()
             .absolute()
-            .bottom(px(16.))
+            .bottom_0()
             .left_0()
             .right_0()
+            .h(px(FOOTER_HEIGHT))
+            .bg(hex(Chrome::EDITOR))
             .flex()
             .items_center()
             .justify_center()
