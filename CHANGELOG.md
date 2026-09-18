@@ -25,8 +25,6 @@ All notable changes to this project are documented here. The format follows
 - The start page is reachable again once workspaces exist (the house button in the sidebar header), Claude Code and
   Codex are always offered with a link to their install guide when they are missing, and the page has a footer with the
   website, release notes and GitHub.
-- The start page has the night sky from agentty.run behind it: twinkling stars and the occasional shooting star, paused
-  while the window is in the background.
 
 ### Changed
 - An agent between tool calls is shown as "Thinking…" instead of "Ready", and the running-turn hint of newer Claude Code

@@ -1647,20 +1647,12 @@ impl Workbench {
         let more = self.installed.as_ref().is_some_and(|i| i.other_agents().any(|a| !a.primary) || !i.ollama_models.is_empty());
         div()
             .size_full()
-            .relative()
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
             .gap_2()
             .bg(hex(Chrome::EDITOR))
-            // The night sky from agentty.run, behind everything and untouchable.
-            .child(div().absolute().inset_0().bg(gpui::linear_gradient(
-                180.,
-                gpui::linear_color_stop(hex_alpha(0xffcc00, 0.05), 0.),
-                gpui::linear_color_stop(hex_alpha(0xffcc00, 0.), 1.),
-            )))
-            .child(super::starfield::starfield())
             .child(gpui::img("brand/logo.png").size(px(56.)))
             .child(
                 div().text_size(px(30.)).font_weight(FontWeight::LIGHT).text_color(hex(Chrome::FOREGROUND)).child(if starting.is_some() {

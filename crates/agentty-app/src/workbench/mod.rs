@@ -28,7 +28,6 @@ pub mod resume_hint;
 mod service_status;
 mod session_viewer;
 mod settings_page;
-mod starfield;
 mod status_menus;
 mod tab_menu;
 pub mod update;
