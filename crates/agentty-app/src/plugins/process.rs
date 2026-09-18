@@ -302,11 +302,9 @@ fn with_dir_first(path_env: &str, dir: Option<&Path>) -> String {
     if std::env::split_paths(path_env).any(|entry| entry == dir) {
         return path_env.to_string();
     }
-    if path_env.is_empty() {
-        dir.display().to_string()
-    } else {
-        format!("{}:{path_env}", dir.display())
-    }
+    // The platform's separator (`:`, or `;` on Windows), which `split_paths` above reads too.
+    let entries = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(path_env).filter(|p| !p.as_os_str().is_empty()));
+    std::env::join_paths(entries).map(|joined| joined.to_string_lossy().into_owned()).unwrap_or_else(|_| path_env.to_string())
 }
 
 /// `name` on `path_env`, then in common install locations (newest nvm Node first).
@@ -371,11 +369,14 @@ mod tests {
 
     #[test]
     fn the_runtime_folder_leads_the_path_once() {
+        // Joined with the platform's separator (`;` on Windows).
+        let join = |parts: &[&str]| std::env::join_paths(parts).unwrap().to_string_lossy().into_owned();
         let node_dir = Path::new("/Users/me/.nvm/versions/node/v22.0.0/bin");
-        assert_eq!(with_dir_first("/usr/bin:/bin", Some(node_dir)), "/Users/me/.nvm/versions/node/v22.0.0/bin:/usr/bin:/bin");
-        let already = "/usr/bin:/Users/me/.nvm/versions/node/v22.0.0/bin";
-        assert_eq!(with_dir_first(already, Some(node_dir)), already);
-        assert_eq!(with_dir_first("", Some(node_dir)), "/Users/me/.nvm/versions/node/v22.0.0/bin");
+        let node = "/Users/me/.nvm/versions/node/v22.0.0/bin";
+        assert_eq!(with_dir_first(&join(&["/usr/bin", "/bin"]), Some(node_dir)), join(&[node, "/usr/bin", "/bin"]));
+        let already = join(&["/usr/bin", node]);
+        assert_eq!(with_dir_first(&already, Some(node_dir)), already);
+        assert_eq!(with_dir_first("", Some(node_dir)), node);
         assert_eq!(with_dir_first("/usr/bin", None), "/usr/bin");
     }
 

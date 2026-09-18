@@ -7,17 +7,21 @@ use crate::launch::{home_dir, LaunchSpec};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, now_ms, relative_time, tilde, IconSize, TypeScale};
 use agentty_bridge::model::{Role, SessionInfo, Turn};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, FontWeight, SharedString, Window};
+use gpui::{div, list, prelude::*, px, AnyElement, App, ClickEvent, Context, FontWeight, ListAlignment, ListState, SharedString, Window};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 /// Turns rendered at most (the newest ones).
 const MAX_TURNS: usize = 200;
 
 pub struct SessionViewer {
     pub session: SessionInfo,
-    /// `None` while loading; `Err` when the transcript can't be read.
-    pub turns: Option<Result<Vec<Turn>, String>>,
-    pub scroll: gpui::ScrollHandle,
+    /// The newest [`MAX_TURNS`] turns; `None` while loading, `Err` when the transcript can't be read.
+    pub turns: Option<Result<Rc<Vec<Turn>>, String>>,
+    /// Older turns left out.
+    skipped: usize,
+    /// Virtual list: only the turns on screen are laid out, so long sessions scroll smoothly.
+    list: ListState,
 }
 
 impl Workbench {
@@ -26,7 +30,8 @@ impl Workbench {
             return;
         }
         let (agent, id) = (session.agent, session.id.clone());
-        self.session_viewer = Some(SessionViewer { session, turns: None, scroll: gpui::ScrollHandle::new() });
+        self.session_viewer =
+            Some(SessionViewer { session, turns: None, skipped: 0, list: ListState::new(0, ListAlignment::Bottom, px(600.)) });
         self.page = None;
         let load_id = id.clone();
         let task =
@@ -35,9 +40,14 @@ impl Workbench {
             let turns = task.await;
             let _ = this.update(cx, |this, cx| {
                 if let Some(viewer) = this.session_viewer.as_mut().filter(|v| v.session.id == id) {
+                    let turns = turns.map(|mut turns| {
+                        viewer.skipped = turns.len().saturating_sub(MAX_TURNS);
+                        Rc::new(turns.split_off(viewer.skipped))
+                    });
+                    // Bottom-aligned: it opens at the end, where the conversation left off.
+                    let rows = turns.as_ref().map_or(0, |t| t.len() + usize::from(viewer.skipped > 0));
+                    viewer.list = ListState::new(rows, ListAlignment::Bottom, px(600.));
                     viewer.turns = Some(turns);
-                    // Start at the end, where the conversation left off.
-                    viewer.scroll.scroll_to_bottom();
                     cx.notify();
                 }
             });
@@ -145,33 +155,32 @@ impl Workbench {
                 div().p_5().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, "viewer.empty")).into_any_element()
             }
             Some(Ok(turns)) => {
-                let skipped = turns.len().saturating_sub(MAX_TURNS);
-                let mut list = div().px_5().py_4().flex().flex_col().gap_3().max_w(px(920.));
-                if skipped > 0 {
-                    list = list.child(div().t_small().text_color(hex(Chrome::MUTED)).child(tf(
-                        cx,
-                        "viewer.skipped",
-                        &[("n", &skipped.to_string())],
-                    )));
-                }
-                for (index, turn) in turns.iter().skip(skipped).enumerate() {
-                    list = list.child(render_turn(index, turn, session.agent, cx));
-                }
-                let scroll = viewer.scroll.clone();
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .child(div().id("session-viewer-scroll").size_full().overflow_y_scroll().track_scroll(&scroll).child(list))
-                    .child(crate::ui::scrollbar(scroll))
-                    .into_any_element()
+                let (turns, skipped, agent) = (turns.clone(), viewer.skipped, session.agent);
+                let notice = (skipped > 0).then(|| tf(cx, "viewer.skipped", &[("n", &skipped.to_string())]));
+                let rows = list(viewer.list.clone(), move |row, _, cx| {
+                    // Each row is laid out only while on screen; spacing is padding, not a gap.
+                    let item = div().px_5().pt_3().max_w(px(920.));
+                    match (&notice, row) {
+                        (Some(text), 0) => item.pt_4().t_small().text_color(hex(Chrome::MUTED)).child(text.clone()).into_any_element(),
+                        _ => {
+                            let index = row - usize::from(notice.is_some());
+                            match turns.get(index) {
+                                Some(turn) => item.child(render_turn(index, turn, agent, cx)).into_any_element(),
+                                None => item.into_any_element(),
+                            }
+                        }
+                    }
+                })
+                .size_full()
+                .pb_4();
+                div().relative().flex_1().min_h_0().child(rows).child(crate::ui::list_scrollbar(viewer.list.clone())).into_any_element()
             }
         };
         Some(div().size_full().flex().flex_col().bg(hex(Chrome::EDITOR)).child(header).child(body).into_any_element())
     }
 }
 
-fn render_turn(index: usize, turn: &Turn, agent: agentty_bridge::model::Agent, cx: &mut Context<Workbench>) -> AnyElement {
+fn render_turn(index: usize, turn: &Turn, agent: agentty_bridge::model::Agent, cx: &App) -> AnyElement {
     let user = turn.role == Role::User;
     let mut text = div().flex().flex_col().gap_0p5().t_body().text_color(hex(if user { Chrome::BRIGHT } else { Chrome::FOREGROUND }));
     for line in turn.text.lines().take(400) {
