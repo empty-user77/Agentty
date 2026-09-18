@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-18
+
 ### Added
 - Antigravity CLI has its own logo instead of a letter avatar.
 - Plugins: a Plugins page to install, enable, restart and remove plugins, install from a folder or a Git repository,
