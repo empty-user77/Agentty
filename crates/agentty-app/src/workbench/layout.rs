@@ -1,6 +1,6 @@
 //! Renders a tab's split tree: pane headers, attention borders and draggable dividers.
 
-use super::panes::{Axis, PaneNode};
+use super::panes::{zoom_sizes, Axis, PaneNode};
 use super::{status_label, Pane, Tab, Workbench};
 use crate::i18n::t;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -51,13 +51,12 @@ impl Workbench {
                 let zoom_child = self.zoomed.as_ref().and_then(|z| children.iter().position(|c| c.contains(z)));
                 for (index, (child, size)) in children.iter().zip(sizes).enumerate() {
                     if index > 0 {
-                        container = container.child(self.render_divider(&path, index - 1, axis, sizes.clone(), cx));
+                        container = container.child(self.render_divider(&path, index - 1, axis, cx));
                     }
                     let mut child_path = path.clone();
                     child_path.push(index);
                     let size = match zoom_child {
-                        Some(zoomed) if zoomed == index => 0.78,
-                        Some(_) => 0.22 / (children.len() - 1).max(1) as f32,
+                        Some(zoomed) => zoom_sizes(children.len(), zoomed)[index],
                         None => *size,
                     };
                     container = container.child(
@@ -77,7 +76,7 @@ impl Workbench {
         }
     }
 
-    fn render_divider(&self, path: &[usize], index: usize, axis: Axis, sizes: Vec<f32>, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_divider(&self, path: &[usize], index: usize, axis: Axis, cx: &mut Context<Self>) -> impl IntoElement {
         let id = SharedString::from(format!("divider-{path:?}-{index}"));
         let dragging = matches!(&self.split_drag, Some(d) if d.path == path && d.index == index);
         let path = path.to_vec();
@@ -92,11 +91,30 @@ impl Workbench {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    this.split_drag =
-                        Some(SplitDrag { path: path.clone(), index, axis, start: event.position, start_sizes: sizes.clone() });
+                    // Focus view draws its own proportions over the saved sizes, so a divider
+                    // dragged while it is on would not move: leave it, keeping what is on screen.
+                    this.leave_zoom_keeping_layout(cx);
+                    let Some(start_sizes) = this.active_tab_mut().and_then(|tab| tab.root.sizes_at(&path)) else { return };
+                    this.split_drag = Some(SplitDrag { path: path.clone(), index, axis, start: event.position, start_sizes });
                     cx.notify();
                 }),
             )
+    }
+
+    fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        let ws = self.workspaces.get_mut(self.active_workspace)?;
+        ws.tabs.get_mut(ws.active_tab)
+    }
+
+    /// Turns focus view off, making its proportions the tab's real split sizes.
+    fn leave_zoom_keeping_layout(&mut self, cx: &mut Context<Self>) {
+        let Some(zoomed) = self.zoomed.take() else { return };
+        for tab in self.workspaces.iter_mut().flat_map(|ws| ws.tabs.iter_mut()) {
+            if tab.root.contains(&zoomed) {
+                tab.root.apply_zoom(&zoomed);
+            }
+        }
+        cx.notify();
     }
 
     pub(super) fn drag_split(&mut self, drag: SplitDrag, position: Point<Pixels>, cx: &mut Context<Self>) {

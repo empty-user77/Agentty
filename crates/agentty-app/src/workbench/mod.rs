@@ -2179,6 +2179,29 @@ impl Workbench {
                     self.perform_close(confirm.target, window, cx);
                 }
             }
+            // Split sizes of the active tab, where each split sits on screen, and the zoomed pane.
+            "splits" => {
+                if let Some(tab) = self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)) {
+                    eprintln!("splits: sizes={:?}", tab.root.all_sizes());
+                }
+                let mut bounds: Vec<_> = self.split_bounds.borrow().iter().map(|(k, b)| (k.clone(), *b)).collect();
+                bounds.sort_by(|a, b| a.0.cmp(&b.0));
+                for (path, b) in bounds {
+                    eprintln!(
+                        "splits: path={path:?} origin=({:.0},{:.0}) size=({:.0},{:.0})",
+                        f32::from(b.origin.x),
+                        f32::from(b.origin.y),
+                        f32::from(b.size.width),
+                        f32::from(b.size.height)
+                    );
+                }
+                eprintln!("splits: zoomed={:?}", self.zoomed.as_ref().map(|p| p.read(cx).pane_id));
+            }
+            "zoom" => {
+                if let Some(pane) = self.active_pane() {
+                    self.toggle_zoom(&pane, window, cx);
+                }
+            }
             "layout" => {
                 for ws in &self.workspaces {
                     let panes: Vec<usize> = ws.tabs.iter().map(|t| t.root.leaves().len()).collect();
