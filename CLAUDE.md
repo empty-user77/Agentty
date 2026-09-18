@@ -47,6 +47,9 @@ After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githook
   `cargo build --release -p agentty-app`, `python3 scripts/check-secrets.py --all`.
 - After pushing, check the CI run (`gh run list` / `gh run watch`) and fix it if it fails.
 - Every user-facing string goes through `i18n.rs` in all four languages (en / ko / ja / zh).
+- Prompts, rules and skills that ship in code or bundled docs (first messages to agents, build guides, plugin
+  prompts, `.claude/skills`) are written in English only. They are not UI strings: they stay out of `i18n.rs` and
+  the plugins' translated tables, and tell the agent which language to talk in (`Talk to me in {language}`).
 - Reply to the user in Korean.
 
 ## Releases

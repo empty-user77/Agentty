@@ -128,3 +128,18 @@
 | ⚠️ 미확인 | auto 모드를 쓸 수 없는 계정에서 플래그를 줬을 때의 Claude Code 동작 · Codex에는 해당 모드 없음(변경 없음) |
 | 설정 | 설정 > 일반 **아이디어 모드 사용하기**(기본 ON, `Settings::idea_mode`). OFF면 시작 화면 배너 · + 메뉴 · 명령 팔레트의 아이디어 항목을 숨김 |
 | 아이디어 페이지 문구 | "새 프로젝트 폴더와 워크스페이스가 만들어지고…" 안내 제거 · 입력창 안내를 "영감을 최대한 많이 전달해 주세요. 몇 마디든, 몇 개의 파일이든 좋습니다."로 교체 |
+
+### 프롬프트 · 규칙 · 스킬은 영어로만
+
+전수 조사(추적 파일 전체에서 한글 검색, 워크로그 제외) 결과와 조치:
+
+| 위치 | 내용 | 조치 |
+|---|---|---|
+| `agentty-bridge/src/idea.rs` | 아이디어 첫 프롬프트의 한국어판(`PROMPT_KO`) | 삭제. 영어 프롬프트 하나 + `Talk to me in {language}` (`idea::language_name`) |
+| `i18n.rs` | 플러그인 개발 프롬프트 `plugins.ai_prompt` / `plugins.ai_prompt_ask` (4개 언어) | 번역 표에서 제거 → `plugins_page.rs`의 영어 상수, 대화 언어 지시 추가 |
+| `plugins/launch/main.mjs` | 한국어 `fixPrompt` · `sbPrompt` | 삭제(영어로 폴백). 패널 UI 번역은 유지 · 0.2.2 |
+| `plugins/cosmica/main.mjs` | ko/ja/zh `continuePrompt` · `insertPrompt` · `summaryPrompt` | 삭제. 요약 프롬프트는 "쓰던 언어로 작성" 지시가 이미 있음 · 1.0.2 |
+| `.claude/skills/release/SKILL.md` | 한국어 체크리스트 예시, 설명의 한국어 트리거 단어 | 영어로 |
+| 대상 아님 | UI 번역(`i18n.rs`, 플러그인 STRINGS), CJK 처리 테스트 픽스처, 글꼴 미리보기, 언어 이름, README 태그라인 | 유지 |
+
+`CLAUDE.md` 프로젝트 규칙에 추가: 코드·번들 문서의 프롬프트/규칙/스킬은 영어로만 쓰고 번역 표에 넣지 않는다. 번들 문서(`docs/plugins/*.md`, 플러그인 템플릿, BUILD_GUIDE, 세션 연결·핸드오프·하네스 프롬프트)는 이미 영어였음.

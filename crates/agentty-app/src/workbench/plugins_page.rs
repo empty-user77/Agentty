@@ -5,6 +5,7 @@ use super::{LaunchTarget, Page, Workbench};
 use crate::i18n::{t, tf};
 use crate::launch::{LaunchSpec, PaneKind};
 use crate::plugins::{self, RunState};
+use crate::settings::settings;
 use crate::text_input::TextInput;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{action_button, hint, icon, icon_named, tilde, IconSize, TypeScale};
@@ -12,6 +13,11 @@ use agentty_bridge::model::Agent;
 use agentty_bridge::plugins::manifest::{Manifest, PERMISSIONS};
 use agentty_bridge::plugins::store::{self, InstalledPlugin, Source};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWeight, PathPromptOptions, SharedString, Window};
+
+/// First message to the agent that builds a new plugin. Prompts are English whatever the UI
+/// language is; `{language}` tells the agent which one to talk in.
+const AI_PROMPT: &str = "Build the Agentty plugin \"{name}\" in this folder. It should: {idea}\n\nRead CLAUDE.md and PLUGIN_GUIDE.md first. Keep agentty-plugin.json in sync with main.mjs, check the code with `node --check main.mjs`, and when you are done tell me to press Restart on the plugin in Agentty's Plugins page.\n\nTalk to me in {language}.";
+const AI_PROMPT_ASK: &str = "We are building the Agentty plugin \"{name}\" in this folder. Read CLAUDE.md and PLUGIN_GUIDE.md, then ask me what the plugin should do.\n\nTalk to me in {language}.";
 
 #[derive(Default)]
 pub struct PluginsPage {
@@ -124,11 +130,9 @@ impl Workbench {
                     inputs.name.update(cx, |i, cx| i.set_text("", cx));
                     inputs.idea.update(cx, |i, cx| i.set_text("", cx));
                 }
-                let prompt = if idea.is_empty() {
-                    tf(cx, "plugins.ai_prompt_ask", &[("name", plugin.name())])
-                } else {
-                    tf(cx, "plugins.ai_prompt", &[("name", plugin.name()), ("idea", &idea)])
-                };
+                let template = if idea.is_empty() { AI_PROMPT_ASK } else { AI_PROMPT };
+                let language = agentty_bridge::idea::language_name(settings(cx).language.code());
+                let prompt = template.replace("{name}", plugin.name()).replace("{idea}", &idea).replace("{language}", language);
                 let title = tf(cx, "plugins.ai_workspace", &[("name", plugin.name())]);
                 self.page = None;
                 self.create_workspace(LaunchSpec::with_prompt(Agent::Claude, prompt, title.clone(), plugin.dir.clone()), window, cx);

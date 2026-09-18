@@ -44,6 +44,7 @@ import { loadProject, saveProject } from './lib/state.mjs';
 const plugin = createPlugin();
 
 // -- copy -------------------------------------------------------------------------------------
+// The panel is translated; prompts sent to an agent (`fixPrompt`, `sbPrompt`) are English only.
 
 const STRINGS = {
   en: {
@@ -219,8 +220,6 @@ const STRINGS = {
     tryAgain: '다시 시도',
     askAgent: '에이전트에게 고쳐달라고 하기',
     askedAgent: '에이전트에게 확인을 요청했습니다…',
-    fixPrompt:
-      'Agentty Launch로 이 프로젝트를 출시하는 중 다음 단계에서 실패했습니다: {step}.\n\n명령어: {command}\n\n출력 (마지막 부분):\n{log}\n\nVercel에서 빌드와 배포가 성공하도록 프로젝트를 고쳐 주세요. 비밀 값이나 실제 값이 담긴 .env 파일은 커밋하지 마세요.',
     needsRedeploy: '새 설정을 실제 사이트에 반영하려면 "사이트 업데이트"를 눌러 주세요.',
     cancel: '취소',
     stepSupabase: '데이터베이스',
@@ -259,8 +258,6 @@ const STRINGS = {
     sbErrStarting: 'Supabase가 아직 프로젝트를 시작하는 중입니다. 1분쯤 뒤에 "다시 시도"를 눌러 주세요.',
     sbErrDbPassword: '데이터베이스 비밀번호가 맞지 않습니다. supabase.com → Project Settings → Database 에서 확인하거나 재설정할 수 있어요.',
     sbErrLogin: 'Supabase 로그인이 끝나지 않았습니다. 다시 시도해서 브라우저에 표시된 코드를 입력해 주세요.',
-    sbPrompt:
-      'Agentty Launch가 이 프로젝트를 Supabase 호스팅 프로젝트에 연결했습니다. 프로젝트 URL과 공개(anon) 키는 {file} 에 {url}, {key} (으)로 들어 있습니다.\n\n다음을 해 주세요:\n1. @supabase/supabase-js 를 추가하고, 위 두 변수를 읽는 작은 클라이언트 모듈을 하나 만듭니다.\n2. 샘플/메모리 데이터를 Supabase 테이블로 옮깁니다: supabase/migrations/<timestamp>_<name>.sql 에 테이블을 만드는 SQL 마이그레이션을 작성하고, 모든 테이블에 row level security 를 켜고 앱에 맞는 정책을 추가합니다.\n3. service_role 키는 절대 사용하거나 요구하지 말고, 키를 코드에 넣지 마세요 — env 파일에만 둡니다. .env.example 에는 값 없이 이름만 적어 둡니다.\n4. `npm run build` 가 계속 통과해야 합니다.\n\n마이그레이션이 준비되면 Launch를 열어 "데이터베이스 변경 적용"을 누르라고 쉬운 말로 알려 주세요.',
   },
   ja: {
     title: 'ローンチ',

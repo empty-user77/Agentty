@@ -163,22 +163,24 @@ fn idea_markdown(title: &str, messages: &[&str], attachments: &[String]) -> Stri
     out
 }
 
-/// The first message to the agent, in the user's language.
+/// The first message to the agent. Prompts are written in English whatever the UI language is;
+/// the agent is told which language to talk to the owner in.
 pub fn build_prompt(language: &str, title: &str) -> String {
-    let template = match language {
-        "ko" => PROMPT_KO,
-        _ => PROMPT_EN,
-    };
-    let reply_in = match language {
+    PROMPT.replace("{title}", title).replace("{language}", language_name(language))
+}
+
+/// English name of a UI language code (`en`, `ko`, `ja`, `zh`), for the "Talk to me in …" line of
+/// a prompt.
+pub fn language_name(code: &str) -> &'static str {
+    match code {
         "ko" => "Korean",
         "ja" => "Japanese",
         "zh" => "Simplified Chinese",
         _ => "English",
-    };
-    template.replace("{title}", title).replace("{language}", reply_in)
+    }
 }
 
-const PROMPT_EN: &str = r#"Build a working demo of my idea "{title}". I'm not a developer, so take the lead as the senior engineer and product designer.
+const PROMPT: &str = r#"Build a working demo of my idea "{title}". I'm not a developer, so take the lead as the senior engineer and product designer.
 
 1. Read docs/idea/IDEA.md, everything in docs/idea/attachments/, and follow docs/idea/BUILD_GUIDE.md.
 2. Don't ask me questions unless something essential is impossible to guess — choose sensible defaults and write your assumptions in PLAN.md.
@@ -187,16 +189,6 @@ const PROMPT_EN: &str = r#"Build a working demo of my idea "{title}". I'm not a 
 5. When the demo works, tell me in plain words what you built, how to try it, and that I can publish it with the 🚀 Launch button.
 
 Talk to me in {language}."#;
-
-const PROMPT_KO: &str = r#"제 아이디어 "{title}"를 실제로 동작하는 데모로 만들어 주세요. 저는 개발자가 아니니 시니어 개발자이자 프로덕트 디자이너로서 주도적으로 진행해 주세요.
-
-1. docs/idea/IDEA.md 와 docs/idea/attachments/ 의 모든 문서를 읽고, docs/idea/BUILD_GUIDE.md 의 방식대로 작업해 주세요.
-2. 도저히 추측할 수 없는 핵심 사항이 아니면 질문하지 말고 합리적인 기본값으로 정한 뒤, 가정한 내용을 PLAN.md 에 적어 주세요.
-3. 진행 상황을 눈으로 볼 수 있게 해 주세요: 첫 화면을 빨리 띄워서 Agentty 내장 브라우저(browser_open)로 열고, 만드는 동안 계속 새로고침해 주세요.
-4. 서로 독립적인 부분은 가능하면 여러 서브에이전트에게 병렬로 나눠 맡기고, 결과를 직접 통합·검토해 주세요.
-5. 데모가 완성되면 무엇을 만들었는지, 어떻게 써 보면 되는지 쉬운 말로 알려 주고, 🚀 출시 버튼으로 인터넷에 공개할 수 있다고 안내해 주세요.
-
-저와는 한국어로 대화해 주세요."#;
 
 /// How the agent should work. Kept in the project so later sessions can re-read it.
 pub const BUILD_GUIDE: &str = r#"# Build guide (Agentty "Build my idea")
@@ -336,7 +328,7 @@ mod tests {
         let settings: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(project.dir.join(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(settings["permissions"]["defaultMode"], "acceptEdits");
-        assert!(project.prompt.contains("Recipe sharing site") && project.prompt.contains("한국어로"));
+        assert!(project.prompt.contains("Recipe sharing site") && project.prompt.contains("Talk to me in Korean"));
         // A second project with the same title gets its own folder.
         let again = create_project(&root, &input, "en", "20260918-1201").unwrap();
         assert_eq!(again.dir, root.join("recipe-sharing-site-2"));
@@ -356,7 +348,10 @@ mod tests {
     fn prompts_follow_the_language() {
         assert!(build_prompt("en", "Todo").contains("in English"));
         assert!(build_prompt("ja", "Todo").contains("Japanese"));
+        // The owner's title stays as written; the prompt around it is English in every language.
         assert!(build_prompt("ko", "할 일").contains("\"할 일\""));
-        assert!(build_prompt("ko", "할 일").contains("한국어로") && !build_prompt("ko", "x").contains("Korean"));
+        assert!(
+            build_prompt("ko", "할 일").starts_with("Build a working demo") && build_prompt("ko", "x").contains("Talk to me in Korean")
+        );
     }
 }
