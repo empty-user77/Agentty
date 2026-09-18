@@ -6,3 +6,8 @@ python3 "$root/scripts/check-secrets.py" --staged || {
   echo "pre-commit: commit blocked — remove the secret(s) above and try again." >&2
   exit 1
 }
+# Files that must never be committed, personal data, code that weakens a guarantee, guard wiring.
+python3 "$root/scripts/security-audit.py" --staged || {
+  echo "pre-commit: commit blocked — fix the security-audit finding(s) above and try again." >&2
+  exit 1
+}
