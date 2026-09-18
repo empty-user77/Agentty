@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-09-18
+
+### Added
+- Agent harnesses: when a terminal enters a project with its own Claude Code or Codex commands, skills, hooks or
+  workflow files, the bar above it offers **Start with harness**. Pick an entry point (such as `/implement`), paste a
+  ticket key, link or prompt, choose the agent and start. Projects can declare entry points in `agentty.json`.
+- Settings → Project: session suggestions, folder prompts, harness options and your own harness detection patterns.
+- The branch menu in pane headers shows the full branch name with a copy button, and can pull (fast-forward only) or
+  push without leaving the terminal. Long branch names show in full on hover.
+
+### Fixed
+- Update checks work on networks where the GitHub API is rate-limited, such as shared company connections. If the
+  release channel still can't be reached, the update window links to the release page to download it directly.
+
 ## [0.1.6] - 2026-09-18
 
 ### Changed
