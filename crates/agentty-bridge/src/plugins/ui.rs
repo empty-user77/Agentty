@@ -103,6 +103,9 @@ pub struct ListItem {
     pub detail: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
+    /// Color of the icon: a finished step in green, a failed one in red.
+    #[serde(default)]
+    pub tone: Tone,
     #[serde(default)]
     pub actions: Vec<ItemAction>,
 }
@@ -266,7 +269,8 @@ mod tests {
                 { "type": "text", "text": "Notes", "style": "title" },
                 { "type": "input", "id": "q", "placeholder": "Search" },
                 { "type": "list", "id": "notes", "items": [
-                    { "id": "a.md", "title": "A", "actions": [{ "id": "insert", "icon": "plus" }] }
+                    { "id": "a.md", "title": "A", "actions": [{ "id": "insert", "icon": "plus" }] },
+                    { "id": "done", "title": "Done", "icon": "circle-check", "tone": "success" }
                 ]},
                 { "type": "row", "children": [{ "type": "button", "id": "save", "label": "Save", "variant": "primary" }] },
                 { "type": "divider" }
@@ -276,6 +280,9 @@ mod tests {
         let mut inputs = Vec::new();
         tree.inputs(&mut inputs);
         assert_eq!(inputs, vec![("q".to_string(), "Search".to_string(), String::new())]);
+        let Node::Column { children, .. } = &tree else { panic!("not a column") };
+        let Node::List { items, .. } = &children[2] else { panic!("not a list") };
+        assert_eq!((items[0].tone, items[1].tone), (Tone::Neutral, Tone::Success));
     }
 
     #[test]

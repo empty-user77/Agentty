@@ -53,6 +53,25 @@ pub fn foreground_pid(tty_fd: std::os::fd::RawFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
+/// The parent of a process, while it is alive.
+#[cfg(target_os = "macos")]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is exactly the size proc_pidinfo expects for PROC_PIDTBSDINFO.
+    let written = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size) };
+    if written != size {
+        return None;
+    }
+    // SAFETY: proc_pidinfo filled the whole struct.
+    Some(unsafe { info.assume_init() }.pbi_ppid)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn parent_pid(_pid: u32) -> Option<u32> {
+    None
+}
+
 /// Absolute path of a process's executable.
 #[cfg(target_os = "macos")]
 pub fn executable_path(pid: u32) -> Option<PathBuf> {

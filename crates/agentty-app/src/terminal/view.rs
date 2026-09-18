@@ -234,6 +234,8 @@ pub struct TerminalView {
     cursor_visible: bool,
     /// Agent detected in the foreground (also when started by hand in a shell pane).
     pub live_agent: Option<PaneKind>,
+    /// When that agent was first seen. A shell pane can be much older than the agent typed into it.
+    agent_since_ms: Option<u64>,
     /// Any known agent CLI in the foreground, by brand id (`claude`, `gemini`, `agy`, …).
     pub live_tool: Option<&'static str>,
     /// When Esc was last pressed while the agent worked (interrupt detection).
@@ -351,6 +353,7 @@ impl TerminalView {
             hover_target: None,
             cursor_visible: true,
             live_agent: None,
+            agent_since_ms: None,
             live_tool: None,
             esc_at: None,
             quiet_ticks: 0,
@@ -435,6 +438,9 @@ impl TerminalView {
         if live_agent.is_none() && (self.live_agent.is_some() || (changed && self.agent_exited)) {
             self.forget_agent_state();
         }
+        if live_agent.is_some() && self.live_agent.is_none() {
+            self.agent_since_ms = Some(crate::ui::now_ms());
+        }
         self.live_agent = live_agent;
         self.live_tool = live_tool;
         if cwd.is_some() && cwd != self.live_cwd {
@@ -501,6 +507,7 @@ impl TerminalView {
         self.status = AgentStatus::Idle;
         self.working_since = None;
         self.stats = None;
+        self.agent_since_ms = None;
         self.live_usage = None;
         self.quiet_ticks = 0;
         self.last_tool = None;
@@ -574,7 +581,9 @@ impl TerminalView {
                     self.working_since = None;
                     self.status = AgentStatus::Finished(None);
                     self.attention = true;
-                    cx.emit(TerminalEvent::Notified { kind: NoticeKind::Finished, message: None });
+                    if !self.announce_with_headline(cx) {
+                        cx.emit(TerminalEvent::Notified { kind: NoticeKind::Finished, message: None });
+                    }
                 } else if self.quiet_ticks >= THINKING_GIVES_UP_TICKS {
                     // The Stop hook never came (a crash, a hook that was never installed). A pane
                     // that has shown nothing for this long is not thinking about anything: say it
@@ -620,11 +629,14 @@ impl TerminalView {
             .filter(|_| agent == agentty_bridge::model::Agent::Claude)
             .and_then(|backend| crate::procinfo::foreground_pid(backend.tty_fd));
         let cwd = self.display_cwd();
-        let since = self.launched_at_ms;
+        // An agent typed into an old shell pane: transcripts written before it started are not its own.
+        let since = self.agent_since_ms.unwrap_or(self.launched_at_ms);
         let task = cx.background_spawn(async move {
             let registered = agent_pid.and_then(agentty_bridge::claude::session_of_pid);
             let recent = match agent {
-                agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent(&cwd, since),
+                // Another Claude Code working in the same folder keeps its transcript the newest one.
+                agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent(&cwd, since)
+                    .filter(|id| !agentty_bridge::claude::owned_by_other_process(id, agent_pid)),
                 agentty_bridge::model::Agent::Codex => agentty_bridge::codex::find_recent(&cwd, since),
                 _ => None,
             };
@@ -641,10 +653,13 @@ impl TerminalView {
             let _ = this.update(cx, |view, cx| {
                 view.model_probe = None;
                 let Some((id, stats, subagents)) = found else { return };
-                let mut changed = view.session_id_live.as_ref() != Some(&id) || view.subagent_files != subagents;
+                let same_session = view.session_id_live.as_ref() == Some(&id);
+                let mut changed = !same_session || view.subagent_files != subagents;
                 view.session_id_live = Some(id);
                 view.subagent_files = subagents;
-                if stats.is_some() && stats != view.stats {
+                // A transcript that cannot be read right now keeps its last reading, but a new session
+                // (no transcript until its first prompt) never inherits the previous session's.
+                if (stats.is_some() || !same_session) && stats != view.stats {
                     view.stats = stats;
                     changed = true;
                 }
@@ -838,7 +853,13 @@ impl TerminalView {
             SignalKind::Stop => {
                 self.status = AgentStatus::Finished(message.clone());
                 self.attention = true;
-                notice = Some(NoticeKind::Finished);
+                // Codex says what it answered; Claude Code's Stop hook does not, so the notice waits
+                // a moment for the first line of the reply from the transcript.
+                if message.is_none() && self.announce_with_headline(cx) {
+                    notice = None;
+                } else {
+                    notice = Some(NoticeKind::Finished);
+                }
             }
             SignalKind::Permission => {
                 let label = detail.tool.as_deref().map(|tool| tool_label(tool, detail.target.as_deref()));
@@ -936,6 +957,33 @@ impl TerminalView {
             self.working_since = None;
         }
         self.finish_signal(notice, message, cx);
+    }
+
+    /// Announces a finished Claude Code turn with the first line of what it answered instead of a
+    /// bare "Done". `false` when there is no transcript to read: the caller announces right away.
+    fn announce_with_headline(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.agent_kind() != Some(PaneKind::Claude) {
+            return false;
+        }
+        let Some(session) = self.session_id_live.clone().or_else(|| self.spec.session_id.clone()) else { return false };
+        cx.spawn(async move |this, cx| {
+            // The hook fires as the turn ends; give the last line of the transcript time to land.
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            let headline = cx
+                .background_spawn(async move {
+                    agentty_bridge::claude::find(&session).ok().and_then(|path| agentty_bridge::claude::last_reply_headline(&path))
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if matches!(view.status, AgentStatus::Finished(None)) {
+                    view.status = AgentStatus::Finished(headline.clone());
+                }
+                cx.emit(TerminalEvent::Notified { kind: NoticeKind::Finished, message: headline });
+                cx.notify();
+            });
+        })
+        .detach();
+        true
     }
 
     fn finish_signal(&mut self, notice: Option<NoticeKind>, message: Option<String>, cx: &mut Context<Self>) {

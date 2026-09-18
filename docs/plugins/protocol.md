@@ -95,7 +95,8 @@ section  { title, children }
 text     { text, style? }                   style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
 input    { id, placeholder?, value? }
-list     { id, items: [{ id, title, subtitle?, detail?, icon?, actions?: [{ id, label?, icon?, tooltip? }] }], empty? }
+list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }], empty? }
+                                            item tone colors its icon (same values as badge)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                    tone: neutral | info | success | warning | error

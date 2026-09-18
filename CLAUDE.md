@@ -13,8 +13,9 @@
 4. **Do not print secrets** in commands you run (no `cat ~/.claude.json`, `env`, `security find-generic-password -w`,
    unmasked `claude mcp list` output). Redact before displaying (`sed -E 's/figd_[A-Za-z0-9_-]+/figd_***/g'`).
 5. **Never bypass the checks**: no `git commit --no-verify` / `-n`, no changing `core.hooksPath`, no editing or
-   deleting `.githooks/`, `scripts/check-secrets.py` or `.claude/hooks/`. If the scanner flags something, remove the
-   value; if it is a false positive, make the value obviously fake — do not weaken the scanner without the user's OK.
+   deleting `.githooks/`, `scripts/check-secrets.py`, `scripts/security-audit.py` or `.claude/hooks/`. If a scanner
+   flags something, remove the value; if it is a false positive, make the value obviously fake (or add an
+   `audit: ok — <reason>` comment for `security-audit.py`) — do not weaken a scanner without the user's OK.
 6. **If a secret is ever committed**: stop, tell the user immediately which file/commit, recommend revoking the
    credential, and ask before rewriting history or force-pushing.
 
@@ -25,13 +26,17 @@ redacted values (`redact_args`, `redact_url`), and files with conversation data 
 
 | Layer | What it does |
 |---|---|
-| `.githooks/pre-commit` | `scripts/check-secrets.py --staged` blocks commits that add credentials |
-| `.githooks/pre-push` | scans every commit being pushed (catches `--no-verify` commits) |
+| `.githooks/pre-commit` | `scripts/check-secrets.py --staged` blocks commits that add credentials; `scripts/security-audit.py --staged` blocks files that must never be committed (env files, keys, transcripts, local tool state), real home folder paths, code that weakens a guarantee (agent permission bypass, broad allow rules in idea projects, `--reveal`, hook skipping, `set -x` in credential scripts, `pull_request_target`, non-English prompts) and unwired guards |
+| `.githooks/pre-push` | both scanners over every commit being pushed (catches `--no-verify` commits) |
 | `.claude/hooks/guard-secrets.py` | Claude Code PreToolUse hook: blocks writing credentials, credential literals in shell commands, and hook bypasses |
-| `.claude/settings.json` | registers the hook; denies reading `.env.agentty-prod` and `--no-verify` commits |
-| CI (`.github/workflows/ci.yml`) | `check-secrets.py --all` on every push and pull request |
+| `.claude/hooks/require-security-audit.py` | Claude Code PreToolUse hook: refuses `git commit` / `git push` until the `security-audit` skill reviewed the staged tree (`security-audit.py --mark`); refuses `git commit -a` and stage-and-commit in one command |
+| `.claude/skills/security-audit` | the review that needs judgment: logic and flow, GitHub / Vercel / Supabase integration safety, authorization on local interfaces (BOLA), leak paths, dev / prod separation, everything else |
+| `.claude/settings.json` | registers both hooks; denies reading `.env.agentty-prod` and `--no-verify` commits |
+| CI (`.github/workflows/ci.yml`) | `check-secrets.py --all` and `security-audit.py --all` on every push and pull request |
 
 After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githooks`).
+
+Before every commit and push: stage the change in its own command, run the `security-audit` skill, then commit.
 
 ## Git
 
@@ -47,6 +52,9 @@ After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githook
   `cargo build --release -p agentty-app`, `python3 scripts/check-secrets.py --all`.
 - After pushing, check the CI run (`gh run list` / `gh run watch`) and fix it if it fails.
 - Every user-facing string goes through `i18n.rs` in all four languages (en / ko / ja / zh).
+- Prompts, rules and skills that ship in code or bundled docs (first messages to agents, build guides, plugin
+  prompts, `.claude/skills`) are written in English only. They are not UI strings: they stay out of `i18n.rs` and
+  the plugins' translated tables, and tell the agent which language to talk in (`Talk to me in {language}`).
 - Reply to the user in Korean.
 
 ## Releases

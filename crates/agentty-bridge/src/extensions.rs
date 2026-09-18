@@ -295,68 +295,209 @@ fn mcp_detail(server: &Value) -> String {
     format!("stdio {command} {}", redact_args(&args)).trim().to_string()
 }
 
-const SECRET_WORDS: &[&str] = &["key", "token", "secret", "password", "passwd", "auth", "credential", "bearer"];
+const MASK: &str = "••••";
+
+/// Substrings of a name that say its value is a credential…
+const SECRET_WORDS: &[&str] =
+    &["key", "token", "secret", "password", "passwd", "auth", "credential", "bearer", "cookie", "session", "signature", "jwt"];
+/// …and short ones that only count as a whole part of the name (`FIGMA_PAT`, not `--path`).
+const SECRET_PARTS: &[&str] = &["pat", "pwd", "sig", "pass"];
+/// How well-known credentials start, whatever they are called.
+const TOKEN_PREFIXES: &[&str] = &[
+    "sk-",
+    "sk_live_",
+    "rk_live_",
+    "pk_live_",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "glpat-",
+    "figd_",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "AKIA",
+    "ASIA",
+    "AIza",
+    "eyJ",
+    "sbp_",
+    "sb_secret_",
+    "npm_",
+    "hf_",
+    "ntn_",
+    "lin_api_",
+    "gsk_",
+    "xai-",
+    "pplx-",
+    "r8_",
+    "dop_v1_",
+    "shpat_",
+    "dckr_pat_",
+    "ATATT3",
+    "GOCSPX-",
+    "sntrys_",
+];
 
 fn looks_secret_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     SECRET_WORDS.iter().any(|w| lower.contains(w))
+        || lower.split(|c: char| !c.is_ascii_alphanumeric()).any(|part| SECRET_PARTS.contains(&part))
 }
 
-/// Long high-entropy strings (API keys, tokens) even without a telling name.
+/// Credentials by their looks: a known prefix, a UUID, or a long run of letters and digits.
 fn looks_like_token(value: &str) -> bool {
     let value = value.trim_matches(|c| c == '"' || c == '\'');
-    value.len() >= 24
-        && value.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
-        && value.chars().any(|c| c.is_ascii_digit())
-        && value.chars().any(|c| c.is_ascii_alphabetic())
-        && !value.contains('/')
+    if value.len() >= 12 && TOKEN_PREFIXES.iter().any(|prefix| value.starts_with(prefix)) {
+        return true;
+    }
+    let plain = value.chars().all(|c| c.is_ascii_alphanumeric() || "-_.~+=".contains(c));
+    let mixed = value.chars().any(|c| c.is_ascii_digit()) && value.chars().any(|c| c.is_ascii_alphabetic());
+    let uuid = value.len() == 36
+        && value.split('-').map(str::len).eq([8, 4, 4, 4, 12])
+        && value.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    uuid || (plain && mixed && value.len() >= 24)
+        // Shorter, but upper case, lower case and digits together: nobody names things that way.
+        || (plain && mixed && value.len() >= 20 && value.chars().any(|c| c.is_ascii_uppercase()) && value.chars().any(|c| c.is_ascii_lowercase()))
 }
 
-/// Hides credentials in command arguments shown in the UI: `--api-key=x`, `--token x`, headers, bare tokens.
+/// Hides credentials in command arguments shown in the UI. First the shapes that name a secret
+/// (`--token x`), then — inside every argument — anything that is one whatever it is called:
+/// `FIGMA_PAT=figd_…`, `Cookie: session=…`, `Bearer …`, a URL with a token in its user, path or query.
 pub fn redact_args(args: &[&str]) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut hide_next = false;
     for arg in args {
         if hide_next {
-            out.push("••••".into());
+            out.push(MASK.into());
             hide_next = false;
-        } else if let Some((name, _)) = arg.split_once('=').filter(|(name, _)| looks_secret_name(name)) {
-            out.push(format!("{name}=••••"));
-        } else if let Some((name, _)) =
-            arg.split_once(':').filter(|(name, _)| !name.is_empty() && !name.contains(['/', ' ']) && looks_secret_name(name))
-        {
-            // HTTP header values such as `Authorization: Bearer …` or `X-Api-Key: …`.
-            out.push(format!("{name}: ••••"));
-        } else if arg.starts_with('-') && looks_secret_name(arg) {
+        } else if arg.starts_with('-') && !arg.contains('=') && looks_secret_name(arg) {
             out.push(arg.to_string());
             hide_next = true;
-        } else if looks_like_token(arg) {
-            out.push("••••".into());
         } else {
-            out.push(arg.to_string());
+            out.push(mask_inline(arg));
         }
     }
     out.join(" ")
 }
 
-fn redact_url(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(mut parsed) => {
-            let pairs: Vec<(String, String)> = parsed
-                .query_pairs()
-                .map(|(k, v)| {
-                    let hidden = looks_secret_name(&k) || looks_like_token(&v);
-                    (k.to_string(), if hidden { "••••".to_string() } else { v.to_string() })
-                })
-                .collect();
-            if !pairs.is_empty() {
-                parsed.query_pairs_mut().clear().extend_pairs(pairs);
-            }
-            let _ = parsed.set_password(None);
-            parsed.to_string()
-        }
-        Err(_) => url.to_string(),
+/// One argument: `name=value`, `Header: value`, or words of which any may be a credential or a URL.
+fn mask_inline(arg: &str) -> String {
+    if let Some((name, value)) = arg.split_once('=').filter(|(name, _)| is_name(name)) {
+        return if looks_secret_name(name) { format!("{name}={MASK}") } else { format!("{name}={}", mask_inline(value)) };
     }
+    if let Some((name, value)) = arg.split_once(": ").filter(|(name, _)| is_name(name)) {
+        // HTTP headers: `Authorization: Bearer …`, `X-Api-Key: …`, `Cookie: a=b; c=d`.
+        return if looks_secret_name(name) { format!("{name}: {MASK}") } else { format!("{name}: {}", mask_words(value)) };
+    }
+    mask_words(arg)
+}
+
+fn is_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['/', ' ', ':', '"', '\'', '{'])
+}
+
+/// Words separated by spaces, `;`, `,`, quotes and brackets; the separators stay as they are.
+/// A word is masked for what it is, after `Bearer` / `Basic` / `Token`, or as the value of a name
+/// that says so with the quotes of JSON in between (`"apiKey": "…"`).
+fn mask_words(text: &str) -> String {
+    #[derive(PartialEq)]
+    enum Next {
+        Anything,
+        /// The word before named a secret; a `:` or `=` on its own arms the mask.
+        AfterSecretName,
+        Secret,
+    }
+    let mut out = String::new();
+    let mut word = String::new();
+    let mut next = Next::Anything;
+    let flush = |word: &mut String, out: &mut String, next: &mut Next| {
+        if word.is_empty() {
+            return;
+        }
+        if matches!(word.as_str(), ":" | "=") {
+            out.push_str(word);
+            if *next == Next::AfterSecretName {
+                *next = Next::Secret;
+            }
+        } else if *next == Next::Secret {
+            out.push_str(MASK);
+            *next = Next::Anything;
+        } else {
+            out.push_str(&mask_word(word));
+            *next = if matches!(word.to_lowercase().as_str(), "bearer" | "basic" | "token") {
+                Next::Secret
+            } else if is_name(word) && looks_secret_name(word) {
+                Next::AfterSecretName
+            } else {
+                Next::Anything
+            };
+        }
+        word.clear();
+    };
+    for c in text.chars() {
+        if c.is_whitespace() || matches!(c, ';' | ',' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>') {
+            flush(&mut word, &mut out, &mut next);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out, &mut next);
+    out
+}
+
+fn mask_word(word: &str) -> String {
+    if word.contains("://") {
+        return redact_url(word);
+    }
+    if let Some((name, value)) = word.split_once('=').or_else(|| word.split_once(':')).filter(|(name, _)| is_name(name)) {
+        let separator = &word[name.len()..name.len() + 1];
+        return if looks_secret_name(name) || looks_like_token(value) { format!("{name}{separator}{MASK}") } else { word.to_string() };
+    }
+    if looks_like_token(word) {
+        MASK.into()
+    } else {
+        word.to_string()
+    }
+}
+
+/// A URL with everything that can carry a credential masked: user and password, token-like path
+/// segments, query values (by name or by looks) and the fragment.
+fn redact_url(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else { return if looks_like_token(url) { MASK.into() } else { url.to_string() } };
+    let Some(host) = parsed.host_str() else { return url.to_string() };
+    let mut out = format!("{}://", parsed.scheme());
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        out.push_str(MASK);
+        out.push('@');
+    }
+    out.push_str(host);
+    if let Some(port) = parsed.port() {
+        out.push_str(&format!(":{port}"));
+    }
+    let path: Vec<String> =
+        parsed.path().split('/').map(|part| if looks_like_token(part) { MASK.to_string() } else { part.to_string() }).collect();
+    out.push_str(&path.join("/"));
+    if let Some(query) = parsed.query() {
+        let pairs: Vec<String> = query
+            .split('&')
+            .map(|pair| match pair.split_once('=') {
+                Some((key, value)) if looks_secret_name(key) || looks_like_token(value) => format!("{key}={MASK}"),
+                _ if looks_like_token(pair) => MASK.to_string(),
+                _ => pair.to_string(),
+            })
+            .collect();
+        out.push('?');
+        out.push_str(&pairs.join("&"));
+    }
+    if let Some(fragment) = parsed.fragment() {
+        out.push('#');
+        out.push_str(if looks_like_token(fragment) { MASK } else { fragment });
+    }
+    out
 }
 
 fn claude_mcp(project: Option<&Path>) -> Vec<Extension> {
@@ -760,9 +901,38 @@ mod tests {
             redact_args(&["@modelcontextprotocol/server-filesystem", "/Users/me/projects"]),
             "@modelcontextprotocol/server-filesystem /Users/me/projects"
         );
+        assert_eq!(redact_url("https://x.dev/mcp?api_key=secret&team=a"), "https://x.dev/mcp?api_key=••••&team=a");
+    }
+
+    /// A value is a credential by what it is, not only by what it is called.
+    #[test]
+    fn redacts_credentials_whatever_they_are_called() {
+        // A name without "key" or "token" in it.
+        assert_eq!(redact_args(&["FIGMA_PAT=figd_example_not_a_real_key", "--path=/Users/me/app"]), "FIGMA_PAT=•••• --path=/Users/me/app");
+        assert_eq!(redact_args(&["REGION=eu", "BUILD=a1B2c3D4e5F6g7H8i9J0k1L2"]), "REGION=eu BUILD=••••");
+        // Headers that are not called Authorization, and values with pairs inside.
+        assert_eq!(redact_args(&["-H", "Cookie: session=example-not-a-real-session; theme=dark"]), "-H Cookie: ••••");
+        assert_eq!(redact_args(&["--header=X-Request: id=1; sid=a1B2c3D4e5F6g7H8i9J0k1L2"]), "--header=X-Request: id=1; sid=••••");
+        assert_eq!(redact_args(&["-H", "X-Custom: Bearer example-not-a-real-token"]), "-H X-Custom: Bearer ••••");
+        // URLs as arguments: user, password, a token in the path, a token in the query.
+        assert_eq!(redact_args(&["--url", "https://me:example-not-real@x.dev/mcp"]), "--url https://••••@x.dev/mcp");
         assert_eq!(
-            redact_url("https://x.dev/mcp?api_key=secret&team=a"),
-            "https://x.dev/mcp?api_key=%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2&team=a"
+            redact_args(&["https://ghp_exampleNotARealToken0000000000000000@github.com/me/app.git"]),
+            "https://••••@github.com/me/app.git"
+        );
+        assert_eq!(redact_url("https://mcp.x.dev/a1B2c3D4e5F6g7H8i9J0k1L2/sse?team=a"), "https://mcp.x.dev/••••/sse?team=a");
+        assert_eq!(
+            redact_url("https://x.dev/mcp?sid=a1B2c3D4e5F6g7H8i9J0k1L2#a1B2c3D4e5F6g7H8i9J0k1L2"),
+            "https://x.dev/mcp?sid=••••#••••"
+        );
+        // JSON handed over as one argument.
+        assert_eq!(redact_args(&[r#"{"apiKey":"example-not-a-real-key","region":"eu"}"#]), r#"{"apiKey":"••••","region":"eu"}"#);
+        // Identifiers that are secrets as often as not.
+        assert_eq!(redact_args(&["--project", "123e4567-e89b-12d3-a456-426614174000"]), "--project ••••");
+        // What is not a credential stays readable.
+        assert_eq!(
+            redact_args(&["-y", "@scope/mcp-server-postgres", "--port=8080", "--mode", "read-only"]),
+            "-y @scope/mcp-server-postgres --port=8080 --mode read-only"
         );
     }
 

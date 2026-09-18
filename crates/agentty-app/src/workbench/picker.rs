@@ -158,7 +158,7 @@ impl Workbench {
                     }
                 }
                 TextInputEvent::Cancelled => return this.close_picker(window, cx),
-                TextInputEvent::Blurred => {}
+                TextInputEvent::Blurred | TextInputEvent::PastedLines(_) => {}
             }
             cx.notify();
         });

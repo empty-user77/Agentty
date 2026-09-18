@@ -102,6 +102,7 @@ impl Backend {
             env.insert("AGENTTY_SOCKET".into(), socket.display().to_string());
         }
         let scrollback = options.scrollback;
+        let pane_id = options.pane_id;
         let options = tty::Options {
             shell: Some(tty::Shell::new(program, args)),
             working_directory: Some(spec.cwd.clone()),
@@ -114,6 +115,8 @@ impl Backend {
         let window_id = NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
         let pty = tty::new(&options, size.window_size(), window_id).context("failed to open PTY")?;
         let child_pid = pty.child().id();
+        // Only this process and what it starts may speak for the pane on the signal socket.
+        crate::agent_signal::register_pane(child_pid, pane_id);
         let tty_fd = std::os::fd::AsRawFd::as_raw_fd(pty.file());
         let event_loop =
             EventLoop::new(term.clone(), listener, pty, options.drain_on_exit, false).context("failed to start PTY event loop")?;
@@ -146,6 +149,7 @@ impl Backend {
 
 impl Drop for Backend {
     fn drop(&mut self) {
+        crate::agent_signal::unregister_pane(self.child_pid);
         // Closing the pane ends what runs in it. Some agents (Claude Code, Codex) ignore the hangup
         // the closed terminal sends and would keep running without a terminal, so signal the
         // foreground job and the shell's group directly.

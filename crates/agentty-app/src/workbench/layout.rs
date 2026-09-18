@@ -2,7 +2,7 @@
 
 use super::panes::{zoom_sizes, Axis, PaneNode};
 use super::{status_label, Pane, Tab, Workbench};
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
 use crate::ui::{icon, IconSize};
@@ -218,10 +218,13 @@ impl Workbench {
                         .gap_1()
                         .min_w_0()
                         .flex_shrink()
+                        // In a narrow pane the folder name gives way (…) instead of running into the branch.
+                        .overflow_hidden()
                         .child(icon("folder", 12., hex(Chrome::MUTED)))
                         .child(
                             div()
-                                .flex_shrink_0()
+                                .min_w_0()
+                                .flex_shrink()
                                 .max_w(px(160.))
                                 .truncate()
                                 .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
@@ -358,6 +361,15 @@ impl Workbench {
         let target = pane.clone();
         let (dirty, ahead) = (pane.read(cx).git_dirty, pane.read(cx).git_ahead);
         let full_name = branch.clone();
+        // The whole chip says what the markers say: uncommitted changes first (they come before a
+        // push), then commits waiting to be pushed; a clean, pushed branch stays quiet.
+        let tint = if dirty {
+            Chrome::WARNING
+        } else if ahead.is_some_and(|n| n > 0) {
+            Chrome::BLUE
+        } else {
+            Chrome::MUTED
+        };
         let sync_bar = open.map(|menu| self.render_branch_sync(menu, &full_name, cx));
         div()
             .relative()
@@ -372,10 +384,10 @@ impl Workbench {
                     .rounded_sm()
                     .max_w(px(180.))
                     .cursor_pointer()
-                    .text_color(hex(Chrome::MUTED))
+                    .text_color(hex(tint))
                     .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
                     .when(open.is_some(), |d| d.bg(hex(Chrome::HOVER)))
-                    .child(icon("git-branch", IconSize::INLINE, hex(Chrome::MUTED)))
+                    .child(icon("git-branch", IconSize::INLINE, hex(tint)))
                     .child(div().truncate().child(branch))
                     // `*` uncommitted changes, `↑N` commits not pushed yet.
                     .when(dirty, |d| d.child(div().flex_shrink_0().text_color(hex(Chrome::WARNING)).child("*")))
@@ -384,10 +396,15 @@ impl Workbench {
                     })
                     .child(icon("chevron-down", 12., hex(Chrome::MUTED)))
                     // Long names are cut off in the chip; the tooltip shows the whole name.
-                    .when(open.is_none(), |d| d.tooltip(crate::ui::Tooltip::text(full_name.clone(), None)))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    .when(open.is_none(), |d| d.tooltip(crate::ui::Tooltip::text(full_name.clone(), Some("⌘ click → web"))))
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         cx.stop_propagation();
-                        this.toggle_branch_menu(&target, window, cx);
+                        // ⌘-click: the branch on GitHub (or wherever `origin` lives); a plain click: the menu.
+                        if event.modifiers().platform {
+                            this.open_branch_on_web(&target, cx);
+                        } else {
+                            this.toggle_branch_menu(&target, window, cx);
+                        }
                     })),
             )
             .when_some(open, |d, menu| {
@@ -414,6 +431,29 @@ impl Workbench {
                 )
             })
             .into_any_element()
+    }
+
+    /// Opens the pane's branch in the browser: `origin`'s web page for it, or the repository's page
+    /// while the branch has not been pushed (its page would be a 404).
+    fn open_branch_on_web(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+        let (repo, branch, pushed) = {
+            let view = pane.read(cx);
+            (view.display_cwd(), view.git_branch.clone(), view.git_ahead.is_some())
+        };
+        let Some(branch) = branch else { return };
+        let task = cx.background_spawn(async move { agentty_bridge::git::remote_web_url(&repo) });
+        cx.spawn(async move |this, cx| {
+            let remote = task.await;
+            let _ = this.update(cx, |this, cx| match remote {
+                None => this.set_status(t(cx, "branch.no_remote").to_string(), cx),
+                Some(repo_url) if pushed => this.open_link(agentty_bridge::git::branch_web_url(&repo_url, &branch), cx),
+                Some(repo_url) => {
+                    this.set_status(tf(cx, "branch.not_pushed", &[("branch", &branch)]), cx);
+                    this.open_link(repo_url, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn toggle_branch_menu(&mut self, pane: &Pane, window: &mut gpui::Window, cx: &mut Context<Self>) {

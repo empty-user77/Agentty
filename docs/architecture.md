@@ -41,6 +41,12 @@
   Codex pane marks it as working.
 - Hooks write `<pane id>\t<kind>\t<json>` lines to `$AGENTTY_SOCKET`; `agent_signal.rs` parses them and the
   workbench updates the pane. `Stop` and `Notification` set the pane's attention flag until the user clicks it.
+- The socket (a Unix socket, `0600`, in the user's private temp folder) only hears processes inside a pane: the
+  kernel names the process on the other end (`LOCAL_PEERPID`), Agentty follows its parents up to the shell of a
+  pane it started, and the connection may speak for that pane only — status, notifications and `agentty browser`
+  alike. Plugins, other apps and scripts outside a pane are not heard. A `tmux` or `screen` server started in a
+  pane detaches from it, so agents inside one are not heard either. The debug driver (`AGENTTY_DEBUG=1`) is the
+  one exception.
 
 ## Persistence
 
@@ -108,3 +114,43 @@ next finished turn is its reply to that context and is not forwarded back, so tw
   into plain shells.
 
 See [docs/plugins](plugins/README.md) for the plugin developer guide and protocol.
+
+## Build my idea and Launch
+
+```
+ idea page (idea_view.rs) ──Start──▶ workbench/idea.rs ──▶ agentty_bridge::idea::create_project
+   messages, pasted plans,                │                  ~/AgenttyProjects/<slug>/
+   attached files                         │                    docs/idea/IDEA.md, attachments/, BUILD_GUIDE.md
+                                          │                    .claude/settings.json (npm/npx/node, browser tools)
+                                          ▼
+                              deliver_prompt(NewWorkspace, claude|codex, build prompt)
+                                          │  agent plans, uses subagents, runs the dev server and
+                                          │  opens it in the in-app browser (browser MCP tools)
+                                          ▼
+                              🚀 Launch plugin (plugins/launch, built in)
+                                 gh / vercel / supabase CLIs (installed into the plugin data folder if missing)
+                                 GitHub login → repo + push → Vercel login → [Supabase] → env vars → deploy → URL
+```
+
+- The idea page is a chat: Enter adds a message, a multi-line paste becomes a document message
+  (`TextInput::keep_pasted_lines`), files are attached with the button or dropped on the page.
+- `create_project` leaves the folder otherwise empty so `create-next-app` / `create vite` still accept
+  it; the build guide tells the agent to scaffold into a subfolder if a scaffolder refuses.
+- The build guide starts with the project's harness: the agent downloads ECC (github.com/affaan-m/ECC,
+  MIT — agent, skill and rule definitions) into the new project with a shallow, sparse clone, installs
+  the few Markdown definitions the idea needs under `.claude/`, records them in `docs/idea/HARNESS.md`
+  and removes the download. Nothing of ECC ships with Agentty; scripts, hook definitions, MCP configs
+  and settings are never installed.
+- Claude Code starts in auto mode there (`--permission-mode auto`, only the command line can turn it
+  on). The project's `.claude/settings.json` is the fallback: `acceptEdits` plus package-manager, node,
+  browser-tool and the harness download commands; deleting files and pushing still ask.
+- Launch is installed from the built-in catalog on first use (+ menu, or when an idea project starts)
+  and adds a 🚀 button to agent panes. Logins run the official CLIs' browser flows; Agentty and the
+  plugin never see or store the tokens. `.env` values are piped to `vercel env add` on stdin and only
+  key names are shown.
+- The Supabase step appears only for projects that use it (or on request). `supabase login` needs a
+  terminal and a typed verification code, so it runs under `script` and the panel has a field for the
+  code. Launch writes the project URL and the public (anon / publishable) key to `.env.local`, never
+  the service_role key; the database password lives in `.env.local` only and reaches
+  `supabase link` / `db push` through the environment. The build guide tells the agent which variable
+  names to read and to put the schema, with row level security, in `supabase/migrations`.

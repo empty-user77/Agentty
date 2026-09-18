@@ -978,6 +978,11 @@ impl Workbench {
                         .child(row(t(cx, "settings.language"), languages))
                         .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
                         .child(row_with_hint(
+                            t(cx, "settings.idea_mode"),
+                            t(cx, "settings.idea_mode_hint"),
+                            toggle("idea-mode", prefs.idea_mode, |s| s.idea_mode = !s.idea_mode, cx),
+                        ))
+                        .child(row_with_hint(
                             t(cx, "settings.agent_bar"),
                             t(cx, "settings.agent_bar_hint"),
                             toggle("agent-bar", prefs.agent_bar, |s| s.agent_bar = !s.agent_bar, cx),

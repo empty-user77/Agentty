@@ -439,9 +439,42 @@ pub fn remote_web_url(repo: &Path) -> Option<String> {
     })
 }
 
+/// Browser URL of a branch, from the repository's browser URL ([`remote_web_url`]). GitHub's form
+/// unless the host is known to use another (GitLab, Bitbucket, Gitea / Forgejo).
+pub fn branch_web_url(repo_url: &str, branch: &str) -> String {
+    let repo_url = repo_url.trim_end_matches('/');
+    let host = url::Url::parse(repo_url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
+    // Slashes belong to the branch name and stay; what would end the path (`#`, `?`, `%`, spaces) is escaped.
+    let branch: String = branch
+        .split('/')
+        .map(|part| url::form_urlencoded::byte_serialize(part.as_bytes()).collect::<String>().replace('+', "%20"))
+        .collect::<Vec<_>>()
+        .join("/");
+    if host.contains("gitlab") {
+        format!("{repo_url}/-/tree/{branch}")
+    } else if host.contains("bitbucket") {
+        format!("{repo_url}/src/{branch}")
+    } else if host.contains("codeberg") || host.contains("gitea") || host.contains("forgejo") {
+        format!("{repo_url}/src/branch/{branch}")
+    } else {
+        format!("{repo_url}/tree/{branch}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_pages_by_host() {
+        assert_eq!(branch_web_url("https://github.com/me/app", "feat/idea-launch"), "https://github.com/me/app/tree/feat/idea-launch");
+        assert_eq!(branch_web_url("https://github.com/me/app/", "fix/#42 login"), "https://github.com/me/app/tree/fix/%2342%20login");
+        assert_eq!(branch_web_url("https://gitlab.com/team/app", "main"), "https://gitlab.com/team/app/-/tree/main");
+        assert_eq!(branch_web_url("https://bitbucket.org/team/app", "main"), "https://bitbucket.org/team/app/src/main");
+        assert_eq!(branch_web_url("https://codeberg.org/me/app", "main"), "https://codeberg.org/me/app/src/branch/main");
+        // A self-hosted GitHub Enterprise, or anything unknown, gets GitHub's form.
+        assert_eq!(branch_web_url("https://git.example.com/me/app", "main"), "https://git.example.com/me/app/tree/main");
+    }
 
     fn temp_repo(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("agentty-git-{name}-{}", std::process::id()));

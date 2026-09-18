@@ -91,31 +91,6 @@ const STRINGS = {
     folderSaved: '세션은 {folder} 폴더에 저장됩니다',
     refresh: '새로고침',
     summaryTimeout: '아직 요약 파일이 만들어지지 않았습니다. 에이전트 창을 확인해 주세요.',
-    continuePrompt: 'Cosmica 노트 "{title}"의 내용을 이어서 작업해 주세요.\n(원본 노트: {path})\n\n---\n\n{body}',
-    insertPrompt: 'Cosmica 노트 "{title}" ({path}):\n\n{body}',
-    summaryPrompt: [
-      '이 세션에서 한 작업을 Cosmica 노트로 요약해 주세요.',
-      '',
-      '아래 경로에 새 Markdown 파일 하나만 만들어 주세요 (폴더가 없으면 만들기):',
-      '{path}',
-      '',
-      '형식:',
-      '---',
-      'source: agentty',
-      'tags: [#agentty, #session-summary]',
-      'created_at: {date}',
-      'cwd: {cwd}',
-      '---',
-      '# <이 세션 작업을 나타내는 짧은 제목>',
-      '',
-      '## 목표',
-      '## 한 일',
-      '## 변경한 파일',
-      '## 결정 사항 · 알게 된 점',
-      '## 다음 할 일',
-      '',
-      '지금까지 대화한 언어로 작성하고, 다른 파일은 수정하거나 커밋하지 마세요.',
-    ].join('\n'),
     logTitle: '{title} — 대화 기록',
     user: '사용자',
     assistant: '어시스턴트',
@@ -147,9 +122,6 @@ const STRINGS = {
     folderSaved: 'セッションは {folder} に保存されます',
     refresh: '更新',
     summaryTimeout: '要約ファイルがまだ作成されていません。エージェントのペインを確認してください。',
-    continuePrompt: 'Cosmica ノート「{title}」の続きを作業してください。\n(元ノート: {path})\n\n---\n\n{body}',
-    insertPrompt: 'Cosmica ノート「{title}」({path}):\n\n{body}',
-    summaryPrompt: null,
     logTitle: '{title} — 会話ログ',
     user: 'ユーザー',
     assistant: 'アシスタント',
@@ -181,9 +153,6 @@ const STRINGS = {
     folderSaved: '会话将保存到 {folder}',
     refresh: '刷新',
     summaryTimeout: '摘要文件尚未生成，请查看智能体窗格。',
-    continuePrompt: '请继续完成 Cosmica 笔记“{title}”中的工作。\n（原笔记：{path}）\n\n---\n\n{body}',
-    insertPrompt: 'Cosmica 笔记“{title}”（{path}）：\n\n{body}',
-    summaryPrompt: null,
     logTitle: '{title} — 对话记录',
     user: '用户',
     assistant: '助手',
@@ -288,7 +257,8 @@ async function saveAiSummary(context) {
   if (['working', 'thinking', 'permission', 'question'].includes(pane.status)) return plugin.notify(tr('busy'), 'warning');
   if (!state.config) state.config = await cosmica.loadConfig();
   const target = path.join(state.config.notesPath, cosmica.safeFolder(state.settings.folder), cosmica.newNoteName());
-  const template = STRINGS[language()].summaryPrompt ?? STRINGS.en.summaryPrompt;
+  // Prompts are English in every UI language; this one asks for the note in the language in use.
+  const template = STRINGS.en.summaryPrompt;
   const text = template.split('{path}').join(target).split('{date}').join(new Date().toISOString()).split('{cwd}').join(pane.cwd);
   await plugin.sendToTerminal({ paneId: pane.id, text, submit: true });
   await plugin.notify(tr('asked'), 'info');

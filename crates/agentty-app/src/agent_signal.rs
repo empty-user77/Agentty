@@ -1,11 +1,89 @@
 //! Local socket that agent hooks report to (`<pane id>\t<kind>\t<json payload>` per line).
+//!
+//! The socket is a Unix domain socket in the user's private temp folder (`0600`): nothing reaches it
+//! over a network, and no other account can open it. Within the account it is closed as well: a
+//! connection is only heard when the process on the other end descends from the shell of a pane
+//! Agentty started — the kernel names that process (`LOCAL_PEERPID`), so it cannot be claimed — and
+//! it may only speak for that pane. A plugin, another app or a script outside a pane cannot report a
+//! pane's status, post notifications or drive the in-app browser.
 
-use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use gpui::Global;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
+
+/// Shell process of every live pane → pane id.
+static PANES: Mutex<Option<HashMap<u32, u64>>> = Mutex::new(None);
+
+pub fn register_pane(shell_pid: u32, pane_id: u64) {
+    if let Ok(mut panes) = PANES.lock() {
+        panes.get_or_insert_with(HashMap::new).insert(shell_pid, pane_id);
+    }
+}
+
+pub fn unregister_pane(shell_pid: u32) {
+    if let Ok(mut panes) = PANES.lock() {
+        if let Some(panes) = panes.as_mut() {
+            panes.remove(&shell_pid);
+        }
+    }
+}
+
+/// The pane whose shell is `pid` or one of its ancestors.
+fn pane_of(pid: u32, parent_of: impl Fn(u32) -> Option<u32>) -> Option<u64> {
+    let panes = PANES.lock().ok()?;
+    let panes = panes.as_ref()?;
+    let mut pid = pid;
+    // Deeper than any real process tree; ends a loop if pids were ever to form one.
+    for _ in 0..64 {
+        if let Some(pane) = panes.get(&pid) {
+            return Some(*pane);
+        }
+        pid = parent_of(pid).filter(|parent| *parent > 1 && *parent != pid)?;
+    }
+    None
+}
+
+/// The process on the other end of `stream`, as the kernel recorded it when it connected.
+#[cfg(target_os = "macos")]
+fn peer_pid(stream: &UnixStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: `pid` and `len` are valid for writes of the sizes passed; the descriptor is open.
+    let result = unsafe {
+        libc::getsockopt(stream.as_raw_fd(), libc::SOL_LOCAL, libc::LOCAL_PEERPID, (&mut pid as *mut libc::pid_t).cast(), &mut len)
+    };
+    (result == 0 && pid > 0).then_some(pid as u32)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn peer_pid(_: &UnixStream) -> Option<u32> {
+    None
+}
+
+/// Whether the peer runs as the same user (the socket's `0600` already says so; this holds even if
+/// the file mode were changed).
+fn peer_is_this_user(stream: &UnixStream) -> bool {
+    use std::os::fd::AsRawFd;
+    let (mut uid, mut gid): (libc::uid_t, libc::gid_t) = (0, 0);
+    // SAFETY: both pointers are valid for writes; the descriptor is open.
+    let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+    // SAFETY: geteuid has no preconditions.
+    result == 0 && uid == unsafe { libc::geteuid() }
+}
+
+/// Who a connection may speak for. `None`: nobody — it is not heard.
+fn authenticate(stream: &UnixStream) -> Option<u64> {
+    if !peer_is_this_user(stream) {
+        return None;
+    }
+    pane_of(peer_pid(stream)?, crate::procinfo::parent_pid)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalKind {
@@ -132,7 +210,10 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
 /// Binds the socket and starts the accept thread.
 pub fn start() -> anyhow::Result<(SignalSocket, UnboundedReceiver<SocketMessage>)> {
     // The per-user temp dir is private (0700) and short enough for SUN_LEN, unlike deep data dirs.
-    let path = std::env::temp_dir().join(format!("agentty-{}.sock", std::process::id()));
+    start_at(std::env::temp_dir().join(format!("agentty-{}.sock", std::process::id())))
+}
+
+fn start_at(path: PathBuf) -> anyhow::Result<(SignalSocket, UnboundedReceiver<SocketMessage>)> {
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
     {
@@ -144,49 +225,66 @@ pub fn start() -> anyhow::Result<(SignalSocket, UnboundedReceiver<SocketMessage>
 
     std::thread::Builder::new().name("agentty-signals".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            let mut writer = stream.try_clone().ok();
-            for line in BufReader::new(stream).lines().map_while(Result::ok) {
-                if let Some(json) = line.strip_prefix("browser\t") {
-                    // Request / response: the CLI waits for one line back.
-                    let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
-                    let (reply, answer) = std::sync::mpsc::channel();
-                    let message = SocketMessage::Browser(BrowserRequest {
-                        pane: request["pane"].as_u64(),
-                        command: request["command"].as_str().unwrap_or_default().to_string(),
-                        args: request["args"]
-                            .as_array()
-                            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-                            .unwrap_or_default(),
-                        reply,
-                    });
-                    if tx.unbounded_send(message).is_err() {
-                        return;
-                    }
-                    let response = answer.recv_timeout(Duration::from_secs(120)).unwrap_or_else(|_| browser_reply(Err("timed out".into())));
-                    if let Some(writer) = writer.as_mut() {
-                        use std::io::Write;
-                        let _ = writeln!(writer, "{response}");
-                    }
-                    continue;
-                }
-                let message = match line.strip_prefix("debug\t") {
-                    Some(rest) if debug => {
-                        let (command, argument) = rest.split_once('\t').unwrap_or((rest, ""));
-                        Some(SocketMessage::Debug(command.to_string(), argument.to_string()))
-                    }
-                    Some(_) => None,
-                    None => parse_line(&line).map(SocketMessage::Signal),
-                };
-                if let Some(message) = message {
-                    if tx.unbounded_send(message).is_err() {
-                        return;
-                    }
-                }
+            // Looked at right away: a hook's `nc` is gone a moment after it has written its line.
+            let pane = authenticate(&stream);
+            // The debug driver (`AGENTTY_DEBUG=1`, development only) connects from outside a pane.
+            if pane.is_none() && !debug {
+                continue;
             }
+            let tx = tx.clone();
+            // One thread per connection: a browser request waits for its answer, and signals from
+            // other panes must not wait with it.
+            let _ = std::thread::Builder::new().name("agentty-signal".into()).spawn(move || serve(stream, pane, debug, tx));
         }
     })?;
     Ok((SignalSocket { path }, rx))
+}
+
+/// Reads one connection. `pane`: who it may speak for. `None` gets in only with the debug driver
+/// on, and then only its `debug` lines are heard: signals and browser requests always need a pane.
+fn serve(stream: UnixStream, pane: Option<u64>, debug: bool, tx: UnboundedSender<SocketMessage>) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let mut writer = stream.try_clone().ok();
+    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+        if let Some(json) = line.strip_prefix("browser\t").filter(|_| pane.is_some()) {
+            // Request / response: the CLI waits for one line back.
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let (reply, answer) = std::sync::mpsc::channel();
+            let message = SocketMessage::Browser(BrowserRequest {
+                // The pane the connection belongs to, whatever the request says.
+                pane,
+                command: request["command"].as_str().unwrap_or_default().to_string(),
+                args: request["args"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default(),
+                reply,
+            });
+            if tx.unbounded_send(message).is_err() {
+                return;
+            }
+            let response = answer.recv_timeout(Duration::from_secs(120)).unwrap_or_else(|_| browser_reply(Err("timed out".into())));
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
+        let message = match line.strip_prefix("debug\t") {
+            Some(rest) if debug => {
+                let (command, argument) = rest.split_once('\t').unwrap_or((rest, ""));
+                Some(SocketMessage::Debug(command.to_string(), argument.to_string()))
+            }
+            Some(_) => None,
+            // A pane reports for itself only.
+            None => parse_line(&line).filter(|signal| pane == Some(signal.pane_id)).map(SocketMessage::Signal),
+        };
+        if let Some(message) = message {
+            if tx.unbounded_send(message).is_err() {
+                return;
+            }
+        }
+    }
 }
 
 /// `agentty notify <message>`: posts a notification for the pane this command runs in.
@@ -197,12 +295,28 @@ pub fn send_notify(message: &str) -> anyhow::Result<()> {
     let text: String = message.chars().filter(|c| *c != '\n' && *c != '\t').collect();
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     writeln!(stream, "{pane}\tnotify\t{text}")?;
+    linger(&stream);
     Ok(())
+}
+
+/// Stays connected until Agentty has read the line: it checks who is on the other end when it
+/// accepts the connection, and a process that has already exited is nobody.
+pub fn linger(stream: &UnixStream) {
+    use std::io::Read;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut stream = stream;
+    let _ = stream.read(&mut [0u8; 1]);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tests run in one process, in parallel: each gets a socket of its own.
+    fn test_socket(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("agentty-test-{}-{name}.sock", std::process::id()))
+    }
 
     #[test]
     fn parses_claude_notification() {
@@ -260,13 +374,68 @@ mod tests {
     }
 
     #[test]
-    fn socket_roundtrip() {
+    #[cfg(target_os = "macos")]
+    fn a_connection_speaks_only_for_the_pane_it_runs_in() {
         use std::io::Write;
-        let (socket, mut rx) = start().unwrap();
-        let mut client = std::os::unix::net::UnixStream::connect(&socket.path).unwrap();
-        client.write_all(b"42\tstop\t{}\n").unwrap();
-        drop(client);
+        let (socket, mut rx) = start_at(test_socket("pane")).unwrap();
+        // This test process stands in for a pane's shell: what connects from it is pane 42.
+        register_pane(std::process::id(), 42);
+        let mut client = UnixStream::connect(&socket.path).unwrap();
+        // A line for another pane is dropped, the pane's own is heard.
+        client.write_all(b"43\tstop\t{}\n42\tstop\t{}\n").unwrap();
+        linger(&client);
         let message = futures::executor::block_on(futures::StreamExt::next(&mut rx)).unwrap();
         assert!(matches!(message, SocketMessage::Signal(s) if s.pane_id == 42));
+
+        // Once the pane is gone, nothing from this process is heard any more.
+        unregister_pane(std::process::id());
+        let mut stranger = UnixStream::connect(&socket.path).unwrap();
+        stranger.write_all(b"42\tstop\t{}\n").unwrap();
+        linger(&stranger);
+        assert!(rx.try_recv().is_err(), "a process outside every pane was heard");
+    }
+
+    /// The real path of a hook: the pane's shell starts `sh`, which pipes into `nc` — a grandchild
+    /// that Agentty has to trace back to the pane through the kernel's process table.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_hook_is_traced_back_to_its_pane() {
+        let (socket, mut rx) = start_at(test_socket("hook")).unwrap();
+        let script = "sleep 0.3; printf '9\\tstop\\t{}\\n' | nc -U -w 1 \"$0\"";
+        let mut shell = std::process::Command::new("sh").args(["-c", script]).arg(&socket.path).spawn().unwrap();
+        register_pane(shell.id(), 9);
+        let message = futures::executor::block_on(futures::StreamExt::next(&mut rx)).unwrap();
+        assert!(matches!(message, SocketMessage::Signal(s) if s.pane_id == 9));
+        let _ = shell.wait();
+        unregister_pane(shell.id());
+
+        // The same command from a shell that is not a pane is not heard.
+        let mut outsider = std::process::Command::new("sh").args(["-c", script]).arg(&socket.path).spawn().unwrap();
+        let _ = outsider.wait();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(rx.try_recv().is_err(), "a shell outside every pane was heard");
+    }
+
+    #[test]
+    fn the_pane_is_found_through_the_process_tree() {
+        // shell 900001 (pane 7) → claude 900002 → hook `sh` 900003 → `nc` 900004
+        register_pane(900_001, 7);
+        let parent_of = |pid: u32| match pid {
+            900_004 => Some(900_003),
+            900_003 => Some(900_002),
+            900_002 => Some(900_001),
+            900_001 => Some(1),
+            // A plugin (900010) is a child of Agentty (900009), not of any pane.
+            900_010 => Some(900_009),
+            900_009 => Some(1),
+            _ => None,
+        };
+        assert_eq!(pane_of(900_004, parent_of), Some(7));
+        assert_eq!(pane_of(900_001, parent_of), Some(7));
+        assert_eq!(pane_of(900_010, parent_of), None);
+        // A process that has exited has no parent to follow.
+        assert_eq!(pane_of(900_099, parent_of), None);
+        unregister_pane(900_001);
+        assert_eq!(pane_of(900_004, parent_of), None);
     }
 }

@@ -106,6 +106,35 @@ fn scan_exchange(path: &Path, window: u64, prompt: &mut Option<String>, reply: &
     }
 }
 
+/// What the agent said last, for the notification that it is done: the first line of its latest
+/// reply, without Markdown markers. Claude Code's `Stop` hook says nothing about the answer.
+pub fn last_reply_headline(path: &Path) -> Option<String> {
+    for line in fsutil::tail_lines_rev(path, 384 * 1024) {
+        if !(line.contains("\"type\":\"assistant\"") && line.contains("\"type\":\"text\"")) || line.contains("\"isSidechain\":true") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        let Some(blocks) = v["message"]["content"].as_array() else { continue };
+        let text: Vec<&str> = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect();
+        if let Some(headline) = headline(&text.join("\n")) {
+            return Some(headline);
+        }
+    }
+    None
+}
+
+/// The first line that says something: headings, list and quote markers, emphasis and code ticks
+/// are dropped, and a line of nothing but those (`---`, "```") is skipped.
+fn headline(text: &str) -> Option<String> {
+    text.lines()
+        .map(|line| {
+            let line = line.trim().trim_start_matches(['#', '>', '-', '*', '+', ' ']).trim();
+            line.replace("**", "").replace("__", "").replace('`', "")
+        })
+        .map(|line| one_line(&line, 140))
+        .find(|line| line.chars().any(char::is_alphanumeric))
+}
+
 /// Distinct models (`claude-…` ids) used by the newest `limit` sessions, most recent first.
 pub fn recent_models(limit: usize) -> Vec<String> {
     let mut files = Vec::new();
@@ -401,6 +430,16 @@ pub fn session_of_pid(pid: u32) -> Option<String> {
     peer_sessions().into_iter().find(|p| p.pid == pid).map(|p| p.session_id)
 }
 
+/// Whether a different running Claude Code process registered this session. Two sessions in one
+/// folder share a project directory, so the newest transcript there can belong to the neighbour.
+pub fn owned_by_other_process(session_id: &str, pid: Option<u32>) -> bool {
+    owned_by_other(&peer_sessions(), session_id, pid)
+}
+
+fn owned_by_other(peers: &[PeerSession], session_id: &str, pid: Option<u32>) -> bool {
+    peers.iter().any(|p| p.session_id == session_id && Some(p.pid) != pid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +456,52 @@ mod tests {
             assert_eq!(peer_session(&first.session_id).map(|p| p.session_id), Some(first.session_id.clone()));
         }
         assert!(peer_session("not-a-session-id").is_none());
+    }
+
+    #[test]
+    fn the_headline_is_the_first_line_that_says_something() {
+        assert_eq!(headline("## Done\n\nDetails follow.").as_deref(), Some("Done"));
+        assert_eq!(headline("---\n**Fixed** the `login` bug.\nMore.").as_deref(), Some("Fixed the login bug."));
+        assert_eq!(headline("- first item\n- second").as_deref(), Some("first item"));
+        assert_eq!(headline("```\n\n").as_deref(), None);
+        assert_eq!(headline(&"word ".repeat(100)).map(|h| h.chars().count() <= 141), Some(true));
+
+        let dir = std::env::temp_dir().join(format!("agentty-headline-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("session.jsonl");
+        let line = |kind: &str, sidechain: bool, text: &str| {
+            serde_json::json!({ "type": kind, "isSidechain": sidechain, "message": { "content": [{ "type": "text", "text": text }] } })
+                .to_string()
+        };
+        let lines = [
+            line("assistant", false, "An older answer."),
+            line("user", false, "and now?"),
+            line("assistant", false, "Pinned the download.\n\nIt now fetches one commit."),
+            // A subagent's reply is not what the pane's agent said.
+            line("assistant", true, "Subagent report."),
+        ];
+        std::fs::write(&transcript, lines.join("\n") + "\n").unwrap();
+        assert_eq!(last_reply_headline(&transcript).as_deref(), Some("Pinned the download."));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_neighbours_session_is_not_this_panes() {
+        let peer = |session_id: &str, pid| PeerSession {
+            name: "agentty".into(),
+            session_id: session_id.into(),
+            pid,
+            cwd: PathBuf::from("/Users/me/app"),
+            status: "idle".into(),
+            interactive: true,
+        };
+        let peers = [peer("neighbour", 4094), peer("mine", 8034)];
+        // Started in the same folder before registering: the neighbour's newer transcript is not ours.
+        assert!(owned_by_other(&peers, "neighbour", Some(8034)));
+        assert!(owned_by_other(&peers, "neighbour", None));
+        assert!(!owned_by_other(&peers, "mine", Some(8034)));
+        // Nobody registered it (a finished session, or a Claude Code too old to register).
+        assert!(!owned_by_other(&peers, "unregistered", Some(8034)));
     }
 
     #[test]
