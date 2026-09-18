@@ -46,6 +46,9 @@ pub enum TextInputEvent {
     Blurred,
     Up,
     Down,
+    /// Multi-line text pasted into a field made with [`TextInput::keep_pasted_lines`]; the field
+    /// itself is left unchanged.
+    PastedLines(String),
 }
 
 pub struct TextInput {
@@ -62,6 +65,8 @@ pub struct TextInput {
     is_selecting: bool,
     /// Secret entry: shows bullets and refuses copy/cut.
     masked: bool,
+    /// Multi-line pastes are handed to the owner (`PastedLines`) instead of being joined.
+    keep_pasted_lines: bool,
     _blur: Option<gpui::Subscription>,
 }
 
@@ -96,6 +101,7 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
             masked: false,
+            keep_pasted_lines: false,
             _blur: Some(blur),
         }
     }
@@ -109,6 +115,11 @@ impl TextInput {
 
     pub fn masked(mut self) -> Self {
         self.masked = true;
+        self
+    }
+
+    pub fn keep_pasted_lines(mut self) -> Self {
+        self.keep_pasted_lines = true;
         self
     }
 
@@ -177,6 +188,10 @@ impl TextInput {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            if self.keep_pasted_lines && text.trim().contains('\n') {
+                cx.emit(TextInputEvent::PastedLines(text.to_string()));
+                return;
+            }
             self.replace_text_in_range(None, &text.replace('\n', " "), window, cx);
         }
     }

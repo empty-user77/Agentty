@@ -19,6 +19,7 @@ mod extensions_view;
 mod file_drop;
 mod git_view;
 mod i18n;
+mod idea_view;
 mod instance;
 mod ipc;
 mod keymap;

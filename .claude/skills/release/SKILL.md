@@ -1,6 +1,6 @@
 ---
 name: release
-description: Release a new Agentty version to github.com/empty-user77/agentty-releases — preflight, version bump, changelog, CI checks, tag, signed/notarized DMG, English release notes, draft release, independent verification, publish and update-feed check. Use when the user asks to release, ship, publish or cut a version (출시, 배포, 릴리즈).
+description: Release a new Agentty version to github.com/empty-user77/agentty-releases — preflight, version bump, changelog, CI checks, tag, signed/notarized DMG, English release notes, draft release, independent verification, publish and update-feed check. Use when the user asks to release, ship, publish or cut a version.
 ---
 
 # Releasing Agentty
@@ -31,11 +31,12 @@ update to every user**.
    state. Build logs are not proof. Every status report starts with what is *not* done yet, as a checklist:
 
    ```
-   - ✅ 소스 커밋·태그·푸시, CI 통과
-   - ❌ DMG 빌드·서명·공증 — <이유>
-   - ⏳ draft 업로드 대기
-   - ⬜ 게시 (사용자 확인 필요)
+   - ✅ source committed, tagged and pushed; CI green
+   - ❌ DMG build, signing, notarization — <reason>
+   - ⏳ draft upload pending
+   - ⬜ publish (needs the user's OK)
    ```
+   (Written in the language of the conversation; the rules in this file stay in English.)
    A `cargo build --release` from the CI checks is not a release build — never list it as "build done".
 
 ## Permissions and long-running commands

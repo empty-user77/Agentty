@@ -63,13 +63,15 @@ pub struct Backend {
     /// PTY controller descriptor, owned by the event loop and valid while this backend lives
     /// (`-1` on Windows, where ConPTY has no such descriptor).
     pub tty_fd: crate::procinfo::TtyFd,
+    /// Windows: this pane's socket token (`$AGENTTY_SOCKET_TOKEN`), forgotten when the pane closes.
+    socket_token: Option<String>,
 }
 
 pub struct SpawnOptions<'a> {
     pub spec: &'a LaunchSpec,
     pub pane_id: u64,
-    /// `$AGENTTY_SOCKET` and, on Windows, `$AGENTTY_SOCKET_TOKEN`.
-    pub signal_socket: Option<(&'a str, Option<&'a str>)>,
+    /// `$AGENTTY_SOCKET`.
+    pub signal_socket: Option<&'a str>,
     pub scrollback: usize,
 }
 
@@ -121,13 +123,19 @@ impl Backend {
         }
         env.extend(crate::shell_integration::environment(&program));
         env.extend(auth.pane_variables());
-        if let Some((address, token)) = options.signal_socket {
+        let mut socket_token = None;
+        if let Some(address) = options.signal_socket {
             env.insert("AGENTTY_SOCKET".into(), address.to_string());
-            if let Some(token) = token {
-                env.insert(crate::ipc::TOKEN_VARIABLE.into(), token.to_string());
+            // Windows: a token of this pane's own, so what runs here speaks for this pane only
+            // (Unix identifies the pane from the connecting process instead).
+            if cfg!(windows) {
+                let token = crate::agent_signal::register_pane_token(options.pane_id);
+                env.insert(crate::ipc::TOKEN_VARIABLE.into(), token.clone());
+                socket_token = Some(token);
             }
         }
         let scrollback = options.scrollback;
+        let pane_id = options.pane_id;
         let options = tty::Options {
             shell: Some(tty::Shell::new(program, args)),
             working_directory: Some(spec.cwd.clone()),
@@ -140,17 +148,28 @@ impl Backend {
         let config = Config { scrolling_history: scrollback, ..Config::default() };
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
         let window_id = NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
-        let pty = tty::new(&options, size.window_size(), window_id).context("failed to open PTY")?;
+        let pty = match tty::new(&options, size.window_size(), window_id) {
+            Ok(pty) => pty,
+            Err(err) => {
+                // Nothing will hold this pane's token: forget it right away.
+                if let Some(token) = &socket_token {
+                    crate::agent_signal::unregister_pane_token(token);
+                }
+                return Err(anyhow::Error::from(err).context("failed to open PTY"));
+            }
+        };
         #[cfg(unix)]
         let (child_pid, tty_fd) = (pty.child().id(), std::os::fd::AsRawFd::as_raw_fd(pty.file()));
         #[cfg(not(unix))]
         let (child_pid, tty_fd) = (pty.child_watcher().pid().map_or(0, |pid| pid.get()), -1);
+        // Only this process and what it starts may speak for the pane on the signal socket.
+        crate::agent_signal::register_pane(child_pid, pane_id);
         let event_loop =
             EventLoop::new(term.clone(), listener, pty, options.drain_on_exit, false).context("failed to start PTY event loop")?;
         let notifier = Notifier(event_loop.channel());
         event_loop.spawn();
 
-        Ok((Self { term, notifier, size, child_pid, tty_fd }, rx))
+        Ok((Self { term, notifier, size, child_pid, tty_fd, socket_token }, rx))
     }
 
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
@@ -176,6 +195,10 @@ impl Backend {
 
 impl Drop for Backend {
     fn drop(&mut self) {
+        crate::agent_signal::unregister_pane(self.child_pid);
+        if let Some(token) = &self.socket_token {
+            crate::agent_signal::unregister_pane_token(token);
+        }
         // Closing the pane ends what runs in it. Some agents (Claude Code, Codex) ignore the hangup
         // the closed terminal sends and would keep running without a terminal, so signal the
         // foreground job and the shell's group directly.

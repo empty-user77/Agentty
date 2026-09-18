@@ -248,20 +248,44 @@ fn safe_path(path: &str) -> Result<&str> {
     Ok(path)
 }
 
+/// The Keychain is shared by every build on the computer, unlike the data folder. A second install
+/// (`AGENTTY_DATA_DIR`: a development build, a test run) gets its own service, so adding or removing
+/// a connector there cannot overwrite or delete the installed app's secret of the same name.
+fn keychain_service() -> String {
+    service_for(std::env::var_os("AGENTTY_DATA_DIR").as_deref())
+}
+
+fn service_for(data_dir: Option<&std::ffi::OsStr>) -> String {
+    scoped_service(KEYCHAIN_SERVICE, data_dir)
+}
+
+/// `base`, or `base.<tag of the data folder>` for a second install (see [`keychain_service`]).
+pub(crate) fn scoped_service(base: &str, data_dir: Option<&std::ffi::OsStr>) -> String {
+    use sha2::{Digest, Sha256};
+    match data_dir {
+        None => base.to_string(),
+        Some(dir) => {
+            let digest = Sha256::digest(dir.as_encoded_bytes());
+            let tag: String = digest.iter().take(4).map(|byte| format!("{byte:02x}")).collect();
+            format!("{base}.{tag}")
+        }
+    }
+}
+
 pub mod secrets {
-    use super::KEYCHAIN_SERVICE;
+    use super::keychain_service;
     use anyhow::Result;
 
     pub fn store(id: &str, secret: &str) -> Result<()> {
-        crate::secret_store::store(KEYCHAIN_SERVICE, id, secret)
+        crate::secret_store::store(&keychain_service(), id, secret)
     }
 
     pub fn load(id: &str) -> Result<String> {
-        crate::secret_store::load(KEYCHAIN_SERVICE, id)
+        crate::secret_store::load(&keychain_service(), id)
     }
 
     pub fn delete(id: &str) -> Result<()> {
-        crate::secret_store::delete(KEYCHAIN_SERVICE, id)
+        crate::secret_store::delete(&keychain_service(), id)
     }
 }
 
@@ -456,6 +480,16 @@ pub fn serve(id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_install_gets_its_own_keychain_service() {
+        use std::ffi::OsStr;
+        assert_eq!(service_for(None), "run.agentty.connector");
+        let dev = service_for(Some(OsStr::new("/Users/me/.agentty-dev")));
+        assert!(dev.starts_with("run.agentty.connector.") && dev.len() == "run.agentty.connector.".len() + 8, "{dev}");
+        assert_eq!(dev, service_for(Some(OsStr::new("/Users/me/.agentty-dev"))));
+        assert_ne!(dev, service_for(Some(OsStr::new("/Users/me/.agentty-test"))));
+    }
 
     fn connector() -> Connector {
         let mut c = Connector::new("My API", "https://api.example.com/v1", Auth::Bearer);

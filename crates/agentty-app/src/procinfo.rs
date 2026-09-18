@@ -60,6 +60,33 @@ pub fn foreground_pid(tty_fd: TtyFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
+/// The parent of a process, while it is alive.
+#[cfg(target_os = "macos")]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is exactly the size proc_pidinfo expects for PROC_PIDTBSDINFO.
+    let written = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size) };
+    if written != size {
+        return None;
+    }
+    // SAFETY: proc_pidinfo filled the whole struct.
+    Some(unsafe { info.assume_init() }.pbi_ppid)
+}
+
+/// Linux: the 4th field of `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    stat_parent(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+/// Windows panes are identified by their token, not their process tree.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[allow(dead_code)]
+pub fn parent_pid(_pid: u32) -> Option<u32> {
+    None
+}
+
 /// ConPTY has no foreground process group; callers fall back to the shell's pid.
 #[cfg(not(unix))]
 pub fn foreground_pid(_tty_fd: TtyFd) -> Option<u32> {
@@ -145,6 +172,13 @@ pub fn group_pids(pgid: u32) -> Vec<u32> {
         pids.push(pgid);
     }
     pids
+}
+
+/// Parent pid (4th field) of a `/proc/<pid>/stat` line; see [`stat_group`] for the parsing.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn stat_parent(stat: &str) -> Option<u32> {
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Process group (5th field) of a `/proc/<pid>/stat` line; the command name may contain spaces
@@ -275,6 +309,7 @@ mod agent_tests {
     #[test]
     fn reads_proc_stat_groups() {
         assert_eq!(stat_group("123 (my (odd) prog) S 1 456 456 0 -1"), Some(456));
+        assert_eq!(stat_parent("123 (my (odd) prog) S 77 456 456 0 -1"), Some(77));
         assert_eq!(stat_group("garbage"), None);
     }
 

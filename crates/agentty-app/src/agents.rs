@@ -3,6 +3,7 @@
 
 use crate::launch::shell_quote;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A command-line agent Agentty can launch in a terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,25 +16,43 @@ pub struct AgentCli {
     pub color: u32,
     /// npm/pip package path fragment, to recognize the CLI when it runs under node or python ("" if none).
     pub package: &'static str,
+    /// Who makes it, for the start page ("Google's coding agent"); "" says nothing.
+    pub maker: &'static str,
 }
 
 /// Agents besides Claude Code and Codex (those have first-class panes with hooks and sessions).
 pub const OTHER_AGENTS: &[AgentCli] = &[
-    AgentCli { primary: true, id: "gemini", name: "Gemini CLI", binary: "gemini", color: 0x4796e3, package: "@google/gemini-cli" },
-    AgentCli { primary: true, id: "agy", name: "Antigravity CLI", binary: "agy", color: 0x3c82f6, package: "" },
-    AgentCli { primary: true, id: "amp", name: "Amp", binary: "amp", color: 0xf34e3f, package: "@sourcegraph/amp" },
-    AgentCli { primary: false, id: "copilot", name: "GitHub Copilot CLI", binary: "copilot", color: 0x8957e5, package: "@github/copilot" },
-    AgentCli { primary: false, id: "cursor", name: "Cursor Agent", binary: "cursor-agent", color: 0xe6e6e6, package: "" },
-    AgentCli { primary: false, id: "opencode", name: "OpenCode", binary: "opencode", color: 0xf5a623, package: "opencode-ai" },
-    AgentCli { primary: false, id: "qwen", name: "Qwen Code", binary: "qwen", color: 0x615ced, package: "@qwen-code/" },
-    AgentCli { primary: false, id: "droid", name: "Factory Droid", binary: "droid", color: 0xee6018, package: "" },
-    AgentCli { primary: false, id: "goose", name: "Goose", binary: "goose", color: 0x9aa0a6, package: "" },
-    AgentCli { primary: false, id: "crush", name: "Crush", binary: "crush", color: 0xff5fd2, package: "" },
-    AgentCli { primary: false, id: "aider", name: "Aider", binary: "aider", color: 0x14b014, package: "/aider/" },
-    AgentCli { primary: false, id: "kimi", name: "Kimi CLI", binary: "kimi", color: 0x1783ff, package: "kimi-cli" },
-    AgentCli { primary: false, id: "kiro", name: "Kiro CLI", binary: "kiro-cli", color: 0x9046ff, package: "" },
-    AgentCli { primary: false, id: "cline", name: "Cline CLI", binary: "cline", color: 0xd4d4d4, package: "@cline/" },
-    AgentCli { primary: false, id: "grok", name: "Grok CLI", binary: "grok", color: 0xe5e5e5, package: "grok-cli" },
+    AgentCli {
+        primary: true,
+        id: "gemini",
+        name: "Gemini CLI",
+        binary: "gemini",
+        color: 0x4796e3,
+        package: "@google/gemini-cli",
+        maker: "Google",
+    },
+    AgentCli { primary: true, id: "agy", name: "Antigravity CLI", binary: "agy", color: 0x3c82f6, package: "", maker: "Google" },
+    AgentCli { primary: true, id: "amp", name: "Amp", binary: "amp", color: 0xf34e3f, package: "@sourcegraph/amp", maker: "" },
+    AgentCli {
+        primary: false,
+        id: "copilot",
+        name: "GitHub Copilot CLI",
+        binary: "copilot",
+        color: 0x8957e5,
+        package: "@github/copilot",
+        maker: "",
+    },
+    AgentCli { primary: false, id: "cursor", name: "Cursor Agent", binary: "cursor-agent", color: 0xe6e6e6, package: "", maker: "" },
+    AgentCli { primary: false, id: "opencode", name: "OpenCode", binary: "opencode", color: 0xf5a623, package: "opencode-ai", maker: "" },
+    AgentCli { primary: false, id: "qwen", name: "Qwen Code", binary: "qwen", color: 0x615ced, package: "@qwen-code/", maker: "" },
+    AgentCli { primary: false, id: "droid", name: "Factory Droid", binary: "droid", color: 0xee6018, package: "", maker: "" },
+    AgentCli { primary: false, id: "goose", name: "Goose", binary: "goose", color: 0x9aa0a6, package: "", maker: "" },
+    AgentCli { primary: false, id: "crush", name: "Crush", binary: "crush", color: 0xff5fd2, package: "", maker: "" },
+    AgentCli { primary: false, id: "aider", name: "Aider", binary: "aider", color: 0x14b014, package: "/aider/", maker: "" },
+    AgentCli { primary: false, id: "kimi", name: "Kimi CLI", binary: "kimi", color: 0x1783ff, package: "kimi-cli", maker: "" },
+    AgentCli { primary: false, id: "kiro", name: "Kiro CLI", binary: "kiro-cli", color: 0x9046ff, package: "", maker: "" },
+    AgentCli { primary: false, id: "cline", name: "Cline CLI", binary: "cline", color: 0xd4d4d4, package: "@cline/", maker: "" },
+    AgentCli { primary: false, id: "grok", name: "Grok CLI", binary: "grok", color: 0xe5e5e5, package: "grok-cli", maker: "" },
 ];
 
 /// Fallback when nothing is configured or used locally: aliases `claude --model` always accepts.
@@ -63,6 +82,37 @@ impl Installed {
 
     pub fn other_agents(&self) -> impl Iterator<Item = &'static AgentCli> + '_ {
         OTHER_AGENTS.iter().filter(|a| self.has(a.binary))
+    }
+}
+
+/// Whether the installed Claude Code accepts `--permission-mode auto`; an older one exits on it.
+/// Read where the command line is built. Panes restored at startup spawn before the first
+/// [`detect`] has answered, so the last answer is kept in the data folder until then.
+static CLAUDE_AUTO_MODE: AtomicBool = AtomicBool::new(false);
+static DETECTED: AtomicBool = AtomicBool::new(false);
+const CLAUDE_AUTO_MODE_LINE: &str = "feature:claude-auto-mode";
+
+fn auto_mode_marker() -> std::path::PathBuf {
+    agentty_bridge::fsutil::data_dir().join("claude-auto-mode")
+}
+
+pub fn claude_auto_mode() -> bool {
+    if DETECTED.load(Ordering::Relaxed) {
+        CLAUDE_AUTO_MODE.load(Ordering::Relaxed)
+    } else {
+        auto_mode_marker().exists()
+    }
+}
+
+fn remember_auto_mode(supported: bool) {
+    CLAUDE_AUTO_MODE.store(supported, Ordering::Relaxed);
+    DETECTED.store(true, Ordering::Relaxed);
+    let marker = auto_mode_marker();
+    if supported {
+        let _ = std::fs::create_dir_all(agentty_bridge::fsutil::data_dir());
+        let _ = std::fs::write(marker, "");
+    } else {
+        let _ = std::fs::remove_file(marker);
     }
 }
 
@@ -101,6 +151,10 @@ fn probe() -> String {
             let version = run(&path, &["--version"]);
             out.push_str(&format!("version:{binary}:{}\n", version.lines().next().unwrap_or_default()));
         }
+        // Same check as the Unix probe: does this Claude Code accept `--permission-mode auto`?
+        if binary == "claude" && run(&path, &["--help"]).contains("\"auto\"") {
+            out.push_str(&format!("{CLAUDE_AUTO_MODE_LINE}\n"));
+        }
         if binary == "ollama" {
             for line in run(&path, &["list"]).lines() {
                 out.push_str(&format!("ollama:{line}\n"));
@@ -116,7 +170,7 @@ fn probe_script() -> String {
     let list = binaries.iter().map(|b| shell_quote(b)).collect::<Vec<_>>().join(" ");
     // Shims living inside other apps' bundles (e.g. cmux's `grok`) are not real installs.
     format!(
-        "for b in {list}; do p=$(command -v \"$b\" 2>/dev/null) || continue; case \"$p\" in *.app/Contents/*) ;; *) echo \"bin:$b\";; esac; done; for b in claude codex; do command -v \"$b\" >/dev/null 2>&1 && echo \"version:$b:$(\"$b\" --version 2>/dev/null </dev/null | head -n 1)\"; done; command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | sed 's/^/ollama:/'; true"
+        "for b in {list}; do p=$(command -v \"$b\" 2>/dev/null) || continue; case \"$p\" in *.app/Contents/*) ;; *) echo \"bin:$b\";; esac; done; for b in claude codex; do command -v \"$b\" >/dev/null 2>&1 && echo \"version:$b:$(\"$b\" --version 2>/dev/null </dev/null | head -n 1)\"; done; command -v claude >/dev/null 2>&1 && claude --help 2>/dev/null </dev/null | grep -q '\"auto\"' && echo \"{CLAUDE_AUTO_MODE_LINE}\"; command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | sed 's/^/ollama:/'; true"
     )
 }
 
@@ -201,6 +255,7 @@ fn claude_models() -> Vec<(String, String)> {
 pub fn detect() -> Installed {
     let output = probe();
     let (binaries, ollama_models, versions) = parse_probe(&output);
+    remember_auto_mode(output.lines().any(|line| line.trim() == CLAUDE_AUTO_MODE_LINE));
     let codex_models = if binaries.contains("codex") { codex_models() } else { Vec::new() };
     let claude_models = if binaries.contains("claude") { claude_models() } else { Vec::new() };
     Installed { binaries, ollama_models, codex_models, claude_models, versions }

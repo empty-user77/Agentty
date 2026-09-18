@@ -219,10 +219,13 @@ fn read_line_limited(reader: &mut impl BufRead, out: &mut Vec<u8>) -> std::io::R
 fn command(plugin: &InstalledPlugin, language: &str) -> Result<Command, String> {
     let manifest = plugin.manifest.as_ref().ok_or_else(|| plugin.error.clone().unwrap_or_else(|| "invalid plugin".into()))?;
     let entry = manifest.entry(&plugin.dir).map_err(|e| format!("{e:#}"))?;
-    let path_env = login_path();
+    let mut path_env = login_path();
     let mut command = match manifest.runtime {
         Runtime::Node => {
             let node = find_program("node", &path_env).ok_or("Node.js was not found. Install Node.js 18 or newer (https://nodejs.org).")?;
+            // npm and the CLIs it installs start with `#!/usr/bin/env node`: the Node.js that runs
+            // the plugin has to be on its PATH as well, wherever it was found.
+            path_env = with_dir_first(&path_env, node.parent());
             let mut command = Command::new(node);
             command.arg(&entry);
             command
@@ -258,6 +261,9 @@ fn command(plugin: &InstalledPlugin, language: &str) -> Result<Command, String> 
     Ok(command)
 }
 
+/// Printed on its own line before the PATH, to find it among whatever else the shell prints.
+const PATH_MARKER: &str = "__agentty_login_path__";
+
 /// PATH of the user's login shell (nvm, Homebrew, …), looked up once.
 fn login_path() -> String {
     static PATH: OnceLock<String> = OnceLock::new();
@@ -267,13 +273,40 @@ fn login_path() -> String {
             // No login shell on Windows: the PATH a new login would get (see `current_path`).
             return agentty_bridge::process::current_path().to_string_lossy().into_owned();
         }
-        crate::launch::run_in_login_shell(&["printenv".into(), "PATH".into()])
+        // Interactive as well as login: `.zshrc` is where many installs put themselves on PATH.
+        // `printenv` rather than `$PATH`: it prints the colon-separated form in every shell.
+        Command::new(crate::launch::LaunchSpec::shell_program())
+            .args(["-l", "-i", "-c", &format!("echo {PATH_MARKER}; printenv PATH")])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
             .ok()
-            .and_then(|out| out.lines().rev().find(|l| l.contains('/') && !l.contains(' ')).map(str::to_string))
+            .and_then(|out| parse_login_path(&String::from_utf8_lossy(&out.stdout)))
             .map(|login| if fallback.is_empty() { login.clone() } else { format!("{login}:{fallback}") })
             .unwrap_or(fallback)
     })
     .clone()
+}
+
+/// The PATH line among the banners and prompts of an interactive shell. It is found by the marker
+/// before it, not by its looks: entries may contain spaces ("…/Application Support/…"), and a
+/// long PATH must arrive whole.
+fn parse_login_path(output: &str) -> Option<String> {
+    let mut lines = output.lines().skip_while(|line| line.trim() != PATH_MARKER);
+    lines.nth(1).map(|path| path.trim().to_string()).filter(|path| path.contains('/'))
+}
+
+/// `path_env` with `dir` in front, unless it is on it already.
+fn with_dir_first(path_env: &str, dir: Option<&Path>) -> String {
+    let Some(dir) = dir.filter(|dir| !dir.as_os_str().is_empty()) else { return path_env.to_string() };
+    if std::env::split_paths(path_env).any(|entry| entry == dir) {
+        return path_env.to_string();
+    }
+    if path_env.is_empty() {
+        dir.display().to_string()
+    } else {
+        format!("{}:{path_env}", dir.display())
+    }
 }
 
 /// `name` on `path_env`, then in common install locations (newest nvm Node first).
@@ -326,6 +359,25 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_path_survives_spaces_and_shell_noise() {
+        let path = "/Users/me/.nvm/versions/node/v22.0.0/bin:/Users/me/Library/Application Support/JetBrains/Toolbox/scripts:/usr/bin";
+        let output = format!("Welcome back!\n{PATH_MARKER}\n{path}\n");
+        assert_eq!(parse_login_path(&output).as_deref(), Some(path));
+        assert_eq!(parse_login_path("no marker here\n/usr/bin\n"), None);
+        assert_eq!(parse_login_path(&format!("{PATH_MARKER}\n")), None);
+    }
+
+    #[test]
+    fn the_runtime_folder_leads_the_path_once() {
+        let node_dir = Path::new("/Users/me/.nvm/versions/node/v22.0.0/bin");
+        assert_eq!(with_dir_first("/usr/bin:/bin", Some(node_dir)), "/Users/me/.nvm/versions/node/v22.0.0/bin:/usr/bin:/bin");
+        let already = "/usr/bin:/Users/me/.nvm/versions/node/v22.0.0/bin";
+        assert_eq!(with_dir_first(already, Some(node_dir)), already);
+        assert_eq!(with_dir_first("", Some(node_dir)), "/Users/me/.nvm/versions/node/v22.0.0/bin");
+        assert_eq!(with_dir_first("/usr/bin", None), "/usr/bin");
+    }
 
     #[test]
     fn reads_lines_with_a_limit() {

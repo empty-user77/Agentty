@@ -14,6 +14,7 @@ pub mod git;
 pub mod handoff;
 pub mod harness;
 pub mod http;
+pub mod idea;
 pub mod kimi;
 pub mod limits;
 pub mod metrics;

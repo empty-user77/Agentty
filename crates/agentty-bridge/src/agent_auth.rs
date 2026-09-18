@@ -26,6 +26,12 @@ use std::time::Duration;
 /// Credential store service for agent credentials.
 pub const SERVICE: &str = "run.agentty.agent-auth";
 
+/// [`SERVICE`] for this install: a second install (`AGENTTY_DATA_DIR`) gets its own, like the
+/// connectors' Keychain service, so a development build can't overwrite the app's keys.
+fn service() -> String {
+    crate::connectors::scoped_service(SERVICE, std::env::var_os("AGENTTY_DATA_DIR").as_deref())
+}
+
 /// Secret slots in the credential store.
 pub mod account {
     pub const CLAUDE_API_KEY: &str = "claude.api_key";
@@ -308,15 +314,15 @@ pub fn store_secret(account: &str, secret: &str) -> Result<()> {
     let secret = secret.trim();
     ensure!(!secret.is_empty(), "the key is empty");
     ensure!(!secret.chars().any(char::is_control), "the key contains line breaks or control characters");
-    crate::secret_store::store(SERVICE, account, secret)
+    crate::secret_store::store(&service(), account, secret)
 }
 
 pub fn load_secret(account: &str) -> Option<String> {
-    crate::secret_store::load(SERVICE, account).ok().filter(|s| !s.is_empty())
+    crate::secret_store::load(&service(), account).ok().filter(|s| !s.is_empty())
 }
 
 pub fn delete_secret(account: &str) -> Result<()> {
-    crate::secret_store::delete(SERVICE, account)
+    crate::secret_store::delete(&service(), account)
 }
 
 /// `••••1a2b` — enough to recognize which key is saved, never enough to use it.

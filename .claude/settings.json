@@ -9,6 +9,15 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-secrets.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/require-security-audit.py\""
+          }
+        ]
       }
     ]
   },

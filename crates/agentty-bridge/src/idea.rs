@@ -1,0 +1,467 @@
+//! "Build my idea": turns a few chat messages and attached documents into a new project folder
+//! and the first prompt for the agent that builds a demo of it.
+//!
+//! The folder gets `docs/idea/IDEA.md` (the messages), `docs/idea/attachments/` (copies of the
+//! attached files), `docs/idea/BUILD_GUIDE.md` (how to work: the project's harness first — agents
+//! and skills the agent downloads from ECC for this product, nothing of it ships with Agentty —
+//! then plan, parallel subagents, live preview in Agentty's browser, Vercel-ready) and
+//! `.claude/settings.json` so Claude Code can install
+//! packages and run the dev server without asking about every command. Everything else is left
+//! empty so project scaffolders (`create-next-app`, `create vite`) still accept the folder.
+
+use crate::fsutil;
+use anyhow::{bail, Context, Result};
+use std::path::{Path, PathBuf};
+
+/// Attachments larger than this are skipped (the agent could not read them anyway).
+pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+pub const MAX_ATTACHMENTS: usize = 20;
+
+/// Where new idea projects go by default: `~/AgenttyProjects` (no spaces: some dev tools choke on them).
+pub fn default_root() -> PathBuf {
+    fsutil::home().join("AgenttyProjects")
+}
+
+/// What the user wrote on the idea page.
+#[derive(Debug, Clone, Default)]
+pub struct IdeaInput {
+    /// Chat messages and pasted documents, in order.
+    pub messages: Vec<String>,
+    pub attachments: Vec<PathBuf>,
+    /// Project name typed by the user; derived from the first message when empty.
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IdeaProject {
+    pub dir: PathBuf,
+    pub title: String,
+    /// First message for the agent.
+    pub prompt: String,
+    /// Attachments that were not copied (missing, a folder, or too large).
+    pub skipped: Vec<PathBuf>,
+}
+
+/// A short title from the name or the first line of the first message.
+pub fn project_title(input: &IdeaInput) -> String {
+    let source = input
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .or_else(|| input.messages.iter().flat_map(|m| m.lines()).map(str::trim).find(|l| !l.is_empty()))
+        .unwrap_or("My idea");
+    let cleaned: String = source.trim_start_matches(['#', '-', '*', ' ']).chars().filter(|c| !c.is_control()).collect();
+    let mut title: String = cleaned.chars().take(40).collect();
+    if cleaned.chars().count() > 40 {
+        title = title.trim_end().to_string() + "…";
+    }
+    if title.trim().is_empty() {
+        "My idea".into()
+    } else {
+        title
+    }
+}
+
+/// Folder name: lowercase ASCII words joined by dashes; `fallback` when nothing ASCII is left
+/// (e.g. a Korean-only title).
+pub fn slug(title: &str, fallback: &str) -> String {
+    let words: Vec<String> =
+        title.to_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect();
+    let mut slug = String::new();
+    for word in words {
+        if slug.len() + word.len() + 1 > 40 {
+            break;
+        }
+        if !slug.is_empty() {
+            slug.push('-');
+        }
+        slug.push_str(&word);
+    }
+    if slug.is_empty() {
+        fallback.to_string()
+    } else {
+        slug
+    }
+}
+
+/// `root/name`, or `root/name-2`, `-3`, … when taken.
+pub fn unique_dir(root: &Path, name: &str) -> PathBuf {
+    let first = root.join(name);
+    if !first.exists() {
+        return first;
+    }
+    (2..).map(|n| root.join(format!("{name}-{n}"))).find(|p| !p.exists()).expect("a free name")
+}
+
+/// Whether Agentty itself made `dir` with "Build my idea". Agentty starts Claude Code in auto mode
+/// there, also for tabs opened and sessions resumed later — so the answer must not be something a
+/// folder can claim for itself: a cloned repository that ships `docs/idea/BUILD_GUIDE.md` is not an
+/// idea project. Only folders recorded in this computer's registry by [`register_project`] are.
+pub fn is_idea_project(dir: &Path) -> bool {
+    is_registered(&registry_path(), dir)
+}
+
+/// Records a project [`create_project`] just made, so later sessions in it are recognized.
+pub fn register_project(dir: &Path) -> Result<()> {
+    register(&registry_path(), dir)
+}
+
+fn registry_path() -> PathBuf {
+    fsutil::data_dir().join("idea-projects.json")
+}
+
+const REGISTRY_LIMIT: usize = 500;
+
+fn registered(registry: &Path) -> Vec<PathBuf> {
+    std::fs::read(registry).ok().and_then(|bytes| serde_json::from_slice::<Vec<PathBuf>>(&bytes).ok()).unwrap_or_default()
+}
+
+fn is_registered(registry: &Path, dir: &Path) -> bool {
+    // The marker still has to be there: a folder emptied and reused for something else is not one.
+    let Ok(dir) = dir.canonicalize() else { return false };
+    dir.join("docs").join("idea").join("BUILD_GUIDE.md").is_file() && registered(registry).contains(&dir)
+}
+
+fn register(registry: &Path, dir: &Path) -> Result<()> {
+    let dir = dir.canonicalize().with_context(|| format!("no such folder: {}", dir.display()))?;
+    let mut projects = registered(registry);
+    projects.retain(|p| p != &dir);
+    projects.push(dir);
+    let start = projects.len().saturating_sub(REGISTRY_LIMIT);
+    if let Some(parent) = registry.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(registry, serde_json::to_vec_pretty(&projects[start..])?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(registry, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// Creates the project folder and returns the prompt that starts the build.
+/// `language` is the UI language code (`en`, `ko`, `ja`, `zh`); `stamp` names untitled projects.
+pub fn create_project(root: &Path, input: &IdeaInput, language: &str, stamp: &str) -> Result<IdeaProject> {
+    let messages: Vec<&str> = input.messages.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+    if messages.is_empty() && input.attachments.is_empty() {
+        bail!("describe the idea or attach a document first");
+    }
+    let title = project_title(input);
+    let dir = unique_dir(root, &slug(&title, &format!("idea-{stamp}")));
+    let idea_dir = dir.join("docs").join("idea");
+    std::fs::create_dir_all(&idea_dir).with_context(|| format!("could not create {}", idea_dir.display()))?;
+
+    let (copied, skipped) = copy_attachments(&input.attachments, &idea_dir.join("attachments"))?;
+    std::fs::write(idea_dir.join("IDEA.md"), idea_markdown(&title, &messages, &copied))?;
+    std::fs::write(idea_dir.join("BUILD_GUIDE.md"), build_guide())?;
+    let claude_dir = dir.join(".claude");
+    std::fs::create_dir_all(&claude_dir)?;
+    std::fs::write(claude_dir.join("settings.json"), claude_settings())?;
+
+    Ok(IdeaProject { prompt: build_prompt(language, &title), dir, title, skipped })
+}
+
+fn copy_attachments(files: &[PathBuf], into: &Path) -> Result<(Vec<String>, Vec<PathBuf>)> {
+    let mut copied: Vec<String> = Vec::new();
+    let mut skipped = Vec::new();
+    for file in files {
+        let fits = std::fs::metadata(file).is_ok_and(|m| m.is_file() && m.len() <= MAX_ATTACHMENT_BYTES);
+        let Some(name) = file.file_name().and_then(|n| n.to_str()).filter(|_| fits && copied.len() < MAX_ATTACHMENTS) else {
+            skipped.push(file.clone());
+            continue;
+        };
+        std::fs::create_dir_all(into)?;
+        // Two files with the same name: keep both.
+        let mut target = name.to_string();
+        let mut n = 2;
+        while copied.contains(&target) {
+            let path = Path::new(name);
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+            target = match path.extension().and_then(|e| e.to_str()) {
+                Some(ext) => format!("{stem}-{n}.{ext}"),
+                None => format!("{stem}-{n}"),
+            };
+            n += 1;
+        }
+        std::fs::copy(file, into.join(&target)).with_context(|| format!("could not copy {}", file.display()))?;
+        copied.push(target);
+    }
+    Ok((copied, skipped))
+}
+
+fn idea_markdown(title: &str, messages: &[&str], attachments: &[String]) -> String {
+    let mut out = format!("# {title}\n\nWritten by the product owner in Agentty's \"Build my idea\".\n\n## The idea\n\n");
+    for message in messages {
+        out.push_str(message);
+        out.push_str("\n\n");
+    }
+    if !attachments.is_empty() {
+        out.push_str("## Attached documents\n\nRead every one of these before planning (`docs/idea/attachments/`):\n\n");
+        for name in attachments {
+            out.push_str(&format!("- [{name}](attachments/{})\n", name.replace(' ', "%20")));
+        }
+    }
+    out
+}
+
+/// The first message to the agent. Prompts are written in English whatever the UI language is;
+/// the agent is told which language to talk to the owner in.
+pub fn build_prompt(language: &str, title: &str) -> String {
+    PROMPT.replace("{title}", title).replace("{language}", language_name(language))
+}
+
+/// English name of a UI language code (`en`, `ko`, `ja`, `zh`), for the "Talk to me in …" line of
+/// a prompt.
+pub fn language_name(code: &str) -> &'static str {
+    match code {
+        "ko" => "Korean",
+        "ja" => "Japanese",
+        "zh" => "Simplified Chinese",
+        _ => "English",
+    }
+}
+
+const PROMPT: &str = r#"Build a working demo of my idea "{title}". I'm not a developer, so take the lead as the senior engineer and product designer.
+
+1. Read docs/idea/IDEA.md, everything in docs/idea/attachments/, and follow docs/idea/BUILD_GUIDE.md — it starts with setting up this project's harness (agents and skills), before any planning.
+2. Don't ask me questions unless something essential is impossible to guess — choose sensible defaults and write your assumptions in PLAN.md.
+3. Show me progress visually: get a first screen running early and open it in Agentty's in-app browser (browser_open), then keep refreshing it as you build.
+4. Split independent parts across parallel subagents where your tools allow it, and integrate/review their work yourself.
+5. When the demo works, tell me in plain words what you built, how to try it, and that I can publish it with the 🚀 Launch button.
+
+Talk to me in {language}."#;
+
+/// The ECC commit idea projects install their harness from. What an agent in auto mode reads as
+/// instructions must not change under a user without a release of Agentty: review the new commit's
+/// `agents/`, `skills/` and `rules/`, then move this forward.
+pub const ECC_COMMIT: &str = "dd6ee538aee0f548d4a6b520118f875431fd749e";
+
+pub fn build_guide() -> String {
+    BUILD_GUIDE.replace("{ecc_commit}", ECC_COMMIT)
+}
+
+pub fn claude_settings() -> String {
+    CLAUDE_SETTINGS.replace("{ecc_commit}", ECC_COMMIT)
+}
+
+/// How the agent should work. Kept in the project so later sessions can re-read it.
+const BUILD_GUIDE: &str = r#"# Build guide (Agentty "Build my idea")
+
+The owner of this project is not a developer. Your job: turn docs/idea/IDEA.md (and the attachments)
+into a working demo they can see and click, ready to publish on Vercel.
+
+## 0. Harness (first, once)
+The right agents and skills raise the quality of everything after this, so set them up before
+planning. They come from ECC (https://github.com/affaan-m/ECC, MIT), a library of agent, skill and
+rule definitions. Agentty does not ship it: download it into this project now, take what this
+product needs, and remove the download.
+- Read the idea first. Then fetch ECC's definitions at the commit Agentty reviewed — exactly these
+  commands, no other branch or version — without history or assets:
+  `git init -q .agentty-ecc`
+  `git -C .agentty-ecc remote add origin https://github.com/affaan-m/ECC.git`
+  `git -C .agentty-ecc sparse-checkout set agents skills rules`
+  `git -C .agentty-ecc fetch -q --depth 1 --filter=blob:none origin {ecc_commit}`
+  `git -C .agentty-ecc checkout -q FETCH_HEAD`
+- Choose by file name and frontmatter description (do not read every file) what this product
+  really needs: planning and architecture, the stack you will use (e.g. Next.js, React, Tailwind,
+  Supabase/Postgres), code review, security review, build-error fixing, end-to-end testing, UI
+  design. Fewer is better: about 4–8 agents, 5–10 skills and the few rules that fit.
+- Install them in this project only: `agents/<name>.md` → `.claude/agents/`, a skill's `SKILL.md`
+  and its other `.md` files → `.claude/skills/<name>/`, `rules/…/*.md` → `.claude/rules/`. With
+  another agent CLI than Claude Code, use the project-level folders ECC's README names for it.
+- Markdown only. Many ECC skills also ship scripts (`.sh`, `.py`, `.js`): leave those out and
+  prefer skills that work without them. Never run ECC's installer or scripts, never copy hook
+  definitions, MCP configs, settings or anything executable, and never install into the home folder.
+- When you are done, `rm -rf .agentty-ecc`.
+- Write docs/idea/HARNESS.md: the ECC commit ({ecc_commit}), and each agent, skill and rule you
+  installed with one line on why. Point to it from CLAUDE.md so later sessions use the harness.
+- If the download fails (offline, git missing), go on without it and say so in PLAN.md.
+From here on, work through the harness: delegate to these agents and apply these skills.
+
+## 1. Plan (short)
+- Write PLAN.md: one-paragraph product summary, target user, the pages/screens and features of the
+  demo, the tech stack, assumptions you made, and a task checklist (`- [ ]`).
+- Scope for a demo: the core flow working end to end with realistic sample data beats many
+  half-finished features.
+
+## 2. Stack (unless the idea clearly needs something else)
+- Web app: Next.js (App Router) + TypeScript + Tailwind CSS. Simple landing page: the same, or
+  Vite + React. Must build with `npm run build` and deploy to Vercel with zero configuration.
+- Data: start with local sample data / in-memory or localStorage. If the product needs a real
+  database or login, design the code so Supabase can be plugged in later (a small data-access
+  module), and note it in PLAN.md.
+- When Supabase is used: the 🚀 Launch button creates or picks the hosted project and writes its
+  URL and public key to `.env.local` — read exactly `NEXT_PUBLIC_SUPABASE_URL` and
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` (`VITE_…` with Vite) and list both names in `.env.example`. Put
+  the schema in `supabase/migrations/<timestamp>_<name>.sql` (Launch applies them), enable row
+  level security on every table with policies that fit the app, and never use or ask for the
+  service_role key.
+- This folder already contains `docs/` and `.claude/`. If a scaffolder refuses a non-empty folder,
+  scaffold into a temporary subfolder and move the files up.
+- Use npm. Never commit secrets: put keys in `.env.local` (gitignored) and document names in
+  `.env.example`.
+
+## 3. Show progress live
+- Get a first screen running early: start the dev server in the background (e.g.
+  `npm run dev -- --port 3000`, or the next free port) and open it in Agentty's in-app browser with
+  the `browser_open` tool. Reload it (`browser_go` reload) after meaningful changes so the owner
+  watches the product take shape.
+- If the browser tools are not available, print the local URL clearly instead.
+
+## 4. Orchestrate
+- Split independent parts (e.g. separate pages, components, data layer, styling) and hand them to
+  parallel subagents (Task tool) with clear file ownership and acceptance criteria. Keep shared
+  pieces (layout, design tokens, types) with you and create them first.
+- Review and integrate subagent work yourself; keep PLAN.md's checklist up to date.
+
+## 5. Quality bar
+- Polished, modern, responsive UI (mobile and desktop), real copy instead of lorem ipsum, empty
+  and error states, accessible contrast and labels.
+- Verify before calling it done: `npm run build` passes, the page has no console errors
+  (`browser_console`), and a screenshot (`browser_screenshot`) looks right.
+
+## 6. Hand-off
+- Write a short README.md (what it is, how to run it) and CLAUDE.md + AGENTS.md with the project
+  conventions for future sessions.
+- Tell the owner in plain words: what was built, how to try it, what could come next, and that the
+  🚀 Launch button (Agentty) publishes it to the internet (GitHub + Vercel).
+"#;
+
+/// Lets Claude Code edit files and run the usual build commands in this new project without a
+/// prompt for each one. Deleting files, network tools other than npm and git pushes still ask, and
+/// so do `cat`, `cp` and `mv`: they reach any file on the computer, and together with an outbound
+/// channel that is how injected instructions take a private key out (the agent has Read, Write and
+/// Edit for files inside the project).
+///
+/// This is the fallback: Agentty starts Claude Code with `--permission-mode auto` in idea projects,
+/// which a project's own settings cannot turn on (`"defaultMode": "auto"` here is ignored), and
+/// these rules apply where auto mode is not available.
+const CLAUDE_SETTINGS: &str = r#"{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(lsof -i:*)",
+      "Bash(git init -q .agentty-ecc)",
+      "Bash(git -C .agentty-ecc remote add origin https://github.com/affaan-m/ECC.git)",
+      "Bash(git -C .agentty-ecc sparse-checkout set agents skills rules)",
+      "Bash(git -C .agentty-ecc fetch -q --depth 1 --filter=blob:none origin {ecc_commit})",
+      "Bash(git -C .agentty-ecc checkout -q FETCH_HEAD)",
+      "Bash(rm -rf .agentty-ecc)",
+      "Bash(git init:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__agentty-browser"
+    ]
+  }
+}
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("agentty-idea-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn titles_come_from_the_name_or_first_line() {
+        let input = IdeaInput { messages: vec!["\n# Dog walking marketplace\nwith booking".into()], ..Default::default() };
+        assert_eq!(project_title(&input), "Dog walking marketplace");
+        let named = IdeaInput { name: Some("  Petly ".into()), ..input };
+        assert_eq!(project_title(&named), "Petly");
+        let long = IdeaInput { messages: vec!["a".repeat(80)], ..Default::default() };
+        assert!(project_title(&long).ends_with('…'));
+        assert_eq!(project_title(&IdeaInput::default()), "My idea");
+    }
+
+    #[test]
+    fn slugs_are_ascii_with_a_fallback() {
+        assert_eq!(slug("Dog walking: Marketplace!", "x"), "dog-walking-marketplace");
+        assert_eq!(slug("강아지 산책 앱", "idea-20260918-1200"), "idea-20260918-1200");
+        assert_eq!(slug("카페 Cafe 2.0", "x"), "cafe-2-0");
+        assert!(slug(&"word ".repeat(30), "x").len() <= 40);
+    }
+
+    #[test]
+    fn creates_the_project_folder() {
+        let root = temp_root("create");
+        let doc = root.join("plan.md");
+        std::fs::write(&doc, "# Spec\nfeatures").unwrap();
+        let input = IdeaInput {
+            messages: vec!["Recipe sharing site".into(), "  ".into(), "Users can save favorites".into()],
+            attachments: vec![doc.clone(), doc.clone(), root.join("missing.pdf"), root.clone()],
+            name: None,
+        };
+        let project = create_project(&root, &input, "ko", "20260918-1200").unwrap();
+        assert_eq!(project.dir, root.join("recipe-sharing-site"));
+        assert_eq!(project.title, "Recipe sharing site");
+        assert_eq!(project.skipped, vec![root.join("missing.pdf"), root.clone()]);
+        let idea = std::fs::read_to_string(project.dir.join("docs/idea/IDEA.md")).unwrap();
+        assert!(idea.contains("Users can save favorites"));
+        assert!(idea.contains("attachments/plan.md") && idea.contains("attachments/plan-2.md"));
+        assert!(project.dir.join("docs/idea/attachments/plan-2.md").exists());
+        assert!(project.dir.join("docs/idea/BUILD_GUIDE.md").exists());
+        // Auto mode follows the registry on this computer, not what a folder contains: a cloned
+        // repository that ships the same guide is not an idea project.
+        let registry = root.join("idea-projects.json");
+        assert!(!is_registered(&registry, &project.dir));
+        register(&registry, &project.dir).unwrap();
+        assert!(is_registered(&registry, &project.dir));
+        let cloned = root.join("cloned-from-the-internet");
+        std::fs::create_dir_all(cloned.join("docs/idea")).unwrap();
+        std::fs::write(cloned.join("docs/idea/BUILD_GUIDE.md"), build_guide()).unwrap();
+        assert!(!is_registered(&registry, &cloned));
+        // A registered folder that no longer carries the guide is not one either.
+        std::fs::remove_file(project.dir.join("docs/idea/BUILD_GUIDE.md")).unwrap();
+        assert!(!is_registered(&registry, &project.dir));
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(project.dir.join(".claude/settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["permissions"]["defaultMode"], "acceptEdits");
+        // The harness comes from the reviewed ECC commit, in the guide and in the allow list alike,
+        // and nothing reaches any file on the computer without asking.
+        let allow: Vec<&str> = settings["permissions"]["allow"].as_array().unwrap().iter().filter_map(|rule| rule.as_str()).collect();
+        let fetch = format!("Bash(git -C .agentty-ecc fetch -q --depth 1 --filter=blob:none origin {ECC_COMMIT})");
+        assert!(allow.contains(&fetch.as_str()), "{allow:?}");
+        assert!(build_guide().contains(ECC_COMMIT) && !build_guide().contains("{ecc_commit}"));
+        assert!(!allow
+            .iter()
+            .any(|rule| ["Bash(cat:", "Bash(cp:", "Bash(mv:", "Bash(curl:", "Bash(rm:"].iter().any(|broad| rule.starts_with(broad))));
+        assert!(project.prompt.contains("Recipe sharing site") && project.prompt.contains("Talk to me in Korean"));
+        // A second project with the same title gets its own folder.
+        let again = create_project(&root, &input, "en", "20260918-1201").unwrap();
+        assert_eq!(again.dir, root.join("recipe-sharing-site-2"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_an_empty_idea() {
+        let root = temp_root("empty");
+        let input = IdeaInput { messages: vec!["   ".into()], ..Default::default() };
+        assert!(create_project(&root, &input, "en", "x").is_err());
+        assert!(std::fs::read_dir(&root).unwrap().next().is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn prompts_follow_the_language() {
+        assert!(build_prompt("en", "Todo").contains("in English"));
+        assert!(build_prompt("ja", "Todo").contains("Japanese"));
+        // The owner's title stays as written; the prompt around it is English in every language.
+        assert!(build_prompt("ko", "할 일").contains("\"할 일\""));
+        assert!(
+            build_prompt("ko", "할 일").starts_with("Build a working demo") && build_prompt("ko", "x").contains("Talk to me in Korean")
+        );
+    }
+}

@@ -71,17 +71,41 @@ pub fn avatar(id: &str, size: f32) -> gpui::Div {
         .bg(hex(0x333438))
         .border_1()
         .border_color(hex_alpha(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, 0.85));
+    base.child(glyph(brand, inner, size))
+}
+
+/// The tool's logo, terminal glyph or first letter, in its brand color.
+fn glyph(brand: &Brand, inner: f32, size: f32) -> AnyElement {
     match (brand.logo, brand.id) {
-        (Some(path), _) => base.child(svg().path(SharedString::from(path)).size(px(inner)).text_color(hex(brand.color))),
-        (None, "shell") => base.child(crate::ui::icon("terminal", inner, hex(Chrome::BRIGHT))),
-        (None, _) => base.child(
-            div()
-                .text_size(px((size * 0.52).max(7.)))
-                .font_weight(FontWeight::BOLD)
-                .text_color(hex(brand.color))
-                .child(brand.name.chars().next().unwrap_or('?').to_string()),
-        ),
+        (Some(path), _) => svg().path(SharedString::from(path)).size(px(inner)).text_color(hex(brand.color)).into_any_element(),
+        (None, "shell") => crate::ui::icon("terminal", inner, hex(Chrome::BRIGHT)).into_any_element(),
+        (None, _) => div()
+            .text_size(px((size * 0.52).max(7.)))
+            .font_weight(FontWeight::BOLD)
+            .text_color(hex(brand.color))
+            .child(brand.name.chars().next().unwrap_or('?').to_string())
+            .into_any_element(),
     }
+}
+
+/// Square tile tinted with the tool's color, like an app icon: the start page's cards.
+pub fn tile(id: &str, size: f32) -> gpui::Div {
+    let brand = brand(id);
+    tinted_tile(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, size).child(glyph(brand, size * 0.56, size))
+}
+
+/// An empty [`tile`] in any color, for cards that show an icon instead of a brand.
+pub fn tinted_tile(color: u32, size: f32) -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .size(px(size))
+        .rounded_lg()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(hex_alpha(color, 0.16))
+        .border_1()
+        .border_color(hex_alpha(color, 0.35))
 }
 
 /// Overlapping avatars like profile stacks: at most `max` shown, then `+N`.

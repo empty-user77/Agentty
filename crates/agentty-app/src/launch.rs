@@ -209,11 +209,19 @@ impl LaunchSpec {
                 if let Some(model) = advisor.model() {
                     args.extend(["--advisor".into(), model.into()]);
                 }
-                args.extend(["--settings".into(), inline_or_file("claude-settings.json", claude_hook_settings())]);
+                if crate::agents::claude_auto_mode() && agentty_bridge::idea::is_idea_project(&self.cwd) {
+                    // "Build my idea" projects belong to people who cannot judge a permission prompt:
+                    // Claude Code's auto mode decides instead. Only the command line can turn it on —
+                    // `"defaultMode": "auto"` in the project's own settings is ignored.
+                    args.extend(["--permission-mode".into(), "auto".into()]);
+                }
                 if crate::settings::browser_tools_enabled() {
-                    // The in-app browser as MCP tools (added to the user's own servers).
+                    // The in-app browser as MCP tools (added to the user's own servers). `--mcp-config`
+                    // takes any number of values, so it must not be the last option: a prompt right
+                    // after it is read as another config file ("Invalid MCP configuration").
                     args.extend(["--mcp-config".into(), inline_or_file("browser-mcp.json", browser_mcp_config())]);
                 }
+                args.extend(["--settings".into(), inline_or_file("claude-settings.json", claude_hook_settings())]);
             }
             PaneKind::Codex => {
                 args.extend(["codex".into(), "-c".into(), codex_notify_override()]);
@@ -229,6 +237,11 @@ impl LaunchSpec {
             }
         }
         if let Start::Prompt(prompt) = &self.start {
+            // A prompt that starts with a dash is an option to Claude Code ("unknown option") unless
+            // options are ended first.
+            if self.kind == PaneKind::Claude {
+                args.push("--".into());
+            }
             args.push(prompt.clone());
         }
         Some(args)
@@ -716,14 +729,28 @@ pub(crate) mod tests {
         let args = spec.command().unwrap();
         assert_eq!(args[..2], ["claude", "--session-id"]);
         assert_eq!(args[2], spec.session_id.clone().unwrap());
+        let at = args.iter().position(|a| a == "--settings").unwrap();
         let settings: serde_json::Value = serde_json::from_str(&claude_hook_settings()).unwrap();
         let stop = settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
         if cfg!(target_os = "macos") {
-            assert_eq!(args[4], claude_hook_settings());
+            assert_eq!(args[at + 1], claude_hook_settings());
             assert!(stop.contains("AGENTTY_SOCKET"), "{stop}");
         } else {
+            // Windows passes the JSON as a file; the hook forwards through `agentty signal`.
             assert!(stop.ends_with(" signal stop"), "{stop}");
         }
+    }
+
+    #[test]
+    fn claude_prompt_is_not_swallowed_by_mcp_config() {
+        let spec =
+            LaunchSpec::with_prompt(agentty_bridge::model::Agent::Claude, "Build my idea".into(), "Idea".into(), PathBuf::from("/tmp"));
+        let args = spec.command().unwrap();
+        assert_eq!(args.last().map(String::as_str), Some("Build my idea"));
+        // `--mcp-config <configs...>` would take the prompt as a second config file, and a prompt
+        // starting with a dash would be read as an option: `--settings <json> -- <prompt>`.
+        assert_eq!(args[args.len() - 2], "--", "{args:?}");
+        assert_eq!(args[args.len() - 4], "--settings", "{args:?}");
     }
 
     #[test]

@@ -136,6 +136,8 @@ pub struct Settings {
     pub resume_bar: bool,
     /// Status bar (model, context, branch) above AI CLI panes.
     pub agent_bar: bool,
+    /// Offer "Build my idea": the start page banner, the + menu and the command palette.
+    pub idea_mode: bool,
     /// Ask before closing a pane, tab or workspace that was used.
     pub confirm_close: bool,
     /// Claude Code advisor for new Claude tabs.
@@ -148,9 +150,6 @@ pub struct Settings {
     pub harness_submit: bool,
     /// Agent that starts harness work.
     pub harness_agent: HarnessAgent,
-    /// The tour (agentty.run, key features) was shown on first launch.
-    #[serde(default)]
-    pub welcome_shown: bool,
     /// The first-launch system check ran (Windows / Linux).
     pub setup_check_shown: bool,
 }
@@ -319,13 +318,13 @@ impl Default for Settings {
             favorite_sessions: Vec::new(),
             resume_bar: true,
             agent_bar: true,
+            idea_mode: true,
             confirm_close: true,
             advisor: AdvisorChoice::Inherit,
             harness_detect: true,
             harness_patterns: Vec::new(),
             harness_submit: true,
             harness_agent: HarnessAgent::Auto,
-            welcome_shown: false,
             setup_check_shown: false,
         }
     }

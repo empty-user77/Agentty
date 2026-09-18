@@ -20,6 +20,8 @@ jobs:
           fetch-depth: 0
       - name: Scan tracked files for credentials
         run: python3 scripts/check-secrets.py --all
+      - name: Security audit (forbidden files, personal data, weakened guarantees, guard wiring)
+        run: python3 scripts/security-audit.py --all
       - name: Scan commits in this push / pull request
         if: github.event_name == 'pull_request' || github.event.before != '0000000000000000000000000000000000000000'
         run: |

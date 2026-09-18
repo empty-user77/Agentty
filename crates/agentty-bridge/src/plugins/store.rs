@@ -167,16 +167,34 @@ pub const USAGE: &str = embedded!("docs/plugins/usage.md");
 pub const AI_PROMPT: &str = embedded!("docs/plugins/ai-prompt.md");
 pub const PROTOCOL: &str = embedded!("docs/plugins/protocol.md");
 
-pub const BUILTIN: &[BuiltinPlugin] = &[BuiltinPlugin {
-    manifest_json: embedded!("plugins/cosmica/agentty-plugin.json"),
-    files: &[
-        ("agentty-plugin.json", embedded!("plugins/cosmica/agentty-plugin.json")),
-        ("main.mjs", embedded!("plugins/cosmica/main.mjs")),
-        ("cosmica.mjs", embedded!("plugins/cosmica/cosmica.mjs")),
-        ("README.md", embedded!("plugins/cosmica/README.md")),
-        ("agentty-plugin.mjs", NODE_SDK),
-    ],
-}];
+pub const BUILTIN: &[BuiltinPlugin] = &[
+    BuiltinPlugin {
+        manifest_json: embedded!("plugins/cosmica/agentty-plugin.json"),
+        files: &[
+            ("agentty-plugin.json", embedded!("plugins/cosmica/agentty-plugin.json")),
+            ("main.mjs", embedded!("plugins/cosmica/main.mjs")),
+            ("cosmica.mjs", embedded!("plugins/cosmica/cosmica.mjs")),
+            ("README.md", embedded!("plugins/cosmica/README.md")),
+            ("agentty-plugin.mjs", NODE_SDK),
+        ],
+    },
+    BuiltinPlugin {
+        manifest_json: embedded!("plugins/launch/agentty-plugin.json"),
+        files: &[
+            ("agentty-plugin.json", embedded!("plugins/launch/agentty-plugin.json")),
+            ("main.mjs", embedded!("plugins/launch/main.mjs")),
+            ("lib/exec.mjs", embedded!("plugins/launch/lib/exec.mjs")),
+            ("lib/parse.mjs", embedded!("plugins/launch/lib/parse.mjs")),
+            ("lib/github.mjs", embedded!("plugins/launch/lib/github.mjs")),
+            ("lib/vercel.mjs", embedded!("plugins/launch/lib/vercel.mjs")),
+            ("lib/supabase.mjs", embedded!("plugins/launch/lib/supabase.mjs")),
+            ("lib/tools.mjs", embedded!("plugins/launch/lib/tools.mjs")),
+            ("lib/state.mjs", embedded!("plugins/launch/lib/state.mjs")),
+            ("README.md", embedded!("plugins/launch/README.md")),
+            ("agentty-plugin.mjs", NODE_SDK),
+        ],
+    },
+];
 
 /// Files of a new plugin made with "New plugin" (`{{id}}` and `{{name}}` are filled in).
 const TEMPLATE: &[(&str, &str)] = &[

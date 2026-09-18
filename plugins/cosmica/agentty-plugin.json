@@ -1,7 +1,7 @@
 {
   "id": "cosmica",
   "name": "Cosmica",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "Agentty",
   "description": "Use Cosmica notes as prompts, continue a note in Agentty straight from Cosmica, and save session summaries back into Cosmica.",
   "icon": "notebook-pen",

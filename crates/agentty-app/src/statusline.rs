@@ -43,6 +43,7 @@ pub fn run() -> i32 {
     {
         if let Ok(mut stream) = crate::ipc::connect(&socket) {
             let _ = writeln!(stream, "{pane}\tusage\t{percent}");
+            crate::agent_signal::linger(stream);
         }
     }
 
