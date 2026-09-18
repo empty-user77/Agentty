@@ -108,3 +108,31 @@ next finished turn is its reply to that context and is not forwarded back, so tw
   into plain shells.
 
 See [docs/plugins](plugins/README.md) for the plugin developer guide and protocol.
+
+## Build my idea and Launch
+
+```
+ idea page (idea_view.rs) ──Start──▶ workbench/idea.rs ──▶ agentty_bridge::idea::create_project
+   messages, pasted plans,                │                  ~/AgenttyProjects/<slug>/
+   attached files                         │                    docs/idea/IDEA.md, attachments/, BUILD_GUIDE.md
+                                          │                    .claude/settings.json (npm/npx/node, browser tools)
+                                          ▼
+                              deliver_prompt(NewWorkspace, claude|codex, build prompt)
+                                          │  agent plans, uses subagents, runs the dev server and
+                                          │  opens it in the in-app browser (browser MCP tools)
+                                          ▼
+                              🚀 Launch plugin (plugins/launch, built in)
+                                 gh / vercel CLIs (installed into the plugin data folder if missing)
+                                 GitHub login → repo + push → Vercel login → env vars → deploy → URL
+```
+
+- The idea page is a chat: Enter adds a message, a multi-line paste becomes a document message
+  (`TextInput::keep_pasted_lines`), files are attached with the button or dropped on the page.
+- `create_project` leaves the folder otherwise empty so `create-next-app` / `create vite` still accept
+  it; the build guide tells the agent to scaffold into a subfolder if a scaffolder refuses.
+- The project's `.claude/settings.json` uses `acceptEdits` and allows package-manager, node and
+  browser-tool commands only; deleting files and pushing still ask.
+- Launch is installed from the built-in catalog on first use (+ menu, or when an idea project starts)
+  and adds a 🚀 button to agent panes. Logins run the official CLIs' browser flows; Agentty and the
+  plugin never see or store the tokens. `.env` values are piped to `vercel env add` on stdin and only
+  key names are shown.

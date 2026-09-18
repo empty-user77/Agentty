@@ -136,7 +136,7 @@ impl Workbench {
                     return;
                 }
                 TextInputEvent::Cancelled => return this.close_palette(window, cx),
-                TextInputEvent::Blurred => {}
+                TextInputEvent::Blurred | TextInputEvent::PastedLines(_) => {}
             }
             cx.notify();
         });
@@ -203,6 +203,7 @@ impl Workbench {
             (Page::Processes, "page.processes", ""),
             (Page::Extensions, "page.extensions", "⇧⌘X"),
             (Page::Plugins, "page.plugins", ""),
+            (Page::Idea, "page.idea", ""),
             (Page::Settings, "page.settings", "⌘,"),
         ] {
             push(

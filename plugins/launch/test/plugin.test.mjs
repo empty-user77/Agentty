@@ -1,0 +1,400 @@
+// Tests for the Launch plugin: `node --test plugins/launch/test/plugin.test.mjs`
+// Unit tests cover the pure parsing helpers; the end-to-end test drives the plugin as Agentty would,
+// against a fake host and fake `gh`/`vercel` executables (shell scripts on a PATH we control) plus
+// a real `git`, so the whole "already logged in → save to GitHub → deploy → launched" path runs for
+// real against local repositories instead of GitHub/Vercel.
+
+import assert from 'node:assert/strict';
+import { execFileSync, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import { stripAnsi, extractDeviceCode, extractDeviceUrl, parseDeployUrl, parseEnvFile, isLocalOnlyValue, sanitizeRepoName, mergeGitignore, envFilesAtRisk, detectFramework, parseInspectAlias } from '../lib/parse.mjs';
+import { pickGhAsset, findGhBinary } from '../lib/tools.mjs';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const pluginDir = path.resolve(here, '..');
+const sdk = path.resolve(here, '../../../sdk/node/agentty-plugin.mjs');
+
+// -- unit tests: pure helpers -----------------------------------------------------------------
+
+test('extractDeviceCode / extractDeviceUrl parse realistic gh and vercel login output', () => {
+  const ghOutput = [
+    '! First copy your one-time code: \x1B[1m9ABC-2K7Q\x1B[0m',
+    'Press Enter to open github.com in your browser...',
+    '\x1B[90mOpening in your browser.\x1B[0m',
+    'https://github.com/login/device',
+  ].join('\n');
+  assert.equal(extractDeviceCode(ghOutput), '9ABC-2K7Q');
+  assert.equal(extractDeviceUrl(ghOutput), 'https://github.com/login/device');
+
+  const vercelOutput = 'Please visit https://vercel.com/login/device?code=WXYZ-9988 and enter WXYZ-9988 to continue.';
+  assert.equal(extractDeviceCode(vercelOutput), 'WXYZ-9988');
+  assert.equal(extractDeviceUrl(vercelOutput), 'https://vercel.com/login/device?code=WXYZ-9988');
+});
+
+test('extractDeviceCode ignores plain text with no code, extractDeviceUrl picks the device-ish URL', () => {
+  assert.equal(extractDeviceCode('no code here'), null);
+  const text = 'See docs at https://vercel.com/docs then continue at https://vercel.com/login/device';
+  assert.equal(extractDeviceUrl(text), 'https://vercel.com/login/device');
+});
+
+test('parseDeployUrl prefers the Production/Aliased line over other URLs', () => {
+  const output = ['Vercel CLI 34.0.0', 'Inspect: https://vercel.com/acme/app/abc123', 'Production: https://my-app.vercel.app [copied to clipboard]'].join('\n');
+  assert.equal(parseDeployUrl(output), 'https://my-app.vercel.app');
+
+  const aliasedOutput = ['Deploying...', 'Aliased to https://my-app.vercel.app'].join('\n');
+  assert.equal(parseDeployUrl(aliasedOutput), 'https://my-app.vercel.app');
+
+  const fallback = 'Deploying...\nhttps://my-app-git-main-acme.vercel.app';
+  assert.equal(parseDeployUrl(fallback), 'https://my-app-git-main-acme.vercel.app');
+
+  assert.equal(parseDeployUrl('no urls in here'), null);
+});
+
+test('parseEnvFile handles quotes, comments and export prefixes', () => {
+  const content = [
+    '# a comment',
+    'export API_URL=http://localhost:3000',
+    'SECRET_KEY="quoted value with spaces"',
+    "SINGLE='single quoted'",
+    'WITH_COMMENT=value # trailing comment',
+    '',
+    'NOT_A_VAR this is not valid',
+  ].join('\n');
+  const vars = parseEnvFile(content);
+  assert.equal(vars.API_URL, 'http://localhost:3000');
+  assert.equal(vars.SECRET_KEY, 'quoted value with spaces');
+  assert.equal(vars.SINGLE, 'single quoted');
+  assert.equal(vars.WITH_COMMENT, 'value');
+  assert.equal(vars.NOT_A_VAR, undefined);
+});
+
+test('isLocalOnlyValue flags loopback addresses only', () => {
+  assert.equal(isLocalOnlyValue('http://localhost:3000'), true);
+  assert.equal(isLocalOnlyValue('http://127.0.0.1:8080/api'), true);
+  assert.equal(isLocalOnlyValue('https://api.example.com'), false);
+  assert.equal(isLocalOnlyValue('sk-example-not-a-real-key'), false);
+});
+
+test('sanitizeRepoName produces a safe GitHub repo name', () => {
+  assert.equal(sanitizeRepoName('My Cool App!'), 'my-cool-app');
+  assert.equal(sanitizeRepoName('  ..weird--name..  '), 'weird--name');
+  assert.equal(sanitizeRepoName(''), 'my-project');
+  assert.equal(sanitizeRepoName('café_app'), 'caf-_app');
+});
+
+test('mergeGitignore appends only the missing required lines, leaving the rest untouched', () => {
+  const existing = 'dist\ncustom-ignore\n';
+  const merged = mergeGitignore(existing);
+  assert.match(merged, /^dist\ncustom-ignore\n/);
+  assert.match(merged, /node_modules/);
+  assert.match(merged, /!\.env\.example/);
+  // Re-merging is a no-op.
+  assert.equal(mergeGitignore(merged), merged);
+});
+
+test('mergeGitignore starting from nothing produces a clean file', () => {
+  const merged = mergeGitignore('');
+  assert.match(merged, /^# Added by Agentty Launch\n/);
+  assert.match(merged, /\.env\n/);
+});
+
+test('envFilesAtRisk refuses real .env files but allows examples', () => {
+  const risky = envFilesAtRisk(['.env', '.env.production', '.env.example', 'src/.env.local', '.env.sample', 'README.md']);
+  assert.deepEqual(risky.sort(), ['.env', '.env.production', 'src/.env.local'].sort());
+});
+
+test('detectFramework recognizes common frameworks and falls back to static', () => {
+  assert.equal(detectFramework({ pkg: { dependencies: { next: '14.0.0' } } }), 'next');
+  assert.equal(detectFramework({ pkg: { devDependencies: { vite: '5.0.0' } } }), 'vite');
+  assert.equal(detectFramework({ pkg: { dependencies: { react: '18.0.0' } } }), 'react');
+  assert.equal(detectFramework({ pkg: null, hasIndexHtml: true }), 'static');
+  assert.equal(detectFramework({ pkg: null, hasIndexHtml: false }), null);
+});
+
+test('pickGhAsset finds the macOS universal zip in a release', () => {
+  const release = {
+    assets: [
+      { name: 'gh_2.60.0_linux_amd64.tar.gz', browser_download_url: 'https://example.com/linux' },
+      { name: 'gh_2.60.0_macOS_universal.zip', browser_download_url: 'https://example.com/mac' },
+      { name: 'gh_2.60.0_windows_amd64.zip', browser_download_url: 'https://example.com/win' },
+    ],
+  };
+  assert.equal(pickGhAsset(release).browser_download_url, 'https://example.com/mac');
+  assert.equal(pickGhAsset({ assets: [] }), null);
+  assert.equal(pickGhAsset({}), null);
+});
+
+test('findGhBinary locates bin/gh under a version-named extraction folder', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-extract-'));
+  try {
+    const binDir = path.join(root, 'gh_2.60.0_macOS_universal', 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'gh'), '#!/bin/sh\necho fake\n');
+    assert.equal(await findGhBinary(root), path.join(binDir, 'gh'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('stripAnsi removes color and cursor codes', () => {
+  assert.equal(stripAnsi('\x1B[1mBold\x1B[0m plain'), 'Bold plain');
+});
+
+// -- end-to-end: fake gh + vercel, real git ----------------------------------------------------
+
+function sandbox() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-plugin-'));
+  const project = path.join(root, 'my-cool-app');
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ name: 'my-cool-app', dependencies: { vite: '5.0.0' } }));
+  const remotes = path.join(root, 'remotes');
+  fs.mkdirSync(remotes, { recursive: true });
+
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'gh'), FAKE_GH, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'vercel'), FAKE_VERCEL, { mode: 0o755 });
+
+  const plugin = path.join(root, 'plugin');
+  fs.mkdirSync(path.join(plugin, 'lib'), { recursive: true });
+  for (const file of ['agentty-plugin.json', 'main.mjs']) fs.copyFileSync(path.join(pluginDir, file), path.join(plugin, file));
+  for (const file of fs.readdirSync(path.join(pluginDir, 'lib'))) fs.copyFileSync(path.join(pluginDir, 'lib', file), path.join(plugin, 'lib', file));
+  fs.copyFileSync(sdk, path.join(plugin, 'agentty-plugin.mjs'));
+
+  return { root, project, remotes, bin, plugin, data: path.join(root, 'data') };
+}
+
+const FAKE_GH = `#!/bin/bash
+set -e
+case "$1" in
+  auth)
+    case "$2" in
+      status) exit 0 ;;
+      setup-git) exit 0 ;;
+      login) exit 1 ;;
+    esac
+    ;;
+  api)
+    if [ "$3" = "--jq" ] && [ "$4" = ".login" ]; then echo "fakeuser"; exit 0; fi
+    if [ "$3" = "--jq" ]; then echo '{"login":"fakeuser","id":424242}'; exit 0; fi
+    ;;
+  repo)
+    case "$2" in
+      create)
+        name="$3"
+        bare="$FAKE_REMOTES_DIR/$name.git"
+        git init --quiet --bare "$bare"
+        git remote add origin "$bare"
+        git push --quiet -u origin HEAD
+        exit 0
+        ;;
+      view)
+        echo "https://github.com/fake-user/my-cool-app"
+        exit 0
+        ;;
+    esac
+    ;;
+esac
+exit 1
+`;
+
+const FAKE_VERCEL = `#!/bin/bash
+case "$1" in
+  whoami) echo "fakeuser"; exit 0 ;;
+  login) exit 1 ;;
+  env)
+    if [ "$2" = "add" ]; then cat >/dev/null; exit 0; fi
+    ;;
+  deploy)
+    echo "Vercel CLI 34.0.0"
+    echo "Deploying my-cool-app"
+    echo "Production: https://my-cool-app.vercel.app"
+    exit 0
+    ;;
+  git)
+    if [ "$2" = "connect" ]; then exit 0; fi
+    ;;
+esac
+exit 1
+`;
+
+/** Starts the plugin; `host.next(method)` resolves with the next call of that method (answered with `result`). */
+function start(box, results = {}) {
+  const env = {
+    ...process.env,
+    PATH: `${box.bin}:${process.env.PATH}`,
+    FAKE_REMOTES_DIR: box.remotes,
+  };
+  const child = spawn(process.execPath, ['main.mjs'], { cwd: box.plugin, env, stdio: ['pipe', 'pipe', 'pipe'] });
+  child.stdin.on('error', () => {}); // the plugin process may already be gone by the time a late reply is sent
+  const waiting = [];
+  const seen = [];
+  let stderr = '';
+  let stopped = false;
+  child.stderr.on('data', (d) => (stderr += d));
+  createInterface({ input: child.stdout }).on('line', (line) => {
+    if (stopped) return;
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (message.id !== undefined && message.method) {
+      const result = results[message.method] ?? null;
+      write({ jsonrpc: '2.0', id: message.id, result });
+    }
+    if (!message.method) return;
+    const index = waiting.findIndex((w) => w.method === message.method);
+    if (index === -1) seen.push(message);
+    else waiting.splice(index, 1)[0].resolve(message);
+  });
+  function write(message) {
+    try {
+      child.stdin.write(JSON.stringify(message) + '\n');
+    } catch {
+      // The plugin process already exited.
+    }
+  }
+  const send = (method, params, id) => write({ jsonrpc: '2.0', method, params, ...(id ? { id } : {}) });
+  const context = { workspace: null, pane: { id: 1, kind: 'shell', tool: 'zsh', title: 'Terminal', cwd: box.project, status: 'idle', running: true }, language: 'en' };
+  send('initialize', { apiVersion: 1, plugin: { id: 'launch', name: 'Launch', dir: box.plugin, dataDir: box.data }, language: 'en', context }, 1);
+  return {
+    child,
+    context,
+    send,
+    stderr: () => stderr,
+    next(method, timeout = 15000) {
+      const index = seen.findIndex((m) => m.method === method);
+      if (index !== -1) return Promise.resolve(seen.splice(index, 1)[0]);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no ${method} within ${timeout} ms; stderr: ${stderr}`)), timeout);
+        waiting.push({ method, resolve: (m) => (clearTimeout(timer), resolve(m)) });
+      });
+    },
+    stop() {
+      stopped = true;
+      child.kill();
+      fs.rmSync(box.root, { recursive: true, force: true });
+    },
+  };
+}
+
+function buttonIds(tree) {
+  const ids = [];
+  (function walk(node) {
+    if (!node) return;
+    if (node.type === 'button') ids.push(node.id);
+    for (const child of node.children ?? []) walk(child);
+  })(tree);
+  return ids;
+}
+
+test('Launch: already logged in to GitHub and Vercel, saves the project and deploys it', async () => {
+  const box = sandbox();
+  const host = start(box);
+  try {
+    host.send('panel/open', { context: host.context });
+    // Tools and both logins are already available, so the wizard lands straight on "Save to GitHub"
+    // once the initial loading spinner settles.
+    let panel = await waitForButton(host, 'gh-save');
+    assert.match(JSON.stringify(panel), /vite/); // framework detected
+
+    host.send('ui/event', { element: 'gh-save', event: 'click', context: host.context });
+    // Wait for the panel to settle on the next step (deploy) rather than an intermediate spinner frame.
+    panel = await waitForButton(host, 'deploy-start');
+    assert.ok(fs.existsSync(path.join(box.remotes, 'my-cool-app.git')), 'gh repo create pushed to a local bare repo');
+    assert.ok(!JSON.stringify(panel).includes('fakeuser@'), 'no raw credentials leak into the panel');
+
+    host.send('ui/event', { element: 'deploy-start', event: 'click', context: host.context });
+    panel = await waitForText(host, /my-cool-app\.vercel\.app/);
+    assert.match(JSON.stringify(panel), /Launched|출시 완료/);
+    assert.match(JSON.stringify(panel), /https:\/\/my-cool-app\.vercel\.app/);
+
+    const saved = JSON.parse(fs.readFileSync(path.join(box.data, 'projects.json'), 'utf8'));
+    assert.equal(saved[box.project].lastDeployUrl, 'https://my-cool-app.vercel.app');
+    assert.equal(saved[box.project].repoUrl, 'https://github.com/fake-user/my-cool-app');
+  } finally {
+    host.stop();
+  }
+});
+
+test('Launch refuses to save when a real .env file is already staged', async () => {
+  const box = sandbox();
+  // Simulate an agent having already `git add`ed a real .env before Launch ever ran — adding
+  // ".env" to .gitignore afterwards would not by itself untrack it, so the guard must catch this.
+  fs.writeFileSync(path.join(box.project, '.env'), 'SECRET=not_a_real_value\n');
+  const git = (...args) => execFileSync('git', args, { cwd: box.project, stdio: ['ignore', 'pipe', 'ignore'] });
+  git('init', '--quiet', '-b', 'main');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'Test');
+  git('add', '.env');
+
+  const host = start(box);
+  try {
+    host.send('panel/open', { context: host.context });
+    await host.next('ui/setPanel');
+    host.send('ui/event', { element: 'gh-save', event: 'click', context: host.context });
+    const panel = await waitForText(host, /\.env/);
+    assert.match(JSON.stringify(panel), /"style":"error"/);
+    // Nothing was committed: no HEAD exists yet.
+    assert.throws(() => git('rev-parse', 'HEAD'));
+  } finally {
+    host.stop();
+  }
+});
+
+test('no project detected when the folder has neither package.json nor index.html', async () => {
+  const box = sandbox();
+  const empty = path.join(box.root, 'empty-folder');
+  fs.mkdirSync(empty);
+  const host = start(box);
+  try {
+    host.send('panel/open', { context: { ...host.context, pane: { ...host.context.pane, cwd: empty } } });
+    const panel = await waitForText(host, /package\.json|index\.html|아직 웹 프로젝트/);
+    assert.match(JSON.stringify(panel), /package\.json|index\.html|아직 웹 프로젝트/);
+  } finally {
+    host.stop();
+  }
+});
+
+/** Waits for a `ui/setPanel` whose tree contains a button with this id (skips intermediate spinner frames). */
+async function waitForButton(host, id, timeout = 15000) {
+  const started = Date.now();
+  for (;;) {
+    const message = await host.next('ui/setPanel', timeout - (Date.now() - started));
+    if (buttonIds(message.params.tree).includes(id)) return message.params.tree;
+    if (Date.now() - started > timeout) throw new Error(`no panel with button ${id} within ${timeout}ms`);
+  }
+}
+
+/** Waits for a `ui/setPanel` whose serialized tree matches `re`. */
+async function waitForText(host, re, timeout = 15000) {
+  const started = Date.now();
+  for (;;) {
+    const message = await host.next('ui/setPanel', timeout - (Date.now() - started));
+    if (re.test(JSON.stringify(message.params.tree))) return message.params.tree;
+    if (Date.now() - started > timeout) throw new Error(`no panel matching ${re} within ${timeout}ms`);
+  }
+}
+
+test('parseDeployUrl prefers the public alias over the protected deployment URL', () => {
+  const output = [
+    '🔍  Inspect: https://vercel.com/acme/my-app/AbC123 [2s]',
+    '✅  Production: https://my-app-k2j3h4-acme.vercel.app [20s]',
+    '🔗  Aliased: https://my-app.vercel.app [21s]',
+  ].join('\n');
+  assert.equal(parseDeployUrl(output), 'https://my-app.vercel.app');
+});
+
+test('parseInspectAlias picks the shortest vercel.app alias', () => {
+  const output = 'Aliases\n  ╶ https://my-app-git-main-acme.vercel.app\n  ╶ https://my-app.vercel.app\n  ╶ https://my-app-acme.vercel.app\n';
+  assert.equal(parseInspectAlias(output), 'https://my-app.vercel.app');
+  assert.equal(parseInspectAlias('nothing'), null);
+});

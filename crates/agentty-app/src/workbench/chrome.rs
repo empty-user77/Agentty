@@ -1059,6 +1059,7 @@ impl Workbench {
                 Page::Settings => vec![(page, t(cx, "page.settings"))],
                 Page::Extensions => vec![(page, t(cx, "page.extensions"))],
                 Page::Plugins => vec![(page, t(cx, "page.plugins"))],
+                Page::Idea => vec![(page, t(cx, "page.idea"))],
             };
             for (tab_page, label) in pages {
                 let active = tab_page == page;
@@ -1421,6 +1422,34 @@ impl Workbench {
             }
             row
         };
+        // "Build my idea" and "Launch": the way from an idea to a live site, above the plain launchers.
+        let feature =
+            |id: &'static str, glyph: &'static str, color: u32, title: &'static str, body: &'static str, cx: &mut Context<Self>| {
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                    .child(div().flex_shrink_0().size(px(18.)).flex().items_center().justify_center().child(icon(
+                        glyph,
+                        IconSize::INLINE,
+                        hex(color),
+                    )))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().truncate().t_body().child(t(cx, title)))
+                            .child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, body))),
+                    )
+            };
         let installed = self.installed.clone().unwrap_or_default();
         let detected = self.installed.is_some();
 
@@ -1436,6 +1465,15 @@ impl Workbench {
                 }
                 cx.notify();
             }))
+            .child(
+                feature("launch-idea", "lightbulb", Chrome::ORANGE, "idea.menu", "idea.menu_body", cx)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx))),
+            )
+            .child(
+                feature("launch-publish", "rocket", Chrome::GREEN, "launch.menu", "launch.menu_body", cx)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_launch(cx))),
+            )
+            .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
             .child(entry(
                 "launch-shell".into(),
                 Some("shell"),
@@ -1715,6 +1753,7 @@ impl Workbench {
                         .children(self.render_group_choice(cx)),
                 )
             })
+            .when(starting.is_none(), |d| d.child(self.render_idea_card(cx)))
             .child(buttons)
             .when(more, |d| {
                 d.child(
@@ -1799,6 +1838,42 @@ impl Workbench {
     }
 
     /// Links and copyright at the bottom of the start page, like the website's footer.
+    /// Start page card for "Build my idea".
+    fn render_idea_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("welcome-idea")
+            .group("welcome-idea")
+            .w(px(280.))
+            .mb_2()
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_4()
+            .py_2p5()
+            .rounded_md()
+            .cursor_pointer()
+            .border_1()
+            .border_color(hex_alpha(Chrome::ORANGE, 0.6))
+            .bg(hex_alpha(Chrome::ORANGE, 0.1))
+            .hover(|s| s.bg(hex_alpha(Chrome::ORANGE, 0.18)).border_color(hex(Chrome::ORANGE)))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx)))
+            .child(icon("lightbulb", 22., hex(Chrome::ORANGE)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "idea.menu")))
+                    .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "idea.menu_body"))),
+            )
+            .child(div().invisible().group_hover("welcome-idea", |s| s.visible()).child(icon(
+                "chevron-right",
+                IconSize::INLINE,
+                hex(Chrome::MUTED),
+            )))
+    }
+
     fn render_welcome_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let link = |id: &'static str, label: String, url: &'static str| {
             div()

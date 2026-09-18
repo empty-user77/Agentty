@@ -1,0 +1,38 @@
+{
+  "id": "launch",
+  "name": "Launch",
+  "version": "0.1.0",
+  "publisher": "Agentty",
+  "description": "Take a project from your computer to a live URL: save it to GitHub and publish it on Vercel, no jargon, one button at a time.",
+  "icon": "rocket",
+  "homepage": "https://www.agentty.run",
+  "links": [
+    { "label": "Agentty", "url": "https://www.agentty.run" }
+  ],
+  "main": "main.mjs",
+  "runtime": "node",
+  "apiVersion": 1,
+  "permissions": ["prompt.inject", "workspace.read"],
+  "keywords": ["deploy", "github", "vercel", "publish", "launch", "hosting"],
+  "contributes": {
+    "panel": { "title": "Launch", "icon": "rocket" },
+    "commands": [
+      {
+        "id": "launch.open",
+        "title": "Launch: Publish this project to the web",
+        "description": "Save this project to GitHub and publish it on Vercel.",
+        "icon": "rocket",
+        "paneBar": true,
+        "when": "always"
+      },
+      {
+        "id": "launch.redeploy",
+        "title": "Launch: Update the live site",
+        "description": "Commit, push and re-deploy the project already published with Launch.",
+        "icon": "refresh-cw",
+        "paneBar": false,
+        "when": "always"
+      }
+    ]
+  }
+}

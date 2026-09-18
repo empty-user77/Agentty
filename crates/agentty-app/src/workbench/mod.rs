@@ -12,6 +12,7 @@ mod find;
 pub mod flow;
 mod guide;
 mod harness;
+mod idea;
 mod install_hint;
 mod layout;
 pub mod mini;
@@ -162,6 +163,8 @@ pub enum Page {
     Settings,
     Extensions,
     Plugins,
+    /// "Build my idea": describe an idea, an agent builds and previews it.
+    Idea,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -225,6 +228,7 @@ pub struct Workbench {
     usage: Option<Entity<UsageView>>,
     extensions: Option<Entity<crate::extensions_view::ExtensionsView>>,
     git: Option<Entity<crate::git_view::GitView>>,
+    idea: Option<Entity<crate::idea_view::IdeaView>>,
     branch_menu: Option<layout::BranchMenu>,
     branch_menu_closed: Option<(gpui::EntityId, std::time::Instant)>,
     /// Installed agent CLIs and local models (`None` until detected).
@@ -352,6 +356,7 @@ impl Workbench {
             usage: None,
             extensions: None,
             git: None,
+            idea: None,
             branch_menu: None,
             branch_menu_closed: None,
             installed: None,
@@ -646,6 +651,12 @@ impl Workbench {
         let bounds = self.pane_bounds.borrow().clone();
         let target =
             visible.iter().find(|p| bounds.get(&p.entity_id()).is_some_and(|b| b.contains(&point))).cloned().or_else(|| self.active_pane());
+        if self.page == Some(Page::Idea) {
+            if let Some(idea) = self.idea.clone() {
+                idea.update(cx, |view, cx| view.add_files(paths, cx));
+            }
+            return;
+        }
         let Some(pane) = target.filter(|_| self.page.is_none()) else { return };
         pane.update(cx, |view, cx| {
             view.drop_paths(paths);
@@ -1329,6 +1340,9 @@ impl Render for Workbench {
             }
             Some(Page::Flow) => self.render_flow(window, cx).into_any_element(),
             Some(Page::Plugins) => self.render_plugins_page(cx).into_any_element(),
+            Some(Page::Idea) => {
+                gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
+            }
             None => {
                 match (self.render_session_viewer(cx), self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)))
                 {
@@ -1660,6 +1674,7 @@ impl Workbench {
             Page::Settings => "settings",
             Page::Extensions => "extensions",
             Page::Plugins => "plugins",
+            Page::Idea => "idea",
         };
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
         self.page = if self.page == Some(page) { None } else { Some(page) };
@@ -1853,6 +1868,7 @@ impl Workbench {
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
                     "plugins" => Some(Page::Plugins),
+                    "idea" => Some(Page::Idea),
                     "git" => Some(Page::Git),
                     _ => None,
                 };
@@ -2193,6 +2209,14 @@ impl Workbench {
             }
             "picker" => self.open_picker(kind(argument).into(), LaunchTarget::NewTab, window, cx),
             "split" => self.split(if argument == "down" { Axis::Vertical } else { Axis::Horizontal }, window, cx),
+            "idea" => {
+                if self.page != Some(Page::Idea) {
+                    self.open_idea_page(window, cx);
+                }
+                let view = self.idea_view(window, cx);
+                view.update(cx, |view, cx| view.debug_action(argument, cx));
+            }
+            "launch" => self.open_launch(cx),
             "type" => {
                 if let Some(pane) = self.active_pane() {
                     let bytes = crate::debug::unescape(argument).into_bytes();
