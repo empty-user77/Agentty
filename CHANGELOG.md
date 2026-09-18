@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-09-18
+
+### Changed
+- Harness detection is narrower: a project counts as a harness only when it has a `.harness`, `harness.json`,
+  `harness.yaml`, `harness.yml` or `HARNESS.md` file, a `harness` list in `agentty.json`, or matches one of your own
+  patterns. Claude Code or Codex commands, skills and hooks alone no longer show the harness bar; in a harness they
+  are still offered as entry points.
+
 ## [0.1.7] - 2026-09-18
 
 ### Added
