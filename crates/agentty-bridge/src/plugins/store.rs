@@ -190,6 +190,7 @@ pub const BUILTIN: &[BuiltinPlugin] = &[
             ("lib/supabase.mjs", embedded!("plugins/launch/lib/supabase.mjs")),
             ("lib/tools.mjs", embedded!("plugins/launch/lib/tools.mjs")),
             ("lib/state.mjs", embedded!("plugins/launch/lib/state.mjs")),
+            ("lib/hosting.mjs", embedded!("plugins/launch/lib/hosting.mjs")),
             ("README.md", embedded!("plugins/launch/README.md")),
             ("agentty-plugin.mjs", NODE_SDK),
         ],
@@ -414,6 +415,30 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every script of a built-in plugin's folder is embedded: one left out would make the
+    /// installed plugin fail on its first `import`.
+    #[test]
+    fn builtin_plugins_embed_every_script() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for plugin in BUILTIN {
+            let id = plugin.manifest().id;
+            let dir = root.join("plugins").join(&id);
+            let mut scripts = Vec::new();
+            for sub in ["", "lib"] {
+                let Ok(entries) = std::fs::read_dir(dir.join(sub)) else { continue };
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.ends_with(".mjs") && name != "agentty-plugin.mjs" {
+                        scripts.push(if sub.is_empty() { name } else { format!("{sub}/{name}") });
+                    }
+                }
+            }
+            for script in scripts {
+                assert!(plugin.files.iter().any(|(name, _)| *name == script), "{id}: {script} is not embedded");
+            }
+        }
+    }
 
     thread_local! {
         /// Data directory of the test running on this thread (instead of `~/.agentty`).

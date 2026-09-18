@@ -41,6 +41,7 @@ import {
 } from './lib/github.mjs';
 import { vercelWhoami, vercelLogin, discoverEnvVars, addEnvVar, deployProduction, connectGit } from './lib/vercel.mjs';
 import { loadProject, saveProject } from './lib/state.mjs';
+import { isLinkedToVercel, vercelHosting } from './lib/hosting.mjs';
 
 const plugin = createPlugin();
 
@@ -104,6 +105,22 @@ const STRINGS = {
     deployButton: 'Publish',
     deploying: 'Publishing…',
     launchedTitle: 'Launched!',
+    hostedTitle: 'Live on Vercel',
+    hostedBody: 'Vercel already deploys {repo}: every push to {branch} goes live on its own. Here is how it stands.',
+    hostedLatest: 'Latest deploy: {state} · {time}',
+    hostedCommit: 'Commit {sha} on {ref}',
+    hostedHistory: 'Recent deploys',
+    hostedDomains: 'Also at {domains}',
+    hostedInspect: 'Open in Vercel',
+    hostedPublish: 'Publish my changes',
+    hostedPublishing: 'Pushing to GitHub…',
+    hostedPushed: 'Pushed — Vercel is building the new version. Refresh in a minute to see it.',
+    hostedNoChanges: 'Nothing new to publish.',
+    stateSuccess: 'Ready',
+    stateFailure: 'Failed',
+    stateBuilding: 'Building',
+    stateQueued: 'Queued',
+    stateInactive: 'Replaced',
     launchedBody: 'Your site is live at:',
     openSite: 'Open site',
     copyLink: 'Copy link',
@@ -215,6 +232,22 @@ const STRINGS = {
     deployButton: '인터넷에 공개하기',
     deploying: '공개하는 중…',
     launchedTitle: '출시 완료!',
+    hostedTitle: 'Vercel에서 서비스 중',
+    hostedBody: '{repo} 저장소는 이미 Vercel이 배포하고 있습니다. {branch}에 푸시하면 자동으로 반영됩니다. 현재 상태입니다.',
+    hostedLatest: '최근 배포: {state} · {time}',
+    hostedCommit: '{ref} 브랜치의 커밋 {sha}',
+    hostedHistory: '최근 배포 기록',
+    hostedDomains: '다른 주소: {domains}',
+    hostedInspect: 'Vercel에서 보기',
+    hostedPublish: '변경 사항 배포하기',
+    hostedPublishing: 'GitHub에 푸시하는 중…',
+    hostedPushed: '푸시했습니다 — Vercel이 새 버전을 빌드하고 있습니다. 1분쯤 뒤 새로고침하면 보입니다.',
+    hostedNoChanges: '배포할 새 변경 사항이 없습니다.',
+    stateSuccess: '정상',
+    stateFailure: '실패',
+    stateBuilding: '빌드 중',
+    stateQueued: '대기 중',
+    stateInactive: '교체됨',
     launchedBody: '사이트가 아래 주소에서 공개되었습니다:',
     openSite: '사이트 열기',
     copyLink: '링크 복사',
@@ -291,6 +324,22 @@ const STRINGS = {
     envSkip: '後で',
     deployButton: '公開する',
     launchedTitle: '公開しました！',
+    hostedTitle: 'Vercel で公開中',
+    hostedBody: '{repo} はすでに Vercel がデプロイしています。{branch} へのプッシュが自動で反映されます。現在の状態です。',
+    hostedLatest: '最新のデプロイ: {state} · {time}',
+    hostedCommit: '{ref} のコミット {sha}',
+    hostedHistory: '最近のデプロイ',
+    hostedDomains: 'ほかのアドレス: {domains}',
+    hostedInspect: 'Vercel で開く',
+    hostedPublish: '変更を公開する',
+    hostedPublishing: 'GitHub にプッシュ中…',
+    hostedPushed: 'プッシュしました — Vercel が新しいバージョンをビルドしています。1 分ほどして更新してください。',
+    hostedNoChanges: '公開する変更はありません。',
+    stateSuccess: '正常',
+    stateFailure: '失敗',
+    stateBuilding: 'ビルド中',
+    stateQueued: '待機中',
+    stateInactive: '置き換え済み',
     openSite: 'サイトを開く',
     copyLink: 'リンクをコピー',
     linkCopied: 'コピーしました',
@@ -340,6 +389,22 @@ const STRINGS = {
     envSkip: '暂时跳过',
     deployButton: '发布到互联网',
     launchedTitle: '已发布！',
+    hostedTitle: '已在 Vercel 上线',
+    hostedBody: '{repo} 已由 Vercel 部署：推送到 {branch} 会自动上线。以下是当前状态。',
+    hostedLatest: '最近部署：{state} · {time}',
+    hostedCommit: '{ref} 分支的提交 {sha}',
+    hostedHistory: '最近部署',
+    hostedDomains: '其他地址：{domains}',
+    hostedInspect: '在 Vercel 中查看',
+    hostedPublish: '发布我的更改',
+    hostedPublishing: '正在推送到 GitHub…',
+    hostedPushed: '已推送 — Vercel 正在构建新版本，约一分钟后刷新即可看到。',
+    hostedNoChanges: '没有可发布的新更改。',
+    stateSuccess: '正常',
+    stateFailure: '失败',
+    stateBuilding: '构建中',
+    stateQueued: '排队中',
+    stateInactive: '已替换',
     openSite: '打开网站',
     copyLink: '复制链接',
     linkCopied: '已复制',
@@ -432,6 +497,8 @@ const state = {
   envSelection: {},
   deployLog: [],
   launched: null, // { url, time }
+  hosting: null, // Vercel already deploys the repo from GitHub: { slug, url, latest, history } (see lib/hosting.mjs)
+  hostedNotice: null, // message after "Publish my changes"
   saved: null,
   existingRemote: null, // an `origin` Launch has not saved to yet: shown and confirmed before the first push
   gitConnected: null,
@@ -523,6 +590,8 @@ async function openProject(cwd) {
   state.needsRedeploy = false;
   state.publicRepo = false;
   state.launched = state.saved?.lastDeployUrl ? { url: state.saved.lastDeployUrl, time: state.saved.lastDeployTime } : null;
+  state.hosting = null;
+  state.hostedNotice = null;
   await resume();
 }
 
@@ -540,6 +609,16 @@ async function resume() {
     return render();
   }
   const origin = await hasOrigin(state.root);
+  // Already deployed by Vercel from GitHub (set up outside Launch): show that site and its deploys
+  // instead of walking through a first launch — no remote to confirm, no env vars or Vercel CLI
+  // login needed to look at it.
+  state.hosting = origin ? await vercelHosting(state.ghBin, state.root, { vercelBin: state.vercelBin }) : null;
+  if (state.hosting) {
+    state.repoUrl = await repoUrl(state.ghBin, state.root);
+    state.launched = { url: state.hosting.url ?? state.launched?.url ?? null, time: state.hosting.latest?.time ?? null, hosted: true };
+    state.step = 'launched';
+    return render();
+  }
   state.existingRemote = origin && state.saved?.confirmedOrigin !== origin ? origin : null;
   if (!origin || state.existingRemote) {
     state.step = 'gh-save';
@@ -913,7 +992,23 @@ function startDeploy() {
   });
 }
 
+/**
+ * Hosted by Vercel's GitHub integration: publishing is a push, Vercel builds it. `vercel deploy` is
+ * not used here — in a folder not linked to the existing Vercel project it would create a second one.
+ */
+function startHostedPublish() {
+  return runStep('deploy', tr('hostedPublishing'), 'git commit / git push', async () => {
+    const before = (await run('git', ['rev-parse', 'HEAD'], { cwd: state.root })).stdout.trim();
+    await doGithubSave();
+    const after = (await run('git', ['rev-parse', 'HEAD'], { cwd: state.root })).stdout.trim();
+    state.hostedNotice = before && before === after ? tr('hostedNoChanges') : tr('hostedPushed');
+    state.hosting = (await vercelHosting(state.ghBin, state.root, { vercelBin: state.vercelBin })) ?? state.hosting;
+    await render();
+  });
+}
+
 async function startUpdateSite() {
+  if (state.hosting && !isLinkedToVercel(state.root)) return startHostedPublish();
   // Database changes the agent wrote since the last visit go first: the new code expects them.
   state.sb.info = await inspectSupabase(state.root, state.inspect);
   if (pendingMigrations().length > 0 && !state.sb.migrationsSkipped) {
@@ -1179,6 +1274,7 @@ function body() {
         errorBlock(),
       ]);
     case 'launched':
+      if (state.launched?.hosted && state.hosting) return hostedBody();
       return ui.column([
         ui.badge(tr('launchedTitle'), 'success'),
         ui.text(tr('launchedBody'), 'muted'),
@@ -1201,6 +1297,66 @@ function body() {
     default:
       return null;
   }
+}
+
+function deployStateLabel(deployState) {
+  switch (deployState) {
+    case 'success':
+      return tr('stateSuccess');
+    case 'failure':
+    case 'error':
+      return tr('stateFailure');
+    case 'in_progress':
+      return tr('stateBuilding');
+    case 'inactive':
+      return tr('stateInactive');
+    default:
+      return tr('stateQueued');
+  }
+}
+
+function deployBadgeTone(deployState) {
+  if (deployState === 'success') return 'success';
+  if (deployState === 'failure' || deployState === 'error') return 'error';
+  return 'warning';
+}
+
+/** The details of a site Vercel already deploys from GitHub. */
+function hostedBody() {
+  const { latest, history, domains = [] } = state.hosting;
+  const branch = state.hosting.branch ?? latest?.ref ?? 'main';
+  const line = (d) =>
+    [deployStateLabel(d.state), d.time ? relativeTime(d.time) : null, d.sha, d.ref].filter(Boolean).join(' · ');
+  return ui.column([
+    ui.row([ui.badge(tr('hostedTitle'), 'success'), latest ? ui.badge(deployStateLabel(latest.state), deployBadgeTone(latest.state)) : null], { gap: 'small', wrap: true }),
+    // The repository pushes go to, shown before "Publish my changes" (no separate remote confirmation here).
+    ui.text(tr('hostedBody', { branch, repo: state.hosting.slug }), 'muted'),
+    state.launched?.url ? ui.text(state.launched.url, 'code') : null,
+    domains.length > 1 ? ui.text(tr('hostedDomains', { domains: domains.slice(1).join(', ') }), 'small') : null,
+    ui.row(
+      [
+        state.launched?.url ? ui.button('open-site', tr('openSite'), { icon: 'external-link', variant: 'primary' }) : null,
+        state.launched?.url ? ui.button('copy-link', tr('copyLink'), { icon: 'copy' }) : null,
+        latest?.inspectUrl ? ui.button('open-vercel', tr('hostedInspect'), { icon: 'arrow-up-right' }) : null,
+      ],
+      { gap: 'small', wrap: true },
+    ),
+    latest ? ui.text(tr('hostedLatest', { state: deployStateLabel(latest.state), time: latest.time ? relativeTime(latest.time) : '—' }), 'small') : null,
+    latest?.sha ? ui.text(tr('hostedCommit', { sha: latest.sha, ref: latest.ref ?? branch }), 'small') : null,
+    history.length > 1 ? ui.text(tr('hostedHistory'), 'small') : null,
+    history.length > 1 ? ui.text(history.map(line).join('\n'), 'code') : null,
+    ui.row(
+      [
+        state.running || state.error ? null : ui.button('update-site', tr('hostedPublish'), { icon: 'upload' }),
+        state.repoUrl ? ui.button('open-repo', tr('openRepo'), { icon: 'git-branch' }) : null,
+        addDatabaseButton(),
+      ],
+      { gap: 'small', wrap: true },
+    ),
+    state.running ? ui.spinner(tr('hostedPublishing')) : null,
+    state.hostedNotice && !state.running ? ui.text(state.hostedNotice, 'small') : null,
+    errorBlock(),
+  ]);
 }
 
 async function render() {
@@ -1310,6 +1466,7 @@ plugin
     await plugin.notify(tr('linkCopied'), 'success');
   })
   .onEvent('open-repo', async () => state.repoUrl && plugin.openUrl(state.repoUrl))
+  .onEvent('open-vercel', async () => state.hosting?.latest?.inspectUrl && plugin.openUrl(state.hosting.latest.inspectUrl))
   .onEvent('retry', () => state.lastAction?.run())
   .onEvent('ask-agent', askAgentToFix)
   .onAnyEvent((event) => {
