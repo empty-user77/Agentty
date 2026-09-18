@@ -225,7 +225,7 @@ export function detectSupabaseUse({ pkg, hasSupabaseDir = false, envNames = [] }
   return envNames.some((name) => /SUPABASE/.test(name));
 }
 
-/** Sets `vars` in `.env`-style content: existing keys are replaced in place, new ones appended. */
+/** Sets `vars` in `.env`-style content: existing keys are replaced in place, new ones appended, `null` removes a key. */
 export function mergeEnvFile(existing, vars) {
   const remaining = new Map(Object.entries(vars));
   const lines = String(existing ?? '')
@@ -235,11 +235,12 @@ export function mergeEnvFile(existing, vars) {
       if (!match || !remaining.has(match[1])) return line;
       const value = remaining.get(match[1]);
       remaining.delete(match[1]);
-      return `${match[1]}=${value}`;
-    });
+      return value == null ? null : `${match[1]}=${value}`;
+    })
+    .filter((line) => line !== null);
   while (lines.length && lines[lines.length - 1] === '') lines.pop();
-  for (const [key, value] of remaining) lines.push(`${key}=${value}`);
-  return `${lines.join('\n')}\n`;
+  for (const [key, value] of remaining) if (value != null) lines.push(`${key}=${value}`);
+  return lines.length ? `${lines.join('\n')}\n` : '';
 }
 
 /** The Supabase region closest to a time zone (`Asia/Seoul` → `ap-northeast-2`), so nobody has to pick one. */

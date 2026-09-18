@@ -12,7 +12,6 @@ import { sanitizeRepoName, supabaseRegionForTimeZone } from './lib/parse.mjs';
 import {
   SupabaseError,
   createSupabaseProject,
-  generateDbPassword,
   inspectSupabase,
   pushMigrations,
   saveDbPassword,
@@ -441,12 +440,13 @@ function dataDir() {
 
 // -- panel dispatch -------------------------------------------------------------------------------
 
-async function runStep(step, label, command, fn) {
+/** `retry` is what "Try again" runs — the step itself unless the caller wraps it in more. */
+async function runStep(step, label, command, fn, retry) {
   state.running = true;
   state.busyLabel = label;
   state.progressLines = [];
   state.error = null;
-  state.lastAction = { step, label, command, run: () => runStep(step, label, command, fn) };
+  state.lastAction = { step, label, command, run: retry ?? (() => runStep(step, label, command, fn)) };
   await render();
   try {
     await fn();
@@ -703,9 +703,14 @@ function supabaseRegion() {
   return supabaseRegionForTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
 }
 
-/** A Launch step for the database: account problems get a plain-language message instead of CLI output. */
-function supabaseStep(label, command, fn) {
-  return runStep('supabase', label, command, async () => {
+/**
+ * A Launch step for the database: account problems get a plain-language message instead of CLI
+ * output. Events arrive while a step is still running, so a second click is ignored — a double
+ * click on "Create a new project" must not create two.
+ */
+function supabaseStep(label, command, fn, retry) {
+  if (state.running) return null;
+  const step = async () => {
     try {
       await fn();
     } catch (err) {
@@ -717,7 +722,8 @@ function supabaseStep(label, command, fn) {
       state.sb.codeDraft = '';
       state.sb.codeSent = false;
     }
-  });
+  };
+  return runStep('supabase', label, command, step, retry);
 }
 
 /** Installs the CLI if needed and logs in (link in the browser, verification code typed into the panel). Resolves the project list. */
@@ -786,11 +792,9 @@ function createSupabase() {
     if (!state.sb.created) {
       if (!state.sb.orgId) throw new SupabaseError('no Supabase organization', 'no-org');
       const name = sanitizeRepoName(path.basename(state.root));
-      const dbPassword = generateDbPassword();
-      const ref = await createSupabaseProject(state.sb.bin, state.root, { name, orgId: state.sb.orgId, region: supabaseRegion(), dbPassword });
+      await ensureGitignore(state.root); // the generated password lands in `.env.local` before the project exists
+      const ref = await createSupabaseProject(state.sb.bin, state.root, { name, orgId: state.sb.orgId, region: supabaseRegion() });
       state.sb.created = { ref, name };
-      await ensureGitignore(state.root);
-      await saveDbPassword(state.root, dbPassword);
     }
     const { ref, name } = state.sb.created;
     await waitUntilHealthy(state.sb.bin, state.root, ref, { onTick: (status) => progress(tr('sbStarting', { status })) });
@@ -832,7 +836,7 @@ async function applySupabaseMigrations() {
     state.sb.phase = 'db-password';
     return render();
   }
-  await supabaseStep(tr('sbMigrating'), 'supabase link / supabase db push', async () => {
+  const apply = async () => {
     await ensureSupabaseSession();
     try {
       await pushMigrations(state.sb.bin, state.root, state.sb.info.ref);
@@ -843,10 +847,14 @@ async function applySupabaseMigrations() {
     state.saved = await saveProject(dataDir(), state.root, { supabaseMigrations: state.sb.info.migrations });
     state.sb.phase = 'connect';
     await resume();
-  });
+  };
+  // "Try again" comes back through here, so an "Update site" that stopped for the database still
+  // goes on after a retry or a corrected password.
+  await supabaseStep(tr('sbMigrating'), 'supabase link / supabase db push', apply, applySupabaseMigrations);
+  if (state.running || state.error) return;
   const thenUpdate = state.sb.thenUpdate;
   state.sb.thenUpdate = false;
-  if (thenUpdate && !state.error && state.step === 'launched') await startUpdateSite();
+  if (thenUpdate && state.step === 'launched') await startUpdateSite();
 }
 
 async function submitDbPassword(value) {

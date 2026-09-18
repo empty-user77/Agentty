@@ -36,8 +36,10 @@ export class SupabaseError extends Error {
   }
 }
 
-function fail(what, result) {
-  const output = `${result.stderr}\n${result.stdout}`.trim();
+/** CLI output becomes an error the panel shows and "Ask the agent" forwards, so known secrets are masked first. */
+function fail(what, result, secrets = []) {
+  let output = `${result.stderr}\n${result.stdout}`.trim();
+  for (const secret of secrets) if (secret) output = output.split(secret).join('***');
   return new SupabaseError(`${what}:\n${tailLines(output, 20).join('\n')}`, supabaseErrorKind(output));
 }
 
@@ -89,15 +91,29 @@ export function supabaseLogin(bin, cwd, { onLink, timeoutMs = 10 * 60_000 } = {}
 }
 
 /** A database password nobody has to remember: URL-safe, so it needs no escaping in a connection string. */
-export function generateDbPassword() {
+function generateDbPassword() {
   return crypto.randomBytes(24).toString('base64url');
 }
 
-/** Creates the hosted project and resolves its `ref`. The password goes to `.env.local` only (see `saveDbPassword`). */
-export async function createSupabaseProject(bin, cwd, { name, orgId, region, dbPassword }) {
+/**
+ * Creates the hosted project with a generated database password and resolves its `ref`. The
+ * password is in `.env.local` *before* the project exists — a project whose password was lost
+ * could only be fixed by a reset on supabase.com — and the previous value comes back if creating
+ * fails. It never leaves this module. The caller makes sure `.env*` is gitignored first.
+ *
+ * `--db-password` is the CLI's documented way to pass it; while the command runs (a few seconds)
+ * it is visible in the process list of this computer.
+ */
+export async function createSupabaseProject(bin, cwd, { name, orgId, region }) {
+  const previous = (await readEnv(cwd, ['.env.local']))[DB_PASSWORD_KEY];
+  const dbPassword = generateDbPassword();
+  await saveDbPassword(cwd, dbPassword);
   const args = ['projects', 'create', sanitizeRepoName(name), '--org-id', orgId, '--region', region, '--db-password', dbPassword, '-o', 'json'];
   const result = await sb(bin, cwd, args, { timeoutMs: 2 * 60_000 });
-  if (result.code !== 0) throw fail('could not create the Supabase project', result);
+  if (result.code !== 0) {
+    await saveDbPassword(cwd, previous || null);
+    throw fail('could not create the Supabase project', result, [dbPassword]);
+  }
   const [created] = normalizeSupabaseProjects([parseLooseJson(result.stdout)].flat());
   if (created) return created.ref;
   // The CLI printed something else than JSON: find the project by name instead.
@@ -185,7 +201,10 @@ async function setEnvVars(file, vars, { mode } = {}) {
   } catch {
     // New file.
   }
-  await fs.writeFile(file, mergeEnvFile(existing, vars), mode ? { mode } : undefined);
+  const merged = mergeEnvFile(existing, vars);
+  // Nothing left (a value that was only ever written by Launch got removed): no empty file stays behind.
+  if (!merged) return fs.rm(file, { force: true });
+  await fs.writeFile(file, merged, mode ? { mode } : undefined);
   if (mode) await fs.chmod(file, mode).catch(() => {});
 }
 
@@ -212,7 +231,7 @@ export async function pushMigrations(bin, cwd, ref) {
   if (!dbPassword) throw new SupabaseError('the database password is not known', 'db-password');
   const env = { [DB_PASSWORD_KEY]: dbPassword };
   const link = await sb(bin, cwd, ['link', '--project-ref', ref], { env, timeoutMs: 2 * 60_000 });
-  if (link.code !== 0) throw fail('could not connect to the Supabase database', link);
+  if (link.code !== 0) throw fail('could not connect to the Supabase database', link, [dbPassword]);
   const push = await sb(bin, cwd, ['db', 'push', '--yes'], { env, timeoutMs: 5 * 60_000 });
-  if (push.code !== 0) throw fail('could not apply the database changes', push);
+  if (push.code !== 0) throw fail('could not apply the database changes', push, [dbPassword]);
 }

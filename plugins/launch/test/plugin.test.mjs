@@ -213,6 +213,9 @@ test('mergeEnvFile replaces keys in place and appends new ones without touching 
   assert.equal(merged, '# local settings\nAPI_URL=http://localhost:3000\nVITE_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co\nVITE_SUPABASE_ANON_KEY=anon_example_not_a_real_key\n');
   assert.equal(mergeEnvFile('', { A: '1' }), 'A=1\n');
   assert.equal(mergeEnvFile(merged, {}), merged);
+  // `null` removes a key; nothing left means no file content at all.
+  assert.equal(mergeEnvFile('A=1\nB=2\n', { A: null }), 'B=2\n');
+  assert.equal(mergeEnvFile('A=1\n', { A: null, C: null }), '');
 });
 
 test('supabaseRegionForTimeZone picks a nearby region and falls back to us-east-1', () => {
@@ -286,7 +289,8 @@ case "$1" in
         exit 0
         ;;
       create)
-        echo "create name=$3" >> "$account/calls.log"
+        if [ -f "$account/free-limit" ]; then echo "The following organization members have reached their maximum limits for the number of active free projects" >&2; exit 1; fi
+        echo "create name=$3 password-saved-first=$(grep -c '^SUPABASE_DB_PASSWORD=.' .env.local 2>/dev/null)" >> "$account/calls.log"
         echo '[{"id":"abcdefghijklmnopqrst","name":"my-cool-app","region":"us-east-1","status":"ACTIVE_HEALTHY"}]' > "$account/projects.json"
         echo '{"id":"abcdefghijklmnopqrst","name":"my-cool-app"}'
         exit 0
@@ -548,7 +552,8 @@ test('Launch connects Supabase: login code, new project, public key only, migrat
     click('sb-migrate');
     panel = await waitForButton(host, 'env-add');
     const calls = fs.readFileSync(path.join(box.supabase, 'calls.log'), 'utf8');
-    assert.match(calls, /^create name=my-cool-app$/m);
+    // The generated password was in .env.local before the project existed, so it cannot be lost.
+    assert.match(calls, /^create name=my-cool-app password-saved-first=1$/m);
     assert.match(calls, /^link ref=abcdefghijklmnopqrst password=given$/m);
     assert.match(calls, /^push password=given$/m);
     assert.ok(!calls.includes(dbPassword));
@@ -567,6 +572,32 @@ test('Launch connects Supabase: login code, new project, public key only, migrat
     assert.equal(saved.supabaseRef, 'abcdefghijklmnopqrst');
     assert.deepEqual(saved.supabaseMigrations, ['20260918000000_todos.sql']);
     assert.ok(!JSON.stringify(saved).includes(dbPassword), 'Launch state holds no password');
+  } finally {
+    host.stop();
+  }
+});
+
+test('a refused project creation is explained in plain words and leaves no password behind', async () => {
+  const box = sandbox();
+  useSupabase(box);
+  fs.writeFileSync(path.join(box.supabase, 'logged-in'), '');
+  fs.writeFileSync(path.join(box.supabase, 'free-limit'), '');
+  const host = start(box);
+  const click = (element) => host.send('ui/event', { element, event: 'click', context: host.context });
+  try {
+    host.send('panel/open', { context: host.context });
+    await waitForButton(host, 'gh-save');
+    click('gh-save');
+    await waitForButton(host, 'sb-connect');
+    click('sb-connect');
+    await waitForButton(host, 'sb-create');
+    // A double click: the second event arrives while the first is still running and is ignored.
+    click('sb-create');
+    click('sb-create');
+    const panel = await waitForText(host, /maximum number of free projects/);
+    assert.match(JSON.stringify(panel), /"style":"error"/);
+    assert.ok(!fs.existsSync(path.join(box.project, '.env.local')), 'the unused password is removed again');
+    assert.ok(!fs.existsSync(path.join(box.supabase, 'calls.log')), 'no project was created');
   } finally {
     host.stop();
   }

@@ -1,7 +1,7 @@
 {
   "id": "launch",
   "name": "Launch",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "Agentty",
   "description": "Take a project from your computer to a live URL: save it to GitHub, connect its Supabase database and publish it on Vercel, no jargon, one button at a time.",
   "icon": "rocket",
