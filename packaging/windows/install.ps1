@@ -114,10 +114,10 @@ Set-UserPath $true
 # Settings > Apps entry
 $version = (Get-Item -LiteralPath $Exe).VersionInfo.ProductVersion
 New-Item -Path $UninstallKey -Force | Out-Null
-$uninstall = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $Dest 'install.ps1')`" -Uninstall"
+$uninstallCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $Dest 'install.ps1')`" -Uninstall"
 $values = @{
     DisplayName = $AppName; DisplayVersion = "$version"; Publisher = 'Agentty contributors'; DisplayIcon = "`"$Exe`",0"
-    InstallLocation = $Dest; UninstallString = $uninstall; URLInfoAbout = 'https://www.agentty.run'
+    InstallLocation = $Dest; UninstallString = $uninstallCommand; URLInfoAbout = 'https://www.agentty.run'
 }
 foreach ($name in $values.Keys) { Set-ItemProperty -LiteralPath $UninstallKey -Name $name -Value $values[$name] }
 Set-ItemProperty -LiteralPath $UninstallKey -Name 'NoModify' -Value 1 -Type DWord
