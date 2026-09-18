@@ -317,7 +317,7 @@ pub fn execute(connector: &Connector, request: &Request) -> Result<(u16, String)
             pairs.append_pair(name, secret);
         }
     }
-    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).redirects(0).build();
+    let agent = crate::http::agent_builder().timeout(REQUEST_TIMEOUT).redirects(0).build();
     let mut req = agent.request(method(&request.method)?, url.as_str()).set("User-Agent", concat!("Agentty/", env!("CARGO_PKG_VERSION")));
     match (&connector.auth, &secret) {
         (Auth::Bearer, Some(secret)) => req = req.set("Authorization", &format!("Bearer {secret}")),

@@ -84,7 +84,9 @@ pub fn parse_summary(json: &serde_json::Value, provider: &Provider) -> ServiceSt
 }
 
 pub fn fetch(provider: &Provider) -> Result<ServiceStatus> {
-    let json: serde_json::Value = ureq::get(provider.summary_url)
+    let json: serde_json::Value = crate::http::agent_builder()
+        .build()
+        .get(provider.summary_url)
         .set("User-Agent", "Agentty")
         .timeout(Duration::from_secs(15))
         .call()

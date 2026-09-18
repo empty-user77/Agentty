@@ -90,7 +90,7 @@ pub fn send(events: Vec<Value>) {
         return;
     }
     let url = format!("https://www.google-analytics.com/mp/collect?measurement_id={measurement_id}&api_secret={secret}");
-    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(10)).build();
+    let agent = crate::http::agent_builder().timeout(std::time::Duration::from_secs(10)).build();
     let client_id = install_id();
     for batch in events.chunks(25) {
         let _ = agent.post(&url).send_json(json!({ "client_id": client_id, "events": batch }));

@@ -77,7 +77,7 @@ pub fn parse_release(json: &serde_json::Value, arch: &str) -> Option<Release> {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout(Duration::from_secs(600)).build()
+    crate::http::agent_builder().timeout_connect(Duration::from_secs(10)).timeout(Duration::from_secs(600)).build()
 }
 
 /// The newest published release, if it is newer than `current`.
