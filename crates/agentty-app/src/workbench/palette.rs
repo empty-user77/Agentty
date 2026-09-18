@@ -206,6 +206,9 @@ impl Workbench {
             (Page::Idea, "page.idea", ""),
             (Page::Settings, "page.settings", "⌘,"),
         ] {
+            if page == Page::Idea && !crate::settings::settings(cx).idea_mode {
+                continue;
+            }
             push(
                 t(cx, key),
                 general,

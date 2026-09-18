@@ -573,8 +573,7 @@ impl Render for IdeaView {
                             this.start(cx);
                         }
                     })),
-            )
-            .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "idea.start_hint")));
+            );
         div()
             .size_full()
             .relative()

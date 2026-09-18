@@ -92,6 +92,12 @@ pub fn unique_dir(root: &Path, name: &str) -> PathBuf {
     (2..).map(|n| root.join(format!("{name}-{n}"))).find(|p| !p.exists()).expect("a free name")
 }
 
+/// Whether `dir` was made by "Build my idea": it carries the build guide. Agentty starts Claude
+/// Code in auto mode there, also for tabs opened and sessions resumed later.
+pub fn is_idea_project(dir: &Path) -> bool {
+    dir.join("docs").join("idea").join("BUILD_GUIDE.md").is_file()
+}
+
 /// Creates the project folder and returns the prompt that starts the build.
 /// `language` is the UI language code (`en`, `ko`, `ja`, `zh`); `stamp` names untitled projects.
 pub fn create_project(root: &Path, input: &IdeaInput, language: &str, stamp: &str) -> Result<IdeaProject> {
@@ -249,6 +255,10 @@ into a working demo they can see and click, ready to publish on Vercel.
 
 /// Lets Claude Code edit files and run the usual build commands in this new project without a
 /// prompt for each one. Deleting files, network tools other than npm and git pushes still ask.
+///
+/// This is the fallback: Agentty starts Claude Code with `--permission-mode auto` in idea projects,
+/// which a project's own settings cannot turn on (`"defaultMode": "auto"` here is ignored), and
+/// these rules apply where auto mode is not available.
 pub const CLAUDE_SETTINGS: &str = r#"{
   "permissions": {
     "defaultMode": "acceptEdits",
@@ -321,6 +331,8 @@ mod tests {
         assert!(idea.contains("attachments/plan.md") && idea.contains("attachments/plan-2.md"));
         assert!(project.dir.join("docs/idea/attachments/plan-2.md").exists());
         assert!(project.dir.join("docs/idea/BUILD_GUIDE.md").exists());
+        assert!(is_idea_project(&project.dir));
+        assert!(!is_idea_project(&root));
         let settings: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(project.dir.join(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(settings["permissions"]["defaultMode"], "acceptEdits");

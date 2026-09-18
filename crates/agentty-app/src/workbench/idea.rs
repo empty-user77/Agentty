@@ -1,7 +1,7 @@
 //! "Build my idea" and "Launch": from an idea on the idea page to a project folder with an agent
 //! building it, and from a project to the Launch plugin that publishes it (GitHub + Vercel).
 
-use super::{Page, Workbench};
+use super::{Group, Page, Workbench};
 use crate::i18n::tf;
 use crate::idea_view::{IdeaEvent, IdeaView};
 use crate::launch::PaneKind;
@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 /// The built-in plugin that publishes projects.
 pub(super) const LAUNCH_PLUGIN: &str = "launch";
+/// The workspace group idea projects are collected in.
+const IDEA_GROUP: &str = "Agentty Idea";
 
 impl Workbench {
     pub(super) fn open_idea_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -87,6 +89,11 @@ impl Workbench {
                     };
                     match this.deliver_prompt(request, window, cx) {
                         Ok(_) => {
+                            let group = this.idea_group();
+                            if let Some(ws) = this.workspaces.last_mut() {
+                                ws.group = Some(group);
+                            }
+                            this.persist(cx);
                             crate::metrics::track(cx, "feature_used", json!({ "feature": "idea_start" }));
                             if let Some(idea) = &this.idea {
                                 idea.update(cx, |v, cx| v.reset(cx));
@@ -109,6 +116,18 @@ impl Workbench {
             });
         })
         .detach();
+    }
+
+    /// The group for idea projects, made on first use and opened so the new workspace shows. It is
+    /// found by name: a renamed group is the user's own, and the next idea starts a new one.
+    fn idea_group(&mut self) -> u64 {
+        if let Some(group) = self.groups.iter_mut().find(|g| g.name == IDEA_GROUP) {
+            group.collapsed = false;
+            return group.id;
+        }
+        let id = self.next_id();
+        self.groups.push(Group { id, name: IDEA_GROUP.into(), collapsed: false });
+        id
     }
 
     /// Opens the Launch panel for the focused project (installing the built-in plugin on first use).

@@ -420,7 +420,6 @@ impl Workbench {
             next_id: 1,
         };
         this.restore(window, cx);
-        this.show_first_run_tour(cx);
         this.refresh_sessions(cx);
         this.detect_agents(cx);
         this.start_update_checks(cx);

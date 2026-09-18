@@ -181,6 +181,12 @@ impl LaunchSpec {
                 if let Some(model) = advisor.model() {
                     args.extend(["--advisor".into(), model.into()]);
                 }
+                if crate::agents::claude_auto_mode() && agentty_bridge::idea::is_idea_project(&self.cwd) {
+                    // "Build my idea" projects belong to people who cannot judge a permission prompt:
+                    // Claude Code's auto mode decides instead. Only the command line can turn it on —
+                    // `"defaultMode": "auto"` in the project's own settings is ignored.
+                    args.extend(["--permission-mode".into(), "auto".into()]);
+                }
                 if crate::settings::browser_tools_enabled() {
                     // The in-app browser as MCP tools (added to the user's own servers). `--mcp-config`
                     // takes any number of values, so it must not be the last option: a prompt right
@@ -367,6 +373,25 @@ mod tests {
         let at = args.iter().position(|a| a == "--settings").unwrap();
         let settings: serde_json::Value = serde_json::from_str(&args[at + 1]).unwrap();
         assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().contains("AGENTTY_SOCKET"));
+    }
+
+    #[test]
+    fn idea_projects_start_claude_in_auto_mode() {
+        let dir = std::env::temp_dir().join(format!("agentty-auto-mode-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("docs/idea")).unwrap();
+        std::fs::write(dir.join("docs/idea/BUILD_GUIDE.md"), "guide").unwrap();
+        let auto = |cwd: &std::path::Path| {
+            let args = LaunchSpec::new(PaneKind::Claude, cwd.to_path_buf()).command().unwrap();
+            args.windows(2).any(|pair| pair == ["--permission-mode", "auto"])
+        };
+        crate::agents::set_claude_auto_mode(true);
+        assert!(auto(&dir));
+        // Any other folder keeps the user's own permission mode.
+        assert!(!auto(std::path::Path::new("/tmp")));
+        // A Claude Code that does not know the mode would exit on the flag.
+        crate::agents::set_claude_auto_mode(false);
+        assert!(!auto(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

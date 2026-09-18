@@ -29,6 +29,10 @@ pub const ACTIVITY_BAR_WIDTH: f32 = 48.;
 const TAB_HEIGHT: f32 = 35.;
 pub const STATUS_BAR_HEIGHT: f32 = 22.;
 const SESSION_ROW_HEIGHT: f32 = 96.;
+/// The start page: a column this wide, with as many launch cards to a row as fit (four at most).
+const WELCOME_WIDTH: f32 = 920.;
+const WELCOME_CARD_MIN_WIDTH: f32 = 190.;
+const WELCOME_RECENT: usize = 6;
 
 #[derive(Clone)]
 pub struct DraggedWorkspace {
@@ -1465,10 +1469,12 @@ impl Workbench {
                 }
                 cx.notify();
             }))
-            .child(
-                feature("launch-idea", "lightbulb", Chrome::ORANGE, "idea.menu", "idea.menu_body", cx)
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx))),
-            )
+            .when(settings(cx).idea_mode, |d| {
+                d.child(
+                    feature("launch-idea", "lightbulb", Chrome::ORANGE, "idea.menu", "idea.menu_body", cx)
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx))),
+                )
+            })
             .child(
                 feature("launch-publish", "rocket", Chrome::GREEN, "launch.menu", "launch.menu_body", cx)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_launch(cx))),
@@ -1647,93 +1653,150 @@ impl Workbench {
         Some(row)
     }
 
-    /// First-run screen, and the start page of a new workspace (with a name field and cancel).
+    /// First-run screen, and the start page of a new workspace (with a name field and cancel):
+    /// what to start, what ran recently, and what else Agentty does.
     pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let starting = self.new_workspace.as_ref().map(|(input, _)| input.clone());
-        let launch = |id: SharedString, logo: &'static str, label: String, choice: LaunchChoice, cx: &mut Context<Self>| {
-            let group = id.clone();
+        let card = |id: SharedString, logo: &'static str, label: String, body: String, choice: LaunchChoice, cx: &mut Context<Self>| {
             div()
                 .id(id)
-                .group(group.clone())
-                .w(px(280.))
+                .flex_1()
+                .min_w(px(WELCOME_CARD_MIN_WIDTH))
+                .p_4()
                 .flex()
-                .items_center()
+                .flex_col()
                 .gap_3()
-                .px_4()
-                .py_2()
-                .rounded_md()
+                .rounded_lg()
                 .cursor_pointer()
                 .border_1()
                 .border_color(hex(Chrome::BORDER))
-                .t_body()
-                .text_color(hex(Chrome::FOREGROUND))
-                .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(Chrome::ACCENT, 0.7)).text_color(hex(Chrome::BRIGHT)))
+                .bg(hex(Chrome::OVERLAY))
+                .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(Chrome::ACCENT, 0.7)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.request_launch(choice.clone(), LaunchTarget::NewWorkspace, window, cx)
                 }))
-                .child(crate::brand::avatar(logo, 22.))
-                .child(div().flex_1().child(label))
-                // The arrow says "start" without repeating a word on every row.
-                .child(div().invisible().group_hover(group, |s| s.visible()).child(icon(
-                    "chevron-right",
-                    IconSize::INLINE,
-                    hex(Chrome::MUTED),
-                )))
+                .child(crate::brand::tile(logo, 36.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(div().truncate().t_body().font_weight(FontWeight::MEDIUM).text_color(hex(Chrome::BRIGHT)).child(label))
+                        .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(body)),
+                )
         };
         // Claude Code and Codex are what Agentty is for: they are always offered, and picking one
         // that isn't installed explains how to get it. Other CLIs only show up once they are there.
         let missing = |id: &'static str, name: &'static str, url: &'static str, cx: &mut Context<Self>| {
-            let row = launch(SharedString::from(format!("welcome-{id}")), id, name.to_string(), PaneKind::Shell.into(), cx);
-            row.child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "welcome.not_installed"))).on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
+            let not_installed = t(cx, "welcome.not_installed").to_string();
+            card(SharedString::from(format!("welcome-{id}")), id, name.to_string(), not_installed, PaneKind::Shell.into(), cx).on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.install_hint = Some((id, name, url));
                     cx.notify();
-                },
-            ))
+                }),
+            )
         };
-        let mut buttons = div().flex().flex_col().gap_2().items_center();
-        buttons = buttons.child(launch("welcome-shell".into(), "shell", t(cx, "welcome.terminal").into(), PaneKind::Shell.into(), cx));
-        buttons = buttons.child(if self.is_installed("claude") {
-            launch("welcome-claude".into(), "claude", "Claude Code".into(), PaneKind::Claude.into(), cx)
+        let mut cards = div().w_full().flex().flex_wrap().gap_3();
+        let terminal_body = t(cx, "welcome.terminal_body").to_string();
+        cards =
+            cards.child(card("welcome-shell".into(), "shell", t(cx, "welcome.terminal").into(), terminal_body, PaneKind::Shell.into(), cx));
+        cards = cards.child(if self.is_installed("claude") {
+            let body = tf(cx, "welcome.maker_body", &[("maker", "Anthropic")]);
+            card("welcome-claude".into(), "claude", "Claude Code".into(), body, PaneKind::Claude.into(), cx)
         } else {
             missing("claude", "Claude Code", CLAUDE_INSTALL_URL, cx)
         });
-        buttons = buttons.child(if self.is_installed("codex") {
-            launch("welcome-codex".into(), "codex", "Codex".into(), PaneKind::Codex.into(), cx)
+        cards = cards.child(if self.is_installed("codex") {
+            let body = tf(cx, "welcome.maker_body", &[("maker", "OpenAI")]);
+            card("welcome-codex".into(), "codex", "Codex".into(), body, PaneKind::Codex.into(), cx)
         } else {
             missing("codex", "Codex", CODEX_INSTALL_URL, cx)
         });
         for agent in self.installed.iter().flat_map(|i| i.other_agents()).filter(|a| a.primary) {
             let choice = LaunchChoice::Command { title: agent.name.to_string(), command: agent.binary.to_string() };
-            buttons =
-                buttons.child(launch(SharedString::from(format!("welcome-{}", agent.id)), agent.id, agent.name.to_string(), choice, cx));
+            let body = if agent.maker.is_empty() {
+                t(cx, "welcome.agent_body").to_string()
+            } else {
+                tf(cx, "welcome.maker_body", &[("maker", agent.maker)])
+            };
+            cards =
+                cards.child(card(SharedString::from(format!("welcome-{}", agent.id)), agent.id, agent.name.to_string(), body, choice, cx));
+        }
+        // Invisible cards keep the last row on the same columns as the rows above it. They carry a
+        // card's padding and border width too: free space is shared on top of those.
+        for _ in 0..3 {
+            cards = cards.child(div().flex_1().min_w(px(WELCOME_CARD_MIN_WIDTH)).h_0().px(px(17.)));
         }
         let more = self.installed.as_ref().is_some_and(|i| i.other_agents().any(|a| !a.primary) || !i.ollama_models.is_empty());
+        let quiet_button = |id: &'static str, label: String| {
+            div()
+                .id(id)
+                .flex_shrink_0()
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .border_1()
+                .border_color(hex(Chrome::BORDER))
+                .t_small()
+                .text_color(hex(Chrome::MUTED))
+                .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+                .child(label)
+        };
+        let header = div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_4()
+            .child(gpui::img("brand/logo.png").size(px(52.)).flex_shrink_0())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(px(26.))
+                            .font_weight(FontWeight::LIGHT)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(if starting.is_some() { t(cx, "new.workspace").to_string() } else { "Agentty".to_string() }),
+                    )
+                    .child(div().truncate().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, "tagline"))),
+            )
+            .when(starting.is_some() && !self.workspaces.is_empty(), |d| {
+                d.child(quiet_button("welcome-cancel", t(cx, "confirm.cancel").to_string()).on_click(cx.listener(
+                    |this, _: &ClickEvent, window, cx| {
+                        this.new_workspace = None;
+                        this.focus_active(window, cx);
+                        cx.notify();
+                    },
+                )))
+            })
+            // Opened from the sidebar with workspaces already running: a way back to them.
+            .when(self.welcome && starting.is_none() && !self.workspaces.is_empty(), |d| {
+                d.child(
+                    quiet_button("welcome-back", t(cx, "welcome.back").to_string())
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close_welcome(window, cx))),
+                )
+            });
+        let heading = |label: String| div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::FOREGROUND)).child(label);
         // A short window scrolls rather than stacking the page on top of its own footer.
         let page = div()
             .w_full()
+            .max_w(px(WELCOME_WIDTH))
+            .mx_auto()
             .flex()
             .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .px_4()
-            .py_8()
-            .child(gpui::img("brand/logo.png").size(px(56.)))
-            .child(
-                div().text_size(px(30.)).font_weight(FontWeight::LIGHT).text_color(hex(Chrome::FOREGROUND)).child(if starting.is_some() {
-                    t(cx, "new.workspace").to_string()
-                } else {
-                    "Agentty".to_string()
-                }),
-            )
-            .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "tagline")))
-            .child(div().t_small().text_color(hex(Chrome::MUTED)).pb_3().child(t(cx, "welcome.subtitle")))
+            .gap_6()
+            .px_6()
+            .pt(px(48.))
+            .pb_8()
+            .child(header)
             .when_some(starting.clone(), |d, input| {
                 d.child(
                     div()
-                        .w(px(280.))
-                        .mb_2()
+                        .w(px(360.))
                         .flex()
                         .flex_col()
                         .gap_1()
@@ -1753,69 +1816,41 @@ impl Workbench {
                         .children(self.render_group_choice(cx)),
                 )
             })
-            .when(starting.is_none(), |d| d.child(self.render_idea_card(cx)))
-            .child(buttons)
-            .when(more, |d| {
-                d.child(
-                    div()
-                        .id("welcome-more")
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_4()
-                        .py_2()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .t_small()
-                        .text_color(hex(Chrome::MUTED))
-                        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
-                        .child(t(cx, "launcher.more_models"))
-                        .child(icon("chevron-down", IconSize::INLINE, hex(Chrome::MUTED)))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.launcher_open = true;
-                            this.launcher_more = true;
-                            this.detect_agents(cx);
-                            cx.notify();
-                        })),
-                )
-            })
-            .when(starting.is_some() && !self.workspaces.is_empty(), |d| {
-                d.child(
-                    div()
-                        .id("welcome-cancel")
-                        .mt_2()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .t_small()
-                        .text_color(hex(Chrome::MUTED))
-                        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
-                        .child(t(cx, "confirm.cancel"))
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.new_workspace = None;
-                            this.focus_active(window, cx);
-                            cx.notify();
-                        })),
-                )
-            })
-            // Opened from the sidebar with workspaces already running: a way back to them.
-            .when(self.welcome && starting.is_none() && !self.workspaces.is_empty(), |d| {
-                d.child(
-                    div()
-                        .id("welcome-back")
-                        .mt_2()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .t_small()
-                        .text_color(hex(Chrome::MUTED))
-                        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
-                        .child(t(cx, "welcome.back"))
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close_welcome(window, cx))),
-                )
-            });
+            .when(starting.is_none() && settings(cx).idea_mode, |d| d.child(self.render_idea_card(cx)))
+            .child(div().w_full().flex().flex_col().gap_3().child(heading(t(cx, "welcome.start").to_string())).child(cards).when(
+                more,
+                |d| {
+                    d.child(
+                        div()
+                            .id("welcome-more")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .py_1()
+                            .cursor_pointer()
+                            .t_small()
+                            .text_color(hex(Chrome::MUTED))
+                            .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                            .child(t(cx, "launcher.more_models"))
+                            .child(icon("chevron-down", IconSize::INLINE, hex(Chrome::MUTED)))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.launcher_open = true;
+                                this.launcher_more = true;
+                                this.detect_agents(cx);
+                                cx.notify();
+                            })),
+                    )
+                },
+            ))
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_wrap()
+                    .gap_6()
+                    .child(self.render_welcome_recent(heading(t(cx, "welcome.recent").to_string()), cx))
+                    .child(self.render_welcome_explore(heading(t(cx, "welcome.explore").to_string()), cx)),
+            );
         div()
             .size_full()
             .relative()
@@ -1824,9 +1859,6 @@ impl Workbench {
                 div()
                     .id("welcome-scroll")
                     .size_full()
-                    .flex()
-                    .flex_col()
-                    .justify_center()
                     .overflow_y_scroll()
                     .track_scroll(&self.welcome_scroll)
                     // Room for the footer, which sits over the bottom of the page.
@@ -1837,43 +1869,156 @@ impl Workbench {
             .child(self.render_welcome_footer(cx))
     }
 
-    /// Links and copyright at the bottom of the start page, like the website's footer.
-    /// Start page card for "Build my idea".
+    /// The sessions touched last, one click from running again.
+    fn render_welcome_recent(&self, heading: gpui::Div, cx: &mut Context<Self>) -> impl IntoElement {
+        let now = now_ms();
+        let mut list = div().flex().flex_col();
+        for (index, session) in self.sessions.iter().take(WELCOME_RECENT).enumerate() {
+            let resume = session.clone();
+            let folder = session.cwd.as_ref().map(|cwd| tilde(std::path::Path::new(cwd))).unwrap_or_default();
+            list = list.child(
+                div()
+                    .id(("welcome-recent", index))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.resume_session(&resume, window, cx)))
+                    .child(crate::brand::avatar(session.agent.id(), 18.))
+                    .child(div().flex_1().min_w_0().truncate().t_body().text_color(hex(Chrome::FOREGROUND)).child(session.title.clone()))
+                    .child(div().flex_shrink_0().max_w(px(170.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(folder))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(px(30.))
+                            .flex()
+                            .justify_end()
+                            .t_small()
+                            .text_color(hex(Chrome::MUTED))
+                            .child(relative_time(now, session.updated_at)),
+                    ),
+            );
+        }
+        div().flex_1().min_w(px(320.)).flex().flex_col().gap_2().child(heading).child(if self.sessions.is_empty() {
+            div().px_2().py_1p5().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "welcome.recent_empty")).into_any_element()
+        } else {
+            list.into_any_element()
+        })
+    }
+
+    /// What else Agentty does besides terminals, each one click away.
+    fn render_welcome_explore(&self, heading: gpui::Div, cx: &mut Context<Self>) -> impl IntoElement {
+        let row =
+            |id: &'static str, glyph: &'static str, color: u32, label: String, body: String, open: ViewAction, cx: &mut Context<Self>| {
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| open(this, cx)))
+                    .child(crate::brand::tinted_tile(color, 28.).child(icon(glyph, 15., hex(color))))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().truncate().t_body().text_color(hex(Chrome::FOREGROUND)).child(label))
+                            .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(body)),
+                    )
+            };
+        let launch = (t(cx, "launch.menu").to_string(), t(cx, "launch.menu_body").to_string());
+        let flow = (t(cx, "page.flow").to_string(), t(cx, "welcome.flow_body").to_string());
+        let usage = (t(cx, "page.usage").to_string(), t(cx, "welcome.usage_body").to_string());
+        let plugins = (t(cx, "page.plugins").to_string(), t(cx, "welcome.plugins_body").to_string());
+        div().flex_1().min_w(px(280.)).flex().flex_col().gap_2().child(heading).child(
+            div()
+                .flex()
+                .flex_col()
+                .child(row("welcome-launch", "rocket", Chrome::ORANGE, launch.0, launch.1, Box::new(|this, cx| this.open_launch(cx)), cx))
+                .child(row(
+                    "welcome-flow",
+                    "network",
+                    Chrome::PURPLE,
+                    flow.0,
+                    flow.1,
+                    Box::new(|this, cx| this.open_page(Page::Flow, cx)),
+                    cx,
+                ))
+                .child(row(
+                    "welcome-usage",
+                    "zap",
+                    Chrome::GREEN,
+                    usage.0,
+                    usage.1,
+                    Box::new(|this, cx| this.open_page(Page::Usage, cx)),
+                    cx,
+                ))
+                .child(row(
+                    "welcome-plugins",
+                    "puzzle",
+                    Chrome::BLUE,
+                    plugins.0,
+                    plugins.1,
+                    Box::new(|this, cx| this.open_plugins_page(None, cx)),
+                    cx,
+                )),
+        )
+    }
+
+    /// Start page card for "Build my idea": the one thing on the page that is not a terminal, so it
+    /// gets the full width — and room for its one-line description.
     fn render_idea_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("welcome-idea")
             .group("welcome-idea")
-            .w(px(280.))
-            .mb_2()
+            .w_full()
             .flex()
             .items_center()
-            .gap_3()
-            .px_4()
-            .py_2p5()
-            .rounded_md()
+            .gap_4()
+            .p_4()
+            .rounded_lg()
             .cursor_pointer()
             .border_1()
-            .border_color(hex_alpha(Chrome::ORANGE, 0.6))
-            .bg(hex_alpha(Chrome::ORANGE, 0.1))
-            .hover(|s| s.bg(hex_alpha(Chrome::ORANGE, 0.18)).border_color(hex(Chrome::ORANGE)))
+            .border_color(hex_alpha(Chrome::ORANGE, 0.5))
+            .bg(hex_alpha(Chrome::ORANGE, 0.08))
+            .hover(|s| s.bg(hex_alpha(Chrome::ORANGE, 0.16)).border_color(hex(Chrome::ORANGE)))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx)))
-            .child(icon("lightbulb", 22., hex(Chrome::ORANGE)))
+            .child(crate::brand::tinted_tile(Chrome::ORANGE, 40.).child(icon("lightbulb", 20., hex(Chrome::ORANGE))))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "idea.menu")))
-                    .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "idea.menu_body"))),
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .truncate()
+                            .t_title()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(t(cx, "idea.menu")),
+                    )
+                    .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "welcome.idea_body"))),
             )
-            .child(div().invisible().group_hover("welcome-idea", |s| s.visible()).child(icon(
+            .child(div().flex_shrink_0().opacity(0.6).group_hover("welcome-idea", |s| s.opacity(1.)).child(icon(
                 "chevron-right",
-                IconSize::INLINE,
-                hex(Chrome::MUTED),
+                IconSize::BUTTON,
+                hex(Chrome::ORANGE),
             )))
     }
 
+    /// Links and copyright at the bottom of the start page, like the website's footer.
     fn render_welcome_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let link = |id: &'static str, label: String, url: &'static str| {
             div()

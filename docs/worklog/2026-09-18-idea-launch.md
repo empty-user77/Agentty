@@ -84,3 +84,47 @@
 | 2 | E2E ① 로그인 코드 입력 → 새 프로젝트 → 키 기록 → 마이그레이션 → 환경변수 단계 | ✅ 가짜 `supabase` CLI + 실제 `script` 가짜 TTY. `.env.local` 0600, service_role 미기록, 패널·상태 파일에 키/비밀번호 없음, `db push`에 비밀번호는 환경변수로만 |
 | 3 | E2E ② 기존 프로젝트 선택 → DB 비밀번호 입력 → 마이그레이션 | ✅ |
 | ⚠️ | 미확인 | 실제 계정으로 로그인 완료 · `projects list`/`create`/`api-keys`의 실제 JSON(두 가지 형태 모두 허용하도록 파싱) · 실제 `link`/`db push` 비대화형 동작 · `projects create`의 `--db-password`는 CLI가 문서화한 방식이라 인자로 전달(같은 Mac의 다른 사용자가 실행 순간 `ps`로 볼 수 있음) |
+
+## 후속 (같은 날)
+
+### 코드 리뷰 반영 (Supabase)
+
+| 지적 | 수정 |
+|---|---|
+| "새 프로젝트 만들기" 더블클릭 시 프로젝트가 2개 생성될 수 있음 (SDK가 이벤트를 동시에 처리) | `supabaseStep`이 실행 중이면 두 번째 이벤트 무시 |
+| 프로젝트 생성 직후 저장이 실패하면 생성된 DB 비밀번호 유실 | 비밀번호를 **생성 전에** `.env.local`에 저장, 생성 실패 시 이전 값 복원(없었으면 파일도 남기지 않음). 비밀번호는 `supabase.mjs` 밖으로 나오지 않음 |
+| DB 비밀번호 오류 뒤에는 "사이트 업데이트"가 이어지지 않음 | "다시 시도"가 래퍼(`applySupabaseMigrations`)를 거치도록 `runStep`에 `retry` 추가, 실패 시 `thenUpdate` 유지 |
+| CLI 오류 출력이 그대로 패널·에이전트 프롬프트로 전달됨 | 알고 있는 비밀번호는 오류 문자열에서 `***`로 마스킹 |
+| ⚠️ 남김 | `projects create --db-password`는 인자로 전달 (CLI 문서화 방식, 환경변수 지원 여부 미확인) |
+
+플러그인 0.2.1 · `node --test` 29개 ✅ (생성 거부 시 평이한 안내 + 비밀번호 미잔류 + 더블클릭 무시 테스트 추가)
+
+### 아이디어 모드 시작 시 `Invalid MCP configuration … ENAMETOOLONG`
+
+- 원인: `claude … --settings <json> --mcp-config <json> '<프롬프트>'`. `--mcp-config`는 값을 여러 개 받는 옵션이라 뒤따르는 프롬프트를 두 번째 설정 파일 경로로 읽음. 브라우저 도구가 켜진 상태에서 프롬프트로 시작하는 모든 Claude 창에 해당 (`Start::Prompt`)
+- 재현: `claude -p --settings '{}' --mcp-config '{"mcpServers":{}}' 'say hi'` → `MCP config file not found: …/say hi`. 순서를 바꾸면 정상 파싱
+- 수정: `--mcp-config`를 `--settings` 앞으로 (`launch.rs`), 회귀 테스트 `claude_prompt_is_not_swallowed_by_mcp_config`
+
+### 시작 화면 개편
+
+| 항목 | 내용 |
+|---|---|
+| 구조 | 헤더(로고 · 이름 · 태그라인) → **아이디어 실현하기** 전체 폭 카드 → **시작하기** 카드 그리드(터미널 · Claude Code · Codex · 설치된 주요 에이전트) → **최근 세션**(6개, 클릭하면 이어서 실행) · **둘러보기**(웹에 출시하기 · 세션 연결 · AI 사용량 · 플러그인) → 푸터 |
+| 카드 | 브랜드 색 사각 타일(`brand::tile`) + 이름 + 한 줄 설명. 폭에 맞춰 1~4열, 보이지 않는 채움 카드로 마지막 줄도 같은 열 폭 |
+| 문구 | 아이디어 카드 "아이디어만 가져오세요. 만들고 출시하는 건 Agentty가 도와드립니다."(한 줄, 넘치면 말줄임) · 터미널 "자유롭게 시작하세요." · 에이전트 "{제작사}의 코딩 에이전트"(`AgentCli::maker`: Gemini/Antigravity = Google) · 헤더의 "바로 아이디어를 실현시켜 보세요!" 제거 |
+| 새 워크스페이스 | 같은 화면에 이름 입력 · 그룹 선택, 취소/터미널로 돌아가기는 헤더 오른쪽 버튼 |
+| 첫 실행 | 웹사이트를 내장 브라우저로 여는 투어 제거 (`welcome_shown` 설정 삭제) |
+| 검증 | ✅ 디버그 스냅샷으로 넓은 창(4열)·좁은 창(2열) 확인 · fmt · clippy · test(app 88 / bridge 78) · 릴리스 빌드 · 시크릿 스캔 |
+
+### 아이디어 프로젝트 기본값 · Launch 패널 제목
+
+| 항목 | 내용 |
+|---|---|
+| auto 모드 | 아이디어 프로젝트(`docs/idea/BUILD_GUIDE.md`가 있는 폴더)에서 Agentty가 띄우는 Claude Code는 `--permission-mode auto`로 시작 — 첫 실행뿐 아니라 그 폴더에서 나중에 여는 탭·이어하기도 동일 |
+| 확인한 사실 | `--setting-sources project`로 사용자 설정을 빼고 시험: 프로젝트 `.claude/settings.json`의 `"defaultMode": "auto"`는 **무시됨**(`permissionMode: default`), `acceptEdits`는 적용됨, `--permission-mode auto` 플래그는 적용됨 → 명령줄로만 켤 수 있음 |
+| 구버전 대비 | 에이전트 감지 때 `claude --help`에 `"auto"`가 있는지 확인(`agents::claude_auto_mode`). 모르는 버전에 플래그를 주면 실행 자체가 실패하므로 그때는 기존 `acceptEdits` + 허용 목록으로 동작 |
+| 그룹 | 아이디어로 만든 워크스페이스는 **Agentty Idea** 그룹에 들어감. 이름으로 찾고, 없으면 만들며, 접혀 있으면 펼침 |
+| Launch 제목 깨짐 | 플러그인 패널의 `row` 안 텍스트가 최소 폭으로 줄어 한글이 한 글자씩 세로로 표시("출/시")되던 문제 — `row` 안의 텍스트가 버튼이 남긴 폭을 차지하도록 수정(`plugin_panel.rs`). 디버그 스냅샷으로 전/후 확인 |
+| ⚠️ 미확인 | auto 모드를 쓸 수 없는 계정에서 플래그를 줬을 때의 Claude Code 동작 · Codex에는 해당 모드 없음(변경 없음) |
+| 설정 | 설정 > 일반 **아이디어 모드 사용하기**(기본 ON, `Settings::idea_mode`). OFF면 시작 화면 배너 · + 메뉴 · 명령 팔레트의 아이디어 항목을 숨김 |
+| 아이디어 페이지 문구 | "새 프로젝트 폴더와 워크스페이스가 만들어지고…" 안내 제거 · 입력창 안내를 "영감을 최대한 많이 전달해 주세요. 몇 마디든, 몇 개의 파일이든 좋습니다."로 교체 |
