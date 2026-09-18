@@ -18,6 +18,12 @@ pub enum PaneNode<T> {
 
 pub const MIN_SIZE: f32 = 0.08;
 
+/// How much room each of `count` children gets while child `zoomed` holds the focused pane.
+pub fn zoom_sizes(count: usize, zoomed: usize) -> Vec<f32> {
+    let rest = 0.22 / (count - 1).max(1) as f32;
+    (0..count).map(|i| if i == zoomed { 0.78 } else { rest }).collect()
+}
+
 impl<T: Clone + PartialEq> PaneNode<T> {
     pub fn leaves(&self) -> Vec<T> {
         let mut out = Vec::new();
@@ -132,6 +138,37 @@ impl<T: Clone + PartialEq> PaneNode<T> {
         }
     }
 
+    /// Sizes of the split at `path`.
+    pub fn sizes_at(&mut self, path: &[usize]) -> Option<Vec<f32>> {
+        match self.split_at_mut(path)? {
+            PaneNode::Split { sizes, .. } => Some(sizes.clone()),
+            PaneNode::Leaf(_) => None,
+        }
+    }
+
+    /// Makes the focus-view proportions of `target` (see [`zoom_sizes`]) the real sizes of every
+    /// split on its path, so leaving focus view doesn't move anything on screen.
+    pub fn apply_zoom(&mut self, target: &T) {
+        if let PaneNode::Split { children, sizes, .. } = self {
+            if let Some(index) = children.iter().position(|c| c.contains(target)) {
+                *sizes = zoom_sizes(children.len(), index);
+                children[index].apply_zoom(target);
+            }
+        }
+    }
+
+    /// Sizes of every split, depth first (for debugging).
+    pub fn all_sizes(&self) -> Vec<Vec<f32>> {
+        match self {
+            PaneNode::Leaf(_) => Vec::new(),
+            PaneNode::Split { children, sizes, .. } => {
+                let mut all = vec![sizes.clone()];
+                all.extend(children.iter().flat_map(|c| c.all_sizes()));
+                all
+            }
+        }
+    }
+
     pub fn map<U>(&self, f: &mut impl FnMut(&T) -> U) -> PaneNode<U> {
         match self {
             PaneNode::Leaf(leaf) => PaneNode::Leaf(f(leaf)),
@@ -199,6 +236,20 @@ mod tests {
         let root = root.remove(&1).unwrap();
         assert!(matches!(root, PaneNode::Leaf(3)));
         assert!(root.remove(&3).is_none());
+    }
+
+    #[test]
+    fn apply_zoom_keeps_the_focus_view_proportions() {
+        let mut root = PaneNode::Leaf(1);
+        root.split(&1, 2, Axis::Vertical);
+        root.split(&1, 3, Axis::Horizontal);
+        root.apply_zoom(&3);
+        assert_eq!(root.all_sizes(), vec![zoom_sizes(2, 0), zoom_sizes(2, 1)]);
+        // A pane that isn't in the tree changes nothing.
+        let before = root.all_sizes();
+        root.apply_zoom(&9);
+        assert_eq!(root.all_sizes(), before);
+        assert_eq!(root.sizes_at(&[0]), Some(zoom_sizes(2, 1)));
     }
 
     #[test]
