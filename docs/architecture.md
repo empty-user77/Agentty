@@ -130,8 +130,14 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
   (`TextInput::keep_pasted_lines`), files are attached with the button or dropped on the page.
 - `create_project` leaves the folder otherwise empty so `create-next-app` / `create vite` still accept
   it; the build guide tells the agent to scaffold into a subfolder if a scaffolder refuses.
-- The project's `.claude/settings.json` uses `acceptEdits` and allows package-manager, node and
-  browser-tool commands only; deleting files and pushing still ask.
+- The build guide starts with the project's harness: the agent downloads ECC (github.com/affaan-m/ECC,
+  MIT — agent, skill and rule definitions) into the new project with a shallow, sparse clone, installs
+  the few Markdown definitions the idea needs under `.claude/`, records them in `docs/idea/HARNESS.md`
+  and removes the download. Nothing of ECC ships with Agentty; scripts, hook definitions, MCP configs
+  and settings are never installed.
+- Claude Code starts in auto mode there (`--permission-mode auto`, only the command line can turn it
+  on). The project's `.claude/settings.json` is the fallback: `acceptEdits` plus package-manager, node,
+  browser-tool and the harness download commands; deleting files and pushing still ask.
 - Launch is installed from the built-in catalog on first use (+ menu, or when an idea project starts)
   and adds a 🚀 button to agent panes. Logins run the official CLIs' browser flows; Agentty and the
   plugin never see or store the tokens. `.env` values are piped to `vercel env add` on stdin and only

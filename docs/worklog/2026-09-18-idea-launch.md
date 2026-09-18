@@ -143,3 +143,22 @@
 | 대상 아님 | UI 번역(`i18n.rs`, 플러그인 STRINGS), CJK 처리 테스트 픽스처, 글꼴 미리보기, 언어 이름, README 태그라인 | 유지 |
 
 `CLAUDE.md` 프로젝트 규칙에 추가: 코드·번들 문서의 프롬프트/규칙/스킬은 영어로만 쓰고 번역 표에 넣지 않는다. 번들 문서(`docs/plugins/*.md`, 플러그인 템플릿, BUILD_GUIDE, 세션 연결·핸드오프·하네스 프롬프트)는 이미 영어였음.
+
+### "도구 설치" 오류 — `env: node: No such file or directory`
+
+| 항목 | 내용 |
+|---|---|
+| 확인한 사실 | 로그인 셸 PATH에 공백이 있는 항목(`…/Application Support/JetBrains/Toolbox/scripts`)이 있음. 호스트는 셸 출력에서 "`/`가 있고 공백이 없는 줄"을 PATH로 골랐기 때문에 PATH 전체를 버리고 앱의 최소 PATH로 폴백 → node 자체는 nvm 폴백으로 찾지만 플러그인 PATH에는 node 폴더가 없어 `npm`(`#!/usr/bin/env node`)이 실패. `run_in_login_shell`은 출력 끝 600자만 돌려주므로 긴 PATH는 잘리기도 함 |
+| 호스트 수정 | `plugins/process.rs`: 마커 줄 다음 줄을 PATH로 읽음(`echo <marker>; printenv PATH`, 모든 셸에서 콜론 구분·전체 길이). 플러그인을 실행하는 Node.js의 폴더를 PATH 맨 앞에 추가(`with_dir_first`) |
+| 플러그인 수정 | `lib/exec.mjs` `pathWithExtras`: `process.execPath`의 폴더를 PATH 맨 앞에 — 구버전 호스트에서도 동작. Launch 0.2.3 |
+| 검증 | ✅ `PATH=/usr/bin:/bin:/usr/sbin:/sbin`(node 없음)에서 nvm node로 `installVercel` 실제 실행 → 설치 성공, `vercel --version` 59.23.1 · 단위 테스트 추가(호스트 2, 플러그인 1) |
+
+### 하네스 먼저 — ECC에서 필요한 에이전트·스킬 설치
+
+| 항목 | 내용 |
+|---|---|
+| 방식 | Agentty는 ECC를 **포함하지 않음**. 빌드 가이드의 0단계에서 에이전트가 아이디어를 읽은 뒤 ECC(github.com/affaan-m/ECC, MIT)를 프로젝트 안 `.agentty-ecc`로 받아 필요한 것만 `.claude/agents` · `.claude/skills` · `.claude/rules`에 설치하고, `docs/idea/HARNESS.md`에 ECC 커밋과 설치 목록·이유를 남긴 뒤 다운로드를 지움. 실패(오프라인)하면 건너뛰고 PLAN.md에 기록 |
+| 다운로드 | `git clone --depth 1 --filter=blob:none --sparse …` + `sparse-checkout set agents skills rules` — 실제 저장소로 확인: 5초, 10MB, 에이전트 68 · 스킬 292 · 규칙 23 |
+| 안전 규칙 | Markdown 정의만 설치(스킬은 `SKILL.md`와 `.md`만 — 확인 결과 ECC 스킬에 스크립트 파일 124개 포함). 설치 스크립트·훅 정의·MCP 설정·settings·실행 파일은 복사/실행 금지, 홈 폴더 설치 금지, 에이전트 4–8 · 스킬 5–10개로 제한 |
+| 권한 | auto 모드가 아닐 때를 위해 위 네 개 명령을 프로젝트 허용 목록에 정확한 문자열로 추가 |
+| ⚠️ 남은 선택 | 기본 브랜치 최신을 받음(커밋은 HARNESS.md에 기록). 외부 저장소 내용이 auto 모드 에이전트의 지침이 되므로, 릴리스 태그나 특정 커밋으로 고정할지는 결정 필요 · 실제 아이디어 프로젝트로 전 과정 실행은 미확인 |

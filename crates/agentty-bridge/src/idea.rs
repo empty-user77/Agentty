@@ -2,8 +2,10 @@
 //! and the first prompt for the agent that builds a demo of it.
 //!
 //! The folder gets `docs/idea/IDEA.md` (the messages), `docs/idea/attachments/` (copies of the
-//! attached files), `docs/idea/BUILD_GUIDE.md` (how to work: plan, parallel subagents, live preview
-//! in Agentty's browser, Vercel-ready) and `.claude/settings.json` so Claude Code can install
+//! attached files), `docs/idea/BUILD_GUIDE.md` (how to work: the project's harness first — agents
+//! and skills the agent downloads from ECC for this product, nothing of it ships with Agentty —
+//! then plan, parallel subagents, live preview in Agentty's browser, Vercel-ready) and
+//! `.claude/settings.json` so Claude Code can install
 //! packages and run the dev server without asking about every command. Everything else is left
 //! empty so project scaffolders (`create-next-app`, `create vite`) still accept the folder.
 
@@ -182,7 +184,7 @@ pub fn language_name(code: &str) -> &'static str {
 
 const PROMPT: &str = r#"Build a working demo of my idea "{title}". I'm not a developer, so take the lead as the senior engineer and product designer.
 
-1. Read docs/idea/IDEA.md, everything in docs/idea/attachments/, and follow docs/idea/BUILD_GUIDE.md.
+1. Read docs/idea/IDEA.md, everything in docs/idea/attachments/, and follow docs/idea/BUILD_GUIDE.md — it starts with setting up this project's harness (agents and skills), before any planning.
 2. Don't ask me questions unless something essential is impossible to guess — choose sensible defaults and write your assumptions in PLAN.md.
 3. Show me progress visually: get a first screen running early and open it in Agentty's in-app browser (browser_open), then keep refreshing it as you build.
 4. Split independent parts across parallel subagents where your tools allow it, and integrate/review their work yourself.
@@ -195,6 +197,30 @@ pub const BUILD_GUIDE: &str = r#"# Build guide (Agentty "Build my idea")
 
 The owner of this project is not a developer. Your job: turn docs/idea/IDEA.md (and the attachments)
 into a working demo they can see and click, ready to publish on Vercel.
+
+## 0. Harness (first, once)
+The right agents and skills raise the quality of everything after this, so set them up before
+planning. They come from ECC (https://github.com/affaan-m/ECC, MIT), a library of agent, skill and
+rule definitions. Agentty does not ship it: download it into this project now, take what this
+product needs, and remove the download.
+- Read the idea first. Then fetch only ECC's definitions, without history or assets:
+  `git clone --depth 1 --filter=blob:none --sparse https://github.com/affaan-m/ECC.git .agentty-ecc`
+  `git -C .agentty-ecc sparse-checkout set agents skills rules`
+- Choose by file name and frontmatter description (do not read every file) what this product
+  really needs: planning and architecture, the stack you will use (e.g. Next.js, React, Tailwind,
+  Supabase/Postgres), code review, security review, build-error fixing, end-to-end testing, UI
+  design. Fewer is better: about 4–8 agents, 5–10 skills and the few rules that fit.
+- Install them in this project only: `agents/<name>.md` → `.claude/agents/`, a skill's `SKILL.md`
+  and its other `.md` files → `.claude/skills/<name>/`, `rules/…/*.md` → `.claude/rules/`. With
+  another agent CLI than Claude Code, use the project-level folders ECC's README names for it.
+- Markdown only. Many ECC skills also ship scripts (`.sh`, `.py`, `.js`): leave those out and
+  prefer skills that work without them. Never run ECC's installer or scripts, never copy hook
+  definitions, MCP configs, settings or anything executable, and never install into the home folder.
+- Note the version (`git -C .agentty-ecc rev-parse --short HEAD`), then `rm -rf .agentty-ecc`.
+- Write docs/idea/HARNESS.md: the ECC commit, and each agent, skill and rule you installed with one
+  line on why. Point to it from CLAUDE.md so later sessions use the harness.
+- If the download fails (offline, git missing), go on without it and say so in PLAN.md.
+From here on, work through the harness: delegate to these agents and apply these skills.
 
 ## 1. Plan (short)
 - Write PLAN.md: one-paragraph product summary, target user, the pages/screens and features of the
@@ -264,6 +290,10 @@ pub const CLAUDE_SETTINGS: &str = r#"{
       "Bash(mv:*)",
       "Bash(cp:*)",
       "Bash(lsof -i:*)",
+      "Bash(git clone --depth 1 --filter=blob:none --sparse https://github.com/affaan-m/ECC.git .agentty-ecc)",
+      "Bash(git -C .agentty-ecc sparse-checkout set agents skills rules)",
+      "Bash(git -C .agentty-ecc rev-parse --short HEAD)",
+      "Bash(rm -rf .agentty-ecc)",
       "Bash(git init:*)",
       "Bash(git status:*)",
       "Bash(git add:*)",
