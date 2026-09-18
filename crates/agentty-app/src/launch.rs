@@ -181,11 +181,13 @@ impl LaunchSpec {
                 if let Some(model) = advisor.model() {
                     args.extend(["--advisor".into(), model.into()]);
                 }
-                args.extend(["--settings".into(), claude_hook_settings()]);
                 if crate::settings::browser_tools_enabled() {
-                    // The in-app browser as MCP tools (added to the user's own servers).
+                    // The in-app browser as MCP tools (added to the user's own servers). `--mcp-config`
+                    // takes any number of values, so it must not be the last option: a prompt right
+                    // after it is read as another config file ("Invalid MCP configuration").
                     args.extend(["--mcp-config".into(), browser_mcp_config()]);
                 }
+                args.extend(["--settings".into(), claude_hook_settings()]);
             }
             PaneKind::Codex => {
                 args.extend(["codex".into(), "-c".into(), codex_notify_override()]);
@@ -362,8 +364,20 @@ mod tests {
         let args = spec.command().unwrap();
         assert_eq!(args[..2], ["claude", "--session-id"]);
         assert_eq!(args[2], spec.session_id.clone().unwrap());
-        let settings: serde_json::Value = serde_json::from_str(&args[4]).unwrap();
+        let at = args.iter().position(|a| a == "--settings").unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&args[at + 1]).unwrap();
         assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().contains("AGENTTY_SOCKET"));
+    }
+
+    #[test]
+    fn claude_prompt_is_not_swallowed_by_mcp_config() {
+        let spec =
+            LaunchSpec::with_prompt(agentty_bridge::model::Agent::Claude, "Build my idea".into(), "Idea".into(), PathBuf::from("/tmp"));
+        let args = spec.command().unwrap();
+        assert_eq!(args.last().map(String::as_str), Some("Build my idea"));
+        // `--mcp-config <configs...>` would take the prompt as a second config file.
+        let before_prompt = &args[args.len() - 3];
+        assert_eq!(before_prompt, "--settings", "{args:?}");
     }
 
     #[test]
