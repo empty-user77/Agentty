@@ -581,7 +581,9 @@ impl TerminalView {
                     self.working_since = None;
                     self.status = AgentStatus::Finished(None);
                     self.attention = true;
-                    cx.emit(TerminalEvent::Notified { kind: NoticeKind::Finished, message: None });
+                    if !self.announce_with_headline(cx) {
+                        cx.emit(TerminalEvent::Notified { kind: NoticeKind::Finished, message: None });
+                    }
                 } else if self.quiet_ticks >= THINKING_GIVES_UP_TICKS {
                     // The Stop hook never came (a crash, a hook that was never installed). A pane
                     // that has shown nothing for this long is not thinking about anything: say it
@@ -851,7 +853,13 @@ impl TerminalView {
             SignalKind::Stop => {
                 self.status = AgentStatus::Finished(message.clone());
                 self.attention = true;
-                notice = Some(NoticeKind::Finished);
+                // Codex says what it answered; Claude Code's Stop hook does not, so the notice waits
+                // a moment for the first line of the reply from the transcript.
+                if message.is_none() && self.announce_with_headline(cx) {
+                    notice = None;
+                } else {
+                    notice = Some(NoticeKind::Finished);
+                }
             }
             SignalKind::Permission => {
                 let label = detail.tool.as_deref().map(|tool| tool_label(tool, detail.target.as_deref()));
@@ -949,6 +957,33 @@ impl TerminalView {
             self.working_since = None;
         }
         self.finish_signal(notice, message, cx);
+    }
+
+    /// Announces a finished Claude Code turn with the first line of what it answered instead of a
+    /// bare "Done". `false` when there is no transcript to read: the caller announces right away.
+    fn announce_with_headline(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.agent_kind() != Some(PaneKind::Claude) {
+            return false;
+        }
+        let Some(session) = self.session_id_live.clone().or_else(|| self.spec.session_id.clone()) else { return false };
+        cx.spawn(async move |this, cx| {
+            // The hook fires as the turn ends; give the last line of the transcript time to land.
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            let headline = cx
+                .background_spawn(async move {
+                    agentty_bridge::claude::find(&session).ok().and_then(|path| agentty_bridge::claude::last_reply_headline(&path))
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if matches!(view.status, AgentStatus::Finished(None)) {
+                    view.status = AgentStatus::Finished(headline.clone());
+                }
+                cx.emit(TerminalEvent::Notified { kind: NoticeKind::Finished, message: headline });
+                cx.notify();
+            });
+        })
+        .detach();
+        true
     }
 
     fn finish_signal(&mut self, notice: Option<NoticeKind>, message: Option<String>, cx: &mut Context<Self>) {

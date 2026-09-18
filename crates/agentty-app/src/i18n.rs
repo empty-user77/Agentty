@@ -524,6 +524,8 @@ strings! {
     "branch.publish_hint" => ["Publish this branch to origin", "이 브랜치를 origin에 올립니다", "このブランチを origin に公開します", "将此分支发布到 origin"],
     "branch.pulled" => ["Up to date with the remote", "최신 상태로 받아왔습니다", "リモートの最新を取り込みました", "已与远程同步"],
     "branch.pushed" => ["Pushed", "푸시했습니다", "プッシュしました", "已推送"],
+    "branch.no_remote" => ["This repository has no remote to open.", "이 저장소에는 열 수 있는 원격 저장소가 없습니다.", "このリポジトリには開けるリモートがありません。", "此仓库没有可打开的远程仓库。"],
+    "branch.not_pushed" => ["{branch} is not pushed yet — opened the repository instead.", "{branch} 브랜치는 아직 푸시되지 않아 저장소 페이지를 열었습니다.", "{branch} はまだプッシュされていないため、リポジトリのページを開きました。", "{branch} 尚未推送，已改为打开仓库页面。"],
     "branch.copy" => ["Copy branch name", "브랜치 이름 복사", "ブランチ名をコピー", "复制分支名"],
     "branch.copied" => ["Branch name copied", "브랜치 이름을 복사했습니다", "ブランチ名をコピーしました", "已复制分支名"],
     "settings.project" => ["Project", "프로젝트", "プロジェクト", "项目"],

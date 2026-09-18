@@ -106,6 +106,35 @@ fn scan_exchange(path: &Path, window: u64, prompt: &mut Option<String>, reply: &
     }
 }
 
+/// What the agent said last, for the notification that it is done: the first line of its latest
+/// reply, without Markdown markers. Claude Code's `Stop` hook says nothing about the answer.
+pub fn last_reply_headline(path: &Path) -> Option<String> {
+    for line in fsutil::tail_lines_rev(path, 384 * 1024) {
+        if !(line.contains("\"type\":\"assistant\"") && line.contains("\"type\":\"text\"")) || line.contains("\"isSidechain\":true") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        let Some(blocks) = v["message"]["content"].as_array() else { continue };
+        let text: Vec<&str> = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect();
+        if let Some(headline) = headline(&text.join("\n")) {
+            return Some(headline);
+        }
+    }
+    None
+}
+
+/// The first line that says something: headings, list and quote markers, emphasis and code ticks
+/// are dropped, and a line of nothing but those (`---`, "```") is skipped.
+fn headline(text: &str) -> Option<String> {
+    text.lines()
+        .map(|line| {
+            let line = line.trim().trim_start_matches(['#', '>', '-', '*', '+', ' ']).trim();
+            line.replace("**", "").replace("__", "").replace('`', "")
+        })
+        .map(|line| one_line(&line, 140))
+        .find(|line| line.chars().any(char::is_alphanumeric))
+}
+
 /// Distinct models (`claude-…` ids) used by the newest `limit` sessions, most recent first.
 pub fn recent_models(limit: usize) -> Vec<String> {
     let mut files = Vec::new();
@@ -427,6 +456,33 @@ mod tests {
             assert_eq!(peer_session(&first.session_id).map(|p| p.session_id), Some(first.session_id.clone()));
         }
         assert!(peer_session("not-a-session-id").is_none());
+    }
+
+    #[test]
+    fn the_headline_is_the_first_line_that_says_something() {
+        assert_eq!(headline("## Done\n\nDetails follow.").as_deref(), Some("Done"));
+        assert_eq!(headline("---\n**Fixed** the `login` bug.\nMore.").as_deref(), Some("Fixed the login bug."));
+        assert_eq!(headline("- first item\n- second").as_deref(), Some("first item"));
+        assert_eq!(headline("```\n\n").as_deref(), None);
+        assert_eq!(headline(&"word ".repeat(100)).map(|h| h.chars().count() <= 141), Some(true));
+
+        let dir = std::env::temp_dir().join(format!("agentty-headline-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("session.jsonl");
+        let line = |kind: &str, sidechain: bool, text: &str| {
+            serde_json::json!({ "type": kind, "isSidechain": sidechain, "message": { "content": [{ "type": "text", "text": text }] } })
+                .to_string()
+        };
+        let lines = [
+            line("assistant", false, "An older answer."),
+            line("user", false, "and now?"),
+            line("assistant", false, "Pinned the download.\n\nIt now fetches one commit."),
+            // A subagent's reply is not what the pane's agent said.
+            line("assistant", true, "Subagent report."),
+        ];
+        std::fs::write(&transcript, lines.join("\n") + "\n").unwrap();
+        assert_eq!(last_reply_headline(&transcript).as_deref(), Some("Pinned the download."));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
