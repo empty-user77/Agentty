@@ -201,8 +201,9 @@ impl Workbench {
         );
         for (page, key, shortcut) in [
             (Page::Flow, "page.flow", "⇧⌘F"),
-            (Page::Usage, "page.usage", "⌥⌘U"),
+            (Page::Usage, "page.monitoring", "⌥⌘U"),
             (Page::Processes, "page.processes", ""),
+            (Page::Proxy, "page.proxy", ""),
             (Page::Extensions, "page.extensions", "⇧⌘X"),
             (Page::Plugins, "page.plugins", ""),
             (Page::Idea, "page.idea", ""),
@@ -222,6 +223,8 @@ impl Workbench {
             );
         }
         push(t(cx, "panel.sessions"), general, Some("⇧⌘S"), Rc::new(|this, _, cx| this.show_panel(SidePanel::Sessions, cx)));
+        push(t(cx, "files.title"), general, Some("⌥⌘B"), Rc::new(|this, _, cx| this.toggle_files_panel(cx)));
+        push(t(cx, "onboarding.show_again"), general, None, Rc::new(|this, _, cx| this.open_onboarding(cx)));
         push(
             t(cx, "menu.toggle_sidebar"),
             general,

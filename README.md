@@ -26,7 +26,8 @@ each agent is doing and highlights the ones that need you.
 - **Instant launch** — new Terminal, Claude Code (Opus / Sonnet / Haiku) or Codex (your recent models) tabs, starting
   in a folder you choose. Other installed agents (Gemini CLI, Copilot CLI, Cursor Agent, OpenCode, Qwen Code, Amp,
   Droid, Goose, Crush, Aider) and local Ollama models are detected and offered; missing ones stay hidden.
-- **Agent harnesses** — entering a project that declares a harness (`.harness`, `HARNESS.md`, `harness.yaml`, …)
+- **Agent harnesses** — entering a project that declares a harness (`.harness`, `HARNESS.md`, `harness.yaml`, a project skill named
+  `harness` or `harness-*`, …)
   offers to start work through its commands and skills: pick an entry point such as `/implement`, paste a ticket key or link, and the
   agent starts with it. Detection patterns are configurable in Settings → Project.
 - **Local sessions** — browse `~/.claude` and `~/.codex` sessions, resume them, or migrate a conversation from Claude
@@ -53,12 +54,18 @@ each agent is doing and highlights the ones that need you.
   apps. The built-in **Cosmica** plugin turns Cosmica notes into prompts ("Continue in Agentty" from Cosmica) and saves
   AI session summaries back into Cosmica. Build your own with the Node.js SDK, or let Claude Code build it from the
   Plugins page — see [docs/plugins](docs/plugins/README.md).
-- **AI usage dashboard** — cost, calls, cache hit rate, tokens, models, projects and tools from local transcripts.
+- **Monitoring** — AI usage (cost, calls, cache hit rate, tokens, models, projects and tools from local transcripts),
+  the AI processes that are running, and a capture proxy that lists what your tabs talk to: start capture, open a tab,
+  filter by endpoint. HTTPS stays encrypted (host, bytes and timing only); nothing is written to disk.
+- **Files panel & working trees** — the folder structure and changes of the project you are in, docked right (⌥⌘B).
+  A second AI session in the same project starts in its own git worktree, so sessions never edit the same files; the
+  panel shows every working tree, who works in it and what changed there.
 - **Resume where you left off** — `cd` into a folder with earlier Claude Code / Codex sessions and a bar offers to
   continue them in place. Search local sessions by title, conversation or path (⇧⌘O).
 - **Service status** — when Claude Code, Codex or Amp is degraded while you use it, a banner links to its status page.
 - **In-app browser** — a WebKit panel next to your terminals (⇧⌘B). ⌘-click links in terminals to open them there or in
-  your default browser (Settings → General). Dev servers show up as `:port` chips in the workspace list.
+  your default browser (Settings → General). Dev servers show up as `:port` chips in the workspace list, open in the
+  in-app browser as soon as they answer, and are stopped when the tab that started them closes.
 - **Terminal essentials** — find in scrollback (⌘F), font zoom (⌘= / ⌘- / ⌘0), drop files to paste their paths, mouse
   reporting for full-screen apps (Claude Code, vim, htop) with Shift to select.
 - **Status bar inventory** — skills, subagents and MCP servers (with live connection state) of the agent in the current tab.
@@ -110,7 +117,8 @@ stays with the shell.
 | Toggle sidebar | ⌘B |
 | Workspaces / Local sessions | ⇧⌘E / ⇧⌘S |
 | Git / Extensions | ⇧⌘G / ⇧⌘X |
-| Session Flow / AI Usage / Settings | ⇧⌘F / ⌥⌘U / ⌘, |
+| Session Flow / Monitoring / Settings | ⇧⌘F / ⌥⌘U / ⌘, |
+| In-app browser / Files panel | ⇧⌘B / ⌥⌘B |
 | Command palette / Jump to unread | ⇧⌘P / ⇧⌘U |
 | Mini mode | ⌃⌘M |
 | Go to workspace / tab 1–9 | ⌘1…⌘9 / ⌃1…⌃9 |

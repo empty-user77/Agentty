@@ -5,7 +5,7 @@
 │ Workbench (root view)                                                      │
 │  ├─ groups → workspaces → tabs → PaneNode tree → TerminalView (pane)       │
 │  ├─ side bar: workspaces / local sessions                                  │
-│  ├─ pages: Git · Session Flow · AI Usage · Extensions · Settings           │
+│  ├─ pages: Git · Session Flow · Monitoring · Extensions · Settings         │
 │  └─ picker (folder), launcher, status bar                                  │
 │                                                                            │
 │ TerminalView ── Backend ── alacritty_terminal::Term + PTY I/O thread       │
@@ -116,6 +116,43 @@ next finished turn is its reply to that context and is not forwarded back, so tw
   into plain shells.
 
 See [docs/plugins](plugins/README.md) for the plugin developer guide and protocol.
+
+## Working trees and the files panel
+
+- `agentty_bridge::worktree` wraps `git worktree`. `workbench/worktrees.rs` hooks into `Workbench::launch`: a *new agent*
+  session whose folder is a working tree another live agent pane already uses gets `git worktree add -b
+  agentty/<name>` under `data_dir()/worktrees/<project>-<hash>/` and starts there. Shells, resumed sessions and the
+  first session stay in the project. Only trees under that folder are ever removed by Agentty (from the files panel,
+  never with `--force`).
+- `workbench/files_panel.rs` is the last column of the terminal area. It follows the active pane (or a tree picked in
+  the panel), reads folders lazily, colors entries from `git status`, and lists the repository's working trees with the
+  panes working in each. Everything is read on a background thread every few seconds while the panel is open. Files
+  are never opened from it (a project file could be a script): a path can be typed into the terminal or revealed.
+- `TerminalView::worktree` (set where the branch is) feeds the purple working-tree chip of the status bar.
+
+## Local servers
+
+`workbench/servers.rs` samples listening TCP ports under each pane's shell every few seconds (`procinfo::listeners`,
+`lsof` + `ps`). A new port of the visible workspace is probed with `GET /` on loopback and, if HTML comes back and links
+open in-app, opened in the in-app browser. When a pane closes, the shell's process tree is read *before* the pane is
+dropped, and whatever in it still listens gets `SIGTERM`, then `SIGKILL` three seconds later.
+
+## Monitoring → Proxy
+
+`capture.rs` is a forward proxy on `127.0.0.1` (std threads, no TLS code). Panes started while capture is on get
+`HTTPS_PROXY` / `HTTP_PROXY` of the form `http://pane-<id>:<token>@127.0.0.1:<port>`: the user name attributes a
+connection to its pane, the per-run random token keeps every other local process out (407). `CONNECT` is tunnelled
+untouched — no certificate, no decryption: host, bytes and timing only. Plain HTTP is forwarded one request per
+connection and records method, path (query values masked) and status, never headers or bodies. Records are a bounded
+in-memory ring. Once started the listener lives as long as the app, because panes keep pointing at it; stopping capture
+only stops recording. An upstream proxy from the app's own environment is chained.
+
+## Status bar layout and onboarding
+
+`hud.rs` holds the order and visibility of the AI CLI status bar items (`settings.hud`, read leniently so an unknown
+item never fails the settings file); `workbench/layout.rs` renders both the bar and split pane headers from it.
+`workbench/onboarding.rs` shows a welcome and a settings step as a dialog on first run, then a tour card whose tasks
+are ticked off by hooks in the features themselves (`onboarding_note`).
 
 ## Build my idea and Launch
 

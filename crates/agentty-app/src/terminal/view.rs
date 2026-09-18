@@ -256,6 +256,8 @@ pub struct TerminalView {
     pub last_activity_ms: u64,
     pub live_cwd: Option<PathBuf>,
     pub git_branch: Option<String>,
+    /// Name of the linked git worktree the pane works in (`None` in a project's own folder).
+    pub worktree: Option<String>,
     /// Uncommitted changes in the pane's repository.
     pub git_dirty: bool,
     /// Commits not pushed yet (`None` without an upstream).
@@ -365,6 +367,7 @@ impl TerminalView {
             last_activity_ms: crate::ui::now_ms(),
             live_cwd: None,
             git_branch: None,
+            worktree: None,
             git_dirty: false,
             git_ahead: None,
             git_probe: None,
@@ -445,6 +448,7 @@ impl TerminalView {
         self.live_tool = live_tool;
         if cwd.is_some() && cwd != self.live_cwd {
             self.git_branch = cwd.as_deref().and_then(crate::procinfo::git_branch);
+            self.worktree = cwd.as_deref().and_then(crate::workbench::worktrees::linked_tree_name);
             self.live_cwd = cwd;
             changed = true;
         }

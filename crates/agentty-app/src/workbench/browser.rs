@@ -29,6 +29,13 @@ pub struct BrowserPanel {
     _subscription: Subscription,
 }
 
+impl BrowserPanel {
+    /// Address of the page shown (or about to be).
+    pub(super) fn current_url(&self) -> Option<String> {
+        self.pending.clone().or_else(|| self.webview.borrow().as_ref().and_then(|view| view.current_url()))
+    }
+}
+
 impl Workbench {
     /// Opens `url` according to the user's choice (in-app panel or the default browser).
     pub(super) fn open_link(&mut self, url: String, cx: &mut Context<Self>) {
@@ -153,6 +160,7 @@ impl Workbench {
             || self.agent_panel.is_some()
             || self.prompt_dialog.is_some()
             || self.harness_dialog.is_some()
+            || self.onboarding.as_ref().is_some_and(|o| o.is_modal())
             // Native views swallow mouse events; hide it so the resize drag keeps reaching GPUI.
             || self.browser_resizing
     }

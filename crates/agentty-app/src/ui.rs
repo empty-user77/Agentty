@@ -37,6 +37,11 @@ pub const ICON_BUTTON: f32 = 26.0;
 
 /// Every icon referenced by name (checked by a test against the embedded assets).
 pub const ICONS: &[&str] = &[
+    "panel-right",
+    "git-fork",
+    "file",
+    "lock",
+    "graduation-cap",
     "circle-dot",
     "key-round",
     "minus",
@@ -425,6 +430,35 @@ pub fn tilde(path: &Path) -> String {
     }
 }
 
+/// A path that fits in `max` characters, cut in the middle: `/Users/me/…/wt/project`. The start
+/// says where it is, the end says what it is; what is left out is the part nobody reads.
+pub fn middle_ellipsis(path: &str, max: usize) -> String {
+    if path.chars().count() <= max {
+        return path.to_string();
+    }
+    let separator = if path.contains('\\') && !path.contains('/') { '\\' } else { '/' };
+    let parts: Vec<&str> = path.split(separator).collect();
+    let join = |head: usize, tail: usize| {
+        let (start, end) = (parts[..head].join(&separator.to_string()), parts[parts.len() - tail..].join(&separator.to_string()));
+        format!("{start}{separator}…{separator}{end}")
+    };
+    // An absolute path starts with an empty part (before the first separator): keep one more.
+    let lead = usize::from(parts.first().is_some_and(|p| p.is_empty()));
+    for (head, tail) in [(2 + lead, 2), (2 + lead, 1), (1 + lead, 1)] {
+        if head + tail < parts.len() {
+            let short = join(head, tail);
+            if short.chars().count() <= max {
+                return short;
+            }
+        }
+    }
+    // Even the two ends are too long (or there is nothing in between): keep both ends of the text.
+    let chars: Vec<char> = path.chars().collect();
+    let keep = max.saturating_sub(1).max(2);
+    let (front, back) = (keep / 2, keep - keep / 2);
+    format!("{}…{}", chars[..front].iter().collect::<String>(), chars[chars.len() - back..].iter().collect::<String>())
+}
+
 pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -513,6 +547,21 @@ pub fn scrollbar(handle: gpui::ScrollHandle) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn long_paths_are_cut_in_the_middle() {
+        use super::middle_ellipsis;
+        assert_eq!(middle_ellipsis("~/code/app", 40), "~/code/app");
+        let long = "/private/tmp/claude-501/-Users-ray-Agentty-Agentty/0023c80e/scratchpad/wt/cap1";
+        assert_eq!(middle_ellipsis(long, 40), "/private/tmp/…/wt/cap1");
+        assert_eq!(middle_ellipsis("~/Agentty/Agentty/crates/agentty-app/src/workbench", 30), "~/Agentty/…/src/workbench");
+        // Less room: one folder at each end, then the two ends of the text itself.
+        assert_eq!(middle_ellipsis(long, 18), "/private/…/cap1");
+        let short = middle_ellipsis("/a-very-long-single-folder-name-without-anything-else", 12);
+        assert_eq!(short.chars().count(), 12);
+        assert!(short.contains('…'));
+        assert_eq!(middle_ellipsis("C:\\Users\\ray\\projects\\app\\src\\deep", 24), "C:\\Users\\…\\src\\deep");
+    }
+
     use super::*;
 
     #[test]

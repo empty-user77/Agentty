@@ -29,6 +29,8 @@ pub fn is_visible(_window: Id) -> bool {
 
 pub fn order_front_regardless(_window: Id) {}
 
+pub fn order_back(_window: Id) {}
+
 pub fn window_number(_window: Id) -> isize {
     0
 }

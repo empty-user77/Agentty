@@ -18,9 +18,41 @@ All notable changes to this project are documented here. The format follows
   token, Amazon Bedrock or Google Vertex AI, and Codex with an API key or an imported `auth.json`, for machines where
   the CLI login isn't possible. Keys are kept in the OS credential store and can be tested before use.
 
+- Files panel docked at the right (⌥⌘B, next to the split buttons): the folder structure and changes of the project
+  the active tab works in, with git status colors. A path can be typed into the terminal or shown in the file manager.
+- A working tree per AI session: a new AI session in a project where another one is already at work starts in its own
+  git worktree on a new `agentty/…` branch, so sessions never edit the same files. The files panel lists every working
+  tree with the sessions in it and what changed there, the status bar shows a working-tree chip, and trees Agentty
+  created can be removed from the panel once no session works in them and they are clean. Settings → General turns
+  it off.
+- Monitoring → Proxy: start capture, open a tab or AI session, and every connection it makes is listed — endpoint,
+  method, status, bytes and duration — with filters by endpoint, tab or text. HTTPS stays encrypted (no certificate is
+  installed); records are kept in memory only.
+- Status bar customization (Settings → Appearance): drag the items of the AI CLI status bar into any order and hide the
+  ones you don't need; model, context, status and branch can be moved but not hidden. A local server ports item can be
+  turned on.
+- A local server started in a tab opens in the in-app browser as soon as it answers with a page (when links open
+  in-app), and is stopped when the tab, pane or workspace that started it closes. Both can be turned off.
+- First-run onboarding: a welcome, the settings worth choosing on day one, and a follow-along tour of split panes,
+  Session Flow, mini mode, the in-app browser, the files panel and Monitoring — numbered steps that light the real
+  button, notice when you did them and say what just happened. Settings → About shows it again.
+
+- Agent harnesses: a project skill named `harness` or `harness-<something>` (`<project>/.claude/skills/…/SKILL.md`)
+  now marks the project as a harness, like `HARNESS.md` does.
+
 ### Changed
+- "AI Usage" is now "Monitoring", with AI Usage, AI Processes and Proxy as its tabs.
+- The enlarge and close buttons of split panes are always visible, not only on hover.
+- The folder in the AI CLI status bar and in split pane headers is cut in the middle when it is long
+  (`~/code/…/src/app`); hovering shows the whole path and ⌘-click (Ctrl-click on Windows / Linux) shows the folder in
+  the file manager.
 - API connector keys use the platform's credential store (Keychain on macOS, unchanged; Credential Manager on Windows;
   Secret Service on Linux).
+
+### Fixed
+- The context meter dropped only after the next prompt following `/compact`; it now shows the compacted size right away.
+- Icons next to text in the AI CLI status bar and pane headers (folder, branch, working tree) sat slightly above
+  their labels.
 
 ## [0.1.9] - 2026-09-18
 

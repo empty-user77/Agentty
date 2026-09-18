@@ -324,36 +324,55 @@ mod agent_tests {
     }
 }
 
-/// TCP ports listened on by each of `roots`' process trees (like cmux's sidebar ports).
-pub fn listening_ports(roots: &[u32]) -> std::collections::HashMap<u32, Vec<u16>> {
-    use std::collections::HashMap;
-    let mut result: HashMap<u32, Vec<u16>> = HashMap::new();
-    if roots.is_empty() {
-        return result;
-    }
-    let run = |program: &str, args: &[&str]| {
-        std::process::Command::new(program)
-            .args(args)
-            .stderr(std::process::Stdio::null())
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default()
-    };
+/// A process under a pane's shell that listens on a TCP port: a dev server, most of the time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Listener {
+    pub pid: u32,
+    pub port: u16,
+}
+
+fn run_quiet(program: &str, args: &[&str]) -> String {
+    std::process::Command::new(program)
+        .args(args)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+}
+
+/// Every pid and its parent, from one `ps` call (empty on Windows).
+pub fn process_parents() -> std::collections::HashMap<u32, u32> {
     if cfg!(windows) {
-        return result; // no ps / lsof; ports are not shown on Windows
+        return Default::default();
+    }
+    parse_ps(&run_quiet("/bin/ps", &["-A", "-o", "pid=,ppid="]))
+}
+
+/// Every process listening on a TCP port (empty on Windows: no `lsof`).
+fn tcp_listeners() -> Vec<(u32, Vec<u16>)> {
+    if cfg!(windows) {
+        return Vec::new();
     }
     let lsof = if cfg!(target_os = "macos") { "/usr/sbin/lsof" } else { "lsof" };
-    let parents = parse_ps(&run("/bin/ps", &["-A", "-o", "pid=,ppid="]));
-    let listeners = parse_lsof(&run(lsof, &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]));
-    for (pid, ports) in listeners {
+    parse_lsof(&run_quiet(lsof, &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]))
+}
+
+/// Listeners in each of `roots`' process trees (like cmux's sidebar ports), keyed by root.
+pub fn listeners(roots: &[u32]) -> std::collections::HashMap<u32, Vec<Listener>> {
+    let mut result: std::collections::HashMap<u32, Vec<Listener>> = Default::default();
+    if roots.is_empty() || cfg!(windows) {
+        return result; // no ps / lsof; ports are not shown on Windows
+    }
+    let parents = process_parents();
+    for (pid, ports) in tcp_listeners() {
         // Walk up to a pane's shell.
         let mut current = pid;
         for _ in 0..64 {
             if roots.contains(&current) {
                 let entry = result.entry(current).or_default();
                 for port in &ports {
-                    if !entry.contains(port) {
-                        entry.push(*port);
+                    if !entry.iter().any(|l| l.port == *port) {
+                        entry.push(Listener { pid, port: *port });
                     }
                 }
                 break;
@@ -364,9 +383,73 @@ pub fn listening_ports(roots: &[u32]) -> std::collections::HashMap<u32, Vec<u16>
             }
         }
     }
-    result.values_mut().for_each(|ports| ports.sort_unstable());
+    result.values_mut().for_each(|found| found.sort_unstable_by_key(|l| l.port));
     result
 }
+
+/// Every pid below `root` in `parents` (the root itself is not included).
+pub fn descendants(root: u32, parents: &std::collections::HashMap<u32, u32>) -> Vec<u32> {
+    let mut found = Vec::new();
+    for &pid in parents.keys() {
+        let mut current = pid;
+        for _ in 0..64 {
+            match parents.get(&current) {
+                Some(&parent) if parent == root => {
+                    found.push(pid);
+                    break;
+                }
+                Some(&parent) if parent > 1 && parent != current => current = parent,
+                _ => break,
+            }
+        }
+    }
+    found.sort_unstable();
+    found
+}
+
+/// Asks the local servers among `candidates` — processes of a pane that is closing — to stop.
+///
+/// Only a process that is listening on a TCP port *right now* gets the `SIGTERM`, so a pid that was
+/// recycled in the meantime, or a child that never served anything, is left alone. Returns what was
+/// signalled; `kill_remaining` a few seconds later ends whatever ignored it.
+pub fn terminate_listeners(candidates: &[u32]) -> Vec<Listener> {
+    let stopped = serving(candidates);
+    for listener in &stopped {
+        signal(listener.pid, false);
+    }
+    stopped
+}
+
+/// `SIGKILL` for the servers of `terminate_listeners` that are still listening.
+pub fn kill_remaining(stopped: &[Listener]) {
+    let pids: Vec<u32> = stopped.iter().map(|l| l.pid).collect();
+    for listener in serving(&pids) {
+        // Still the same server (same port), not a process that took over the pid.
+        if stopped.contains(&listener) {
+            signal(listener.pid, true);
+        }
+    }
+}
+
+/// Which of `candidates` listen on a TCP port now (never this app, never pid 1).
+fn serving(candidates: &[u32]) -> Vec<Listener> {
+    let own = std::process::id();
+    tcp_listeners()
+        .into_iter()
+        .filter(|(pid, _)| *pid > 1 && *pid != own && candidates.contains(pid))
+        .filter_map(|(pid, ports)| Some(Listener { pid, port: *ports.first()? }))
+        .collect()
+}
+
+#[cfg(unix)]
+fn signal(pid: u32, force: bool) {
+    unsafe {
+        libc::kill(pid as libc::pid_t, if force { libc::SIGKILL } else { libc::SIGTERM });
+    }
+}
+
+#[cfg(not(unix))]
+fn signal(_pid: u32, _force: bool) {}
 
 pub fn parse_ps(output: &str) -> std::collections::HashMap<u32, u32> {
     output
@@ -406,5 +489,9 @@ mod port_tests {
         let ps = "  900   850\n  850   800\n  901     1\n";
         let parents = parse_ps(ps);
         assert_eq!(parents.get(&900), Some(&850));
+        // Everything below a pane's shell, however deep; a process that left for pid 1 is not its.
+        assert_eq!(descendants(800, &parents), vec![850, 900]);
+        assert_eq!(descendants(850, &parents), vec![900]);
+        assert!(descendants(900, &parents).is_empty());
     }
 }
