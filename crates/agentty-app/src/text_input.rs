@@ -2,9 +2,9 @@
 
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun,
-    UTF16Selection, UnderlineStyle, Window,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection,
+    UnderlineStyle, Window,
 };
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -20,22 +20,22 @@ const CONTEXT: &str = "TextInput";
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
-        KeyBinding::new("delete", Delete, Some(CONTEXT)),
-        KeyBinding::new("left", Left, Some(CONTEXT)),
-        KeyBinding::new("right", Right, Some(CONTEXT)),
-        KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT)),
-        KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
-        KeyBinding::new("cmd-a", SelectAll, Some(CONTEXT)),
-        KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
-        KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
-        KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
-        KeyBinding::new("home", Home, Some(CONTEXT)),
-        KeyBinding::new("end", End, Some(CONTEXT)),
-        KeyBinding::new("enter", Confirm, Some(CONTEXT)),
-        KeyBinding::new("escape", Cancel, Some(CONTEXT)),
-        KeyBinding::new("up", MoveUp, Some(CONTEXT)),
-        KeyBinding::new("down", MoveDown, Some(CONTEXT)),
+        crate::key("backspace", Backspace, Some(CONTEXT)),
+        crate::key("delete", Delete, Some(CONTEXT)),
+        crate::key("left", Left, Some(CONTEXT)),
+        crate::key("right", Right, Some(CONTEXT)),
+        crate::key("shift-left", SelectLeft, Some(CONTEXT)),
+        crate::key("shift-right", SelectRight, Some(CONTEXT)),
+        crate::key("cmd-a", SelectAll, Some(CONTEXT)),
+        crate::key("cmd-v", Paste, Some(CONTEXT)),
+        crate::key("cmd-c", Copy, Some(CONTEXT)),
+        crate::key("cmd-x", Cut, Some(CONTEXT)),
+        crate::key("home", Home, Some(CONTEXT)),
+        crate::key("end", End, Some(CONTEXT)),
+        crate::key("enter", Confirm, Some(CONTEXT)),
+        crate::key("escape", Cancel, Some(CONTEXT)),
+        crate::key("up", MoveUp, Some(CONTEXT)),
+        crate::key("down", MoveDown, Some(CONTEXT)),
     ]);
 }
 

@@ -116,6 +116,55 @@ fn remember_auto_mode(supported: bool) {
     }
 }
 
+/// Probe output in [`parse_probe`]'s format.
+#[cfg(unix)]
+fn probe() -> String {
+    // Interactive login shell: many installs (e.g. `~/.local/bin` for Claude Code, nvm) only reach
+    // PATH through `.zshrc`, which a login-only shell started from Finder never reads.
+    std::process::Command::new(crate::launch::LaunchSpec::shell_program())
+        .args(["-l", "-i", "-c", &probe_script()])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+}
+
+/// Windows: programs are found on PATH (with PATHEXT) and asked for their version directly.
+#[cfg(windows)]
+fn probe() -> String {
+    use agentty_bridge::process::{command, which};
+    let run = |program: &std::path::Path, args: &[&str]| {
+        command(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    };
+    let mut out = String::new();
+    for binary in ["claude", "codex", "ollama"].into_iter().chain(OTHER_AGENTS.iter().map(|a| a.binary)) {
+        let Some(path) = which(binary) else { continue };
+        out.push_str(&format!("bin:{binary}\n"));
+        if matches!(binary, "claude" | "codex") {
+            let version = run(&path, &["--version"]);
+            out.push_str(&format!("version:{binary}:{}\n", version.lines().next().unwrap_or_default()));
+        }
+        // Same check as the Unix probe: does this Claude Code accept `--permission-mode auto`?
+        if binary == "claude" && run(&path, &["--help"]).contains("\"auto\"") {
+            out.push_str(&format!("{CLAUDE_AUTO_MODE_LINE}\n"));
+        }
+        if binary == "ollama" {
+            for line in run(&path, &["list"]).lines() {
+                out.push_str(&format!("ollama:{line}\n"));
+            }
+        }
+    }
+    out
+}
+
+#[cfg_attr(windows, allow(dead_code))]
 fn probe_script() -> String {
     let binaries: Vec<&str> = ["claude", "codex", "ollama"].into_iter().chain(OTHER_AGENTS.iter().map(|a| a.binary)).collect();
     let list = binaries.iter().map(|b| shell_quote(b)).collect::<Vec<_>>().join(" ");
@@ -204,15 +253,7 @@ fn claude_models() -> Vec<(String, String)> {
 }
 
 pub fn detect() -> Installed {
-    // Interactive login shell: many installs (e.g. `~/.local/bin` for Claude Code, nvm) only reach
-    // PATH through `.zshrc`, which a login-only shell started from Finder never reads.
-    let output = std::process::Command::new(crate::launch::LaunchSpec::shell_program())
-        .args(["-l", "-i", "-c", &probe_script()])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
+    let output = probe();
     let (binaries, ollama_models, versions) = parse_probe(&output);
     remember_auto_mode(output.lines().any(|line| line.trim() == CLAUDE_AUTO_MODE_LINE));
     let codex_models = if binaries.contains("codex") { codex_models() } else { Vec::new() };

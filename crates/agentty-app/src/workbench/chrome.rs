@@ -141,7 +141,14 @@ impl Workbench {
         }
     }
 
-    pub(super) fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Agentty's own title bar. macOS draws the traffic lights over it; Windows and Linux use the
+    /// system title bar, except Linux compositors without server-side decorations (GNOME on
+    /// Wayland), where this bar also moves the window and carries its buttons.
+    pub(super) fn render_title_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let client_side = !cfg!(target_os = "macos") && matches!(window.window_decorations(), gpui::Decorations::Client { .. });
+        if !cfg!(target_os = "macos") && !client_side {
+            return div().into_any_element();
+        }
         let title = self.workspaces.get(self.active_workspace).map(|ws| self.workspace_title(ws, cx)).unwrap_or_default();
         div()
             .id("title-bar")
@@ -150,17 +157,51 @@ impl Workbench {
             .flex()
             .items_center()
             .justify_center()
+            .relative()
             .bg(hex(Chrome::ACTIVITY_BAR))
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .t_small()
             .text_color(hex(Chrome::MUTED))
-            .on_mouse_down(MouseButton::Left, |event: &MouseDownEvent, window, _| {
+            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, _| {
                 if event.click_count == 2 {
                     window.titlebar_double_click();
+                } else if client_side {
+                    window.start_window_move();
                 }
             })
             .child(if title.is_empty() { "Agentty".to_string() } else { format!("{title} — Agentty") })
+            .when(client_side, |bar| {
+                let slot = self.slot;
+                bar.child(
+                    div()
+                        .absolute()
+                        .right(px(6.))
+                        .top_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        // Buttons must not start a window move.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(icon_only("window-minimize", "minus", |_, window, _| window.minimize_window()))
+                        .child(icon_only("window-zoom", "square", |_, window, _| window.zoom_window()))
+                        .child(icon_only(
+                            "window-close",
+                            "x",
+                            cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.persist(cx);
+                                // Without a menu bar item, closing the main window ends Agentty.
+                                if slot == 0 {
+                                    cx.quit();
+                                } else {
+                                    window.remove_window();
+                                }
+                            }),
+                        )),
+                )
+            })
+            .into_any_element()
     }
 
     pub(super) fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1351,13 +1392,15 @@ impl Workbench {
                 (t(cx, "tooltip.browser"), Some("⇧⌘B")),
                 cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
             ))
-            .child(header_icon(
-                "header-mini",
-                "picture-in-picture-2",
-                false,
-                (t(cx, "mini.enter"), Some("⌃⌘M")),
-                cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
-            ))
+            .when(crate::platform::HAS_MINI_MODE, |d| {
+                d.child(header_icon(
+                    "header-mini",
+                    "picture-in-picture-2",
+                    false,
+                    (t(cx, "mini.enter"), Some("⌃⌘M")),
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
+                ))
+            })
             .child(header_icon(
                 "header-split-right",
                 "columns-2",
@@ -1401,7 +1444,7 @@ impl Workbench {
                     )),
                 })
                 .child(div().flex_1().min_w_0().truncate().t_body().child(label))
-                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(shortcut))
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(crate::keymap::display(shortcut).into_owned()))
         };
         // Model shortcuts under an agent: "Opus · Sonnet · Haiku".
         let models = |kind: PaneKind, models: Vec<(String, String)>, cx: &mut Context<Self>| {

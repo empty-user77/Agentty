@@ -114,12 +114,16 @@ mod tests {
 
     #[test]
     fn parses_prompt_and_store_links() {
-        let Link::Prompt(request) = parse("agentty://prompt?text=Fix+the+build&agent=codex&cwd=%2Ftmp&title=Build").unwrap() else {
+        // An absolute folder of this platform (`C:\…` on Windows, `/…` elsewhere).
+        let folder = std::env::temp_dir();
+        let encoded: String = url::form_urlencoded::byte_serialize(folder.display().to_string().as_bytes()).collect();
+        let Link::Prompt(request) = parse(&format!("agentty://prompt?text=Fix+the+build&agent=codex&cwd={encoded}&title=Build")).unwrap()
+        else {
             panic!("not a prompt link")
         };
         assert_eq!(request.text, "Fix the build");
         assert_eq!(request.agent.as_deref(), Some("codex"));
-        assert_eq!(request.cwd, Some(PathBuf::from("/tmp")));
+        assert_eq!(request.cwd, Some(folder));
         assert!(request.submit);
         assert!(parse("agentty://prompt?text=").is_err());
         assert!(parse("agentty://prompt?file=%2Fetc%2Fpasswd").is_err());
@@ -145,10 +149,13 @@ mod tests {
         // A symlink that leads into a hidden folder is refused, like the folder itself.
         let secret = hidden.join("secret.md");
         std::fs::write(&secret, "# Secret").unwrap();
-        let link = dir.join("shortcut.md");
-        let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink(&secret, &link).unwrap();
-        assert!(parse(&format!("agentty://prompt?text=Continue&file={}", encode(&link))).is_err());
+        #[cfg(unix)]
+        {
+            let link = dir.join("shortcut.md");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&secret, &link).unwrap();
+            assert!(parse(&format!("agentty://prompt?text=Continue&file={}", encode(&link))).is_err());
+        }
         assert!(parse(&format!("agentty://prompt?text=Continue&file={}", encode(&secret))).is_err());
         std::fs::remove_dir_all(dir).ok();
     }

@@ -49,6 +49,10 @@ impl Workbench {
 
     /// Shows the panel (loading `url` if given). The panel itself is built on the next render.
     pub(super) fn open_browser(&mut self, url: Option<String>, cx: &mut Context<Self>) {
+        if !crate::platform::HAS_WEBVIEW {
+            // No embedded browser on this platform: the default browser opens the page instead.
+            return cx.open_url(&url.unwrap_or_else(|| browser_url(&settings(cx).browser.home, cx)));
+        }
         self.page = None;
         match self.browser.as_mut() {
             Some(browser) => {

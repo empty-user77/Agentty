@@ -28,6 +28,7 @@ import {
 } from '../lib/parse.mjs';
 import { pickGhAsset, pickGhChecksums, checksumFor, findGhBinary } from '../lib/tools.mjs';
 import { REQUIRED_VERCELIGNORE_LINES, IDEA_NOTES_GITIGNORE_LINES, secretFilesAtRisk, describeRemote } from '../lib/parse.mjs';
+import { isVercelProductionDeployment, pickVercelProductionDeployments, summarizeDeployment, liveUrlOf, parseInspectDomains } from '../lib/parse.mjs';
 import { pathWithExtras } from '../lib/exec.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -361,6 +362,20 @@ case "$1" in
   api)
     if [ "$3" = "--jq" ] && [ "$4" = ".login" ]; then echo "fakeuser"; exit 0; fi
     if [ "$3" = "--jq" ]; then echo '{"login":"fakeuser","id":424242}'; exit 0; fi
+    # A repository Vercel already deploys from GitHub (FAKE_HOSTED=1): its production deployments.
+    case "$2" in
+      repos/fake-user/my-cool-app/deployments/7/statuses*)
+        echo '[{"state":"success","environment_url":"https://my-cool-app-live.vercel.app","log_url":"https://vercel.com/fake-user/my-cool-app/dpl7","created_at":"2026-09-18T10:00:00Z"}]'; exit 0 ;;
+      repos/fake-user/my-cool-app/deployments/6/statuses*)
+        echo '[{"state":"failure","environment_url":"https://my-cool-app-old.vercel.app","created_at":"2026-09-17T10:00:00Z"}]'; exit 0 ;;
+      repos/fake-user/my-cool-app/deployments*)
+        if [ -n "$FAKE_HOSTED" ]; then
+          echo '[{"id":7,"sha":"abcdef1234567","ref":"main","environment":"Production","creator":{"login":"vercel[bot]"},"created_at":"2026-09-18T09:59:00Z"},{"id":8,"sha":"fffffff","ref":"feature","environment":"Preview","creator":{"login":"vercel[bot]"}},{"id":6,"sha":"1234567aaaa","ref":"main","environment":"Production","creator":{"login":"vercel[bot]"}}]'
+        else
+          echo '[]'
+        fi
+        exit 0 ;;
+    esac
     ;;
   repo)
     case "$2" in
@@ -373,7 +388,7 @@ case "$1" in
         exit 0
         ;;
       view)
-        echo "https://github.com/fake-user/my-cool-app"
+        if [ "$4" = "nameWithOwner" ]; then echo "fake-user/my-cool-app"; else echo "https://github.com/fake-user/my-cool-app"; fi
         exit 0
         ;;
     esac
@@ -410,6 +425,7 @@ function start(box, results = {}) {
     PATH: `${box.bin}:${process.env.PATH}`,
     FAKE_REMOTES_DIR: box.remotes,
     FAKE_SB_DIR: box.supabase,
+    ...(box.env ?? {}),
   };
   const child = spawn(process.execPath, ['main.mjs'], { cwd: box.plugin, env, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => {}); // the plugin process may already be gone by the time a late reply is sent
@@ -682,23 +698,39 @@ test('Launch uses an existing Supabase project and asks for its database passwor
 });
 
 /** Waits for a `ui/setPanel` whose tree contains a button with this id (skips intermediate spinner frames). */
-async function waitForButton(host, id, timeout = 15000) {
+/** Texts of a panel tree, for failure messages. */
+function panelTexts(tree) {
+  const texts = [];
+  (function walk(node) {
+    if (!node) return;
+    for (const key of ['text', 'label', 'title']) if (typeof node[key] === 'string') texts.push(node[key]);
+    for (const child of node.children ?? []) walk(child);
+  })(tree);
+  return texts.join(' | ').slice(0, 600);
+}
+
+async function waitForPanel(host, matches, what, timeout) {
   const started = Date.now();
+  let last = null;
   for (;;) {
-    const message = await host.next('ui/setPanel', timeout - (Date.now() - started));
-    if (buttonIds(message.params.tree).includes(id)) return message.params.tree;
-    if (Date.now() - started > timeout) throw new Error(`no panel with button ${id} within ${timeout}ms`);
+    let message;
+    try {
+      message = await host.next('ui/setPanel', timeout - (Date.now() - started));
+    } catch (err) {
+      throw new Error(`${err.message}\nwaiting for ${what}; last panel: ${panelTexts(last)}`);
+    }
+    last = message.params.tree;
+    if (matches(last)) return last;
+    if (Date.now() - started > timeout) throw new Error(`no panel with ${what} within ${timeout}ms; last panel: ${panelTexts(last)}`);
   }
 }
 
-/** Waits for a `ui/setPanel` whose serialized tree matches `re`. */
-async function waitForText(host, re, timeout = 15000) {
-  const started = Date.now();
-  for (;;) {
-    const message = await host.next('ui/setPanel', timeout - (Date.now() - started));
-    if (re.test(JSON.stringify(message.params.tree))) return message.params.tree;
-    if (Date.now() - started > timeout) throw new Error(`no panel matching ${re} within ${timeout}ms`);
-  }
+function waitForButton(host, id, timeout = 15000) {
+  return waitForPanel(host, (tree) => buttonIds(tree).includes(id), `button ${id}`, timeout);
+}
+
+function waitForText(host, re, timeout = 15000) {
+  return waitForPanel(host, (tree) => re.test(JSON.stringify(tree)), String(re), timeout);
 }
 
 test('parseDeployUrl prefers the public alias over the protected deployment URL', () => {
@@ -715,3 +747,82 @@ test('parseInspectAlias picks the shortest vercel.app alias', () => {
   assert.equal(parseInspectAlias(output), 'https://my-app.vercel.app');
   assert.equal(parseInspectAlias('nothing'), null);
 });
+
+test('Vercel production deployments are recognized from GitHub', () => {
+  const vercel = (environment, login = 'vercel[bot]') => ({ environment, creator: { login } });
+  assert.ok(isVercelProductionDeployment(vercel('Production')));
+  assert.ok(isVercelProductionDeployment(vercel('Production – my-app')));
+  assert.ok(!isVercelProductionDeployment(vercel('Preview')));
+  assert.ok(!isVercelProductionDeployment(vercel('Production', 'someone')), 'deployments made by others are not Vercel\'s');
+  assert.deepEqual(pickVercelProductionDeployments([vercel('Preview'), vercel('Production'), vercel('Production')], 1), [vercel('Production')]);
+  assert.deepEqual(pickVercelProductionDeployments(null), []);
+
+  const summary = summarizeDeployment(
+    { sha: 'abcdef1234567', ref: 'main', created_at: '2026-09-18T09:59:00Z' },
+    [{ state: 'success', environment_url: 'https://app.vercel.app', log_url: 'javascript:alert(1)', target_url: 'https://vercel.com/x/y', created_at: '2026-09-18T10:00:00Z' }],
+  );
+  assert.deepEqual(summary, { state: 'success', url: 'https://app.vercel.app', inspectUrl: 'https://vercel.com/x/y', sha: 'abcdef1', ref: 'main', time: Date.parse('2026-09-18T10:00:00Z') });
+  // Only https links are kept: the panel opens them.
+  assert.equal(summarizeDeployment({}, [{ environment_url: 'http://plain.example' }]).url, null);
+  assert.equal(summarizeDeployment({}, null).state, 'pending');
+  assert.equal(liveUrlOf([{ state: 'failure', url: 'https://new.vercel.app' }, { state: 'success', url: 'https://ok.vercel.app' }]), 'https://ok.vercel.app');
+  assert.equal(liveUrlOf([{ state: 'in_progress', url: 'https://new.vercel.app' }]), 'https://new.vercel.app');
+});
+
+test('Launch: a repository Vercel already deploys shows the live site, and publishing only pushes', async () => {
+  const box = sandbox();
+  box.env = { FAKE_HOSTED: '1' };
+  // An existing project with a remote that Launch never saved to (set up outside Launch).
+  const git = (...args) => execFileSync('git', args, { cwd: box.project, stdio: 'pipe' });
+  const bare = path.join(box.remotes, 'my-cool-app.git');
+  execFileSync('git', ['init', '--quiet', '--bare', bare]);
+  git('init', '--quiet');
+  git('add', '-A');
+  git('-c', 'user.name=Fake', '-c', 'user.email=fake@example.com', 'commit', '--quiet', '-m', 'first');
+  git('remote', 'add', 'origin', bare);
+  git('push', '--quiet', '-u', 'origin', 'HEAD');
+  const host = start(box);
+  try {
+    host.send('panel/open', { context: host.context });
+    let panel = await waitForButton(host, 'open-vercel');
+    const text = JSON.stringify(panel);
+    assert.match(text, /Live on Vercel/);
+    assert.match(text, /https:\/\/my-cool-app-live\.vercel\.app/, 'the newest successful production URL');
+    assert.match(text, /abcdef1/, 'the latest commit');
+    assert.match(text, /fake-user\/my-cool-app/, 'the repository pushes go to is named before publishing');
+    assert.ok(!buttonIds(panel).includes('deploy-start'), 'no first-launch "Publish" for a site that is already live');
+    assert.ok(!buttonIds(panel).includes('gh-save'), 'no remote confirmation needed to look at it');
+
+    // "Publish my changes" pushes to GitHub; Vercel builds it. No `vercel deploy` (it could create a second project).
+    fs.writeFileSync(path.join(box.project, 'index.html'), '<h1>new</h1>');
+    host.send('ui/event', { element: 'update-site', event: 'click', context: host.context });
+    panel = await waitForText(host, /Pushed/);
+    assert.ok(!fs.existsSync(path.join(box.root, 'deploys.log')), 'vercel deploy was not run');
+    const remoteLog = execFileSync('git', ['--git-dir', bare, 'log', '--oneline'], { encoding: 'utf8' });
+    assert.equal(remoteLog.trim().split('\n').length, 2, 'the change reached the remote');
+  } finally {
+    host.stop();
+  }
+});
+
+test('the live site is shown at its own domain, and commit refs are not branch names', () => {
+  const inspect = [
+    'Vercel CLI 50.0.0',
+    '  General',
+    '    name\tmy-site',
+    '    url\t\thttps://my-site-abc123-team.vercel.app',
+    '  Aliases',
+    '    ╶ https://www.example.com',
+    '    ╶ https://example.com',
+    '    ╶ https://my-site.vercel.app',
+    '    ╶ https://my-site-git-main-team.vercel.app',
+    '  Builds',
+    '    ╶ https://not-an-alias.example',
+  ].join('\n');
+  assert.deepEqual(parseInspectDomains(inspect), ['https://example.com', 'https://www.example.com', 'https://my-site.vercel.app']);
+  assert.deepEqual(parseInspectDomains('no aliases here'), []);
+  const sha = 'a'.repeat(40);
+  assert.equal(summarizeDeployment({ ref: sha, sha }, []).ref, null);
+  assert.equal(summarizeDeployment({ ref: 'main', sha }, []).ref, 'main');
+});
+

@@ -498,7 +498,7 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
         "host/revealPath" => {
             let path = std::path::PathBuf::from(params.get("path").and_then(Value::as_str).unwrap_or_default());
             if path.is_absolute() && path.exists() {
-                let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&path).spawn();
+                crate::platform::reveal(&path);
                 reply(Ok(Value::Null), cx)
             } else {
                 // Same answer whether the path is missing or not absolute: a plugin has no

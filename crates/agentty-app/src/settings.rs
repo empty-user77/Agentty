@@ -49,17 +49,10 @@ impl Language {
         }
     }
 
-    /// First preferred macOS language, falling back to `LANG`, then English.
+    /// First preferred system language (macOS languages, the Windows locale, `LANG` on Linux),
+    /// then English.
     fn detect() -> Self {
-        let preferred = std::process::Command::new("defaults")
-            .args(["read", "-g", "AppleLanguages"])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .and_then(|s| s.lines().nth(1).map(|l| l.trim().trim_matches(|c| c == '"' || c == ',').to_string()))
-            .or_else(|| std::env::var("LANG").ok())
-            .unwrap_or_default();
-        Self::from_code(&preferred)
+        Self::from_code(&crate::platform::preferred_language())
     }
 
     /// `ko-KR` → Korean; unsupported languages → English.
@@ -157,6 +150,8 @@ pub struct Settings {
     pub harness_submit: bool,
     /// Agent that starts harness work.
     pub harness_agent: HarnessAgent,
+    /// The first-launch system check ran (Windows / Linux).
+    pub setup_check_shown: bool,
 }
 
 /// Which agent starts work through a harness.
@@ -330,6 +325,7 @@ impl Default for Settings {
             harness_patterns: Vec::new(),
             harness_submit: true,
             harness_agent: HarnessAgent::Auto,
+            setup_check_shown: false,
         }
     }
 }

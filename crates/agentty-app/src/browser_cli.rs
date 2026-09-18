@@ -78,7 +78,7 @@ pub fn request_line(command: &str, args: &[String], socket: &str) -> std::io::Re
         "command": command,
         "args": args,
     });
-    let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
+    let mut stream = crate::ipc::connect(socket)?;
     writeln!(stream, "browser\t{request}")?;
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;

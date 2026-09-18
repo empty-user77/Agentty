@@ -49,7 +49,9 @@ impl Workbench {
         let view = pane.read(cx);
         let prefs = crate::settings::settings(cx);
         let (offer_sessions, offer_harness) = (prefs.resume_bar, prefs.harness_detect);
-        if view.is_agent() || !view.is_running() || !(offer_sessions || offer_harness) {
+        // Any agent CLI in the foreground (Gemini, Antigravity, Amp, …, not only Claude Code and
+        // Codex) is already working here: offering to resume a session would only be in the way.
+        if view.is_agent() || view.live_tool.is_some() || !view.is_running() || !(offer_sessions || offer_harness) {
             return None;
         }
         let dir = view.display_cwd();

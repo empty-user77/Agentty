@@ -399,8 +399,9 @@ impl Workbench {
                     .when(open.is_none(), |d| d.tooltip(crate::ui::Tooltip::text(full_name.clone(), Some("⌘ click → web"))))
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         cx.stop_propagation();
-                        // ⌘-click: the branch on GitHub (or wherever `origin` lives); a plain click: the menu.
-                        if event.modifiers().platform {
+                        // ⌘-click (Ctrl-click on Windows / Linux): the branch on GitHub (or wherever
+                        // `origin` lives); a plain click: the menu.
+                        if crate::keymap::link_modifier(&event.modifiers()) {
                             this.open_branch_on_web(&target, cx);
                         } else {
                             this.toggle_branch_menu(&target, window, cx);
@@ -433,8 +434,9 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Opens the pane's branch in the browser: `origin`'s web page for it, or the repository's page
-    /// while the branch has not been pushed (its page would be a 404).
+    /// Opens the pane's branch in the default browser: `origin`'s web page for it, or the repository's
+    /// page while the branch has not been pushed (its page would be a 404). Always the external
+    /// browser, whatever links are set to open in: repository hosts need the user's own login.
     fn open_branch_on_web(&mut self, pane: &Pane, cx: &mut Context<Self>) {
         let (repo, branch, pushed) = {
             let view = pane.read(cx);
@@ -446,10 +448,10 @@ impl Workbench {
             let remote = task.await;
             let _ = this.update(cx, |this, cx| match remote {
                 None => this.set_status(t(cx, "branch.no_remote").to_string(), cx),
-                Some(repo_url) if pushed => this.open_link(agentty_bridge::git::branch_web_url(&repo_url, &branch), cx),
+                Some(repo_url) if pushed => cx.open_url(&agentty_bridge::git::branch_web_url(&repo_url, &branch)),
                 Some(repo_url) => {
                     this.set_status(tf(cx, "branch.not_pushed", &[("branch", &branch)]), cx);
-                    this.open_link(repo_url, cx);
+                    cx.open_url(&repo_url);
                 }
             });
         })

@@ -37,6 +37,9 @@ pub const ICON_BUTTON: f32 = 26.0;
 
 /// Every icon referenced by name (checked by a test against the embedded assets).
 pub const ICONS: &[&str] = &[
+    "circle-dot",
+    "key-round",
+    "minus",
     "arrow-up-right",
     "bell",
     "bell-dot",
@@ -228,7 +231,7 @@ impl Tooltip {
     ) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
         let text = text.into();
         move |_, cx| {
-            let (text, shortcut) = (text.clone(), shortcut.map(SharedString::from));
+            let (text, shortcut) = (text.clone(), shortcut.map(|s| SharedString::from(crate::keymap::display(s).into_owned())));
             cx.new(|cx| {
                 // GPUI shows tooltips after 0.5 s; wait a little longer so passing over icons stays quiet.
                 cx.spawn(async move |this, cx| {
@@ -458,6 +461,31 @@ pub fn money(value: f64) -> String {
 /// Thin overlay scrollbar for a scroll container (place as the last child of a `relative()`
 /// container that tracks `handle`). Drawn at paint time from the live scroll offset, so it
 /// never lags a frame behind and costs nothing when content fits.
+/// [`scrollbar`] for a virtual `list`.
+pub fn list_scrollbar(state: gpui::ListState) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let viewport = state.viewport_bounds();
+            let max_y = f32::from(state.max_offset_for_scrollbar().height);
+            let height = f32::from(viewport.size.height);
+            if height <= 0. || max_y <= 0.5 {
+                return;
+            }
+            let thumb = (height * height / (height + max_y)).max(24.);
+            let progress = (-f32::from(state.scroll_px_offset_for_scrollbar().y) / max_y).clamp(0., 1.);
+            let top = f32::from(viewport.origin.y) + (height - thumb) * progress;
+            let rect = gpui::Bounds::new(gpui::point(bounds.right() - px(8.), px(top + 2.)), gpui::size(px(5.), px(thumb - 4.)));
+            window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, 0.18)).corner_radii(px(3.)));
+        },
+    )
+    .absolute()
+    .top_0()
+    .right_0()
+    .h_full()
+    .w(px(10.))
+}
+
 pub fn scrollbar(handle: gpui::ScrollHandle) -> impl IntoElement {
     gpui::canvas(
         |_, _, _| {},
@@ -493,6 +521,38 @@ mod tests {
         assert_eq!(compact_number(66_200_000), "66.2M");
         assert_eq!(money(59.0), "$59.00");
         assert_eq!(money(0.0067), "$0.0067");
+    }
+
+    /// Every icon the UI names exists in `ICONS` and is embedded (a missing one panics in debug
+    /// builds and renders blank in release).
+    #[test]
+    fn icons_are_registered_and_embedded() {
+        use gpui::AssetSource;
+        let used = [
+            // Settings navigation
+            "settings",
+            "folder-open",
+            "key-round",
+            "terminal",
+            "globe",
+            "command",
+            "wrench",
+            "sparkles",
+            // Linux title bar buttons
+            "minus",
+            "square",
+            "x",
+            // System check states
+            "circle-check",
+            "circle-x",
+            "shield-alert",
+            "circle-dot",
+        ];
+        for name in used.iter().chain(ICONS) {
+            assert!(ICONS.contains(name), "{name} is not in ICONS");
+            let asset = crate::assets::Assets.load(&format!("icons/{name}.svg")).ok().flatten();
+            assert!(asset.is_some(), "icons/{name}.svg is not embedded");
+        }
     }
 
     #[test]

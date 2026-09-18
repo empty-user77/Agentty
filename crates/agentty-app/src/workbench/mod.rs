@@ -1,6 +1,7 @@
 //! The window's root view. Hierarchy: group → workspace (one sidebar row) → tab → split panes.
 
 mod account_usage;
+mod accounts_page;
 mod agent_panel;
 mod browser;
 mod browser_control;
@@ -31,6 +32,7 @@ mod service_status;
 mod session_viewer;
 mod settings_page;
 mod status_menus;
+mod system_page;
 mod tab_menu;
 pub mod update;
 
@@ -291,6 +293,10 @@ pub struct Workbench {
     notices_open: bool,
     window_active: bool,
     alias_form: Option<settings_page::AliasForm>,
+    accounts_form: Option<accounts_page::AccountsForm>,
+    /// Settings → System check results (Windows / Linux), and whether a check is running.
+    system_check: Option<Vec<crate::setup_check::Tool>>,
+    system_checking: bool,
     harness_pattern_form: Option<settings_page::HarnessPatternForm>,
     /// Plugin whose panel is docked right of the terminals.
     plugin_panel: Option<String>,
@@ -406,6 +412,9 @@ impl Workbench {
             notices_open: false,
             window_active: true,
             alias_form: None,
+            accounts_form: None,
+            system_check: None,
+            system_checking: false,
             harness_pattern_form: None,
             plugin_panel: None,
             plugin_inputs: HashMap::new(),
@@ -420,6 +429,7 @@ impl Workbench {
             next_id: 1,
         };
         this.restore(window, cx);
+        this.first_run_system_check(cx);
         this.refresh_sessions(cx);
         this.detect_agents(cx);
         this.start_update_checks(cx);
@@ -477,7 +487,7 @@ impl Workbench {
                 crate::set_app_menus(cx);
                 return true;
             }
-            if !crate::settings::settings(cx).menu_bar {
+            if !crate::settings::settings(cx).menu_bar || !crate::platform::HAS_STATUS_ITEM {
                 return true;
             }
             if let Some(ns) = crate::native::ns_window(window) {
@@ -556,7 +566,7 @@ impl Workbench {
                 cx.notify();
             }
             TerminalEvent::OpenLink(url) => this.open_link(url.clone(), cx),
-            TerminalEvent::RevealPath(path) => reveal_in_finder(path),
+            TerminalEvent::RevealPath(path) => crate::platform::reveal(path),
         });
         self.pane_subscriptions.insert(pane.entity_id(), subscription);
         pane
@@ -1483,6 +1493,14 @@ impl Render for Workbench {
                 }
             }))
             .on_mouse_move(cx.listener(Self::on_root_mouse_move))
+            // Windows / Linux: files dropped from the file manager (macOS uses a native hook, `file_drop`).
+            .when(!cfg!(target_os = "macos"), |root| {
+                root.on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                    let position = window.mouse_position();
+                    let paths: Vec<PathBuf> = paths.paths().iter().map(|p| crate::platform::drops::terminal_safe(p)).collect();
+                    this.drop_files_at((f32::from(position.x), f32::from(position.y)), &paths, window, cx);
+                }))
+            })
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1502,7 +1520,7 @@ impl Render for Workbench {
             .bg(hex(Chrome::EDITOR))
             .text_color(hex(Chrome::FOREGROUND))
             .font_family(".SystemUIFont")
-            .child(self.render_title_bar(cx))
+            .child(self.render_title_bar(window, cx))
             .child(
                 div()
                     .flex_1()
@@ -1782,17 +1800,6 @@ impl Workbench {
     }
 }
 
-/// Shows a file selected in Finder, or opens a folder.
-fn reveal_in_finder(path: &std::path::Path) {
-    let mut command = std::process::Command::new("/usr/bin/open");
-    if path.is_dir() {
-        command.arg(path);
-    } else {
-        command.arg("-R").arg(path);
-    }
-    let _ = command.spawn();
-}
-
 pub fn other_agent(agent: Agent) -> Agent {
     match agent {
         Agent::Claude => Agent::Codex,
@@ -2009,6 +2016,8 @@ impl Workbench {
                     "about" => settings_page::SettingsSection::About,
                     "browser" => settings_page::SettingsSection::Browser,
                     "project" => settings_page::SettingsSection::Project,
+                    "accounts" => settings_page::SettingsSection::Accounts,
+                    "system" => settings_page::SettingsSection::System,
                     _ => settings_page::SettingsSection::General,
                 };
                 cx.notify();
@@ -2106,6 +2115,7 @@ impl Workbench {
                     eprintln!("find: {:?}", pane.read(cx).search_position());
                 }
             }
+            #[cfg(target_os = "macos")]
             "responder" => {
                 #[allow(unexpected_cfgs)]
                 unsafe {

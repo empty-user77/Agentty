@@ -386,7 +386,7 @@ impl TerminalView {
     /// resize (zsh would otherwise leave a stray `%` line behind).
     fn spawn(&mut self, grid: GridSize, cx: &mut Context<Self>) {
         self.spawned = true;
-        let socket = cx.try_global::<SignalSocket>().map(|s| s.path.clone());
+        let socket = cx.try_global::<SignalSocket>().map(|s| s.address.clone());
         let options =
             SpawnOptions { spec: &self.spec, pane_id: self.pane_id, signal_socket: socket.as_deref(), scrollback: settings(cx).scrollback };
         match Backend::spawn(options, grid) {
@@ -1296,7 +1296,7 @@ impl TerminalView {
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
         self.activate(cx);
-        if event.modifiers.platform {
+        if crate::keymap::link_modifier(&event.modifiers) {
             if let Some(target) = self.grid_point(event.position).and_then(|(point, _)| self.link_at(point)) {
                 self.open_target(target, cx);
                 return;
@@ -1324,7 +1324,7 @@ impl TerminalView {
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if event.pressed_button.is_none() {
-            self.update_hover(event.position, event.modifiers.platform, cx);
+            self.update_hover(event.position, crate::keymap::link_modifier(&event.modifiers), cx);
         }
         if self.mouse_reporting && event.pressed_button == Some(MouseButton::Left) {
             let mode = self.mode();
@@ -1375,7 +1375,7 @@ impl TerminalView {
     }
 
     fn on_modifiers_changed(&mut self, event: &gpui::ModifiersChangedEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.update_hover(window.mouse_position(), event.modifiers.platform, cx);
+        self.update_hover(window.mouse_position(), crate::keymap::link_modifier(&event.modifiers), cx);
     }
 
     /// Column range of the URL covering `point`.

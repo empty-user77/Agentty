@@ -36,22 +36,37 @@ pub enum SettingsSection {
     #[default]
     General,
     Project,
+    Accounts,
     Appearance,
     Browser,
     Shortcuts,
+    /// Helper tools on Windows / Linux (hidden on macOS).
+    System,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 6] = [Self::General, Self::Project, Self::Appearance, Self::Browser, Self::Shortcuts, Self::About];
+    pub const ALL: [SettingsSection; 8] =
+        [Self::General, Self::Project, Self::Accounts, Self::Appearance, Self::Browser, Self::Shortcuts, Self::System, Self::About];
+
+    /// Sections shown on this platform (the browser settings need the macOS web view).
+    fn visible() -> impl Iterator<Item = SettingsSection> {
+        Self::ALL.into_iter().filter(|s| match s {
+            Self::Browser => crate::platform::HAS_WEBVIEW,
+            Self::System => !cfg!(target_os = "macos"),
+            _ => true,
+        })
+    }
 
     fn label(self) -> &'static str {
         match self {
             Self::General => "settings.general",
             Self::Project => "settings.project",
+            Self::Accounts => "settings.accounts",
             Self::Appearance => "settings.appearance",
             Self::Browser => "settings.browser",
             Self::Shortcuts => "settings.shortcuts",
+            Self::System => "settings.system",
             Self::About => "settings.about",
         }
     }
@@ -60,9 +75,11 @@ impl SettingsSection {
         match self {
             Self::General => "settings",
             Self::Project => "folder-open",
+            Self::Accounts => "key-round",
             Self::Appearance => "terminal",
             Self::Browser => "globe",
             Self::Shortcuts => "command",
+            Self::System => "wrench",
             Self::About => "sparkles",
         }
     }
@@ -147,7 +164,7 @@ fn render_shortcuts(cx: &mut Context<Workbench>) -> Div {
                     .bg(hex(0x2a2a2a))
                     .t_small()
                     .text_color(hex(Chrome::BRIGHT))
-                    .child(*keys),
+                    .child(crate::keymap::display(keys).into_owned()),
             ));
         }
         list = list.child(block);
@@ -163,10 +180,18 @@ fn installed_font_families(mut names: Vec<String>) -> Vec<String> {
     names
 }
 
+#[cfg(target_os = "macos")]
 const FONT_CHOICES: &[&str] =
     &[BUNDLED_FONT, "Menlo", "SF Mono", "Monaco", "Fira Code", "Cascadia Code", "Hack", "Source Code Pro", "D2Coding"];
+/// Monospace fonts that ship with Windows first, then popular downloads.
+#[cfg(windows)]
+const FONT_CHOICES: &[&str] =
+    &[BUNDLED_FONT, "Cascadia Mono", "Cascadia Code", "Consolas", "Fira Code", "Hack", "Source Code Pro", "D2Coding"];
+#[cfg(not(any(target_os = "macos", windows)))]
+const FONT_CHOICES: &[&str] =
+    &[BUNDLED_FONT, "DejaVu Sans Mono", "Ubuntu Mono", "Noto Sans Mono", "Fira Code", "Hack", "Source Code Pro", "D2Coding"];
 
-fn section(title: &str) -> Div {
+pub(super) fn section(title: &str) -> Div {
     div().flex().flex_col().gap_3().pb_6().child(
         div()
             .t_title()
@@ -190,7 +215,7 @@ fn row(label: &str, control: impl IntoElement) -> Div {
 }
 
 /// A row whose label has a second, muted line explaining it.
-fn row_with_hint(label: &str, hint: &str, control: impl IntoElement) -> Div {
+pub(super) fn row_with_hint(label: &str, hint: &str, control: impl IntoElement) -> Div {
     div()
         .flex()
         .items_center()
@@ -1004,11 +1029,14 @@ impl Workbench {
                             t(cx, "settings.notify_when_focused"),
                             toggle("notify-focused", prefs.notify_when_focused, |s| s.notify_when_focused = !s.notify_when_focused, cx),
                         ))
-                        .child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx))),
+                        .when(crate::platform::HAS_STATUS_ITEM, |d| {
+                            d.child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
+                        }),
                 )
                 .child(aliases)
                 .into_any_element(),
             SettingsSection::Project => self.render_project_settings(window, cx).into_any_element(),
+            SettingsSection::Accounts => self.render_accounts(window, cx).into_any_element(),
             SettingsSection::Appearance => div()
                 .flex()
                 .flex_col()
@@ -1108,6 +1136,7 @@ impl Workbench {
                 )
                 .into_any_element(),
             SettingsSection::Shortcuts => render_shortcuts(cx).into_any_element(),
+            SettingsSection::System => self.render_system_check(cx).into_any_element(),
             SettingsSection::Browser => self.render_browser_settings(window, cx).into_any_element(),
             SettingsSection::About => self.render_about(cx).into_any_element(),
         };
@@ -1123,7 +1152,7 @@ impl Workbench {
             .border_r_1()
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::SIDE_BAR));
-        for section in SettingsSection::ALL {
+        for section in SettingsSection::visible() {
             let active = section == section_id;
             nav = nav.child(
                 div()

@@ -3,8 +3,9 @@
 //! Security model:
 //! - The connector definition (name, base URL, auth style, endpoints) lives in
 //!   `<data dir>/connectors.json` and contains **no secrets**.
-//! - The credential is stored in the macOS Keychain (encrypted by the OS, per-user ACL) and read
-//!   only by the `mcp-connector` process at request time. It is never written to agent config
+//! - The credential is stored in the OS credential store (macOS Keychain, Windows Credential
+//!   Manager, Linux Secret Service — see [`crate::secret_store`]) and read only by the
+//!   `mcp-connector` process at request time. It is never written to agent config
 //!   files, logs or tool results.
 //! - Requests are confined to the connector's base URL: paths must be relative, `..` segments are
 //!   rejected, redirects are not followed (so credentials can't leak to other hosts), HTTPS is
@@ -255,13 +256,18 @@ fn keychain_service() -> String {
 }
 
 fn service_for(data_dir: Option<&std::ffi::OsStr>) -> String {
+    scoped_service(KEYCHAIN_SERVICE, data_dir)
+}
+
+/// `base`, or `base.<tag of the data folder>` for a second install (see [`keychain_service`]).
+pub(crate) fn scoped_service(base: &str, data_dir: Option<&std::ffi::OsStr>) -> String {
     use sha2::{Digest, Sha256};
     match data_dir {
-        None => KEYCHAIN_SERVICE.to_string(),
+        None => base.to_string(),
         Some(dir) => {
             let digest = Sha256::digest(dir.as_encoded_bytes());
             let tag: String = digest.iter().take(4).map(|byte| format!("{byte:02x}")).collect();
-            format!("{KEYCHAIN_SERVICE}.{tag}")
+            format!("{base}.{tag}")
         }
     }
 }
@@ -270,37 +276,16 @@ pub mod secrets {
     use super::keychain_service;
     use anyhow::Result;
 
-    #[cfg(target_os = "macos")]
     pub fn store(id: &str, secret: &str) -> Result<()> {
-        security_framework::passwords::set_generic_password(&keychain_service(), id, secret.as_bytes())?;
-        Ok(())
+        crate::secret_store::store(&keychain_service(), id, secret)
     }
 
-    #[cfg(target_os = "macos")]
     pub fn load(id: &str) -> Result<String> {
-        let bytes = security_framework::passwords::get_generic_password(&keychain_service(), id)?;
-        Ok(String::from_utf8(bytes)?)
+        crate::secret_store::load(&keychain_service(), id)
     }
 
-    #[cfg(target_os = "macos")]
     pub fn delete(id: &str) -> Result<()> {
-        security_framework::passwords::delete_generic_password(&keychain_service(), id)?;
-        Ok(())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn store(_: &str, _: &str) -> Result<()> {
-        anyhow::bail!("secure credential storage is only implemented for macOS")
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn load(_: &str) -> Result<String> {
-        anyhow::bail!("secure credential storage is only implemented for macOS")
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn delete(_: &str) -> Result<()> {
-        Ok(())
+        crate::secret_store::delete(&keychain_service(), id)
     }
 }
 
@@ -319,7 +304,9 @@ pub struct Request {
 pub fn execute(connector: &Connector, request: &Request) -> Result<(u16, String)> {
     let secret = match connector.auth {
         Auth::None => None,
-        _ => Some(secrets::load(&connector.id).context("API key not found in the Keychain")?),
+        _ => Some(
+            secrets::load(&connector.id).with_context(|| format!("API key not found in the {}", crate::secret_store::backend_name()))?,
+        ),
     };
     let redact = |text: String| match &secret {
         Some(secret) if secret.len() >= 4 => text.replace(secret.as_str(), "***"),

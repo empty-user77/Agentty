@@ -8,13 +8,7 @@ static QUEUE: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 
 fn os_version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    VERSION.get_or_init(|| {
-        std::process::Command::new("/usr/bin/sw_vers")
-            .arg("-productVersion")
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default()
-    })
+    VERSION.get_or_init(crate::platform::os_version)
 }
 
 /// Queues `event` (dropped unless analytics is built in and not turned off by `DO_NOT_TRACK`).

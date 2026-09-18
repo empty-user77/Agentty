@@ -217,7 +217,7 @@ impl Workbench {
                 cx.listener(|_, _: &ClickEvent, _, _| {
                     let dir = store::plugins_dir();
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::process::Command::new("/usr/bin/open").arg(dir).spawn();
+                    crate::platform::open_folder(&dir);
                 }),
             ));
 
@@ -649,7 +649,7 @@ impl Workbench {
         buttons = buttons.child(action_button(button_id("reveal"), t(cx, "plugins.reveal"), {
             let dir = plugin.dir.clone();
             cx.listener(move |_, _: &ClickEvent, _, _| {
-                let _ = std::process::Command::new("/usr/bin/open").arg(&dir).spawn();
+                crate::platform::open_folder(&dir);
             })
         }));
         if plugin.source == Source::Local || plugin.source == Source::Dev {

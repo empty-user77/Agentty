@@ -1,5 +1,6 @@
 //! Local Claude Code / Codex session discovery and cross-agent context handoff.
 
+pub mod agent_auth;
 pub mod agy;
 pub mod amp;
 pub mod claude;
@@ -20,7 +21,9 @@ pub mod metrics;
 pub mod model;
 pub mod plugins;
 pub mod pricing;
+pub mod process;
 pub mod protobuf;
+pub mod secret_store;
 pub mod service_status;
 pub mod update;
 pub mod usage;

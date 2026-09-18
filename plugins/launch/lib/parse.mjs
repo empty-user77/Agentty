@@ -338,3 +338,68 @@ export function parseInspectAlias(output) {
   const urls = (stripAnsi(output).match(URL_RE) || []).map((u) => u.replace(/[.,]+$/, '')).filter((u) => /^https:\/\/[^/]+\.vercel\.app\/?$/.test(u));
   return urls.sort((a, b) => a.length - b.length)[0] ?? null;
 }
+
+// -- Hosting already set up outside Launch ------------------------------------------------------
+
+/** Vercel's GitHub app creates the deployments (`vercel[bot]`); its production ones are named "Production" (or "Production – <project>"). */
+export function isVercelProductionDeployment(deployment) {
+  const creator = String(deployment?.creator?.login ?? '');
+  const environment = String(deployment?.environment ?? '');
+  return /^vercel(\[bot\])?$/i.test(creator) && /^production\b/i.test(environment);
+}
+
+/** The newest Vercel production deployments first (GitHub already lists them newest first). */
+export function pickVercelProductionDeployments(deployments, limit = 5) {
+  if (!Array.isArray(deployments)) return [];
+  return deployments.filter(isVercelProductionDeployment).slice(0, limit);
+}
+
+/**
+ * One deployment and its latest status (`GET …/deployments/{id}/statuses`, newest first) as the panel
+ * shows it. `state`: success, failure, error, in_progress, queued, pending or inactive. Only https URLs
+ * are kept: the panel opens them.
+ */
+export function summarizeDeployment(deployment, statuses) {
+  const latest = Array.isArray(statuses) ? statuses[0] : null;
+  const https = (url) => (typeof url === 'string' && /^https:\/\/[^\s]+$/.test(url) ? url : null);
+  const time = Date.parse(latest?.created_at ?? deployment?.created_at ?? '');
+  return {
+    state: String(latest?.state ?? 'pending'),
+    url: https(latest?.environment_url),
+    inspectUrl: https(latest?.log_url) ?? https(latest?.target_url),
+    sha: typeof deployment?.sha === 'string' ? deployment.sha.slice(0, 7) : null,
+    // Vercel's GitHub deployments name the commit, not the branch, as their ref.
+    ref: typeof deployment?.ref === 'string' && !/^[0-9a-f]{40}$/i.test(deployment.ref) ? deployment.ref : null,
+    time: Number.isFinite(time) ? time : null,
+  };
+}
+
+/** The site's address: the newest deployment that has one and succeeded, else the newest that has one. */
+export function liveUrlOf(summaries) {
+  return summaries.find((s) => s.url && s.state === 'success')?.url ?? summaries.find((s) => s.url)?.url ?? null;
+}
+
+/**
+ * The domains a deployment is served at, from `vercel inspect <url>` ("Aliases" section): custom
+ * domains first, then `*.vercel.app` ones, shortest first; branch aliases (`-git-<branch>-`) are left
+ * out. Only https hosts are returned.
+ */
+export function parseInspectDomains(output) {
+  const text = stripAnsi(String(output ?? ''));
+  const start = text.search(/^\s*Aliases\s*$/m);
+  if (start < 0) return [];
+  const section = text.slice(start).split('\n').slice(1);
+  const hosts = [];
+  for (const line of section) {
+    const match = /^\s*[╶\-*]?\s*(https:\/\/[A-Za-z0-9.-]+)\/?\s*$/.exec(line);
+    if (!match) {
+      if (hosts.length > 0 && line.trim()) break; // the next section
+      continue;
+    }
+    if (!/-git-/.test(match[1]) && !hosts.includes(match[1])) hosts.push(match[1]);
+  }
+  const custom = hosts.filter((h) => !h.endsWith('.vercel.app')).sort((a, b) => a.length - b.length);
+  const vercel = hosts.filter((h) => h.endsWith('.vercel.app')).sort((a, b) => a.length - b.length);
+  return [...custom, ...vercel];
+}
+

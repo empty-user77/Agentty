@@ -1,6 +1,6 @@
 //! Reader for Antigravity CLI (`agy`) conversations: `~/.gemini/antigravity-cli/`.
 //! Summaries live in `conversation_summaries.db` (SQLite), steps in `conversations/<id>.db`
-//! as protobuf blobs. SQLite is read through macOS's `/usr/bin/sqlite3`.
+//! as protobuf blobs. SQLite is read through the `sqlite3` CLI (macOS's `/usr/bin/sqlite3`).
 
 use crate::fsutil::{self, one_line};
 use crate::model::{Agent, Role, SessionInfo, Turn};
@@ -13,12 +13,10 @@ fn root() -> PathBuf {
 }
 
 fn sqlite_json(db: &Path, query: &str) -> Result<Vec<Value>> {
-    let output = std::process::Command::new("/usr/bin/sqlite3")
-        .args(["-readonly", "-json"])
-        .arg(db)
-        .arg(query)
-        .output()
-        .context("sqlite3 is not available")?;
+    // macOS ships sqlite3 in /usr/bin; elsewhere it is looked up on PATH.
+    let program = if cfg!(target_os = "macos") { "/usr/bin/sqlite3" } else { "sqlite3" };
+    let output =
+        crate::process::command(program).args(["-readonly", "-json"]).arg(db).arg(query).output().context("sqlite3 is not available")?;
     anyhow::ensure!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr).trim());
     let text = String::from_utf8_lossy(&output.stdout);
     if text.trim().is_empty() {
@@ -127,7 +125,12 @@ mod tests {
     #[test]
     fn parses_times_and_workspaces() {
         assert_eq!(parse_time("2026-09-17 10:49:08.21223+00:00"), 1_789_642_148_212);
-        assert_eq!(workspace(r#"["file:///Users/me/my%20app"]"#).as_deref(), Some("/Users/me/my app"));
+        // File URLs name a drive on Windows.
+        if cfg!(windows) {
+            assert_eq!(workspace(r#"["file:///C:/Users/me/my%20app"]"#).as_deref(), Some(r"C:\Users\me\my app"));
+        } else {
+            assert_eq!(workspace(r#"["file:///Users/me/my%20app"]"#).as_deref(), Some("/Users/me/my app"));
+        }
         assert_eq!(hex("0a01"), Some(vec![0x0a, 0x01]));
     }
 }

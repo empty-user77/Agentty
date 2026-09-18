@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Windows and Linux support. Terminals, agents, sessions, usage, Git, plugins and connectors work on both; panes use
+  PowerShell on Windows. Shortcuts use Ctrl+Shift (⌘), Ctrl+Alt+Shift (⇧⌘), Ctrl+Alt (⌥⌘) and Alt+1…9 (⌘1…9) there,
+  so Ctrl+letter stays with the shell. The in-app browser, menu bar item and mini mode remain macOS-only. See
+  `docs/platforms.md`.
+- Windows: per-user installer (Start menu, `agentty://` links, "Open in Agentty" on folders, PATH, uninstall from
+  Settings → Apps), app icon and version information, single instance, and Settings → System check, which finds
+  missing tools (Git for Windows, Node.js, Claude Code, Codex, PowerShell 7) and installs them with one click via
+  winget. Newly installed tools are found without restarting Agentty. Linux gets the same System check.
+- Settings → Accounts: start Claude Code with an API key, a gateway token and base URL, a `claude setup-token` OAuth
+  token, Amazon Bedrock or Google Vertex AI, and Codex with an API key or an imported `auth.json`, for machines where
+  the CLI login isn't possible. Keys are kept in the OS credential store and can be tested before use.
+
+### Changed
+- API connector keys use the platform's credential store (Keychain on macOS, unchanged; Credential Manager on Windows;
+  Secret Service on Linux).
+
 ## [0.1.9] - 2026-09-18
 
 ### Fixed

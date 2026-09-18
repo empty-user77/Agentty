@@ -10,7 +10,7 @@
 │                                                                            │
 │ TerminalView ── Backend ── alacritty_terminal::Term + PTY I/O thread       │
 │      ▲                                                                     │
-│      └── agent signals ◀── Unix socket ($TMPDIR, 0600) ◀── agent hooks    │
+│      └── agent signals ◀── ipc.rs socket (Unix 0600 / Windows loopback) ◀ hooks│
 └───────────────────────────────┬────────────────────────────────────────────┘
                                 │ links
 ┌──────────────────────── agentty-bridge (library + CLI) ────────────────────┐
@@ -18,7 +18,9 @@
 │ usage.rs / pricing.rs token accounting and reports                         │
 │ handoff.rs            context documents for migration and sharing          │
 │ extensions.rs         skills / agents / commands / plugins / MCP discovery │
-│ connectors.rs         API connectors (Keychain secrets, stdio MCP server)  │
+│ connectors.rs         API connectors (OS credential store, stdio MCP)      │
+│ agent_auth.rs         sign-in methods for agent tabs (keys, Codex home)    │
+│ secret_store.rs       Keychain / Credential Manager / Secret Service       │
 │ git.rs                git CLI wrapper for the Git page                     │
 │ plugins/              plugin manifest, store, UI schema, agentty:// links │
 └────────────────────────────────────────────────────────────────────────────┘

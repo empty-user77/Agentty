@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Agentty
+GenericName=AI Terminal
+Comment=Your multi-orchestration AI terminal
+Exec=agentty %U
+Icon=agentty
+Terminal=false
+Categories=Development;System;TerminalEmulator;
+Keywords=terminal;ai;claude;codex;agent;
+MimeType=x-scheme-handler/agentty;
+StartupWMClass=agentty
