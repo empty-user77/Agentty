@@ -4,7 +4,7 @@
 
 <p align="center"><b>The orchestration terminal for AI-native workflows.</b><br>나를 위한 멀티 오케스트레이션 AI 터미널</p>
 
-<p align="center"><a href="https://agentty.run">agentty.run</a></p>
+<p align="center"><a href="https://www.agentty.run">agentty.run</a></p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg"></a>
@@ -41,6 +41,11 @@ each agent is doing and highlights the ones that need you.
 - **Extensions** — skills, subagents, commands, plugins and MCP servers for Claude Code and Codex in one place; add
   official MCP servers in one click and insert or run any of them in the active agent.
 - **API connectors** — expose any HTTP API to your agents as an MCP server; secrets live in the macOS Keychain.
+- **Plugins** — connect other apps and add tools: a plugin fills a panel next to your terminals, adds buttons above
+  agent panes and palette commands, sends prompts to new or open workspaces, and handles `agentty://` links from other
+  apps. The built-in **Cosmica** plugin turns Cosmica notes into prompts ("Continue in Agentty" from Cosmica) and saves
+  AI session summaries back into Cosmica. Build your own with the Node.js SDK, or let Claude Code build it from the
+  Plugins page — see [docs/plugins](docs/plugins/README.md).
 - **AI usage dashboard** — cost, calls, cache hit rate, tokens, models, projects and tools from local transcripts.
 - **Resume where you left off** — `cd` into a folder with earlier Claude Code / Codex sessions and a bar offers to
   continue them in place. Search local sessions by title, conversation or path (⇧⌘O).
@@ -96,6 +101,25 @@ The full list is in **Settings → Keyboard Shortcuts**.
 
 Double-click the title bar to zoom the window; double-click empty space in the tab strip to open a new tab.
 
+## Plugins
+
+Plugins connect Agentty with other apps and add tools to your terminals: a panel next to the
+terminals, buttons above agent panes, command palette entries, and prompts sent to a new workspace, a
+new tab or an open workspace — always after you pick where in a "Send to…" dialog. Open **Plugins**
+(puzzle icon) to install, enable, restart or remove them.
+
+The built-in **Cosmica** plugin turns [Cosmica](https://www.cosmica.ink/) notes into prompts
+(including "Continue in Agentty" from Cosmica itself) and saves AI session summaries back into it. Other apps can hand work to Agentty
+with `agentty://` links.
+
+Plugins run as separate processes and may only do what their manifest declares: send prompts, type
+into terminals, read AI conversations, see workspaces. The Plugins page shows that list before you
+install.
+
+- [How to use plugins](docs/plugins/usage.md)
+- [Writing a plugin](docs/plugins/README.md) — Node.js SDK, or [the protocol](docs/plugins/protocol.md) for any language.
+  The Plugins page can also create one and have Claude Code build it.
+
 ## Files
 
 | Path | Purpose |
@@ -107,6 +131,9 @@ Double-click the title bar to zoom the window; double-click empty space in the t
 | `~/.agentty/handoffs/` | Context documents created by migrations and Session Flow |
 | `~/.agentty/connectors.json` | API connector definitions (secrets are in the Keychain, never in this file) |
 | `agentty.json` (project) or `~/.agentty/commands.json` | Custom command palette entries |
+| `~/.agentty/plugins/` | Installed plugins (`state.json` records which are enabled) |
+| `~/.agentty/plugin-data/<id>/` | Private data of each plugin |
+| `~/.agentty/prompts/` | Long prompts from plugins and links, handed to agents as files |
 
 See [docs/configuration.md](docs/configuration.md) for details and [docs/architecture.md](docs/architecture.md) for how
 the pieces fit together.

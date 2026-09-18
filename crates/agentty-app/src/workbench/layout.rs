@@ -117,6 +117,7 @@ impl Workbench {
     fn render_pane(&self, pane: &Pane, split: bool, active: bool, cx: &mut Context<Self>) -> AnyElement {
         let chip = pane.read(cx).git_branch.clone().filter(|_| split).map(|b| self.branch_chip(pane, b, cx));
         let collab = split.then(|| self.render_collab_chips(pane, cx)).flatten();
+        let plugin_buttons = split.then(|| self.render_plugin_pane_buttons(pane, cx)).flatten();
         let view = pane.read(cx);
         let prefs_bar = crate::settings::settings(cx).agent_bar;
         let width = self.pane_bounds.borrow().get(&pane.entity_id()).map(|b| f32::from(b.size.width)).unwrap_or(f32::MAX);
@@ -158,7 +159,22 @@ impl Workbench {
                     this.focus_pane(&pane_for_focus, window, cx);
                     pane_for_focus.update(cx, |v, cx| v.acknowledge(cx));
                 }))
-                .child(crate::brand::avatar(view.tool_id(), 16.))
+                // The icon is the grip: dragging it moves the pane, while the buttons further
+                // right keep their clicks (they stop propagation of their own).
+                .child(
+                    div()
+                        .id(("pane-grip", pane.entity_id().as_u64() as usize))
+                        .cursor(gpui::CursorStyle::OpenHand)
+                        .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "pane.move_hint"), None))
+                        .on_drag(
+                            super::drop_split::DraggedPane { pane_id: view.pane_id, title: view.display_title().into() },
+                            |dragged, _, _, cx| {
+                                super::drop_split::note_pane_drag(dragged.pane_id);
+                                cx.new(|_| super::chrome::DragPreview { title: dragged.title.clone() })
+                            },
+                        )
+                        .child(crate::brand::avatar(view.tool_id(), 16.)),
+                )
                 .when_some(view.stats.as_ref().filter(|_| agent_info).and_then(model_label), |d, model| {
                     d.child(div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(model))
                 })
@@ -174,6 +190,7 @@ impl Workbench {
                 )
                 .children(collab)
                 .child(div().flex_1())
+                .children(plugin_buttons)
                 // Where this pane is: project folder, with the full path when there is room.
                 .child(
                     div()
@@ -226,6 +243,9 @@ impl Workbench {
                 )
         });
 
+        // Dropping a tab here merges it as a split; picking turns panes into link targets.
+        let drop_zones = (cx.has_active_drag() && self.drop_target(pane, cx)).then(|| self.render_tab_drop_zones(pane, cx));
+        let connect_pick = self.render_connect_pick(pane, cx);
         let resume_hint = self.render_resume_hint(pane, cx);
         let find_bar = self.render_find_bar(pane, cx);
         // Single agent panes get a slim live status bar; split panes carry the same info in their header.
@@ -261,7 +281,9 @@ impl Workbench {
                     .flex_1()
                     .min_h_0()
                     .child(gpui::AnyView::from(pane.clone()).cached(gpui::StyleRefinement::default().size_full()))
-                    .children(find_bar),
+                    .children(find_bar)
+                    .children(drop_zones)
+                    .children(connect_pick),
             )
             .into_any_element()
     }
@@ -445,6 +467,7 @@ impl Workbench {
     fn render_agent_bar(&self, pane: &Pane, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let chip = pane.read(cx).git_branch.clone().map(|b| self.branch_chip(pane, b, cx));
         let collab = self.render_collab_chips(pane, cx);
+        let plugin_buttons = self.render_plugin_pane_buttons(pane, cx);
         let view = pane.read(cx);
         let kind = view.agent_kind()?;
         let (status, status_color) = status_label(view, cx);
@@ -500,6 +523,7 @@ impl Workbench {
                 )
                 .children(collab)
                 .child(div().flex_1())
+                .children(plugin_buttons)
                 .children(chip)
                 .when(width >= 820., |d| {
                     d.child(

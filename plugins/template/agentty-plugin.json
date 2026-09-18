@@ -1,0 +1,24 @@
+{
+  "id": "{{id}}",
+  "name": "{{name}}",
+  "version": "0.1.0",
+  "publisher": "",
+  "description": "A new Agentty plugin.",
+  "icon": "sparkles",
+  "main": "main.mjs",
+  "runtime": "node",
+  "apiVersion": 1,
+  "permissions": ["prompt.inject", "workspace.read"],
+  "contributes": {
+    "panel": { "title": "{{name}}", "icon": "sparkles" },
+    "commands": [
+      {
+        "id": "{{id}}.explain",
+        "title": "Ask the agent to explain this folder",
+        "icon": "sparkles",
+        "paneBar": true,
+        "when": "always"
+      }
+    ]
+  }
+}

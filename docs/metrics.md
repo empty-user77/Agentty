@@ -5,7 +5,7 @@ Release builds send anonymous usage events to **Google Analytics 4** through the
 
 ## Setup
 
-1. In GA4, create a property with a **Web** data stream (any URL, e.g. `https://agentty.run`).
+1. In GA4, create a property with a **Web** data stream (any URL, e.g. `https://www.agentty.run`).
 2. Stream details → copy the **Measurement ID** (`G-…`).
 3. Stream details → **Measurement Protocol API secrets** → create a secret.
 4. Put both in `.env.agentty-prod` (never committed):

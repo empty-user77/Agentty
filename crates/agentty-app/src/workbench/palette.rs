@@ -202,6 +202,7 @@ impl Workbench {
             (Page::Usage, "page.usage", "⌥⌘U"),
             (Page::Processes, "page.processes", ""),
             (Page::Extensions, "page.extensions", "⇧⌘X"),
+            (Page::Plugins, "page.plugins", ""),
             (Page::Settings, "page.settings", "⌘,"),
         ] {
             push(
@@ -224,6 +225,28 @@ impl Workbench {
                 cx.notify();
             }),
         );
+
+        // Plugin commands (and panels) of enabled plugins.
+        let plugin_category = t(cx, "palette.plugin");
+        let mut plugin_items: Vec<(String, Option<String>, Run)> = Vec::new();
+        for (plugin, manifest) in crate::plugins::active(cx) {
+            if let Some(panel) = &manifest.contributes.panel {
+                let id = plugin.id.clone();
+                let label = crate::i18n::tf(cx, "plugins.palette_panel", &[("name", &panel.title)]);
+                plugin_items.push((label, None, Rc::new(move |this, _, cx| this.open_plugin_panel(&id, cx))));
+            }
+            for command in manifest.contributes.commands.iter().filter(|c| c.palette) {
+                let (id, command_id) = (plugin.id.clone(), command.id.clone());
+                plugin_items.push((
+                    command.title.clone(),
+                    Some(manifest.name.clone()),
+                    Rc::new(move |this, _, cx| this.run_plugin_command(&id, &command_id, None, cx)),
+                ));
+            }
+        }
+        for (label, detail, run) in plugin_items {
+            push(&label, plugin_category, detail.as_deref(), run);
+        }
 
         let workspace_category = t(cx, "palette.workspace");
         for (index, ws) in self.workspaces.iter().enumerate() {

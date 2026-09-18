@@ -7,8 +7,11 @@ mod browser_control;
 mod chrome;
 mod confirm;
 mod context_menu;
+mod drop_split;
 mod find;
 pub mod flow;
+mod guide;
+mod install_hint;
 mod layout;
 pub mod mini;
 mod notices;
@@ -16,11 +19,16 @@ mod palette;
 pub mod panes;
 mod persist;
 mod picker;
+mod plugin_host;
+mod plugin_panel;
+mod plugins_page;
 mod processes;
+mod prompt_dialog;
 pub mod resume_hint;
 mod service_status;
 mod session_viewer;
 mod settings_page;
+mod starfield;
 mod status_menus;
 mod tab_menu;
 pub mod update;
@@ -70,6 +78,7 @@ actions!(
         OpenSettings,
         OpenExtensions,
         OpenGit,
+        OpenPlugins,
         ToggleBrowser,
         FindInTerminal,
         ZoomIn,
@@ -152,6 +161,7 @@ pub enum Page {
     Processes,
     Settings,
     Extensions,
+    Plugins,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -273,6 +283,20 @@ pub struct Workbench {
     notices_open: bool,
     window_active: bool,
     alias_form: Option<settings_page::AliasForm>,
+    /// Plugin whose panel is docked right of the terminals.
+    plugin_panel: Option<String>,
+    plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
+    plugin_scroll: gpui::ScrollHandle,
+    /// Context last sent to plugins (serialized), to send only changes.
+    plugin_context_key: String,
+    prompt_dialog: Option<prompt_dialog::PromptDialog>,
+    /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
+    install_hint: Option<(&'static str, &'static str, &'static str)>,
+    /// The start page is shown even though workspaces exist (opened from the sidebar).
+    welcome: bool,
+    /// "Pick a pane to connect": the pane the link starts from.
+    connect_pick: Option<u64>,
+    plugins_page: plugins_page::PluginsPage,
     next_id: u64,
 }
 
@@ -368,9 +392,19 @@ impl Workbench {
             notices_open: false,
             window_active: true,
             alias_form: None,
+            plugin_panel: None,
+            plugin_inputs: HashMap::new(),
+            plugin_scroll: gpui::ScrollHandle::new(),
+            plugin_context_key: String::new(),
+            prompt_dialog: None,
+            welcome: false,
+            install_hint: None,
+            connect_pick: None,
+            plugins_page: Default::default(),
             next_id: 1,
         };
         this.restore(window, cx);
+        this.show_first_run_tour(cx);
         this.refresh_sessions(cx);
         this.detect_agents(cx);
         this.start_update_checks(cx);
@@ -547,6 +581,9 @@ impl Workbench {
     }
 
     fn remove_pane(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+        if self.connect_pick == Some(pane.read(cx).pane_id) {
+            self.connect_pick = None;
+        }
         self.pane_subscriptions.remove(&pane.entity_id());
         self.pane_bounds.borrow_mut().remove(&pane.entity_id());
         if self.zoomed.as_ref() == Some(pane) {
@@ -556,7 +593,7 @@ impl Workbench {
             self.agent_panel = None;
         }
         let removed_id = pane.read(cx).pane_id;
-        self.flow.forget(removed_id);
+        self.flow_forget_pane(removed_id, cx);
         self.notices.retain(|n| n.pane_id != removed_id);
         let Some((w, t)) = self.locate(pane) else { return };
         let ws = &mut self.workspaces[w];
@@ -615,7 +652,25 @@ impl Workbench {
 
     // -- workspaces and tabs -------------------------------------------------------------------
 
+    /// Shows the start page again (from the sidebar), with the workspaces left as they are.
+    pub(super) fn open_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.welcome = true;
+        self.page = None;
+        self.session_viewer = None;
+        self.launcher_open = false;
+        self.detect_agents(cx);
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
+    pub(super) fn close_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.welcome = false;
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
     pub fn create_workspace(&mut self, spec: LaunchSpec, window: &mut Window, cx: &mut Context<Self>) {
+        self.welcome = false;
         let cwd = spec.cwd.clone();
         let pane = self.spawn_pane(spec, cx);
         let id = self.next_id();
@@ -657,6 +712,7 @@ impl Workbench {
     }
 
     pub fn open_tab(&mut self, spec: LaunchSpec, window: &mut Window, cx: &mut Context<Self>) {
+        self.welcome = false;
         if self.workspaces.is_empty() {
             return self.create_workspace(spec, window, cx);
         }
@@ -676,6 +732,7 @@ impl Workbench {
         if index >= self.workspaces.len() {
             return;
         }
+        self.welcome = false;
         self.active_workspace = index;
         crate::native::note_recent_folder(&self.workspaces[index].cwd);
         self.page = None;
@@ -703,6 +760,7 @@ impl Workbench {
     }
 
     fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.welcome = false;
         let Some(ws) = self.workspaces.get_mut(self.active_workspace) else { return };
         if index < ws.tabs.len() {
             ws.active_tab = index;
@@ -1225,6 +1283,9 @@ impl Render for Workbench {
             git.update(cx, |v, _| v.set_visible(false));
         }
         self.prepare_browser(window, cx);
+        self.prepare_plugin_panel(window, cx);
+        self.prepare_plugins_page(window, cx);
+        self.broadcast_plugin_context(window, cx);
         self.check_settings_toast(cx);
         // Name the window after what it shows, so several Agentty windows can be told apart in the
         // Dock menu and Mission Control.
@@ -1250,11 +1311,12 @@ impl Render for Workbench {
                 gpui::AnyView::from(self.git_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
             Some(Page::Flow) => self.render_flow(window, cx).into_any_element(),
+            Some(Page::Plugins) => self.render_plugins_page(cx).into_any_element(),
             None => {
                 match (self.render_session_viewer(cx), self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)))
                 {
                     (Some(viewer), _) => viewer,
-                    (None, Some(tab)) if self.new_workspace.is_none() => self.render_tab(tab, cx),
+                    (None, Some(tab)) if self.new_workspace.is_none() && !self.welcome => self.render_tab(tab, cx),
                     (None, _) => self.render_welcome(cx).into_any_element(),
                 }
             }
@@ -1328,6 +1390,7 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_page(Page::Settings, cx)))
             .on_action(cx.listener(|this, _: &OpenExtensions, _, cx| this.open_page(Page::Extensions, cx)))
             .on_action(cx.listener(|this, _: &OpenGit, _, cx| this.open_page(Page::Git, cx)))
+            .on_action(cx.listener(|this, _: &OpenPlugins, _, cx| this.open_page(Page::Plugins, cx)))
             .on_action(cx.listener(|this, _: &ToggleBrowser, window, cx| this.toggle_browser(window, cx)))
             .on_action(cx.listener(|this, _: &FindInTerminal, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|_, _: &ZoomIn, _, cx| update_settings(cx, |s| s.font_size = (s.font_size + 1.).min(32.))))
@@ -1393,6 +1456,7 @@ impl Render for Workbench {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
+                    drop_split::end_tab_drag();
                     if this.flow.is_dragging() {
                         this.finish_flow_drag(cx);
                     }
@@ -1428,16 +1492,14 @@ impl Render for Workbench {
                             .flex_col()
                             .child(self.render_tab_strip(cx))
                             .children(self.render_service_banner(cx))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    .child(div().flex_1().min_w_0().h_full().child(main))
-                                    .when(self.page.is_none(), |d| {
-                                        d.children(self.render_browser_splitter(cx)).children(self.render_browser(cx))
-                                    }),
-                            )
+                            .child(div().flex_1().min_h_0().flex().child(div().flex_1().min_w_0().h_full().child(main)).when(
+                                self.page.is_none(),
+                                |d| {
+                                    d.children(self.render_browser_splitter(cx))
+                                        .children(self.render_browser(cx))
+                                        .children(self.render_plugin_panel(cx))
+                                },
+                            ))
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
                             .when(self.notices_open, |d| {
                                 d.child(
@@ -1457,7 +1519,10 @@ impl Render for Workbench {
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
             .children((!self.updates.popup).then(|| self.render_update_badge(cx)).flatten())
+            .children(self.render_connect_pick_bar(cx))
+            .children(self.render_install_hint(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_prompt_dialog(cx))
             .children(self.render_toast())
     }
 }
@@ -1576,9 +1641,14 @@ impl Workbench {
             Page::Processes => "processes",
             Page::Settings => "settings",
             Page::Extensions => "extensions",
+            Page::Plugins => "plugins",
         };
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
         self.page = if self.page == Some(page) { None } else { Some(page) };
+        if self.page == Some(Page::Plugins) {
+            // Pick up plugins copied into the folder by hand.
+            crate::plugins::reload(cx);
+        }
         // AgentGit and Session Flow work with workspaces: always show that list next to them.
         if self.page.is_some_and(Self::page_keeps_sidebar) {
             self.panel = SidePanel::Workspaces;
@@ -1717,6 +1787,7 @@ pub fn status_label(view: &TerminalView, cx: &gpui::App) -> (String, u32) {
     match &view.status {
         AgentStatus::Idle => (t(cx, "status.idle").into(), Chrome::MUTED),
         AgentStatus::Working => (t(cx, "status.working").into(), Chrome::ORANGE),
+        AgentStatus::Thinking => (t(cx, "status.thinking").into(), Chrome::BLUE),
         AgentStatus::Finished(_) => (t(cx, "status.finished").into(), Chrome::SUCCESS),
         AgentStatus::Permission(detail) => (
             match detail {
@@ -1763,6 +1834,7 @@ impl Workbench {
                     "processes" => Some(Page::Processes),
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
+                    "plugins" => Some(Page::Plugins),
                     "git" => Some(Page::Git),
                     _ => None,
                 };
@@ -1916,6 +1988,59 @@ impl Workbench {
                 }
             }
             "link" => self.open_link(argument.to_string(), cx),
+            // `agentty-link agentty://…`: as if another app opened the link.
+            "agentty-link" => self.open_agentty_link(argument, window, cx),
+            // `plugin-panel <id>` / `plugin-command <id> <command>`.
+            "plugin-panel" => self.toggle_plugin_panel(argument, cx),
+            "plugin-command" => {
+                if let Some((plugin, command)) = argument.split_once(' ') {
+                    self.run_plugin_command(plugin, command, None, cx);
+                }
+            }
+            "plugin-install" => self.install_builtin_plugin(argument.to_string(), window, cx),
+            // `prompt-agent claude|codex|shell` picks the agent in the open "Send to…" dialog.
+            "prompt-agent" => {
+                if let Some(dialog) = self.prompt_dialog.as_mut() {
+                    dialog.kind = kind(argument);
+                }
+            }
+            "prompt-confirm" => {
+                if self.prompt_dialog.is_some() {
+                    self.confirm_prompt_dialog(window, cx);
+                }
+            }
+            "plugins" => {
+                for plugin in &crate::plugins::host(cx).installed {
+                    let runtime = crate::plugins::runtime(cx, &plugin.id);
+                    let panel = runtime.and_then(|r| r.panel.as_ref()).and_then(|p| serde_json::to_string(p).ok()).unwrap_or_default();
+                    eprintln!(
+                        "plugins: {} enabled={} state={:?} panel={} logs={:?}",
+                        plugin.id,
+                        plugin.enabled,
+                        runtime.map(|r| r.state.clone()),
+                        panel.chars().take(600).collect::<String>(),
+                        runtime.map(|r| r.logs.iter().rev().take(6).cloned().collect::<Vec<_>>())
+                    );
+                }
+                let dialog = self.prompt_dialog.as_ref().map(|d| {
+                    format!(
+                        "kind={:?} cwd={} title={:?} text={:?}",
+                        d.kind,
+                        d.cwd.display(),
+                        d.request.title,
+                        d.request.text.chars().take(160).collect::<String>()
+                    )
+                });
+                eprintln!(
+                    "plugins: dialog={dialog:?} panel={:?} page={} pending={:?} message={:?} toast={:?} status={:?}",
+                    self.plugin_panel,
+                    self.page == Some(Page::Plugins),
+                    self.plugins_page.pending_link,
+                    self.plugins_page.message,
+                    self.toast.as_ref().map(|t| t.0.clone()),
+                    self.status
+                );
+            }
             "find" => {
                 self.open_find(window, cx);
                 if let Some(bar) = self.find_bar.as_ref() {
@@ -1935,8 +2060,28 @@ impl Workbench {
                     }
                 }
             }
+            // `drag x1 y1 x2 y2`: a paced drag, so the window paints between steps (drop targets
+            // only exist while a drag is running).
+            "drag" => {
+                let points: Vec<f32> = argument.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                let [x1, y1, x2, y2] = points[..] else { return };
+                if let Some(ns) = crate::native::ns_window(window) {
+                    cx.spawn(async move |_, cx| {
+                        crate::debug::synthetic_input(ns, "press", &format!("{x1} {y1}"));
+                        for step in 1..=12 {
+                            cx.background_executor().timer(std::time::Duration::from_millis(40)).await;
+                            let t = step as f32 / 12.0;
+                            let (x, y) = (x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
+                            crate::debug::synthetic_input(ns, "drag-to", &format!("{x} {y}"));
+                        }
+                        cx.background_executor().timer(std::time::Duration::from_millis(80)).await;
+                        crate::debug::synthetic_input(ns, "release", &format!("{x2} {y2}"));
+                    })
+                    .detach();
+                }
+            }
             // `click x y [right]`, `key cmd-n`, `text 한글abc`: synthetic input, dispatched after this update.
-            "click" | "move" | "drag" | "scroll" | "key" | "text" => {
+            "click" | "move" | "scroll" | "key" | "text" | "press" | "drag-to" | "release" => {
                 let (command, argument) = (command.to_string(), argument.to_string());
                 if let Some(ns) = crate::native::ns_window(window) {
                     cx.spawn(async move |_, _| crate::debug::synthetic_input(ns, &command, &argument)).detach();

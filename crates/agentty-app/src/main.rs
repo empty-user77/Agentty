@@ -18,6 +18,7 @@ mod launch;
 mod metrics;
 mod native;
 mod notifications;
+mod plugins;
 mod procinfo;
 mod settings;
 mod shell_integration;
@@ -240,6 +241,7 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::action(t(cx, "page.flow"), workbench::OpenFlow),
                 MenuItem::action(t(cx, "page.usage"), workbench::OpenUsage),
                 MenuItem::action(t(cx, "page.extensions"), workbench::OpenExtensions),
+                MenuItem::action(t(cx, "page.plugins"), workbench::OpenPlugins),
                 MenuItem::separator(),
                 MenuItem::action(t(cx, "menu.browser"), workbench::ToggleBrowser),
                 MenuItem::action(t(cx, "menu.zoom_pane"), workbench::ToggleZoom),
@@ -413,6 +415,11 @@ fn main() {
         if let Ok(mut queue) = OPENED_FOLDERS.lock() {
             queue.extend(folders);
         }
+        // `agentty://…` links from other apps (e.g. Cosmica's "Continue in Agentty").
+        let links = urls.iter().filter(|url| url.starts_with("agentty://")).cloned();
+        if let Ok(mut queue) = OPENED_LINKS.lock() {
+            queue.extend(links);
+        }
     });
     app.on_reopen(|cx| with_workbench(cx, |wb, window, cx| wb.handle_tray(status_item::TrayAction::Show, window, cx)));
     app.run(|cx: &mut App| {
@@ -432,6 +439,15 @@ fn main() {
         };
 
         notifications::prepare();
+        let mut plugin_events = plugins::init(cx);
+        cx.spawn(async move |cx| {
+            while let Some(envelope) = plugin_events.next().await {
+                if cx.update(|cx| plugins::handle(envelope, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         bind_keys(cx);
         register_app_actions(cx);
         set_app_menus(cx);
@@ -462,6 +478,10 @@ fn main() {
                     if let Some(target) = active.or(windows.first().copied()) {
                         let _ = target.update(cx, |workbench, window, cx| workbench.open_folder(folder, window, cx));
                     }
+                }
+                let links = OPENED_LINKS.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default();
+                for link in links {
+                    with_active_workbench(cx, |workbench, window, cx| workbench.open_agentty_link(&link, window, cx));
                 }
                 for dropped in file_drop::drain() {
                     for window in workbenches(cx) {
@@ -575,6 +595,8 @@ fn main() {
 
 /// Folders macOS asked us to open (Dock recent list, Finder "Open With"), handled by the app loop.
 static OPENED_FOLDERS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+/// `agentty://` links opened by other apps, handled by the app loop.
+static OPENED_LINKS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// `file:///Users/me/My%20Project/` → `/Users/me/My Project`.
 fn file_url_path(url: &str) -> Option<std::path::PathBuf> {
@@ -658,6 +680,18 @@ fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench
         cx.new(|cx| Workbench::new(slot, window, cx))
     })
     .ok()
+}
+
+/// The frontmost Agentty window, else the main one.
+fn active_workbench(cx: &App) -> Option<gpui::WindowHandle<Workbench>> {
+    let active = cx.active_window().and_then(|w| w.downcast::<Workbench>());
+    active.or_else(|| workbenches(cx).into_iter().next())
+}
+
+/// Runs `f` with the frontmost workbench; false when no window is open.
+pub fn with_active_workbench(cx: &mut App, f: impl FnOnce(&mut Workbench, &mut gpui::Window, &mut gpui::Context<Workbench>)) -> bool {
+    let Some(handle) = active_workbench(cx) else { return false };
+    handle.update(cx, |workbench, window, cx| f(workbench, window, cx)).is_ok()
 }
 
 /// Runs `f` with the main window's workbench, wherever it is called from.

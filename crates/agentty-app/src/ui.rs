@@ -102,7 +102,53 @@ pub const ICONS: &[&str] = &[
     "circle-x",
     "clock",
     "app-window",
+    "puzzle",
+    "notebook-pen",
+    "send",
+    "save",
+    "file-input",
+    "trash-2",
+    "download",
+    "upload",
+    "power",
+    "scroll-text",
+    "zap",
+    "wand-sparkles",
+    "code",
+    "file-plus",
+    "list",
+    "message-square",
+    "notebook",
+    "sticky-note",
+    "bookmark",
+    "calendar",
+    "tag",
+    "clipboard",
+    "clipboard-paste",
+    "git-pull-request",
+    "bug",
+    "rocket",
+    "book-open",
+    "hammer",
+    "wrench",
+    "database",
+    "cloud",
+    "eye",
+    "play",
+    "square",
+    "lightbulb",
+    "plug",
+    "hash",
+    "house",
+    "at-sign",
+    "mail",
+    "image",
 ];
+
+/// An icon named at runtime (plugins): the matching embedded icon, or a generic one.
+pub fn icon_named(name: Option<&str>) -> &'static str {
+    name.and_then(|name| ICONS.iter().find(|known| **known == name).copied()).unwrap_or("puzzle")
+}
 
 pub trait TypeScale: Styled + Sized {
     fn t_caption(self) -> Self {

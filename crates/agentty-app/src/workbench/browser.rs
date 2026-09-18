@@ -29,7 +29,20 @@ pub struct BrowserPanel {
     _subscription: Subscription,
 }
 
+/// What the tour opens on first launch: the key features of Agentty on the website.
+const TOUR_URL: &str = "https://www.agentty.run/#glance";
+
 impl Workbench {
+    /// First launch: show what Agentty can do next to the start page, instead of an empty window.
+    /// Only the first window does it, and only once — the choice is remembered in settings.
+    pub(super) fn show_first_run_tour(&mut self, cx: &mut Context<Self>) {
+        if self.slot != 0 || settings(cx).welcome_shown || self.browser.is_some() {
+            return;
+        }
+        crate::settings::update_settings(cx, |s| s.welcome_shown = true);
+        self.open_browser(Some(TOUR_URL.to_string()), cx);
+    }
+
     /// Opens `url` according to the user's choice (in-app panel or the default browser).
     pub(super) fn open_link(&mut self, url: String, cx: &mut Context<Self>) {
         match settings(cx).link_opener {
@@ -147,6 +160,7 @@ impl Workbench {
             || self.resume_menu.is_some()
             || self.close_confirm.is_some()
             || self.agent_panel.is_some()
+            || self.prompt_dialog.is_some()
             // Native views swallow mouse events; hide it so the resize drag keeps reaching GPUI.
             || self.browser_resizing
     }

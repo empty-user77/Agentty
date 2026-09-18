@@ -20,6 +20,7 @@
 │ extensions.rs         skills / agents / commands / plugins / MCP discovery │
 │ connectors.rs         API connectors (Keychain secrets, stdio MCP server)  │
 │ git.rs                git CLI wrapper for the Git page                     │
+│ plugins/              plugin manifest, store, UI schema, agentty:// links │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -75,3 +76,35 @@ background threads; the page polls status every 3 seconds only while visible. Br
 A live Session Flow edge remembers how many source turns it delivered. When the source agent finishes a turn, only the
 new turns are written to an update document and submitted to the target (queued if the target is busy). The target's
 next finished turn is its reply to that context and is not forwarded back, so two-way links cannot loop.
+
+## Plugins
+
+```
+ other app ──agentty://──▶ main.rs (on_open_urls) ──▶ Workbench::open_agentty_link
+                                                         │
+ plugin process ◀─ stdin/stdout JSON-RPC ─▶ plugins/process.rs ──▶ plugins::handle (app thread)
+   (node main.mjs)                                        │            │
+                                   panel tree, badge, logs│            │ window calls
+                                                          ▼            ▼
+                                             PluginHost (global)   workbench/plugin_host.rs
+                                                                   (prompts, terminals, sessions)
+```
+
+- `agentty-bridge::plugins` has no UI: the manifest (`agentty-plugin.json`), installed plugins and their enabled state
+  (`~/.agentty/plugins/state.json`), built-in plugins embedded in the binary (`plugins/cosmica`, the template and the
+  SDK are `include_str!`-ed), the panel UI schema with size limits, and `agentty://` link parsing.
+- `plugins/mod.rs` (app) is a GPUI global shared by all windows. A plugin starts on first use (or at launch with
+  `onStartup`); `plugins/process.rs` runs it with the login shell's PATH and reader/writer threads that forward events
+  over a channel to the app loop. Events from an older process generation are ignored after a restart.
+- Calls are checked against the manifest's permissions. Calls that need a window (`prompt/inject`, `terminal/send`,
+  `session/get`, `workspace/list`, `ui/notify`) go to the frontmost workbench. After a link reached a plugin, and until
+  the user interacts with that plugin, its prompts are forced through the "Send to…" dialog and `terminal/send` is
+  refused, so a web page can't drive an agent through a plugin.
+- Plugins never draw: `ui/setPanel` sends a tree (columns, rows, text, buttons, inputs, lists, …) that
+  `workbench/plugin_panel.rs` renders natively in a column right of the terminals; text inputs are GPUI entities kept
+  per plugin and element id. Pane-bar commands render in the agent status bar and split-pane headers.
+- `workbench/prompt_dialog.rs` is the "Send to…" dialog; `deliver_prompt` starts new agent sessions with the prompt as
+  their first message, types into idle agents with bracketed paste + Enter, and only ever types (never presses Enter)
+  into plain shells.
+
+See [docs/plugins](plugins/README.md) for the plugin developer guide and protocol.

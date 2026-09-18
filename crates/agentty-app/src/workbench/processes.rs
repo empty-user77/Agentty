@@ -143,7 +143,7 @@ impl Workbench {
                     if view.shell_pid().is_some_and(|pid| pid == process.root || process.ancestors.contains(&pid)) {
                         let (workspace, title) = (self.workspace_title(ws, cx), view.display_title());
                         let label = if workspace == title { title } else { format!("{workspace} / {title}") };
-                        return Some((label, view.status == crate::terminal::AgentStatus::Working));
+                        return Some((label, view.status.in_turn()));
                     }
                 }
             }

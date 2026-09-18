@@ -7,6 +7,7 @@ use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
 use crate::ui::{hint, kind_color, tilde};
+use agentty_bridge::claude::PeerSession;
 use agentty_bridge::model::Agent;
 use gpui::{
     canvas, div, point, prelude::*, px, size, Bounds, ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, PathBuilder, Pixels,
@@ -15,6 +16,11 @@ use gpui::{
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+
+/// Prompt that ends a direct link.
+fn stop_messaging(name: &str) -> String {
+    format!("The link with the Claude Code session \"{name}\" is closed in Agentty: stop sending it messages.")
+}
 
 const NODE_WIDTH: f32 = 260.;
 /// Distinct colors so sessions from the same workspace are recognizable at a glance.
@@ -30,6 +36,17 @@ pub enum EdgeStatus {
     Failed(String),
 }
 
+/// How two sessions are linked.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LinkMode {
+    /// The source conversation is written to a document the target agent is asked to read.
+    /// Used whenever the two sides can't talk by themselves (Codex, agents started by hand).
+    Context,
+    /// Both sides are Claude Code sessions registered on this machine, so they message each other
+    /// directly with Claude Code's own session messaging; Agentty only introduces them.
+    Direct,
+}
+
 #[derive(Clone)]
 pub struct FlowEdge {
     pub from: u64,
@@ -39,11 +56,16 @@ pub struct FlowEdge {
     pub live: bool,
     /// Source turns already delivered through this edge.
     pub sent: usize,
+    pub mode: LinkMode,
 }
 
 impl FlowEdge {
     fn new(from: u64, to: u64) -> Self {
-        Self { from, to, status: EdgeStatus::Sharing, live: false, sent: 0 }
+        Self { from, to, status: EdgeStatus::Sharing, live: false, sent: 0, mode: LinkMode::Context }
+    }
+
+    fn direct(from: u64, to: u64) -> Self {
+        Self { from, to, status: EdgeStatus::Shared(0), live: false, sent: 0, mode: LinkMode::Direct }
     }
 }
 
@@ -161,6 +183,106 @@ impl Workbench {
         }
     }
 
+    /// Connects two agent panes from outside the Session Flow page (the link button of a pane).
+    /// Two Claude Code sessions are introduced to each other and talk directly; everything else
+    /// gets the conversation as a document (optionally kept up to date).
+    pub(super) fn connect_panes(&mut self, from: u64, to: u64, live: bool, cx: &mut Context<Self>) {
+        if from == to {
+            return;
+        }
+        match self.direct_peers(from, to, cx) {
+            Some((source, target)) => self.connect_directly(from, to, source, target, cx),
+            None => {
+                if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
+                    self.flow.edges.push(FlowEdge::new(from, to));
+                }
+                self.share(from, to, cx);
+                if live {
+                    self.set_live(from, to, true, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// The registered Claude Code sessions of both panes, when both can message each other.
+    pub(super) fn direct_peers(&self, from: u64, to: u64, cx: &gpui::App) -> Option<(PeerSession, PeerSession)> {
+        let peer = |pane_id: u64| self.peer_session_of(pane_id, cx);
+        let (source, target) = (peer(from)?, peer(to)?);
+        (source.session_id != target.session_id).then_some((source, target))
+    }
+
+    /// How another Claude Code session can address the session in this pane.
+    pub(super) fn peer_session_of(&self, pane_id: u64, cx: &gpui::App) -> Option<PeerSession> {
+        let panes = self.all_panes();
+        let pane = panes.iter().find(|p| p.read(cx).pane_id == pane_id)?;
+        let view = pane.read(cx);
+        if view.agent_kind() != Some(crate::launch::PaneKind::Claude) || !view.is_running() {
+            return None;
+        }
+        // A pane Agentty launched knows its session id; for an agent started by hand the id is
+        // guessed from the newest transcript in its folder, which is another session's when two of
+        // them run in the same folder — so a guess that another pane owns for sure is dropped.
+        let launched = view.spec.kind == crate::launch::PaneKind::Claude;
+        let id = match (launched, &view.spec.session_id) {
+            (true, Some(id)) => id.clone(),
+            _ => {
+                let guess = view.session_id_live.clone()?;
+                let owned_elsewhere = panes.iter().filter(|p| p.read(cx).pane_id != pane_id).any(|p| {
+                    let other = p.read(cx);
+                    other.spec.kind == crate::launch::PaneKind::Claude && other.spec.session_id.as_deref() == Some(guess.as_str())
+                });
+                if owned_elsewhere {
+                    return None;
+                }
+                guess
+            }
+        };
+        agentty_bridge::claude::peer_session(&id).filter(|p| p.interactive)
+    }
+
+    /// Introduces two Claude Code sessions so they keep talking by themselves.
+    fn connect_directly(&mut self, from: u64, to: u64, source: PeerSession, target: PeerSession, cx: &mut Context<Self>) {
+        match self.flow.edges.iter_mut().find(|e| e.from == from && e.to == to) {
+            Some(edge) => {
+                edge.mode = LinkMode::Direct;
+                edge.status = EdgeStatus::Shared(0);
+            }
+            None => self.flow.edges.push(FlowEdge::direct(from, to)),
+        }
+        self.deliver(
+            from,
+            format!(
+                "You are now working with another Claude Code session on this machine, named \"{}\" (in {}).                  Use ListAgents to confirm it is there, then SendMessage to introduce what you are working on and                  what you need from it. Keep collaborating with it directly: its replies arrive as messages.                  Agentty linked you; nothing else was shared with it yet.",
+                target.name,
+                target.cwd.display()
+            ),
+            cx,
+        );
+        self.deliver(
+            to,
+            format!(
+                "The Claude Code session \"{}\" (in {}) was linked with you in Agentty and will message you shortly.                  When it does, work with it and answer with SendMessage.",
+                source.name,
+                source.cwd.display()
+            ),
+            cx,
+        );
+        self.status = Some(tf(cx, "flow.direct_connected", &[("name", &target.name)]).into());
+    }
+
+    /// Agent panes that `pane_id` is not connected to yet, in display order.
+    pub(super) fn connectable_panes(&self, pane_id: u64, cx: &gpui::App) -> Vec<Pane> {
+        self.agent_panes(cx)
+            .into_iter()
+            .filter(|p| {
+                let other = p.read(cx).pane_id;
+                other != pane_id
+                    && !self.flow.edges().iter().any(|e| (e.from, e.to) == (pane_id, other) || (e.from, e.to) == (other, pane_id))
+            })
+            .collect()
+    }
+
     pub(super) fn flow_set_live(&mut self, from: u64, to: u64, live: bool, cx: &mut Context<Self>) {
         self.set_live(from, to, live, cx);
     }
@@ -170,13 +292,58 @@ impl Workbench {
     }
 
     pub(super) fn flow_disconnect(&mut self, from: u64, to: u64, cx: &mut Context<Self>) {
+        let direct = self.flow.edges.iter().any(|e| e.from == from && e.to == to && e.mode == LinkMode::Direct);
         self.flow.edges.retain(|e| !(e.from == from && e.to == to));
+        // Sessions that talk by themselves have to be told the link is over.
+        if direct {
+            let (source, target) = (self.peer_session_of(from, cx), self.peer_session_of(to, cx));
+            if let Some(target) = &target {
+                self.deliver(from, stop_messaging(&target.name), cx);
+            }
+            if let Some(source) = &source {
+                self.deliver(to, stop_messaging(&source.name), cx);
+            }
+        }
         cx.notify();
+    }
+
+    /// A pane is going away: sessions it was messaging directly are told the link is over before
+    /// its links are dropped (closing a tab must not leave the other session talking to nobody).
+    pub(super) fn flow_forget_pane(&mut self, pane_id: u64, cx: &mut Context<Self>) {
+        let mut peers: Vec<u64> = self
+            .flow
+            .edges()
+            .iter()
+            .filter(|e| e.mode == LinkMode::Direct)
+            .filter_map(|e| match (e.from, e.to) {
+                (from, to) if from == pane_id => Some(to),
+                (from, to) if to == pane_id => Some(from),
+                _ => None,
+            })
+            .collect();
+        peers.sort_unstable();
+        peers.dedup();
+        if let Some(closing) = self.peer_session_of(pane_id, cx).filter(|_| !peers.is_empty()) {
+            for peer in peers {
+                self.deliver(peer, stop_messaging(&closing.name), cx);
+            }
+        }
+        self.flow.forget(pane_id);
+    }
+
+    /// Disconnects every link of a pane (both directions).
+    pub(super) fn flow_disconnect_all(&mut self, pane_id: u64, cx: &mut Context<Self>) {
+        let pairs: Vec<(u64, u64)> =
+            self.flow.edges.iter().filter(|e| e.from == pane_id || e.to == pane_id).map(|e| (e.from, e.to)).collect();
+        for (from, to) in pairs {
+            self.flow_disconnect(from, to, cx);
+        }
     }
 
     fn set_live(&mut self, from: u64, to: u64, live: bool, cx: &mut Context<Self>) {
         if let Some(edge) = self.flow.edges.iter_mut().find(|e| e.from == from && e.to == to) {
-            edge.live = live;
+            // Sessions that message each other need no forwarding.
+            edge.live = live && edge.mode == LinkMode::Context;
         }
         cx.notify();
     }
@@ -214,7 +381,7 @@ impl Workbench {
     /// Submits a prompt to a pane now, or queues it until the agent finishes its current turn.
     fn deliver(&mut self, pane_id: u64, prompt: String, cx: &mut Context<Self>) {
         let Some(target) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id) else { return };
-        if matches!(target.read(cx).status, crate::terminal::AgentStatus::Working) {
+        if target.read(cx).status.in_turn() {
             self.flow.pending.entry(pane_id).or_default().push(prompt);
             return;
         }
@@ -579,6 +746,7 @@ impl Workbench {
     fn render_edge_label(&self, edge: FlowEdge, mid: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
         let (from, to) = (edge.from, edge.to);
         let (text, color) = match &edge.status {
+            _ if edge.mode == LinkMode::Direct => (t(cx, "collab.direct").to_string(), Chrome::GREEN),
             EdgeStatus::Sharing => (t(cx, "flow.sharing").to_string(), Chrome::ORANGE),
             EdgeStatus::Shared(n) => (tf(cx, "flow.shared_short", &[("n", &n.to_string())]), Chrome::ATTENTION),
             EdgeStatus::Failed(message) => (format!("{} · {message}", t(cx, "flow.failed")), Chrome::ERROR),

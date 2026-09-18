@@ -492,7 +492,7 @@ impl Workbench {
 pub const AUTHOR: &str = "Ray Lee";
 pub const AUTHOR_EMAIL: &str = "yongyongdev@gmail.com";
 pub const AUTHOR_URL: &str = "https://github.com/empty-user77";
-pub const WEBSITE: &str = "https://agentty.run";
+pub const WEBSITE: &str = "https://www.agentty.run";
 
 impl Workbench {
     /// "About Agentty" from the app menu: icon, version, author and a GitHub link.

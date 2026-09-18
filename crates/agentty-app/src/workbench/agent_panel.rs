@@ -1,7 +1,7 @@
 //! Collaboration view for one agent pane: its subagents (what each is doing, with its log) and
 //! its session links (who it shares context with, and controls for them).
 
-use super::flow::EdgeStatus;
+use super::flow::{EdgeStatus, LinkMode};
 use super::{Pane, Workbench};
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -91,7 +91,9 @@ impl Workbench {
         let (hook_total, hook_running) = (view.subagents.len(), view.subagents.iter().filter(|r| r.finished.is_none()).count());
         let (file_total, file_active) = view.subagent_files;
         let (total, running) = (hook_total.max(file_total), hook_running.max(file_active));
-        if links == 0 && total == 0 {
+        // The link chip is also the way to *make* a link, so it shows whenever there is another agent.
+        let connectable = view.is_agent() && view.is_running() && !self.connectable_panes(pane_id, cx).is_empty();
+        if links == 0 && total == 0 && !connectable {
             return None;
         }
         let open = self.agent_panel.as_ref().filter(|p| p.pane == pane.entity_id()).map(|p| p.tab);
@@ -112,17 +114,23 @@ impl Workbench {
                 .child(label)
         };
         let mut row = div().flex().items_center().gap_1();
-        if links > 0 {
+        if links > 0 || connectable {
             let target = pane.clone();
             row = row.child(
                 chip(
                     SharedString::from(format!("collab-links-{pane_id}")),
                     "link",
-                    links.to_string(),
-                    if live { Chrome::ATTENTION } else { Chrome::BLUE },
+                    if links > 0 { links.to_string() } else { String::new() },
+                    if live {
+                        Chrome::ATTENTION
+                    } else if links > 0 {
+                        Chrome::BLUE
+                    } else {
+                        Chrome::MUTED
+                    },
                     open == Some(PanelTab::Links),
                 )
-                .tooltip(crate::ui::Tooltip::text(t(cx, "collab.links"), None))
+                .tooltip(crate::ui::Tooltip::text(t(cx, if links > 0 { "collab.links" } else { "collab.connect" }), None))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.toggle_agent_panel(&target, PanelTab::Links, cx);
@@ -379,12 +387,15 @@ impl Workbench {
                     )
                 })
                 .unwrap_or_default();
+            let (from, to, live) = (edge.from, edge.to, edge.live);
+            let direct = edge.mode == LinkMode::Direct;
             let (status, color) = match &edge.status {
+                // A direct link forwards nothing: the sessions message each other.
+                _ if direct => (t(cx, "collab.direct_active").to_string(), Chrome::GREEN),
                 EdgeStatus::Sharing => (t(cx, "flow.sharing").to_string(), Chrome::ORANGE),
                 EdgeStatus::Shared(n) => (tf(cx, "flow.shared", &[("n", &n.to_string())]), Chrome::SUCCESS),
                 EdgeStatus::Failed(error) => (format!("{} · {error}", t(cx, "flow.failed")), Chrome::ERROR),
             };
-            let (from, to, live) = (edge.from, edge.to, edge.live);
             let pending = self.flow.pending_for(peer_id);
             let button = |id: SharedString, label: String| {
                 div()
@@ -437,6 +448,16 @@ impl Workbench {
                                         .text_color(hex(Chrome::ATTENTION))
                                         .child(t(cx, "flow.live")),
                                 )
+                            })
+                            .when(direct, |d| {
+                                d.child(
+                                    div()
+                                        .px_1()
+                                        .rounded_sm()
+                                        .bg(hex_alpha(Chrome::GREEN, 0.2))
+                                        .text_color(hex(Chrome::GREEN))
+                                        .child(t(cx, "collab.direct")),
+                                )
                             }),
                     )
                     .child(
@@ -461,17 +482,19 @@ impl Workbench {
                         div()
                             .flex()
                             .gap_1()
-                            .child(
-                                button(
-                                    SharedString::from(format!("link-live-{index}")),
-                                    if live { t(cx, "collab.stop_live") } else { t(cx, "collab.make_live") }.to_string(),
+                            .when(!direct, |d| {
+                                d.child(
+                                    button(
+                                        SharedString::from(format!("link-live-{index}")),
+                                        if live { t(cx, "collab.stop_live") } else { t(cx, "collab.make_live") }.to_string(),
+                                    )
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.flow_set_live(from, to, !live, cx))),
                                 )
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.flow_set_live(from, to, !live, cx))),
-                            )
-                            .child(
-                                button(SharedString::from(format!("link-resync-{index}")), t(cx, "flow.resync").to_string())
-                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.flow_resync(from, to, cx))),
-                            )
+                                .child(
+                                    button(SharedString::from(format!("link-resync-{index}")), t(cx, "flow.resync").to_string())
+                                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.flow_resync(from, to, cx))),
+                                )
+                            })
                             .child(button(SharedString::from(format!("link-jump-{index}")), t(cx, "collab.go_to").to_string()).on_click(
                                 cx.listener(move |this, _: &ClickEvent, window, cx| {
                                     this.agent_panel = None;
@@ -485,6 +508,108 @@ impl Workbench {
                     ),
             );
         }
+        // Connecting from here, instead of going to the Session Flow page.
+        let candidates = self.connectable_panes(pane_id, cx);
+        let mut connect = div().flex().flex_col().gap_1().px_1().pb_1();
+        connect =
+            connect.child(
+                div()
+                    .px_2()
+                    .pt_2()
+                    .pb_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div().flex_1().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(
+                            if edges.is_empty() { t(cx, "collab.connect_first") } else { t(cx, "collab.connect_more") }.to_uppercase(),
+                        ),
+                    )
+                    // Tab names say little when there are many of them: let the user click the pane.
+                    .when(!candidates.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .id("connect-pick")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .t_small()
+                                .text_color(hex(Chrome::BLUE))
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                                .child(icon("square-terminal", IconSize::INLINE, hex(Chrome::BLUE)))
+                                .child(t(cx, "collab.pick"))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.start_connect_pick(pane_id, cx))),
+                        )
+                    }),
+            );
+        if candidates.is_empty() {
+            connect = connect.child(crate::ui::hint(t(cx, "collab.no_targets")));
+        }
+        for (index, peer) in candidates.iter().enumerate() {
+            let view = peer.read(cx);
+            let peer_id = view.pane_id;
+            // Two Claude Code sessions can message each other; anything else gets the conversation.
+            let direct = self.direct_peers(pane_id, peer_id, cx).map(|(_, target)| target);
+            let location = self
+                .locate(peer)
+                .map(|(w, tab)| {
+                    format!(
+                        "{} › {}",
+                        self.workspace_title(&self.workspaces[w], cx),
+                        tf(cx, "collab.tab", &[("n", &(tab + 1).to_string())])
+                    )
+                })
+                .unwrap_or_default();
+            let action = |id: SharedString, label: String, primary: bool| {
+                div()
+                    .id(id)
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .t_small()
+                    .flex_shrink_0()
+                    .cursor_pointer()
+                    .bg(if primary { hex_alpha(Chrome::ACCENT, 0.9) } else { hex(0x2d2d30) })
+                    .text_color(hex(if primary { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
+                    .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+                    .child(label)
+            };
+            connect = connect.child(
+                div()
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .t_small()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .child(crate::brand::avatar(view.tool_id(), 16.))
+                    .child(div().min_w_0().truncate().text_color(hex(Chrome::BRIGHT)).child(view.display_title()))
+                    .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(location))
+                    .when_some(direct.clone(), |d, target| {
+                        d.child(div().flex_shrink_0().t_caption().text_color(hex(Chrome::GREEN)).child(target.name.clone())).child(
+                            action(SharedString::from(format!("connect-direct-{index}")), t(cx, "collab.direct_connect").to_string(), true)
+                                .tooltip(crate::ui::Tooltip::text(t(cx, "collab.direct_hint"), None))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.connect_panes(pane_id, peer_id, false, cx))),
+                        )
+                    })
+                    .when(direct.is_none(), |d| {
+                        d.child(
+                            action(SharedString::from(format!("connect-share-{index}")), t(cx, "collab.share_context").to_string(), false)
+                                .tooltip(crate::ui::Tooltip::text(t(cx, "collab.share_context_hint"), None))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.connect_panes(pane_id, peer_id, false, cx))),
+                        )
+                        .child(
+                            action(SharedString::from(format!("connect-live-{index}")), t(cx, "collab.make_live").to_string(), true)
+                                .tooltip(crate::ui::Tooltip::text(t(cx, "collab.make_live_hint"), None))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.connect_panes(pane_id, peer_id, true, cx))),
+                        )
+                    }),
+            );
+        }
+
         div()
             .flex()
             .flex_col()
@@ -499,6 +624,18 @@ impl Workbench {
                     .border_color(hex(Chrome::OVERLAY_BORDER))
                     .child(icon("link", IconSize::INLINE, hex(Chrome::FOREGROUND)))
                     .child(div().flex_1().t_body().font_weight(FontWeight::SEMIBOLD).child(t(cx, "collab.links")))
+                    .when(!edges.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .id("links-disconnect-all")
+                                .t_small()
+                                .text_color(hex(Chrome::MUTED))
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(hex(Chrome::ERROR)))
+                                .child(t(cx, "collab.disconnect_all"))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.flow_disconnect_all(pane_id, cx))),
+                        )
+                    })
                     .child(
                         div()
                             .id("links-open-flow")
@@ -514,6 +651,7 @@ impl Workbench {
                     ),
             )
             .child(list)
+            .child(connect)
             .into_any_element()
     }
 }

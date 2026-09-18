@@ -9,7 +9,7 @@ rust-version = "1.98"
 license = "GPL-3.0-or-later"
 authors = ["Agentty contributors"]
 repository = "https://github.com/empty-user77/agentty"
-homepage = "https://agentty.run"
+homepage = "https://www.agentty.run"
 keywords = ["terminal", "ai", "claude", "codex", "gpui"]
 
 [workspace.dependencies]

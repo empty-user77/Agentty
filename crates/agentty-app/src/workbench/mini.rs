@@ -6,7 +6,7 @@ use super::{status_label, Workbench};
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::native::{self, Frame};
-use crate::terminal::{AgentStatus, NoticeKind};
+use crate::terminal::NoticeKind;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
 use gpui::{
@@ -384,7 +384,7 @@ impl Workbench {
                         workspace: workspace.clone(),
                         status,
                         color,
-                        working: matches!(view.status, AgentStatus::Working),
+                        working: view.status.in_turn(),
                         waiting: view.attention,
                         elapsed: view.working_since.map(|t| t.elapsed().as_secs()),
                     });

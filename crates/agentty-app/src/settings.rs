@@ -29,6 +29,16 @@ impl Language {
         }
     }
 
+    /// `en`, `ko`, `ja` or `zh` for the language shown.
+    pub fn code(self) -> &'static str {
+        match self.resolved() {
+            Language::System | Language::En => "en",
+            Language::Ko => "ko",
+            Language::Ja => "ja",
+            Language::Zh => "zh",
+        }
+    }
+
     pub fn native_name(self) -> &'static str {
         match self {
             Language::System => "System",
@@ -137,6 +147,9 @@ pub struct Settings {
     pub confirm_close: bool,
     /// Claude Code advisor for new Claude tabs.
     pub advisor: AdvisorChoice,
+    /// The tour (agentty.run, key features) was shown on first launch.
+    #[serde(default)]
+    pub welcome_shown: bool,
 }
 
 /// Claude Code's advisor tool (a stronger model Claude consults at key moments) for a Claude tab.
@@ -284,6 +297,7 @@ impl Default for Settings {
             agent_bar: true,
             confirm_close: true,
             advisor: AdvisorChoice::Inherit,
+            welcome_shown: false,
         }
     }
 }

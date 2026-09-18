@@ -43,10 +43,16 @@ impl<T: Clone + PartialEq> PaneNode<T> {
     /// (so repeated "split down" stacks panes evenly, like cmux); otherwise the leaf is
     /// replaced by a new split.
     pub fn split(&mut self, target: &T, new: T, axis: Axis) -> bool {
+        self.attach(target, PaneNode::Leaf(new), axis, false)
+    }
+
+    /// Puts a whole subtree next to `target` (a tab dropped into a pane), before it when `before`.
+    pub fn attach(&mut self, target: &T, node: PaneNode<T>, axis: Axis, before: bool) -> bool {
         match self {
             PaneNode::Leaf(leaf) if leaf == target => {
                 let old = PaneNode::Leaf(leaf.clone());
-                *self = PaneNode::Split { axis, children: vec![old, PaneNode::Leaf(new)], sizes: vec![0.5, 0.5] };
+                let children = if before { vec![node, old] } else { vec![old, node] };
+                *self = PaneNode::Split { axis, children, sizes: vec![0.5, 0.5] };
                 true
             }
             PaneNode::Leaf(_) => false,
@@ -55,11 +61,23 @@ impl<T: Clone + PartialEq> PaneNode<T> {
                 if let (Some(index), true) = (direct, *own_axis == axis) {
                     let share = sizes[index] / 2.0;
                     sizes[index] = share;
-                    children.insert(index + 1, PaneNode::Leaf(new));
-                    sizes.insert(index + 1, share);
+                    let at = if before { index } else { index + 1 };
+                    children.insert(at, node);
+                    sizes.insert(at, share);
                     return true;
                 }
-                children.iter_mut().any(|child| child.split(target, new.clone(), axis))
+                let mut node = Some(node);
+                children.iter_mut().any(|child| match node.take() {
+                    Some(pending) => {
+                        if child.attach(target, pending.clone(), axis, before) {
+                            true
+                        } else {
+                            node = Some(pending);
+                            false
+                        }
+                    }
+                    None => false,
+                })
             }
         }
     }
@@ -146,6 +164,26 @@ mod tests {
             },
             _ => panic!("expected split"),
         }
+    }
+
+    #[test]
+    fn attach_inserts_a_subtree_on_either_side() {
+        // A tab with two panes dropped on the left of pane 1.
+        let mut root = PaneNode::Leaf(1);
+        root.split(&1, 2, Axis::Horizontal);
+        let mut moved = PaneNode::Leaf(3);
+        moved.split(&3, 4, Axis::Vertical);
+        assert!(root.attach(&1, moved, Axis::Horizontal, true));
+        assert_eq!(root.leaves(), vec![3, 4, 1, 2]);
+        if let PaneNode::Split { sizes, .. } = &root {
+            assert!((sizes.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        }
+        // Dropping below turns the leaf into a vertical split, keeping the order.
+        let mut root = PaneNode::Leaf(1);
+        assert!(root.attach(&1, PaneNode::Leaf(5), Axis::Vertical, false));
+        assert_eq!(root.leaves(), vec![1, 5]);
+        assert!(!root.attach(&9, PaneNode::Leaf(6), Axis::Vertical, false));
+        assert_eq!(root.leaves(), vec![1, 5]);
     }
 
     #[test]

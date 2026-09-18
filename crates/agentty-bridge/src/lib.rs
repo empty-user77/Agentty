@@ -15,6 +15,7 @@ pub mod kimi;
 pub mod limits;
 pub mod metrics;
 pub mod model;
+pub mod plugins;
 pub mod pricing;
 pub mod protobuf;
 pub mod service_status;
@@ -23,6 +24,7 @@ pub mod usage;
 
 use anyhow::Result;
 use model::{Agent, SessionInfo, Turn};
+use std::path::PathBuf;
 
 /// Sessions from the selected agents, newest first.
 pub fn list(agent: Option<Agent>, limit: usize) -> Vec<SessionInfo> {
@@ -89,6 +91,39 @@ pub fn claude_context_window(model: &str) -> u64 {
         200_000
     } else {
         1_000_000
+    }
+}
+
+/// Path of a session transcript, for the agents that keep one Agentty can read.
+fn transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
+    match agent {
+        Agent::Claude => claude::find(id).ok(),
+        Agent::Codex => codex::find(id).ok(),
+        _ => None,
+    }
+}
+
+/// Which of two session ids a pane should be reading right now.
+///
+/// A pane pins the session id it launched with, but the agent does not always keep writing to it:
+/// `/clear` and a resume both fork Claude Code into a *new* transcript with a new id, and the pinned
+/// one stops growing. Reading it forever freezes the model, the context meter and the subagent count
+/// at whatever they were when the fork happened. Whichever transcript was written most recently is
+/// the live one.
+pub fn live_session_id(agent: Agent, pinned: Option<String>, recent: Option<String>) -> Option<String> {
+    pick_live(pinned, recent, |id| transcript_path(agent, id).map(|p| fsutil::mtime_ms(&p)).unwrap_or(0))
+}
+
+fn pick_live(pinned: Option<String>, recent: Option<String>, written_at: impl Fn(&str) -> u64) -> Option<String> {
+    match (pinned, recent) {
+        (Some(pinned), Some(recent)) if pinned != recent => {
+            if written_at(&recent) > written_at(&pinned) {
+                Some(recent)
+            } else {
+                Some(pinned)
+            }
+        }
+        (pinned, recent) => pinned.or(recent),
     }
 }
 
@@ -252,6 +287,24 @@ mod model_name_tests {
         assert_eq!(super::short_tokens(258_400), "258K");
         let stats = super::SessionStats { context_used: 890_000, context_window: 1_000_000, ..Default::default() };
         assert_eq!(stats.context_percent().map(|p| p.round()), Some(89.0));
+    }
+
+    #[test]
+    fn follows_the_transcript_that_is_still_being_written() {
+        let at = |id: &str| match id {
+            "pinned" => 100,
+            "fork" => 200,
+            _ => 0,
+        };
+        let pick =
+            |p: Option<&str>, r: Option<&str>| super::pick_live(p.map(str::to_string), r.map(str::to_string), at).unwrap_or_default();
+        // `/clear` forked the session: the newer file wins, so the context meter keeps moving.
+        assert_eq!(pick(Some("pinned"), Some("fork")), "fork");
+        // A stale neighbour must not steal a pane that is still writing its own transcript.
+        assert_eq!(pick(Some("fork"), Some("pinned")), "fork");
+        assert_eq!(pick(Some("pinned"), None), "pinned");
+        assert_eq!(pick(None, Some("fork")), "fork");
+        assert_eq!(pick(None, None), "");
     }
 
     #[test]

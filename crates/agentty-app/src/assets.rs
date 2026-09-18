@@ -5,6 +5,47 @@ use std::borrow::Cow;
 
 const FILES: &[(&str, &[u8])] = &[
     ("icons/app-window.svg", include_bytes!("../assets/icons/app-window.svg")),
+    ("icons/puzzle.svg", include_bytes!("../assets/icons/puzzle.svg")),
+    ("icons/notebook-pen.svg", include_bytes!("../assets/icons/notebook-pen.svg")),
+    ("icons/send.svg", include_bytes!("../assets/icons/send.svg")),
+    ("icons/save.svg", include_bytes!("../assets/icons/save.svg")),
+    ("icons/file-input.svg", include_bytes!("../assets/icons/file-input.svg")),
+    ("icons/trash-2.svg", include_bytes!("../assets/icons/trash-2.svg")),
+    ("icons/download.svg", include_bytes!("../assets/icons/download.svg")),
+    ("icons/upload.svg", include_bytes!("../assets/icons/upload.svg")),
+    ("icons/power.svg", include_bytes!("../assets/icons/power.svg")),
+    ("icons/scroll-text.svg", include_bytes!("../assets/icons/scroll-text.svg")),
+    ("icons/zap.svg", include_bytes!("../assets/icons/zap.svg")),
+    ("icons/wand-sparkles.svg", include_bytes!("../assets/icons/wand-sparkles.svg")),
+    ("icons/code.svg", include_bytes!("../assets/icons/code.svg")),
+    ("icons/file-plus.svg", include_bytes!("../assets/icons/file-plus.svg")),
+    ("icons/list.svg", include_bytes!("../assets/icons/list.svg")),
+    ("icons/message-square.svg", include_bytes!("../assets/icons/message-square.svg")),
+    ("icons/notebook.svg", include_bytes!("../assets/icons/notebook.svg")),
+    ("icons/sticky-note.svg", include_bytes!("../assets/icons/sticky-note.svg")),
+    ("icons/bookmark.svg", include_bytes!("../assets/icons/bookmark.svg")),
+    ("icons/calendar.svg", include_bytes!("../assets/icons/calendar.svg")),
+    ("icons/tag.svg", include_bytes!("../assets/icons/tag.svg")),
+    ("icons/clipboard.svg", include_bytes!("../assets/icons/clipboard.svg")),
+    ("icons/clipboard-paste.svg", include_bytes!("../assets/icons/clipboard-paste.svg")),
+    ("icons/git-pull-request.svg", include_bytes!("../assets/icons/git-pull-request.svg")),
+    ("icons/bug.svg", include_bytes!("../assets/icons/bug.svg")),
+    ("icons/rocket.svg", include_bytes!("../assets/icons/rocket.svg")),
+    ("icons/book-open.svg", include_bytes!("../assets/icons/book-open.svg")),
+    ("icons/hammer.svg", include_bytes!("../assets/icons/hammer.svg")),
+    ("icons/wrench.svg", include_bytes!("../assets/icons/wrench.svg")),
+    ("icons/database.svg", include_bytes!("../assets/icons/database.svg")),
+    ("icons/cloud.svg", include_bytes!("../assets/icons/cloud.svg")),
+    ("icons/eye.svg", include_bytes!("../assets/icons/eye.svg")),
+    ("icons/play.svg", include_bytes!("../assets/icons/play.svg")),
+    ("icons/square.svg", include_bytes!("../assets/icons/square.svg")),
+    ("icons/lightbulb.svg", include_bytes!("../assets/icons/lightbulb.svg")),
+    ("icons/plug.svg", include_bytes!("../assets/icons/plug.svg")),
+    ("icons/hash.svg", include_bytes!("../assets/icons/hash.svg")),
+    ("icons/house.svg", include_bytes!("../assets/icons/house.svg")),
+    ("icons/at-sign.svg", include_bytes!("../assets/icons/at-sign.svg")),
+    ("icons/mail.svg", include_bytes!("../assets/icons/mail.svg")),
+    ("icons/image.svg", include_bytes!("../assets/icons/image.svg")),
     ("icons/arrow-down.svg", include_bytes!("../assets/icons/arrow-down.svg")),
     ("icons/arrow-left.svg", include_bytes!("../assets/icons/arrow-left.svg")),
     ("icons/arrow-right.svg", include_bytes!("../assets/icons/arrow-right.svg")),
@@ -100,6 +141,20 @@ impl AssetSource for Assets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plugin authors pick icons from the list in the plugin guide.
+    #[test]
+    fn plugin_guide_lists_every_icon() {
+        let guide = agentty_bridge::plugins::store::GUIDE;
+        let listed = guide.lines().find(|l| l.starts_with('`') && l.contains("puzzle")).unwrap_or_default();
+        let names: Vec<&str> = listed.trim_matches(|c| c == '`' || c == '.').split_whitespace().collect();
+        for name in crate::ui::ICONS {
+            assert!(names.contains(name), "docs/plugins/README.md does not list icon {name}");
+        }
+        for name in names {
+            assert!(crate::ui::ICONS.contains(&name), "docs/plugins/README.md lists unknown icon {name}");
+        }
+    }
 
     #[test]
     fn every_icon_used_in_code_exists() {

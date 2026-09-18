@@ -44,6 +44,8 @@ impl Chrome {
     pub const ORANGE: u32 = 0xe8a33d;
     pub const GREEN: u32 = 0x4ec9b0;
     pub const FAVORITE: u32 = 0xf5c518;
+    /// Tail of a shooting star on the start page.
+    pub const METEOR: u32 = 0xffecaa;
 }
 
 #[derive(Debug, Clone, PartialEq)]

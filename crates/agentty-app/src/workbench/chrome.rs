@@ -17,6 +17,14 @@ type WindowAction = Box<dyn Fn(&mut Workbench, &mut Window, &mut Context<Workben
 type ViewAction = Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)>;
 
 pub const TITLE_BAR_HEIGHT: f32 = 36.;
+/// Links shown under the start page.
+const RELEASES_URL: &str = "https://github.com/empty-user77/agentty-releases/releases";
+const GITHUB_URL: &str = "https://github.com/empty-user77/agentty-releases";
+const AUTHOR_URL: &str = "https://raylee.app";
+/// Where to read how to install the agent CLIs Agentty is built around.
+const CLAUDE_INSTALL_URL: &str = "https://code.claude.com/docs/en/quickstart";
+const CODEX_INSTALL_URL: &str = "https://learn.chatgpt.com/docs/codex/cli#getting-started";
+const COPYRIGHT_YEAR: &str = "2026";
 pub const ACTIVITY_BAR_WIDTH: f32 = 48.;
 const TAB_HEIGHT: f32 = 35.;
 pub const STATUS_BAR_HEIGHT: f32 = 22.;
@@ -43,7 +51,7 @@ pub struct DraggedGroup {
 }
 
 pub struct DragPreview {
-    title: SharedString,
+    pub title: SharedString,
 }
 
 impl Render for DragPreview {
@@ -102,6 +110,7 @@ impl Workbench {
             AgentStatus::Permission(_) | AgentStatus::Question(_) => 3,
             AgentStatus::Finished(_) => 2,
             AgentStatus::Working => 1,
+            AgentStatus::Thinking => 1,
             AgentStatus::Interrupted | AgentStatus::Idle => 0,
         };
         let agent = panes.iter().map(|p| p.read(cx)).filter(|v| v.is_agent()).max_by_key(|v| rank(&v.status) * 2 + v.attention as usize);
@@ -153,6 +162,7 @@ impl Workbench {
                     "page.flow" => (tooltip, "⇧⌘F"),
                     "page.usage" => (tooltip, "⌥⌘U"),
                     "page.extensions" => (tooltip, "⇧⌘X"),
+                    "page.plugins" => (tooltip, ""),
                     "page.settings" => (tooltip, "⌘,"),
                     _ => (tooltip, ""),
                 };
@@ -237,6 +247,14 @@ impl Workbench {
                         "page.extensions",
                         Box::new(|this, cx| this.open_page(Page::Extensions, cx)),
                         cx,
+                    ))
+                    .child(item(
+                        "activity-plugins",
+                        "puzzle",
+                        self.page == Some(Page::Plugins),
+                        "page.plugins",
+                        Box::new(|this, cx| this.open_page(Page::Plugins, cx)),
+                        cx,
                     )),
             )
             .child(div().flex().flex_col().child(item(
@@ -269,6 +287,10 @@ impl Workbench {
             SidePanel::Workspaces => div()
                 .flex()
                 .gap_0p5()
+                .child(
+                    icon_only("sidebar-home", "house", cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
+                        .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None)),
+                )
                 .child(
                     icon_only(
                         "sidebar-new-group",
@@ -1010,6 +1032,7 @@ impl Workbench {
                 Page::Flow => vec![(page, t(cx, "page.flow"))],
                 Page::Settings => vec![(page, t(cx, "page.settings"))],
                 Page::Extensions => vec![(page, t(cx, "page.extensions"))],
+                Page::Plugins => vec![(page, t(cx, "page.plugins"))],
             };
             for (tab_page, label) in pages {
                 let active = tab_page == page;
@@ -1093,9 +1116,17 @@ impl Workbench {
                         )
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.activate_tab(index, window, cx)))
                         // Drag a tab onto another to reorder, or onto a workspace in the sidebar to move it.
-                        .on_drag(DraggedTab { workspace: ws.id, index, title: view.display_title().into() }, |dragged, _, _, cx| {
+                        .on_drag(DraggedTab { workspace: ws.id, index, title: view.display_title().into() }, move |dragged, _, _, cx| {
+                            super::drop_split::note_tab_drag(dragged.workspace, dragged.index);
                             cx.new(|_| DragPreview { title: dragged.title.clone() })
                         })
+                        // Holding a dragged tab over another one opens it, so the tab can be dropped
+                        // into the split of that tab (dropping on the tab itself merges it too).
+                        .on_drag_move(cx.listener(move |this, event: &gpui::DragMoveEvent<DraggedTab>, window, cx| {
+                            if event.bounds.contains(&event.event.position) {
+                                this.preview_tab_during_drag(index, window, cx);
+                            }
+                        }))
                         .drag_over::<DraggedTab>(move |style, dragged, _, _| {
                             if dragged.index == index {
                                 style
@@ -1105,8 +1136,13 @@ impl Workbench {
                                 style.border_r_2().border_color(hex(Chrome::ACCENT))
                             }
                         })
-                        .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
-                            this.reorder_tab(dragged.workspace, dragged.index, index, cx)
+                        .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                            // Dropped on a tab of another workspace, or on itself: just reorder.
+                            if this.workspaces.get(this.active_workspace).is_some_and(|ws| ws.id == dragged.workspace) {
+                                this.reorder_tab(dragged.workspace, dragged.index, index, cx)
+                            } else {
+                                this.move_tab_into_tab(dragged, index, window, cx)
+                            }
                         }))
                         .child(crate::brand::avatar(view.tool_id(), 16.))
                         .child(div().truncate().child(view.display_title()))
@@ -1275,7 +1311,8 @@ impl Workbench {
                         )
                     })
             })
-            // cmux-style quick actions: icons only.
+            // Plugins with a panel, then cmux-style quick actions: icons only.
+            .children(self.render_plugin_header_buttons(cx))
             .child(header_icon(
                 "header-browser",
                 "globe",
@@ -1579,14 +1616,29 @@ impl Workbench {
                     hex(Chrome::MUTED),
                 )))
         };
+        // Claude Code and Codex are what Agentty is for: they are always offered, and picking one
+        // that isn't installed explains how to get it. Other CLIs only show up once they are there.
+        let missing = |id: &'static str, name: &'static str, url: &'static str, cx: &mut Context<Self>| {
+            let row = launch(SharedString::from(format!("welcome-{id}")), id, name.to_string(), PaneKind::Shell.into(), cx);
+            row.child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "welcome.not_installed"))).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    this.install_hint = Some((id, name, url));
+                    cx.notify();
+                },
+            ))
+        };
         let mut buttons = div().flex().flex_col().gap_2().items_center();
         buttons = buttons.child(launch("welcome-shell".into(), "shell", t(cx, "welcome.terminal").into(), PaneKind::Shell.into(), cx));
-        if self.is_installed("claude") {
-            buttons = buttons.child(launch("welcome-claude".into(), "claude", "Claude Code".into(), PaneKind::Claude.into(), cx));
-        }
-        if self.is_installed("codex") {
-            buttons = buttons.child(launch("welcome-codex".into(), "codex", "Codex".into(), PaneKind::Codex.into(), cx));
-        }
+        buttons = buttons.child(if self.is_installed("claude") {
+            launch("welcome-claude".into(), "claude", "Claude Code".into(), PaneKind::Claude.into(), cx)
+        } else {
+            missing("claude", "Claude Code", CLAUDE_INSTALL_URL, cx)
+        });
+        buttons = buttons.child(if self.is_installed("codex") {
+            launch("welcome-codex".into(), "codex", "Codex".into(), PaneKind::Codex.into(), cx)
+        } else {
+            missing("codex", "Codex", CODEX_INSTALL_URL, cx)
+        });
         for agent in self.installed.iter().flat_map(|i| i.other_agents()).filter(|a| a.primary) {
             let choice = LaunchChoice::Command { title: agent.name.to_string(), command: agent.binary.to_string() };
             buttons =
@@ -1595,12 +1647,20 @@ impl Workbench {
         let more = self.installed.as_ref().is_some_and(|i| i.other_agents().any(|a| !a.primary) || !i.ollama_models.is_empty());
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
             .gap_2()
             .bg(hex(Chrome::EDITOR))
+            // The night sky from agentty.run, behind everything and untouchable.
+            .child(div().absolute().inset_0().bg(gpui::linear_gradient(
+                180.,
+                gpui::linear_color_stop(hex_alpha(0xffcc00, 0.05), 0.),
+                gpui::linear_color_stop(hex_alpha(0xffcc00, 0.), 1.),
+            )))
+            .child(super::starfield::starfield())
             .child(gpui::img("brand/logo.png").size(px(56.)))
             .child(
                 div().text_size(px(30.)).font_weight(FontWeight::LIGHT).text_color(hex(Chrome::FOREGROUND)).child(if starting.is_some() {
@@ -1680,6 +1740,54 @@ impl Workbench {
                         })),
                 )
             })
+            // Opened from the sidebar with workspaces already running: a way back to them.
+            .when(self.welcome && starting.is_none() && !self.workspaces.is_empty(), |d| {
+                d.child(
+                    div()
+                        .id("welcome-back")
+                        .mt_2()
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .t_small()
+                        .text_color(hex(Chrome::MUTED))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+                        .child(t(cx, "welcome.back"))
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close_welcome(window, cx))),
+                )
+            })
+            .child(self.render_welcome_footer(cx))
+    }
+
+    /// Links and copyright at the bottom of the start page, like the website's footer.
+    fn render_welcome_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let link = |id: &'static str, label: String, url: &'static str| {
+            div()
+                .id(id)
+                .px_1()
+                .cursor_pointer()
+                .text_color(hex(Chrome::MUTED))
+                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                .child(label)
+                .on_click(move |_: &ClickEvent, _, cx| cx.open_url(url))
+        };
+        div()
+            .absolute()
+            .bottom(px(16.))
+            .left_0()
+            .right_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .t_caption()
+            .text_color(hex(Chrome::MUTED))
+            .child(link("welcome-about", t(cx, "welcome.about").to_string(), super::update::WEBSITE))
+            .child(link("welcome-releases", t(cx, "welcome.releases").to_string(), RELEASES_URL))
+            .child(link("welcome-github", "GitHub".to_string(), GITHUB_URL))
+            .child(div().opacity(0.6).child(format!("© {COPYRIGHT_YEAR} Agentty ·")))
+            .child(link("welcome-author", "raylee.app".to_string(), AUTHOR_URL))
     }
 
     pub(super) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -327,9 +327,88 @@ pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
         .and_then(|(path, _)| path.file_stem().map(|s| s.to_string_lossy().to_string()))
 }
 
+/// A running Claude Code session as it registers itself in `~/.claude/sessions/<pid>.json`.
+/// Sessions message each other by `name` (the `SendMessage` / `ListAgents` tools), so Agentty can
+/// tell two of its own sessions how to reach one another.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PeerSession {
+    /// The address other sessions use (`agentty-be`, `cosmica-desktop-f5`, …).
+    pub name: String,
+    pub session_id: String,
+    pub pid: u32,
+    pub cwd: PathBuf,
+    /// `idle`, `busy`, … as the session last reported it.
+    pub status: String,
+    /// Interactive sessions only; background and print runs are not worth messaging.
+    pub interactive: bool,
+}
+
+fn sessions_dir() -> PathBuf {
+    fsutil::home().join(".claude").join("sessions")
+}
+
+/// Claude Code sessions registered on this machine. Read from disk at most once a second: the UI
+/// asks for this while it repaints.
+pub fn peer_sessions() -> Vec<PeerSession> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(std::time::Instant, Vec<PeerSession>)>> = Mutex::new(None);
+    let fresh = |cache: &Option<(std::time::Instant, Vec<PeerSession>)>| {
+        cache.as_ref().filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(1)).map(|(_, peers)| peers.clone())
+    };
+    if let Some(peers) = CACHE.lock().ok().as_deref().and_then(fresh) {
+        return peers;
+    }
+    let peers = read_peer_sessions();
+    if let Ok(mut cache) = CACHE.lock() {
+        *cache = Some((std::time::Instant::now(), peers.clone()));
+    }
+    peers
+}
+
+fn read_peer_sessions() -> Vec<PeerSession> {
+    let Ok(entries) = std::fs::read_dir(sessions_dir()) else { return Vec::new() };
+    let mut peers: Vec<PeerSession> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|entry| {
+            let value: Value = serde_json::from_slice(&std::fs::read(entry.path()).ok()?).ok()?;
+            let text = |key: &str| value[key].as_str().map(str::to_string);
+            Some(PeerSession {
+                name: text("name").filter(|n| !n.is_empty())?,
+                session_id: text("sessionId")?,
+                pid: value["pid"].as_u64()? as u32,
+                cwd: PathBuf::from(text("cwd").unwrap_or_default()),
+                status: text("status").unwrap_or_default(),
+                interactive: text("kind").as_deref() == Some("interactive"),
+            })
+        })
+        .collect();
+    peers.sort_by(|a, b| a.name.cmp(&b.name));
+    peers
+}
+
+/// The registered session with this id (the id Agentty started the pane with).
+pub fn peer_session(session_id: &str) -> Option<PeerSession> {
+    peer_sessions().into_iter().find(|p| p.session_id == session_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_session_registry() {
+        // The real registry: every entry that has a name is addressable and has an id and a pid.
+        // Sessions rename themselves while they run, so only the id is compared.
+        let peers = peer_sessions();
+        for peer in &peers {
+            assert!(!peer.name.is_empty() && !peer.session_id.is_empty() && peer.pid > 0);
+        }
+        if let Some(first) = peers.first() {
+            assert_eq!(peer_session(&first.session_id).map(|p| p.session_id), Some(first.session_id.clone()));
+        }
+        assert!(peer_session("not-a-session-id").is_none());
+    }
 
     #[test]
     fn encodes_project_dirs() {

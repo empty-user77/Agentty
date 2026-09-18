@@ -1,0 +1,51 @@
+{
+  "id": "cosmica",
+  "name": "Cosmica",
+  "version": "1.0.1",
+  "publisher": "Agentty",
+  "description": "Use Cosmica notes as prompts, continue a note in Agentty straight from Cosmica, and save session summaries back into Cosmica.",
+  "icon": "notebook-pen",
+  "homepage": "https://www.cosmica.ink/",
+  "links": [
+    { "label": "Cosmica", "url": "https://www.cosmica.ink/" },
+    { "label": "Agentty", "url": "https://www.agentty.run" }
+  ],
+  "requires": {
+    "name": "Cosmica",
+    "url": "https://www.cosmica.ink/",
+    "note": "Notes are read from the folder Cosmica keeps them in; install Cosmica first, or point it at ~/CosmicaNotes/Note."
+  },
+  "main": "main.mjs",
+  "runtime": "node",
+  "apiVersion": 1,
+  "permissions": ["prompt.inject", "terminal.write", "session.read", "workspace.read"],
+  "detect": ["/Applications/Cosmica.app", "~/Applications/Cosmica.app", "~/.cosmica/config.json"],
+  "keywords": ["notes", "cosmica", "markdown", "summary"],
+  "contributes": {
+    "panel": { "title": "Cosmica", "icon": "notebook-pen" },
+    "commands": [
+      {
+        "id": "cosmica.saveSummary",
+        "title": "Cosmica: Save AI summary of this session",
+        "icon": "notebook-pen",
+        "paneBar": true,
+        "when": "agent"
+      },
+      {
+        "id": "cosmica.saveTranscript",
+        "title": "Cosmica: Save conversation log of this session",
+        "icon": "scroll-text"
+      },
+      {
+        "id": "cosmica.browse",
+        "title": "Cosmica: Browse notes",
+        "icon": "search"
+      },
+      {
+        "id": "cosmica.continueLatest",
+        "title": "Cosmica: Continue the latest note",
+        "icon": "send"
+      }
+    ]
+  }
+}

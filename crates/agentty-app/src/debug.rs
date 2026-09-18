@@ -134,6 +134,13 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
         };
         match (command, coords) {
             ("move", (Some(x), Some(y))) => mouse(5, x, y, flags(argument)),
+            // One step of a drag: the caller spaces them out so the window keeps painting.
+            ("press", (Some(x), Some(y))) => {
+                mouse(5, x, y, 0);
+                mouse(1, x, y, 0);
+            }
+            ("drag-to", (Some(x), Some(y))) => mouse(6, x, y, 0),
+            ("release", (Some(x), Some(y))) => mouse(2, x, y, 0),
             ("click", (Some(x), Some(y))) => {
                 let right = argument.contains("right");
                 let modifiers = flags(argument);
@@ -141,19 +148,7 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                 mouse(if right { 3 } else { 1 }, x, y, modifiers);
                 mouse(if right { 4 } else { 2 }, x, y, modifiers);
             }
-            // `drag x1 y1 x2 y2` and `scroll x y lines` (negative lines scroll up).
-            ("drag", (Some(x), Some(y))) => {
-                let rest: Vec<f64> = argument.split_whitespace().skip(2).filter_map(|v| v.parse().ok()).collect();
-                if let [x2, y2] = rest[..] {
-                    mouse(5, x, y, 0);
-                    mouse(1, x, y, 0);
-                    for step in 1..=8 {
-                        let t = step as f64 / 8.0;
-                        mouse(6, x + (x2 - x) * t, y + (y2 - y) * t, 0);
-                    }
-                    mouse(2, x2, y2, 0);
-                }
-            }
+            // `scroll x y lines` (negative lines scroll up); drags come in as press/drag-to/release.
             ("scroll", (Some(x), Some(y))) => {
                 let lines: i32 = argument.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(-5);
                 mouse(5, x, y, 0);
