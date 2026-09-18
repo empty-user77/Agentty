@@ -401,6 +401,16 @@ pub fn session_of_pid(pid: u32) -> Option<String> {
     peer_sessions().into_iter().find(|p| p.pid == pid).map(|p| p.session_id)
 }
 
+/// Whether a different running Claude Code process registered this session. Two sessions in one
+/// folder share a project directory, so the newest transcript there can belong to the neighbour.
+pub fn owned_by_other_process(session_id: &str, pid: Option<u32>) -> bool {
+    owned_by_other(&peer_sessions(), session_id, pid)
+}
+
+fn owned_by_other(peers: &[PeerSession], session_id: &str, pid: Option<u32>) -> bool {
+    peers.iter().any(|p| p.session_id == session_id && Some(p.pid) != pid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +427,25 @@ mod tests {
             assert_eq!(peer_session(&first.session_id).map(|p| p.session_id), Some(first.session_id.clone()));
         }
         assert!(peer_session("not-a-session-id").is_none());
+    }
+
+    #[test]
+    fn a_neighbours_session_is_not_this_panes() {
+        let peer = |session_id: &str, pid| PeerSession {
+            name: "agentty".into(),
+            session_id: session_id.into(),
+            pid,
+            cwd: PathBuf::from("/Users/me/app"),
+            status: "idle".into(),
+            interactive: true,
+        };
+        let peers = [peer("neighbour", 4094), peer("mine", 8034)];
+        // Started in the same folder before registering: the neighbour's newer transcript is not ours.
+        assert!(owned_by_other(&peers, "neighbour", Some(8034)));
+        assert!(owned_by_other(&peers, "neighbour", None));
+        assert!(!owned_by_other(&peers, "mine", Some(8034)));
+        // Nobody registered it (a finished session, or a Claude Code too old to register).
+        assert!(!owned_by_other(&peers, "unregistered", Some(8034)));
     }
 
     #[test]
