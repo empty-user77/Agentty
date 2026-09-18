@@ -567,8 +567,7 @@ impl Workbench {
             .flex_wrap()
             .gap_1()
             .children(agentty_bridge::harness::DEFAULT_PATTERNS.iter().map(|p| pattern_chip(p.to_string())))
-            .child(pattern_chip("agentty.json → \"harness\"".into()))
-            .child(pattern_chip(".claude/settings.json → hooks".into()));
+            .child(pattern_chip("agentty.json → \"harness\"".into()));
 
         let mut custom = div().flex().flex_col().gap_1();
         if prefs.harness_patterns.is_empty() {
