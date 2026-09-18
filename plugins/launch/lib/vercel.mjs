@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { run, spawnInteractive, baseEnv, tailLines } from './exec.mjs';
-import { extractDeviceCode, extractDeviceUrl, isLocalOnlyValue, parseDeployUrl, parseEnvFile, parseInspectAlias, stripAnsi } from './parse.mjs';
+import { LOCAL_ONLY_KEYS, extractDeviceCode, extractDeviceUrl, isLocalOnlyValue, parseDeployUrl, parseEnvFile, parseInspectAlias, stripAnsi } from './parse.mjs';
 
 function vercelEnv(extra = {}) {
   return baseEnv({ CI: '', ...extra });
@@ -92,7 +92,7 @@ export async function discoverEnvVars(root) {
       vars[key].files.push(name);
     }
   }
-  for (const entry of Object.values(vars)) entry.isLocal = isLocalOnlyValue(entry.value);
+  for (const [key, entry] of Object.entries(vars)) entry.isLocal = LOCAL_ONLY_KEYS.includes(key) || isLocalOnlyValue(entry.value);
   return { files: present, vars };
 }
 

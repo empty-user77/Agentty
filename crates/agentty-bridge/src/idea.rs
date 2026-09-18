@@ -210,6 +210,12 @@ into a working demo they can see and click, ready to publish on Vercel.
 - Data: start with local sample data / in-memory or localStorage. If the product needs a real
   database or login, design the code so Supabase can be plugged in later (a small data-access
   module), and note it in PLAN.md.
+- When Supabase is used: the 🚀 Launch button creates or picks the hosted project and writes its
+  URL and public key to `.env.local` — read exactly `NEXT_PUBLIC_SUPABASE_URL` and
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` (`VITE_…` with Vite) and list both names in `.env.example`. Put
+  the schema in `supabase/migrations/<timestamp>_<name>.sql` (Launch applies them), enable row
+  level security on every table with policies that fit the app, and never use or ask for the
+  service_role key.
 - This folder already contains `docs/` and `.claude/`. If a scaffolder refuses a non-empty folder,
   scaffold into a temporary subfolder and move the files up.
 - Use npm. Never commit secrets: put keys in `.env.local` (gitignored) and document names in

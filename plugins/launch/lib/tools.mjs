@@ -1,6 +1,6 @@
-// Finds or installs the `gh` and `vercel` CLIs. No Homebrew: `gh` is downloaded straight from its
-// GitHub release, `vercel` is installed with npm into the plugin's own data folder, so this works
-// even on a machine with neither tool and no package manager set up.
+// Finds or installs the `gh`, `vercel` and `supabase` CLIs. No Homebrew: `gh` is downloaded straight
+// from its GitHub release, `vercel` and `supabase` are installed with npm into the plugin's own data
+// folder, so this works even on a machine with none of them and no package manager set up.
 
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -100,19 +100,37 @@ function npmPath() {
   return existsSync(nextToNode) ? nextToNode : 'npm';
 }
 
-/** Installs `vercel@latest` into `<dataDir>/tools` with npm. Returns the CLI's binary path. */
-export async function installVercel(dataDir, { log } = {}) {
+/** Installs an npm package that ships a CLI into `<dataDir>/tools`. Returns the CLI's binary path. */
+async function installNpmCli(dataDir, { pkg, bin, label, log }) {
   const dir = toolsDir(dataDir);
   await fs.mkdir(dir, { recursive: true });
-  log?.('Installing the Vercel CLI…');
-  const result = await run(npmPath(), ['install', '--prefix', dir, 'vercel@latest', '--no-audit', '--no-fund'], {
+  log?.(`Installing the ${label}…`);
+  const result = await run(npmPath(), ['install', '--prefix', dir, `${pkg}@latest`, '--no-audit', '--no-fund'], {
     cwd: dir,
     timeoutMs: 5 * 60_000,
     env: baseEnv({ npm_config_yes: 'true' }),
   });
-  const binary = path.join(dir, 'node_modules', '.bin', 'vercel');
-  if (result.code !== 0 || !existsSync(binary)) throw new Error(`could not install the Vercel CLI: ${result.stderr || result.stdout || 'unknown error'}`);
+  const binary = path.join(dir, 'node_modules', '.bin', bin);
+  if (result.code !== 0 || !existsSync(binary)) throw new Error(`could not install the ${label}: ${result.stderr || result.stdout || 'unknown error'}`);
   return binary;
+}
+
+/** Installs `vercel@latest` into `<dataDir>/tools` with npm. Returns the CLI's binary path. */
+export async function installVercel(dataDir, { log } = {}) {
+  return installNpmCli(dataDir, { pkg: 'vercel', bin: 'vercel', label: 'Vercel CLI', log });
+}
+
+/** `supabase` already on PATH, already installed by Launch, or `null`. Never installs. */
+export async function findSupabase(dataDir) {
+  const onPath = await findOnPath('supabase', baseEnv());
+  if (onPath) return onPath;
+  const installed = path.join(toolsDir(dataDir), 'node_modules', '.bin', 'supabase');
+  return existsSync(installed) ? installed : null;
+}
+
+/** Finds `supabase`, installing the npm package into the plugin's data folder if it isn't available anywhere. */
+export async function ensureSupabase(dataDir, { log } = {}) {
+  return (await findSupabase(dataDir)) ?? (await installNpmCli(dataDir, { pkg: 'supabase', bin: 'supabase', label: 'Supabase CLI', log }));
 }
 
 /** Finds `gh`, installing it into the plugin's data folder if it isn't available anywhere. */

@@ -187,6 +187,7 @@ pub const BUILTIN: &[BuiltinPlugin] = &[
             ("lib/parse.mjs", embedded!("plugins/launch/lib/parse.mjs")),
             ("lib/github.mjs", embedded!("plugins/launch/lib/github.mjs")),
             ("lib/vercel.mjs", embedded!("plugins/launch/lib/vercel.mjs")),
+            ("lib/supabase.mjs", embedded!("plugins/launch/lib/supabase.mjs")),
             ("lib/tools.mjs", embedded!("plugins/launch/lib/tools.mjs")),
             ("lib/state.mjs", embedded!("plugins/launch/lib/state.mjs")),
             ("README.md", embedded!("plugins/launch/README.md")),

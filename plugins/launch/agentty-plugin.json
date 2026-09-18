@@ -1,9 +1,9 @@
 {
   "id": "launch",
   "name": "Launch",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "Agentty",
-  "description": "Take a project from your computer to a live URL: save it to GitHub and publish it on Vercel, no jargon, one button at a time.",
+  "description": "Take a project from your computer to a live URL: save it to GitHub, connect its Supabase database and publish it on Vercel, no jargon, one button at a time.",
   "icon": "rocket",
   "homepage": "https://www.agentty.run",
   "links": [
@@ -13,7 +13,7 @@
   "runtime": "node",
   "apiVersion": 1,
   "permissions": ["prompt.inject", "workspace.read"],
-  "keywords": ["deploy", "github", "vercel", "publish", "launch", "hosting"],
+  "keywords": ["deploy", "github", "vercel", "supabase", "database", "publish", "launch", "hosting"],
   "contributes": {
     "panel": { "title": "Launch", "icon": "rocket" },
     "commands": [

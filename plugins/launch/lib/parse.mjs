@@ -83,7 +83,7 @@ export function sanitizeRepoName(name) {
 }
 
 /** Lines Launch wants in `.gitignore`. Order matters: negations must follow what they negate. */
-export const REQUIRED_GITIGNORE_LINES = ['node_modules', '.env', '.env.local', '.env.*.local', '.env.*', '!.env.example', '!.env.sample', '.vercel', '.next', 'dist', '.DS_Store'];
+export const REQUIRED_GITIGNORE_LINES = ['node_modules', '.env', '.env.local', '.env.*.local', '.env.*', '!.env.example', '!.env.sample', '.vercel', 'supabase/.temp', '.next', 'dist', '.DS_Store'];
 
 /** Appends whichever of `REQUIRED_GITIGNORE_LINES` are missing, without touching existing lines. */
 export function mergeGitignore(existing, required = REQUIRED_GITIGNORE_LINES) {
@@ -125,6 +125,147 @@ export function detectFramework({ pkg, hasIndexHtml } = {}) {
     return 'node';
   }
   if (hasIndexHtml) return 'static';
+  return null;
+}
+
+// -- Supabase -----------------------------------------------------------------------------------
+
+/** Env vars that only make sense on this computer, whatever their value: never pre-selected for the live site. */
+export const LOCAL_ONLY_KEYS = ['SUPABASE_DB_PASSWORD'];
+
+/** The browser link `supabase login --no-browser` prints before it waits for the verification code. */
+export function extractSupabaseLoginUrl(text) {
+  const urls = stripAnsi(text).match(URL_RE) || [];
+  return urls.find((u) => /supabase\.com\/dashboard\/cli\/login/i.test(u)) ?? null;
+}
+
+/** JSON printed by a CLI that may put log lines around it. `null` when nothing parses. */
+export function parseLooseJson(text) {
+  const clean = stripAnsi(text).trim();
+  try {
+    return JSON.parse(clean);
+  } catch {
+    // Fall through: look for the first array/object in the text.
+  }
+  for (const [open, close] of [['[', ']'], ['{', '}']]) {
+    const start = clean.indexOf(open);
+    const end = clean.lastIndexOf(close);
+    if (start === -1 || end <= start) continue;
+    try {
+      return JSON.parse(clean.slice(start, end + 1));
+    } catch {
+      // Try the next shape.
+    }
+  }
+  return null;
+}
+
+/** A list from CLI JSON that is either the array itself or wrapped (`{ projects: [...] }`, `{ data: [...] }`). */
+function looseArray(json) {
+  if (Array.isArray(json)) return json;
+  if (json && typeof json === 'object') {
+    for (const value of Object.values(json)) if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+/** `supabase projects list -o json` → `[{ ref, name, region, status, orgId }]`. Older CLIs call the ref `id`. */
+export function normalizeSupabaseProjects(json) {
+  return looseArray(json)
+    .map((p) => ({
+      ref: String(p?.ref ?? p?.id ?? ''),
+      name: String(p?.name ?? ''),
+      region: String(p?.region ?? ''),
+      status: String(p?.status ?? ''),
+      orgId: String(p?.organization_slug ?? p?.organization_id ?? ''),
+    }))
+    .filter((p) => /^[a-z]{20}$/.test(p.ref));
+}
+
+/** `supabase orgs list -o json` → `[{ id, name }]`. */
+export function normalizeSupabaseOrgs(json) {
+  return looseArray(json)
+    .map((o) => ({ id: String(o?.slug ?? o?.id ?? ''), name: String(o?.name ?? '') }))
+    .filter((o) => o.id);
+}
+
+/**
+ * The key a browser may hold, from `supabase projects api-keys -o json`: the legacy `anon` key or a
+ * `publishable` one. `service_role` and `secret` keys bypass row-level security and are never used.
+ */
+export function pickSupabasePublicKey(json) {
+  const keys = looseArray(json).filter((k) => typeof k?.api_key === 'string' && k.api_key);
+  const isPrivate = (k) => /service_role|secret/i.test(`${k?.name ?? ''} ${k?.type ?? ''}`) || /^sb_secret_/.test(k.api_key);
+  const usable = keys.filter((k) => !isPrivate(k));
+  const chosen = usable.find((k) => k.name === 'anon') ?? usable.find((k) => k.type === 'publishable') ?? null;
+  return chosen ? chosen.api_key : null;
+}
+
+const SUPABASE_URL_NAME = /SUPABASE_URL$/;
+const SUPABASE_KEY_NAME = /SUPABASE_(?:ANON_KEY|PUBLISHABLE_KEY|PUBLISHABLE_DEFAULT_KEY|KEY)$/;
+
+/**
+ * Names for the project URL and public key. Names the project already uses win (its code reads
+ * them); otherwise the framework's convention for variables the browser may see.
+ */
+export function supabaseEnvNames(framework, existingNames = []) {
+  const names = existingNames.filter((n) => !/SERVICE_ROLE|SECRET/.test(n));
+  const prefix = { next: 'NEXT_PUBLIC_', vite: 'VITE_', react: 'VITE_', vue: 'VITE_', svelte: 'VITE_', astro: 'PUBLIC_', sveltekit: 'PUBLIC_' }[framework] ?? '';
+  return {
+    url: names.find((n) => SUPABASE_URL_NAME.test(n)) ?? `${prefix}SUPABASE_URL`,
+    key: names.find((n) => SUPABASE_KEY_NAME.test(n)) ?? (framework === 'nuxt' ? 'SUPABASE_KEY' : `${prefix}SUPABASE_ANON_KEY`),
+  };
+}
+
+/** Whether the project uses Supabase: the client library, a `supabase/` folder, or env names mentioning it. */
+export function detectSupabaseUse({ pkg, hasSupabaseDir = false, envNames = [] } = {}) {
+  const deps = { ...(pkg?.dependencies ?? {}), ...(pkg?.devDependencies ?? {}) };
+  if (Object.keys(deps).some((name) => name.startsWith('@supabase/'))) return true;
+  if (hasSupabaseDir) return true;
+  return envNames.some((name) => /SUPABASE/.test(name));
+}
+
+/** Sets `vars` in `.env`-style content: existing keys are replaced in place, new ones appended. */
+export function mergeEnvFile(existing, vars) {
+  const remaining = new Map(Object.entries(vars));
+  const lines = String(existing ?? '')
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+      if (!match || !remaining.has(match[1])) return line;
+      const value = remaining.get(match[1]);
+      remaining.delete(match[1]);
+      return `${match[1]}=${value}`;
+    });
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  for (const [key, value] of remaining) lines.push(`${key}=${value}`);
+  return `${lines.join('\n')}\n`;
+}
+
+/** The Supabase region closest to a time zone (`Asia/Seoul` → `ap-northeast-2`), so nobody has to pick one. */
+export function supabaseRegionForTimeZone(timeZone) {
+  const tz = String(timeZone ?? '');
+  const table = [
+    [/^Asia\/Seoul$/, 'ap-northeast-2'],
+    [/^Asia\/Tokyo$/, 'ap-northeast-1'],
+    [/^Asia\/(?:Kolkata|Calcutta|Karachi|Dhaka|Colombo|Dubai)$/, 'ap-south-1'],
+    [/^(?:Australia|Pacific)\//, 'ap-southeast-2'],
+    [/^Asia\//, 'ap-southeast-1'],
+    [/^Europe\/(?:London|Dublin|Lisbon)$/, 'eu-west-2'],
+    [/^(?:Europe|Africa)\//, 'eu-central-1'],
+    [/^America\/(?:Sao_Paulo|Argentina|Buenos_Aires|Santiago|Bogota|Lima|Montevideo)/, 'sa-east-1'],
+    [/^America\/(?:Toronto|Montreal|Halifax|Winnipeg)$/, 'ca-central-1'],
+    [/^America\/(?:Los_Angeles|Vancouver|Tijuana|Phoenix|Denver|Anchorage)$/, 'us-west-1'],
+  ];
+  return table.find(([pattern]) => pattern.test(tz))?.[1] ?? 'us-east-1';
+}
+
+/** A plain-language reason for a failed Supabase command, or `null` to show the raw output. */
+export function supabaseErrorKind(output) {
+  const text = stripAnsi(output);
+  if (/access token not provided|unauthorized|invalid access token/i.test(text)) return 'login';
+  if (/maximum limits? .*free projects|free projects? limit|limit of \d+ (?:active )?free/i.test(text)) return 'free-limit';
+  if (/password authentication failed|failed SASL auth/i.test(text)) return 'db-password';
   return null;
 }
 

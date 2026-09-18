@@ -122,8 +122,8 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
                                           │  opens it in the in-app browser (browser MCP tools)
                                           ▼
                               🚀 Launch plugin (plugins/launch, built in)
-                                 gh / vercel CLIs (installed into the plugin data folder if missing)
-                                 GitHub login → repo + push → Vercel login → env vars → deploy → URL
+                                 gh / vercel / supabase CLIs (installed into the plugin data folder if missing)
+                                 GitHub login → repo + push → Vercel login → [Supabase] → env vars → deploy → URL
 ```
 
 - The idea page is a chat: Enter adds a message, a multi-line paste becomes a document message
@@ -136,3 +136,9 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
   and adds a 🚀 button to agent panes. Logins run the official CLIs' browser flows; Agentty and the
   plugin never see or store the tokens. `.env` values are piped to `vercel env add` on stdin and only
   key names are shown.
+- The Supabase step appears only for projects that use it (or on request). `supabase login` needs a
+  terminal and a typed verification code, so it runs under `script` and the panel has a field for the
+  code. Launch writes the project URL and the public (anon / publishable) key to `.env.local`, never
+  the service_role key; the database password lives in `.env.local` only and reaches
+  `supabase link` / `db push` through the environment. The build guide tells the agent which variable
+  names to read and to put the schema, with row level security, in `supabase/migrations`.

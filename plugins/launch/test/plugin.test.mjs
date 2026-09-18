@@ -14,6 +14,18 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { stripAnsi, extractDeviceCode, extractDeviceUrl, parseDeployUrl, parseEnvFile, isLocalOnlyValue, sanitizeRepoName, mergeGitignore, envFilesAtRisk, detectFramework, parseInspectAlias } from '../lib/parse.mjs';
+import {
+  extractSupabaseLoginUrl,
+  parseLooseJson,
+  normalizeSupabaseProjects,
+  normalizeSupabaseOrgs,
+  pickSupabasePublicKey,
+  supabaseEnvNames,
+  detectSupabaseUse,
+  mergeEnvFile,
+  supabaseRegionForTimeZone,
+  supabaseErrorKind,
+} from '../lib/parse.mjs';
 import { pickGhAsset, findGhBinary } from '../lib/tools.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -146,6 +158,79 @@ test('stripAnsi removes color and cursor codes', () => {
   assert.equal(stripAnsi('\x1B[1mBold\x1B[0m plain'), 'Bold plain');
 });
 
+// -- unit tests: Supabase helpers ---------------------------------------------------------------
+
+test('extractSupabaseLoginUrl finds the CLI login link and nothing else', () => {
+  const output = 'Docs: https://supabase.com/docs\nHere is your login link, open it in the browser: \x1B[1mhttps://supabase.com/dashboard/cli/login?session_id=fake-session&token_name=cli_fake&public_key=fake\x1B[0m\n\nEnter your verification code: ';
+  assert.equal(extractSupabaseLoginUrl(output), 'https://supabase.com/dashboard/cli/login?session_id=fake-session&token_name=cli_fake&public_key=fake');
+  assert.equal(extractSupabaseLoginUrl('Access token not provided. See https://supabase.com/docs'), null);
+});
+
+test('Supabase project and organization lists are read from either JSON shape', () => {
+  const current = '[{"id":"abcdefghijklmnopqrst","organization_id":"fake-org-slug","name":"shop","region":"ap-northeast-2","status":"ACTIVE_HEALTHY"}]';
+  assert.deepEqual(normalizeSupabaseProjects(parseLooseJson(current)), [{ ref: 'abcdefghijklmnopqrst', name: 'shop', region: 'ap-northeast-2', status: 'ACTIVE_HEALTHY', orgId: 'fake-org-slug' }]);
+  // A newer API carries a separate `ref`, and a CLI may wrap the list or print a log line first.
+  const wrapped = 'Fetching projects...\n{"projects":[{"id":"6f1c0c2e","ref":"tsrqponmlkjihgfedcba","name":"blog"}]}';
+  assert.deepEqual(normalizeSupabaseProjects(parseLooseJson(wrapped)).map((p) => p.ref), ['tsrqponmlkjihgfedcba']);
+  assert.deepEqual(normalizeSupabaseProjects(parseLooseJson('not json')), []);
+  assert.deepEqual(normalizeSupabaseOrgs(parseLooseJson('[{"id":"fake-org-slug","name":"Fake Org"}]')), [{ id: 'fake-org-slug', name: 'Fake Org' }]);
+});
+
+test('pickSupabasePublicKey only ever returns a key a browser may hold', () => {
+  const legacy = [
+    { name: 'service_role', api_key: 'service_example_not_a_real_key' },
+    { name: 'anon', api_key: 'anon_example_not_a_real_key' },
+  ];
+  assert.equal(pickSupabasePublicKey(legacy), 'anon_example_not_a_real_key');
+  const modern = [
+    { name: 'default', type: 'secret', api_key: 'sb_secret_example_not_a_real_key' },
+    { name: 'default', type: 'publishable', api_key: 'sb_publishable_example_not_a_real_key' },
+  ];
+  assert.equal(pickSupabasePublicKey(modern), 'sb_publishable_example_not_a_real_key');
+  assert.equal(pickSupabasePublicKey([{ name: 'service_role', api_key: 'service_example_not_a_real_key' }]), null);
+  assert.equal(pickSupabasePublicKey(null), null);
+});
+
+test('supabaseEnvNames follows the framework unless the project already names its variables', () => {
+  assert.deepEqual(supabaseEnvNames('next', []), { url: 'NEXT_PUBLIC_SUPABASE_URL', key: 'NEXT_PUBLIC_SUPABASE_ANON_KEY' });
+  assert.deepEqual(supabaseEnvNames('vite', []), { url: 'VITE_SUPABASE_URL', key: 'VITE_SUPABASE_ANON_KEY' });
+  assert.deepEqual(supabaseEnvNames('node', []), { url: 'SUPABASE_URL', key: 'SUPABASE_ANON_KEY' });
+  // The app's code already reads these names; a service-role name is never picked as "the key".
+  const existing = ['NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'];
+  assert.deepEqual(supabaseEnvNames('next', existing), { url: 'NEXT_PUBLIC_SUPABASE_URL', key: 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY' });
+});
+
+test('detectSupabaseUse notices the client library, the supabase folder or env names', () => {
+  assert.equal(detectSupabaseUse({ pkg: { dependencies: { '@supabase/supabase-js': '2.0.0' } } }), true);
+  assert.equal(detectSupabaseUse({ pkg: { dependencies: { next: '15.0.0' } }, hasSupabaseDir: true }), true);
+  assert.equal(detectSupabaseUse({ pkg: null, envNames: ['NEXT_PUBLIC_SUPABASE_URL'] }), true);
+  assert.equal(detectSupabaseUse({ pkg: { dependencies: { next: '15.0.0' } }, envNames: ['API_URL'] }), false);
+});
+
+test('mergeEnvFile replaces keys in place and appends new ones without touching the rest', () => {
+  const existing = '# local settings\nAPI_URL=http://localhost:3000\nexport VITE_SUPABASE_URL=http://127.0.0.1:54321\n';
+  const merged = mergeEnvFile(existing, { VITE_SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co', VITE_SUPABASE_ANON_KEY: 'anon_example_not_a_real_key' });
+  assert.equal(merged, '# local settings\nAPI_URL=http://localhost:3000\nVITE_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co\nVITE_SUPABASE_ANON_KEY=anon_example_not_a_real_key\n');
+  assert.equal(mergeEnvFile('', { A: '1' }), 'A=1\n');
+  assert.equal(mergeEnvFile(merged, {}), merged);
+});
+
+test('supabaseRegionForTimeZone picks a nearby region and falls back to us-east-1', () => {
+  assert.equal(supabaseRegionForTimeZone('Asia/Seoul'), 'ap-northeast-2');
+  assert.equal(supabaseRegionForTimeZone('Asia/Tokyo'), 'ap-northeast-1');
+  assert.equal(supabaseRegionForTimeZone('Europe/Berlin'), 'eu-central-1');
+  assert.equal(supabaseRegionForTimeZone('America/Los_Angeles'), 'us-west-1');
+  assert.equal(supabaseRegionForTimeZone('America/New_York'), 'us-east-1');
+  assert.equal(supabaseRegionForTimeZone(undefined), 'us-east-1');
+});
+
+test('supabaseErrorKind recognizes account problems an agent cannot fix', () => {
+  assert.equal(supabaseErrorKind('Access token not provided. Supply an access token by running supabase login'), 'login');
+  assert.equal(supabaseErrorKind('The following organization members have reached their maximum limits for the number of active free projects'), 'free-limit');
+  assert.equal(supabaseErrorKind('failed to connect: password authentication failed for user "postgres"'), 'db-password');
+  assert.equal(supabaseErrorKind('ERROR: relation "todos" already exists (SQLSTATE 42P07)'), null);
+});
+
 // -- end-to-end: fake gh + vercel, real git ----------------------------------------------------
 
 function sandbox() {
@@ -160,6 +245,9 @@ function sandbox() {
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'gh'), FAKE_GH, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'vercel'), FAKE_VERCEL, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'supabase'), FAKE_SUPABASE, { mode: 0o755 });
+  const supabase = path.join(root, 'supabase-account');
+  fs.mkdirSync(supabase, { recursive: true });
 
   const plugin = path.join(root, 'plugin');
   fs.mkdirSync(path.join(plugin, 'lib'), { recursive: true });
@@ -167,8 +255,63 @@ function sandbox() {
   for (const file of fs.readdirSync(path.join(pluginDir, 'lib'))) fs.copyFileSync(path.join(pluginDir, 'lib', file), path.join(plugin, 'lib', file));
   fs.copyFileSync(sdk, path.join(plugin, 'agentty-plugin.mjs'));
 
-  return { root, project, remotes, bin, plugin, data: path.join(root, 'data') };
+  return { root, project, remotes, bin, plugin, supabase, data: path.join(root, 'data') };
 }
+
+/** Turns the sandbox project into one that uses Supabase and has a migration waiting. */
+function useSupabase(box) {
+  fs.writeFileSync(path.join(box.project, 'package.json'), JSON.stringify({ name: 'my-cool-app', dependencies: { vite: '5.0.0', '@supabase/supabase-js': '2.0.0' } }));
+  fs.mkdirSync(path.join(box.project, 'supabase', 'migrations'), { recursive: true });
+  fs.writeFileSync(path.join(box.project, 'supabase', 'migrations', '20260918000000_todos.sql'), 'create table todos (id bigint primary key);\nalter table todos enable row level security;\n');
+}
+
+// The "account" is a folder: `logged-in` marks a session, `projects.json` the hosted projects, and
+// `calls.log` records what ran — whether a database password was supplied, never the password.
+const FAKE_SUPABASE = `#!/bin/bash
+account="$FAKE_SB_DIR"
+case "$1" in
+  login)
+    echo "Here is your login link, open it in the browser: https://supabase.com/dashboard/cli/login?session_id=fake-session&token_name=cli_fake&public_key=fake"
+    printf "Enter your verification code: "
+    read -r code
+    if [ "$code" = "fakecode" ]; then touch "$account/logged-in"; echo "You are now logged in."; exit 0; fi
+    echo "invalid verification code" >&2
+    exit 1
+    ;;
+  projects)
+    if [ ! -f "$account/logged-in" ]; then echo "Access token not provided. Supply an access token by running supabase login." >&2; exit 1; fi
+    case "$2" in
+      list)
+        if [ -f "$account/projects.json" ]; then cat "$account/projects.json"; else echo "[]"; fi
+        exit 0
+        ;;
+      create)
+        echo "create name=$3" >> "$account/calls.log"
+        echo '[{"id":"abcdefghijklmnopqrst","name":"my-cool-app","region":"us-east-1","status":"ACTIVE_HEALTHY"}]' > "$account/projects.json"
+        echo '{"id":"abcdefghijklmnopqrst","name":"my-cool-app"}'
+        exit 0
+        ;;
+      api-keys)
+        echo '[{"name":"anon","api_key":"anon_example_not_a_real_key"},{"name":"service_role","api_key":"service_example_not_a_real_key"}]'
+        exit 0
+        ;;
+    esac
+    ;;
+  orgs)
+    if [ ! -f "$account/logged-in" ]; then echo "Access token not provided." >&2; exit 1; fi
+    echo '[{"id":"fake-org-slug","name":"Fake Org"}]'
+    exit 0
+    ;;
+  link)
+    echo "link ref=$3 password=\${SUPABASE_DB_PASSWORD:+given}" >> "$account/calls.log"
+    exit 0
+    ;;
+  db)
+    if [ "$2" = "push" ]; then echo "push password=\${SUPABASE_DB_PASSWORD:+given}" >> "$account/calls.log"; exit 0; fi
+    ;;
+esac
+exit 1
+`;
 
 const FAKE_GH = `#!/bin/bash
 set -e
@@ -230,6 +373,7 @@ function start(box, results = {}) {
     ...process.env,
     PATH: `${box.bin}:${process.env.PATH}`,
     FAKE_REMOTES_DIR: box.remotes,
+    FAKE_SB_DIR: box.supabase,
   };
   const child = spawn(process.execPath, ['main.mjs'], { cwd: box.plugin, env, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => {}); // the plugin process may already be gone by the time a late reply is sent
@@ -359,6 +503,101 @@ test('no project detected when the folder has neither package.json nor index.htm
     host.send('panel/open', { context: { ...host.context, pane: { ...host.context.pane, cwd: empty } } });
     const panel = await waitForText(host, /package\.json|index\.html|아직 웹 프로젝트/);
     assert.match(JSON.stringify(panel), /package\.json|index\.html|아직 웹 프로젝트/);
+  } finally {
+    host.stop();
+  }
+});
+
+test('Launch connects Supabase: login code, new project, public key only, migrations, then the env step', async () => {
+  const box = sandbox();
+  useSupabase(box);
+  const host = start(box);
+  const click = (element) => host.send('ui/event', { element, event: 'click', context: host.context });
+  try {
+    host.send('panel/open', { context: host.context });
+    await waitForButton(host, 'gh-save');
+    click('gh-save');
+    // The project uses Supabase and has no keys yet, so the database step comes before env/deploy.
+    await waitForButton(host, 'sb-connect');
+    click('sb-connect');
+
+    // Not logged in: the login link opens in the browser and the panel asks for the verification code.
+    const opened = await host.next('host/openUrl');
+    assert.match(opened.params.url, /^https:\/\/supabase\.com\/dashboard\/cli\/login\?/);
+    await waitForText(host, /"id":"sb-code"/);
+    host.send('ui/event', { element: 'sb-code', event: 'submit', value: 'fakecode', context: host.context });
+
+    // Logged in with no projects yet: create one.
+    await waitForButton(host, 'sb-create');
+    click('sb-create');
+    let panel = await waitForButton(host, 'sb-continue');
+    const envLocal = fs.readFileSync(path.join(box.project, '.env.local'), 'utf8');
+    assert.match(envLocal, /^VITE_SUPABASE_URL=https:\/\/abcdefghijklmnopqrst\.supabase\.co$/m);
+    assert.match(envLocal, /^VITE_SUPABASE_ANON_KEY=anon_example_not_a_real_key$/m);
+    assert.match(envLocal, /^SUPABASE_DB_PASSWORD=.{20,}$/m);
+    assert.ok(!envLocal.includes('service_example'), 'the service_role key never reaches the project');
+    assert.equal(fs.statSync(path.join(box.project, '.env.local')).mode & 0o777, 0o600);
+    assert.match(fs.readFileSync(path.join(box.project, '.env.example'), 'utf8'), /^VITE_SUPABASE_URL=$/m);
+    assert.match(fs.readFileSync(path.join(box.project, '.gitignore'), 'utf8'), /^\.env\.local$/m);
+    const dbPassword = /^SUPABASE_DB_PASSWORD=(.+)$/m.exec(envLocal)[1];
+    assert.ok(!JSON.stringify(panel).includes(dbPassword) && !JSON.stringify(panel).includes('anon_example'), 'no key or password is shown in the panel');
+
+    // The migration written by the agent is applied, with the password passed in the environment.
+    click('sb-continue');
+    await waitForButton(host, 'sb-migrate');
+    click('sb-migrate');
+    panel = await waitForButton(host, 'env-add');
+    const calls = fs.readFileSync(path.join(box.supabase, 'calls.log'), 'utf8');
+    assert.match(calls, /^create name=my-cool-app$/m);
+    assert.match(calls, /^link ref=abcdefghijklmnopqrst password=given$/m);
+    assert.match(calls, /^push password=given$/m);
+    assert.ok(!calls.includes(dbPassword));
+
+    // The new variables are offered to the live site; the database password starts unselected.
+    const toggles = {};
+    (function walk(node) {
+      if (node?.type === 'toggle') toggles[node.id] = node.value;
+      for (const child of node?.children ?? []) walk(child);
+    })(panel);
+    assert.deepEqual(toggles, { 'env:VITE_SUPABASE_URL': true, 'env:VITE_SUPABASE_ANON_KEY': true, 'env:SUPABASE_DB_PASSWORD': false });
+
+    click('env-add');
+    await waitForButton(host, 'deploy-start');
+    const saved = JSON.parse(fs.readFileSync(path.join(box.data, 'projects.json'), 'utf8'))[box.project];
+    assert.equal(saved.supabaseRef, 'abcdefghijklmnopqrst');
+    assert.deepEqual(saved.supabaseMigrations, ['20260918000000_todos.sql']);
+    assert.ok(!JSON.stringify(saved).includes(dbPassword), 'Launch state holds no password');
+  } finally {
+    host.stop();
+  }
+});
+
+test('Launch uses an existing Supabase project and asks for its database password before migrating', async () => {
+  const box = sandbox();
+  useSupabase(box);
+  fs.writeFileSync(path.join(box.supabase, 'logged-in'), '');
+  fs.writeFileSync(path.join(box.supabase, 'projects.json'), '[{"id":"abcdefghijklmnopqrst","name":"existing-shop","region":"ap-northeast-2","status":"ACTIVE_HEALTHY"}]');
+  const host = start(box);
+  const click = (element) => host.send('ui/event', { element, event: 'click', context: host.context });
+  try {
+    host.send('panel/open', { context: host.context });
+    await waitForButton(host, 'gh-save');
+    click('gh-save');
+    await waitForButton(host, 'sb-connect');
+    click('sb-connect');
+    const panel = await waitForButton(host, 'sb-create');
+    assert.match(JSON.stringify(panel), /existing-shop/);
+    host.send('ui/event', { element: 'sb-projects', event: 'select', item: 'abcdefghijklmnopqrst', context: host.context });
+    await waitForButton(host, 'sb-continue');
+    assert.ok(!fs.readFileSync(path.join(box.project, '.env.local'), 'utf8').includes('SUPABASE_DB_PASSWORD'), 'no password is invented for a project Launch did not create');
+
+    click('sb-continue');
+    await waitForButton(host, 'sb-migrate');
+    click('sb-migrate');
+    await waitForButton(host, 'sb-dbpass-save');
+    host.send('ui/event', { element: 'sb-dbpass', event: 'submit', value: 'typed_example_not_a_real_password', context: host.context });
+    await waitForButton(host, 'env-add');
+    assert.match(fs.readFileSync(path.join(box.supabase, 'calls.log'), 'utf8'), /^push password=given$/m);
   } finally {
     host.stop();
   }
