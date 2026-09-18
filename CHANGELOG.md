@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-09-18
+
+### Fixed
+- Split pane dividers could not be moved in a tab where a pane was in focus view (the maximize button in a split
+  pane's header). Dragging a divider now leaves focus view, keeping the current layout, and resizes as expected.
+
 ## [0.1.8] - 2026-09-18
 
 ### Changed
