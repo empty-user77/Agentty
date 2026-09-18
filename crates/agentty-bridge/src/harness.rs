@@ -1,5 +1,7 @@
-//! Detects agent harnesses: projects that ship their own commands, skills, subagents, hooks or
-//! workflow files for Claude Code or Codex, so work can be started through them from the UI.
+//! Detects agent harnesses: projects that declare one with a marker file (`.harness`,
+//! `HARNESS.md`, …), an `agentty.json` `"harness"` list or a user pattern, so work can be started
+//! through the project's commands and skills from the UI. Commands, skills or hooks alone
+//! (`.claude/`, `.codex/`) are too common to count as a harness.
 //!
 //! Detection only looks at the project (never user-level configuration) and only follows the
 //! patterns' own path segments, so it is cheap enough to run whenever a terminal changes folder.
@@ -10,33 +12,9 @@ use crate::model::Agent;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-/// Which agent a pattern points to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flavor {
-    Claude,
-    Codex,
-    Any,
-}
-
 /// Built-in patterns, relative to the project root. `*` and `?` match within a name, `**` any
-/// number of folders. Instruction files alone (`CLAUDE.md`, `AGENTS.md`) are not a harness.
-pub const DEFAULT_PATTERNS: &[(&str, Flavor)] = &[
-    (".claude/commands/**/*.md", Flavor::Claude),
-    (".claude/skills/*/SKILL.md", Flavor::Claude),
-    (".claude/agents/*.md", Flavor::Claude),
-    (".claude/hooks/*", Flavor::Claude),
-    (".claude-plugin/plugin.json", Flavor::Claude),
-    (".claude-plugin/marketplace.json", Flavor::Claude),
-    (".mcp.json", Flavor::Claude),
-    (".codex/skills/*/SKILL.md", Flavor::Codex),
-    (".agents/skills/*/SKILL.md", Flavor::Codex),
-    (".codex/config.toml", Flavor::Codex),
-    (".harness", Flavor::Any),
-    ("harness.json", Flavor::Any),
-    ("harness.yaml", Flavor::Any),
-    ("harness.yml", Flavor::Any),
-    ("HARNESS.md", Flavor::Any),
-];
+/// number of folders.
+pub const DEFAULT_PATTERNS: &[&str] = &[".harness", "harness.json", "harness.yaml", "harness.yml", "HARNESS.md"];
 
 /// Folders never searched by `**`.
 const SKIPPED_DIRS: &[&str] = &[".git", "node_modules", "target", "build", "dist", ".venv", "vendor", "Pods", ".next"];
@@ -131,23 +109,10 @@ pub fn detect(dir: &Path, extra_patterns: &[String]) -> Option<Harness> {
 /// Whether `root` itself holds a harness.
 pub fn detect_at(root: &Path, extra_patterns: &[String]) -> Option<Harness> {
     let mut harness = Harness { root: root.to_path_buf(), ..Default::default() };
-    let patterns = DEFAULT_PATTERNS.iter().map(|(p, f)| (p.to_string(), *f)).chain(extra_patterns.iter().map(|p| (p.clone(), Flavor::Any)));
-    for (pattern, flavor) in patterns {
-        if !matches(root, &pattern) {
-            continue;
-        }
-        harness.claude |= flavor == Flavor::Claude;
-        harness.codex |= flavor == Flavor::Codex;
-        if !harness.matched.contains(&pattern) {
+    for pattern in DEFAULT_PATTERNS.iter().map(|p| p.to_string()).chain(extra_patterns.iter().cloned()) {
+        if matches(root, &pattern) && !harness.matched.contains(&pattern) {
             harness.matched.push(pattern);
         }
-    }
-    let settings: Value =
-        std::fs::read(root.join(".claude").join("settings.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    harness.hooks = settings["hooks"].as_object().map_or(0, |h| h.len());
-    if harness.hooks > 0 {
-        harness.claude = true;
-        harness.matched.push(".claude/settings.json (hooks)".into());
     }
     let configured = configured_entries(root);
     if !configured.is_empty() {
@@ -157,12 +122,19 @@ pub fn detect_at(root: &Path, extra_patterns: &[String]) -> Option<Harness> {
         return None;
     }
 
+    let settings: Value =
+        std::fs::read(root.join(".claude").join("settings.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    harness.hooks = settings["hooks"].as_object().map_or(0, |h| h.len());
     let mcp: Value = std::fs::read(root.join(".mcp.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     harness.mcp = mcp["mcpServers"].as_object().map_or(0, |m| m.len());
     let mut commands = Vec::new();
     let mut skills = Vec::new();
     for agent in [Agent::Claude, Agent::Codex] {
         for item in extensions::project_only(agent, root) {
+            match agent {
+                Agent::Codex => harness.codex = true,
+                _ => harness.claude = true,
+            }
             let entry = |kind| Entry {
                 kind,
                 agent: Some(agent),
@@ -187,6 +159,7 @@ pub fn detect_at(root: &Path, extra_patterns: &[String]) -> Option<Harness> {
     }
     // Commands that take an argument are the usual entry points ("/implement <ticket>").
     commands.sort_by_key(|e| e.hint.is_none());
+    harness.claude |= harness.hooks > 0 || harness.mcp > 0;
     harness.entries = configured;
     harness.entries.extend(commands);
     harness.entries.extend(skills);
@@ -329,8 +302,21 @@ mod tests {
     }
 
     #[test]
+    fn agent_tooling_alone_is_not_a_harness() {
+        let dir = project("tooling");
+        write(dir.join(".claude/commands/review.md"), "Review");
+        write(dir.join(".claude/skills/deploy/SKILL.md"), "---\nname: deploy\n---\n");
+        write(dir.join(".claude/settings.json"), r#"{"hooks":{"PreToolUse":[]}}"#);
+        write(dir.join(".codex/config.toml"), "");
+        write(dir.join(".mcp.json"), r#"{"mcpServers":{}}"#);
+        assert_eq!(detect_at(&dir, &[]), None);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn claude_commands_become_entry_points() {
         let dir = project("claude");
+        write(dir.join("HARNESS.md"), "# Flow");
         write(dir.join(".claude/commands/review.md"), "---\ndescription: Review the diff\n---\nReview");
         write(
             dir.join(".claude/commands/jira/implement.md"),
@@ -339,6 +325,7 @@ mod tests {
         write(dir.join(".claude/skills/deploy/SKILL.md"), "---\nname: deploy\ndescription: Ship it\n---\n");
         write(dir.join(".claude/agents/tester.md"), "---\nname: tester\n---\n");
         let harness = detect_at(&dir, &[]).unwrap();
+        assert_eq!(harness.matched, vec!["HARNESS.md".to_string()]);
         assert!(harness.claude && !harness.codex);
         assert_eq!((harness.commands, harness.skills, harness.agents), (2, 1, 1));
         let first = &harness.entries[0];
@@ -393,6 +380,7 @@ mod tests {
     #[test]
     fn claude_hooks_count() {
         let dir = project("hooks");
+        write(dir.join("harness.yaml"), "steps: []");
         write(dir.join(".claude/settings.json"), r#"{"hooks":{"PreToolUse":[]}}"#);
         let harness = detect_at(&dir, &[]).unwrap();
         assert_eq!((harness.hooks, harness.claude), (1, true));

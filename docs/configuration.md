@@ -41,20 +41,20 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 
 ## Agent harnesses
 
-When a terminal enters a project that ships its own agent tooling, the bar above it offers
+When a terminal enters a project that declares a harness, the bar above it offers
 **Start with harness**. The dialog lists the project's entry points, takes a ticket key, link or
 prompt, and starts Claude Code or Codex in that project with it — `/implement PROJ-123`, for example.
 The project root is the folder itself or a parent up to the repository root.
 
-A project counts as a harness when it has any of these (instruction files such as `CLAUDE.md` or
-`AGENTS.md` alone do not count):
+A project counts as a harness when it has any of these:
 
-- Claude Code: `.claude/commands/**/*.md`, `.claude/skills/*/SKILL.md`, `.claude/agents/*.md`,
-  `.claude/hooks/*`, hooks in `.claude/settings.json`, `.claude-plugin/plugin.json` or
-  `marketplace.json`, `.mcp.json`
-- Codex: `.codex/skills/*/SKILL.md`, `.agents/skills/*/SKILL.md`, `.codex/config.toml`
-- Any agent: `.harness`, `harness.json`, `harness.yaml`, `harness.yml`, `HARNESS.md`, a `harness`
-  list in `agentty.json`, or a pattern you add in **Settings → Project**
+- `.harness`, `harness.json`, `harness.yaml`, `harness.yml` or `HARNESS.md`
+- a `harness` list in `agentty.json`
+- a pattern you add in **Settings → Project**
+
+Claude Code or Codex commands, skills, hooks and instruction files (`.claude/`, `.codex/`,
+`CLAUDE.md`, `AGENTS.md`) alone do not count, but once a project is a harness its project-level
+commands and skills are offered as entry points.
 
 Commands that take an argument (`argument-hint`) are offered first, then other commands and skills.
 A project can name its own entry points in `agentty.json`:

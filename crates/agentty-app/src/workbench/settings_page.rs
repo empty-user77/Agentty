@@ -566,7 +566,7 @@ impl Workbench {
             .flex()
             .flex_wrap()
             .gap_1()
-            .children(agentty_bridge::harness::DEFAULT_PATTERNS.iter().map(|(p, _)| pattern_chip(p.to_string())))
+            .children(agentty_bridge::harness::DEFAULT_PATTERNS.iter().map(|p| pattern_chip(p.to_string())))
             .child(pattern_chip("agentty.json → \"harness\"".into()))
             .child(pattern_chip(".claude/settings.json → hooks".into()));
 

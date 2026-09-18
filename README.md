@@ -26,8 +26,8 @@ each agent is doing and highlights the ones that need you.
 - **Instant launch** — new Terminal, Claude Code (Opus / Sonnet / Haiku) or Codex (your recent models) tabs, starting
   in a folder you choose. Other installed agents (Gemini CLI, Copilot CLI, Cursor Agent, OpenCode, Qwen Code, Amp,
   Droid, Goose, Crush, Aider) and local Ollama models are detected and offered; missing ones stay hidden.
-- **Agent harnesses** — entering a project with its own Claude Code / Codex commands, skills, hooks or workflow files
-  offers to start work through them: pick an entry point such as `/implement`, paste a ticket key or link, and the
+- **Agent harnesses** — entering a project that declares a harness (`.harness`, `HARNESS.md`, `harness.yaml`, …)
+  offers to start work through its commands and skills: pick an entry point such as `/implement`, paste a ticket key or link, and the
   agent starts with it. Detection patterns are configurable in Settings → Project.
 - **Local sessions** — browse `~/.claude` and `~/.codex` sessions, resume them, or migrate a conversation from Claude
   to Codex (and back).
