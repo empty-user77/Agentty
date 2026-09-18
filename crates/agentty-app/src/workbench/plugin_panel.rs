@@ -273,7 +273,14 @@ impl Workbench {
                 let mut row = div().flex().items_center().gap(gap(*g)).min_w_0().when(*wrap, |d| d.flex_wrap());
                 for (index, child) in children.iter().enumerate() {
                     path.push(index);
-                    row = row.child(self.render_plugin_node(plugin, child, path, cx));
+                    let rendered = self.render_plugin_node(plugin, child, path, cx);
+                    // Text takes the room the buttons leave. Left to its own size it shrinks to its
+                    // narrowest wrap — one character a line for Korean, Japanese and Chinese.
+                    row = row.child(if matches!(child, Node::Text { .. }) {
+                        div().flex_1().min_w_0().child(rendered).into_any_element()
+                    } else {
+                        rendered
+                    });
                     path.pop();
                 }
                 row.into_any_element()
