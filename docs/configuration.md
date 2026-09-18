@@ -39,6 +39,33 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `harnessSubmit` | Send the harness prompt right away (`false`: only type it in) |
 | `harnessAgent` | `auto`, `claude`, `codex` |
 
+## Accounts (agent sign-in)
+
+**Settings → Accounts** chooses how new Claude Code and Codex tabs sign in. The default, **CLI login**, changes
+nothing: the agents use their own login. The other methods are for machines where that login isn't possible:
+
+| Agent | Method | What a new tab gets |
+|---|---|---|
+| Claude Code | API key | `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_BASE_URL`) |
+| Claude Code | Gateway token | `ANTHROPIC_AUTH_TOKEN` (+ optional `ANTHROPIC_BASE_URL`) |
+| Claude Code | OAuth token | `CLAUDE_CODE_OAUTH_TOKEN` — from `claude setup-token`; a pasted `.credentials.json` also works |
+| Claude Code | Amazon Bedrock | `CLAUDE_CODE_USE_BEDROCK=1`, `AWS_REGION`, optional `AWS_PROFILE` / `AWS_BEARER_TOKEN_BEDROCK` |
+| Claude Code | Google Vertex AI | `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION` |
+| Codex | API key | `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`) and `CODEX_HOME=~/.agentty/codex-home` |
+| Codex | auth.json | `CODEX_HOME=~/.agentty/codex-home` with the imported `auth.json` (Codex refreshes it there) |
+
+- The method and non-secret values are saved in `~/.agentty/agent-auth.json`; keys and tokens in the OS credential
+  store (service `run.agentty.agent-auth`). **Test** checks a key against the provider's `/models` endpoint.
+- Values reach only the agent process: the pane's environment carries `AGENTTY_AUTH_<NAME>`, the command line
+  refers to it (`NAME="$AGENTTY_AUTH_NAME" claude …`), and the shell that remains after the agent exits doesn't
+  keep it. Variables of other methods are removed for the agent (`env -u …`), so an `ANTHROPIC_API_KEY` exported
+  in a shell profile can't override the chosen method.
+- The private Codex home links `config.toml`, `AGENTS.md`, `sessions/`, `history.jsonl`, prompts and skills to
+  your `~/.codex` (junctions / copies on Windows without symlink rights), so sessions and `codex resume` work across
+  sign-in methods. Its `auth.json` is never linked.
+- If the saved method can't be used (e.g. the key was removed from the credential store), the pane says so and the
+  agent falls back to its own login.
+
 ## Agent harnesses
 
 When a terminal enters a project that declares a harness, the bar above it offers

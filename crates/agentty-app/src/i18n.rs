@@ -18,13 +18,44 @@ pub fn tf(cx: &App, key: &'static str, args: &[(&str, &str)]) -> String {
 }
 
 pub fn tr(language: Language, key: &'static str) -> &'static str {
-    let Some(row) = lookup(key) else { return key };
-    match language.resolved() {
+    let Some(row) = platform_row(key).or_else(|| lookup(key)) else { return key };
+    let text = match language.resolved() {
         Language::En | Language::System => row[0],
         Language::Ko => row[1],
         Language::Ja => row[2],
         Language::Zh => row[3],
+    };
+    platform_text(text)
+}
+
+/// Strings that name macOS-only things (Finder, Keychain), reworded for Windows and Linux.
+#[cfg(target_os = "macos")]
+fn platform_row(_key: &str) -> Option<[&'static str; 4]> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_row(key: &str) -> Option<[&'static str; 4]> {
+    Some(match key {
+        "ext.open_folder" | "plugins.reveal" => ["Show in file manager", "파일 관리자에서 보기", "ファイルマネージャーで表示", "在文件管理器中显示"],
+        "terminal.reveal_file" => ["⌘-click to show in the file manager", "⌘ 클릭하여 파일 관리자에서 보기", "⌘ クリックでファイルマネージャーに表示", "⌘ 点击在文件管理器中显示"],
+        "ext.mcp_secret_warning" => ["Values entered here are saved by the agent in its config file as plain text. For API keys, use API connectors (system credential store).", "여기 입력한 값은 에이전트 설정 파일에 평문으로 저장됩니다. API 키는 API 커넥터(시스템 자격 증명 저장소)를 사용하세요.", "ここに入力した値はエージェントの設定ファイルに平文で保存されます。API キーには API コネクタ（システムの資格情報ストア）を使ってください。", "此处输入的值会以明文保存在智能体配置中。API 密钥请使用 API 连接器（系统凭据存储）。"],
+        "ext.conn_secret" => ["API key (stored in the system credential store)", "API 키 (시스템 자격 증명 저장소에 저장)", "API キー (システムの資格情報ストアに保存)", "API 密钥（保存在系统凭据存储中）"],
+        "ext.conn_security" => ["Keys are kept in the system credential store (Windows Credential Manager / Secret Service) and never written to agent config files.", "키는 시스템 자격 증명 저장소(Windows 자격 증명 관리자 / Secret Service)에 저장되며 에이전트 설정 파일에 기록되지 않습니다.", "キーはシステムの資格情報ストア（Windows 資格情報マネージャー / Secret Service）に保存され、エージェントの設定ファイルには書き込まれません。", "密钥保存在系统凭据存储（Windows 凭据管理器 / Secret Service）中，不会写入智能体配置文件。"],
+        "settings.system_notifications" => ["Show desktop notifications when an agent finishes or needs input", "에이전트가 작업을 끝내거나 입력을 기다리면 데스크톱 알림 표시", "エージェントの完了や入力待ちをデスクトップ通知で表示", "智能体完成或等待输入时显示桌面通知"],
+        _ => return None,
+    })
+}
+
+/// Shortcut glyphs (⌘, ⇧, …) as this platform's keys; translated once per string and kept.
+fn platform_text(text: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") || !text.contains(['⌘', '⌥', '⌃', '⇧']) {
+        return text;
     }
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<&'static str, &'static str>>> =
+        std::sync::LazyLock::new(Default::default);
+    let Ok(mut cache) = CACHE.lock() else { return text };
+    cache.entry(text).or_insert_with(|| Box::leak(crate::keymap::display(text).into_owned().into_boxed_str()))
 }
 
 macro_rules! strings {
@@ -47,6 +78,7 @@ strings! {
     "welcome.not_installed" => ["Not installed", "설치 안 됨", "未インストール", "未安装"],
     "install.title" => ["{name} is not installed", "{name}가 설치되어 있지 않습니다", "{name} がインストールされていません", "未安装 {name}"],
     "install.body" => ["Agentty starts {name} from your shell, so install its CLI first. The guide walks through it in a few minutes.", "Agentty는 셸에서 {name}를 실행하므로 CLI를 먼저 설치해야 합니다. 안내 문서를 따라 몇 분이면 됩니다.", "Agentty はシェルから {name} を起動するため、先に CLI をインストールしてください。ガイドに従えば数分で終わります。", "Agentty 通过 shell 启动 {name}，请先安装其 CLI，按指南操作几分钟即可。"],
+    "install.open_system_check" => ["Install it", "설치하기", "インストールする", "去安装"],
     "install.open_guide" => ["Open the guide", "설치 안내 열기", "ガイドを開く", "打开指南"],
     "welcome.about" => ["About", "소개", "紹介", "介绍"],
     "welcome.releases" => ["Release notes", "릴리즈 노트", "リリースノート", "版本说明"],
@@ -786,6 +818,89 @@ strings! {
     "prompt.submit_shell" => ["Terminals only get the text typed in; press Enter yourself", "터미널에는 입력만 하며 실행은 직접 Enter로 합니다", "ターミナルには入力のみ行います。実行は Enter で", "终端只会输入文字，需自行按回车"],
     "prompt.truncated" => ["The preview shows the first {shown} of {chars} characters — all of it will be sent.", "미리보기는 {chars}자 중 앞 {shown}자만 보여 줍니다. 전체 내용이 전송됩니다.", "プレビューは {chars} 文字のうち先頭 {shown} 文字のみです。全文が送信されます。", "预览仅显示 {chars} 个字符中的前 {shown} 个，将发送全部内容。"],
     "prompt.send" => ["Send", "보내기", "送信", "发送"],
+
+    "settings.accounts" => ["Accounts", "계정 · 인증", "アカウント", "账户"],
+    "accounts.claude_intro" => ["How new Claude Code tabs sign in. Use another method when `claude` can't log in on this machine (no browser, company proxy, shared API account).", "새 Claude Code 탭의 로그인 방식입니다. 이 컴퓨터에서 `claude` 로그인을 쓸 수 없을 때(브라우저 없음, 사내 프록시, 공용 API 계정) 다른 방식을 고르세요.", "新しい Claude Code タブのサインイン方法です。このマシンで `claude` のログインが使えない場合（ブラウザなし、社内プロキシ、共有 API アカウント）は別の方法を選んでください。", "新 Claude Code 标签页的登录方式。当本机无法使用 `claude` 登录（无浏览器、公司代理、共享 API 账户）时，请选择其他方式。"],
+    "accounts.codex_intro" => ["How new Codex tabs sign in. API keys and imported auth.json files use a private Codex home that shares your ~/.codex config, sessions and history.", "새 Codex 탭의 로그인 방식입니다. API 키와 가져온 auth.json은 ~/.codex 설정·세션·기록을 공유하는 별도 Codex 홈을 사용합니다.", "新しい Codex タブのサインイン方法です。API キーとインポートした auth.json は、~/.codex の設定・セッション・履歴を共有する専用の Codex ホームを使います。", "新 Codex 标签页的登录方式。API 密钥和导入的 auth.json 使用独立的 Codex 主目录，并共享 ~/.codex 的配置、会话和历史。"],
+    "accounts.method_cli" => ["CLI login", "CLI 로그인", "CLI ログイン", "CLI 登录"],
+    "accounts.method_api_key" => ["API key", "API 키", "API キー", "API 密钥"],
+    "accounts.method_auth_token" => ["Gateway token", "게이트웨이 토큰", "ゲートウェイトークン", "网关令牌"],
+    "accounts.method_oauth" => ["OAuth token", "OAuth 토큰", "OAuth トークン", "OAuth 令牌"],
+    "accounts.method_bedrock" => ["Amazon Bedrock", "Amazon Bedrock", "Amazon Bedrock", "Amazon Bedrock"],
+    "accounts.method_vertex" => ["Google Vertex AI", "Google Vertex AI", "Google Vertex AI", "Google Vertex AI"],
+    "accounts.method_auth_json" => ["auth.json", "auth.json", "auth.json", "auth.json"],
+    "accounts.claude_cli_hint" => ["Claude Code uses its own login (`claude` → /login). Nothing is added to new tabs.", "Claude Code 자체 로그인(`claude` → /login)을 사용합니다. 새 탭에 아무것도 추가하지 않습니다.", "Claude Code 自身のログイン（`claude` → /login）を使います。新しいタブには何も追加しません。", "使用 Claude Code 自身的登录（`claude` → /login），不会向新标签页添加任何内容。"],
+    "accounts.claude_api_key_hint" => ["An Anthropic Console API key (ANTHROPIC_API_KEY). Usage is billed to the API account. Claude Code asks once whether to use it.", "Anthropic Console API 키(ANTHROPIC_API_KEY)입니다. 사용량은 API 계정으로 청구되며, Claude Code가 처음 한 번 사용 여부를 묻습니다.", "Anthropic Console の API キー（ANTHROPIC_API_KEY）です。利用料は API アカウントに請求され、Claude Code が初回に使用可否を確認します。", "Anthropic Console 的 API 密钥（ANTHROPIC_API_KEY），费用计入 API 账户。Claude Code 首次会询问是否使用。"],
+    "accounts.claude_auth_token_hint" => ["A bearer token for an LLM gateway or proxy (ANTHROPIC_AUTH_TOKEN), usually with its base URL.", "LLM 게이트웨이·프록시용 Bearer 토큰(ANTHROPIC_AUTH_TOKEN)입니다. 보통 Base URL과 함께 씁니다.", "LLM ゲートウェイ／プロキシ用の Bearer トークン（ANTHROPIC_AUTH_TOKEN）です。通常は Base URL と一緒に使います。", "LLM 网关或代理的 Bearer 令牌（ANTHROPIC_AUTH_TOKEN），通常与 Base URL 一起使用。"],
+    "accounts.claude_oauth_hint" => ["A long-lived subscription token from `claude setup-token` on a machine where login works (CLAUDE_CODE_OAUTH_TOKEN). A pasted .credentials.json also works, but its token expires within hours.", "로그인이 되는 컴퓨터에서 `claude setup-token`으로 만든 장기 구독 토큰(CLAUDE_CODE_OAUTH_TOKEN)입니다. .credentials.json을 붙여 넣어도 되지만 그 토큰은 몇 시간 안에 만료됩니다.", "ログインできるマシンで `claude setup-token` を実行して得た長期サブスクリプショントークン（CLAUDE_CODE_OAUTH_TOKEN）です。.credentials.json を貼り付けても使えますが、そのトークンは数時間で期限切れになります。", "在可登录的机器上用 `claude setup-token` 生成的长期订阅令牌（CLAUDE_CODE_OAUTH_TOKEN）。也可粘贴 .credentials.json，但其令牌几小时内过期。"],
+    "accounts.claude_bedrock_hint" => ["Claude through Amazon Bedrock. Credentials come from the AWS chain (profile, SSO, environment) or an optional Bedrock API key.", "Amazon Bedrock을 통해 Claude를 사용합니다. 자격 증명은 AWS 체인(프로필, SSO, 환경 변수) 또는 선택 입력한 Bedrock API 키를 씁니다.", "Amazon Bedrock 経由で Claude を使います。認証情報は AWS のチェーン（プロファイル、SSO、環境変数）または任意の Bedrock API キーを使います。", "通过 Amazon Bedrock 使用 Claude。凭据来自 AWS 凭据链（配置文件、SSO、环境变量）或可选的 Bedrock API 密钥。"],
+    "accounts.claude_vertex_hint" => ["Claude through Google Vertex AI with Application Default Credentials (`gcloud auth application-default login`).", "Application Default Credentials(`gcloud auth application-default login`)로 Google Vertex AI를 통해 Claude를 사용합니다.", "Application Default Credentials（`gcloud auth application-default login`）で Google Vertex AI 経由の Claude を使います。", "通过 Google Vertex AI 使用 Claude，凭据为 Application Default Credentials（`gcloud auth application-default login`）。"],
+    "accounts.codex_cli_hint" => ["Codex uses its own login (`codex login`) in ~/.codex. Nothing is added to new tabs.", "Codex 자체 로그인(`codex login`, ~/.codex)을 사용합니다. 새 탭에 아무것도 추가하지 않습니다.", "Codex 自身のログイン（`codex login`、~/.codex）を使います。新しいタブには何も追加しません。", "使用 Codex 自身的登录（`codex login`，~/.codex），不会向新标签页添加任何内容。"],
+    "accounts.codex_api_key_hint" => ["An OpenAI API key (OPENAI_API_KEY), optionally for an OpenAI-compatible base URL.", "OpenAI API 키(OPENAI_API_KEY)입니다. OpenAI 호환 Base URL도 지정할 수 있습니다.", "OpenAI の API キー（OPENAI_API_KEY）です。OpenAI 互換の Base URL も指定できます。", "OpenAI API 密钥（OPENAI_API_KEY），也可指定兼容 OpenAI 的 Base URL。"],
+    "accounts.codex_auth_json_hint" => ["Import ~/.codex/auth.json from a machine where `codex login` works (ChatGPT sign-in) — Codex keeps refreshing it here.", "`codex login`이 되는 컴퓨터의 ~/.codex/auth.json(ChatGPT 로그인)을 가져옵니다. 이후 Codex가 여기서 계속 갱신합니다.", "`codex login` が使えるマシンの ~/.codex/auth.json（ChatGPT サインイン）をインポートします。以後 Codex がここで更新し続けます。", "导入可运行 `codex login` 的机器上的 ~/.codex/auth.json（ChatGPT 登录），之后由 Codex 在此持续刷新。"],
+    "accounts.api_key" => ["API key", "API 키", "API キー", "API 密钥"],
+    "accounts.auth_token" => ["Token", "토큰", "トークン", "令牌"],
+    "accounts.oauth_token" => ["OAuth token", "OAuth 토큰", "OAuth トークン", "OAuth 令牌"],
+    "accounts.bedrock_key" => ["Bedrock API key (optional)", "Bedrock API 키 (선택)", "Bedrock API キー（任意）", "Bedrock API 密钥（可选）"],
+    "accounts.secret_hint" => ["Leave empty to keep the saved one", "비워 두면 저장된 값을 유지합니다", "空欄なら保存済みの値を使います", "留空则保留已保存的值"],
+    "accounts.secret_placeholder" => ["Paste the key", "키를 붙여 넣으세요", "キーを貼り付け", "粘贴密钥"],
+    "accounts.base_url" => ["Base URL (optional)", "Base URL (선택)", "Base URL（任意）", "Base URL（可选）"],
+    "accounts.base_url_hint" => ["ANTHROPIC_BASE_URL — for gateways; https only", "ANTHROPIC_BASE_URL — 게이트웨이용, https만 허용", "ANTHROPIC_BASE_URL — ゲートウェイ用、https のみ", "ANTHROPIC_BASE_URL — 用于网关，仅限 https"],
+    "accounts.codex_base_url_hint" => ["OPENAI_BASE_URL — e.g. https://gateway.example.com/v1", "OPENAI_BASE_URL — 예: https://gateway.example.com/v1", "OPENAI_BASE_URL — 例: https://gateway.example.com/v1", "OPENAI_BASE_URL — 例如 https://gateway.example.com/v1"],
+    "accounts.base_url_placeholder" => ["https://…", "https://…", "https://…", "https://…"],
+    "accounts.project" => ["Project ID", "프로젝트 ID", "プロジェクト ID", "项目 ID"],
+    "accounts.project_placeholder" => ["my-gcp-project", "my-gcp-project", "my-gcp-project", "my-gcp-project"],
+    "accounts.region" => ["Region", "리전", "リージョン", "区域"],
+    "accounts.region_placeholder" => ["us-east-1 / us-east5 / global", "us-east-1 / us-east5 / global", "us-east-1 / us-east5 / global", "us-east-1 / us-east5 / global"],
+    "accounts.aws_profile" => ["AWS profile (optional)", "AWS 프로필 (선택)", "AWS プロファイル（任意）", "AWS 配置文件（可选）"],
+    "accounts.aws_profile_placeholder" => ["default", "default", "default", "default"],
+    "accounts.auth_json" => ["auth.json", "auth.json", "auth.json", "auth.json"],
+    "accounts.auth_json_field_hint" => ["Paste its contents or choose the file", "내용을 붙여 넣거나 파일을 선택하세요", "内容を貼り付けるかファイルを選択", "粘贴内容或选择文件"],
+    "accounts.auth_json_placeholder" => ["{\"tokens\": …}", "{\"tokens\": …}", "{\"tokens\": …}", "{\"tokens\": …}"],
+    "accounts.choose_file" => ["Choose file…", "파일 선택…", "ファイルを選択…", "选择文件…"],
+    "accounts.auth_json_loaded" => ["File read — press Save to import it.", "파일을 읽었습니다. 저장을 눌러 가져오세요.", "ファイルを読み込みました。保存を押してインポートしてください。", "已读取文件，请点击保存以导入。"],
+    "accounts.auth_json_api_key" => ["Imported: API key auth.json", "가져옴: API 키 auth.json", "インポート済み: API キーの auth.json", "已导入：API 密钥 auth.json"],
+    "accounts.auth_json_chatgpt" => ["Imported: ChatGPT sign-in ({email}, {plan})", "가져옴: ChatGPT 로그인 ({email}, {plan})", "インポート済み: ChatGPT サインイン（{email}、{plan}）", "已导入：ChatGPT 登录（{email}，{plan}）"],
+    "accounts.auth_json_missing" => ["Paste or choose an auth.json first.", "먼저 auth.json을 붙여 넣거나 선택하세요.", "先に auth.json を貼り付けるか選択してください。", "请先粘贴或选择 auth.json。"],
+    "accounts.save" => ["Save", "저장", "保存", "保存"],
+    "accounts.verify" => ["Test", "연결 확인", "接続テスト", "测试"],
+    "accounts.reset" => ["Remove & use CLI login", "삭제하고 CLI 로그인 사용", "削除して CLI ログインを使う", "删除并使用 CLI 登录"],
+    "accounts.saved" => ["Saved. New tabs use it; tabs already open keep their sign-in.", "저장했습니다. 새 탭부터 적용되며 열려 있는 탭은 그대로입니다.", "保存しました。新しいタブから適用され、開いているタブはそのままです。", "已保存。新标签页生效，已打开的标签页保持不变。"],
+    "accounts.removed" => ["Removed. New tabs use the CLI login again.", "삭제했습니다. 새 탭은 다시 CLI 로그인을 사용합니다.", "削除しました。新しいタブは再び CLI ログインを使います。", "已删除。新标签页将重新使用 CLI 登录。"],
+    "accounts.secret_missing" => ["Enter the key first.", "먼저 키를 입력하세요.", "先にキーを入力してください。", "请先输入密钥。"],
+    "accounts.checking" => ["Checking…", "확인 중…", "確認中…", "检查中…"],
+    "accounts.verified" => ["Works — {n} models available.", "정상입니다 — 사용 가능한 모델 {n}개.", "有効です — 利用可能なモデル {n} 件。", "可用 — 共 {n} 个模型。"],
+    "accounts.saved_in" => ["Saved in {store}: {key}", "{store}에 저장됨: {key}", "{store} に保存済み: {key}", "已保存在 {store}：{key}"],
+    "accounts.nothing_saved" => ["Nothing saved yet.", "저장된 값이 없습니다.", "まだ保存されていません。", "尚未保存。"],
+    "accounts.security" => ["Security", "보안", "セキュリティ", "安全"],
+    "accounts.security_body" => ["Keys and tokens are kept in {store}. They reach only the agent process of a new tab, as environment variables — never its command line, agent config files or logs.", "키와 토큰은 {store}에 보관됩니다. 새 탭의 에이전트 프로세스에만 환경 변수로 전달되며 명령줄·에이전트 설정 파일·로그에는 남지 않습니다.", "キーとトークンは {store} に保管されます。新しいタブのエージェントプロセスにだけ環境変数として渡され、コマンドライン・エージェント設定ファイル・ログには残りません。", "密钥和令牌保存在 {store} 中，仅以环境变量形式传给新标签页的智能体进程，不会出现在命令行、智能体配置文件或日志中。"],
+    "settings.system" => ["System check", "환경 점검", "環境チェック", "环境检查"],
+    "system.tools" => ["Helper tools", "보조 도구", "補助ツール", "辅助工具"],
+    "system.intro" => ["Tools Agentty uses on this system. Install anything missing with one click — it runs in a new terminal tab — then press Recheck. New tools are found without restarting Agentty.", "이 시스템에서 Agentty가 사용하는 도구입니다. 없는 도구는 클릭 한 번으로 설치할 수 있습니다(새 터미널 탭에서 실행). 설치 후 다시 확인을 누르세요. Agentty를 다시 시작하지 않아도 인식됩니다.", "このシステムで Agentty が使うツールです。足りないものはワンクリックでインストールできます（新しいターミナルタブで実行）。完了したら再確認を押してください。Agentty の再起動は不要です。", "Agentty 在本系统上使用的工具。缺少的工具可一键安装（在新终端标签页中运行），完成后点击重新检查，无需重启 Agentty。"],
+    "system.recheck" => ["Recheck", "다시 확인", "再確認", "重新检查"],
+    "system.checking" => ["Checking…", "확인 중…", "確認中…", "检查中…"],
+    "system.install" => ["Install", "설치", "インストール", "安装"],
+    "system.copy" => ["Copy command", "명령 복사", "コマンドをコピー", "复制命令"],
+    "system.guide" => ["Guide", "안내", "ガイド", "指南"],
+    "system.missing" => ["Not found", "설치되지 않음", "見つかりません", "未找到"],
+    "system.required" => ["Required", "필수", "必須", "必需"],
+    "system.recommended" => ["Recommended", "권장", "推奨", "推荐"],
+    "system.optional" => ["Optional", "선택", "任意", "可选"],
+    "system.all_good" => ["Everything important is installed.", "필요한 도구가 모두 설치되어 있습니다.", "必要なツールはすべてインストール済みです。", "所需工具均已安装。"],
+    "system.install_note" => ["Install commands use winget on Windows and your package manager (with sudo) on Linux; you can review each one in its tab before it finishes.", "설치 명령은 Windows에서는 winget, Linux에서는 패키지 관리자(sudo)를 사용합니다. 각 탭에서 진행 상황을 확인할 수 있습니다.", "インストールコマンドは Windows では winget、Linux ではパッケージマネージャー（sudo）を使います。各タブで進行状況を確認できます。", "安装命令在 Windows 上使用 winget，在 Linux 上使用包管理器（sudo），可在各标签页中查看进度。"],
+    "system.purpose.windows" => ["Terminals need the Windows pseudo console (Windows 10 version 1809 or later).", "터미널은 Windows 의사 콘솔(Windows 10 1809 이상)이 필요합니다.", "ターミナルには Windows 疑似コンソール（Windows 10 1809 以降）が必要です。", "终端需要 Windows 伪控制台（Windows 10 1809 或更高版本）。"],
+    "system.purpose.git_bash" => ["Claude Code runs its hooks with Git Bash — without it, pane status (working / waiting / done) isn't reported. Also provides git for the Git page.", "Claude Code는 Git Bash로 훅을 실행합니다. 없으면 패널 상태(작업 중/대기/완료)가 표시되지 않습니다. Git 페이지용 git도 함께 설치됩니다.", "Claude Code は Git Bash でフックを実行します。ないとペインの状態（作業中／待機／完了）が表示されません。Git ページ用の git も入ります。", "Claude Code 通过 Git Bash 运行钩子，缺少时面板状态（工作中／等待／完成）无法显示。同时提供 Git 页面所需的 git。"],
+    "system.purpose.claude" => ["Claude Code agent tabs.", "Claude Code 에이전트 탭.", "Claude Code エージェントタブ。", "Claude Code 智能体标签页。"],
+    "system.purpose.codex" => ["Codex agent tabs (installed with npm, so Node.js first).", "Codex 에이전트 탭 (npm으로 설치하므로 Node.js 먼저).", "Codex エージェントタブ（npm でインストールするので先に Node.js）。", "Codex 智能体标签页（通过 npm 安装，需先安装 Node.js）。"],
+    "system.purpose.node" => ["Runs npm-based agent CLIs (Codex, Gemini CLI, …) and Node.js plugins.", "npm 기반 에이전트 CLI(Codex, Gemini CLI 등)와 Node.js 플러그인 실행.", "npm ベースのエージェント CLI（Codex、Gemini CLI など）と Node.js プラグインを実行します。", "运行基于 npm 的智能体 CLI（Codex、Gemini CLI 等）和 Node.js 插件。"],
+    "system.purpose.pwsh" => ["Modern PowerShell for panes: faster start, correct argument passing, better UTF-8. Windows PowerShell 5.1 is used without it.", "패널용 최신 PowerShell: 더 빠른 시작, 정확한 인자 전달, 더 나은 UTF-8. 없으면 Windows PowerShell 5.1을 사용합니다.", "ペイン用の新しい PowerShell：起動が速く、引数の受け渡しが正確で UTF-8 に強い。ない場合は Windows PowerShell 5.1 を使います。", "面板使用的新版 PowerShell：启动更快、参数传递正确、UTF-8 更好。缺少时使用 Windows PowerShell 5.1。"],
+    "system.purpose.winget" => ["The Windows package manager used by the Install buttons (included in current Windows as App Installer).", "설치 버튼이 사용하는 Windows 패키지 관리자 (최신 Windows에는 앱 설치 관리자로 포함).", "インストールボタンが使う Windows パッケージマネージャー（最新の Windows にはアプリ インストーラーとして同梱）。", "安装按钮使用的 Windows 包管理器（新版 Windows 以“应用安装程序”形式自带）。"],
+    "system.purpose.git" => ["The Git page, branches and worktrees.", "Git 페이지, 브랜치, 워크트리.", "Git ページ、ブランチ、ワークツリー。", "Git 页面、分支和工作树。"],
+    "system.purpose.secret_tool" => ["Keeps API keys in the desktop keyring (GNOME Keyring / KWallet) instead of a private file.", "API 키를 개인 파일 대신 데스크톱 키링(GNOME Keyring / KWallet)에 보관합니다.", "API キーを専用ファイルではなくデスクトップのキーリング（GNOME Keyring / KWallet）に保管します。", "将 API 密钥保存在桌面密钥环（GNOME Keyring / KWallet）而非私有文件中。"],
+    "system.purpose.xdg_open" => ["Opens links, folders and files from Agentty.", "Agentty에서 링크·폴더·파일을 엽니다.", "Agentty からリンク・フォルダー・ファイルを開きます。", "从 Agentty 打开链接、文件夹和文件。"],
+    "system.purpose.notify_send" => ["Desktop notifications when an agent finishes or needs input.", "에이전트가 끝나거나 입력을 기다릴 때 데스크톱 알림.", "エージェントの完了や入力待ちをデスクトップ通知で知らせます。", "智能体完成或等待输入时发送桌面通知。"],
+    "system.purpose.lsof" => ["Shows the ports each terminal is listening on.", "각 터미널이 열어 둔 포트를 표시합니다.", "各ターミナルが待ち受けているポートを表示します。", "显示每个终端正在监听的端口。"],
+    "accounts.applies" => ["Changes apply to Claude Code / Codex tabs opened afterwards (including resumed sessions).", "변경 사항은 이후에 여는 Claude Code / Codex 탭(재개한 세션 포함)에 적용됩니다.", "変更は以後に開く Claude Code / Codex タブ（再開したセッションを含む）に適用されます。", "更改适用于之后打开的 Claude Code / Codex 标签页（包括恢复的会话）。"],
 }
 
 #[cfg(test)]
@@ -800,5 +915,17 @@ mod tests {
         }
         assert_eq!(tr(Language::Ko, "page.usage"), "AI 사용량");
         assert_eq!(tr(Language::En, "missing.key"), "missing.key");
+        for key in ["ext.open_folder", "terminal.reveal_file", "ext.mcp_secret_warning", "ext.conn_secret", "ext.conn_security"] {
+            if let Some(row) = platform_row(key) {
+                assert!(row.iter().all(|s| !s.is_empty()) && lookup(key).is_some(), "{key}");
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn shortcuts_follow_the_platform() {
+        assert_eq!(tr(Language::En, "hint.no_workspaces"), "No workspaces. Press Ctrl+Shift+N to create one.");
+        assert!(!tr(Language::Ko, "terminal.reveal_file").contains("Finder"));
     }
 }

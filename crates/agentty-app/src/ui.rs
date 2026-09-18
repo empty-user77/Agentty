@@ -228,7 +228,7 @@ impl Tooltip {
     ) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
         let text = text.into();
         move |_, cx| {
-            let (text, shortcut) = (text.clone(), shortcut.map(SharedString::from));
+            let (text, shortcut) = (text.clone(), shortcut.map(|s| SharedString::from(crate::keymap::display(s).into_owned())));
             cx.new(|cx| {
                 // GPUI shows tooltips after 0.5 s; wait a little longer so passing over icons stays quiet.
                 cx.spawn(async move |this, cx| {

@@ -36,7 +36,7 @@ impl Workbench {
     /// First launch: show what Agentty can do next to the start page, instead of an empty window.
     /// Only the first window does it, and only once — the choice is remembered in settings.
     pub(super) fn show_first_run_tour(&mut self, cx: &mut Context<Self>) {
-        if self.slot != 0 || settings(cx).welcome_shown || self.browser.is_some() {
+        if self.slot != 0 || settings(cx).welcome_shown || self.browser.is_some() || !crate::platform::HAS_WEBVIEW {
             return;
         }
         crate::settings::update_settings(cx, |s| s.welcome_shown = true);
@@ -62,6 +62,10 @@ impl Workbench {
 
     /// Shows the panel (loading `url` if given). The panel itself is built on the next render.
     pub(super) fn open_browser(&mut self, url: Option<String>, cx: &mut Context<Self>) {
+        if !crate::platform::HAS_WEBVIEW {
+            // No embedded browser on this platform: the default browser opens the page instead.
+            return cx.open_url(&url.unwrap_or_else(|| browser_url(&settings(cx).browser.home, cx)));
+        }
         self.page = None;
         match self.browser.as_mut() {
             Some(browser) => {

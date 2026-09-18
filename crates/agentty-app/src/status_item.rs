@@ -10,31 +10,12 @@ use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel, NO, YES};
 use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::CString;
-use std::sync::{Mutex, Once};
+use std::sync::Once;
 
 type Id = *mut Object;
 const NIL: Id = std::ptr::null_mut();
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrayAction {
-    Show,
-    ToggleMini,
-    Focus(u64),
-    OpenUsage,
-    Quit,
-}
-
-static ACTIONS: Mutex<Vec<TrayAction>> = Mutex::new(Vec::new());
-
-pub fn push_action(action: TrayAction) {
-    if let Ok(mut actions) = ACTIONS.lock() {
-        actions.push(action);
-    }
-}
-
-pub fn drain_actions() -> Vec<TrayAction> {
-    ACTIONS.lock().map(|mut a| std::mem::take(&mut *a)).unwrap_or_default()
-}
+pub use crate::platform::tray::{drain_actions, push_action, TrayAction, TrayPane, TrayState};
 
 const TAG_SHOW: isize = 1;
 const TAG_MINI: isize = 2;
@@ -68,39 +49,6 @@ fn target_class() -> &'static Class {
 fn ns_string(text: &str) -> Id {
     let c = CString::new(text.replace('\0', "")).unwrap_or_default();
     unsafe { msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()] }
-}
-
-/// One agent pane in the menu.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrayPane {
-    pub id: u64,
-    pub label: String,
-    pub working: bool,
-    pub waiting: bool,
-}
-
-/// Everything the menu shows, with strings already localized.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TrayState {
-    pub panes: Vec<TrayPane>,
-    pub show_label: String,
-    pub mini_label: String,
-    pub quit_label: String,
-    pub empty_label: String,
-    pub mini: bool,
-    /// "Usage · last 7 days" and one line per agent with cost and limit resets.
-    pub usage_title: String,
-    pub usage_lines: Vec<String>,
-}
-
-impl TrayState {
-    pub fn working(&self) -> usize {
-        self.panes.iter().filter(|p| p.working).count()
-    }
-
-    pub fn waiting(&self) -> usize {
-        self.panes.iter().filter(|p| p.waiting).count()
-    }
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -228,17 +176,5 @@ impl Drop for StatusItem {
                 let _: () = msg_send![self.target, release];
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn counts_working_and_waiting() {
-        let pane = |id, working, waiting| TrayPane { id, label: String::new(), working, waiting };
-        let state = TrayState { panes: vec![pane(1, true, false), pane(2, false, true), pane(3, true, false)], ..Default::default() };
-        assert_eq!((state.working(), state.waiting()), (2, 1));
     }
 }

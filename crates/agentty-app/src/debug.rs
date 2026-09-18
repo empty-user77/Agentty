@@ -1,7 +1,9 @@
 //! Development hooks, enabled only when `AGENTTY_DEBUG=1`: remote UI commands over the agent
 //! socket and self-snapshots of Agentty's own window (no screen-recording permission needed).
 
-use anyhow::{Context as _, Result};
+#[cfg(target_os = "macos")]
+use anyhow::Context as _;
+use anyhow::Result;
 use std::path::Path;
 
 pub fn enabled() -> bool {
@@ -218,3 +220,6 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
         }
     }
 }
+
+#[cfg(not(target_os = "macos"))]
+pub fn synthetic_input(_ns_window: crate::native::Id, _command: &str, _argument: &str) {}

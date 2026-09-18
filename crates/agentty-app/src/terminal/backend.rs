@@ -60,14 +60,16 @@ pub struct Backend {
     notifier: Notifier,
     size: GridSize,
     pub child_pid: u32,
-    /// PTY controller descriptor, owned by the event loop and valid while this backend lives.
-    pub tty_fd: std::os::fd::RawFd,
+    /// PTY controller descriptor, owned by the event loop and valid while this backend lives
+    /// (`-1` on Windows, where ConPTY has no such descriptor).
+    pub tty_fd: crate::procinfo::TtyFd,
 }
 
 pub struct SpawnOptions<'a> {
     pub spec: &'a LaunchSpec,
     pub pane_id: u64,
-    pub signal_socket: Option<&'a std::path::Path>,
+    /// `$AGENTTY_SOCKET` and, on Windows, `$AGENTTY_SOCKET_TOKEN`.
+    pub signal_socket: Option<(&'a str, Option<&'a str>)>,
     pub scrollback: usize,
 }
 
@@ -79,7 +81,9 @@ impl Backend {
         let (tx, rx) = unbounded();
         let listener = Listener(tx);
 
-        let (program, args) = spec.argv();
+        // Credentials chosen in Settings → Accounts (nothing for the agents' own CLI login).
+        let auth = spec.auth_setup();
+        let (program, args) = spec.argv_with_auth(&auth);
         let mut env = HashMap::new();
         env.insert("TERM".into(), "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
@@ -89,17 +93,39 @@ impl Backend {
         // `agentty browser …` / `agentty notify …` work in every pane.
         if let Ok(exe) = std::env::current_exe() {
             env.insert("AGENTTY_BIN".into(), exe.display().to_string());
-            if let (Some(dir), Some(path)) = (exe.parent(), std::env::var_os("PATH")) {
-                let mut paths = vec![dir.to_path_buf()];
-                paths.extend(std::env::split_paths(&path));
+            // Windows: this process's PATH plus what the registry has now (tools installed since
+            // Agentty started); elsewhere `$PATH` as before.
+            let path = if cfg!(windows) { Some(agentty_bridge::process::current_path()) } else { std::env::var_os("PATH") };
+            if let (Some(dir), Some(path)) = (exe.parent(), path) {
+                // macOS: the app bundle's own folder goes first. Elsewhere the executable may sit
+                // in Downloads or another shared folder, so it goes last: a `git.exe` or `node`
+                // lying next to it must never shadow the real ones.
+                let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
+                if cfg!(target_os = "macos") {
+                    paths.insert(0, dir.to_path_buf());
+                } else {
+                    paths.push(dir.to_path_buf());
+                }
                 if let Ok(joined) = std::env::join_paths(paths) {
                     env.insert("PATH".into(), joined.to_string_lossy().to_string());
                 }
             }
         }
+        // Claude Code on Windows runs hooks with Git Bash; point it at Git for Windows' bash so
+        // WSL's `bash.exe` (or none) isn't picked, which would silence pane status.
+        #[cfg(windows)]
+        if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_none() {
+            if let Some(bash) = agentty_bridge::process::git_bash() {
+                env.insert("CLAUDE_CODE_GIT_BASH_PATH".into(), bash.display().to_string());
+            }
+        }
         env.extend(crate::shell_integration::environment(&program));
-        if let Some(socket) = options.signal_socket {
-            env.insert("AGENTTY_SOCKET".into(), socket.display().to_string());
+        env.extend(auth.pane_variables());
+        if let Some((address, token)) = options.signal_socket {
+            env.insert("AGENTTY_SOCKET".into(), address.to_string());
+            if let Some(token) = token {
+                env.insert(crate::ipc::TOKEN_VARIABLE.into(), token.to_string());
+            }
         }
         let scrollback = options.scrollback;
         let options = tty::Options {
@@ -107,14 +133,18 @@ impl Backend {
             working_directory: Some(spec.cwd.clone()),
             drain_on_exit: true,
             env,
+            #[cfg(windows)]
+            escape_args: true,
         };
 
         let config = Config { scrolling_history: scrollback, ..Config::default() };
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
         let window_id = NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
         let pty = tty::new(&options, size.window_size(), window_id).context("failed to open PTY")?;
-        let child_pid = pty.child().id();
-        let tty_fd = std::os::fd::AsRawFd::as_raw_fd(pty.file());
+        #[cfg(unix)]
+        let (child_pid, tty_fd) = (pty.child().id(), std::os::fd::AsRawFd::as_raw_fd(pty.file()));
+        #[cfg(not(unix))]
+        let (child_pid, tty_fd) = (pty.child_watcher().pid().map_or(0, |pid| pid.get()), -1);
         let event_loop =
             EventLoop::new(term.clone(), listener, pty, options.drain_on_exit, false).context("failed to start PTY event loop")?;
         let notifier = Notifier(event_loop.channel());

@@ -245,7 +245,7 @@ pub fn install_from_git(url: &str) -> Result<InstalledPlugin> {
     let tmp = plugins_dir().join(format!(".clone-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(plugins_dir())?;
-    let output = std::process::Command::new("git")
+    let output = crate::process::command("git")
         .args(["clone", "--depth", "1", "--", url])
         .arg(&tmp)
         .env("GIT_TERMINAL_PROMPT", "0")

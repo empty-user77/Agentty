@@ -43,3 +43,71 @@ jobs:
         run: cargo test --workspace
       - name: Build (release)
         run: cargo build --release -p agentty-app
+
+  # Same checks on Linux (X11 + Wayland backends) and Windows. macOS above stays the reference build.
+  check-linux:
+    needs: secrets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev zsh
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Build (release)
+        run: cargo build --release -p agentty-app
+      - name: Package and install round trip
+        run: |
+          scripts/package-linux.sh
+          tar -xzf dist/agentty-*-linux-*.tar.gz -C target
+          prefix="$RUNNER_TEMP/agentty-prefix"
+          PREFIX="$prefix" target/agentty-*-linux-*/install.sh
+          test -x "$prefix/bin/agentty"
+          test -f "$prefix/share/applications/run.agentty.Agentty.desktop"
+          PREFIX="$prefix" target/agentty-*-linux-*/install.sh --uninstall
+          test ! -e "$prefix/bin/agentty"
+
+  check-windows:
+    needs: secrets
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Build (release)
+        run: cargo build --release -p agentty-app
+      - name: Resources, package and install round trip
+        shell: pwsh
+        run: |
+          $info = (Get-Item target\release\agentty.exe).VersionInfo
+          if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
+          ./scripts/package-windows.ps1
+          $zip = Get-ChildItem dist\agentty-*-windows-*.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath target\installer-test -Force
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File target\installer-test\install.ps1 -NoLaunch
+          if ($LASTEXITCODE) { throw 'install.ps1 failed' }
+          $installed = Join-Path $env:LOCALAPPDATA 'Programs\Agentty'
+          foreach ($path in @("$installed\agentty.exe", 'HKCU:\Software\Classes\agentty\shell\open\command',
+                              'HKCU:\Software\Classes\Directory\shell\Agentty\command',
+                              'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Agentty')) {
+            if (-not (Test-Path $path)) { throw "missing after install: $path" }
+          }
+          if (-not ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' -contains $installed)) { throw 'not on PATH' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$installed\install.ps1" -Uninstall
+          Start-Sleep -Seconds 5
+          foreach ($path in @('HKCU:\Software\Classes\agentty', "$installed\agentty.exe")) {
+            if (Test-Path $path) { throw "left behind after uninstall: $path" }
+          }

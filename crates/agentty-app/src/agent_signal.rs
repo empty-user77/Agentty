@@ -3,8 +3,6 @@
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use gpui::Global;
 use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +34,8 @@ pub enum SocketMessage {
     Browser(BrowserRequest),
     /// `debug\t<command>\t<argument>`; only accepted when `AGENTTY_DEBUG=1`.
     Debug(String, String),
+    /// `open\t["agentty://…", "/folder", …]` from a second launch (Windows / Linux single instance).
+    Open(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -78,14 +78,17 @@ pub fn browser_reply(result: Result<String, String>) -> String {
 }
 
 pub struct SignalSocket {
-    pub path: PathBuf,
+    /// `$AGENTTY_SOCKET` for panes (a socket path, or `127.0.0.1:<port>` on Windows).
+    pub address: String,
+    /// `$AGENTTY_SOCKET_TOKEN` for panes (Windows).
+    pub token: Option<String>,
 }
 
 impl Global for SignalSocket {}
 
 impl Drop for SignalSocket {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        crate::ipc::Listener::cleanup(&self.address);
     }
 }
 
@@ -131,19 +134,13 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
 
 /// Binds the socket and starts the accept thread.
 pub fn start() -> anyhow::Result<(SignalSocket, UnboundedReceiver<SocketMessage>)> {
-    // The per-user temp dir is private (0700) and short enough for SUN_LEN, unlike deep data dirs.
-    let path = std::env::temp_dir().join(format!("agentty-{}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    let listener = crate::ipc::Listener::bind()?;
+    let socket = SignalSocket { address: listener.address.clone(), token: listener.token.clone() };
     let (tx, rx) = unbounded();
     let debug = crate::debug::enabled();
 
     std::thread::Builder::new().name("agentty-signals".into()).spawn(move || {
-        for stream in listener.incoming().flatten() {
+        for stream in listener.incoming() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let mut writer = stream.try_clone().ok();
             for line in BufReader::new(stream).lines().map_while(Result::ok) {
@@ -170,6 +167,14 @@ pub fn start() -> anyhow::Result<(SignalSocket, UnboundedReceiver<SocketMessage>
                     }
                     continue;
                 }
+                // Single-instance hand-over (Windows / Linux only; macOS gets open events).
+                if let Some(json) = line.strip_prefix("open\t").filter(|_| !cfg!(target_os = "macos")) {
+                    let arguments: Vec<String> = serde_json::from_str(json).unwrap_or_default();
+                    if tx.unbounded_send(SocketMessage::Open(arguments.into_iter().take(32).collect())).is_err() {
+                        return;
+                    }
+                    continue;
+                }
                 let message = match line.strip_prefix("debug\t") {
                     Some(rest) if debug => {
                         let (command, argument) = rest.split_once('\t').unwrap_or((rest, ""));
@@ -186,7 +191,7 @@ pub fn start() -> anyhow::Result<(SignalSocket, UnboundedReceiver<SocketMessage>
             }
         }
     })?;
-    Ok((SignalSocket { path }, rx))
+    Ok((socket, rx))
 }
 
 /// `agentty notify <message>`: posts a notification for the pane this command runs in.
@@ -195,9 +200,32 @@ pub fn send_notify(message: &str) -> anyhow::Result<()> {
     let socket = std::env::var("AGENTTY_SOCKET").map_err(|_| anyhow::anyhow!("not running inside a Agentty terminal"))?;
     let pane = std::env::var("AGENTTY_PANE_ID").map_err(|_| anyhow::anyhow!("not running inside a Agentty terminal"))?;
     let text: String = message.chars().filter(|c| *c != '\n' && *c != '\t').collect();
-    let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
+    let mut stream = crate::ipc::connect(&socket)?;
     writeln!(stream, "{pane}\tnotify\t{text}")?;
     Ok(())
+}
+
+/// `agentty signal <kind> [payload]`: forwards one agent hook event to the pane's Agentty. The
+/// payload is the argument (Codex `notify`) or stdin (Claude Code hooks), newlines removed.
+/// Used on platforms without `nc -U`; always exits 0 so a closed Agentty never breaks the agent.
+pub fn forward_signal(args: &[String]) -> i32 {
+    use std::io::{Read, Write};
+    let (Some(kind), Ok(socket), Ok(pane)) = (args.first(), std::env::var("AGENTTY_SOCKET"), std::env::var("AGENTTY_PANE_ID")) else {
+        return 0;
+    };
+    let payload = match args.get(1) {
+        Some(argument) => argument.clone(),
+        None => {
+            let mut input = Vec::new();
+            let _ = std::io::stdin().take(1024 * 1024).read_to_end(&mut input);
+            String::from_utf8_lossy(&input).into_owned()
+        }
+    };
+    let payload: String = payload.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+    if let Ok(mut stream) = crate::ipc::connect(&socket) {
+        let _ = writeln!(stream, "{pane}\t{kind}\t{payload}");
+    }
+    0
 }
 
 #[cfg(test)]
@@ -263,7 +291,10 @@ mod tests {
     fn socket_roundtrip() {
         use std::io::Write;
         let (socket, mut rx) = start().unwrap();
-        let mut client = std::os::unix::net::UnixStream::connect(&socket.path).unwrap();
+        if let Some(token) = &socket.token {
+            std::env::set_var(crate::ipc::TOKEN_VARIABLE, token);
+        }
+        let mut client = crate::ipc::connect(&socket.address).unwrap();
         client.write_all(b"42\tstop\t{}\n").unwrap();
         drop(client);
         let message = futures::executor::block_on(futures::StreamExt::next(&mut rx)).unwrap();

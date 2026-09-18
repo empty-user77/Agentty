@@ -9,7 +9,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg"></a>
   <img alt="Rust 1.98" src="https://img.shields.io/badge/rust-1.98-orange.svg">
-  <img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-lightgrey.svg">
+  <img alt="Platform: macOS | Windows | Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg">
 </p>
 
 Agentty is a native, GPU-rendered terminal for running shells, **Claude Code** and
@@ -43,7 +43,11 @@ each agent is doing and highlights the ones that need you.
   selected files, browse history and merge branches. Click the branch in any pane header to switch branches, pull, push or copy its name.
 - **Extensions** — skills, subagents, commands, plugins and MCP servers for Claude Code and Codex in one place; add
   official MCP servers in one click and insert or run any of them in the active agent.
-- **API connectors** — expose any HTTP API to your agents as an MCP server; secrets live in the macOS Keychain.
+- **API connectors** — expose any HTTP API to your agents as an MCP server; secrets live in the OS credential store
+  (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+- **Accounts without the CLI login** — Settings → Accounts starts Claude Code with an API key, a gateway token
+  (`ANTHROPIC_AUTH_TOKEN` + base URL), a `claude setup-token` OAuth token, Amazon Bedrock or Google Vertex AI, and
+  Codex with an API key or an imported `auth.json` — for machines where `claude` / `codex login` can't sign in.
 - **Plugins** — connect other apps and add tools: a plugin fills a panel next to your terminals, adds buttons above
   agent panes and palette commands, sends prompts to new or open workspaces, and handles `agentty://` links from other
   apps. The built-in **Cosmica** plugin turns Cosmica notes into prompts ("Continue in Agentty" from Cosmica) and saves
@@ -77,6 +81,20 @@ cargo run --release -p agentty-app
 
 Requirements: macOS 13+, Rust 1.98 (pinned in `rust-toolchain.toml`), Xcode command line tools. `claude` and/or `codex` on your `PATH` for agent tabs.
 Packaging, signing and notarization: see [docs/release.md](docs/release.md).
+
+### Windows and Linux
+
+Agentty also builds and runs on Windows 10/11 and Linux (X11 and Wayland) — see [docs/platforms.md](docs/platforms.md)
+for what differs.
+
+- **Windows**: `cargo build --release -p agentty-app`, or `pwsh scripts/package-windows.ps1` for a zip. Panes run
+  PowerShell (`pwsh` when installed); Claude Code needs Git for Windows for its hooks.
+- **Linux**: install the GPUI libraries (Debian/Ubuntu: `sudo apt install pkg-config libxkbcommon-dev
+  libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libvulkan-dev libfontconfig-dev libzstd-dev`), then
+  `cargo build --release -p agentty-app`, or `scripts/package-linux.sh` for a tarball with `install.sh`.
+
+Shortcuts are the same with ⌘ → Ctrl+Shift, ⇧⌘ → Ctrl+Alt+Shift, ⌥⌘ → Ctrl+Alt and ⌘1…9 → Alt+1…9, so Ctrl+letter
+stays with the shell.
 
 ## Keyboard shortcuts
 
@@ -133,6 +151,8 @@ install.
 | `~/.agentty/pricing.json` | Optional model prices for non-Claude models |
 | `~/.agentty/handoffs/` | Context documents created by migrations and Session Flow |
 | `~/.agentty/connectors.json` | API connector definitions (secrets are in the Keychain, never in this file) |
+| `~/.agentty/agent-auth.json` | Sign-in method for new Claude Code / Codex tabs (Settings → Accounts; no secrets) |
+| `~/.agentty/codex-home/` | Private Codex home for API-key / `auth.json` sign-in (`auth.json` `0600`; config and sessions link to `~/.codex`) |
 | `agentty.json` (project) or `~/.agentty/commands.json` | Custom command palette entries |
 | `~/.agentty/plugins/` | Installed plugins (`state.json` records which are enabled) |
 | `~/.agentty/plugin-data/<id>/` | Private data of each plugin |

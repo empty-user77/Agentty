@@ -73,13 +73,26 @@ impl Workbench {
                                         cx.notify();
                                     },
                                 )))
-                                .child(button("install-hint-open", t(cx, "install.open_guide").to_string(), true).on_click(cx.listener(
-                                    move |this, _: &ClickEvent, _, cx| {
+                                .child(
+                                    button(
+                                        "install-hint-open",
+                                        t(cx, if cfg!(target_os = "macos") { "install.open_guide" } else { "install.open_system_check" })
+                                            .to_string(),
+                                        true,
+                                    )
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                         this.install_hint = None;
-                                        cx.open_url(url);
+                                        if cfg!(target_os = "macos") {
+                                            cx.open_url(url);
+                                        } else {
+                                            // Windows / Linux: one-click install from Settings → System check.
+                                            this.system_check = None;
+                                            this.settings_section = super::settings_page::SettingsSection::System;
+                                            this.open_page(super::Page::Settings, cx);
+                                        }
                                         cx.notify();
-                                    },
-                                ))),
+                                    })),
+                                ),
                         ),
                 )
                 .into_any_element(),

@@ -4,10 +4,10 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("-C")
         .arg(repo)
         .args(args)

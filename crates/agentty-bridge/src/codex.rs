@@ -16,6 +16,10 @@ fn codex_dir() -> PathBuf {
 fn rollouts() -> Vec<PathBuf> {
     let mut files = Vec::new();
     fsutil::jsonl_files(&codex_dir().join("sessions"), 4, &mut files);
+    // Agentty's private Codex home (API-key / auth.json sign-in) when its sessions aren't linked here.
+    for private in crate::agent_auth::codex_home_sessions() {
+        fsutil::jsonl_files(&private, 4, &mut files);
+    }
     files.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("rollout-")));
     files
 }

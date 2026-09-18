@@ -137,10 +137,10 @@ impl PluginProcess {
 
     /// Terminates the plugin before Agentty exits, without waiting for it to agree.
     pub fn kill(&self) {
-        self.signal(libc::SIGTERM);
+        self.signal(false);
         // Agentty is going away; a plugin that ignores SIGTERM must not outlive it.
         std::thread::sleep(std::time::Duration::from_millis(150));
-        self.signal(libc::SIGKILL);
+        self.signal(true);
     }
 
     /// Asks the plugin to exit, then terminates it, then makes sure it is gone.
@@ -148,13 +148,10 @@ impl PluginProcess {
         self.send(agentty_bridge::plugins::notification("shutdown", serde_json::json!({})));
         let pid = self.pid.clone();
         std::thread::spawn(move || {
-            for (wait, signal) in [(1500, libc::SIGTERM), (1500, libc::SIGKILL)] {
+            for (wait, force) in [(1500, false), (1500, true)] {
                 std::thread::sleep(std::time::Duration::from_millis(wait));
                 match pid.lock().ok().and_then(|p| *p) {
-                    // SAFETY: plain kill(2) on the plugin's own child process id.
-                    Some(pid) => unsafe {
-                        libc::kill(pid as libc::pid_t, signal);
-                    },
+                    Some(pid) => terminate(pid, force),
                     // It exited on its own.
                     None => break,
                 }
@@ -162,14 +159,30 @@ impl PluginProcess {
         });
     }
 
-    fn signal(&self, signal: libc::c_int) {
+    fn signal(&self, force: bool) {
         if let Some(pid) = self.pid.lock().ok().and_then(|p| *p) {
-            // SAFETY: plain kill(2) on the plugin's own child process id.
-            unsafe {
-                libc::kill(pid as libc::pid_t, signal);
-            }
+            terminate(pid, force);
         }
     }
+}
+
+/// SIGTERM (or SIGKILL when `force`) to the plugin's own child process.
+#[cfg(unix)]
+fn terminate(pid: u32, force: bool) {
+    // SAFETY: plain kill(2) on the plugin's own child process id.
+    unsafe {
+        libc::kill(pid as libc::pid_t, if force { libc::SIGKILL } else { libc::SIGTERM });
+    }
+}
+
+/// Windows has no SIGTERM for console programs; the plugin's process tree is ended.
+#[cfg(windows)]
+fn terminate(pid: u32, _force: bool) {
+    let _ = agentty_bridge::process::command("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// Reads one `\n`-terminated line, refusing lines longer than [`MAX_LINE_BYTES`].
@@ -222,6 +235,7 @@ fn command(plugin: &InstalledPlugin, language: &str) -> Result<Command, String> 
         }
         Runtime::Executable => Command::new(&entry),
     };
+    agentty_bridge::process::hide_window(&mut command);
     let data = plugin_data_dir(&plugin.id);
     let _ = std::fs::create_dir_all(&data);
     #[cfg(unix)]
@@ -249,6 +263,10 @@ fn login_path() -> String {
     static PATH: OnceLock<String> = OnceLock::new();
     PATH.get_or_init(|| {
         let fallback = std::env::var("PATH").unwrap_or_default();
+        if cfg!(windows) {
+            // No login shell on Windows: the PATH a new login would get (see `current_path`).
+            return agentty_bridge::process::current_path().to_string_lossy().into_owned();
+        }
         crate::launch::run_in_login_shell(&["printenv".into(), "PATH".into()])
             .ok()
             .and_then(|out| out.lines().rev().find(|l| l.contains('/') && !l.contains(' ')).map(str::to_string))
@@ -266,6 +284,13 @@ fn find_program(name: &str, path_env: &str) -> Option<PathBuf> {
         return found;
     }
     let home = crate::launch::home_dir();
+    if cfg!(windows) {
+        let found = agentty_bridge::process::which_in(if name == "python3" { "python" } else { name }, std::ffi::OsStr::new(path_env));
+        if let Ok(mut cache) = cache.lock() {
+            cache.insert(name.to_string(), found.clone());
+        }
+        return found;
+    }
     let mut candidates: Vec<PathBuf> = std::env::split_paths(path_env).map(|dir| dir.join(name)).collect();
     for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
         candidates.push(Path::new(dir).join(name));
@@ -287,9 +312,15 @@ fn find_program(name: &str, path_env: &str) -> Option<PathBuf> {
     found
 }
 
+#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]

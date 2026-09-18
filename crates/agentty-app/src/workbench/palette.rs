@@ -157,7 +157,9 @@ impl Workbench {
     fn palette_items(&self, cx: &mut Context<Self>) -> Vec<Item> {
         let mut items: Vec<Item> = Vec::new();
         let mut push = |label: &str, category: &str, hint: Option<&str>, run: Run| {
-            items.push(Item { label: label.to_string(), category: category.to_string(), hint: hint.map(str::to_string), run });
+            // Shortcut hints are written for macOS; shown as this platform's keys.
+            let hint = hint.map(|h| crate::keymap::display(h).into_owned());
+            items.push(Item { label: label.to_string(), category: category.to_string(), hint, run });
         };
 
         let project = self.active_pane().map(|p| p.read(cx).display_cwd());

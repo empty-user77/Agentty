@@ -41,7 +41,7 @@ pub fn run() -> i32 {
 
     if let (Some(percent), Ok(socket), Ok(pane)) = (usage_percent(&json), std::env::var("AGENTTY_SOCKET"), std::env::var("AGENTTY_PANE_ID"))
     {
-        if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(socket) {
+        if let Ok(mut stream) = crate::ipc::connect(&socket) {
             let _ = writeln!(stream, "{pane}\tusage\t{percent}");
         }
     }
@@ -55,7 +55,10 @@ pub fn run() -> i32 {
     let cwd = json["workspace"]["current_dir"].as_str().or(json["cwd"].as_str()).map(PathBuf::from);
     let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| crate::launch::home_dir().join(".claude"));
     let Some(command) = user_command(cwd.as_deref(), &config_dir) else { return 0 };
-    let Ok(mut child) = Command::new("sh").args(["-c", &command]).stdin(Stdio::piped()).spawn() else { return 0 };
+    // The user's command is POSIX shell syntax (Claude Code runs it with Git Bash on Windows).
+    let shell = if cfg!(windows) { agentty_bridge::process::which("sh").or_else(|| agentty_bridge::process::which("bash")) } else { None };
+    let shell = shell.map_or_else(|| "sh".into(), |p| p.into_os_string());
+    let Ok(mut child) = Command::new(shell).args(["-c", &command]).stdin(Stdio::piped()).spawn() else { return 0 };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(&input);
     }

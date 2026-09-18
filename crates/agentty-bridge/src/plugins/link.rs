@@ -145,10 +145,13 @@ mod tests {
         // A symlink that leads into a hidden folder is refused, like the folder itself.
         let secret = hidden.join("secret.md");
         std::fs::write(&secret, "# Secret").unwrap();
-        let link = dir.join("shortcut.md");
-        let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink(&secret, &link).unwrap();
-        assert!(parse(&format!("agentty://prompt?text=Continue&file={}", encode(&link))).is_err());
+        #[cfg(unix)]
+        {
+            let link = dir.join("shortcut.md");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&secret, &link).unwrap();
+            assert!(parse(&format!("agentty://prompt?text=Continue&file={}", encode(&link))).is_err());
+        }
         assert!(parse(&format!("agentty://prompt?text=Continue&file={}", encode(&secret))).is_err());
         std::fs::remove_dir_all(dir).ok();
     }

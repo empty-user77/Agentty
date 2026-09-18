@@ -38,6 +38,7 @@ pub fn cwd_of(_pid: u32) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn reads_own_cwd() {
         let expected = std::env::current_dir().unwrap().canonicalize().unwrap();
         let actual = super::cwd_of(std::process::id()).unwrap().canonicalize().unwrap();
@@ -45,12 +46,24 @@ mod tests {
     }
 }
 
+/// A terminal's controller descriptor (`-1` placeholder on Windows).
+#[cfg(unix)]
+pub type TtyFd = std::os::fd::RawFd;
+#[cfg(not(unix))]
+pub type TtyFd = i32;
+
 /// Process group currently in the foreground of a terminal (what the user is running).
 #[cfg(unix)]
-pub fn foreground_pid(tty_fd: std::os::fd::RawFd) -> Option<u32> {
+pub fn foreground_pid(tty_fd: TtyFd) -> Option<u32> {
     // SAFETY: tcgetpgrp only reads the terminal state of a valid descriptor; errors return -1.
     let pgid = unsafe { libc::tcgetpgrp(tty_fd) };
     (pgid > 0).then_some(pgid as u32)
+}
+
+/// ConPTY has no foreground process group; callers fall back to the shell's pid.
+#[cfg(not(unix))]
+pub fn foreground_pid(_tty_fd: TtyFd) -> Option<u32> {
+    None
 }
 
 /// Absolute path of a process's executable.
@@ -65,6 +78,11 @@ pub fn executable_path(pid: u32) -> Option<PathBuf> {
 #[cfg(target_os = "linux")]
 pub fn executable_path(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn executable_path(_pid: u32) -> Option<PathBuf> {
+    None
 }
 
 /// Which agent CLI (by `crate::brand` id) a process is running: its executable, or for script
@@ -113,7 +131,31 @@ pub fn group_pids(pgid: u32) -> Vec<u32> {
     pids.into_iter().filter(|p| *p > 0).map(|p| p as u32).collect()
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Linux: every process whose `/proc/<pid>/stat` names `pgid` as its group.
+#[cfg(target_os = "linux")]
+pub fn group_pids(pgid: u32) -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else { return vec![pgid] };
+    let mut pids: Vec<u32> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|stat| stat_group(&stat)) == Some(pgid))
+        .take(256)
+        .collect();
+    if pids.is_empty() {
+        pids.push(pgid);
+    }
+    pids
+}
+
+/// Process group (5th field) of a `/proc/<pid>/stat` line; the command name may contain spaces
+/// and parentheses, so fields are counted after its closing parenthesis.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn stat_group(stat: &str) -> Option<u32> {
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(2)?.parse().ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn group_pids(pgid: u32) -> Vec<u32> {
     vec![pgid]
 }
@@ -135,12 +177,19 @@ pub fn process_args(pid: u32) -> Vec<String> {
     parse_procargs(&buffer[..size.min(buffer.len())])
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn process_args(pid: u32) -> Vec<String> {
+    let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else { return Vec::new() };
+    raw.split(|b| *b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).to_string()).collect()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn process_args(_pid: u32) -> Vec<String> {
     Vec::new()
 }
 
 /// `argc` (i32), the executable path, NUL padding, then `argc` NUL-terminated arguments.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn parse_procargs(buffer: &[u8]) -> Vec<String> {
     if buffer.len() < 4 {
         return Vec::new();
@@ -156,7 +205,7 @@ pub fn parse_procargs(buffer: &[u8]) -> Vec<String> {
 }
 
 /// The agent CLI running in the foreground of a terminal, if any.
-pub fn foreground_tool(tty_fd: std::os::fd::RawFd, fallback_pid: u32) -> Option<&'static str> {
+pub fn foreground_tool(tty_fd: TtyFd, fallback_pid: u32) -> Option<&'static str> {
     let pgid = foreground_pid(tty_fd).unwrap_or(fallback_pid);
     let mut pids = group_pids(pgid);
     if !pids.contains(&pgid) {
@@ -219,7 +268,14 @@ mod agent_tests {
         raw.extend_from_slice(b"/usr/bin/node\0\0\0node\0/x/codex.js\0PATH=/bin\0");
         assert_eq!(parse_procargs(&raw), vec!["node".to_string(), "/x/codex.js".to_string()]);
         // Our own process has at least its program name.
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         assert!(!process_args(std::process::id()).is_empty());
+    }
+
+    #[test]
+    fn reads_proc_stat_groups() {
+        assert_eq!(stat_group("123 (my (odd) prog) S 1 456 456 0 -1"), Some(456));
+        assert_eq!(stat_group("garbage"), None);
     }
 
     #[test]
@@ -248,8 +304,12 @@ pub fn listening_ports(roots: &[u32]) -> std::collections::HashMap<u32, Vec<u16>
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default()
     };
+    if cfg!(windows) {
+        return result; // no ps / lsof; ports are not shown on Windows
+    }
+    let lsof = if cfg!(target_os = "macos") { "/usr/sbin/lsof" } else { "lsof" };
     let parents = parse_ps(&run("/bin/ps", &["-A", "-o", "pid=,ppid="]));
-    let listeners = parse_lsof(&run("/usr/sbin/lsof", &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]));
+    let listeners = parse_lsof(&run(lsof, &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]));
     for (pid, ports) in listeners {
         // Walk up to a pane's shell.
         let mut current = pid;
