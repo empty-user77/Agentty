@@ -2,13 +2,20 @@
 // non-interactive login flows that print a device code and wait for Enter).
 
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { stripAnsi } from './parse.mjs';
 
 /** Extra PATH entries plugins should check besides the login-shell PATH Agentty already gives them. */
 export const EXTRA_PATH = ['/opt/homebrew/bin', '/usr/local/bin'];
 
-export function pathWithExtras(env = process.env) {
+/**
+ * PATH for spawned tools. The folder of the Node.js running this plugin goes first: `npm`, `vercel`
+ * and `supabase` all start with `#!/usr/bin/env node`, and a Node.js from nvm, fnm or Volta is not
+ * on the PATH of an app started from the Dock ("env: node: No such file or directory").
+ */
+export function pathWithExtras(env = process.env, nodeDir = path.dirname(process.execPath)) {
   const parts = String(env.PATH ?? '').split(':').filter(Boolean);
+  if (nodeDir && !parts.includes(nodeDir)) parts.unshift(nodeDir);
   for (const dir of EXTRA_PATH) if (!parts.includes(dir)) parts.push(dir);
   return parts.join(':');
 }

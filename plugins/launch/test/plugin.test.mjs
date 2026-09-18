@@ -27,6 +27,7 @@ import {
   supabaseErrorKind,
 } from '../lib/parse.mjs';
 import { pickGhAsset, findGhBinary } from '../lib/tools.mjs';
+import { pathWithExtras } from '../lib/exec.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginDir = path.resolve(here, '..');
@@ -152,6 +153,14 @@ test('findGhBinary locates bin/gh under a version-named extraction folder', asyn
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('pathWithExtras puts the running Node.js first so `#!/usr/bin/env node` tools start', () => {
+  // An app started from the Dock: nvm's Node.js runs the plugin but is not on PATH.
+  const nodeDir = '/Users/me/.nvm/versions/node/v22.0.0/bin';
+  assert.equal(pathWithExtras({ PATH: '/usr/bin:/bin' }, nodeDir), `${nodeDir}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin`);
+  assert.equal(pathWithExtras({ PATH: `/usr/bin:${nodeDir}` }, nodeDir), `/usr/bin:${nodeDir}:/opt/homebrew/bin:/usr/local/bin`);
+  assert.ok(pathWithExtras({ PATH: '/usr/bin' }).startsWith(path.dirname(process.execPath)));
 });
 
 test('stripAnsi removes color and cursor codes', () => {
