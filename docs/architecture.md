@@ -41,6 +41,12 @@
   Codex pane marks it as working.
 - Hooks write `<pane id>\t<kind>\t<json>` lines to `$AGENTTY_SOCKET`; `agent_signal.rs` parses them and the
   workbench updates the pane. `Stop` and `Notification` set the pane's attention flag until the user clicks it.
+- The socket (a Unix socket, `0600`, in the user's private temp folder) only hears processes inside a pane: the
+  kernel names the process on the other end (`LOCAL_PEERPID`), Agentty follows its parents up to the shell of a
+  pane it started, and the connection may speak for that pane only — status, notifications and `agentty browser`
+  alike. Plugins, other apps and scripts outside a pane are not heard. A `tmux` or `screen` server started in a
+  pane detaches from it, so agents inside one are not heard either. The debug driver (`AGENTTY_DEBUG=1`) is the
+  one exception.
 
 ## Persistence
 

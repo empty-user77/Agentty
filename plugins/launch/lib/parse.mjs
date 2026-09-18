@@ -83,7 +83,53 @@ export function sanitizeRepoName(name) {
 }
 
 /** Lines Launch wants in `.gitignore`. Order matters: negations must follow what they negate. */
-export const REQUIRED_GITIGNORE_LINES = ['node_modules', '.env', '.env.local', '.env.*.local', '.env.*', '!.env.example', '!.env.sample', '.vercel', 'supabase/.temp', '.next', 'dist', '.DS_Store'];
+export const REQUIRED_GITIGNORE_LINES = [
+  'node_modules',
+  '.env',
+  '.env.local',
+  '.env.*.local',
+  '.env.*',
+  '!.env.example',
+  '!.env.sample',
+  '.envrc',
+  '*.pem',
+  '*.p12',
+  '*.pfx',
+  'id_rsa*',
+  'id_ed25519*',
+  '.aws/',
+  '.ssh/',
+  '.claude/settings.local.json',
+  '.vercel',
+  'supabase/.temp',
+  '.agentty-ecc',
+  '.next',
+  'dist',
+  '.DS_Store',
+];
+
+/** The owner's private notes from "Build my idea": never part of a public repository. */
+export const IDEA_NOTES_GITIGNORE_LINES = ['docs/idea/'];
+
+/**
+ * What a deploy must not upload. A site without a framework serves every uploaded file, so the
+ * owner's idea notes and attachments, agent settings and working notes would be readable at
+ * `https://<site>/docs/idea/IDEA.md`. None of these are needed to build — of `supabase/` only what
+ * no app imports (generated types there still build).
+ */
+export const REQUIRED_VERCELIGNORE_LINES = [
+  'docs/idea',
+  '.claude',
+  '.agentty-ecc',
+  'supabase/.temp',
+  'supabase/migrations',
+  'supabase/seed.sql',
+  'PLAN.md',
+  'CLAUDE.md',
+  'AGENTS.md',
+  '.env*',
+  '!.env.example',
+];
 
 /** Appends whichever of `REQUIRED_GITIGNORE_LINES` are missing, without touching existing lines. */
 export function mergeGitignore(existing, required = REQUIRED_GITIGNORE_LINES) {
@@ -105,9 +151,26 @@ export function mergeGitignore(existing, required = REQUIRED_GITIGNORE_LINES) {
 export function envFilesAtRisk(paths) {
   return (paths ?? []).filter((p) => {
     const base = String(p).split('/').pop() ?? '';
+    if (/^\.envrc$/.test(base)) return true;
     if (!/^\.env(?:\..+)?$/.test(base)) return false;
     return !/^\.env\.(?:example|sample)$/i.test(base);
   });
+}
+
+/** Key material and credential files (tracked or staged) that must not be uploaded either. */
+export function secretFilesAtRisk(paths) {
+  return (paths ?? []).filter((p) => {
+    const path = String(p);
+    const base = path.split('/').pop() ?? '';
+    return /\.(?:pem|p12|pfx)$/i.test(base) || /^id_(?:rsa|dsa|ecdsa|ed25519)$/.test(base) || /(?:^|\/)\.(?:aws|ssh)\//.test(path) || base === '.netrc';
+  });
+}
+
+/** `host/owner/repo` of a git remote URL, for showing where a push goes. `null` when it is not a URL we know. */
+export function describeRemote(url) {
+  const text = String(url ?? '').trim();
+  const match = text.match(/^(?:https?:\/\/(?:[^@/]+@)?|ssh:\/\/(?:[^@/]+@)?|[^@/\s]+@)([^/:\s]+)[/:](.+?)(?:\.git)?\/?$/);
+  return match ? { host: match[1].toLowerCase(), path: match[2], display: `${match[1].toLowerCase()}/${match[2]}` } : null;
 }
 
 /** Framework name from a parsed `package.json` (dependencies + devDependencies), or from `index.html` alone. */

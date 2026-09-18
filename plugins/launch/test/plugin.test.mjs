@@ -26,7 +26,8 @@ import {
   supabaseRegionForTimeZone,
   supabaseErrorKind,
 } from '../lib/parse.mjs';
-import { pickGhAsset, findGhBinary } from '../lib/tools.mjs';
+import { pickGhAsset, pickGhChecksums, checksumFor, findGhBinary } from '../lib/tools.mjs';
+import { REQUIRED_VERCELIGNORE_LINES, IDEA_NOTES_GITIGNORE_LINES, secretFilesAtRisk, describeRemote } from '../lib/parse.mjs';
 import { pathWithExtras } from '../lib/exec.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -161,6 +162,27 @@ test('pathWithExtras puts the running Node.js first so `#!/usr/bin/env node` too
   assert.equal(pathWithExtras({ PATH: '/usr/bin:/bin' }, nodeDir), `${nodeDir}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin`);
   assert.equal(pathWithExtras({ PATH: `/usr/bin:${nodeDir}` }, nodeDir), `/usr/bin:${nodeDir}:/opt/homebrew/bin:/usr/local/bin`);
   assert.ok(pathWithExtras({ PATH: '/usr/bin' }).startsWith(path.dirname(process.execPath)));
+});
+
+test('the gh download is checked against the checksum file of its release', () => {
+  const release = { assets: [{ name: 'gh_2.60.0_checksums.txt', browser_download_url: 'https://example.com/sums' }, { name: 'gh_2.60.0_macOS_universal.zip' }] };
+  assert.equal(pickGhChecksums(release).browser_download_url, 'https://example.com/sums');
+  assert.equal(pickGhChecksums({ assets: [] }), null);
+  const sums = `${'a'.repeat(64)}  gh_2.60.0_linux_amd64.tar.gz\n${'b'.repeat(64)}  gh_2.60.0_macOS_universal.zip\n`;
+  assert.equal(checksumFor(sums, 'gh_2.60.0_macOS_universal.zip'), 'b'.repeat(64));
+  assert.equal(checksumFor(sums, 'gh_2.60.0_windows_amd64.zip'), null);
+});
+
+test('key files stop a save, and .envrc counts as an env file', () => {
+  assert.deepEqual(secretFilesAtRisk(['src/app.ts', 'certs/server.pem', 'deploy/id_ed25519', '.aws/credentials', 'README.md']).sort(), ['.aws/credentials', 'certs/server.pem', 'deploy/id_ed25519']);
+  assert.deepEqual(envFilesAtRisk(['.envrc', 'sub/.envrc', '.env.example']).sort(), ['.envrc', 'sub/.envrc']);
+});
+
+test('describeRemote names where a push goes, for every remote URL shape', () => {
+  assert.equal(describeRemote('git@github.com:me/my-app.git').display, 'github.com/me/my-app');
+  assert.equal(describeRemote('https://github.com/me/my-app').display, 'github.com/me/my-app');
+  assert.equal(describeRemote('https://token_example@git.example.org/team/app.git').display, 'git.example.org/team/app');
+  assert.equal(describeRemote('/tmp/remotes/app.git'), null);
 });
 
 test('stripAnsi removes color and cursor codes', () => {
@@ -368,6 +390,7 @@ case "$1" in
     if [ "$2" = "add" ]; then cat >/dev/null; exit 0; fi
     ;;
   deploy)
+    echo "deploy" >> "$FAKE_REMOTES_DIR/../deploys.log"
     echo "Vercel CLI 34.0.0"
     echo "Deploying my-cool-app"
     echo "Production: https://my-cool-app.vercel.app"
@@ -467,10 +490,25 @@ test('Launch: already logged in to GitHub and Vercel, saves the project and depl
     // Wait for the panel to settle on the next step (deploy) rather than an intermediate spinner frame.
     panel = await waitForButton(host, 'deploy-start');
     assert.ok(fs.existsSync(path.join(box.remotes, 'my-cool-app.git')), 'gh repo create pushed to a local bare repo');
+    // Finished steps are green checks; the ones still ahead stay neutral.
+    const steps = {};
+    (function walk(node) {
+      if (node?.type === 'list' && node.id === 'steps') for (const item of node.items) steps[item.id] = `${item.icon} ${item.tone}`;
+      for (const child of node?.children ?? []) walk(child);
+    })(panel);
+    assert.equal(steps['gh-save'], 'circle-check success');
+    assert.equal(steps.deploy, 'circle-pause neutral');
     assert.ok(!JSON.stringify(panel).includes('fakeuser@'), 'no raw credentials leak into the panel');
 
+    // A double click on "Publish": the second event arrives while the first runs and is ignored.
+    host.send('ui/event', { element: 'deploy-start', event: 'click', context: host.context });
     host.send('ui/event', { element: 'deploy-start', event: 'click', context: host.context });
     panel = await waitForText(host, /my-cool-app\.vercel\.app/);
+    assert.equal(fs.readFileSync(path.join(box.root, 'deploys.log'), 'utf8').trim().split('\n').length, 1, 'one deploy for a double click');
+    // The owner's idea notes, agent settings and env files never go up with a deploy.
+    const vercelignore = fs.readFileSync(path.join(box.project, '.vercelignore'), 'utf8');
+    for (const line of REQUIRED_VERCELIGNORE_LINES) assert.ok(vercelignore.split('\n').includes(line), `.vercelignore has ${line}`);
+    assert.ok(!fs.readFileSync(path.join(box.project, '.gitignore'), 'utf8').includes(IDEA_NOTES_GITIGNORE_LINES[0]), 'a private repository keeps the idea notes');
     assert.match(JSON.stringify(panel), /Launched|출시 완료/);
     assert.match(JSON.stringify(panel), /https:\/\/my-cool-app\.vercel\.app/);
 

@@ -5,7 +5,18 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { run, spawnInteractive, baseEnv } from './exec.mjs';
-import { detectFramework, envFilesAtRisk, mergeGitignore, sanitizeRepoName, extractDeviceCode, extractDeviceUrl } from './parse.mjs';
+import {
+  IDEA_NOTES_GITIGNORE_LINES,
+  REQUIRED_GITIGNORE_LINES,
+  REQUIRED_VERCELIGNORE_LINES,
+  detectFramework,
+  envFilesAtRisk,
+  secretFilesAtRisk,
+  mergeGitignore,
+  sanitizeRepoName,
+  extractDeviceCode,
+  extractDeviceUrl,
+} from './parse.mjs';
 
 /** Walks up from `startDir` to the nearest `.git` or `package.json`, else returns `startDir` itself. */
 export async function findProjectRoot(startDir) {
@@ -58,17 +69,29 @@ export async function ensureGitRepo(cwd) {
   if (result.code !== 0) throw new Error(`git init failed: ${result.stderr || result.stdout}`);
 }
 
-/** Adds any missing lines from `parse.mjs`'s `REQUIRED_GITIGNORE_LINES`; leaves the rest alone. */
-export async function ensureGitignore(root) {
-  const file = path.join(root, '.gitignore');
+async function ensureIgnoreFile(file, required) {
   let existing = '';
   try {
     existing = await fs.readFile(file, 'utf8');
   } catch {
-    // No .gitignore yet.
+    // No such file yet.
   }
-  const merged = mergeGitignore(existing);
+  const merged = mergeGitignore(existing, required);
   if (merged !== existing) await fs.writeFile(file, merged);
+}
+
+/**
+ * Adds any missing lines from `parse.mjs`'s `REQUIRED_GITIGNORE_LINES`; leaves the rest alone.
+ * `keepIdeaNotesOut`: for a public repository — the owner's idea notes and attachments stay local.
+ */
+export async function ensureGitignore(root, { keepIdeaNotesOut = false } = {}) {
+  const required = keepIdeaNotesOut ? [...REQUIRED_GITIGNORE_LINES, ...IDEA_NOTES_GITIGNORE_LINES] : REQUIRED_GITIGNORE_LINES;
+  await ensureIgnoreFile(path.join(root, '.gitignore'), required);
+}
+
+/** Keeps idea notes, agent settings and env files out of every deploy (see `REQUIRED_VERCELIGNORE_LINES`). */
+export async function ensureVercelignore(root) {
+  await ensureIgnoreFile(path.join(root, '.vercelignore'), REQUIRED_VERCELIGNORE_LINES);
 }
 
 /** Every `.env*` file (besides `.env.example`/`.env.sample`) already tracked or staged, if any. */
@@ -81,7 +104,9 @@ export async function envFilesToRefuse(cwd) {
     .map((l) => l.slice(3).trim())
     .filter(Boolean);
   const paths = new Set([...tracked.stdout.split('\n'), ...staged.stdout.split('\n'), ...fromStatus].map((l) => l.trim()).filter(Boolean));
-  return envFilesAtRisk([...paths]);
+  // Key material anywhere in the tree that is already tracked: ignoring it now would not untrack it.
+  const trackedAll = await git(cwd, ['ls-files']);
+  return [...new Set([...envFilesAtRisk([...paths]), ...secretFilesAtRisk(trackedAll.stdout.split('\n').filter(Boolean))])];
 }
 
 export async function setLocalGitUserIfMissing(cwd, { name, email }) {

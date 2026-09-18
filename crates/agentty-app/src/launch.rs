@@ -209,6 +209,11 @@ impl LaunchSpec {
             }
         }
         if let Start::Prompt(prompt) = &self.start {
+            // A prompt that starts with a dash is an option to Claude Code ("unknown option") unless
+            // options are ended first.
+            if self.kind == PaneKind::Claude {
+                args.push("--".into());
+            }
             args.push(prompt.clone());
         }
         Some(args)
@@ -376,33 +381,15 @@ mod tests {
     }
 
     #[test]
-    fn idea_projects_start_claude_in_auto_mode() {
-        let dir = std::env::temp_dir().join(format!("agentty-auto-mode-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("docs/idea")).unwrap();
-        std::fs::write(dir.join("docs/idea/BUILD_GUIDE.md"), "guide").unwrap();
-        let auto = |cwd: &std::path::Path| {
-            let args = LaunchSpec::new(PaneKind::Claude, cwd.to_path_buf()).command().unwrap();
-            args.windows(2).any(|pair| pair == ["--permission-mode", "auto"])
-        };
-        crate::agents::set_claude_auto_mode(true);
-        assert!(auto(&dir));
-        // Any other folder keeps the user's own permission mode.
-        assert!(!auto(std::path::Path::new("/tmp")));
-        // A Claude Code that does not know the mode would exit on the flag.
-        crate::agents::set_claude_auto_mode(false);
-        assert!(!auto(&dir));
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
     fn claude_prompt_is_not_swallowed_by_mcp_config() {
         let spec =
             LaunchSpec::with_prompt(agentty_bridge::model::Agent::Claude, "Build my idea".into(), "Idea".into(), PathBuf::from("/tmp"));
         let args = spec.command().unwrap();
         assert_eq!(args.last().map(String::as_str), Some("Build my idea"));
-        // `--mcp-config <configs...>` would take the prompt as a second config file.
-        let before_prompt = &args[args.len() - 3];
-        assert_eq!(before_prompt, "--settings", "{args:?}");
+        // `--mcp-config <configs...>` would take the prompt as a second config file, and a prompt
+        // starting with a dash would be read as an option: `--settings <json> -- <prompt>`.
+        assert_eq!(args[args.len() - 2], "--", "{args:?}");
+        assert_eq!(args[args.len() - 4], "--settings", "{args:?}");
     }
 
     #[test]

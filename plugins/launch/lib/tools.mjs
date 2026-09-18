@@ -2,6 +2,7 @@
 // from its GitHub release, `vercel` and `supabase` are installed with npm into the plugin's own data
 // folder, so this works even on a machine with none of them and no package manager set up.
 
+import crypto from 'node:crypto';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -14,6 +15,21 @@ const GH_RELEASE_API = 'https://api.github.com/repos/cli/cli/releases/latest';
 export function pickGhAsset(release) {
   const assets = Array.isArray(release?.assets) ? release.assets : [];
   return assets.find((a) => /macOS_universal\.zip$/i.test(a?.name ?? '')) ?? null;
+}
+
+/** The release's `gh_<version>_checksums.txt` asset, or `null`. */
+export function pickGhChecksums(release) {
+  const assets = Array.isArray(release?.assets) ? release.assets : [];
+  return assets.find((a) => /_checksums\.txt$/i.test(a?.name ?? '')) ?? null;
+}
+
+/** The SHA-256 listed for `fileName` in a `sha256sum`-style checksum file, or `null`. */
+export function checksumFor(checksums, fileName) {
+  for (const line of String(checksums ?? '').split(/\r?\n/)) {
+    const match = line.trim().match(/^([a-f0-9]{64})\s+\*?(.+)$/i);
+    if (match && match[2].trim() === fileName) return match[1].toLowerCase();
+  }
+  return null;
 }
 
 /** Finds `<root>/**\/bin/gh` after extracting the release zip (the folder name carries the version). */
@@ -82,7 +98,14 @@ export async function installGh(dataDir, { log } = {}) {
   await fs.rm(extractDir, { recursive: true, force: true });
   const assetResponse = await fetch(asset.browser_download_url);
   if (!assetResponse.ok) throw new Error(`could not download the GitHub CLI (HTTP ${assetResponse.status})`);
-  await fs.writeFile(zipPath, Buffer.from(await assetResponse.arrayBuffer()));
+  const zip = Buffer.from(await assetResponse.arrayBuffer());
+  // The download has to be the file the release lists: a truncated or swapped archive is not run.
+  const sums = pickGhChecksums(release);
+  const sumsResponse = sums ? await fetch(sums.browser_download_url) : null;
+  const expected = sumsResponse?.ok ? checksumFor(await sumsResponse.text(), asset.name) : null;
+  if (!expected) throw new Error('could not verify the GitHub CLI download (no checksum in the release)');
+  if (crypto.createHash('sha256').update(zip).digest('hex') !== expected) throw new Error('the GitHub CLI download does not match its checksum');
+  await fs.writeFile(zipPath, zip);
   log?.('Installing the GitHub CLI…');
   await fs.mkdir(extractDir, { recursive: true });
   const result = await run('ditto', ['-x', '-k', zipPath, extractDir], { timeoutMs: 60_000 });

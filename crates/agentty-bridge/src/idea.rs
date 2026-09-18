@@ -94,10 +94,51 @@ pub fn unique_dir(root: &Path, name: &str) -> PathBuf {
     (2..).map(|n| root.join(format!("{name}-{n}"))).find(|p| !p.exists()).expect("a free name")
 }
 
-/// Whether `dir` was made by "Build my idea": it carries the build guide. Agentty starts Claude
-/// Code in auto mode there, also for tabs opened and sessions resumed later.
+/// Whether Agentty itself made `dir` with "Build my idea". Agentty starts Claude Code in auto mode
+/// there, also for tabs opened and sessions resumed later — so the answer must not be something a
+/// folder can claim for itself: a cloned repository that ships `docs/idea/BUILD_GUIDE.md` is not an
+/// idea project. Only folders recorded in this computer's registry by [`register_project`] are.
 pub fn is_idea_project(dir: &Path) -> bool {
-    dir.join("docs").join("idea").join("BUILD_GUIDE.md").is_file()
+    is_registered(&registry_path(), dir)
+}
+
+/// Records a project [`create_project`] just made, so later sessions in it are recognized.
+pub fn register_project(dir: &Path) -> Result<()> {
+    register(&registry_path(), dir)
+}
+
+fn registry_path() -> PathBuf {
+    fsutil::data_dir().join("idea-projects.json")
+}
+
+const REGISTRY_LIMIT: usize = 500;
+
+fn registered(registry: &Path) -> Vec<PathBuf> {
+    std::fs::read(registry).ok().and_then(|bytes| serde_json::from_slice::<Vec<PathBuf>>(&bytes).ok()).unwrap_or_default()
+}
+
+fn is_registered(registry: &Path, dir: &Path) -> bool {
+    // The marker still has to be there: a folder emptied and reused for something else is not one.
+    let Ok(dir) = dir.canonicalize() else { return false };
+    dir.join("docs").join("idea").join("BUILD_GUIDE.md").is_file() && registered(registry).contains(&dir)
+}
+
+fn register(registry: &Path, dir: &Path) -> Result<()> {
+    let dir = dir.canonicalize().with_context(|| format!("no such folder: {}", dir.display()))?;
+    let mut projects = registered(registry);
+    projects.retain(|p| p != &dir);
+    projects.push(dir);
+    let start = projects.len().saturating_sub(REGISTRY_LIMIT);
+    if let Some(parent) = registry.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(registry, serde_json::to_vec_pretty(&projects[start..])?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(registry, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 /// Creates the project folder and returns the prompt that starts the build.
@@ -114,10 +155,10 @@ pub fn create_project(root: &Path, input: &IdeaInput, language: &str, stamp: &st
 
     let (copied, skipped) = copy_attachments(&input.attachments, &idea_dir.join("attachments"))?;
     std::fs::write(idea_dir.join("IDEA.md"), idea_markdown(&title, &messages, &copied))?;
-    std::fs::write(idea_dir.join("BUILD_GUIDE.md"), BUILD_GUIDE)?;
+    std::fs::write(idea_dir.join("BUILD_GUIDE.md"), build_guide())?;
     let claude_dir = dir.join(".claude");
     std::fs::create_dir_all(&claude_dir)?;
-    std::fs::write(claude_dir.join("settings.json"), CLAUDE_SETTINGS)?;
+    std::fs::write(claude_dir.join("settings.json"), claude_settings())?;
 
     Ok(IdeaProject { prompt: build_prompt(language, &title), dir, title, skipped })
 }
@@ -192,8 +233,21 @@ const PROMPT: &str = r#"Build a working demo of my idea "{title}". I'm not a dev
 
 Talk to me in {language}."#;
 
+/// The ECC commit idea projects install their harness from. What an agent in auto mode reads as
+/// instructions must not change under a user without a release of Agentty: review the new commit's
+/// `agents/`, `skills/` and `rules/`, then move this forward.
+pub const ECC_COMMIT: &str = "dd6ee538aee0f548d4a6b520118f875431fd749e";
+
+pub fn build_guide() -> String {
+    BUILD_GUIDE.replace("{ecc_commit}", ECC_COMMIT)
+}
+
+pub fn claude_settings() -> String {
+    CLAUDE_SETTINGS.replace("{ecc_commit}", ECC_COMMIT)
+}
+
 /// How the agent should work. Kept in the project so later sessions can re-read it.
-pub const BUILD_GUIDE: &str = r#"# Build guide (Agentty "Build my idea")
+const BUILD_GUIDE: &str = r#"# Build guide (Agentty "Build my idea")
 
 The owner of this project is not a developer. Your job: turn docs/idea/IDEA.md (and the attachments)
 into a working demo they can see and click, ready to publish on Vercel.
@@ -203,9 +257,13 @@ The right agents and skills raise the quality of everything after this, so set t
 planning. They come from ECC (https://github.com/affaan-m/ECC, MIT), a library of agent, skill and
 rule definitions. Agentty does not ship it: download it into this project now, take what this
 product needs, and remove the download.
-- Read the idea first. Then fetch only ECC's definitions, without history or assets:
-  `git clone --depth 1 --filter=blob:none --sparse https://github.com/affaan-m/ECC.git .agentty-ecc`
+- Read the idea first. Then fetch ECC's definitions at the commit Agentty reviewed — exactly these
+  commands, no other branch or version — without history or assets:
+  `git init -q .agentty-ecc`
+  `git -C .agentty-ecc remote add origin https://github.com/affaan-m/ECC.git`
   `git -C .agentty-ecc sparse-checkout set agents skills rules`
+  `git -C .agentty-ecc fetch -q --depth 1 --filter=blob:none origin {ecc_commit}`
+  `git -C .agentty-ecc checkout -q FETCH_HEAD`
 - Choose by file name and frontmatter description (do not read every file) what this product
   really needs: planning and architecture, the stack you will use (e.g. Next.js, React, Tailwind,
   Supabase/Postgres), code review, security review, build-error fixing, end-to-end testing, UI
@@ -216,9 +274,9 @@ product needs, and remove the download.
 - Markdown only. Many ECC skills also ship scripts (`.sh`, `.py`, `.js`): leave those out and
   prefer skills that work without them. Never run ECC's installer or scripts, never copy hook
   definitions, MCP configs, settings or anything executable, and never install into the home folder.
-- Note the version (`git -C .agentty-ecc rev-parse --short HEAD`), then `rm -rf .agentty-ecc`.
-- Write docs/idea/HARNESS.md: the ECC commit, and each agent, skill and rule you installed with one
-  line on why. Point to it from CLAUDE.md so later sessions use the harness.
+- When you are done, `rm -rf .agentty-ecc`.
+- Write docs/idea/HARNESS.md: the ECC commit ({ecc_commit}), and each agent, skill and rule you
+  installed with one line on why. Point to it from CLAUDE.md so later sessions use the harness.
 - If the download fails (offline, git missing), go on without it and say so in PLAN.md.
 From here on, work through the harness: delegate to these agents and apply these skills.
 
@@ -272,12 +330,15 @@ From here on, work through the harness: delegate to these agents and apply these
 "#;
 
 /// Lets Claude Code edit files and run the usual build commands in this new project without a
-/// prompt for each one. Deleting files, network tools other than npm and git pushes still ask.
+/// prompt for each one. Deleting files, network tools other than npm and git pushes still ask, and
+/// so do `cat`, `cp` and `mv`: they reach any file on the computer, and together with an outbound
+/// channel that is how injected instructions take a private key out (the agent has Read, Write and
+/// Edit for files inside the project).
 ///
 /// This is the fallback: Agentty starts Claude Code with `--permission-mode auto` in idea projects,
 /// which a project's own settings cannot turn on (`"defaultMode": "auto"` here is ignored), and
 /// these rules apply where auto mode is not available.
-pub const CLAUDE_SETTINGS: &str = r#"{
+const CLAUDE_SETTINGS: &str = r#"{
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
@@ -286,13 +347,12 @@ pub const CLAUDE_SETTINGS: &str = r#"{
       "Bash(node:*)",
       "Bash(mkdir:*)",
       "Bash(ls:*)",
-      "Bash(cat:*)",
-      "Bash(mv:*)",
-      "Bash(cp:*)",
       "Bash(lsof -i:*)",
-      "Bash(git clone --depth 1 --filter=blob:none --sparse https://github.com/affaan-m/ECC.git .agentty-ecc)",
+      "Bash(git init -q .agentty-ecc)",
+      "Bash(git -C .agentty-ecc remote add origin https://github.com/affaan-m/ECC.git)",
       "Bash(git -C .agentty-ecc sparse-checkout set agents skills rules)",
-      "Bash(git -C .agentty-ecc rev-parse --short HEAD)",
+      "Bash(git -C .agentty-ecc fetch -q --depth 1 --filter=blob:none origin {ecc_commit})",
+      "Bash(git -C .agentty-ecc checkout -q FETCH_HEAD)",
       "Bash(rm -rf .agentty-ecc)",
       "Bash(git init:*)",
       "Bash(git status:*)",
@@ -353,11 +413,31 @@ mod tests {
         assert!(idea.contains("attachments/plan.md") && idea.contains("attachments/plan-2.md"));
         assert!(project.dir.join("docs/idea/attachments/plan-2.md").exists());
         assert!(project.dir.join("docs/idea/BUILD_GUIDE.md").exists());
-        assert!(is_idea_project(&project.dir));
-        assert!(!is_idea_project(&root));
+        // Auto mode follows the registry on this computer, not what a folder contains: a cloned
+        // repository that ships the same guide is not an idea project.
+        let registry = root.join("idea-projects.json");
+        assert!(!is_registered(&registry, &project.dir));
+        register(&registry, &project.dir).unwrap();
+        assert!(is_registered(&registry, &project.dir));
+        let cloned = root.join("cloned-from-the-internet");
+        std::fs::create_dir_all(cloned.join("docs/idea")).unwrap();
+        std::fs::write(cloned.join("docs/idea/BUILD_GUIDE.md"), build_guide()).unwrap();
+        assert!(!is_registered(&registry, &cloned));
+        // A registered folder that no longer carries the guide is not one either.
+        std::fs::remove_file(project.dir.join("docs/idea/BUILD_GUIDE.md")).unwrap();
+        assert!(!is_registered(&registry, &project.dir));
         let settings: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(project.dir.join(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(settings["permissions"]["defaultMode"], "acceptEdits");
+        // The harness comes from the reviewed ECC commit, in the guide and in the allow list alike,
+        // and nothing reaches any file on the computer without asking.
+        let allow: Vec<&str> = settings["permissions"]["allow"].as_array().unwrap().iter().filter_map(|rule| rule.as_str()).collect();
+        let fetch = format!("Bash(git -C .agentty-ecc fetch -q --depth 1 --filter=blob:none origin {ECC_COMMIT})");
+        assert!(allow.contains(&fetch.as_str()), "{allow:?}");
+        assert!(build_guide().contains(ECC_COMMIT) && !build_guide().contains("{ecc_commit}"));
+        assert!(!allow
+            .iter()
+            .any(|rule| ["Bash(cat:", "Bash(cp:", "Bash(mv:", "Bash(curl:", "Bash(rm:"].iter().any(|broad| rule.starts_with(broad))));
         assert!(project.prompt.contains("Recipe sharing site") && project.prompt.contains("Talk to me in Korean"));
         // A second project with the same title gets its own folder.
         let again = create_project(&root, &input, "en", "20260918-1201").unwrap();

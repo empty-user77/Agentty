@@ -42,6 +42,14 @@
 | E | 중간 · 추적 | `redact_args` / `redact_url`이 `-H "Cookie: session=…"` 같은 결합 문자열은 가리지 못함(확장 화면의 MCP 설정 표시) | 값 안의 `name=value` · `Name: value` 형태도 마스킹, 테스트 추가 |
 | F | 낮음 | `create_project`의 이름 선점 경합, 에이전트 실행 실패 시 프로젝트 폴더가 남음 · npm `@latest` 미고정 · PATH에 먼저 있는 `gh` / `vercel` 우선 | 필요 시 개별 처리 |
 
+### 같은 날 후속 — A · C · E 해결
+
+| # | 조치 |
+|---|---|
+| A | **소켓은 Agentty가 띄운 창 안의 프로세스만 들음.** 연결이 들어오면 커널이 기록한 상대 PID(`LOCAL_PEERPID`, 위조 불가)와 uid를 읽고, 부모 체인(`proc_pidinfo`)을 따라 올라가 **창의 셸**(`register_pane`)에 닿는 경우에만 받음. 그 창의 id로만 말할 수 있음: 다른 창 id의 신호는 버리고, 브라우저 요청의 창은 연결이 속한 창으로 강제. 플러그인 · 다른 앱 · 창 밖 스크립트는 상태 위조 · 알림 · 브라우저 조작 불가. 연결마다 스레드를 써서 브라우저 요청 대기 중에도 다른 창 신호가 밀리지 않음. Agentty 자신의 짧은 클라이언트(`agentty notify`, statusline)는 서버가 읽을 때까지 연결 유지(`linger`). 디버그 드라이버는 기존대로 `AGENTTY_DEBUG=1`일 때만 예외. 테스트: 실제 훅 모양(`sh` → `nc` 손자 프로세스)이 등록된 셸에서는 수신, 등록 안 된 셸에서는 미수신 · 다른 창 id 폐기 · 등록 해제 후 미수신. ⚠️ 제약: 창 안에서 `tmux` / `screen`을 띄우면 그 서버가 launchd 밑으로 옮겨져 조상 관계가 끊김 → 그 안의 에이전트 신호와 `agentty browser`는 받지 않음 |
+| C | ECC를 오늘 받은 커밋 `dd6ee538aee0f548d4a6b520118f875431fd749e`(2026-09-17)로 고정: `idea::ECC_COMMIT`, 가이드의 명령(`git init` → `remote add` → `sparse-checkout set` → `fetch --depth 1 … <commit>` → `checkout FETCH_HEAD`)과 허용 목록이 같은 값 사용. 실제 저장소로 검증(2초, HEAD 일치). 갱신 절차: 새 커밋의 `agents/` · `skills/` · `rules/`를 검토한 뒤 상수 변경 |
+| E | 마스킹을 **이름 기준 + 값 기준**으로: 인자 안 어디든 알려진 접두어(`figd_`, `ghp_`, `sk-`, `sbp_`…) · UUID · 긴 영숫자 열을 가리고, `Cookie` / `session` / `signature` / `jwt` 등 이름 추가(`PAT` · `PWD`는 이름의 한 마디일 때만 — `--path`는 그대로), `Bearer` / `Basic` 뒤의 값, JSON 인자(`"apiKey":"…"`), URL의 사용자 · 비밀번호 · 토큰 같은 경로 조각 · 쿼리 값 · 프래그먼트. 이전에는 `FIGMA_PAT=figd_…` 같은 인자가 그대로 보였음(이름에 key / token 없음). 가린 URL은 더 이상 `%E2%80%A2`로 인코딩되지 않음. 테스트 12개 사례 |
+
 ## 확인했고 문제없던 것
 
 - `agentty://` 링크: 프롬프트는 항상 확인 대화상자 · 자동 전송 없음, 링크로 플러그인 자동 설치 불가, 링크를 받은 플러그인은 이후 터미널 전송 금지(link guard)

@@ -417,7 +417,7 @@ impl Workbench {
                                 this.send_plugin_event(&owner, event, cx);
                             }))
                             .when_some(item.icon.as_deref(), |d, g| {
-                                d.child(icon(icon_named(Some(g)), IconSize::INLINE, hex(Chrome::MUTED)))
+                                d.child(icon(icon_named(Some(g)), IconSize::INLINE, hex(tone_color(item.tone))))
                             })
                             .child(
                                 div()

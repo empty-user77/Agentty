@@ -70,7 +70,13 @@ impl Workbench {
                 let _ = this.update(cx, |this, cx| {
                     plugins::reload(cx);
                     let project = match project {
-                        Ok(project) => project,
+                        Ok(project) => {
+                            // Only folders recorded here start Claude Code in auto mode later.
+                            if let Err(err) = agentty_bridge::idea::register_project(&project.dir) {
+                                eprintln!("agentty: could not record the idea project: {err:#}");
+                            }
+                            project
+                        }
                         Err(err) => {
                             if let Some(idea) = &this.idea {
                                 idea.update(cx, |v, cx| v.show_error(format!("{err:#}"), cx));

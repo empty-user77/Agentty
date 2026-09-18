@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { run, spawnInteractive, baseEnv, tailLines } from './exec.mjs';
+import { ensureVercelignore } from './github.mjs';
 import { LOCAL_ONLY_KEYS, extractDeviceCode, extractDeviceUrl, isLocalOnlyValue, parseDeployUrl, parseEnvFile, parseInspectAlias, stripAnsi } from './parse.mjs';
 
 function vercelEnv(extra = {}) {
@@ -109,6 +110,7 @@ export async function addEnvVar(vercelBin, cwd, key, value) {
  * Resolves `{ ok, url, output }`.
  */
 export async function deployProduction(vercelBin, cwd, { onLine } = {}) {
+  await ensureVercelignore(cwd);
   const proc = spawnInteractive(vercelBin, ['deploy', '--prod', '--yes'], {
     cwd,
     env: vercelEnv(),

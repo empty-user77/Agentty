@@ -8,7 +8,7 @@ import { existsSync, statSync } from 'node:fs';
 import { createPlugin, ui } from './agentty-plugin.mjs';
 import { run, tailLines } from './lib/exec.mjs';
 import { ensureGh, ensureSupabase, ensureVercel, findGh, findVercel } from './lib/tools.mjs';
-import { sanitizeRepoName, supabaseRegionForTimeZone } from './lib/parse.mjs';
+import { describeRemote, sanitizeRepoName, supabaseRegionForTimeZone } from './lib/parse.mjs';
 import {
   SupabaseError,
   createSupabaseProject,
@@ -30,6 +30,7 @@ import {
   ghLogin,
   ensureGitRepo,
   ensureGitignore,
+  ensureVercelignore,
   envFilesToRefuse,
   setLocalGitUserIfMissing,
   commitAll,
@@ -77,6 +78,9 @@ const STRINGS = {
     openVercel: 'Open Vercel',
     githubSaveBody: 'This saves your project as a private GitHub repository (you can make it public below).',
     publicRepo: 'Make the repository public',
+    publicRepoHint: 'Your idea notes (docs/idea) stay on this computer when the repository is public.',
+    existingRemoteBody: 'This project is already connected to {remote}. Launch will save your changes there.',
+    existingRemoteButton: 'Save to this repository',
     githubSaveButton: 'Save to GitHub',
     savingToGithub: 'Saving to GitHub…',
     envGuardError: 'Refusing to save: {files} would be uploaded with real values in it. Move it out of the project or add it to .gitignore, then try again.',
@@ -185,6 +189,9 @@ const STRINGS = {
     openVercel: 'Vercel 열기',
     githubSaveBody: '프로젝트를 비공개 GitHub 저장소로 저장합니다 (아래에서 공개로 바꿀 수 있어요).',
     publicRepo: '저장소를 공개로 만들기',
+    publicRepoHint: '저장소를 공개로 만들면 아이디어 노트(docs/idea)는 이 컴퓨터에만 남습니다.',
+    existingRemoteBody: '이 프로젝트는 이미 {remote} 에 연결되어 있습니다. Launch는 변경 사항을 그곳에 저장합니다.',
+    existingRemoteButton: '이 저장소에 저장',
     githubSaveButton: 'GitHub에 저장',
     savingToGithub: 'GitHub에 저장 중…',
     envGuardError: '저장을 중단했습니다: {files} 에 실제 값이 들어 있어 업로드될 뻔했습니다. 프로젝트 밖으로 옮기거나 .gitignore에 추가한 뒤 다시 시도해 주세요.',
@@ -275,6 +282,7 @@ const STRINGS = {
     codeCopied: 'コピーしました',
     openGithub: 'GitHub を開く',
     publicRepo: 'リポジトリを公開にする',
+    existingRemoteButton: 'このリポジトリに保存',
     githubSaveButton: 'GitHub に保存',
     vercelLoginButton: 'Vercel にログイン',
     vercelLoginTerminal: 'ターミナルでログイン',
@@ -323,6 +331,7 @@ const STRINGS = {
     codeCopied: '已复制',
     openGithub: '打开 GitHub',
     publicRepo: '设为公开仓库',
+    existingRemoteButton: '保存到此仓库',
     githubSaveButton: '保存到 GitHub',
     vercelLoginButton: '登录 Vercel',
     vercelLoginTerminal: '在终端登录',
@@ -424,6 +433,7 @@ const state = {
   deployLog: [],
   launched: null, // { url, time }
   saved: null,
+  existingRemote: null, // an `origin` Launch has not saved to yet: shown and confirmed before the first push
   gitConnected: null,
   needsRedeploy: false,
   sb: freshSupabaseState(),
@@ -439,6 +449,8 @@ function dataDir() {
 
 /** `retry` is what "Try again" runs — the step itself unless the caller wraps it in more. */
 async function runStep(step, label, command, fn, retry) {
+  // Events arrive while a step is still running: a double click must not save, deploy or install twice.
+  if (state.running) return;
   state.running = true;
   state.busyLabel = label;
   state.progressLines = [];
@@ -528,7 +540,8 @@ async function resume() {
     return render();
   }
   const origin = await hasOrigin(state.root);
-  if (!origin) {
+  state.existingRemote = origin && state.saved?.confirmedOrigin !== origin ? origin : null;
+  if (!origin || state.existingRemote) {
     state.step = 'gh-save';
     return render();
   }
@@ -596,7 +609,10 @@ function startGithubLogin() {
 
 async function doGithubSave() {
   await ensureGitRepo(state.root);
-  await ensureGitignore(state.root);
+  const existing = await hasOrigin(state.root);
+  // A public repository never gets the owner's idea notes; every save keeps them out of deploys.
+  await ensureGitignore(state.root, { keepIdeaNotesOut: !existing && state.publicRepo });
+  await ensureVercelignore(state.root);
   const risky = await envFilesToRefuse(state.root);
   if (risky.length > 0) throw new Error(tr('envGuardError', { files: risky.join(', ') }));
   const identity = state.gh.username ? await ghUserIdentity(state.ghBin, state.root) : null;
@@ -613,7 +629,9 @@ async function doGithubSave() {
     await pushOrigin(state.root);
   }
   state.repoUrl = await repoUrl(state.ghBin, state.root);
-  await saveProject(dataDir(), state.root, { repoUrl: state.repoUrl });
+  // The remote the user saw and saved to; a different one later is shown and confirmed again.
+  state.saved = await saveProject(dataDir(), state.root, { repoUrl: state.repoUrl, confirmedOrigin: await hasOrigin(state.root) });
+  state.existingRemote = null;
 }
 
 function startGithubSave() {
@@ -927,6 +945,7 @@ async function askAgentToFix() {
 // -- rendering --------------------------------------------------------------------------------
 
 const STEP_ICON = { waiting: 'circle-pause', running: 'loader-circle', done: 'circle-check', failed: 'circle-x' };
+const STEP_TONE = { waiting: 'neutral', running: 'info', done: 'success', failed: 'error' };
 
 function statusOf(id) {
   if (state.step === 'no-project' || state.step === 'no-pane' || state.step === null) return 'waiting';
@@ -952,7 +971,7 @@ function stepsChecklist() {
     { id: 'env', label: tr('stepEnv') },
     { id: 'deploy', label: tr('stepDeploy') },
   ].filter(Boolean);
-  const items = rows.map((r) => ({ id: r.id, title: r.label, icon: STEP_ICON[statusOf(r.id)] }));
+  const items = rows.map((r) => ({ id: r.id, title: r.label, icon: STEP_ICON[statusOf(r.id)], tone: STEP_TONE[statusOf(r.id)] }));
   return ui.list('steps', items);
 }
 
@@ -1048,6 +1067,7 @@ function supabaseBody(failed) {
     case 'migrate':
       return ui.column([
         ui.text(tr('sbMigrateBody', { count: pendingMigrations().length }), 'muted'),
+        ui.text(pendingMigrations().join('\n'), 'code'),
         !failed && ui.row([ui.button('sb-migrate', tr('sbMigrate'), { icon: 'database', variant: 'primary' }), ui.button('sb-migrate-skip', tr('sbSkip'), { icon: 'x' })], { gap: 'small', wrap: true }),
         errorBlock(),
       ]);
@@ -1099,10 +1119,20 @@ function body() {
         errorBlock(),
       ]);
     case 'gh-save':
+      if (state.existingRemote) {
+        const remote = describeRemote(state.existingRemote)?.display ?? state.existingRemote;
+        return ui.column([
+          state.gh.username ? ui.text(tr('ghLoggedInAs', { username: state.gh.username }), 'muted') : null,
+          ui.text(tr('existingRemoteBody', { remote }), 'muted'),
+          state.running ? ui.spinner(tr('savingToGithub')) : !failed && ui.button('gh-save', tr('existingRemoteButton'), { icon: 'git-branch', variant: 'primary' }),
+          errorBlock(),
+        ]);
+      }
       return ui.column([
         state.gh.username ? ui.text(tr('ghLoggedInAs', { username: state.gh.username }), 'muted') : null,
         ui.text(tr('githubSaveBody'), 'muted'),
         ui.toggle('repo-public-toggle', tr('publicRepo'), state.publicRepo),
+        state.publicRepo ? ui.text(tr('publicRepoHint'), 'small') : null,
         state.running ? ui.spinner(tr('savingToGithub')) : !failed && ui.button('gh-save', tr('githubSaveButton'), { icon: 'git-branch', variant: 'primary' }),
         errorBlock(),
       ]);
@@ -1237,6 +1267,7 @@ plugin
   })
   .onEvent('repo-public-toggle', (event) => {
     state.publicRepo = Boolean(event.value);
+    return render();
   })
   .onEvent('gh-save', startGithubSave)
   .onEvent('vercel-login-start', startVercelLogin)
@@ -1285,7 +1316,7 @@ plugin
     const match = /^env:(.+)$/.exec(event.element ?? '');
     if (match) state.envSelection[match[1]] = Boolean(event.value);
   })
-  .command('launch.open', ({ context, args }) => openForContext(context, typeof args?.path === 'string' ? args.path : undefined))
+  .command('launch.open', ({ context, args }) => (typeof args?.path === 'string' ? openValidAbsoluteDir(args.path, context) : openForContext(context)))
   .command('launch.redeploy', async ({ context }) => {
     await openForContext(context);
     if (state.step === 'launched') await startUpdateSite();

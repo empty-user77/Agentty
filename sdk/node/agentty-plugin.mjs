@@ -25,7 +25,7 @@ export const ui = {
   /** variant: primary | secondary | ghost | danger */
   button: (id, label, { icon, variant = 'secondary', disabled = false } = {}) => ({ type: 'button', id, label, icon, variant, disabled }),
   input: (id, { placeholder = '', value = '' } = {}) => ({ type: 'input', id, placeholder, value }),
-  /** items: [{ id, title, subtitle?, detail?, icon?, actions?: [{ id, label?, icon?, tooltip? }] }] */
+  /** items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }] — tone colors the icon */
   list: (id, items, { empty } = {}) => ({ type: 'list', id, items, empty }),
   /** options: [{ value, label }] */
   choice: (id, options, value = '') => ({ type: 'choice', id, options, value }),

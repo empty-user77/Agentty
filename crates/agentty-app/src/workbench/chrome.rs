@@ -1657,7 +1657,7 @@ impl Workbench {
     /// what to start, what ran recently, and what else Agentty does.
     pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let starting = self.new_workspace.as_ref().map(|(input, _)| input.clone());
-        let card = |id: SharedString, logo: &'static str, label: String, body: String, choice: LaunchChoice, cx: &mut Context<Self>| {
+        let tile = |id: SharedString, logo: &'static str, label: String, body: String| {
             div()
                 .id(id)
                 .flex_1()
@@ -1672,9 +1672,6 @@ impl Workbench {
                 .border_color(hex(Chrome::BORDER))
                 .bg(hex(Chrome::OVERLAY))
                 .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(Chrome::ACCENT, 0.7)))
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.request_launch(choice.clone(), LaunchTarget::NewWorkspace, window, cx)
-                }))
                 .child(crate::brand::tile(logo, 36.))
                 .child(
                     div()
@@ -1685,16 +1682,23 @@ impl Workbench {
                         .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(body)),
                 )
         };
+        let card = |id: SharedString, logo: &'static str, label: String, body: String, choice: LaunchChoice, cx: &mut Context<Self>| {
+            tile(id, logo, label, body).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.request_launch(choice.clone(), LaunchTarget::NewWorkspace, window, cx)
+            }))
+        };
         // Claude Code and Codex are what Agentty is for: they are always offered, and picking one
-        // that isn't installed explains how to get it. Other CLIs only show up once they are there.
+        // that isn't installed explains how to get it — and only that: click listeners add up, so
+        // this card must not carry the launch listener as well. Other CLIs only show up once they
+        // are there.
         let missing = |id: &'static str, name: &'static str, url: &'static str, cx: &mut Context<Self>| {
             let not_installed = t(cx, "welcome.not_installed").to_string();
-            card(SharedString::from(format!("welcome-{id}")), id, name.to_string(), not_installed, PaneKind::Shell.into(), cx).on_click(
-                cx.listener(move |this, _: &ClickEvent, _, cx| {
+            tile(SharedString::from(format!("welcome-{id}")), id, name.to_string(), not_installed).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
                     this.install_hint = Some((id, name, url));
                     cx.notify();
-                }),
-            )
+                },
+            ))
         };
         let mut cards = div().w_full().flex().flex_wrap().gap_3();
         let terminal_body = t(cx, "welcome.terminal_body").to_string();

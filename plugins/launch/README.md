@@ -13,12 +13,15 @@ the web**), or `agentty://plugin/launch/open?path=%2FUsers%2Fme%2Fmy-app`.
 1. **Project check** — looks at the focused pane's folder (walking up to the nearest `package.json`
    or `.git`) and names the framework (Next.js, Vite, Astro, a static site, …).
 2. **Tools** — needs the GitHub CLI (`gh`) and the Vercel CLI. If neither is already on your `PATH`,
-   Launch downloads/installs both into its own data folder — no Homebrew, nothing system-wide.
+   Launch downloads/installs both into its own data folder — no Homebrew, nothing system-wide. The
+   `gh` download is checked against the SHA-256 in its release's checksum file.
 3. **GitHub login** — runs `gh auth login --web` for you; the one-time code is shown big, copied to
    the clipboard, and the browser opens on its own.
-4. **Save to GitHub** — commits everything (adding sensible lines to `.gitignore` first) and either
-   creates a new private repository (public is a toggle) or pushes to the existing one. Refuses to
-   save if a real `.env` file would be uploaded.
+4. **Save to GitHub** — commits everything (adding sensible lines to `.gitignore` first: env files,
+   `.envrc`, key files, local tool state) and creates a new private repository. Public is a toggle,
+   and then the owner's idea notes (`docs/idea/`) stay on the computer. A project that already has a
+   remote shows where it points and asks once before anything is pushed there. Refuses to save if a
+   real env file or key file (`.pem`, `.p12`, `id_rsa`, `.aws/`…) is tracked or staged.
 5. **Vercel login** — same idea as GitHub. If Vercel's login can't be driven without a browser
    window, Launch opens a terminal with the login command typed in and lets you finish there.
 6. **Database** — only for projects that use Supabase (the `@supabase/*` client, a `supabase/`
@@ -27,8 +30,10 @@ the web**), or `agentty://plugin/launch/open?path=%2FUsers%2Fme%2Fmy-app`.
 7. **Environment variables** — if `.env`/`.env.local`/`.env.production` exist, their *names* (never
    values) are listed with a toggle to add each one to the live site. Values that only make sense
    on your computer (localhost addresses, the database password) start switched off.
-8. **Publish** — `vercel deploy --prod --yes`, with a small live log, then best-effort connects the
-   GitHub repo to Vercel so future pushes deploy automatically.
+8. **Publish** — writes `.vercelignore` first (idea notes, `.claude/`, migrations, working notes and
+   env files are never uploaded: a site without a framework serves every file it is given), then
+   `vercel deploy --prod --yes`, with a small live log, then best-effort connects the GitHub repo to
+   Vercel so future pushes deploy automatically.
 9. **Launched!** — the public URL, with buttons to open it, copy the link, update the site, or open
    the GitHub repo. Remembered per project, so reopening Launch goes straight back here.
 

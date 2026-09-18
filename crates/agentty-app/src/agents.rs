@@ -86,17 +86,34 @@ impl Installed {
 }
 
 /// Whether the installed Claude Code accepts `--permission-mode auto`; an older one exits on it.
-/// Known after [`detect`] ran, and read where the command line is built.
+/// Read where the command line is built. Panes restored at startup spawn before the first
+/// [`detect`] has answered, so the last answer is kept in the data folder until then.
 static CLAUDE_AUTO_MODE: AtomicBool = AtomicBool::new(false);
+static DETECTED: AtomicBool = AtomicBool::new(false);
 const CLAUDE_AUTO_MODE_LINE: &str = "feature:claude-auto-mode";
 
-pub fn claude_auto_mode() -> bool {
-    CLAUDE_AUTO_MODE.load(Ordering::Relaxed)
+fn auto_mode_marker() -> std::path::PathBuf {
+    agentty_bridge::fsutil::data_dir().join("claude-auto-mode")
 }
 
-#[cfg(test)]
-pub fn set_claude_auto_mode(supported: bool) {
+pub fn claude_auto_mode() -> bool {
+    if DETECTED.load(Ordering::Relaxed) {
+        CLAUDE_AUTO_MODE.load(Ordering::Relaxed)
+    } else {
+        auto_mode_marker().exists()
+    }
+}
+
+fn remember_auto_mode(supported: bool) {
     CLAUDE_AUTO_MODE.store(supported, Ordering::Relaxed);
+    DETECTED.store(true, Ordering::Relaxed);
+    let marker = auto_mode_marker();
+    if supported {
+        let _ = std::fs::create_dir_all(agentty_bridge::fsutil::data_dir());
+        let _ = std::fs::write(marker, "");
+    } else {
+        let _ = std::fs::remove_file(marker);
+    }
 }
 
 fn probe_script() -> String {
@@ -197,7 +214,7 @@ pub fn detect() -> Installed {
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let (binaries, ollama_models, versions) = parse_probe(&output);
-    CLAUDE_AUTO_MODE.store(output.lines().any(|line| line.trim() == CLAUDE_AUTO_MODE_LINE), Ordering::Relaxed);
+    remember_auto_mode(output.lines().any(|line| line.trim() == CLAUDE_AUTO_MODE_LINE));
     let codex_models = if binaries.contains("codex") { codex_models() } else { Vec::new() };
     let claude_models = if binaries.contains("claude") { claude_models() } else { Vec::new() };
     Installed { binaries, ollama_models, codex_models, claude_models, versions }
