@@ -11,6 +11,7 @@ pub mod fsutil;
 pub mod gemini;
 pub mod git;
 pub mod handoff;
+pub mod harness;
 pub mod http;
 pub mod kimi;
 pub mod limits;

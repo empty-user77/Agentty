@@ -148,6 +148,29 @@ pub fn discover(agent: Agent, project: Option<&Path>) -> Vec<Extension> {
     items
 }
 
+/// Only what a project itself defines (no user, plugin or system items): cheap enough to run on
+/// every `cd`.
+pub fn project_only(agent: Agent, project: &Path) -> Vec<Extension> {
+    let mut items = match agent {
+        Agent::Claude => {
+            let root = project.join(".claude");
+            let mut items = skills_in(Agent::Claude, &root.join("skills"), Scope::Project, |n| format!("/{n}"));
+            items.extend(claude_agents(&root.join("agents"), Scope::Project, None));
+            items.extend(claude_commands(&root.join("commands"), Scope::Project, None));
+            items
+        }
+        Agent::Codex => {
+            let invoke = |n: &str| format!("${n}");
+            let mut items = skills_in(Agent::Codex, &project.join(".agents").join("skills"), Scope::Project, invoke);
+            items.extend(skills_in(Agent::Codex, &project.join(".codex").join("skills"), Scope::Project, invoke));
+            items
+        }
+        _ => Vec::new(),
+    };
+    items.sort_by_key(|a| (a.kind as u8, a.name.to_lowercase()));
+    items
+}
+
 fn scope_rank(scope: &Scope) -> u8 {
     match scope {
         Scope::Project => 0,

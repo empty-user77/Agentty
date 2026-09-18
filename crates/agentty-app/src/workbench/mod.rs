@@ -11,6 +11,7 @@ mod drop_split;
 mod find;
 pub mod flow;
 mod guide;
+mod harness;
 mod install_hint;
 mod layout;
 pub mod mini;
@@ -260,6 +261,8 @@ pub struct Workbench {
     status_dismissed: std::collections::HashSet<String>,
     resume_dismissed: std::collections::HashSet<(u64, PathBuf)>,
     resume_menu: Option<u64>,
+    harness_cache: harness::HarnessCache,
+    harness_dialog: Option<harness::HarnessDialog>,
     status_menu: Option<status_menus::StatusMenu>,
     processes: processes::ProcessMonitor,
     inventory: status_menus::AgentInventory,
@@ -284,6 +287,7 @@ pub struct Workbench {
     notices_open: bool,
     window_active: bool,
     alias_form: Option<settings_page::AliasForm>,
+    harness_pattern_form: Option<settings_page::HarnessPatternForm>,
     /// Plugin whose panel is docked right of the terminals.
     plugin_panel: Option<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
@@ -374,6 +378,8 @@ impl Workbench {
             status_dismissed: Default::default(),
             resume_dismissed: Default::default(),
             resume_menu: None,
+            harness_cache: Default::default(),
+            harness_dialog: None,
             status_menu: None,
             processes: Default::default(),
             inventory: Default::default(),
@@ -395,6 +401,7 @@ impl Workbench {
             notices_open: false,
             window_active: true,
             alias_form: None,
+            harness_pattern_form: None,
             plugin_panel: None,
             plugin_inputs: HashMap::new(),
             plugin_scroll: gpui::ScrollHandle::new(),
@@ -539,7 +546,11 @@ impl Workbench {
                     this.flow_agent_finished(pane_id, cx);
                 }
             }
-            TerminalEvent::TitleChanged | TerminalEvent::StatusChanged => cx.notify(),
+            TerminalEvent::TitleChanged | TerminalEvent::StatusChanged => {
+                // A shell that changed folder may have entered a project with an agent harness.
+                this.watch_harness(&pane, cx);
+                cx.notify();
+            }
             TerminalEvent::OpenLink(url) => this.open_link(url.clone(), cx),
             TerminalEvent::RevealPath(path) => reveal_in_finder(path),
         });
@@ -1529,6 +1540,7 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_close_confirm(cx))
             .children(self.render_prompt_dialog(cx))
+            .children(self.render_harness_dialog(cx))
             .children(self.render_toast())
     }
 }
@@ -1890,6 +1902,14 @@ impl Workbench {
             }
             "update" => match argument {
                 path if path.ends_with(".dmg") => self.install_local_dmg(PathBuf::from(path), cx),
+                "check-failed" => {
+                    self.updates.state = update::UpdateState::CheckFailed(
+                        "update check failed: https://api.github.com/repos/empty-user77/agentty-releases/releases/latest: status code 403"
+                            .into(),
+                    );
+                    self.updates.popup = true;
+                    cx.notify();
+                }
                 "fake" => {
                     self.updates.state = update::UpdateState::Available(agentty_bridge::update::Release {
                         version: "0.2.0".into(),
@@ -1973,6 +1993,7 @@ impl Workbench {
                     "shortcuts" => settings_page::SettingsSection::Shortcuts,
                     "about" => settings_page::SettingsSection::About,
                     "browser" => settings_page::SettingsSection::Browser,
+                    "project" => settings_page::SettingsSection::Project,
                     _ => settings_page::SettingsSection::General,
                 };
                 cx.notify();
@@ -2010,6 +2031,21 @@ impl Workbench {
                     dialog.kind = kind(argument);
                 }
             }
+            // `harness` opens the harness dialog for the active pane; `harness-start` starts it.
+            "harness" => {
+                if let Some(pane) = self.active_pane() {
+                    let dir = pane.read(cx).display_cwd();
+                    match self.harness_for(&dir) {
+                        Some(harness) => self.open_harness_dialog(pane, harness, window, cx),
+                        None => eprintln!("harness: none detected for {}", dir.display()),
+                    }
+                }
+            }
+            "harness-select" => {
+                let index = argument.parse::<usize>().ok();
+                self.debug_select_harness_entry(index, cx);
+            }
+            "harness-input" => self.debug_harness_input(argument, cx),
             "prompt-confirm" => {
                 if self.prompt_dialog.is_some() {
                     self.confirm_prompt_dialog(window, cx);
@@ -2150,7 +2186,11 @@ impl Workbench {
                 }
                 eprintln!("layout: confirm={}", self.close_confirm.is_some());
             }
-            "workspace" => self.create_workspace(LaunchSpec::new(kind(argument), home_dir()), window, cx),
+            // `workspace <kind> [folder]`
+            "workspace" => {
+                let (name, dir) = argument.split_once(' ').map(|(k, d)| (k, PathBuf::from(d))).unwrap_or((argument, home_dir()));
+                self.create_workspace(LaunchSpec::new(kind(name), dir), window, cx)
+            }
             "picker" => self.open_picker(kind(argument).into(), LaunchTarget::NewTab, window, cx),
             "split" => self.split(if argument == "down" { Axis::Vertical } else { Axis::Horizontal }, window, cx),
             "type" => {

@@ -462,7 +462,7 @@ impl TerminalView {
     }
 
     /// Branch, uncommitted changes and unpushed commits, from `git status` in the background.
-    fn probe_git(&mut self, cx: &mut Context<Self>) {
+    pub fn probe_git(&mut self, cx: &mut Context<Self>) {
         if self.git_probe.is_some() {
             return;
         }

@@ -3,7 +3,8 @@
 use super::Workbench;
 use crate::i18n::t;
 use crate::settings::{
-    reload_themes, settings, update_settings, CommandAlias, CursorShapeSetting, Language, Settings, SettingsStore, BUNDLED_FONT,
+    reload_themes, settings, update_settings, CommandAlias, CursorShapeSetting, HarnessAgent, Language, Settings, SettingsStore,
+    BUNDLED_FONT,
 };
 use crate::shell_integration::{is_valid_command, is_valid_word};
 use crate::text_input::{TextInput, TextInputEvent};
@@ -11,6 +12,13 @@ use crate::theme::{hex, hex_alpha, themes_dir, Chrome, TerminalTheme};
 use crate::ui::TypeScale;
 use crate::ui::{action_button, chip};
 use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, FontWeight, PathPromptOptions, SharedString, Subscription, Window};
+
+/// Input for adding a harness pattern.
+pub struct HarnessPatternForm {
+    pub input: Entity<TextInput>,
+    invalid: bool,
+    _subscription: Subscription,
+}
 
 /// Inputs for adding a reserved word.
 pub struct AliasForm {
@@ -27,6 +35,7 @@ const THEMES_PER_ROW: usize = 4;
 pub enum SettingsSection {
     #[default]
     General,
+    Project,
     Appearance,
     Browser,
     Shortcuts,
@@ -34,11 +43,12 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 5] = [Self::General, Self::Appearance, Self::Browser, Self::Shortcuts, Self::About];
+    pub const ALL: [SettingsSection; 6] = [Self::General, Self::Project, Self::Appearance, Self::Browser, Self::Shortcuts, Self::About];
 
     fn label(self) -> &'static str {
         match self {
             Self::General => "settings.general",
+            Self::Project => "settings.project",
             Self::Appearance => "settings.appearance",
             Self::Browser => "settings.browser",
             Self::Shortcuts => "settings.shortcuts",
@@ -49,6 +59,7 @@ impl SettingsSection {
     fn icon(self) -> &'static str {
         match self {
             Self::General => "settings",
+            Self::Project => "folder-open",
             Self::Appearance => "terminal",
             Self::Browser => "globe",
             Self::Shortcuts => "command",
@@ -435,6 +446,7 @@ impl Workbench {
             UpdateState::Checking => t(cx, "update.checking").to_string(),
             UpdateState::UpToDate => t(cx, "update.up_to_date").to_string(),
             UpdateState::Failed(error) => error.clone(),
+            UpdateState::CheckFailed(_) => t(cx, "update.check_failed").to_string(),
             _ => String::new(),
         };
         let link = |id: &'static str, label: String, url: &'static str| action_button(id, label, move |_, _, cx| cx.open_url(url));
@@ -487,6 +499,171 @@ impl Workbench {
                             .child(link("about-license", "GPL-3.0-or-later".into(), "https://www.gnu.org/licenses/gpl-3.0.html")),
                     )
                     .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "settings.about_notice"))),
+            )
+    }
+
+    fn harness_pattern_form(&mut self, window: &mut Window, cx: &mut Context<Self>) -> &mut HarnessPatternForm {
+        if self.harness_pattern_form.is_none() {
+            let input = cx.new(|cx| TextInput::localized("", "settings.harness_pattern_placeholder", window, cx));
+            let subscription = cx.subscribe_in(&input, window, |this: &mut Workbench, _, event: &TextInputEvent, _, cx| {
+                if matches!(event, TextInputEvent::Confirmed) {
+                    this.add_harness_pattern(cx);
+                }
+            });
+            self.harness_pattern_form = Some(HarnessPatternForm { input, invalid: false, _subscription: subscription });
+        }
+        self.harness_pattern_form.as_mut().expect("pattern form was just created")
+    }
+
+    fn add_harness_pattern(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = self.harness_pattern_form.as_mut() else { return };
+        let pattern = form.input.read(cx).text().trim().trim_start_matches("./").to_string();
+        if !agentty_bridge::harness::is_valid_pattern(&pattern) {
+            form.invalid = true;
+            return cx.notify();
+        }
+        form.invalid = false;
+        form.input.update(cx, |input, cx| input.set_text("", cx));
+        update_settings(cx, move |s| {
+            if !s.harness_patterns.contains(&pattern) {
+                s.harness_patterns.push(pattern);
+            }
+        });
+        self.recheck_harnesses(cx);
+    }
+
+    fn render_project_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let prefs = settings(cx).clone();
+        let form = self.harness_pattern_form(window, cx);
+        let (input, invalid) = (form.input.clone(), form.invalid);
+
+        let mut agents = div().flex().gap_1();
+        for (choice, label) in [
+            (HarnessAgent::Auto, t(cx, "settings.harness_agent_auto")),
+            (HarnessAgent::Claude, "Claude Code"),
+            (HarnessAgent::Codex, "Codex"),
+        ] {
+            agents = agents.child(chip(
+                SharedString::from(format!("harness-agent-{label}")),
+                label,
+                prefs.harness_agent == choice,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.harness_agent = choice)),
+            ));
+        }
+
+        let pattern_chip = |text: String| {
+            div()
+                .px_1p5()
+                .py_0p5()
+                .rounded_sm()
+                .bg(hex(0x232323))
+                .font_family(BUNDLED_FONT)
+                .t_small()
+                .text_color(hex(Chrome::MUTED))
+                .child(text)
+        };
+        let defaults = div()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .children(agentty_bridge::harness::DEFAULT_PATTERNS.iter().map(|(p, _)| pattern_chip(p.to_string())))
+            .child(pattern_chip("agentty.json → \"harness\"".into()))
+            .child(pattern_chip(".claude/settings.json → hooks".into()));
+
+        let mut custom = div().flex().flex_col().gap_1();
+        if prefs.harness_patterns.is_empty() {
+            custom = custom.child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "settings.harness_patterns_empty")));
+        }
+        for (index, pattern) in prefs.harness_patterns.iter().enumerate() {
+            let target = pattern.clone();
+            custom = custom.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_3()
+                    .py_1p5()
+                    .rounded_md()
+                    .bg(hex(0x232323))
+                    .font_family(BUNDLED_FONT)
+                    .t_body()
+                    .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::BRIGHT)).child(pattern.clone()))
+                    .child(crate::ui::icon_only(
+                        ("harness-pattern-remove", index),
+                        "x",
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            let target = target.clone();
+                            update_settings(cx, move |s| s.harness_patterns.retain(|p| p != &target));
+                            this.recheck_harnesses(cx);
+                        }),
+                    )),
+            );
+        }
+        let focus = input.clone();
+        let field = div()
+            .flex_1()
+            .min_w_0()
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| window.focus(&gpui::Focusable::focus_handle(&focus, cx)))
+            .flex()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(hex(Chrome::BORDER))
+            .bg(hex(0x1a1a1a))
+            .t_body()
+            .font_family(BUNDLED_FONT)
+            .text_color(hex(Chrome::BRIGHT))
+            .child(input);
+
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                section(t(cx, "settings.project_sessions"))
+                    .child(row_with_hint(
+                        t(cx, "settings.resume_bar"),
+                        t(cx, "settings.resume_bar_hint"),
+                        toggle("resume-bar", prefs.resume_bar, |s| s.resume_bar = !s.resume_bar, cx),
+                    ))
+                    .child(row(
+                        t(cx, "settings.ask_dir"),
+                        toggle("ask-dir", prefs.ask_directory, |s| s.ask_directory = !s.ask_directory, cx),
+                    ))
+                    .child(row(
+                        t(cx, "settings.ask_dir_tabs"),
+                        toggle("ask-dir-tabs", prefs.ask_directory_for_tabs, |s| s.ask_directory_for_tabs = !s.ask_directory_for_tabs, cx),
+                    )),
+            )
+            .child(
+                section(t(cx, "settings.project_harness"))
+                    .child(row_with_hint(
+                        t(cx, "settings.harness_detect"),
+                        t(cx, "settings.harness_detect_hint"),
+                        div()
+                            .id("harness-detect-row")
+                            .child(toggle("harness-detect", prefs.harness_detect, |s| s.harness_detect = !s.harness_detect, cx))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.recheck_harnesses(cx))),
+                    ))
+                    .child(row_with_hint(t(cx, "settings.harness_agent"), t(cx, "settings.harness_agent_hint"), agents))
+                    .child(row_with_hint(
+                        t(cx, "settings.harness_submit"),
+                        t(cx, "settings.harness_submit_hint"),
+                        toggle("harness-submit", prefs.harness_submit, |s| s.harness_submit = !s.harness_submit, cx),
+                    ))
+                    .child(div().pt_2().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "settings.harness_patterns")))
+                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "settings.harness_patterns_hint")))
+                    .child(custom)
+                    .child(div().flex().items_center().gap_2().child(field).child(action_button(
+                        "harness-pattern-add",
+                        t(cx, "settings.alias_add"),
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.add_harness_pattern(cx)),
+                    )))
+                    .when(invalid, |d| {
+                        d.child(div().t_small().text_color(hex(Chrome::ERROR)).child(t(cx, "settings.harness_pattern_invalid")))
+                    })
+                    .child(div().pt_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "settings.harness_defaults")))
+                    .child(defaults),
             )
     }
 
@@ -801,24 +978,6 @@ impl Workbench {
                         .pb_6()
                         .child(row(t(cx, "settings.language"), languages))
                         .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
-                        .child(row(
-                            t(cx, "settings.ask_dir"),
-                            toggle("ask-dir", prefs.ask_directory, |s| s.ask_directory = !s.ask_directory, cx),
-                        ))
-                        .child(row(
-                            t(cx, "settings.ask_dir_tabs"),
-                            toggle(
-                                "ask-dir-tabs",
-                                prefs.ask_directory_for_tabs,
-                                |s| s.ask_directory_for_tabs = !s.ask_directory_for_tabs,
-                                cx,
-                            ),
-                        ))
-                        .child(row_with_hint(
-                            t(cx, "settings.resume_bar"),
-                            t(cx, "settings.resume_bar_hint"),
-                            toggle("resume-bar", prefs.resume_bar, |s| s.resume_bar = !s.resume_bar, cx),
-                        ))
                         .child(row_with_hint(
                             t(cx, "settings.agent_bar"),
                             t(cx, "settings.agent_bar_hint"),
@@ -845,6 +1004,7 @@ impl Workbench {
                 )
                 .child(aliases)
                 .into_any_element(),
+            SettingsSection::Project => self.render_project_settings(window, cx).into_any_element(),
             SettingsSection::Appearance => div()
                 .flex()
                 .flex_col()

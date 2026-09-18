@@ -161,6 +161,7 @@ impl Workbench {
             || self.close_confirm.is_some()
             || self.agent_panel.is_some()
             || self.prompt_dialog.is_some()
+            || self.harness_dialog.is_some()
             // Native views swallow mouse events; hide it so the resize drag keeps reaching GPUI.
             || self.browser_resizing
     }

@@ -9,6 +9,8 @@ use std::path::Path;
 use std::time::Duration;
 
 pub const RELEASE_REPO: &str = "empty-user77/agentty-releases";
+/// Where every version can be downloaded by hand.
+pub const RELEASES_PAGE: &str = "https://github.com/empty-user77/agentty-releases/releases";
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,11 +67,7 @@ pub fn parse_release(json: &serde_json::Value, arch: &str) -> Option<Release> {
     Some(Release {
         version,
         notes: json["body"].as_str().unwrap_or_default().to_string(),
-        page_url: json["html_url"]
-            .as_str()
-            .filter(|u| trusted_url(u))
-            .unwrap_or("https://github.com/empty-user77/agentty-releases/releases")
-            .to_string(),
+        page_url: json["html_url"].as_str().filter(|u| trusted_url(u)).unwrap_or(RELEASES_PAGE).to_string(),
         dmg_name: dmg.as_ref().map(|d| d.0.clone()),
         dmg_url: dmg.map(|d| d.1),
         checksums_url: checksums.map(|c| c.1),
@@ -81,22 +79,97 @@ fn agent() -> ureq::Agent {
 }
 
 /// The newest published release, if it is newer than `current`.
+///
+/// Asks the GitHub API first. Unauthenticated API calls are limited per public IP address, which
+/// is shared by everyone behind a company network, so when the API refuses (403/429) or cannot be
+/// reached, the release is found through the plain github.com pages instead.
 pub fn check(current: &str, arch: &str) -> Result<Option<Release>> {
     let url = format!("https://api.github.com/repos/{RELEASE_REPO}/releases/latest");
-    let response = match agent()
+    let response = agent()
         .get(&url)
         .set("Accept", "application/vnd.github+json")
         .set("User-Agent", &format!("Agentty/{current}"))
         .timeout(Duration::from_secs(20))
-        .call()
-    {
-        Ok(response) => response,
+        .call();
+    let api_error = match response {
+        Ok(response) => {
+            let json: serde_json::Value = response.into_json()?;
+            return Ok(parse_release(&json, arch).filter(|r| is_newer(&r.version, current)));
+        }
         // No published release yet.
         Err(ureq::Error::Status(404, _)) => return Ok(None),
-        Err(err) => return Err(err).context("update check failed"),
+        Err(ureq::Error::Status(code, response)) => {
+            let message = response.into_json::<serde_json::Value>().ok().and_then(|j| j["message"].as_str().map(str::to_string));
+            anyhow::anyhow!("{url}: status code {code}{}", message.map(|m| format!(" ({m})")).unwrap_or_default())
+        }
+        Err(err) => anyhow::Error::new(err),
     };
-    let json: serde_json::Value = response.into_json()?;
-    Ok(parse_release(&json, arch).filter(|r| is_newer(&r.version, current)))
+    check_via_web(current, arch)
+        .map_err(|web| api_error.context(format!("fallback via github.com also failed: {web:#}")))
+        .context("update check failed")
+}
+
+/// The latest release from github.com itself: `releases/latest` redirects to the release's tag, and
+/// the checksum list names its files.
+fn check_via_web(current: &str, arch: &str) -> Result<Option<Release>> {
+    let user_agent = format!("Agentty/{current}");
+    let latest = format!("https://github.com/{RELEASE_REPO}/releases/latest");
+    let response = match agent().get(&latest).set("User-Agent", &user_agent).timeout(Duration::from_secs(20)).call() {
+        Ok(response) => response,
+        Err(ureq::Error::Status(404, _)) => return Ok(None),
+        Err(err) => return Err(err).context("github.com release page"),
+    };
+    let Some(tag) = tag_from_release_url(response.get_url()) else {
+        // Redirected to the release list: nothing is published.
+        return Ok(None);
+    };
+    let version = tag.trim_start_matches('v');
+    if !is_newer(version, current) {
+        return Ok(None);
+    }
+    let checksums_url = format!("https://github.com/{RELEASE_REPO}/releases/download/{tag}/Agentty-{version}-SHA256SUMS.txt");
+    let listing = agent()
+        .get(&checksums_url)
+        .set("User-Agent", &user_agent)
+        .timeout(Duration::from_secs(30))
+        .call()
+        .context("release checksums")?
+        .into_string()?;
+    release_from_checksums(&tag, &listing, arch).context("no DMG listed in the release checksums").map(Some)
+}
+
+/// `https://github.com/<repo>/releases/tag/v1.2.3` → `v1.2.3`.
+fn tag_from_release_url(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    if parsed.host_str() != Some("github.com") {
+        return None;
+    }
+    let tag = parsed.path().strip_prefix(&format!("/{RELEASE_REPO}/releases/tag/"))?;
+    (!tag.contains('/') && parse_version(tag).is_some()).then(|| tag.to_string())
+}
+
+/// A release whose files are known from its `SHA256SUMS.txt` (no notes: the page link has them).
+fn release_from_checksums(tag: &str, listing: &str, arch: &str) -> Option<Release> {
+    let names: Vec<&str> = listing.lines().filter_map(|l| l.split_whitespace().nth(1)).map(|n| n.trim_start_matches('*')).collect();
+    let arch_aliases: &[&str] = if arch == "aarch64" || arch == "arm64" { &["arm64", "aarch64"] } else { &["x86_64", "x64", "intel"] };
+    let dmg = names
+        .iter()
+        .find(|n| n.ends_with(".dmg") && arch_aliases.iter().any(|a| n.contains(a)))
+        .or_else(|| names.iter().find(|n| n.ends_with(".dmg") && !n.contains("x86_64") && !n.contains("arm64")))?
+        .to_string();
+    if dmg.contains('/') || dmg.contains("..") {
+        return None;
+    }
+    let download = |name: &str| format!("https://github.com/{RELEASE_REPO}/releases/download/{tag}/{name}");
+    let version = tag.trim_start_matches('v').to_string();
+    Some(Release {
+        notes: String::new(),
+        page_url: format!("https://github.com/{RELEASE_REPO}/releases/tag/{tag}"),
+        dmg_url: Some(download(&dmg)),
+        checksums_url: Some(download(&format!("Agentty-{version}-SHA256SUMS.txt"))),
+        dmg_name: Some(dmg),
+        version,
+    })
 }
 
 pub fn sha256_file(path: &Path) -> Result<String> {
@@ -176,6 +249,38 @@ pub fn download(release: &Release, dir: &Path, current: &str, progress: &mut dyn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_fallback_reads_tag_and_checksums() {
+        let tag = tag_from_release_url("https://github.com/empty-user77/agentty-releases/releases/tag/v0.1.6");
+        assert_eq!(tag.as_deref(), Some("v0.1.6"));
+        assert_eq!(tag_from_release_url("https://github.com/empty-user77/agentty-releases/releases"), None);
+        assert_eq!(tag_from_release_url("https://example.com/empty-user77/agentty-releases/releases/tag/v0.1.6"), None);
+
+        let listing = "aaa  Agentty-0.1.6-release20260918131331-arm64.dmg\nbbb  Agentty-0.1.6-arm64.zip\n";
+        let release = release_from_checksums("v0.1.6", listing, "aarch64").unwrap();
+        assert_eq!(release.version, "0.1.6");
+        assert_eq!(release.dmg_name.as_deref(), Some("Agentty-0.1.6-release20260918131331-arm64.dmg"));
+        let dmg_url = release.dmg_url.unwrap();
+        assert!(trusted_url(&dmg_url));
+        assert_eq!(
+            dmg_url,
+            "https://github.com/empty-user77/agentty-releases/releases/download/v0.1.6/Agentty-0.1.6-release20260918131331-arm64.dmg"
+        );
+        assert_eq!(
+            release.checksums_url.as_deref(),
+            Some("https://github.com/empty-user77/agentty-releases/releases/download/v0.1.6/Agentty-0.1.6-SHA256SUMS.txt")
+        );
+        assert!(release_from_checksums("v0.1.6", "aaa  Agentty-0.1.6-arm64.zip\n", "aarch64").is_none());
+        assert!(release_from_checksums("v0.1.6", "aaa  ../evil-arm64.dmg\n", "aarch64").is_none());
+    }
+
+    #[test]
+    #[ignore = "needs network"]
+    fn web_fallback_finds_the_published_release() {
+        let release = check_via_web("0.0.1", "aarch64").unwrap().expect("a published release");
+        assert!(release.dmg_url.is_some_and(|u| u.ends_with("-arm64.dmg")));
+    }
 
     #[test]
     fn download_copy_reports_progress() {

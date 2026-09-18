@@ -26,6 +26,9 @@ each agent is doing and highlights the ones that need you.
 - **Instant launch** — new Terminal, Claude Code (Opus / Sonnet / Haiku) or Codex (your recent models) tabs, starting
   in a folder you choose. Other installed agents (Gemini CLI, Copilot CLI, Cursor Agent, OpenCode, Qwen Code, Amp,
   Droid, Goose, Crush, Aider) and local Ollama models are detected and offered; missing ones stay hidden.
+- **Agent harnesses** — entering a project with its own Claude Code / Codex commands, skills, hooks or workflow files
+  offers to start work through them: pick an entry point such as `/implement`, paste a ticket key or link, and the
+  agent starts with it. Detection patterns are configurable in Settings → Project.
 - **Local sessions** — browse `~/.claude` and `~/.codex` sessions, resume them, or migrate a conversation from Claude
   to Codex (and back).
 - **Session Flow** — drag a line from one agent session to another to share its context, across Claude Code and Codex.
@@ -37,7 +40,7 @@ each agent is doing and highlights the ones that need you.
 - **Notifications** — native macOS notifications when an agent finishes or needs input (click to open the pane), a
   notification center, jump to the latest unread (⇧⌘U), and `agentty notify` for your own scripts.
 - **Git** — a GitHub Desktop–style page: switch repositories and branches, fetch / pull / push, review diffs, commit
-  selected files, browse history and merge branches. Click the branch in any pane header to switch branches.
+  selected files, browse history and merge branches. Click the branch in any pane header to switch branches, pull, push or copy its name.
 - **Extensions** — skills, subagents, commands, plugins and MCP servers for Claude Code and Codex in one place; add
   official MCP servers in one click and insert or run any of them in the active agent.
 - **API connectors** — expose any HTTP API to your agents as an MCP server; secrets live in the macOS Keychain.

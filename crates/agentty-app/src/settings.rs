@@ -147,9 +147,38 @@ pub struct Settings {
     pub confirm_close: bool,
     /// Claude Code advisor for new Claude tabs.
     pub advisor: AdvisorChoice,
+    /// Offer to start work through a project's agent harness when a terminal enters it.
+    pub harness_detect: bool,
+    /// Extra harness patterns (relative to the project), on top of the built-in ones.
+    pub harness_patterns: Vec<String>,
+    /// Send the harness prompt right away (otherwise it is typed in for review).
+    pub harness_submit: bool,
+    /// Agent that starts harness work.
+    pub harness_agent: HarnessAgent,
     /// The tour (agentty.run, key features) was shown on first launch.
     #[serde(default)]
     pub welcome_shown: bool,
+}
+
+/// Which agent starts work through a harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HarnessAgent {
+    /// The one the harness is built for (Claude Code when both).
+    #[default]
+    Auto,
+    Claude,
+    Codex,
+}
+
+impl HarnessAgent {
+    pub fn resolve(self, harness: &agentty_bridge::harness::Harness) -> agentty_bridge::model::Agent {
+        match self {
+            Self::Auto => harness.preferred_agent(),
+            Self::Claude => agentty_bridge::model::Agent::Claude,
+            Self::Codex => agentty_bridge::model::Agent::Codex,
+        }
+    }
 }
 
 /// Claude Code's advisor tool (a stronger model Claude consults at key moments) for a Claude tab.
@@ -297,6 +326,10 @@ impl Default for Settings {
             agent_bar: true,
             confirm_close: true,
             advisor: AdvisorChoice::Inherit,
+            harness_detect: true,
+            harness_patterns: Vec::new(),
+            harness_submit: true,
+            harness_agent: HarnessAgent::Auto,
             welcome_shown: false,
         }
     }

@@ -25,6 +25,8 @@ pub enum UpdateState {
     UpToDate,
     Available(Release),
     Installing(Release),
+    /// The release channel could not be reached (proxies, rate limits, …).
+    CheckFailed(String),
     Failed(String),
 }
 
@@ -203,7 +205,7 @@ impl Workbench {
                     }
                     Ok(None) => UpdateState::UpToDate,
                     // Quiet background failures keep whatever we knew before.
-                    Err(err) if manual => UpdateState::Failed(format!("{err:#}")),
+                    Err(err) if manual => UpdateState::CheckFailed(format!("{err:#}")),
                     Err(_) => match previous {
                         UpdateState::Available(release) => UpdateState::Available(release),
                         _ => UpdateState::Idle,
@@ -385,9 +387,28 @@ impl Workbench {
                 tf(cx, "update.up_to_date_body", &[("version", CURRENT_VERSION)]),
                 button("update-ok", "OK".into(), true).on_click(close).into_any_element(),
             ),
-            UpdateState::Failed(error) => {
-                (t(cx, "update.failed").into(), error.clone(), button("update-ok", "OK".into(), true).on_click(close).into_any_element())
+            // Offer the release page instead of a dead end; it opens in the default browser.
+            UpdateState::CheckFailed(_) | UpdateState::Failed(_) => {
+                let check = matches!(self.updates.state, UpdateState::CheckFailed(_));
+                (
+                    t(cx, if check { "update.check_failed" } else { "update.failed" }).into(),
+                    t(cx, if check { "update.check_failed_body" } else { "update.failed_body" }).into(),
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(button("update-close", t(cx, "update.close").into(), false).on_click(close))
+                        .child(
+                            button("update-releases", t(cx, "update.open_releases").into(), true)
+                                .on_click(|_, _, cx| cx.open_url(agentty_bridge::update::RELEASES_PAGE)),
+                        )
+                        .into_any_element(),
+                )
             }
+        };
+        // The technical reason, small, for when someone asks what went wrong.
+        let detail = match &self.updates.state {
+            UpdateState::CheckFailed(error) | UpdateState::Failed(error) => Some(error.clone()),
+            _ => None,
         };
         let notes = match &self.updates.state {
             UpdateState::Available(release) if !release.notes.trim().is_empty() => {
@@ -426,6 +447,7 @@ impl Workbench {
                             .child(div().t_large().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(title)),
                     )
                     .when(!body.is_empty(), |d| d.child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body)))
+                    .when_some(detail, |d, detail| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).line_clamp(3).child(detail)))
                     .when_some(notes, |d, notes| {
                         d.child(
                             div()

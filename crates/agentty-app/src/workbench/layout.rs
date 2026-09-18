@@ -2,6 +2,7 @@
 
 use super::panes::{Axis, PaneNode};
 use super::{status_label, Pane, Tab, Workbench};
+use crate::i18n::t;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
 use crate::ui::{icon, IconSize};
@@ -316,7 +317,19 @@ pub struct BranchMenu {
     pub pane: gpui::EntityId,
     pub repo: std::path::PathBuf,
     pub picker: gpui::Entity<crate::branch_picker::BranchPicker>,
+    /// Upstream and ahead/behind counts, loaded when the menu opens.
+    status: Option<agentty_bridge::git::RepoStatus>,
+    /// A pull or push is running.
+    sync: Option<SyncKind>,
+    /// Result of the last pull/push: (succeeded, message).
+    sync_result: Option<(bool, String)>,
     _subscription: gpui::Subscription,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SyncKind {
+    Pull,
+    Push,
 }
 
 impl Workbench {
@@ -326,6 +339,8 @@ impl Workbench {
         let open = self.branch_menu.as_ref().filter(|m| m.pane == id);
         let target = pane.clone();
         let (dirty, ahead) = (pane.read(cx).git_dirty, pane.read(cx).git_ahead);
+        let full_name = branch.clone();
+        let sync_bar = open.map(|menu| self.render_branch_sync(menu, &full_name, cx));
         div()
             .relative()
             .flex_shrink_0()
@@ -350,6 +365,8 @@ impl Workbench {
                         d.child(div().flex_shrink_0().text_color(hex(Chrome::BLUE)).child(format!("↑{n}")))
                     })
                     .child(icon("chevron-down", 12., hex(Chrome::MUTED)))
+                    // Long names are cut off in the chip; the tooltip shows the whole name.
+                    .when(open.is_none(), |d| d.tooltip(crate::ui::Tooltip::text(full_name.clone(), None)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         cx.stop_propagation();
                         this.toggle_branch_menu(&target, window, cx);
@@ -364,6 +381,7 @@ impl Workbench {
                             cx.notify();
                         }
                     }))
+                    .children(sync_bar)
                     .child(menu.picker.clone());
                 // Anchored right under the chip, left edges aligned.
                 d.child(
@@ -405,8 +423,169 @@ impl Workbench {
                 }
             }
         });
-        self.branch_menu = Some(BranchMenu { pane: id, repo, picker, _subscription: subscription });
+        self.branch_menu =
+            Some(BranchMenu { pane: id, repo, picker, status: None, sync: None, sync_result: None, _subscription: subscription });
+        self.load_branch_status(cx);
         cx.notify();
+    }
+
+    fn load_branch_status(&mut self, cx: &mut Context<Self>) {
+        let Some(repo) = self.branch_menu.as_ref().map(|m| m.repo.clone()) else { return };
+        let task = cx.background_spawn(async move { agentty_bridge::git::status(&repo).ok() });
+        cx.spawn(async move |this, cx| {
+            let status = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(menu) = this.branch_menu.as_mut() {
+                    menu.status = status;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// `git pull --ff-only` / `git push` for the branch menu's repository (commits stay on the Git page).
+    fn sync_branch(&mut self, kind: SyncKind, cx: &mut Context<Self>) {
+        let Some(menu) = self.branch_menu.as_mut() else { return };
+        if menu.sync.is_some() {
+            return;
+        }
+        menu.sync = Some(kind);
+        menu.sync_result = None;
+        let repo = menu.repo.clone();
+        let (branch, has_upstream) = menu.status.as_ref().map(|s| (s.branch.clone(), s.upstream.is_some())).unwrap_or((None, false));
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            match kind {
+                SyncKind::Pull => agentty_bridge::git::pull(&repo),
+                SyncKind::Push => match branch {
+                    Some(branch) => agentty_bridge::git::push(&repo, &branch, has_upstream),
+                    None => Err(anyhow::anyhow!("detached HEAD")),
+                },
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                let message = match (&result, kind) {
+                    (Ok(()), SyncKind::Pull) => t(cx, "branch.pulled").to_string(),
+                    (Ok(()), SyncKind::Push) => t(cx, "branch.pushed").to_string(),
+                    (Err(err), _) => err.to_string().lines().last().unwrap_or_default().to_string(),
+                };
+                let repo = this.branch_menu.as_ref().map(|m| m.repo.clone());
+                if let Some(menu) = this.branch_menu.as_mut() {
+                    menu.sync = None;
+                    menu.sync_result = Some((result.is_ok(), message.clone()));
+                } else {
+                    this.set_status(message, cx);
+                }
+                // Panes in this repository show the new ahead/behind state right away.
+                if let Some(repo) = repo {
+                    for pane in this.all_panes() {
+                        if agentty_bridge::git::repo_root(&pane.read(cx).display_cwd()).as_deref() == Some(repo.as_path()) {
+                            pane.update(cx, |view, cx| view.probe_git(cx));
+                        }
+                    }
+                }
+                this.load_branch_status(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Top of the branch menu: the full branch name with copy, and pull / push.
+    fn render_branch_sync(&self, menu: &BranchMenu, branch: &str, cx: &mut Context<Self>) -> AnyElement {
+        let status = menu.status.as_ref();
+        let (ahead, behind) = status.map(|s| (s.ahead, s.behind)).unwrap_or((0, 0));
+        let has_upstream = status.is_some_and(|s| s.upstream.is_some());
+        let copy_name = branch.to_string();
+        let button = |id: &'static str, glyph: &'static str, label: String, running: bool, enabled: bool| {
+            div()
+                .id(id)
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .py_1()
+                .rounded_md()
+                .t_small()
+                .bg(hex(0x2d2d30))
+                .text_color(hex(if enabled { Chrome::BRIGHT } else { Chrome::MUTED }))
+                .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(hex(Chrome::ACCENT))))
+                .child(if running {
+                    crate::ui::spinner(IconSize::INLINE, hex(Chrome::BRIGHT)).into_any_element()
+                } else {
+                    icon(glyph, IconSize::INLINE, hex(if enabled { Chrome::BRIGHT } else { Chrome::MUTED })).into_any_element()
+                })
+                .child(label)
+        };
+        let busy = menu.sync.is_some();
+        let pull_label = if behind > 0 { format!("{} ↓{behind}", t(cx, "branch.pull")) } else { t(cx, "branch.pull").to_string() };
+        let push_label = if ahead > 0 { format!("{} ↑{ahead}", t(cx, "branch.push")) } else { t(cx, "branch.push").to_string() };
+        // Pushing needs something to push, or a branch that is not on the remote yet.
+        let can_push = status.is_some() && (ahead > 0 || !has_upstream) && !busy;
+        let can_pull = has_upstream && !busy;
+        div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .px_2()
+            .pt_2()
+            .pb_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(icon("git-branch", IconSize::INLINE, hex(Chrome::MUTED)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .t_small()
+                            .font_family(crate::settings::BUNDLED_FONT)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(branch.to_string()),
+                    )
+                    .child(
+                        crate::ui::icon_only(
+                            "branch-copy",
+                            "copy",
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_name.clone()));
+                                this.set_status(t(cx, "branch.copied"), cx);
+                            }),
+                        )
+                        .tooltip(crate::ui::Tooltip::text(t(cx, "branch.copy"), None)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        button("branch-pull", "arrow-down", pull_label, menu.sync == Some(SyncKind::Pull), can_pull)
+                            .when(can_pull, |d| d.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.sync_branch(SyncKind::Pull, cx))))
+                            .tooltip(crate::ui::Tooltip::text(t(cx, "branch.pull_hint"), None)),
+                    )
+                    .child(
+                        button("branch-push", "arrow-up", push_label, menu.sync == Some(SyncKind::Push), can_push)
+                            .when(can_push, |d| d.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.sync_branch(SyncKind::Push, cx))))
+                            .tooltip(crate::ui::Tooltip::text(
+                                if has_upstream { t(cx, "branch.push_hint") } else { t(cx, "branch.publish_hint") },
+                                None,
+                            )),
+                    ),
+            )
+            .children(
+                menu.sync_result.clone().map(|(ok, message)| {
+                    div().t_caption().text_color(hex(if ok { Chrome::SUCCESS } else { Chrome::ERROR })).child(message)
+                }),
+            )
+            .child(div().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            .into_any_element()
     }
 
     pub(super) fn create_branch(&mut self, repo: std::path::PathBuf, name: String, cx: &mut Context<Self>) {
