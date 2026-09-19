@@ -182,6 +182,10 @@ pub enum Page {
 pub enum LaunchTarget {
     NewTab,
     NewWorkspace,
+    /// A split of the current tab, right of / below the active pane. Goes through the same launch
+    /// path as a tab, so an agent started there gets its own working tree when the project is taken.
+    SplitRight,
+    SplitDown,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -217,6 +221,8 @@ pub struct Workbench {
     sidebar_open: bool,
     page: Option<Page>,
     launcher_open: bool,
+    /// Where the + menu opens what is picked: a tab (default each time it opens) or a split.
+    launcher_target: LaunchTarget,
     workspace_menu: Option<u64>,
     picker: Option<picker::Picker>,
     palette: Option<palette::Palette>,
@@ -231,6 +237,10 @@ pub struct Workbench {
     /// Files panel docked at the right edge (folder structure, changes, working trees).
     files_panel: Option<files_panel::FilesPanel>,
     files_resizing: bool,
+    /// Dragging the handle under the files panel's working-tree list: (pointer y, height) at the start.
+    files_trees_drag: Option<(f32, f32)>,
+    /// Window width at the last render, for sizing the panels docked at the right.
+    viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
     split_drag: Option<layout::SplitDrag>,
     split_bounds: Rc<RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>>,
@@ -287,6 +297,8 @@ pub struct Workbench {
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
     find_bar: Option<find::FindBar>,
+    /// Panes already told that they share a working tree with another agent (once each).
+    shared_tree_warned: std::collections::HashSet<u64>,
     /// Local servers started in panes: ports, auto-open, stopping them with their pane.
     servers: servers::ServerWatch,
     installed_fonts: Option<Vec<String>>,
@@ -364,6 +376,7 @@ impl Workbench {
             sidebar_open: true,
             page: None,
             launcher_open: false,
+            launcher_target: LaunchTarget::NewTab,
             workspace_menu: None,
             picker: None,
             palette: None,
@@ -377,6 +390,8 @@ impl Workbench {
             browser_resizing: false,
             files_panel: None,
             files_resizing: false,
+            files_trees_drag: None,
+            viewport_width: 1400.,
             browser_home_input: None,
             split_drag: None,
             split_bounds: Rc::default(),
@@ -421,6 +436,7 @@ impl Workbench {
             browser: None,
             browser_request: None,
             find_bar: None,
+            shared_tree_warned: Default::default(),
             servers: Default::default(),
             installed_fonts: None,
             font_list_open: false,
@@ -566,6 +582,7 @@ impl Workbench {
             TerminalEvent::TitleChanged | TerminalEvent::StatusChanged => {
                 // A shell that changed folder may have entered a project with an agent harness.
                 this.watch_harness(&pane, cx);
+                this.warn_about_shared_tree(&pane, cx);
                 cx.notify();
             }
             TerminalEvent::OpenLink(url) => this.open_link(url.clone(), cx),
@@ -880,6 +897,8 @@ impl Workbench {
         let ask = match target {
             LaunchTarget::NewTab => settings(cx).ask_directory_for_tabs || self.workspaces.is_empty() && settings(cx).ask_directory,
             LaunchTarget::NewWorkspace => settings(cx).ask_directory,
+            // A split belongs to the tab it is made in: it starts where that tab is.
+            LaunchTarget::SplitRight | LaunchTarget::SplitDown => false,
         };
         if ask {
             self.open_picker(choice, target, window, cx);
@@ -920,6 +939,8 @@ impl Workbench {
         match target {
             LaunchTarget::NewTab => self.open_tab(spec, window, cx),
             LaunchTarget::NewWorkspace => self.create_workspace(spec, window, cx),
+            LaunchTarget::SplitRight => self.split_with(spec, Axis::Horizontal, window, cx),
+            LaunchTarget::SplitDown => self.split_with(spec, Axis::Vertical, window, cx),
         }
     }
 
@@ -1301,13 +1322,25 @@ impl Workbench {
 
     fn on_root_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.pressed_button != Some(MouseButton::Left) {
-            if self.sidebar_resizing || self.browser_resizing || self.files_resizing || self.split_drag.is_some() || self.flow.is_dragging()
+            if self.sidebar_resizing
+                || self.browser_resizing
+                || self.files_resizing
+                || self.files_trees_drag.is_some()
+                || self.split_drag.is_some()
+                || self.flow.is_dragging()
             {
                 self.end_drags(cx);
             }
             return;
         }
-        if self.files_resizing {
+        if let Some((start_y, start_height)) = self.files_trees_drag {
+            // Down makes the working-tree list taller; `trees_height` keeps it within its rows.
+            let height = (start_height + f32::from(event.position.y) - start_y).max(40.);
+            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
+                store.settings.files_panel_trees_height = height
+            });
+            cx.notify();
+        } else if self.files_resizing {
             // The files panel is the last column: its splitter sits just left of it.
             let viewport = f32::from(window.viewport_size().width);
             let width = (viewport - f32::from(event.position.x) - 2.5)
@@ -1318,11 +1351,9 @@ impl Workbench {
             cx.notify();
         } else if self.browser_resizing {
             // The splitter sits just left of the panel; the plugin and files panels may sit right of it.
-            let right = self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
-                + self
-                    .files_panel
-                    .as_ref()
-                    .map_or(0., |_| crate::settings::settings(cx).files_panel_width.max(files_panel::MIN_WIDTH) + 5.);
+            let shown = self.docked_widths(cx).1;
+            let right =
+                self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH) + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
             let viewport = f32::from(window.viewport_size().width) - right;
             let width = (viewport - f32::from(event.position.x) - 2.5).clamp(320.0, (viewport - 420.0).max(320.0));
             gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.browser.width = width);
@@ -1340,10 +1371,11 @@ impl Workbench {
     }
 
     fn end_drags(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_resizing || self.browser_resizing || self.files_resizing {
+        if self.sidebar_resizing || self.browser_resizing || self.files_resizing || self.files_trees_drag.is_some() {
             self.sidebar_resizing = false;
             self.browser_resizing = false;
             self.files_resizing = false;
+            self.files_trees_drag = None;
             update_settings(cx, |_| {}); // persist the final width
         }
         if self.split_drag.take().is_some() {
@@ -1356,6 +1388,7 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_active = window.is_window_active();
+        self.viewport_width = f32::from(window.viewport_size().width);
         if let Some(git) = self.git.clone().filter(|_| self.page != Some(Page::Git)) {
             git.update(cx, |v, _| v.set_visible(false));
         }
@@ -1552,7 +1585,12 @@ impl Render for Workbench {
                     if this.flow.is_dragging() {
                         this.finish_flow_drag(cx);
                     }
-                    if this.sidebar_resizing || this.browser_resizing || this.files_resizing || this.split_drag.is_some() {
+                    if this.sidebar_resizing
+                        || this.browser_resizing
+                        || this.files_resizing
+                        || this.files_trees_drag.is_some()
+                        || this.split_drag.is_some()
+                    {
                         this.end_drags(cx);
                     }
                 }),
@@ -1664,10 +1702,15 @@ impl Workbench {
     }
 
     pub(super) fn show_toast(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.show_toast_for(text, 1800, cx);
+    }
+
+    /// A toast that stays for `millis` (something worth reading, not just a confirmation).
+    pub(super) fn show_toast_for(&mut self, text: impl Into<SharedString>, millis: u64, cx: &mut Context<Self>) {
         let id = self.toast.as_ref().map_or(1, |(_, id)| id + 1);
         self.toast = Some((text.into(), id));
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
+            cx.background_executor().timer(std::time::Duration::from_millis(millis)).await;
             let _ = this.update(cx, |this, cx| {
                 if this.toast.as_ref().is_some_and(|(_, current)| *current == id) {
                     this.toast = None;
@@ -1683,9 +1726,10 @@ impl Workbench {
         // Left of the panels docked at the right: the browser is a native view, and anything drawn
         // under it (a toast about a server that just stopped, say) would never be seen.
         let docked = if self.page.is_none() {
-            self.browser.as_ref().map_or(0., |_| settings(cx).browser.width + 5.)
+            let (browser, files) = self.docked_widths(cx);
+            self.browser.as_ref().map_or(0., |_| browser + 5.)
                 + self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
-                + self.files_panel.as_ref().map_or(0., |_| settings(cx).files_panel_width.max(files_panel::MIN_WIDTH) + 5.)
+                + self.files_panel.as_ref().map_or(0., |_| files + 5.)
         } else {
             0.
         };
@@ -2354,9 +2398,15 @@ impl Workbench {
                 self.create_workspace(LaunchSpec::new(kind(name), dir), window, cx)
             }
             // Through the same path as the + menu (a session tree of its own when the project is taken).
-            "launch-agent" => {
+            "launch-agent" | "launch-split" | "launch-split-down" | "launch-workspace" => {
                 let (name, dir) = argument.split_once(' ').map(|(k, d)| (k, PathBuf::from(d))).unwrap_or((argument, home_dir()));
-                self.launch(kind(name).into(), LaunchTarget::NewTab, dir, window, cx)
+                let target = match command {
+                    "launch-split" => LaunchTarget::SplitRight,
+                    "launch-split-down" => LaunchTarget::SplitDown,
+                    "launch-workspace" => LaunchTarget::NewWorkspace,
+                    _ => LaunchTarget::NewTab,
+                };
+                self.launch(kind(name).into(), target, dir, window, cx)
             }
             "picker" => self.open_picker(kind(argument).into(), LaunchTarget::NewTab, window, cx),
             "split" => self.split(if argument == "down" { Axis::Vertical } else { Axis::Horizontal }, window, cx),

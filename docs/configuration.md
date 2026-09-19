@@ -23,6 +23,7 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
   "autoWorktree": true,
   "stopServersOnClose": true,
   "browser": { "autoOpenServers": true },
+  "agentBarPosition": "top",
   "hud": [{ "item": "model", "visible": true }, { "item": "context", "visible": true }],
   "harnessDetect": true,
   "harnessPatterns": [".team-harness", "tools/agent/*.yaml"],
@@ -41,6 +42,7 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `autoWorktree` | A new AI session in a project where another one is at work starts in its own git worktree (`~/.agentty/worktrees/<project>-<hash>/<name>`, branch `agentty/<name>`) |
 | `stopServersOnClose` | Closing a tab, pane or workspace stops the local servers started in it (`SIGTERM`, then `SIGKILL`) |
 | `browser.autoOpenServers` | A local server started in a tab opens in the in-app browser once it answers with a page (only while links open in-app) |
+| `agentBarPosition` | `top` (default) or `bottom`: the AI CLI status bar, and the header of a split pane, above the terminal or under it |
 | `hud` | Items of the AI CLI status bar in order: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `plugins`, `worktree`, `branch`, `folder`. `model`, `context`, `status`, `branch` and `spacer` cannot be hidden. Easier in Settings → Appearance → Status bar |
 | `harnessDetect` | Offer to start work through a project's agent harness (see below) |
 | `harnessPatterns` | Extra harness patterns, relative to the project (`*` within a name, `**` any folders) |

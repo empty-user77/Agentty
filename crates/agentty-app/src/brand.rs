@@ -18,12 +18,12 @@ const BRANDS: &[Brand] = &[
     Brand { id: "agy", name: "Antigravity CLI", logo: Some("logos/antigravity.svg"), color: 0x3186ff },
     Brand { id: "amp", name: "Amp", logo: None, color: 0xf34e3f },
     Brand { id: "copilot", name: "GitHub Copilot CLI", logo: Some("logos/githubcopilot.svg"), color: 0xb392f0 },
-    Brand { id: "cursor", name: "Cursor Agent", logo: Some("logos/cursor.svg"), color: 0xe6e6e6 },
+    Brand { id: "cursor", name: "Cursor CLI", logo: Some("logos/cursor.svg"), color: 0xe6e6e6 },
     Brand { id: "opencode", name: "OpenCode", logo: Some("logos/opencode.svg"), color: 0xf5a623 },
     Brand { id: "qwen", name: "Qwen Code", logo: Some("logos/qwen.svg"), color: 0x8b87ff },
     Brand { id: "kimi", name: "Kimi CLI", logo: Some("logos/kimi.svg"), color: 0x4a9dff },
     Brand { id: "cline", name: "Cline CLI", logo: Some("logos/cline.svg"), color: 0xd4d4d4 },
-    Brand { id: "grok", name: "Grok CLI", logo: Some("logos/x.svg"), color: 0xe5e5e5 },
+    Brand { id: "grok", name: "Grok Build", logo: Some("logos/x.svg"), color: 0xe5e5e5 },
     Brand { id: "ollama", name: "Ollama", logo: Some("logos/ollama.svg"), color: 0xe8e8e8 },
 ];
 

@@ -143,6 +143,7 @@ impl Workbench {
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
         let view = pane.read(cx);
         let prefs_bar = crate::settings::settings(cx).agent_bar;
+        let bars_below = bars_below(cx);
         let width = self.pane_bounds.borrow().get(&pane.entity_id()).map(|b| f32::from(b.size.width)).unwrap_or(f32::MAX);
         let attention = view.attention;
         let border = if attention {
@@ -156,7 +157,7 @@ impl Workbench {
         let pane_for_focus = pane.clone();
 
         // Split pane header: which tool, where (project folder + path), its live status and branch.
-        let header = split.then(|| {
+        let mut header = split.then(|| {
             let (zoom, close) = (pane.clone(), pane.clone());
             let zoomed = self.zoomed.as_ref() == Some(pane);
             let cwd = view.display_cwd();
@@ -314,7 +315,7 @@ impl Workbench {
         let resume_hint = self.render_resume_hint(pane, cx);
         let find_bar = self.render_find_bar(pane, cx);
         // Single agent panes get a slim live status bar; split panes carry the same info in their header.
-        let agent_bar = (!split && prefs_bar).then(|| self.render_agent_bar(pane, width, cx)).flatten();
+        let mut agent_bar = (!split && prefs_bar).then(|| self.render_agent_bar(pane, width, cx)).flatten();
         let widths = self.pane_bounds.clone();
         let id = pane.entity_id();
 
@@ -335,8 +336,8 @@ impl Workbench {
                 .absolute()
                 .size_full(),
             )
-            .children(header)
-            .children(agent_bar)
+            // The pane's bar: above the terminal, or under it (Settings → Appearance).
+            .when(!bars_below, |d| d.children(header.take()).children(agent_bar.take()))
             .children(resume_hint)
             // Cached: the grid is only re-laid out when this terminal notifies (output, cursor,
             // focus), not when unrelated parts of the window re-render (e.g. sidebar scrolling).
@@ -350,6 +351,8 @@ impl Workbench {
                     .children(drop_zones)
                     .children(connect_pick),
             )
+            .children(header)
+            .children(agent_bar)
             .into_any_element()
     }
 
@@ -522,17 +525,8 @@ impl Workbench {
                     }))
                     .children(sync_bar)
                     .child(menu.picker.clone());
-                // Anchored right under the chip, left edges aligned.
-                d.child(
-                    div().absolute().top_full().left_0().child(
-                        gpui::deferred(
-                            gpui::anchored()
-                                .snap_to_window_with_margin(px(8.))
-                                .child(div().mt_1().child(crate::ui::fade_in("branch-menu-fade", popover))),
-                        )
-                        .with_priority(2),
-                    ),
-                )
+                // Anchored right under the chip (over it when the bar sits under the terminal), left edges aligned.
+                d.child(bar_popover(crate::ui::fade_in("branch-menu-fade", popover), 2, cx))
             })
             .into_any_element()
     }
@@ -828,7 +822,7 @@ impl Workbench {
                 .px_3()
                 .overflow_hidden()
                 .bg(hex(Chrome::TAB_INACTIVE))
-                .border_b_1()
+                .map(|d| if bars_below(cx) { d.border_t_1() } else { d.border_b_1() })
                 .border_color(hex(Chrome::BORDER))
                 .t_small()
                 // The items of the status bar, in the user's order (Settings → Appearance).
@@ -915,6 +909,26 @@ impl Workbench {
                 .into_any_element(),
         )
     }
+}
+
+/// Whether panes show their bar under the terminal instead of above it.
+pub(super) fn bars_below(cx: &gpui::App) -> bool {
+    crate::settings::settings(cx).agent_bar_position == crate::hud::HudPosition::Bottom
+}
+
+/// A popover that belongs to a chip of a pane's bar: it opens away from the bar, under the chip
+/// when the bar is above the terminal and over the chip when the bar is under it.
+pub(super) fn bar_popover(popover: impl IntoElement, priority: usize, cx: &gpui::App) -> gpui::Div {
+    let below = bars_below(cx);
+    let anchored = gpui::anchored()
+        .anchor(if below { gpui::Corner::BottomLeft } else { gpui::Corner::TopLeft })
+        .snap_to_window_with_margin(px(8.))
+        .child(div().map(|d| if below { d.mb_1() } else { d.mt_1() }).child(popover));
+    div()
+        .absolute()
+        .left_0()
+        .map(|d| if below { d.bottom_full() } else { d.top_full() })
+        .child(gpui::deferred(anchored).with_priority(priority))
 }
 
 /// Tooltip hint of a folder chip: ⌘-click (Ctrl-click on Windows / Linux) shows the folder.

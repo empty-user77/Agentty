@@ -10,8 +10,7 @@ use crate::ui::TypeScale;
 use crate::ui::{action_button, chip, hint, icon, icon_only, icon_only_sized, menu_item, now_ms, popover, relative_time, tilde, IconSize};
 use agentty_bridge::model::Agent;
 use gpui::{
-    div, prelude::*, px, AnimationExt, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, MouseButton, MouseDownEvent, SharedString,
-    Window,
+    div, prelude::*, px, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, MouseButton, MouseDownEvent, SharedString, Window,
 };
 
 type WindowAction = Box<dyn Fn(&mut Workbench, &mut Window, &mut Context<Workbench>)>;
@@ -74,22 +73,6 @@ impl Render for DragPreview {
 }
 
 /// Icon-only button in the tab strip, with a delayed name + shortcut tooltip.
-/// A pulsing ring over a control the onboarding tour wants pressed (the control must be `relative`).
-fn tour_ring(id: &'static str) -> impl IntoElement {
-    div()
-        .absolute()
-        .inset_0()
-        .rounded_md()
-        .border_2()
-        .border_color(hex(Chrome::WARNING))
-        .bg(hex_alpha(Chrome::WARNING, 0.18))
-        .with_animation(
-            SharedString::from(format!("tour-ring-{id}")),
-            gpui::Animation::new(std::time::Duration::from_millis(1100)).repeat().with_easing(gpui::pulsating_between(0.35, 1.0)),
-            |ring, delta| ring.opacity(delta),
-        )
-}
-
 fn header_icon(
     id: &'static str,
     glyph: &'static str,
@@ -256,7 +239,7 @@ impl Workbench {
                             .group_hover(id, |s| s.text_color(hex(Chrome::BRIGHT))),
                     )
                     // The onboarding tour points here.
-                    .when(target == Some(id), |d| d.relative().child(tour_ring(id)))
+                    .when(target == Some(id), |d| d.relative().child(crate::ui::pulse_ring(id, false)))
             };
         // One active item at a time: an open page wins over the side panel's item.
         let sidebar = |panel| self.page.is_none() && self.sidebar_open && self.panel == panel;
@@ -1285,8 +1268,13 @@ impl Workbench {
 
         // The control the onboarding tour asks for gets a pulsing ring.
         let target = self.tour_target();
-        let ringed =
-            |button: gpui::Stateful<gpui::Div>, id: &'static str| if target == Some(id) { button.child(tour_ring(id)) } else { button };
+        let ringed = |button: gpui::Stateful<gpui::Div>, id: &'static str| {
+            if target == Some(id) {
+                button.child(crate::ui::pulse_ring(id, false))
+            } else {
+                button
+            }
+        };
 
         div()
             .id("tab-strip")
@@ -1323,6 +1311,7 @@ impl Workbench {
                             return;
                         }
                         this.launcher_open = !this.launcher_open;
+                        this.launcher_target = LaunchTarget::NewTab;
                         // The menu opens below the button.
                         let position = event.position();
                         this.launcher_at = Some(gpui::point(position.x - px(12.), position.y + px(20.)));
@@ -1354,6 +1343,7 @@ impl Workbench {
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
                             this.launcher_at = Some(event.position);
                             this.launcher_open = true;
+                            this.launcher_target = LaunchTarget::NewTab;
                             this.notices_open = false;
                             this.detect_agents(cx);
                             cx.notify();
@@ -1434,16 +1424,6 @@ impl Workbench {
             })
             .child(ringed(
                 header_icon(
-                    "header-files",
-                    "panel-right",
-                    self.files_panel.is_some(),
-                    (t(cx, "files.title"), Some("⌥⌘B")),
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_files_panel(cx)),
-                ),
-                "header-files",
-            ))
-            .child(ringed(
-                header_icon(
                     "header-split-right",
                     "columns-2",
                     false,
@@ -1458,6 +1438,18 @@ impl Workbench {
                 false,
                 (t(cx, "split.down"), Some("⇧⌘D")),
                 cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
+            ))
+            // The files panel docks at the right edge, so its button is the last one. A tree, not a
+            // framed panel: next to the split buttons a frame reads as one more way to split.
+            .child(ringed(
+                header_icon(
+                    "header-files",
+                    "list-tree",
+                    self.files_panel.is_some(),
+                    (t(cx, "files.title"), Some("⌥⌘B")),
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_files_panel(cx)),
+                ),
+                "header-files",
             ))
     }
 
@@ -1507,7 +1499,7 @@ impl Workbench {
                         .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)).border_color(hex(Chrome::ACCENT)))
                         .child(label)
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.request_launch(LaunchChoice::Model(kind, model.clone()), LaunchTarget::NewTab, window, cx)
+                            this.request_launch(LaunchChoice::Model(kind, model.clone()), this.launcher_target, window, cx)
                         })),
                 );
             }
@@ -1567,12 +1559,53 @@ impl Workbench {
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_launch(cx))),
             )
             .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            // Where what is picked below opens. A split starts in the tab's folder — and an agent
+            // there gets its own working tree when another one already works in the project.
+            .child({
+                let has_tab = self.active_pane().is_some();
+                let target = |id: &'static str, glyph: &'static str, label: &'static str, value: LaunchTarget, cx: &mut Context<Self>| {
+                    let active = self.launcher_target == value;
+                    div()
+                        .id(id)
+                        .flex_1()
+                        .h(px(26.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .t_small()
+                        .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::MUTED }))
+                        .when(active, |d| d.bg(hex(Chrome::SELECTED)))
+                        .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                        .child(icon(glyph, 12., hex(if active { Chrome::BRIGHT } else { Chrome::MUTED })))
+                        .child(t(cx, label))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.launcher_target = value;
+                            cx.notify();
+                        }))
+                };
+                div()
+                    .mx_2()
+                    .mb_1()
+                    .p_0p5()
+                    .flex()
+                    .gap_0p5()
+                    .rounded_md()
+                    .bg(hex(Chrome::PANEL))
+                    .child(target("launch-target-tab", "plus", "launcher.target_tab", LaunchTarget::NewTab, cx))
+                    .when(has_tab, |d| {
+                        d.child(target("launch-target-right", "columns-2", "launcher.target_right", LaunchTarget::SplitRight, cx))
+                            .child(target("launch-target-down", "rows-2", "launcher.target_down", LaunchTarget::SplitDown, cx))
+                    })
+            })
             .child(entry(
                 "launch-shell".into(),
                 Some("shell"),
                 t(cx, "welcome.terminal").into(),
                 "⌘T",
-                Box::new(|this, w, cx| this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, w, cx)),
+                Box::new(|this, w, cx| this.request_launch(PaneKind::Shell, this.launcher_target, w, cx)),
                 cx,
             ));
         if self.is_installed("claude") {
@@ -1582,7 +1615,7 @@ impl Workbench {
                     Some("claude"),
                     "Claude Code".into(),
                     "⌥⌘C",
-                    Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, LaunchTarget::NewTab, w, cx)),
+                    Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, this.launcher_target, w, cx)),
                     cx,
                 ))
                 .child(models(PaneKind::Claude, installed.claude_models.clone(), cx));
@@ -1593,7 +1626,7 @@ impl Workbench {
                 Some("codex"),
                 "Codex".into(),
                 "⌥⌘X",
-                Box::new(|this, w, cx| this.request_launch(PaneKind::Codex, LaunchTarget::NewTab, w, cx)),
+                Box::new(|this, w, cx| this.request_launch(PaneKind::Codex, this.launcher_target, w, cx)),
                 cx,
             ));
             if !installed.codex_models.is_empty() {
@@ -1610,7 +1643,7 @@ impl Workbench {
                 Box::new(move |this, w, cx| {
                     this.request_launch(
                         LaunchChoice::Command { title: title.clone(), command: command.clone() },
-                        LaunchTarget::NewTab,
+                        this.launcher_target,
                         w,
                         cx,
                     )
@@ -1663,7 +1696,7 @@ impl Workbench {
                         Box::new(move |this, w, cx| {
                             this.request_launch(
                                 LaunchChoice::Command { title: title.clone(), command: command.clone() },
-                                LaunchTarget::NewTab,
+                                this.launcher_target,
                                 w,
                                 cx,
                             )

@@ -126,6 +126,18 @@ pub fn tool_for_process(path: &std::path::Path, args: &[String]) -> Option<&'sta
     if let Some(agent) = crate::agents::OTHER_AGENTS.iter().find(|a| a.binary == name) {
         return Some(agent.id);
     }
+    // CLIs whose process is not called like their command. Cursor's `agent` / `cursor-agent` start
+    // `~/.local/share/cursor-agent/versions/<version>/…` (its own node, or a single executable);
+    // xAI's `grok` / `agent` are links to `~/.grok/downloads/grok-<os>-<arch>`.
+    let normalized = text.replace('\\', "/");
+    if normalized.contains("/cursor-agent/versions/")
+        || args.iter().skip(1).take(3).any(|a| a.replace('\\', "/").contains("/cursor-agent/versions/"))
+    {
+        return Some("cursor");
+    }
+    if name.starts_with("grok-") && normalized.contains("/.grok/") {
+        return Some("grok");
+    }
     if matches!(name.as_str(), "node" | "bun" | "deno" | "python" | "python3") {
         // `node /…/bin/gemini …`, `node /…/@openai/codex/bin/codex.js`
         for arg in args.iter().skip(1).take(3) {
@@ -481,6 +493,23 @@ pub fn parse_lsof(output: &str) -> Vec<(u32, Vec<u16>)> {
 #[cfg(test)]
 mod port_tests {
     use super::*;
+
+    #[test]
+    fn recognises_clis_whose_process_has_another_name() {
+        let path = |p: &str| std::path::PathBuf::from(p);
+        // Cursor CLI: `agent` and `cursor-agent` are links into its versions folder.
+        let sea = path("/Users/me/.local/share/cursor-agent/versions/2026.09.18-9a7762b/cursor-agent-sea");
+        assert_eq!(tool_for_process(&sea, &[]), Some("cursor"));
+        let node = path("/Users/me/.local/share/cursor-agent/versions/2026.09.18-9a7762b/node");
+        let script = "/Users/me/.local/share/cursor-agent/versions/2026.09.18-9a7762b/index.js".to_string();
+        assert_eq!(tool_for_process(&node, &["node".into(), script]), Some("cursor"));
+        // xAI's Grok Build: `grok` and `agent` are links to a per-platform binary.
+        assert_eq!(tool_for_process(&path("/Users/me/.grok/downloads/grok-macos-aarch64"), &[]), Some("grok"));
+        assert_eq!(tool_for_process(&path("/Users/me/.grok/bin/grok"), &[]), Some("grok"));
+        // Something else that merely starts with the same letters is not it.
+        assert_eq!(tool_for_process(&path("/usr/local/bin/grok-exporter"), &[]), None);
+        assert_eq!(tool_for_process(&path("/usr/bin/node"), &["node".into(), "/srv/app/index.js".into()]), None);
+    }
 
     #[test]
     fn maps_listeners_to_pane_trees() {

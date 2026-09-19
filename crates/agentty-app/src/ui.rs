@@ -37,7 +37,6 @@ pub const ICON_BUTTON: f32 = 26.0;
 
 /// Every icon referenced by name (checked by a test against the embedded assets).
 pub const ICONS: &[&str] = &[
-    "panel-right",
     "git-fork",
     "file",
     "lock",
@@ -428,6 +427,22 @@ pub fn tilde(path: &Path) -> String {
         Ok(rest) => format!("~/{}", rest.display()),
         Err(_) => path.display().to_string(),
     }
+}
+
+/// A pulsing ring over a control the onboarding tour wants used (the control must be `relative`).
+pub fn pulse_ring(id: &'static str, round: bool) -> gpui::AnimationElement<Div> {
+    div()
+        .absolute()
+        .inset_0()
+        .map(|d| if round { d.rounded_full() } else { d.rounded_md() })
+        .border_2()
+        .border_color(hex(Chrome::WARNING))
+        .bg(hex_alpha(Chrome::WARNING, 0.18))
+        .with_animation(
+            SharedString::from(format!("tour-ring-{id}")),
+            gpui::Animation::new(std::time::Duration::from_millis(1100)).repeat().with_easing(gpui::pulsating_between(0.35, 1.0)),
+            |ring, delta| ring.opacity(delta),
+        )
 }
 
 /// A path that fits in `max` characters, cut in the middle: `/Users/me/…/wt/project`. The start

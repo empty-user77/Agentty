@@ -42,7 +42,7 @@ pub const OTHER_AGENTS: &[AgentCli] = &[
         package: "@github/copilot",
         maker: "",
     },
-    AgentCli { primary: false, id: "cursor", name: "Cursor Agent", binary: "cursor-agent", color: 0xe6e6e6, package: "", maker: "" },
+    AgentCli { primary: false, id: "cursor", name: "Cursor CLI", binary: "cursor-agent", color: 0xe6e6e6, package: "", maker: "Cursor" },
     AgentCli { primary: false, id: "opencode", name: "OpenCode", binary: "opencode", color: 0xf5a623, package: "opencode-ai", maker: "" },
     AgentCli { primary: false, id: "qwen", name: "Qwen Code", binary: "qwen", color: 0x615ced, package: "@qwen-code/", maker: "" },
     AgentCli { primary: false, id: "droid", name: "Factory Droid", binary: "droid", color: 0xee6018, package: "", maker: "" },
@@ -52,7 +52,7 @@ pub const OTHER_AGENTS: &[AgentCli] = &[
     AgentCli { primary: false, id: "kimi", name: "Kimi CLI", binary: "kimi", color: 0x1783ff, package: "kimi-cli", maker: "" },
     AgentCli { primary: false, id: "kiro", name: "Kiro CLI", binary: "kiro-cli", color: 0x9046ff, package: "", maker: "" },
     AgentCli { primary: false, id: "cline", name: "Cline CLI", binary: "cline", color: 0xd4d4d4, package: "@cline/", maker: "" },
-    AgentCli { primary: false, id: "grok", name: "Grok CLI", binary: "grok", color: 0xe5e5e5, package: "grok-cli", maker: "" },
+    AgentCli { primary: false, id: "grok", name: "Grok Build", binary: "grok", color: 0xe5e5e5, package: "grok-cli", maker: "xAI" },
 ];
 
 /// Fallback when nothing is configured or used locally: aliases `claude --model` always accepts.

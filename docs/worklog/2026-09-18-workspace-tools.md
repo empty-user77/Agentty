@@ -71,6 +71,46 @@ never fails the settings file; toasts stay clear of the native browser view.
   whole path on hover, and ⌘-click shows it in the file manager (checked by counting Finder windows
   with a small Swift script: no automation prompt needed).
 
+## Live test (2026-09-19): six sessions building landing pages in one repository
+
+`~/worktreeTestWorkspace`, release build with the debug driver, own data folder
+(`~/.agentty-dev-worktree-test`). One workspace with a tab of four splits (3 × Claude Code, Codex)
+and a second tab, plus a second workspace — all on the same repository.
+
+- The first session stayed in the project; the other five got `agentty/<agent>-<time>` trees,
+  including the splits (`launch-split`), which is what the new split target of the + menu does.
+- The files panel showed it live: a row per tree with its session, `변경 N`, `↑1` after a commit,
+  status dots, the project folder's branch switching to `feat/coffee-landing-page` (the agent
+  followed the owner's git rules), "현재 탭" following the active pane.
+- Agents opened their own `file://…/worktrees/…/index.html` in the in-app browser to check it.
+- Found and fixed: a split could only open a shell (so agents in splits shared the folder); with
+  the browser and the files panel both open four splits were left ~220 pt (now the terminals keep
+  440 pt). Found, not fixed: every new tree asks Claude Code to trust the folder again and asks for
+  each shell command (friction of parallel sessions; "auto mode" in Claude's own prompt helps).
+- Codex hit its usage limit and did nothing; Claude warned at 85 % of the session limit with six
+  default-model sessions, so the test was not pushed further.
+
+## After the pull request (2026-09-19, not committed yet)
+
+Requests that came in after PR #5 was opened; all tried in the scratch debug app, none committed
+(the owner has not asked for a commit).
+
+- Working-tree list of the files panel: height can be dragged (`files_panel_trees_height`, 0 = auto).
+- Tour, files task: four steps now — open the panel, pick a session's tree, open a folder, close.
+  In a project without linked trees the panel shows example trees for that step
+  (`files_panel::demo_trees`, tag "example", nothing on disk or in git, no remove button); with real
+  trees those are ringed instead. `TourEvent::TreePicked`; "do this step for me" pins the first real
+  tree or picks the first example. `tour <task>` (e.g. `tour files`) jumps to a task.
+- Status bar position: `agent_bar_position` (`hud::HudPosition`, default **top** — bottom was the
+  default for an hour; the owner tried it and found it awkward — read leniently).
+  `layout::bars_below` decides for the single-pane bar *and* the split pane header (one rule, like a
+  vim status line); `layout::bar_popover` opens the branch menu and the collaboration panel away from
+  the bar. Settings → General "Status bar position", and a question in the basics step of onboarding.
+- `row_with_hint` (Settings): a long hint wraps in its column; before, it pushed the control of that
+  row out of line with the others (Claude Advisor, working trees).
+- Seen, left alone: the debug command `close-tab <index out of range>` opens a close dialog for zero
+  terminals. The UI cannot send such an index.
+
 ## Notes for whoever continues
 
 - More debug commands: `probe` (one JSON line: panes, listeners, browser URL, files panel, capture

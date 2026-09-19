@@ -27,6 +27,29 @@ impl Workbench {
         })
     }
 
+    /// An agent typed into a shell (`claude` in a split, say) starts where the shell is: nothing can
+    /// move it afterwards. When another agent already works in that tree, say so once, and how to
+    /// get a tree of its own next time.
+    pub(super) fn warn_about_shared_tree(&mut self, pane: &super::Pane, cx: &mut Context<Self>) {
+        let view = pane.read(cx);
+        let by_hand = view.spec.kind == PaneKind::Shell && view.tool_id() != "shell";
+        if !by_hand || !crate::settings::settings(cx).auto_worktree || self.shared_tree_warned.contains(&view.pane_id) {
+            return;
+        }
+        let Some(root) = tree_root(&view.display_cwd()) else { return };
+        let (id, entity) = (view.pane_id, pane.entity_id());
+        let shared = self.all_panes().iter().any(|other| {
+            let other_view = other.read(cx);
+            other.entity_id() != entity
+                && other_view.tool_id() != "shell"
+                && tree_root(&other_view.display_cwd()).as_deref() == Some(root.as_path())
+        });
+        if shared {
+            self.shared_tree_warned.insert(id);
+            self.show_toast_for(t(cx, "worktree.shared").to_string(), 9000, cx);
+        }
+    }
+
     /// Starts `choice` in a working tree of its own when the one at `cwd` is taken. Returns whether
     /// it took over the launch.
     pub(super) fn launch_in_own_tree(

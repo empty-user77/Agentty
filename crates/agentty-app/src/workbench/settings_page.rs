@@ -221,15 +221,18 @@ pub(super) fn row_with_hint(label: &str, hint: &str, control: impl IntoElement) 
         .items_center()
         .justify_between()
         .gap_4()
+        // A long hint wraps inside its column: the control stays in line with those of the other rows.
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .gap_0p5()
                 .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string()))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(hint.to_string())),
         )
-        .child(control)
+        .child(div().flex_shrink_0().child(control))
 }
 
 fn stepper(
@@ -988,6 +991,18 @@ impl Workbench {
             ));
         }
 
+        let mut bar_positions = div().flex().gap_1();
+        for (position, key) in
+            [(crate::hud::HudPosition::Top, "settings.position_top"), (crate::hud::HudPosition::Bottom, "settings.position_bottom")]
+        {
+            bar_positions = bar_positions.child(chip(
+                SharedString::from(format!("bar-position-{position:?}")),
+                t(cx, key),
+                prefs.agent_bar_position == position,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.agent_bar_position = position)),
+            ));
+        }
+
         let mut cursors = div().flex().gap_1();
         for (shape, key) in [
             (CursorShapeSetting::Block, "settings.cursor.block"),
@@ -1026,6 +1041,11 @@ impl Workbench {
                             t(cx, "settings.agent_bar"),
                             t(cx, "settings.agent_bar_hint"),
                             toggle("agent-bar", prefs.agent_bar, |s| s.agent_bar = !s.agent_bar, cx),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.agent_bar_position"),
+                            t(cx, "settings.agent_bar_position_hint"),
+                            bar_positions,
                         ))
                         .child(row(
                             t(cx, "settings.confirm_close"),

@@ -24,8 +24,8 @@ each agent is doing and highlights the ones that need you.
 - **Agent awareness** — live status per workspace (working / done / waiting for input). When an agent finishes or asks
   a question, its pane border lights up until you click it.
 - **Instant launch** — new Terminal, Claude Code (Opus / Sonnet / Haiku) or Codex (your recent models) tabs, starting
-  in a folder you choose. Other installed agents (Gemini CLI, Copilot CLI, Cursor Agent, OpenCode, Qwen Code, Amp,
-  Droid, Goose, Crush, Aider) and local Ollama models are detected and offered; missing ones stay hidden.
+  in a folder you choose. Other installed agents (Gemini CLI, Copilot CLI, Cursor CLI, Grok Build, OpenCode, Qwen
+  Code, Amp, Droid, Goose, Crush, Aider) and local Ollama models are detected and offered; missing ones stay hidden.
 - **Agent harnesses** — entering a project that declares a harness (`.harness`, `HARNESS.md`, `harness.yaml`, a project skill named
   `harness` or `harness-*`, …)
   offers to start work through its commands and skills: pick an entry point such as `/implement`, paste a ticket key or link, and the
@@ -37,7 +37,7 @@ each agent is doing and highlights the ones that need you.
 - **Mini mode & menu bar** — fold the window into a small always-on-top panel at the screen edge (⌃⌘M); finished
   agents pop up as speech bubbles, a click brings the full window back. The menu bar icon animates while agents work,
   lists them, and keeps Agentty running after you close the window.
-- **Pane status bar** — model, context window and rate-limit usage meters, branch and folder for every agent pane.
+- **Pane status bar** — model, context window and rate-limit usage meters, branch and folder for every agent pane; under the terminal or above it, items in your order.
 - **Notifications** — native macOS notifications when an agent finishes or needs input (click to open the pane), a
   notification center, jump to the latest unread (⇧⌘U), and `agentty notify` for your own scripts.
 - **Git** — a GitHub Desktop–style page: switch repositories and branches, fetch / pull / push, review diffs, commit

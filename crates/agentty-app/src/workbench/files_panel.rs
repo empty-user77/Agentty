@@ -15,6 +15,36 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const MIN_WIDTH: f32 = 220.;
+/// Width the terminals keep when the browser and this panel are both docked at the right.
+const MIN_TERMINALS: f32 = 440.;
+const MIN_BROWSER: f32 = 320.;
+/// The working-tree list: one row at least, and by default no more than six and a half (the half row
+/// says "there is more"); the handle under it sets any height in between.
+const MIN_TREES_HEIGHT: f32 = TREE_ROW_HEIGHT;
+const DEFAULT_TREES_HEIGHT: f32 = TREE_ROW_HEIGHT * 6.5;
+
+/// Height of the working-tree list: what the user dragged it to (`chosen`, 0 = never), never more
+/// than its rows need and never less than one row.
+pub(super) fn trees_height(rows: usize, chosen: f32) -> f32 {
+    let content = rows as f32 * TREE_ROW_HEIGHT + 4.;
+    let wanted = if chosen > 0. { chosen } else { DEFAULT_TREES_HEIGHT };
+    wanted.min(content).max(MIN_TREES_HEIGHT.min(content))
+}
+
+/// Widths the browser and the files panel are shown at. Each has the width the user gave it — until
+/// together they would squeeze the terminals: then the browser gives way first (down to its
+/// minimum), then this panel. `room` is what is left of the window beside the side bars and the
+/// plugin panel.
+pub(super) fn docked_widths(room: f32, browser: Option<f32>, files: Option<f32>) -> (f32, f32) {
+    let (mut browser_width, mut files_width) = (browser.unwrap_or(0.), files.map_or(0., |w| w.max(MIN_WIDTH)));
+    let over = browser_width + files_width + MIN_TERMINALS - room;
+    if over > 0. && browser.is_some() && files.is_some() {
+        let give = over.min((browser_width - MIN_BROWSER).max(0.));
+        browser_width -= give;
+        files_width -= (over - give).min((files_width - MIN_WIDTH).max(0.));
+    }
+    (browser_width, files_width)
+}
 const ROW_HEIGHT: f32 = 22.;
 const TREE_ROW_HEIGHT: f32 = 40.;
 /// Entries shown per folder; a folder with more says how many were left out.
@@ -75,6 +105,8 @@ pub(super) struct FilesPanel {
     loading: bool,
     /// Active pane and its folder when the panel last looked, to follow tab switches and `cd`.
     seen: Option<(gpui::EntityId, PathBuf)>,
+    /// Example tree picked while the onboarding tour shows its example working trees.
+    demo_pick: usize,
 }
 
 impl FilesPanel {
@@ -125,6 +157,30 @@ fn change_color(kind: char) -> u32 {
         'U' => Chrome::ORANGE,
         _ => Chrome::WARNING,
     }
+}
+
+/// Working trees the onboarding tour shows in a folder that has none: a project with two AI sessions
+/// in trees of their own. Nothing of it exists on disk or in git; (tool, status color) per row.
+fn demo_trees() -> Vec<(TreeInfo, (&'static str, u32))> {
+    let tree = |path: &str, branch: &str, main: bool| Worktree {
+        path: PathBuf::from(path),
+        branch: Some(branch.to_string()),
+        head: String::new(),
+        main,
+        managed: false,
+        prunable: false,
+    };
+    vec![
+        (TreeInfo { tree: tree("/example/my-project", "main", true), changes: 1, ahead: 0 }, ("claude", Chrome::ORANGE)),
+        (
+            TreeInfo { tree: tree("/example/claude-0919-1121", "agentty/claude-0919-1121", false), changes: 2, ahead: 1 },
+            ("claude", Chrome::SUCCESS),
+        ),
+        (
+            TreeInfo { tree: tree("/example/codex-0919-1122", "agentty/codex-0919-1122", false), changes: 1, ahead: 0 },
+            ("codex", Chrome::ATTENTION),
+        ),
+    ]
 }
 
 /// Everything the panel shows about `root`, read off the UI thread.
@@ -195,6 +251,7 @@ impl Workbench {
                     generation: 0,
                     loading: false,
                     seen: None,
+                    demo_pick: 0,
                 });
                 // Refreshes while it is open; ends with the panel.
                 cx.spawn(async move |this, cx| loop {
@@ -228,6 +285,15 @@ impl Workbench {
             panel.seen = seen;
             self.refresh_files_panel(cx);
         }
+    }
+
+    /// Shown widths of (browser, files panel): see [`docked_widths`].
+    pub(super) fn docked_widths(&self, cx: &gpui::App) -> (f32, f32) {
+        let prefs = crate::settings::settings(cx);
+        let sidebar = if self.sidebar_open { prefs.sidebar_width } else { 0. };
+        let plugin = self.plugin_panel.as_ref().map_or(0., |_| super::plugin_panel::PANEL_WIDTH);
+        let room = self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - plugin;
+        docked_widths(room, self.browser.as_ref().map(|_| prefs.browser.width), self.files_panel.as_ref().map(|_| prefs.files_panel_width))
     }
 
     /// The working tree (or plain folder) the active pane works in.
@@ -313,6 +379,40 @@ impl Workbench {
             panel.expanded.insert(path);
             self.onboarding_event(super::onboarding::TourEvent::FolderOpened, cx);
         }
+        cx.notify();
+    }
+
+    /// Whether the working-tree section shows the tour's example trees: while the tour teaches the
+    /// panel, in a project that has no linked trees of its own.
+    pub(super) fn tour_shows_tree_demo(&self) -> bool {
+        self.tour_teaches_files() && self.files_panel.as_ref().is_some_and(|p| !p.snapshot.trees.iter().any(|t| !t.tree.main))
+    }
+
+    /// Picks one of the tour's example trees (a click on it, or "do this step for me").
+    pub(super) fn pick_demo_tree(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(panel) = self.files_panel.as_mut() {
+            panel.demo_pick = index;
+        }
+        // The step asks for a session: the project folder of the examples does not count.
+        if demo_trees().get(index).is_some_and(|(info, _)| !info.tree.main) {
+            self.onboarding_event(super::onboarding::TourEvent::TreePicked, cx);
+        }
+        cx.notify();
+    }
+
+    /// The tour's "do this step for me" for picking a session's tree: the first real one, or the
+    /// first example where the project has none.
+    pub(super) fn pick_tree_for_tour(&mut self, cx: &mut Context<Self>) {
+        if self.tour_shows_tree_demo() {
+            return self.pick_demo_tree(1, cx);
+        }
+        let first = self.files_panel.as_ref().and_then(|p| p.snapshot.trees.iter().find(|t| !t.tree.main).map(|t| t.tree.path.clone()));
+        if let (Some(path), Some(panel)) = (first, self.files_panel.as_mut()) {
+            panel.pinned = Some(path);
+            panel.error = None;
+            self.refresh_files_panel(cx);
+        }
+        self.onboarding_event(super::onboarding::TourEvent::TreePicked, cx);
         cx.notify();
     }
 
@@ -423,7 +523,7 @@ impl Workbench {
     pub(super) fn render_files_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let panel = self.files_panel.as_ref()?;
         let snapshot = &panel.snapshot;
-        let width = crate::settings::settings(cx).files_panel_width.max(MIN_WIDTH);
+        let width = self.docked_widths(cx).1;
         let active_tree = self.active_tree(cx);
         let project = snapshot.trees.iter().find(|t| t.tree.main).map(|t| t.tree.path.clone()).unwrap_or_else(|| snapshot.root.clone());
         let project_name = project.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| tilde(&project));
@@ -475,7 +575,8 @@ impl Workbench {
                 }),
             ));
 
-        let trees = (!snapshot.trees.is_empty()).then(|| self.render_worktrees(panel, active_tree.as_deref(), cx));
+        let trees =
+            (!snapshot.trees.is_empty() || self.tour_shows_tree_demo()).then(|| self.render_worktrees(panel, active_tree.as_deref(), cx));
 
         let tab = |id: &'static str, label: String, which: FilesTab, cx: &mut Context<Self>| {
             let active = panel.tab == which;
@@ -561,7 +662,11 @@ impl Workbench {
     fn render_worktrees(&self, panel: &FilesPanel, active_tree: Option<&Path>, cx: &mut Context<Self>) -> AnyElement {
         let snapshot = &panel.snapshot;
         let folded = panel.trees_folded;
-        let linked = snapshot.trees.iter().filter(|t| !t.tree.main).count();
+        // The onboarding tour shows example trees where the project has none of its own.
+        let demo = self.tour_shows_tree_demo();
+        let (trees, demo_sessions): (Vec<TreeInfo>, Vec<(&'static str, u32)>) =
+            if demo { demo_trees().into_iter().unzip() } else { (snapshot.trees.clone(), Vec::new()) };
+        let linked = trees.iter().filter(|t| !t.tree.main).count();
         let title = div()
             .id("files-trees-title")
             .px_2()
@@ -575,6 +680,18 @@ impl Workbench {
             .text_color(hex(Chrome::MUTED))
             .child(icon(if folded { "chevron-right" } else { "chevron-down" }, 12., hex(Chrome::MUTED)))
             .child(t(cx, "files.worktrees").to_uppercase())
+            .when(demo, |d| {
+                d.child(
+                    div()
+                        .ml_1()
+                        .px_1()
+                        .rounded_sm()
+                        .bg(hex_alpha(Chrome::WARNING, 0.25))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(hex(Chrome::WARNING))
+                        .child(t(cx, "flow.demo_tag")),
+                )
+            })
             .child(div().flex_1())
             .child(div().font_weight(FontWeight::NORMAL).child(tf(cx, "files.worktree_count", &[("n", &linked.to_string())])))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -583,15 +700,18 @@ impl Workbench {
                 }
                 cx.notify();
             }));
-        let mut list = div().flex().flex_col().pb_1();
-        let count = snapshot.trees.len();
-        for (index, info) in snapshot.trees.iter().enumerate().filter(|_| !folded) {
+        let height = trees_height(trees.len(), crate::settings::settings(cx).files_panel_trees_height);
+        // Scrolls inside its own height, which the handle below it changes.
+        let mut list = div().id("files-trees-list").h(px(height)).overflow_y_scroll().flex().flex_col().pb_1();
+        let count = trees.len();
+        let ring = self.tour_target() == Some("files-trees");
+        for (index, info) in trees.iter().enumerate().filter(|_| !folded) {
             let tree = &info.tree;
-            let viewing = tree.path == snapshot.root;
-            let here = active_tree == Some(tree.path.as_path());
+            let viewing = if demo { panel.demo_pick == index } else { tree.path == snapshot.root };
+            let here = if demo { index == 0 } else { active_tree == Some(tree.path.as_path()) };
             let last = index + 1 == count;
-            let sessions = self.panes_in_tree(&tree.path, cx);
-            let path = tree.path.clone();
+            let sessions = if demo { Vec::new() } else { self.panes_in_tree(&tree.path, cx) };
+            let (path, is_main) = (tree.path.clone(), tree.main);
             let color = if tree.main { Chrome::BLUE } else { Chrome::PURPLE };
             let branch = tree.branch.clone().unwrap_or_else(|| t(cx, "files.detached").to_string());
             let confirm = panel.confirm_remove.as_ref() == Some(&tree.path);
@@ -619,11 +739,20 @@ impl Workbench {
             if sessions.len() > 4 {
                 avatars = avatars.child(div().t_caption().text_color(hex(Chrome::MUTED)).child(format!("+{}", sessions.len() - 4)));
             }
+            if let Some((tool, status_color)) = demo_sessions.get(index) {
+                avatars = avatars.child(
+                    div()
+                        .relative()
+                        .child(crate::brand::avatar(tool, 14.))
+                        .child(div().absolute().right(px(-1.)).bottom(px(-1.)).size(px(5.)).rounded_full().bg(hex(*status_color))),
+                );
+            }
             let remove_path = tree.path.clone();
             list = list.child(
                 div()
                     .id(SharedString::from(format!("files-tree-{index}")))
                     .group("files-tree")
+                    .relative()
                     .h(px(TREE_ROW_HEIGHT))
                     .mx_1()
                     .pr_1()
@@ -636,8 +765,15 @@ impl Workbench {
                     .border_color(if viewing { hex(color) } else { hex_alpha(0, 0.) })
                     .when(viewing, |d| d.bg(hex_alpha(color, 0.12)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .tooltip(Tooltip::text(tilde(&tree.path), None))
+                    .tooltip(Tooltip::text(if demo { t(cx, "files.demo_note").to_string() } else { tilde(&tree.path) }, None))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if demo {
+                            return this.pick_demo_tree(index, cx);
+                        }
+                        // The onboarding tour waits for a session's tree to be picked (the project folder is not one).
+                        if !is_main {
+                            this.onboarding_event(super::onboarding::TourEvent::TreePicked, cx);
+                        }
                         if let Some(panel) = this.files_panel.as_mut() {
                             panel.pinned = Some(path.clone());
                             panel.error = None;
@@ -645,6 +781,8 @@ impl Workbench {
                         this.refresh_files_panel(cx);
                         cx.notify();
                     }))
+                    // The tour asks for a session's tree: those rows get its pulsing ring.
+                    .when(ring && !tree.main, |d| d.child(crate::ui::pulse_ring("files-trees", false)))
                     .child(rail)
                     .child(icon(if tree.main { "folder" } else { "git-fork" }, 13., hex(color)))
                     .child(
@@ -721,7 +859,40 @@ impl Workbench {
                     }),
             );
         }
-        div().flex_shrink_0().border_b_1().border_color(hex(Chrome::BORDER)).child(title).child(list).into_any_element()
+        // The handle between the trees and the files: a hairline at rest, lit while hovered or dragged.
+        let resizing = self.files_trees_drag.is_some();
+        let handle = div()
+            .id("files-trees-resize")
+            .group("files-trees-resize")
+            .h(px(5.))
+            .flex_shrink_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .cursor(gpui::CursorStyle::ResizeUpDown)
+            .child(
+                div()
+                    .h(px(1.))
+                    .w_full()
+                    .bg(hex(Chrome::BORDER))
+                    .group_hover("files-trees-resize", |s| s.h(px(5.)).bg(hex(Chrome::ACCENT)))
+                    .when(resizing, |d| d.h(px(5.)).bg(hex(Chrome::ACCENT))),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    this.files_trees_drag = Some((f32::from(event.position.y), height));
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            );
+        div()
+            .flex_shrink_0()
+            .child(title)
+            .when(!folded, |d| d.child(list).child(handle))
+            .when(folded, |d| d.border_b_1().border_color(hex(Chrome::BORDER)))
+            .into_any_element()
     }
 
     fn render_file_rows(&self, panel: &FilesPanel, cx: &mut Context<Self>) -> AnyElement {
@@ -946,6 +1117,43 @@ fn kind_label(kind: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tour_shows_a_project_with_sessions_in_trees_of_their_own() {
+        let trees = demo_trees();
+        assert_eq!(trees.iter().filter(|(info, _)| info.tree.main).count(), 1);
+        assert!(trees.iter().filter(|(info, _)| !info.tree.main).count() >= 2);
+        // Nothing of them exists: no remove button (it is only offered for trees Agentty made).
+        assert!(trees.iter().all(|(info, _)| !info.tree.managed));
+        assert!(trees.iter().all(|(info, _)| info.tree.path.starts_with("/example")));
+    }
+
+    #[test]
+    fn the_tree_list_is_as_tall_as_asked_within_its_rows() {
+        // Never dragged: all rows up to six and a half, then it scrolls.
+        assert_eq!(trees_height(3, 0.), 3. * TREE_ROW_HEIGHT + 4.);
+        assert_eq!(trees_height(12, 0.), DEFAULT_TREES_HEIGHT);
+        // Dragged: that height, but never past the rows and never under one row.
+        assert_eq!(trees_height(12, 400.), 400.);
+        assert_eq!(trees_height(6, 400.), 6. * TREE_ROW_HEIGHT + 4.);
+        assert_eq!(trees_height(6, 10.), MIN_TREES_HEIGHT);
+        assert_eq!(trees_height(6, 90.), 90.);
+    }
+
+    #[test]
+    fn docked_panels_leave_the_terminals_room() {
+        // Plenty of room: both as the user sized them.
+        assert_eq!(docked_widths(2000., Some(560.), Some(300.)), (560., 300.));
+        // A 1400 pt window with the side bar open (about 1070 left): the browser gives way first.
+        let (browser, files) = docked_widths(1070., Some(560.), Some(300.));
+        assert_eq!((browser, files), (330., 300.));
+        assert!(1070. - browser - files >= MIN_TERMINALS);
+        // Tighter still: the browser stops at its minimum, then the files panel shrinks to its own.
+        assert_eq!(docked_widths(900., Some(560.), Some(300.)), (MIN_BROWSER, MIN_WIDTH));
+        // One panel alone keeps its width (the user can see what they resize).
+        assert_eq!(docked_widths(700., Some(560.), None), (560., 0.));
+        assert_eq!(docked_widths(700., None, Some(300.)), (0., 300.));
+    }
 
     #[test]
     fn a_name_that_looks_like_an_option_is_typed_as_a_path() {

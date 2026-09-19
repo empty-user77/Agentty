@@ -41,6 +41,10 @@ pub(super) enum TourEvent {
     MiniEntered,
     MiniLeft,
     FolderOpened,
+    /// The two example cards of Session Flow were linked.
+    DemoLinked,
+    /// A working tree was picked in the files panel (a real one, or one of the tour's examples).
+    TreePicked,
 }
 
 /// How the tour knows a step was done.
@@ -48,8 +52,6 @@ enum Check {
     /// The app is in this state (a page is open, a panel is closed, …).
     State(fn(&Workbench) -> bool),
     Event(TourEvent),
-    /// Nothing to detect (something to look at or try freely): the user says "got it".
-    Manual,
 }
 
 type Demo = fn(&mut Workbench, &mut Window, &mut Context<Workbench>);
@@ -152,7 +154,16 @@ impl Task {
                         Check::State(|w| w.page == Some(Page::Flow)),
                         Some(|w, _, cx| w.open_page(Page::Flow, cx)),
                     ),
-                    step("onboarding.flow_2", "onboarding.flow_2_done", None, None, Check::Manual, None),
+                    // Two example cards are on the page for this step (`flow.rs`), so there is always
+                    // something to drag, and nothing real is ever sent.
+                    step(
+                        "onboarding.flow_2",
+                        "onboarding.flow_2_done",
+                        None,
+                        Some("flow-demo-handle"),
+                        Check::Event(TourEvent::DemoLinked),
+                        Some(|w, _, cx| w.flow_demo_link(super::flow::DEMO_SOURCE, super::flow::DEMO_TARGET, cx)),
+                    ),
                     step(
                         "onboarding.flow_3",
                         "onboarding.flow_3_done",
@@ -195,10 +206,9 @@ impl Task {
                         Check::State(|w| w.browser.is_some()),
                         Some(|w, window, cx| w.toggle_browser(window, cx)),
                     ),
-                    step("onboarding.browser_2", "onboarding.browser_2_done", None, None, Check::Manual, None),
                     step(
-                        "onboarding.browser_3",
-                        "onboarding.browser_3_done",
+                        "onboarding.browser_2",
+                        "onboarding.browser_2_done",
                         Some("⇧⌘B"),
                         Some("header-browser"),
                         Check::State(|w| w.browser.is_none()),
@@ -207,7 +217,7 @@ impl Task {
                 ],
             },
             Task::Files => Guide {
-                glyph: "panel-right",
+                glyph: "list-tree",
                 title: "onboarding.files",
                 what: "onboarding.files_what",
                 steps: vec![
@@ -219,17 +229,26 @@ impl Task {
                         Check::State(|w| w.files_panel.is_some()),
                         Some(|w, _, cx| w.toggle_files_panel(cx)),
                     ),
+                    // The project may have no working trees yet: the panel shows example ones for this step.
                     step(
                         "onboarding.files_2",
                         "onboarding.files_2_done",
+                        None,
+                        Some("files-trees"),
+                        Check::Event(TourEvent::TreePicked),
+                        Some(|w, _, cx| w.pick_tree_for_tour(cx)),
+                    ),
+                    step(
+                        "onboarding.files_3",
+                        "onboarding.files_3_done",
                         None,
                         None,
                         Check::Event(TourEvent::FolderOpened),
                         Some(|w, _, cx| w.open_first_folder(cx)),
                     ),
                     step(
-                        "onboarding.files_3",
-                        "onboarding.files_3_done",
+                        "onboarding.files_4",
+                        "onboarding.files_4_done",
                         Some("⌥⌘B"),
                         Some("header-files"),
                         Check::State(|w| w.files_panel.is_none()),
@@ -313,6 +332,12 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Every feature was tried: the tour closes and the start page is what comes next.
+    fn finish_onboarding(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_onboarding(cx);
+        self.open_welcome(window, cx);
+    }
+
     fn close_onboarding(&mut self, cx: &mut Context<Self>) {
         self.onboarding = None;
         update_settings(cx, |s| s.onboarding_done = true);
@@ -346,7 +371,6 @@ impl Workbench {
             let done = match step.check {
                 Check::State(check) => check(self),
                 Check::Event(event) => self.onboarding.as_mut().is_some_and(|o| o.seen.remove(&event)),
-                Check::Manual => false,
             };
             if !done {
                 break;
@@ -361,6 +385,16 @@ impl Workbench {
         }
     }
 
+    /// Whether the tour is on the files panel (its working-tree section then shows example trees).
+    pub(super) fn tour_teaches_files(&self) -> bool {
+        self.onboarding.as_ref().is_some_and(|o| o.step == Step::Tour && o.current == Task::Files && !o.finished(Task::Files))
+    }
+
+    /// Whether the Session Flow page shows its two example cards: only while the tour teaches it.
+    pub(super) fn tour_shows_flow_demo(&self) -> bool {
+        self.onboarding.as_ref().is_some_and(|o| o.step == Step::Tour && o.current == Task::Flow && !o.finished(Task::Flow))
+    }
+
     /// Element id of the control the step to do now wants pressed, for a ring around it.
     pub(super) fn tour_target(&self) -> Option<&'static str> {
         let onboarding = self.onboarding.as_ref().filter(|o| o.step == Step::Tour)?;
@@ -368,20 +402,22 @@ impl Workbench {
         onboarding.current.guide().steps.get(at).and_then(|step| step.target)
     }
 
-    /// "Do it for me" (or "Got it" for a step with nothing to detect): exactly the step to do now.
+    /// "Do this step for me": exactly the step to do now.
     fn onboarding_do_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((task, at)) = self.onboarding.as_ref().map(|o| (o.current, o.progress.get(&o.current).copied().unwrap_or(0))) else {
             return;
         };
         let steps = task.guide().steps;
         let Some(step) = steps.get(at) else { return };
-        match (&step.check, step.demo) {
-            (Check::Manual, _) | (_, None) => {
+        match step.demo {
+            Some(demo) => demo(self, window, cx),
+            // Nothing the app can do in the user's place (coming back from mini mode): the button
+            // is not offered for such a step; the debug driver just moves on.
+            None => {
                 if let Some(onboarding) = self.onboarding.as_mut() {
                     onboarding.progress.insert(task, at + 1);
                 }
             }
-            (_, Some(demo)) => demo(self, window, cx),
         }
         cx.notify();
     }
@@ -395,7 +431,8 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Debug driver: `tour` (state), `tour do` (the step to do now, for me), `tour next`, `tour start`.
+    /// Debug driver: `tour` (state), `tour do` (the step to do now, for me), `tour next`, `tour start`,
+    /// `tour finish` (what the last button does).
     pub(super) fn debug_tour(&mut self, argument: &str, window: &mut Window, cx: &mut Context<Self>) -> serde_json::Value {
         match argument {
             "start" => {
@@ -403,13 +440,21 @@ impl Workbench {
                 self.go_to(Step::Tour, cx);
             }
             "do" => self.onboarding_do_step(window, cx),
+            "finish" => self.finish_onboarding(window, cx),
             "next" => {
                 let next = self.onboarding.as_ref().and_then(|o| Task::all().into_iter().find(|t| !o.finished(*t)));
                 if let Some(next) = next {
                     self.onboarding_go(next, cx);
                 }
             }
-            _ => {}
+            // A task by name (`tour files`): straight to it, whatever is finished.
+            name => {
+                if let Some(task) = Task::all().into_iter().find(|t| format!("{t:?}").eq_ignore_ascii_case(name)) {
+                    self.open_onboarding(cx);
+                    self.go_to(Step::Tour, cx);
+                    self.onboarding_go(task, cx);
+                }
+            }
         }
         self.advance_tour(cx);
         match self.onboarding.as_ref() {
@@ -592,21 +637,23 @@ impl Workbench {
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, change)))
                 .child(div().size(px(16.)).rounded_full().bg(hex(Chrome::BRIGHT)))
         };
-        let row = |title: &str, body: &str, control: AnyElement| {
+        // A row is read at a glance: an icon, a short name, one line of what it does. The long
+        // explanations stay in Settings, where someone looks for them.
+        let row = |glyph: &'static str, color: u32, title: &str, body: &str, control: AnyElement| {
             div()
                 .flex()
                 .items_center()
-                .justify_between()
-                .gap_4()
-                .py_1p5()
+                .gap_3()
+                .py_2()
+                .child(crate::brand::tinted_tile(color, 30.).child(icon(glyph, IconSize::BUTTON, hex(color))))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(title.to_string()))
-                        .child(div().t_small().text_color(hex(Chrome::MUTED)).child(body.to_string())),
+                        .child(div().truncate().t_body().text_color(hex(Chrome::BRIGHT)).child(title.to_string()))
+                        .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(body.to_string())),
                 )
                 .child(control)
         };
@@ -625,6 +672,20 @@ impl Workbench {
             .when(crate::platform::HAS_WEBVIEW, |d| d.child(opener("onboarding-link-inapp", "settings.link_inapp", LinkOpener::InApp, cx)))
             .child(opener("onboarding-link-external", "settings.link_external", LinkOpener::External, cx));
         let in_app = prefs.link_opener == LinkOpener::InApp && crate::platform::HAS_WEBVIEW;
+        let bar_at = |id: &'static str, label: &'static str, value: crate::hud::HudPosition, cx: &mut Context<Self>| {
+            chip(
+                id,
+                t(cx, label),
+                prefs.agent_bar_position == value,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.agent_bar_position = value)),
+            )
+        };
+        let bar_positions = div()
+            .flex()
+            .flex_shrink_0()
+            .gap_1()
+            .child(bar_at("onboarding-bar-top", "settings.position_top", crate::hud::HudPosition::Top, cx))
+            .child(bar_at("onboarding-bar-bottom", "settings.position_bottom", crate::hud::HudPosition::Bottom, cx));
 
         let list = div()
             .id("onboarding-basics")
@@ -633,11 +694,19 @@ impl Workbench {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .child(row(t(cx, "settings.link_opener"), t(cx, "onboarding.links_body"), openers.into_any_element()))
+            .child(row(
+                "globe",
+                Chrome::BLUE,
+                t(cx, "onboarding.opt_links"),
+                t(cx, "onboarding.opt_links_body"),
+                openers.into_any_element(),
+            ))
             .when(in_app, |d| {
                 d.child(row(
-                    t(cx, "settings.browser_auto_open"),
-                    t(cx, "settings.browser_auto_open_hint"),
+                    "zap",
+                    Chrome::GREEN,
+                    t(cx, "onboarding.opt_auto_open"),
+                    t(cx, "onboarding.opt_auto_open_body"),
                     switch(
                         "onboarding-auto-open",
                         prefs.browser.auto_open_servers,
@@ -648,25 +717,40 @@ impl Workbench {
                 ))
             })
             .child(row(
-                t(cx, "settings.auto_worktree"),
-                t(cx, "settings.auto_worktree_hint"),
+                "rows-2",
+                Chrome::ORANGE,
+                t(cx, "onboarding.opt_bar_position"),
+                t(cx, "onboarding.opt_bar_position_body"),
+                bar_positions.into_any_element(),
+            ))
+            .child(row(
+                "git-fork",
+                Chrome::PURPLE,
+                t(cx, "onboarding.opt_worktree"),
+                t(cx, "onboarding.opt_worktree_body"),
                 switch("onboarding-worktree", prefs.auto_worktree, |s| s.auto_worktree = !s.auto_worktree, cx).into_any_element(),
             ))
             .child(row(
-                t(cx, "settings.stop_servers"),
-                t(cx, "settings.stop_servers_hint"),
+                "power",
+                Chrome::ERROR,
+                t(cx, "onboarding.opt_stop_servers"),
+                t(cx, "onboarding.opt_stop_servers_body"),
                 switch("onboarding-stop-servers", prefs.stop_servers_on_close, |s| s.stop_servers_on_close = !s.stop_servers_on_close, cx)
                     .into_any_element(),
             ))
             .child(row(
-                t(cx, "settings.system_notifications"),
-                t(cx, "onboarding.notifications_body"),
+                "bell",
+                Chrome::ORANGE,
+                t(cx, "onboarding.opt_notify"),
+                t(cx, "onboarding.opt_notify_body"),
                 switch("onboarding-notifications", prefs.system_notifications, |s| s.system_notifications = !s.system_notifications, cx)
                     .into_any_element(),
             ))
             .child(row(
-                t(cx, "settings.idea_mode"),
-                t(cx, "settings.idea_mode_hint"),
+                "lightbulb",
+                Chrome::WARNING,
+                t(cx, "onboarding.opt_idea"),
+                t(cx, "onboarding.opt_idea_body"),
                 switch("onboarding-idea", prefs.idea_mode, |s| s.idea_mode = !s.idea_mode, cx).into_any_element(),
             ));
 
@@ -829,8 +913,7 @@ impl Workbench {
         }
 
         let now = guide.steps.get(at);
-        let manual = now.is_some_and(|step| matches!(step.check, Check::Manual));
-        let can_help = now.is_some_and(|step| manual || step.demo.is_some());
+        let can_help = now.is_some_and(|step| step.demo.is_some());
         div()
             .id("onboarding-tour")
             .absolute()
@@ -888,9 +971,19 @@ impl Workbench {
                         .child(
                             div()
                                 .flex_1()
+                                // Without this a flex child is as wide as its text and runs out of the card.
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
                                 .t_small()
-                                .text_color(hex(Chrome::BRIGHT))
-                                .child(t(cx, if all_done { "onboarding.all_done" } else { "onboarding.task_done" })),
+                                .child(
+                                    div()
+                                        .text_color(hex(Chrome::BRIGHT))
+                                        .child(t(cx, if all_done { "onboarding.all_done" } else { "onboarding.task_done" })),
+                                )
+                                // What "Finish" does, on a line of its own (two short lines read better
+                                // than one that breaks in the middle of a word).
+                                .when(all_done, |d| d.child(div().text_color(hex(Chrome::MUTED)).child(t(cx, "onboarding.all_done_next")))),
                         ),
                 )
             })
@@ -903,8 +996,8 @@ impl Workbench {
                     .child(if !task_done && can_help {
                         self.onboarding_button(
                             "onboarding-do-step",
-                            t(cx, if manual { "onboarding.got_it" } else { "onboarding.show_me" }),
-                            manual,
+                            t(cx, "onboarding.show_me"),
+                            false,
                             |this, window, cx| this.onboarding_do_step(window, cx),
                             cx,
                         )
@@ -932,7 +1025,13 @@ impl Workbench {
                                 "onboarding-done",
                                 t(cx, if all_done { "onboarding.finish" } else { "onboarding.later" }),
                                 all_done,
-                                |this, _, cx| this.close_onboarding(cx),
+                                move |this, window, cx| {
+                                    if all_done {
+                                        this.finish_onboarding(window, cx)
+                                    } else {
+                                        this.close_onboarding(cx)
+                                    }
+                                },
                                 cx,
                             )
                             .into_any_element(),
@@ -944,7 +1043,7 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{Check, Task};
+    use super::Task;
     use crate::settings::Language;
 
     #[test]
@@ -961,7 +1060,7 @@ mod tests {
             for step in &guide.steps {
                 keys.extend([step.text, step.done]);
                 // A step the app cannot do for the user must be one the user can always finish.
-                if step.demo.is_none() && !matches!(step.check, Check::Manual) {
+                if step.demo.is_none() {
                     assert!(step.shortcut.is_some(), "{} has neither a demo nor a shortcut", step.text);
                 }
             }

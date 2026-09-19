@@ -77,6 +77,22 @@ pub struct HudEntry {
     pub visible: bool,
 }
 
+/// Where a pane shows its status bar: above the terminal, or under it (like the status line of vim or tmux).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HudPosition {
+    #[default]
+    Top,
+    Bottom,
+}
+
+/// Reads the saved position leniently: a value this version does not know means the default, not a
+/// settings file that fails to load.
+pub fn lenient_position<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<HudPosition, D::Error> {
+    let raw = serde_json::Value::deserialize(deserializer).unwrap_or_default();
+    Ok(serde_json::from_value(raw).unwrap_or_default())
+}
+
 /// Reads a saved layout leniently: an entry this version does not know (written by a newer one) is
 /// skipped instead of failing the whole settings file, which would reset every setting.
 pub fn lenient<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<HudEntry>, D::Error> {
@@ -125,6 +141,22 @@ pub fn toggled(layout: &[HudEntry], item: HudItem) -> Vec<HudEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bar_sits_above_the_terminal_unless_a_file_says_bottom() {
+        #[derive(Deserialize)]
+        struct File {
+            #[serde(default, deserialize_with = "lenient_position")]
+            at: HudPosition,
+        }
+        let at = |json: &str| serde_json::from_str::<File>(json).unwrap().at;
+        assert_eq!(at("{}"), HudPosition::Top);
+        assert_eq!(at(r#"{"at":"top"}"#), HudPosition::Top);
+        assert_eq!(at(r#"{"at":"bottom"}"#), HudPosition::Bottom);
+        // A value from a newer version, or a broken one, does not fail the settings file.
+        assert_eq!(at(r#"{"at":"left"}"#), HudPosition::Top);
+        assert_eq!(at(r#"{"at":7}"#), HudPosition::Top);
+    }
 
     #[test]
     fn required_items_move_but_never_hide() {

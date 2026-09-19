@@ -118,6 +118,8 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// Width of the files panel docked at the right edge.
     pub files_panel_width: f32,
+    /// Height of its working-tree list once the user dragged it (0: as tall as its rows, up to a few).
+    pub files_panel_trees_height: f32,
     /// Ask for a starting folder whenever a new workspace is opened.
     pub ask_directory: bool,
     /// Also ask for new tabs (otherwise they open in the current tab's folder).
@@ -138,6 +140,9 @@ pub struct Settings {
     pub resume_bar: bool,
     /// Status bar (model, context, branch) above AI CLI panes.
     pub agent_bar: bool,
+    /// Whether that bar (and the header of a split pane) sits above the terminal or under it.
+    #[serde(deserialize_with = "crate::hud::lenient_position")]
+    pub agent_bar_position: crate::hud::HudPosition,
     /// Items of that status bar, in order (`hud::normalized` fills in what a file is missing).
     #[serde(deserialize_with = "crate::hud::lenient")]
     pub hud: Vec<crate::hud::HudEntry>,
@@ -321,6 +326,7 @@ impl Default for Settings {
             scrollback: 10_000,
             sidebar_width: 280.0,
             files_panel_width: 300.0,
+            files_panel_trees_height: 0.0,
             ask_directory: true,
             ask_directory_for_tabs: false,
             recent_dirs: Vec::new(),
@@ -333,6 +339,7 @@ impl Default for Settings {
             favorite_sessions: Vec::new(),
             resume_bar: true,
             agent_bar: true,
+            agent_bar_position: crate::hud::HudPosition::default(),
             hud: crate::hud::default_layout(),
             idea_mode: true,
             confirm_close: true,

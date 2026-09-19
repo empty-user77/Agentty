@@ -286,7 +286,7 @@ impl Workbench {
         Some(
             div()
                 .relative()
-                .w(px(settings(cx).browser.width))
+                .w(px(self.docked_widths(cx).0))
                 .flex_shrink_0()
                 .h_full()
                 .flex()
