@@ -12,8 +12,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # These jobs run on the self-hosted Apple silicon Mac, check-windows on a self-hosted Windows PC
-  # (the repository is private, so only collaborators' pull requests reach them).
+  # All jobs run on the self-hosted Apple silicon Mac (check-linux in Docker there) except
+  # check-windows, which runs on a self-hosted Windows PC. The repository is private, so only
+  # collaborators' pull requests reach them.
   secrets:
     runs-on: [self-hosted, macOS, ARM64]
     steps:
@@ -63,6 +64,13 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The runner keeps the PATH it started with (and a service may not get the user's PATH at
+      # all), so put rustup's default location on it explicitly.
+      - name: Put cargo on PATH
+        run: |
+          $bin = Join-Path $env:USERPROFILE '.cargo\bin'
+          if (-not (Test-Path (Join-Path $bin 'rustup.exe'))) { throw "rustup not found in $bin (runner user: $env:USERNAME)" }
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
       - name: Install toolchain
         run: rustup toolchain install
       - name: Clippy
@@ -85,34 +93,41 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Linux build: planned, not supported yet. Uncomment this job to re-enable it (it passed on the
-  # merge of PR #3).
-  # check-linux:
-  #   needs: secrets
-  #   runs-on: ubuntu-24.04
-  #   steps:
-  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-  #     - name: Install system libraries
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y --no-install-recommends pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
-  #           libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev zsh
-  #     - name: Install toolchain
-  #       run: rustup toolchain install
-  #     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-  #     - name: Clippy
-  #       run: cargo clippy --workspace --all-targets -- -D warnings
-  #     - name: Test
-  #       run: cargo test --workspace
-  #     - name: Build (release)
-  #       run: cargo build --release -p agentty-app
-  #     - name: Package and install round trip
-  #       run: |
-  #         scripts/package-linux.sh
-  #         tar -xzf dist/agentty-*-linux-*.tar.gz -C target
-  #         prefix="$RUNNER_TEMP/agentty-prefix"
-  #         PREFIX="$prefix" target/agentty-*-linux-*/install.sh
-  #         test -x "$prefix/bin/agentty"
-  #         test -f "$prefix/share/applications/run.agentty.Agentty.desktop"
-  #         PREFIX="$prefix" target/agentty-*-linux-*/install.sh --uninstall
-  #         test ! -e "$prefix/bin/agentty"
+  # Linux has no runner of its own: this job runs on the Mac and builds inside an Ubuntu container
+  # (Docker Desktop must be running). Apple silicon, so the build is linux-aarch64. Cargo's registry,
+  # the toolchain and target/ live in named volumes, so later runs reuse them.
+  check-linux:
+    needs: secrets
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Docker is running
+        run: docker info --format '{{.ServerVersion}} {{.Architecture}}' || { echo "::error::Docker Desktop is not running on the runner"; exit 1; }
+      - name: Clippy, test and package (Ubuntu 24.04)
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" -w /src \
+            -v agentty-linux-cargo:/root/.cargo \
+            -v agentty-linux-rustup:/root/.rustup \
+            -v agentty-linux-target:/src/target \
+            -e CARGO_TERM_COLOR=always \
+            ubuntu:24.04 bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive PATH="/root/.cargo/bin:$PATH"
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends ca-certificates curl build-essential git \
+                pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+                libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev zsh >/dev/null
+              command -v rustup >/dev/null || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --no-modify-path
+              rustup toolchain install
+              cargo clippy --workspace --all-targets -- -D warnings
+              cargo test --workspace
+              scripts/package-linux.sh
+            '
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agentty-linux-aarch64
+          path: |
+            dist/agentty-*-linux-*.tar.gz
+            dist/agentty-*-linux-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
