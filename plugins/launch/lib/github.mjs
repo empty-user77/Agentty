@@ -207,6 +207,12 @@ export async function createAndPushRepo(ghBin, cwd, { name, isPublic = false, ma
   throw new Error(`could not find a free repository name starting from "${base}"`);
 }
 
+/** Whether `gh` confirms the `origin` repository is private (or internal). Unknown counts as public. */
+export async function repoIsPrivate(ghBin, cwd) {
+  const result = await run(ghBin, ['repo', 'view', '--json', 'visibility', '-q', '.visibility'], { cwd, env: ghEnv(), timeoutMs: 15_000 });
+  return result.code === 0 && ['PRIVATE', 'INTERNAL'].includes(result.stdout.trim().toUpperCase());
+}
+
 /** The repo's web URL, from `gh` if possible, else derived from the `origin` remote. */
 export async function repoUrl(ghBin, cwd) {
   const viaGh = await run(ghBin, ['repo', 'view', '--json', 'url', '-q', '.url'], { cwd, env: ghEnv(), timeoutMs: 15_000 });

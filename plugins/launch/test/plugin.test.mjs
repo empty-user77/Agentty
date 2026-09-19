@@ -388,7 +388,9 @@ case "$1" in
         exit 0
         ;;
       view)
-        if [ "$4" = "nameWithOwner" ]; then echo "fake-user/my-cool-app"; else echo "https://github.com/fake-user/my-cool-app"; fi
+        if [ "$4" = "nameWithOwner" ]; then echo "fake-user/my-cool-app";
+        elif [ "$4" = "visibility" ]; then echo "\${FAKE_VISIBILITY:-PUBLIC}";
+        else echo "https://github.com/fake-user/my-cool-app"; fi
         exit 0
         ;;
     esac
@@ -800,6 +802,8 @@ test('Launch: a repository Vercel already deploys shows the live site, and publi
     assert.ok(!fs.existsSync(path.join(box.root, 'deploys.log')), 'vercel deploy was not run');
     const remoteLog = execFileSync('git', ['--git-dir', bare, 'log', '--oneline'], { encoding: 'utf8' });
     assert.equal(remoteLog.trim().split('\n').length, 2, 'the change reached the remote');
+    // A remote Launch did not create is treated as public unless GitHub says it is private.
+    assert.ok(fs.readFileSync(path.join(box.project, '.gitignore'), 'utf8').split('\n').includes(IDEA_NOTES_GITIGNORE_LINES[0]), 'a public remote never gets the idea notes');
   } finally {
     host.stop();
   }

@@ -37,6 +37,7 @@ import {
   hasOrigin,
   pushOrigin,
   createAndPushRepo,
+  repoIsPrivate,
   repoUrl,
 } from './lib/github.mjs';
 import { vercelWhoami, vercelLogin, discoverEnvVars, addEnvVar, deployProduction, connectGit } from './lib/vercel.mjs';
@@ -690,7 +691,9 @@ async function doGithubSave() {
   await ensureGitRepo(state.root);
   const existing = await hasOrigin(state.root);
   // A public repository never gets the owner's idea notes; every save keeps them out of deploys.
-  await ensureGitignore(state.root, { keepIdeaNotesOut: !existing && state.publicRepo });
+  // A remote Launch did not create keeps them out unless GitHub confirms it is private.
+  const keepIdeaNotesOut = existing ? !(await repoIsPrivate(state.ghBin, state.root)) : state.publicRepo;
+  await ensureGitignore(state.root, { keepIdeaNotesOut });
   await ensureVercelignore(state.root);
   const risky = await envFilesToRefuse(state.root);
   if (risky.length > 0) throw new Error(tr('envGuardError', { files: risky.join(', ') }));
