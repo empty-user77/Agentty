@@ -16,7 +16,8 @@ pwsh scripts/package-windows.ps1 -Installer # on Windows: zip + Inno Setup insta
 ## Windows installer and Linux packages
 
 Each release also carries, built by the **Release packages** workflow (`.github/workflows/release-packages.yml`, on
-`v*` tag pushes and by hand with `gh workflow run release-packages.yml -f ref=<ref>`):
+`v*` tag pushes, on pull requests that change the packaging, and by hand with
+`gh workflow run release-packages.yml -f ref=<ref>`):
 
 | File | Built by | On |
 |---|---|---|

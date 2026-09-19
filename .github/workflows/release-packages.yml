@@ -7,6 +7,14 @@ name: Release packages
 on:
   push:
     tags: ['v*']
+  # Pull requests that change the packaging build it too, so a broken installer shows up before the release. Only
+  # these paths: the Linux build is emulated and slow, and shares the Mac with CI.
+  pull_request:
+    paths:
+      - .github/workflows/release-packages.yml
+      - packaging/**
+      - scripts/package-windows.ps1
+      - scripts/build-linux-packages.sh
   workflow_dispatch:
     inputs:
       ref:
