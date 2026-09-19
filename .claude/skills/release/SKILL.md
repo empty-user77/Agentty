@@ -1,13 +1,20 @@
 ---
 name: release
-description: Release a new Agentty version to github.com/empty-user77/agentty-releases — preflight, version bump, changelog, CI checks, tag, signed/notarized DMG, English release notes, draft release, independent verification, publish and update-feed check. Use when the user asks to release, ship, publish or cut a version.
+description: Release a new Agentty version to github.com/empty-user77/agentty-releases — preflight, version bump, changelog, CI checks, tag, Windows installer and Linux packages from the release-packages workflow, signed/notarized DMG, English release notes, draft release, independent verification, publish and update-feed check. Use when the user asks to release, ship, publish or cut a version.
 ---
 
 # Releasing Agentty
 
 Agentty's source lives in `empty-user77/Agentty`; binaries and the auto-update feed live in
 `empty-user77/agentty-releases`. Installed apps poll `releases/latest` of that repo, so **publishing a release ships an
-update to every user**.
+update to every user** (macOS and Windows install it in place; Linux users are pointed to the release page).
+
+A release holds: the notarized DMG and app zip (built here), the Windows installer
+`Agentty-X.Y.Z-windows-x64-setup.exe` and the same installer in `Agentty-X.Y.Z-windows-x64-setup.zip` (Chrome blocks
+unsigned `.exe` downloads), `Agentty-X.Y.Z-linux-amd64.deb`, `Agentty-X.Y.Z-linux-x86_64.rpm`, and
+`Agentty-X.Y.Z-SHA256SUMS.txt` over all of them. The Windows and Linux files are built by the **Release packages**
+workflow (`.github/workflows/release-packages.yml`) that the tag push starts on the self-hosted Windows PC and Mac; the
+workflow has no token for `agentty-releases`, so they are downloaded here and uploaded with the DMG.
 
 ## Rules
 
@@ -58,8 +65,9 @@ update to every user**.
 scripts/release-preflight.sh X.Y.Z
 ```
 It checks: on `main`, up to date, tag free, secret-scanning hooks installed, the active `gh` account can push to both
-repos, latest CI green, version newer than the published one, `.env.agentty-prod` present/private/gitignored with all
-signing, notarization and GA variables set, the Developer ID certificate in the keychain, and the build tools.
+repos, latest CI green, version newer than the published one, the self-hosted Windows and macOS runners online (the
+Release packages workflow needs both), Docker running, `.env.agentty-prod` present/private/gitignored with all signing,
+notarization and GA variables set, the Developer ID certificate in the keychain, and the build tools.
 
 Common fixes:
 | ✗ | Fix |
@@ -68,6 +76,7 @@ Common fixes:
 | `.env.agentty-prod` missing | Ask the user to copy it from the previous checkout (e.g. `! cp -p <old repo>/.env.agentty-prod .`). Never create it from values you saw elsewhere. |
 | account cannot push | `gh auth switch -u empty-user77` |
 | certificate not in keychain | unlock the login keychain |
+| runner offline | ask the user to start the Windows PC's runner service / the Mac's runner, or Docker Desktop |
 
 Uncommitted feature work is only a warning: commit it (conventional message, with the Co-Authored-By trailer) before
 step 2 so the release commit contains only the bump and changelog.
@@ -97,7 +106,22 @@ git commit -am "chore: release vX.Y.Z"      # with the Co-Authored-By trailer
 git tag -a vX.Y.Z -m "Agentty vX.Y.Z"
 git push origin main && git push origin vX.Y.Z
 ```
-CI runs on pull requests only, so this push starts no CI run: the checks in step 3 are the gate.
+CI runs on pull requests only, so this push starts no CI run: the checks in step 3 are the gate. The tag push starts
+the **Release packages** workflow.
+
+### 4b. Windows installer and Linux packages
+```sh
+scripts/fetch-release-packages.sh X.Y.Z > <scratchpad>/packages.log 2>&1
+```
+(background; the Linux build is emulated x86_64 on the Mac and can take an hour or more.) It finds the workflow run
+for the tag's commit, waits for it, and copies the four files into `dist/`. If the run fails, read
+`gh run view <id> --log-failed`, fix on `main` and ship the next patch version; do not move the tag. If no run
+started, dispatch one: `gh workflow run release-packages.yml -f ref=vX.Y.Z`. A Windows job that fails with "Inno Setup
+6 (ISCC.exe) was not found" needs `winget install JRSoftware.InnoSetup` on the Windows PC — ask the user; never install
+software on that PC yourself.
+
+Only with the user's explicit OK may a release go out without these files: then set `AGENTTY_MAC_ONLY=1` for steps 6,
+7 and 9 and drop the Windows / Linux lines from the notes.
 
 ### 5. Release notes (English)
 Write `dist/release-notes-vX.Y.Z.md` (dist/ is gitignored) from the changelog entry, for end users:
@@ -113,9 +137,17 @@ Write `dist/release-notes-vX.Y.Z.md` (dist/ is gitignored) from the changelog en
 - ...
 
 ## Install
-Download `Agentty-X.Y.Z-release<build>-arm64.dmg` below, open it and drag **Agentty** into Applications.
+**macOS** — download `Agentty-X.Y.Z-release<build>-arm64.dmg`, open it and drag **Agentty** into Applications.
 Requires macOS 13+ on Apple silicon. Signed with Developer ID and notarized by Apple.
-Existing installs update automatically.
+
+**Windows** — download `Agentty-X.Y.Z-windows-x64-setup.exe` (or `Agentty-X.Y.Z-windows-x64-setup.zip` if your
+browser blocks it) and run it. Installs for your user only, no administrator rights. Requires Windows 10 version 1809
+or later (x64). The installer is not code-signed yet: if SmartScreen appears, choose **More info → Run anyway**.
+
+**Linux (x86_64)** — Debian / Ubuntu: `sudo apt install ./Agentty-X.Y.Z-linux-amd64.deb`;
+Fedora / RHEL: `sudo dnf install ./Agentty-X.Y.Z-linux-x86_64.rpm`. Debian 12+, Ubuntu 22.04+, RHEL 9+, Fedora.
+
+Existing installs on macOS and Windows update automatically; on Linux, install the new package.
 
 **Checksums:** see `Agentty-X.Y.Z-SHA256SUMS.txt`.
 **Source:** https://github.com/empty-user77/Agentty/tree/vX.Y.Z
@@ -126,16 +158,18 @@ Plain, factual English; no Korean, no internal jargon, no secrets. Show the note
 ```sh
 AGENTTY_RELEASE_NOTES=dist/release-notes-vX.Y.Z.md ./scripts/build-dmg.sh publish > <scratchpad>/release.log 2>&1
 ```
-(background; `build-dmg.sh` loads `.env.agentty-prod`, maps legacy `COSTERM_*` names and refuses to publish without
-GA credentials.) The log should end with `Notarized and stapled`, `Uploaded to …` and `Done`, but that is not the proof:
+(background; `build-dmg.sh` loads `.env.agentty-prod`, maps legacy `COSTERM_*` names, refuses to publish without GA
+credentials, and refuses — before building — when a Windows / Linux file from step 4b is missing in `dist/`. It adds
+them to `SHA256SUMS.txt` and uploads them with the DMG.) The log should end with `Notarized and stapled`, `Uploaded to …` and `Done`, but that is not the proof:
 
 ### 7. Verify the draft independently
 ```sh
 scripts/verify-release.sh X.Y.Z
 ```
 Checks app version, deep/strict signature, team and hardened runtime, `spctl` "Notarized Developer ID" and stapled
-tickets for app and DMG, checksums, GA credentials compiled into the binary, and that the draft holds exactly the DMG,
-zip and SHA256SUMS. Report the result as the checklist from rule 8, then ask the user to review the draft.
+tickets for app and DMG, checksums, GA credentials compiled into the binary, the Windows and Linux files present and
+listed in the checksums, and that the draft holds exactly the DMG, zip, Windows installer and zip, .deb, .rpm and
+SHA256SUMS. Report the result as the checklist from rule 8, then ask the user to review the draft.
 
 ### 8. Publish (only after the user says so)
 ```sh
@@ -150,7 +184,8 @@ step 9.
 ```sh
 scripts/verify-release.sh X.Y.Z --published
 ```
-Adds: release is public, `releases/latest` serves vX.Y.Z, and the downloaded DMG matches the published checksums.
+Adds: release is public, `releases/latest` serves vX.Y.Z, and the downloaded DMG, installer and packages match the
+published checksums.
 Then report (in Korean): version, release URL, asset names, and that installed apps pick it up within an hour (or at
 next launch).
 

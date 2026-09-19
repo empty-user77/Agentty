@@ -1,0 +1,111 @@
+name: Release packages
+
+# Builds the Windows installer and the Linux packages for a release. Runs when a vX.Y.Z tag is pushed (the release
+# skill pushes it) and by hand for any ref. Nothing is published from here and the workflow holds no token for
+# agentty-releases: the release skill downloads the artifacts (scripts/fetch-release-packages.sh) and uploads them
+# with the DMG from the maintainer's Mac.
+on:
+  push:
+    tags: ['v*']
+  # Pull requests that change the packaging build it too, so a broken installer shows up before the release. Only
+  # these paths: the Linux build is emulated and slow, and shares the Mac with CI.
+  pull_request:
+    paths:
+      - .github/workflows/release-packages.yml
+      - packaging/**
+      - scripts/package-windows.ps1
+      - scripts/build-linux-packages.sh
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-packages-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Same self-hosted Windows PC as CI's check-windows (see ci.yml for the PATH and execution policy notes). It also
+  # needs Inno Setup 6: winget install JRSoftware.InnoSetup (the package script fails with that hint when missing).
+  windows:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}\..\agentty-target
+    defaults:
+      run:
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Version matches the tag
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:TAG) { throw "Cargo.toml has $version, the tag is $env:TAG" }
+      - name: Put cargo on PATH
+        run: |
+          $bin = Join-Path $env:USERPROFILE '.cargo\bin'
+          if (-not (Test-Path (Join-Path $bin 'rustup.exe'))) { throw "rustup not found in $bin (runner user: $env:USERNAME)" }
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+      - name: Install toolchain
+        run: rustup toolchain install
+      # No install round trip: the runner is a personal PC, and installing or uninstalling would touch the Agentty the
+      # user runs there.
+      - name: Build installer and zips
+        run: |
+          ./scripts/package-windows.ps1 -Installer
+          $info = (Get-Item "$env:CARGO_TARGET_DIR\release\agentty.exe").VersionInfo
+          if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
+          Get-ChildItem dist | Where-Object { $_.Name -like '*-windows-*' } | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agentty-windows-x64
+          path: |
+            dist/Agentty-*-windows-x64-setup.exe
+            dist/Agentty-*-windows-x64-setup.zip
+            dist/agentty-*-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  # Runs on the Apple silicon Mac in an emulated x86_64 AlmaLinux 9 container (Docker Desktop must be running), so the
+  # first build is slow; the toolchain, registry and target/ are kept in named volumes for the next one.
+  linux:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Version matches the tag
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          [[ "v$version" == "$TAG" ]] || { echo "::error::Cargo.toml has $version, the tag is $TAG"; exit 1; }
+      - name: Docker is running
+        run: docker info --format '{{.ServerVersion}} {{.Architecture}}' || { echo "::error::Docker Desktop is not running on the runner"; exit 1; }
+      - name: Build .deb and .rpm, install each in a clean container
+        run: scripts/build-linux-packages.sh --check
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agentty-linux-x86_64
+          path: |
+            dist/Agentty-*-linux-amd64.deb
+            dist/Agentty-*-linux-x86_64.rpm
+          if-no-files-found: error
+          retention-days: 30

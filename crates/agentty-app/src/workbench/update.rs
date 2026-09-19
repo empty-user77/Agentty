@@ -1,6 +1,9 @@
 //! Auto-update: checks the release channel at launch and hourly, announces new versions with a
-//! popup and a sidebar badge, and installs them (verified download → signature and team check →
-//! bundle swap → relaunch).
+//! popup and a sidebar badge, and installs them. macOS: verified download → signature and team
+//! check → bundle swap → relaunch. Windows: verified download of the setup program, which Agentty
+//! starts silently before quitting; the setup program waits for it, installs and starts the new
+//! version. Linux (and development builds) only announce the version and open its release page:
+//! packages are installed with the package manager.
 
 use super::Workbench;
 use crate::i18n::{t, tf};
@@ -11,11 +14,52 @@ use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, FontWeight, Win
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Temp folders updates are downloaded into (`<temp>/agentty-update-…`).
+const DOWNLOAD_PREFIX: &str = "agentty-update";
+
+/// How this copy of Agentty takes an update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallKind {
+    /// Runs from `Agentty.app`: swap the bundle.
+    MacBundle,
+    /// Installed by the Windows setup program (or the zip's install.ps1 into the same folder).
+    WindowsSetup,
+    /// Linux packages and development builds: open the release page.
+    Manual,
+}
+
+pub fn install_kind() -> InstallKind {
+    static KIND: OnceLock<InstallKind> = OnceLock::new();
+    *KIND.get_or_init(|| {
+        if current_bundle().is_some() {
+            InstallKind::MacBundle
+        } else if cfg!(windows) && installed_on_windows() {
+            InstallKind::WindowsSetup
+        } else {
+            InstallKind::Manual
+        }
+    })
+}
+
+/// Whether `agentty.exe` runs from an installation (not a build folder): the setup program's
+/// uninstaller sits next to it, or it is in the default per-user folder install.ps1 also uses.
+fn installed_on_windows() -> bool {
+    let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) else { return false };
+    let default = std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("Programs").join("Agentty"));
+    is_windows_install_dir(&dir, default.as_deref())
+}
+
+fn is_windows_install_dir(dir: &Path, default: Option<&Path>) -> bool {
+    let same = |a: &Path, b: &Path| {
+        a.to_string_lossy().trim_end_matches(['\\', '/']).eq_ignore_ascii_case(b.to_string_lossy().trim_end_matches(['\\', '/']))
+    };
+    dir.join("unins000.exe").is_file() || default.is_some_and(|default| same(dir, default))
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum UpdateState {
@@ -110,17 +154,60 @@ fn run(command: &mut Command) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Downloads, verifies and stages the new bundle next to the current one; returns the staged path.
-fn prepare_install(release: &Release, progress: &InstallProgress) -> anyhow::Result<(PathBuf, PathBuf)> {
-    anyhow::ensure!(current_bundle().is_some(), "updates install only into the Agentty app bundle");
-    let work = std::env::temp_dir().join(format!("agentty-update-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&work);
+/// A downloaded, verified update, ready to hand over once Agentty quits.
+enum Prepared {
+    /// The running bundle and the new one staged next to it.
+    Bundle { current: PathBuf, staged: PathBuf },
+    /// The Windows setup program, checked against the published checksum.
+    Setup(PathBuf),
+}
+
+/// Downloads and verifies the update into a new private temp folder: stages the new bundle next to
+/// the current one on macOS, returns the setup program on Windows.
+fn prepare_install(release: &Release, progress: &InstallProgress) -> anyhow::Result<Prepared> {
+    let kind = install_kind();
+    anyhow::ensure!(kind != InstallKind::Manual, "updates install only into an installed copy of Agentty");
+    let work = update::private_download_dir(DOWNLOAD_PREFIX)?;
+    // Earlier setup programs can't delete themselves while they run.
+    update::remove_old_download_dirs(DOWNLOAD_PREFIX, &work);
     progress.reset();
-    let dmg = update::download(release, &work, CURRENT_VERSION, &mut |done, total| progress.set_bytes(done, total))?;
+    let file = update::download(release, &work, CURRENT_VERSION, &mut |done, total| progress.set_bytes(done, total))?;
     progress.set_stage(InstallStage::Verifying);
-    let staged = stage_from_dmg(&dmg, &work);
-    let _ = std::fs::remove_file(&dmg);
-    staged
+    if kind == InstallKind::WindowsSetup {
+        return Ok(Prepared::Setup(file));
+    }
+    let staged = stage_from_dmg(&file, &work);
+    let _ = std::fs::remove_file(&file);
+    staged.map(|(current, staged)| Prepared::Bundle { current, staged })
+}
+
+/// Hands the update over; Agentty quits right after.
+fn launch_prepared(prepared: &Prepared) -> anyhow::Result<()> {
+    match prepared {
+        Prepared::Bundle { current, staged } => spawn_relauncher(current, staged),
+        Prepared::Setup(setup) => spawn_setup(setup),
+    }
+}
+
+/// Starts the Windows setup program without questions: it waits for this process to exit (by PID,
+/// so other Agentty processes such as MCP servers keep running), installs over this copy and
+/// starts the new version (see packaging/windows/agentty.iss).
+fn spawn_setup(setup: &Path) -> anyhow::Result<()> {
+    Command::new(setup)
+        .args(setup_arguments(std::process::id()))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+fn setup_arguments(pid: u32) -> Vec<String> {
+    ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCANCEL", "/RELAUNCH"]
+        .into_iter()
+        .map(String::from)
+        .chain([format!("/WAITPID={pid}")])
+        .collect()
 }
 
 /// Mounts `dmg`, checks the app's signature, developer team and notarization, and copies it next
@@ -191,7 +278,7 @@ impl Workbench {
             self.updates.popup = true;
         }
         cx.notify();
-        let task = cx.background_spawn(async { update::check(CURRENT_VERSION, std::env::consts::ARCH) });
+        let task = cx.background_spawn(async { update::check(CURRENT_VERSION, std::env::consts::OS, std::env::consts::ARCH) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -220,9 +307,7 @@ impl Workbench {
     /// Debug: install from a local DMG through the same verification and swap as a real update.
     pub fn install_local_dmg(&mut self, dmg: PathBuf, cx: &mut Context<Self>) {
         let task = cx.background_spawn(async move {
-            let work = std::env::temp_dir().join(format!("agentty-update-local-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&work);
-            std::fs::create_dir_all(&work)?;
+            let work = update::private_download_dir(DOWNLOAD_PREFIX)?;
             let (current, staged) = stage_from_dmg(&dmg, &work)?;
             spawn_relauncher(&current, &staged)
         });
@@ -245,8 +330,9 @@ impl Workbench {
         let UpdateState::Available(release) = self.updates.state.clone() else {
             return self.check_for_updates(true, cx);
         };
-        if current_bundle().is_none() {
-            // Development builds can't replace themselves; show the download page instead.
+        if install_kind() == InstallKind::Manual || release.installer_url.is_none() {
+            // Linux packages, development builds and releases without an installer for this system:
+            // show the download page instead.
             cx.open_url(&release.page_url);
             return;
         }
@@ -272,7 +358,7 @@ impl Workbench {
         .detach();
         let progress = self.updates.progress.clone();
         cx.spawn(async move |this, cx| {
-            let result = task.await.and_then(|(current, staged)| spawn_relauncher(&current, &staged));
+            let result = task.await.and_then(|prepared| launch_prepared(&prepared));
             if result.is_ok() {
                 // Let the "restarting" state show before the window disappears.
                 progress.set_stage(InstallStage::Restarting);
@@ -357,16 +443,23 @@ impl Workbench {
         let (title, body, actions): (String, String, gpui::AnyElement) = match &self.updates.state {
             UpdateState::Available(release) => {
                 let page = release.page_url.clone();
+                // Without an installer for this copy the primary button opens the release page.
+                let manual = install_kind() == InstallKind::Manual || release.installer_url.is_none();
+                let body_key = match (manual, cfg!(target_os = "linux")) {
+                    (true, true) => "update.available_body_linux",
+                    (true, false) => "update.available_body_manual",
+                    (false, _) => "update.available_body",
+                };
                 (
                     tf(cx, "update.available_title", &[("version", &release.version)]),
-                    tf(cx, "update.available_body", &[("current", CURRENT_VERSION), ("version", &release.version)]),
+                    tf(cx, body_key, &[("current", CURRENT_VERSION), ("version", &release.version)]),
                     div()
                         .flex()
                         .gap_2()
                         .child(button("update-notes", t(cx, "update.notes").into(), false).on_click(move |_, _, cx| cx.open_url(&page)))
                         .child(button("update-later", t(cx, "update.later").into(), false).on_click(close))
                         .child(
-                            button("update-install", t(cx, "update.install").into(), true)
+                            button("update-install", t(cx, if manual { "update.download" } else { "update.install" }).into(), true)
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.install_update(cx))),
                         )
                         .into_any_element(),
@@ -374,7 +467,8 @@ impl Workbench {
             }
             UpdateState::Installing(release) => (
                 tf(cx, "update.available_title", &[("version", &release.version)]),
-                t(cx, "update.installing_body").into(),
+                t(cx, if install_kind() == InstallKind::WindowsSetup { "update.installing_body_setup" } else { "update.installing_body" })
+                    .into(),
                 self.render_install_progress(cx),
             ),
             UpdateState::Checking => (
@@ -478,9 +572,13 @@ impl Workbench {
             InstallStage::Downloading => total.map(|total| (done as f32 / total as f32).clamp(0.0, 1.0)),
             InstallStage::Verifying | InstallStage::Restarting => Some(1.0),
         };
+        let setup = install_kind() == InstallKind::WindowsSetup;
         let label = match stage {
             InstallStage::Downloading => t(cx, "update.stage_downloading"),
+            // Windows checks the published checksum; the setup program isn't signed.
+            InstallStage::Verifying if setup => t(cx, "update.stage_verifying_download"),
             InstallStage::Verifying => t(cx, "update.stage_verifying"),
+            InstallStage::Restarting if setup => t(cx, "update.stage_starting_setup"),
             InstallStage::Restarting => t(cx, "update.stage_restarting"),
         };
         let detail = match (stage, total) {
@@ -613,5 +711,28 @@ mod tests {
     fn development_binary_is_not_a_bundle() {
         // Tests run from target/…/deps, never inside Contents/MacOS.
         assert!(current_bundle().is_none());
+        assert_eq!(install_kind(), InstallKind::Manual);
+    }
+
+    #[test]
+    fn windows_install_folder_is_recognized() {
+        let dir = std::env::temp_dir().join(format!("agentty-install-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let default = Path::new("C:\\Users\\someone\\AppData\\Local\\Programs\\Agentty");
+        assert!(!is_windows_install_dir(&dir, Some(default)));
+        // The folder install.ps1 and the setup program use by default, however it is spelled.
+        assert!(is_windows_install_dir(Path::new("c:\\users\\someone\\appdata\\local\\programs\\agentty\\"), Some(default)));
+        // Anywhere else only with the setup program's uninstaller next to agentty.exe.
+        std::fs::write(dir.join("unins000.exe"), b"").unwrap();
+        assert!(is_windows_install_dir(&dir, None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn setup_runs_silently_and_waits_for_this_process() {
+        let args = setup_arguments(4242);
+        for expected in ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH", "/WAITPID=4242"] {
+            assert!(args.iter().any(|a| a == expected), "{expected} missing from {args:?}");
+        }
     }
 }
