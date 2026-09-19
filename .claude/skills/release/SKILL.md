@@ -97,7 +97,7 @@ git commit -am "chore: release vX.Y.Z"      # with the Co-Authored-By trailer
 git tag -a vX.Y.Z -m "Agentty vX.Y.Z"
 git push origin main && git push origin vX.Y.Z
 ```
-Watch CI (`gh run watch <id> --exit-status`) and fix failures before building.
+CI runs on pull requests only, so this push starts no CI run: the checks in step 3 are the gate.
 
 ### 5. Release notes (English)
 Write `dist/release-notes-vX.Y.Z.md` (dist/ is gitignored) from the changelog entry, for end users:

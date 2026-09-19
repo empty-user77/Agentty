@@ -1,8 +1,8 @@
 name: CI
 
+# Pull requests only: pushes to main (releases included) are checked locally by the pre-push hook
+# and the release skill's checks.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -12,8 +12,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Both jobs run on the self-hosted Apple silicon Mac (the repository is private, so only
-  # collaborators' pushes and pull requests reach it).
+  # These jobs run on the self-hosted Apple silicon Mac, check-windows on a self-hosted Windows PC
+  # (the repository is private, so only collaborators' pull requests reach them).
   secrets:
     runs-on: [self-hosted, macOS, ARM64]
     steps:
@@ -24,11 +24,8 @@ jobs:
         run: python3 scripts/check-secrets.py --all
       - name: Security audit (forbidden files, personal data, weakened guarantees, guard wiring)
         run: python3 scripts/security-audit.py --all
-      - name: Scan commits in this push / pull request
-        if: github.event_name == 'pull_request' || github.event.before != '0000000000000000000000000000000000000000'
-        run: |
-          base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          python3 scripts/check-secrets.py --range "$base..${{ github.sha }}"
+      - name: Scan commits in this pull request
+        run: python3 scripts/check-secrets.py --range "${{ github.event.pull_request.base.sha }}..${{ github.sha }}"
 
   check:
     needs: secrets
@@ -51,8 +48,41 @@ jobs:
       - name: Build (release)
         run: cargo build --release -p agentty-app
 
-  # Linux and Windows builds: planned, not supported yet. Uncomment these jobs to re-enable them
-  # (they passed on the merge of PR #3). macOS above is the only build CI checks for now.
+  # Windows can't be built on the Mac (GPUI compiles its shaders with the Windows SDK's fxc.exe).
+  # The runner needs rustup, git and Visual Studio Build Tools (C++ workload + Windows SDK). The zip
+  # is uploaded as a workflow artifact: download it from the run's Summary page.
+  check-windows:
+    needs: secrets
+    runs-on: [self-hosted, Windows, X64]
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}\..\agentty-target
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install toolchain
+        run: rustup toolchain install
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      # No install round trip here: the runner is a personal PC, and install.ps1 -Uninstall would
+      # remove an Agentty the user installed on it.
+      - name: Package
+        shell: powershell
+        run: |
+          ./scripts/package-windows.ps1
+          $info = (Get-Item "$env:CARGO_TARGET_DIR\release\agentty.exe").VersionInfo
+          if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agentty-windows-x86_64
+          path: |
+            dist/agentty-*-windows-*.zip
+            dist/agentty-*-windows-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # Linux build: planned, not supported yet. Uncomment this job to re-enable it (it passed on the
+  # merge of PR #3).
   # check-linux:
   #   needs: secrets
   #   runs-on: ubuntu-24.04
@@ -82,40 +112,3 @@ jobs:
   #         test -f "$prefix/share/applications/run.agentty.Agentty.desktop"
   #         PREFIX="$prefix" target/agentty-*-linux-*/install.sh --uninstall
   #         test ! -e "$prefix/bin/agentty"
-  #
-  # check-windows:
-  #   needs: secrets
-  #   runs-on: windows-2022
-  #   steps:
-  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-  #     - name: Install toolchain
-  #       run: rustup toolchain install
-  #     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-  #     - name: Clippy
-  #       run: cargo clippy --workspace --all-targets -- -D warnings
-  #     - name: Test
-  #       run: cargo test --workspace
-  #     - name: Build (release)
-  #       run: cargo build --release -p agentty-app
-  #     - name: Resources, package and install round trip
-  #       shell: pwsh
-  #       run: |
-  #         $info = (Get-Item target\release\agentty.exe).VersionInfo
-  #         if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
-  #         ./scripts/package-windows.ps1
-  #         $zip = Get-ChildItem dist\agentty-*-windows-*.zip | Select-Object -First 1
-  #         Expand-Archive $zip.FullName -DestinationPath target\installer-test -Force
-  #         powershell.exe -NoProfile -ExecutionPolicy Bypass -File target\installer-test\install.ps1 -NoLaunch
-  #         if ($LASTEXITCODE) { throw 'install.ps1 failed' }
-  #         $installed = Join-Path $env:LOCALAPPDATA 'Programs\Agentty'
-  #         foreach ($path in @("$installed\agentty.exe", 'HKCU:\Software\Classes\agentty\shell\open\command',
-  #                             'HKCU:\Software\Classes\Directory\shell\Agentty\command',
-  #                             'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Agentty')) {
-  #           if (-not (Test-Path $path)) { throw "missing after install: $path" }
-  #         }
-  #         if (-not ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' -contains $installed)) { throw 'not on PATH' }
-  #         powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$installed\install.ps1" -Uninstall
-  #         Start-Sleep -Seconds 5
-  #         foreach ($path in @('HKCU:\Software\Classes\agentty', "$installed\agentty.exe")) {
-  #           if (Test-Path $path) { throw "left behind after uninstall: $path" }
-  #         }

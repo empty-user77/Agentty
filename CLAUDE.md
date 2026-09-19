@@ -32,7 +32,7 @@ redacted values (`redact_args`, `redact_url`), and files with conversation data 
 | `.claude/hooks/require-security-audit.py` | Claude Code PreToolUse hook: refuses `git commit` / `git push` until the `security-audit` skill reviewed the staged tree (`security-audit.py --mark`); refuses `git commit -a` and stage-and-commit in one command |
 | `.claude/skills/security-audit` | the review that needs judgment: logic and flow, GitHub / Vercel / Supabase integration safety, authorization on local interfaces (BOLA), leak paths, dev / prod separation, everything else |
 | `.claude/settings.json` | registers both hooks; denies reading `.env.agentty-prod` and `--no-verify` commits |
-| CI (`.github/workflows/ci.yml`) | `check-secrets.py --all` and `security-audit.py --all` on every push and pull request |
+| CI (`.github/workflows/ci.yml`) | `check-secrets.py --all` and `security-audit.py --all` on every pull request (pushes to main start no CI run) |
 
 After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githooks`).
 
@@ -50,7 +50,7 @@ Before every commit and push: stage the change in its own command, run the `secu
 - Before handing work back or pushing, run exactly what CI runs and make it pass:
   `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
   `cargo build --release -p agentty-app`, `python3 scripts/check-secrets.py --all`.
-- After pushing, check the CI run (`gh run list` / `gh run watch`) and fix it if it fails.
+- After opening or updating a pull request, check its CI run (`gh run list` / `gh run watch`) and fix it if it fails.
 - Every user-facing string goes through `i18n.rs` in all four languages (en / ko / ja / zh).
 - Prompts, rules and skills that ship in code or bundled docs (first messages to agents, build guides, plugin
   prompts, `.claude/skills`) are written in English only. They are not UI strings: they stay out of `i18n.rs` and
