@@ -137,6 +137,32 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
   are never opened from it (a project file could be a script): a path can be typed into the terminal or revealed.
 - `TerminalView::worktree` (set where the branch is) feeds the purple working-tree chip of the status bar.
 
+## Docker panel
+
+- `agentty_bridge::docker` looks at the project (working-tree root) of the active pane: a compose file
+  (`compose.yaml`, `compose.yml`, `docker-compose.yml`, `docker-compose.yaml`) or a `Dockerfile` at its root, and its
+  containers from `docker ps --all --format json`. Containers whose compose labels
+  (`com.docker.compose.project.working_dir`) point into the project count even when the compose file lives in a
+  subfolder or was passed with `-f` — commands for them reuse the project name and config files from those labels.
+  Without compose, containers whose image or name is the project folder's name are shown.
+- Services come from `docker compose ps --all --format json` (one JSON object per line, or one array before compose
+  2.21) merged with `docker compose config --services`, so a service without a container is listed as "not created".
+  Plain `config` is never run: it prints the environment resolved, and compose files and `.env` often hold passwords.
+  Only names, images, states, ports and Docker's status text are kept.
+- Every command is an argv array (no shell). Names reach a command only after Docker reported them and they passed
+  `docker::valid_name` (letters, digits, `.`, `_`, `-`, not starting with `-`). `down` has no `-v`, and the panel asks a
+  second time before running it. Errors are cut to one line, and a line that mentions the environment or an
+  interpolation is replaced by a generic note.
+- The `docker` program is looked up on `PATH` and in the folders Docker Desktop, Homebrew, Rancher Desktop, OrbStack and
+  snap install to (a GUI app on macOS doesn't get the login shell's `PATH`); commands get that `PATH` too, so the
+  compose plugin and credential helpers are found. Queries time out after 15 s, actions after 10 minutes.
+- `workbench/docker_panel.rs` asks once when the active pane's project changes and when the window comes to the front
+  (this feeds the status bar chip), and every 4 s only while the panel is open — always on a background thread. The
+  panel is a fixed-width column left of the files panel. Logs open in a new terminal tab running
+  `docker compose logs -f --tail 200 <service>` (or `docker logs -f` for a plain container).
+- Debug driver: `docker` toggles the panel; `docker refresh|up|down|start:<svc>|stop:<svc>|restart:<svc>|logs:<svc>`,
+  and `probe` includes the panel's state.
+
 ## Local servers
 
 `workbench/servers.rs` samples listening TCP ports under each pane's shell every few seconds (`procinfo::listeners`,
