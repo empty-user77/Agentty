@@ -17,11 +17,7 @@ pub fn capture_own_window(path: &Path) -> Result<()> {
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::number::CFNumber;
     use core_foundation::string::CFString;
-    use core_graphics::geometry::CGRect;
-    use core_graphics::window::{
-        create_description_from_array, create_image, create_window_list, kCGNullWindowID, kCGWindowImageBestResolution,
-        kCGWindowImageBoundsIgnoreFraming, kCGWindowListOptionIncludingWindow, kCGWindowListOptionOnScreenOnly,
-    };
+    use core_graphics::window::{create_description_from_array, create_window_list, kCGNullWindowID, kCGWindowListOptionOnScreenOnly};
 
     let ids = create_window_list(kCGWindowListOptionOnScreenOnly, kCGNullWindowID).context("no window list")?;
     let descriptions = create_description_from_array(ids).context("no window descriptions")?;
@@ -38,6 +34,16 @@ pub fn capture_own_window(path: &Path) -> Result<()> {
         })
         .and_then(|d| number(&d, "kCGWindowNumber"))
         .context("Agentty window not found")? as u32;
+    capture_window(window_id, path)
+}
+
+/// Writes a PNG of one window (by its window number).
+#[cfg(target_os = "macos")]
+pub fn capture_window(window_id: u32, path: &Path) -> Result<()> {
+    use core_graphics::geometry::CGRect;
+    use core_graphics::window::{
+        create_image, kCGWindowImageBestResolution, kCGWindowImageBoundsIgnoreFraming, kCGWindowListOptionIncludingWindow,
+    };
 
     // SAFETY: CGRectNull is an immutable CoreGraphics constant (capture the window's own bounds).
     let bounds: CGRect = unsafe { core_graphics::display::CGRectNull };

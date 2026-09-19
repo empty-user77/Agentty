@@ -409,6 +409,8 @@ strings! {
     "mini.empty_hint" => ["Start Claude Code or Codex to track it here.", "Claude Code나 Codex를 시작하면 여기에 표시됩니다.", "Claude Code か Codex を起動するとここに表示されます。", "启动 Claude Code 或 Codex 后会显示在这里。"],
     "tray.show" => ["Show Agentty", "Agentty 열기", "Agentty を表示", "显示 Agentty"],
     "tray.quit" => ["Quit Agentty", "Agentty 종료", "Agentty を終了", "退出 Agentty"],
+    "tray.agents" => ["Agents", "에이전트", "エージェント", "智能体"],
+    "tray.waiting" => ["{n} waiting", "{n}개 대기 중", "{n} 件待機中", "{n} 个等待中"],
     "settings.notify_when_focused" => ["Notify even while Agentty is in front", "Agentty이 앞에 있을 때도 알림 표시", "Agentty が前面にあるときも通知", "Agentty 在前台时也通知"],
     "settings.menu_bar" => ["Show Agentty in the menu bar (closing the window keeps it running)", "메뉴 막대에 Agentty 표시 (창을 닫아도 계속 실행)", "メニューバーに Agentty を表示（ウィンドウを閉じても実行を継続）", "在菜单栏显示 Agentty（关闭窗口后继续运行）"],
     "flow.shared_short" => ["{n} turns", "{n}턴", "{n} ターン", "{n} 轮"],

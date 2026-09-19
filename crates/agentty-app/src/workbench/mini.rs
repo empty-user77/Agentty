@@ -45,6 +45,16 @@ pub struct AgentSummary {
     pub elapsed: Option<u64>,
 }
 
+impl AgentSummary {
+    /// Status, with how long it has been working ("Working · 2m 10s").
+    pub fn status_line(&self) -> String {
+        match self.elapsed.filter(|_| self.working) {
+            Some(seconds) => format!("{} · {}", self.status, super::layout::format_elapsed(seconds)),
+            None => self.status.clone(),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Bubble {
     pane_id: u64,
@@ -238,10 +248,7 @@ impl Render for MiniView {
         }
         for agent in agents.iter() {
             let pane_id = agent.pane_id;
-            let status = match agent.elapsed.filter(|_| agent.working) {
-                Some(seconds) => format!("{} · {}", agent.status, super::layout::format_elapsed(seconds)),
-                None => agent.status.clone(),
-            };
+            let status = agent.status_line();
             rows = rows.child(
                 div()
                     .id(("mini-row", pane_id as usize))
@@ -395,25 +402,16 @@ impl Workbench {
     }
 
     pub fn tray_state(&self, cx: &App) -> crate::status_item::TrayState {
+        let agents = self.agent_summaries(cx);
         crate::status_item::TrayState {
-            panes: self
-                .agent_summaries(cx)
-                .into_iter()
-                .map(|a| crate::status_item::TrayPane {
-                    id: a.pane_id,
-                    label: format!("{} — {} · {}", a.title, a.workspace, a.status),
-                    working: a.working,
-                    waiting: a.waiting,
-                })
-                .collect(),
-            show_label: t(cx, "tray.show").into(),
-            mini_label: t(cx, "mini.enter").into(),
-            quit_label: t(cx, "tray.quit").into(),
-            empty_label: t(cx, "mini.no_agents").into(),
-            mini: self.mini.is_some(),
-            usage_title: t(cx, "tray.usage_title").into(),
-            usage_lines: self.account_usage.iter().map(|u| u.menu_line(cx)).collect(),
+            working: agents.iter().filter(|a| a.working).count(),
+            waiting: agents.iter().filter(|a| a.waiting).count(),
         }
+    }
+
+    /// Spend and plan limits per agent account, for the menu bar popover.
+    pub fn account_usage(&self) -> &[super::AccountUsage] {
+        &self.account_usage
     }
 
     pub fn handle_tray(&mut self, action: crate::status_item::TrayAction, window: &mut Window, cx: &mut Context<Self>) {
@@ -443,6 +441,8 @@ impl Workbench {
                 cx.notify();
             }
             TrayAction::Quit => cx.quit(),
+            // Handled by the app loop (`tray_popover`).
+            TrayAction::TogglePopover | TrayAction::ClosePopover => {}
         }
     }
 
