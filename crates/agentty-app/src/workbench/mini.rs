@@ -440,7 +440,8 @@ impl Workbench {
                 self.page = Some(super::Page::Usage);
                 cx.notify();
             }
-            TrayAction::Quit => cx.quit(),
+            // Outside this window's update, so it can ask about unsaved files first.
+            TrayAction::Quit => cx.defer(crate::request_quit),
             // Handled by the app loop (`tray_popover`).
             TrayAction::TogglePopover | TrayAction::ClosePopover => {}
         }

@@ -75,6 +75,31 @@ pub enum LinkOpener {
     InApp,
 }
 
+/// Where the file editor's "Open in editor" button sends a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalEditor {
+    /// Visual Studio Code when it is installed, else the system's text editor.
+    #[default]
+    Auto,
+    VsCode,
+    Cursor,
+    System,
+}
+
+impl ExternalEditor {
+    pub const ALL: [ExternalEditor; 4] = [Self::Auto, Self::VsCode, Self::Cursor, Self::System];
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Auto => "editor.external_auto",
+            Self::VsCode => "editor.external_vscode",
+            Self::Cursor => "editor.external_cursor",
+            Self::System => "editor.external_system",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorShapeSetting {
@@ -135,6 +160,8 @@ pub struct Settings {
     /// Menu bar icon; closing the window keeps Agentty running there.
     pub menu_bar: bool,
     pub link_opener: LinkOpener,
+    /// App the file editor's "Open in editor" button uses.
+    pub external_editor: ExternalEditor,
     pub browser: BrowserSettings,
     /// Offer earlier AI sessions when a terminal enters their folder.
     pub resume_bar: bool,
@@ -335,6 +362,7 @@ impl Default for Settings {
             notify_when_focused: false,
             menu_bar: true,
             link_opener: LinkOpener::InApp,
+            external_editor: ExternalEditor::Auto,
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
             resume_bar: true,

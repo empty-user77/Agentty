@@ -9,6 +9,7 @@ mod chrome;
 mod confirm;
 mod context_menu;
 mod drop_split;
+mod editor_host;
 mod files_panel;
 mod find;
 pub mod flow;
@@ -290,6 +291,12 @@ pub struct Workbench {
     /// Subagents / session links popover of a pane.
     agent_panel: Option<agent_panel::AgentPanel>,
     session_viewer: Option<session_viewer::SessionViewer>,
+    /// File editor (files opened from the files panel), and whether it is what the main area shows.
+    editor: Option<Entity<crate::editor::CodeEditor>>,
+    editor_shown: bool,
+    editor_subscription: Option<Subscription>,
+    /// The user already answered "unsaved files — quit / close anyway?".
+    discard_confirmed: bool,
     launcher_more: bool,
     service_status: HashMap<&'static str, agentty_bridge::service_status::ServiceStatus>,
     status_dismissed: std::collections::HashSet<String>,
@@ -432,6 +439,10 @@ impl Workbench {
             account_usage: Vec::new(),
             agent_panel: None,
             session_viewer: None,
+            editor: None,
+            editor_shown: false,
+            editor_subscription: None,
+            discard_confirmed: false,
             launcher_more: false,
             service_status: HashMap::new(),
             status_dismissed: Default::default(),
@@ -501,22 +512,18 @@ impl Workbench {
         // Additional windows close, but stay in the recent list (Dock and History menus) to reopen.
         let entity = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
+            let closes = slot > 0 || !crate::settings::settings(cx).menu_bar || !crate::platform::HAS_STATUS_ITEM;
+            // Unsaved files in the editor: ask first (closing the main window ends Agentty).
+            let then = if slot > 0 { crate::editor::AfterDiscard::CloseWindow } else { crate::editor::AfterDiscard::Quit };
+            if closes && entity.update(cx, |this, cx| this.ask_about_unsaved_files(then, window, cx)).unwrap_or(false) {
+                return false;
+            }
             if slot > 0 {
-                let _ = entity.update(cx, |this, cx| {
-                    this.persist(cx);
-                    let names: Vec<String> = this.workspaces.iter().map(|ws| this.workspace_title(ws, cx)).collect();
-                    let title = match names.as_slice() {
-                        [] => String::new(),
-                        [one] => one.clone(),
-                        [first, rest @ ..] => format!("{first} +{}", rest.len()),
-                    };
-                    ClosedWindows::remember(slot, title, !names.is_empty());
-                    this.closed = true;
-                });
+                let _ = entity.update(cx, |this, cx| this.remember_closed_window(cx));
                 crate::set_app_menus(cx);
                 return true;
             }
-            if !crate::settings::settings(cx).menu_bar || !crate::platform::HAS_STATUS_ITEM {
+            if closes {
                 return true;
             }
             if let Some(ns) = crate::native::ns_window(window) {
@@ -530,6 +537,19 @@ impl Workbench {
         })
         .detach();
         this
+    }
+
+    /// A second window is closing: saves it and lists it in the recent windows to reopen.
+    pub(super) fn remember_closed_window(&mut self, cx: &mut Context<Self>) {
+        self.persist(cx);
+        let names: Vec<String> = self.workspaces.iter().map(|ws| self.workspace_title(ws, cx)).collect();
+        let title = match names.as_slice() {
+            [] => String::new(),
+            [one] => one.clone(),
+            [first, rest @ ..] => format!("{first} +{}", rest.len()),
+        };
+        ClosedWindows::remember(self.slot, title, !names.is_empty());
+        self.closed = true;
     }
 
     /// Re-detects installed agents at most once a minute (new installs show up without a restart).
@@ -724,6 +744,7 @@ impl Workbench {
         self.welcome = true;
         self.page = None;
         self.session_viewer = None;
+        self.hide_editor();
         self.launcher_open = false;
         self.detect_agents(cx);
         // Tools may have been installed since: the start page's setup bar follows.
@@ -791,6 +812,7 @@ impl Workbench {
         ws.active_tab = ws.tabs.len() - 1;
         self.page = None;
         self.session_viewer = None;
+        self.hide_editor();
         self.launcher_open = false;
         self.focus_active(window, cx);
         self.persist(cx);
@@ -806,6 +828,7 @@ impl Workbench {
         crate::native::note_recent_folder(&self.workspaces[index].cwd);
         self.page = None;
         self.session_viewer = None;
+        self.hide_editor();
         self.new_workspace = None;
         self.launcher_open = false;
         self.workspace_menu = None;
@@ -835,6 +858,7 @@ impl Workbench {
             ws.active_tab = index;
             self.page = None;
             self.session_viewer = None;
+            self.hide_editor();
             self.focus_active(window, cx);
             cx.notify();
         }
@@ -873,6 +897,7 @@ impl Workbench {
         tab.root.split(&active, pane.clone(), axis);
         tab.active = pane.clone();
         self.page = None;
+        self.hide_editor();
         self.focus_pane(&pane, window, cx);
         self.persist(cx);
         cx.notify();
@@ -885,6 +910,7 @@ impl Workbench {
         let Some(index) = leaves.iter().position(|p| *p == tab.active) else { return };
         let next = if forward { (index + 1) % leaves.len() } else { (index + leaves.len() - 1) % leaves.len() };
         tab.active = leaves[next].clone();
+        self.hide_editor();
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -1454,6 +1480,7 @@ impl Render for Workbench {
             Some(Page::Idea) => {
                 gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
+            None if self.editor_visible(cx) => self.render_editor(cx).expect("editor is visible"),
             None => {
                 match (self.render_session_viewer(cx), self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)))
                 {
@@ -1483,6 +1510,9 @@ impl Render for Workbench {
                     this.focus_active(window, cx);
                     return cx.notify();
                 }
+                if this.close_active_file(cx) {
+                    return;
+                }
                 if let Some(ws) = this.workspaces.get(this.active_workspace) {
                     let index = ws.active_tab;
                     this.request_close_tabs(&[index], window, cx);
@@ -1492,6 +1522,9 @@ impl Render for Workbench {
                 if this.page.take().is_some() {
                     this.focus_active(window, cx);
                     return cx.notify();
+                }
+                if this.close_active_file(cx) {
+                    return;
                 }
                 if let Some(pane) = this.active_pane() {
                     this.request_close_pane(&pane, window, cx);
@@ -1535,7 +1568,12 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenPlugins, _, cx| this.open_page(Page::Plugins, cx)))
             .on_action(cx.listener(|this, _: &ToggleBrowser, window, cx| this.toggle_browser(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleFiles, _, cx| this.toggle_files_panel(cx)))
-            .on_action(cx.listener(|this, _: &FindInTerminal, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &FindInTerminal, window, cx| {
+                // The terminal behind the editor is not on screen to search.
+                if !this.editor_visible(cx) {
+                    this.open_find(window, cx)
+                }
+            }))
             .on_action(cx.listener(|_, _: &ZoomIn, _, cx| update_settings(cx, |s| s.font_size = (s.font_size + 1.).min(32.))))
             .on_action(cx.listener(|_, _: &ZoomOut, _, cx| update_settings(cx, |s| s.font_size = (s.font_size - 1.).max(8.))))
             .on_action(
@@ -1698,6 +1736,7 @@ impl Workbench {
         self.new_workspace_group = group;
         self.page = None;
         self.session_viewer = None;
+        self.hide_editor();
         self.launcher_open = false;
         let input = cx.new(|cx| TextInput::localized("", "welcome.name_placeholder", window, cx));
         let subscription = cx.subscribe_in(&input, window, |this, _, event: &TextInputEvent, window, cx| match event {
@@ -2034,6 +2073,7 @@ impl Workbench {
                         "listeners": listeners,
                         "browser": self.browser.as_ref().and_then(|b| b.current_url()),
                         "files": self.files_panel.as_ref().map(|p| p.debug_state()),
+                        "editor": self.editor_debug_state(cx),
                         "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
                     })
@@ -2045,6 +2085,11 @@ impl Workbench {
                     let _ = crate::capture::start();
                 }
             },
+            "edit" => self.debug_editor("edit", argument, window, cx),
+            "editor" => {
+                let (command, argument) = argument.split_once(' ').unwrap_or((argument, ""));
+                self.debug_editor(command, argument, window, cx);
+            }
             "files" => match argument {
                 "" => self.toggle_files_panel(cx),
                 path => self.open_files_panel(Some(PathBuf::from(path)), cx),
@@ -2612,6 +2657,8 @@ impl Workbench {
                 }
             }
             "quit" => cx.quit(),
+            // Like ⌘Q: asks about unsaved files in the editor first.
+            "request-quit" => cx.defer(crate::request_quit),
             _ => eprintln!("agentty: unknown debug command {command}"),
         }
         cx.notify();

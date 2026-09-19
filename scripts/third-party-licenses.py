@@ -2,7 +2,7 @@
 """Writes the license texts of everything compiled into the app bundle.
 
 Covers every crate in the release dependency graph (normal dependencies for the macOS target) plus the
-bundled fonts, icons and logos. Identical license texts are printed once with the list of crates they apply to.
+bundled fonts, icons, logos and the file editor's syntax definitions. Identical license texts are printed once with the list of crates they apply to.
 
 Usage: scripts/third-party-licenses.py <out.txt> [target-triple]
 """
@@ -17,6 +17,8 @@ ASSETS = [
     ("JetBrains Mono (SIL Open Font License 1.1)", "crates/agentty-app/assets/fonts/JetBrainsMono-OFL.txt"),
     ("JetBrainsMono Nerd Font Mono (Nerd Fonts)", "crates/agentty-app/assets/fonts/NerdFonts-LICENSE.txt"),
     ("Lucide icons (ISC)", "crates/agentty-app/assets/icons/LICENSE.txt"),
+    # Sublime Text grammars compiled into the app by `two-face` for the file editor's syntax colors.
+    ("Syntax definitions of the file editor (bat's set via two-face; MIT, Apache-2.0, BSD)", "crates/agentty-app/assets/licenses/syntax-definitions.md"),
     ("Simple Icons brand logos (CC0 1.0)", "crates/agentty-app/assets/logos/LICENSE.txt"),
 ]
 

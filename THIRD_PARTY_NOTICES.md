@@ -24,6 +24,14 @@ IEC Power Symbols (MIT).
 | serde, serde_json, anyhow, futures, uuid, chrono, dirs, libc, clap | MIT OR Apache-2.0 |
 | plist | MIT |
 | unicode-segmentation | MIT OR Apache-2.0 |
+| [syntect](https://github.com/trishume/syntect), fancy-regex, bincode (file editor syntax highlighting) | MIT |
+| [two-face](https://codeberg.org/CosmicHarper/two-face) (bat's syntax definitions for syntect) | MIT OR Apache-2.0 |
+
+## Syntax definitions
+
+The file editor colors code with the Sublime Text grammars curated by the [bat](https://github.com/sharkdp/bat)
+project, compiled into the app by `two-face`. Each grammar keeps its own license (MIT, Apache-2.0 or BSD); the full
+texts are in `crates/agentty-app/assets/licenses/syntax-definitions.md` and in the release bundle's license file.
 
 ## Icons and logos
 

@@ -17,6 +17,7 @@ that doesn't depend on AppKit or WebKit.
 | Reserved words (`claude zzzz`) | zsh / bash | PowerShell | zsh / bash |
 | Foreground program, cwd, ports | ✓ | Launch kind only | `/proc` |
 | Auto-update | Signed DMG | Release page | Release page |
+| File editor "Open in editor" (system default) | `open -t` (default text editor) | Notepad | An installed text editor (GNOME Text Editor, gedit, Kate, …); never `xdg-open` |
 
 ## Keyboard shortcuts
 
@@ -32,7 +33,8 @@ Ctrl+letter always reaches the shell:
 | ⌘= / ⌘- / ⌘0 | Ctrl+= / Ctrl+- / Ctrl+0 |
 | ⌘-click (links) | Ctrl-click |
 
-Text fields use plain Ctrl+C / V / X / A. Shortcut labels in the UI are shown in the platform's form.
+Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S to save, Ctrl+Y to redo, Ctrl+←/→ by
+word, Ctrl+Home / End for the file). Shortcut labels in the UI are shown in the platform's form.
 
 ## How it is organized
 

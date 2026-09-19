@@ -61,6 +61,12 @@ each agent is doing and highlights the ones that need you.
   A second AI session in the same project, opened from the + menu or typed into a terminal, starts in its own git
   worktree on a new branch from the project's default branch, so sessions never edit the same files; the panel shows
   every working tree, who works in it and what changed there.
+- **File editor** — click a file in the files panel to view and edit it in a tab next to your terminals: syntax
+  colors for Java, Kotlin, JavaScript, TypeScript / TSX, JSON, YAML, TOML, Markdown, Rust, Python, Go, shell, HTML,
+  CSS, SQL and more, undo / redo, IME input, save (⌘S), and **Format** with the formatter you have installed
+  (Prettier, google-java-format, ktlint, rustfmt, gofmt, Black). Files changed by an agent reload by themselves.
+  **Open in editor** hands the file to VS Code, Cursor or the system's text editor. Files are only ever read and
+  written — never run.
 - **Resume where you left off** — `cd` into a folder with earlier Claude Code / Codex sessions and a bar offers to
   continue them in place. Search local sessions by title, conversation or path (⇧⌘O).
 - **Service status** — when Claude Code, Codex or Amp is degraded while you use it, a banner links to its status page.
@@ -125,6 +131,7 @@ stays with the shell.
 | Go to workspace / tab 1–9 | ⌘1…⌘9 / ⌃1…⌃9 |
 | Search local sessions | ⇧⌘O |
 | Git page: commit / push / fetch / refresh | ⌘↩ / ⌘P / ⇧⌘T / ⌘R |
+| File editor: save / format / close file | ⌘S / ⇧⌥F / ⌘W |
 | Copy / paste / select all / clear | ⌘C / ⌘V / ⌘A / ⌘K |
 
 The full list is in **Settings → Keyboard Shortcuts**.

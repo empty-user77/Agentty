@@ -28,7 +28,8 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
   "harnessDetect": true,
   "harnessPatterns": [".team-harness", "tools/agent/*.yaml"],
   "harnessSubmit": true,
-  "harnessAgent": "auto"
+  "harnessAgent": "auto",
+  "externalEditor": "auto"
 }
 ```
 
@@ -48,6 +49,7 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `harnessPatterns` | Extra harness patterns, relative to the project (`*` within a name, `**` any folders) |
 | `harnessSubmit` | Send the harness prompt right away (`false`: only type it in) |
 | `harnessAgent` | `auto`, `claude`, `codex` |
+| `externalEditor` | What the file editor's "Open in editor" button uses: `auto` (VS Code when installed, else the system's text editor), `vsCode`, `cursor`, `system` (macOS: default text editor, Windows: Notepad, Linux: an installed desktop text editor). Settings → Project → File editor |
 
 ## Accounts (agent sign-in)
 

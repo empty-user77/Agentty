@@ -229,7 +229,7 @@ impl Workbench {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => cx.quit(),
+                Ok(()) => cx.defer(crate::request_quit),
                 Err(err) => {
                     eprintln!("update: {err:#}");
                     this.updates.state = UpdateState::Failed(format!("{err:#}"));
@@ -245,6 +245,10 @@ impl Workbench {
         let UpdateState::Available(release) = self.updates.state.clone() else {
             return self.check_for_updates(true, cx);
         };
+        // Installing ends with a relaunch: unsaved files in the editor come first.
+        if self.show_unsaved_files(cx) {
+            return;
+        }
         if current_bundle().is_none() {
             // Development builds can't replace themselves; show the download page instead.
             cx.open_url(&release.page_url);
@@ -280,7 +284,7 @@ impl Workbench {
                 cx.background_executor().timer(Duration::from_millis(800)).await;
             }
             let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => cx.quit(),
+                Ok(()) => cx.defer(crate::request_quit),
                 Err(err) => {
                     this.updates.state = UpdateState::Failed(format!("{err:#}"));
                     cx.notify();

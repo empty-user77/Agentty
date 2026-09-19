@@ -19,6 +19,14 @@ All notable changes to this project are documented here. The format follows
 - `claude` or `codex` typed into a terminal in a project where another agent is at work starts in a working tree of
   its own, like sessions opened from the + menu.
 - Pages (Settings, Monitoring, …) have a home tab first that goes back to the start page.
+- File editor: click a file in the files panel to view and edit it in a tab next to the terminals. Syntax colors for
+  Java, Kotlin, JavaScript, TypeScript / TSX, JSON, YAML, TOML, Markdown, Rust, Python, Go, shell, HTML, CSS, SQL and
+  more; undo / redo, IME input, atomic saves that keep file permissions, and a Format button that uses the installed
+  formatter (Prettier, google-java-format, ktlint, rustfmt, gofmt, Black) and says what to install when it is missing.
+  Files changed on disk (by an agent, git or another editor) reload, or ask when there are unsaved changes. "Open in
+  editor" hands the file to VS Code, Cursor or the system's text editor (Settings → Project → File editor). Large,
+  binary and non-UTF-8 files, and links to files outside the project, open read-only or with a notice. Project files
+  are never run: formatter settings that are code are refused.
 
 ### Changed
 - API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);
@@ -28,6 +36,7 @@ All notable changes to this project are documented here. The format follows
 - The first-run tour waits until the environment is ready (nothing important missing in the System check).
 
 ### Fixed
+- Windows and Linux builds compile again (a macOS-only debug snapshot helper was called on every platform).
 - Recheck in the System check finds tools installed while Agentty runs, including ones whose installer didn't add
   them to `PATH` (Claude Code in `~/.local/bin`): Windows reads the registry's `PATH` correctly, and macOS and Linux
   ask a fresh login shell.

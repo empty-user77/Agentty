@@ -27,7 +27,7 @@ struct Chord {
 }
 
 /// Contexts whose bindings are plain text editing (Ctrl+C copies there, there is no shell).
-const TEXT_CONTEXTS: &[&str] = &["TextInput"];
+const TEXT_CONTEXTS: &[&str] = &["TextInput", "CodeEditor"];
 
 /// Splits `alt-cmd-c` / `cmd--` into modifiers and key.
 fn parse(keys: &str) -> (Chord, &str) {
@@ -117,10 +117,18 @@ pub fn display(text: &str) -> Cow<'_, str> {
     if cfg!(target_os = "macos") || !text.contains(['⌘', '⌥', '⌃', '⇧']) {
         return Cow::Borrowed(text);
     }
-    Cow::Owned(translate_display(text))
+    Cow::Owned(translate_display(text, false))
 }
 
-fn translate_display(text: &str) -> String {
+/// Like [`display`], for a shortcut of a text editing context (⌘S → Ctrl+S, not Ctrl+Shift+S).
+pub fn display_in_text(text: &str) -> Cow<'_, str> {
+    if cfg!(target_os = "macos") || !text.contains(['⌘', '⌥', '⌃', '⇧']) {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(translate_display(text, true))
+}
+
+fn translate_display(text: &str, text_field: bool) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -177,7 +185,7 @@ fn translate_display(text: &str) -> String {
             other if other.chars().count() == 1 => other.to_uppercase(),
             other => other.to_string(),
         };
-        let translated = translate(chord, &key.to_lowercase(), false);
+        let translated = translate(chord, &key.to_lowercase(), text_field);
         let mut parts: Vec<&str> = Vec::new();
         for (on, name) in [(translated.ctrl, "Ctrl"), (translated.alt, "Alt"), (translated.shift, "Shift"), (translated.cmd, "Super")] {
             if on {
@@ -285,17 +293,20 @@ mod tests {
 
     #[test]
     fn displays_shortcuts() {
-        assert_eq!(translate_display("⌘T"), "Ctrl+Shift+T");
-        assert_eq!(translate_display("⇧⌘]  /  ⇧⌘[  ·  ⌃Tab"), "Ctrl+Alt+Shift+]  /  Ctrl+Alt+Shift+[  ·  Ctrl+Tab");
-        assert_eq!(translate_display("⌥⌘↓"), "Ctrl+Alt+Down");
-        assert_eq!(translate_display("⌃1 … ⌃9"), "Ctrl+1 … Ctrl+9");
-        assert_eq!(translate_display("⌘1 … ⌘9"), "Alt+1 … Alt+9");
-        assert_eq!(translate_display("⌘=  /  ⌘-  /  ⌘0"), "Ctrl+=  /  Ctrl+-  /  Ctrl+0");
-        assert_eq!(translate_display("⇧⌘↩"), "Ctrl+Alt+Shift+Enter");
-        assert_eq!(translate_display("⌘ Click"), "Ctrl+Click");
-        assert_eq!(translate_display("Open links (⌘-click in terminals) in"), "Open links (Ctrl+click in terminals) in");
-        assert_eq!(translate_display("⌘ 클릭하여 링크 열기"), "Ctrl+클릭하여 링크 열기");
-        assert_eq!(translate_display("No workspaces. Press ⌘N to create one."), "No workspaces. Press Ctrl+Shift+N to create one.");
-        assert_eq!(translate_display("⌘,"), "Ctrl+Shift+,");
+        assert_eq!(translate_display("⌘T", false), "Ctrl+Shift+T");
+        // The file editor is a text field: plain Ctrl.
+        assert_eq!(translate_display("⌘S", true), "Ctrl+S");
+        assert_eq!(translate_display("⇧⌘Z", true), "Ctrl+Shift+Z");
+        assert_eq!(translate_display("⇧⌘]  /  ⇧⌘[  ·  ⌃Tab", false), "Ctrl+Alt+Shift+]  /  Ctrl+Alt+Shift+[  ·  Ctrl+Tab");
+        assert_eq!(translate_display("⌥⌘↓", false), "Ctrl+Alt+Down");
+        assert_eq!(translate_display("⌃1 … ⌃9", false), "Ctrl+1 … Ctrl+9");
+        assert_eq!(translate_display("⌘1 … ⌘9", false), "Alt+1 … Alt+9");
+        assert_eq!(translate_display("⌘=  /  ⌘-  /  ⌘0", false), "Ctrl+=  /  Ctrl+-  /  Ctrl+0");
+        assert_eq!(translate_display("⇧⌘↩", false), "Ctrl+Alt+Shift+Enter");
+        assert_eq!(translate_display("⌘ Click", false), "Ctrl+Click");
+        assert_eq!(translate_display("Open links (⌘-click in terminals) in", false), "Open links (Ctrl+click in terminals) in");
+        assert_eq!(translate_display("⌘ 클릭하여 링크 열기", false), "Ctrl+클릭하여 링크 열기");
+        assert_eq!(translate_display("No workspaces. Press ⌘N to create one.", false), "No workspaces. Press Ctrl+Shift+N to create one.");
+        assert_eq!(translate_display("⌘,", false), "Ctrl+Shift+,");
     }
 }

@@ -25,6 +25,10 @@ libc = "0.2.189"
 plist = "1.10.1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+# Syntax highlighting for the file editor: Sublime Text grammars (bat's curated set) on the pure-Rust regex engine.
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-fancy"] }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
+toml = "0.8"
 unicode-segmentation = "1.13.3"
 uuid = { version = "1.26.1", features = ["v4"] }
 
