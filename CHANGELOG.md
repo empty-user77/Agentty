@@ -14,12 +14,33 @@ All notable changes to this project are documented here. The format follows
   Settings → Apps), app icon and version information, single instance, and Settings → System check, which finds
   missing tools (Git for Windows, Node.js, Claude Code, Codex, PowerShell 7) and installs them with one click via
   winget. Newly installed tools are found without restarting Agentty. Linux gets the same System check.
+
+### Changed
+- API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);
+  macOS keeps using the Keychain.
+
+## [0.1.10] - 2026-09-19
+
+### Added
+- Build my idea (start page banner, + menu): describe an app in a chat-style box, paste a plan or drop files, and
+  Agentty creates a project with your idea, a build guide and agent settings, then starts Claude Code or Codex to
+  build it while previewing the app live in the in-app browser. New idea workspaces go into an "Agentty Idea" group;
+  Settings → General → "Use idea mode" hides the entry points.
+- Launch plugin (built in): put a project on the web from Agentty — installs the GitHub and Vercel CLIs when missing,
+  signs in through their browser logins, creates the repository, pushes, sets environment variables and deploys to
+  production with the public URL. When a step fails, "Ask the agent to fix it" hands the error to the agent. Finished
+  steps show a green check.
+- Launch can connect Supabase: pick or create a project, keep its URL and public key in `.env.local`, and apply
+  pending migrations before each "Update site".
+- Launch recognizes a repository Vercel already deploys from GitHub and shows the live site, the latest deploy's
+  state and recent deploys instead of the first-launch wizard; "Publish my changes" then only pushes to GitHub.
+- New start page: the "Build my idea" banner, launch cards for the terminal, Claude Code, Codex and your other
+  installed agents, recent sessions one click from running again, and an Explore list.
 - Settings → Accounts: start Claude Code with an API key, a gateway token and base URL, a `claude setup-token` OAuth
   token, Amazon Bedrock or Google Vertex AI, and Codex with an API key or an imported `auth.json`, for machines where
-  the CLI login isn't possible. Keys are kept in the OS credential store and can be tested before use.
-
+  the CLI login isn't possible. Keys are kept in the Keychain and can be tested before use.
 - Files panel docked at the right (⌥⌘B, next to the split buttons): the folder structure and changes of the project
-  the active tab works in, with git status colors. A path can be typed into the terminal or shown in the file manager.
+  the active tab works in, with git status colors. A path can be typed into the terminal or shown in Finder.
 - A working tree per AI session: a new AI session in a project where another one is already at work starts in its own
   git worktree on a new `agentty/…` branch, so sessions never edit the same files. The files panel lists every working
   tree with the sessions in it and what changed there, the status bar shows a working-tree chip, and trees Agentty
@@ -42,10 +63,15 @@ All notable changes to this project are documented here. The format follows
 - First-run onboarding: a welcome, the settings worth choosing on day one, and a follow-along tour of split panes,
   Session Flow, mini mode, the in-app browser, the files panel and Monitoring — numbered steps that light the real
   button, notice when you did them and say what just happened; Session Flow brings two example cards to link, and
-  the files panel shows example working trees where the project has none yet — both go away with the tour. Settings → About shows it again.
-
+  the files panel shows example working trees where the project has none yet — both go away with the tour.
+  Settings → About shows it again.
+- Branch chip in pane headers: ⌘-click opens the branch on GitHub, GitLab, Bitbucket or Gitea in your browser, and
+  the chip turns yellow with uncommitted changes and light blue with commits to push.
+- Finished-agent notices show the first line of the agent's last reply instead of just "Done".
 - Agent harnesses: a project skill named `harness` or `harness-<something>` (`<project>/.claude/skills/…/SKILL.md`)
   now marks the project as a harness, like `HARNESS.md` does.
+- In-app browser: a progress bar under the toolbar while a page loads or reloads, and a page that can't be opened
+  (a dev server that isn't up yet) says so with a "Try again" button instead of leaving the previous page.
 
 ### Changed
 - "AI Usage" is now "Monitoring", with AI Usage, AI Processes and Proxy as its tabs.
@@ -53,17 +79,32 @@ All notable changes to this project are documented here. The format follows
 - With the in-app browser and the files panel both open, the terminals keep at least 440 pt: the browser gives way
   first, then the files panel.
 - The folder in the AI CLI status bar and in split pane headers is cut in the middle when it is long
-  (`~/code/…/src/app`); hovering shows the whole path and ⌘-click (Ctrl-click on Windows / Linux) shows the folder in
-  the file manager.
-- API connector keys use the platform's credential store (Keychain on macOS, unchanged; Credential Manager on Windows;
-  Secret Service on Linux).
+  (`~/code/…/src/app`); hovering shows the whole path and ⌘-click shows the folder in Finder.
+- The session viewer stays fast with long conversations.
+- The first-launch website tour in the in-app browser is replaced by the new start page and onboarding.
 
 ### Fixed
+- Reloading the in-app browser now fetches the page from the server, and retries the address shown when the last load
+  failed; before, it could reload the previous page or do nothing.
 - The context meter dropped only after the next prompt following `/compact`; it now shows the compacted size right away.
+- The context meter could show the usage of another Claude Code session working in the same folder.
+- A Claude Code pane started with a prompt while the browser tools were on failed with "Invalid MCP configuration".
+- Plugins could lose the login shell's PATH when one of its folders contained a space, so "Install tools" failed.
+- Text next to a button in a plugin panel row could collapse to one character per line in Korean, Japanese and
+  Chinese.
+- The resume bar now hides while any agent CLI runs in the pane, not only Claude Code or Codex.
 - The Cursor CLI (`agent` / `cursor-agent`) and xAI's Grok Build (`grok`) are recognized while they run in a pane (tab icon,
   status bar name, AI processes), not only in the + menu: their processes are not called like their commands.
 - Icons next to text in the AI CLI status bar and pane headers (folder, branch, working tree) sat slightly above
   their labels.
+
+### Security
+- Only processes running inside a pane Agentty started can report that pane's status, post notifications or drive
+  the in-app browser.
+- MCP server details mask credentials by value as well as by name, and a development build can no longer overwrite
+  the installed app's connector keys.
+- Launch keeps idea notes, agent settings, key files and migrations out of deploys and public repositories, and asks
+  before the first push to a remote it did not create.
 
 ## [0.1.9] - 2026-09-18
 
