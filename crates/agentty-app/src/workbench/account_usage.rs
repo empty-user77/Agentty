@@ -23,20 +23,54 @@ pub struct AccountUsage {
 impl AccountUsage {
     /// "Claude Code  $661 · weekly 42% · resets in 2d 5h".
     pub fn menu_line(&self, cx: &App) -> String {
-        let now = crate::ui::now_ms();
-        let mut parts = vec![format!("{}  {}", self.agent.display_name(), self.cost.map(crate::ui::money).unwrap_or_else(|| "—".into()))];
-        let window = self.limits.as_ref().and_then(|l| l.weekly.map(|w| ("tray.weekly", w)).or(l.session.map(|w| ("tray.session", w))));
-        if let Some((label, window)) = window {
-            let (days, hours, minutes) = time_left(window.resets_at, now);
-            let left = if days > 0 {
-                tf(cx, "tray.reset_days", &[("d", &days.to_string()), ("h", &hours.to_string())])
-            } else {
-                tf(cx, "tray.reset_hours", &[("h", &hours.to_string()), ("m", &minutes.to_string())])
-            };
-            parts.push(format!("{} {:.0}%", t(cx, label), window.used_percent));
-            parts.push(left);
+        let mut parts = vec![format!("{}  {}", self.agent.display_name(), self.cost_label())];
+        if let Some(limit) = self.limit() {
+            parts.push(format!("{} {:.0}%", t(cx, limit.label), limit.used_percent));
+            parts.push(limit.resets_in(cx));
         }
         parts.join(" · ")
+    }
+
+    /// "$661", or "—" when no request had a known price.
+    pub fn cost_label(&self) -> String {
+        self.cost.map(crate::ui::money).unwrap_or_else(|| "—".into())
+    }
+
+    /// Every known plan-limit window: the 5-hour one, then the weekly one.
+    pub fn windows(&self) -> Vec<Limit> {
+        let Some(limits) = self.limits.as_ref() else { return Vec::new() };
+        [("tray.session", limits.session), ("tray.weekly", limits.weekly)]
+            .into_iter()
+            .filter_map(|(label, window)| window.map(|w| Limit { label, used_percent: w.used_percent, resets_at: w.resets_at }))
+            .collect()
+    }
+
+    /// The plan limit that matters most: weekly when known, else the 5-hour window.
+    pub fn limit(&self) -> Option<Limit> {
+        let limits = self.limits.as_ref()?;
+        let (label, window) = limits.weekly.map(|w| ("tray.weekly", w)).or(limits.session.map(|w| ("tray.session", w)))?;
+        Some(Limit { label, used_percent: window.used_percent, resets_at: window.resets_at })
+    }
+}
+
+/// One plan-limit window, ready to show.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Limit {
+    /// i18n key: "weekly" or "5h".
+    pub label: &'static str,
+    pub used_percent: f64,
+    pub resets_at: i64,
+}
+
+impl Limit {
+    /// "resets in 2d 5h".
+    pub fn resets_in(&self, cx: &App) -> String {
+        let (days, hours, minutes) = time_left(self.resets_at, crate::ui::now_ms());
+        if days > 0 {
+            tf(cx, "tray.reset_days", &[("d", &days.to_string()), ("h", &hours.to_string())])
+        } else {
+            tf(cx, "tray.reset_hours", &[("h", &hours.to_string()), ("m", &minutes.to_string())])
+        }
     }
 }
 

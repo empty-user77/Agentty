@@ -43,6 +43,7 @@ mod statusline;
 mod terminal;
 mod text_input;
 mod theme;
+mod tray_popover;
 mod ui;
 mod usage_view;
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/webview.rs")]
@@ -562,43 +563,37 @@ fn main() {
         })
         .detach();
 
-        // Menu bar item: animation while agents work (in any window), and its menu's actions.
+        // Menu bar item: animation while agents work (in any window). Its clicks and popover
+        // actions wake the loop below right away.
+        let mut tray_wake = status_item::wake_channel();
+        cx.spawn(async move |cx| {
+            while tray_wake.next().await.is_some() {
+                if cx.update(run_tray_actions).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.spawn(async move |cx| {
             let mut tray: Option<status_item::StatusItem> = None;
             loop {
                 let working = cx.update(|cx| {
                     if !settings::settings(cx).menu_bar || !platform::HAS_STATUS_ITEM {
+                        tray_popover::close(cx);
                         tray = None;
                         return false;
                     }
                     let tray = tray.get_or_insert_with(status_item::StatusItem::new);
-                    let windows = workbenches(cx);
-                    for action in status_item::drain_actions() {
-                        // Focus goes to the window holding that pane; everything else to the main window.
-                        let target = match action {
-                            status_item::TrayAction::Focus(pane) => {
-                                windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(pane, cx))).or(windows.first()).copied()
-                            }
-                            _ => windows.first().copied(),
-                        };
-                        if let Some(window) = target {
-                            let _ = window.update(cx, |workbench, window, cx| workbench.handle_tray(action, window, cx));
-                        }
-                    }
-                    let mut state: Option<status_item::TrayState> = None;
-                    for window in &windows {
+                    // Notification clicks queue actions too.
+                    run_tray_actions(cx);
+                    let mut state = status_item::TrayState::default();
+                    for window in workbenches(cx) {
                         let Ok(next) = window.read(cx).map(|wb| wb.tray_state(cx)) else { continue };
-                        match state.as_mut() {
-                            Some(state) => {
-                                state.panes.extend(next.panes);
-                                state.mini |= next.mini;
-                            }
-                            None => state = Some(next),
-                        }
+                        state.working += next.working;
+                        state.waiting += next.waiting;
                     }
-                    let state = state.unwrap_or_default();
                     tray.update(&state);
-                    state.working() > 0
+                    state.working > 0
                 });
                 let Ok(working) = working else { break };
                 cx.background_executor().timer(std::time::Duration::from_millis(if working { 120 } else { 700 })).await;
@@ -796,6 +791,30 @@ pub fn with_active_workbench(cx: &mut App, f: impl FnOnce(&mut Workbench, &mut g
 }
 
 /// Runs `f` with the main window's workbench, wherever it is called from.
+/// Runs queued menu bar, popover and notification actions.
+fn run_tray_actions(cx: &mut App) {
+    let actions = status_item::drain_actions();
+    if actions.is_empty() {
+        return;
+    }
+    let windows = workbenches(cx);
+    for action in actions {
+        if tray_popover::handle(action, cx) {
+            continue;
+        }
+        // Focus goes to the window holding that pane; everything else to the main window.
+        let target = match action {
+            status_item::TrayAction::Focus(pane) => {
+                windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(pane, cx))).or(windows.first()).copied()
+            }
+            _ => windows.first().copied(),
+        };
+        if let Some(window) = target {
+            let _ = window.update(cx, |workbench, window, cx| workbench.handle_tray(action, window, cx));
+        }
+    }
+}
+
 fn with_workbench(cx: &mut App, f: impl FnOnce(&mut Workbench, &mut gpui::Window, &mut gpui::Context<Workbench>)) {
     let Some(handle) = workbenches(cx).into_iter().next() else { return };
     let _ = handle.update(cx, |workbench, window, cx| f(workbench, window, cx));

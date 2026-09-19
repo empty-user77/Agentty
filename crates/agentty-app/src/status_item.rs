@@ -1,46 +1,46 @@
-//! macOS menu bar item: always-on Agentty icon with a running animation while agents work, a
-//! menu listing agent panes, and entries to show the window, enter mini mode or quit.
+//! macOS menu bar item: always-on Agentty icon with a running animation while agents work.
+//! Clicking it toggles the popover (`tray_popover`), a GPUI panel placed under the icon.
 //!
-//! AppKit calls happen on the main thread (GPUI's foreground executor). Menu clicks are queued
-//! and drained by the app loop, so no Rust closure is ever called from Objective-C.
+//! AppKit calls happen on the main thread (GPUI's foreground executor). Clicks are queued and
+//! drained by the app loop, so no Rust closure is ever called from Objective-C.
 
 #![allow(unexpected_cfgs)] // objc 0.2 macros check a `cargo-clippy` cfg
 
+use block::ConcreteBlock;
+use cocoa::foundation::NSRect;
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel, NO, YES};
 use objc::{class, msg_send, sel, sel_impl};
+use std::cell::Cell;
 use std::ffi::CString;
 use std::sync::Once;
 
 type Id = *mut Object;
 const NIL: Id = std::ptr::null_mut();
 
-pub use crate::platform::tray::{drain_actions, push_action, TrayAction, TrayPane, TrayState};
+pub use crate::platform::tray::{drain_actions, push_action, wake_channel, TrayAction, TrayAnchor, TrayState};
 
-const TAG_SHOW: isize = 1;
-const TAG_MINI: isize = 2;
-const TAG_QUIT: isize = 3;
-const TAG_USAGE: isize = 4;
-const TAG_PANE: isize = 1000;
+// NSEventMask bits.
+const LEFT_MOUSE_DOWN: u64 = 1 << 1;
+const RIGHT_MOUSE_DOWN: u64 = 1 << 3;
+const OTHER_MOUSE_DOWN: u64 = 1 << 25;
 
-extern "C" fn tray_action(_: &Object, _: Sel, sender: Id) {
-    let tag: isize = unsafe { msg_send![sender, tag] };
-    let action = match tag {
-        TAG_SHOW => TrayAction::Show,
-        TAG_MINI => TrayAction::ToggleMini,
-        TAG_QUIT => TrayAction::Quit,
-        TAG_USAGE => TrayAction::OpenUsage,
-        t if t >= TAG_PANE => TrayAction::Focus((t - TAG_PANE) as u64),
-        _ => return,
-    };
-    push_action(action);
+thread_local! {
+    /// The status item's button (main thread only), for the popover's anchor and highlight.
+    static BUTTON: Cell<Id> = const { Cell::new(NIL) };
+    /// Global mouse monitor while the popover is open.
+    static MONITOR: Cell<Id> = const { Cell::new(NIL) };
+}
+
+extern "C" fn button_clicked(_: &Object, _: Sel, _sender: Id) {
+    push_action(TrayAction::TogglePopover);
 }
 
 fn target_class() -> &'static Class {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
         let mut decl = ClassDecl::new("AgenttyTrayTarget", class!(NSObject)).expect("AgenttyTrayTarget registered twice");
-        unsafe { decl.add_method(sel!(trayAction:), tray_action as extern "C" fn(&Object, Sel, Id)) };
+        unsafe { decl.add_method(sel!(buttonClicked:), button_clicked as extern "C" fn(&Object, Sel, Id)) };
         decl.register();
     });
     Class::get("AgenttyTrayTarget").expect("AgenttyTrayTarget class")
@@ -51,12 +51,71 @@ fn ns_string(text: &str) -> Id {
     unsafe { msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()] }
 }
 
+/// Where the icon is on screen, or `None` while it is hidden (menu bar setting off).
+pub fn anchor() -> Option<TrayAnchor> {
+    let button = BUTTON.with(Cell::get);
+    if button.is_null() {
+        return None;
+    }
+    unsafe {
+        let window: Id = msg_send![button, window];
+        if window.is_null() {
+            return None;
+        }
+        let screen: Id = msg_send![window, screen];
+        if screen.is_null() {
+            return None;
+        }
+        let icon: NSRect = msg_send![window, frame];
+        let area: NSRect = msg_send![screen, frame];
+        let description: Id = msg_send![screen, deviceDescription];
+        let number: Id = msg_send![description, objectForKey: ns_string("NSScreenNumber")];
+        let display: u32 = if number.is_null() { 0 } else { msg_send![number, unsignedIntValue] };
+        Some(TrayAnchor {
+            display,
+            center_x: icon.origin.x + icon.size.width / 2. - area.origin.x,
+            bottom: area.origin.y + area.size.height - icon.origin.y,
+            screen_width: area.size.width,
+        })
+    }
+}
+
+/// Keeps the icon pressed while the popover is open, like a menu.
+pub fn set_highlighted(on: bool) {
+    let button = BUTTON.with(Cell::get);
+    if !button.is_null() {
+        unsafe {
+            let _: () = msg_send![button, highlight: if on { YES } else { NO }];
+        }
+    }
+}
+
+/// While on, a click in any other app closes the popover. Clicks in Agentty's own windows take
+/// key status from the popover, which closes it too.
+pub fn watch_outside_clicks(on: bool) {
+    let current = MONITOR.with(Cell::get);
+    unsafe {
+        if !current.is_null() {
+            let _: () = msg_send![class!(NSEvent), removeMonitor: current];
+            let _: () = msg_send![current, release];
+            MONITOR.with(|m| m.set(NIL));
+        }
+        if on {
+            let handler = ConcreteBlock::new(|_event: Id| push_action(TrayAction::ClosePopover)).copy();
+            let monitor: Id = msg_send![class!(NSEvent), addGlobalMonitorForEventsMatchingMask: LEFT_MOUSE_DOWN | RIGHT_MOUSE_DOWN | OTHER_MOUSE_DOWN handler: &*handler];
+            if !monitor.is_null() {
+                let _: Id = msg_send![monitor, retain];
+                MONITOR.with(|m| m.set(monitor));
+            }
+        }
+    }
+}
+
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub struct StatusItem {
     item: Id,
     target: Id,
-    menu_state: Option<TrayState>,
     title: String,
     frame: usize,
 }
@@ -75,26 +134,29 @@ impl StatusItem {
             let image: Id = msg_send![image, initWithData: data];
             if !image.is_null() {
                 let _: () = msg_send![image, setSize: cocoa::foundation::NSSize::new(18., 18.)];
-            }
-            if !image.is_null() {
                 let _: () = msg_send![image, setTemplate: YES];
                 let _: () = msg_send![button, setImage: image];
                 let _: () = msg_send![button, setImagePosition: 2isize]; // NSImageLeft
+                let _: () = msg_send![image, release];
             }
             let _: () = msg_send![button, setToolTip: ns_string("Agentty")];
             let target: Id = msg_send![target_class(), new];
-            Self { item, target, menu_state: None, title: String::new(), frame: 0 }
+            let _: () = msg_send![button, setTarget: target];
+            let _: () = msg_send![button, setAction: sel!(buttonClicked:)];
+            // On mouse down, like a menu.
+            let _: isize = msg_send![button, sendActionOn: LEFT_MOUSE_DOWN | RIGHT_MOUSE_DOWN];
+            BUTTON.with(|b| b.set(button));
+            Self { item, target, title: String::new(), frame: 0 }
         }
     }
 
-    /// Advances the running animation and rebuilds the menu when its contents changed.
+    /// Advances the running animation.
     pub fn update(&mut self, state: &TrayState) {
-        let working = state.working();
-        let title = if working > 0 {
+        let title = if state.working > 0 {
             self.frame = (self.frame + 1) % SPINNER.len();
-            format!(" {} {working}", SPINNER[self.frame])
-        } else if state.waiting() > 0 {
-            format!(" ● {}", state.waiting())
+            format!(" {} {}", SPINNER[self.frame], state.working)
+        } else if state.waiting > 0 {
+            format!(" ● {}", state.waiting)
         } else {
             String::new()
         };
@@ -105,69 +167,12 @@ impl StatusItem {
             }
             self.title = title;
         }
-        if self.menu_state.as_ref() != Some(state) {
-            self.rebuild_menu(state);
-            self.menu_state = Some(state.clone());
-        }
-    }
-
-    fn add_item(&self, menu: Id, title: &str, tag: isize, enabled: bool) -> Id {
-        unsafe {
-            let item: Id = msg_send![class!(NSMenuItem), alloc];
-            let item: Id = msg_send![item, initWithTitle: ns_string(title) action: sel!(trayAction:) keyEquivalent: ns_string("")];
-            let _: () = msg_send![item, setTarget: self.target];
-            let _: () = msg_send![item, setTag: tag];
-            if !enabled {
-                let _: () = msg_send![item, setAction: sel!(noSuchAction:)];
-                let _: () = msg_send![item, setEnabled: NO];
-            }
-            let _: () = msg_send![menu, addItem: item];
-            let _: () = msg_send![item, release];
-            item
-        }
-    }
-
-    fn rebuild_menu(&self, state: &TrayState) {
-        unsafe {
-            let menu: Id = msg_send![class!(NSMenu), new];
-            let _: () = msg_send![menu, setAutoenablesItems: NO];
-            self.add_item(menu, &state.show_label, TAG_SHOW, true);
-            let mini = self.add_item(menu, &state.mini_label, TAG_MINI, true);
-            let _: () = msg_send![mini, setState: if state.mini { 1isize } else { 0isize }];
-            let separator: Id = msg_send![class!(NSMenuItem), separatorItem];
-            let _: () = msg_send![menu, addItem: separator];
-            if !state.usage_lines.is_empty() {
-                self.add_item(menu, &state.usage_title, 0, false);
-                for line in &state.usage_lines {
-                    self.add_item(menu, &format!("   {line}"), TAG_USAGE, true);
-                }
-                let separator: Id = msg_send![class!(NSMenuItem), separatorItem];
-                let _: () = msg_send![menu, addItem: separator];
-            }
-            if state.panes.is_empty() {
-                self.add_item(menu, &state.empty_label, 0, false);
-            }
-            for pane in &state.panes {
-                let marker = if pane.working {
-                    "◐"
-                } else if pane.waiting {
-                    "●"
-                } else {
-                    "○"
-                };
-                self.add_item(menu, &format!("{marker}  {}", pane.label), TAG_PANE + pane.id as isize, true);
-            }
-            let separator: Id = msg_send![class!(NSMenuItem), separatorItem];
-            let _: () = msg_send![menu, addItem: separator];
-            self.add_item(menu, &state.quit_label, TAG_QUIT, true);
-            let _: () = msg_send![self.item, setMenu: menu];
-            let _: () = msg_send![menu, release];
-        }
     }
 }
 
 impl Drop for StatusItem {
     fn drop(&mut self) {
+        BUTTON.with(|b| b.set(NIL));
         unsafe {
             let bar: Id = msg_send![class!(NSStatusBar), systemStatusBar];
             let _: () = msg_send![bar, removeStatusItem: self.item];

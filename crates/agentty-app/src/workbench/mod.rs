@@ -133,6 +133,7 @@ pub fn next_free_window_slot() -> usize {
     LayoutState::next_free_slot()
 }
 
+pub use account_usage::AccountUsage;
 pub use persist::ClosedWindows;
 
 pub struct Tab {
@@ -2344,9 +2345,11 @@ impl Workbench {
                 eprintln!("windows: {slots:?}");
             }
             "tray" => {
-                let state = self.tray_state(cx);
-                eprintln!("tray: {} {:?}", state.usage_title, state.usage_lines);
+                let lines: Vec<String> = self.account_usage.iter().map(|u| u.menu_line(cx)).collect();
+                eprintln!("tray: {:?} {lines:?}", self.tray_state(cx));
             }
+            "tray-popover" => crate::status_item::push_action(crate::status_item::TrayAction::TogglePopover),
+            "tray-snapshot" => crate::tray_popover::debug_snapshot(PathBuf::from(argument), cx),
             "hover" => {
                 if let Some(pane) = self.active_pane() {
                     eprintln!("hover: {:?}", pane.read(cx).debug_hover());
