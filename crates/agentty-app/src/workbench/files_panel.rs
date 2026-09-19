@@ -6,10 +6,10 @@
 use super::{Pane, Workbench};
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::{icon, icon_only_sized, tilde, IconSize, Tooltip, TypeScale};
+use crate::ui::{icon, icon_only_sized, menu_item, popover, tilde, IconSize, Tooltip, TypeScale};
 use agentty_bridge::git::FileChange;
 use agentty_bridge::worktree::Worktree;
-use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, Context, FontWeight, SharedString};
+use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, ClipboardItem, Context, FontWeight, Pixels, Point, SharedString};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -89,6 +89,14 @@ struct Snapshot {
     trees: Vec<TreeInfo>,
 }
 
+/// Right-click menu on a working tree of the list.
+pub(super) struct TreeMenu {
+    tree: Worktree,
+    position: Point<Pixels>,
+    /// Removal waiting for a second click: `Some(true)` with its branch.
+    confirm: Option<bool>,
+}
+
 pub(super) struct FilesPanel {
     /// Working tree picked in the panel; `None` follows the active pane.
     pinned: Option<PathBuf>,
@@ -100,6 +108,7 @@ pub(super) struct FilesPanel {
     /// Tree whose removal waits for a second click, and an error from the last removal.
     confirm_remove: Option<PathBuf>,
     error: Option<String>,
+    tree_menu: Option<TreeMenu>,
     scroll: gpui::UniformListScrollHandle,
     generation: u64,
     loading: bool,
@@ -206,11 +215,14 @@ fn load(root: PathBuf, expanded: Vec<PathBuf>) -> Snapshot {
     }
     let trees = agentty_bridge::worktree::list(&root).unwrap_or_default();
     let main_head = trees.iter().find(|t| t.main).map(|t| t.head.clone()).unwrap_or_default();
+    // A tree whose folder was deleted by hand stays listed (as gone) so its menu can clean it up.
     snapshot.trees = trees
         .into_iter()
-        .filter(|tree| !tree.prunable)
         .take(24)
         .map(|tree| {
+            if tree.prunable {
+                return TreeInfo { tree, changes: 0, ahead: 0 };
+            }
             let changes = if tree.path == root {
                 snapshot.changes.len()
             } else {
@@ -247,6 +259,7 @@ impl Workbench {
                     selected: None,
                     confirm_remove: None,
                     error: None,
+                    tree_menu: None,
                     scroll: gpui::UniformListScrollHandle::new(),
                     generation: 0,
                     loading: false,
@@ -479,6 +492,205 @@ impl Workbench {
             });
         })
         .detach();
+    }
+
+    /// Debug driver: the menu of the `index`-th tree in the list, as a right click would open it.
+    pub(super) fn debug_tree_menu(&mut self, index: usize, cx: &mut Context<Self>) {
+        let tree = self.files_panel.as_ref().and_then(|p| p.snapshot.trees.get(index)).map(|t| t.tree.clone());
+        if let Some(tree) = tree {
+            self.open_tree_menu(tree, gpui::point(px(1180.), px(140.)), cx);
+        }
+    }
+
+    fn open_tree_menu(&mut self, tree: Worktree, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(panel) = self.files_panel.as_mut() {
+            panel.tree_menu = Some(TreeMenu { tree, position, confirm: None });
+            panel.error = None;
+        }
+        cx.notify();
+    }
+
+    fn close_tree_menu(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.files_panel.as_mut() {
+            panel.tree_menu = None;
+        }
+        cx.notify();
+    }
+
+    /// Shows the files of working tree `path` in the panel (what a click on its row does).
+    fn view_tree(&mut self, path: PathBuf, main: bool, cx: &mut Context<Self>) {
+        // The onboarding tour waits for a session's tree to be picked (the project folder is not one).
+        if !main {
+            self.onboarding_event(super::onboarding::TourEvent::TreePicked, cx);
+        }
+        if let Some(panel) = self.files_panel.as_mut() {
+            panel.pinned = Some(path);
+            panel.error = None;
+            panel.tree_menu = None;
+        }
+        self.refresh_files_panel(cx);
+        cx.notify();
+    }
+
+    /// From the menu: removes a linked working tree (Agentty's or the user's own), and its branch when
+    /// asked. Git decides what is safe: a tree with changes and a branch with unmerged commits stay.
+    fn remove_tree_from_menu(&mut self, tree: Worktree, delete_branch: bool, cx: &mut Context<Self>) {
+        let Some(panel) = self.files_panel.as_mut() else { return };
+        panel.tree_menu = None;
+        let Some(repo) = panel.snapshot.trees.iter().find(|t| t.tree.main).map(|t| t.tree.path.clone()) else { return };
+        // A session still working in it would lose its folder.
+        if self.panes_in_tree(&tree.path, cx).into_iter().next().is_some() {
+            let text = t(cx, "files.tree_in_use").to_string();
+            if let Some(panel) = self.files_panel.as_mut() {
+                panel.error = Some(text);
+            }
+            return cx.notify();
+        }
+        let path = tree.path.clone();
+        cx.spawn(async move |this, cx| {
+            let target = path.clone();
+            let result = cx.background_spawn(async move { agentty_bridge::worktree::remove_linked(&repo, &target, delete_branch) }).await;
+            let _ = this.update(cx, |this, cx| {
+                let message = match &result {
+                    Ok(Some(branch)) => Some(tf(cx, "files.branch_kept", &[("branch", branch)])),
+                    Ok(None) => None,
+                    Err(err) => {
+                        let text = format!("{err:#}");
+                        Some(if text.contains("modified or untracked") { t(cx, "files.tree_dirty").to_string() } else { text })
+                    }
+                };
+                if let Some(panel) = this.files_panel.as_mut() {
+                    panel.error = message;
+                    if result.is_ok() && panel.pinned.as_ref() == Some(&path) {
+                        panel.pinned = None;
+                    }
+                }
+                this.refresh_files_panel(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// From the menu: forgets working trees whose folder was deleted by hand.
+    fn prune_trees(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.files_panel.as_mut() else { return };
+        panel.tree_menu = None;
+        let Some(repo) = panel.snapshot.trees.iter().find(|t| t.tree.main).map(|t| t.tree.path.clone()) else { return };
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { agentty_bridge::worktree::prune(&repo) }).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(panel) = this.files_panel.as_mut() {
+                    panel.error = result.err().map(|err| format!("{err:#}"));
+                }
+                this.refresh_files_panel(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The working tree menu: view its files, open a terminal there, show it, copy its path, and for
+    /// a linked tree remove it (with its branch when asked; a second click confirms) or clean it up
+    /// when its folder is gone.
+    pub(super) fn render_tree_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let menu = self.files_panel.as_ref()?.tree_menu.as_ref()?;
+        let tree = menu.tree.clone();
+        let (path, main) = (tree.path.clone(), tree.main);
+        let in_use = self.panes_in_tree(&path, cx).into_iter().next().is_some();
+        let separator = || div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER));
+        let mut list = popover().w(px(250.)).on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_tree_menu(cx))).child(
+            div()
+                .px_3()
+                .pt_1()
+                .pb_1()
+                .t_small()
+                .text_color(hex(Chrome::MUTED))
+                .truncate()
+                .child(tree.branch.clone().unwrap_or_else(|| tree.name())),
+        );
+        if !tree.prunable {
+            let (view, terminal, reveal, copy) = (path.clone(), path.clone(), path.clone(), path.clone());
+            list = list
+                .child(menu_item(
+                    "files-tree-menu-view",
+                    t(cx, "files.menu.view"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.view_tree(view.clone(), main, cx)),
+                ))
+                .child(menu_item(
+                    "files-tree-menu-terminal",
+                    t(cx, "files.menu.terminal"),
+                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.close_tree_menu(cx);
+                        this.open_tab(crate::launch::LaunchSpec::new(crate::launch::PaneKind::Shell, terminal.clone()), window, cx);
+                    }),
+                ))
+                .child(menu_item(
+                    "files-tree-menu-reveal",
+                    t(cx, "files.reveal"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.close_tree_menu(cx);
+                        crate::platform::reveal(&reveal);
+                    }),
+                ))
+                .child(menu_item(
+                    "files-tree-menu-copy",
+                    t(cx, "files.menu.copy_path"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy.display().to_string()));
+                        this.close_tree_menu(cx);
+                    }),
+                ));
+        }
+        if main {
+            return Some(self.place_tree_menu(menu.position, list));
+        }
+        list = list.child(separator());
+        if tree.prunable {
+            list = list.child(menu_item(
+                "files-tree-menu-prune",
+                t(cx, "files.menu.prune"),
+                cx.listener(|this, _: &ClickEvent, _, cx| this.prune_trees(cx)),
+            ));
+        } else if in_use {
+            list = list.child(div().px_3().py_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "files.tree_in_use")));
+        } else {
+            for (with_branch, id, label) in [
+                (false, "files-tree-menu-remove", "files.menu.remove"),
+                (true, "files-tree-menu-remove-branch", "files.menu.remove_branch"),
+            ] {
+                // The branch can only go along when there is one.
+                if with_branch && tree.branch.is_none() {
+                    continue;
+                }
+                let confirm = menu.confirm == Some(with_branch);
+                let target = tree.clone();
+                list = list.child(
+                    menu_item(
+                        id,
+                        if confirm { t(cx, "files.remove_confirm") } else { t(cx, label) },
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            let Some(menu) = this.files_panel.as_mut().and_then(|p| p.tree_menu.as_mut()) else { return };
+                            if menu.confirm == Some(with_branch) {
+                                this.remove_tree_from_menu(target.clone(), with_branch, cx);
+                            } else {
+                                menu.confirm = Some(with_branch);
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .text_color(hex(Chrome::ERROR))
+                    .when(confirm, |d| d.bg(hex_alpha(Chrome::ERROR, 0.25))),
+                );
+            }
+        }
+        Some(self.place_tree_menu(menu.position, list))
+    }
+
+    fn place_tree_menu(&self, position: Point<Pixels>, list: gpui::Div) -> AnyElement {
+        gpui::deferred(gpui::anchored().position(position).snap_to_window_with_margin(px(8.)).child(list))
+            .with_priority(3)
+            .into_any_element()
     }
 
     /// Panes whose folder is inside the working tree `root`.
@@ -749,6 +961,8 @@ impl Workbench {
                 );
             }
             let remove_path = tree.path.clone();
+            let menu_tree = tree.clone();
+            let gone = tree.prunable;
             list = list.child(
                 div()
                     .id(SharedString::from(format!("files-tree-{index}")))
@@ -767,21 +981,26 @@ impl Workbench {
                     .when(viewing, |d| d.bg(hex_alpha(color, 0.12)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .tooltip(Tooltip::text(if demo { t(cx, "files.demo_note").to_string() } else { tilde(&tree.path) }, None))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                        // A right click opens the menu (below); it must not also pick the tree and close it.
+                        if event.is_right_click() || gone {
+                            return;
+                        }
                         if demo {
                             return this.pick_demo_tree(index, cx);
                         }
-                        // The onboarding tour waits for a session's tree to be picked (the project folder is not one).
-                        if !is_main {
-                            this.onboarding_event(super::onboarding::TourEvent::TreePicked, cx);
-                        }
-                        if let Some(panel) = this.files_panel.as_mut() {
-                            panel.pinned = Some(path.clone());
-                            panel.error = None;
-                        }
-                        this.refresh_files_panel(cx);
-                        cx.notify();
+                        this.view_tree(path.clone(), is_main, cx);
                     }))
+                    // Right click: what can be done with this tree (not with the tour's examples).
+                    .when(!demo, |d| {
+                        d.on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.open_tree_menu(menu_tree.clone(), event.position, cx);
+                            }),
+                        )
+                    })
                     // The tour asks for a session's tree: those rows get its pulsing ring.
                     .when(ring && !tree.main, |d| d.child(crate::ui::pulse_ring("files-trees", false)))
                     .child(rail)
@@ -836,7 +1055,8 @@ impl Workbench {
                                     .when(info.ahead > 0, |d| {
                                         d.child(div().text_color(hex(Chrome::BLUE)).child(format!("↑{}", info.ahead)))
                                     })
-                                    .when(info.changes == 0 && info.ahead == 0 && !tree.main, |d| d.child(t(cx, "files.clean"))),
+                                    .when(gone, |d| d.child(div().text_color(hex(Chrome::WARNING)).child(t(cx, "files.tree_gone"))))
+                                    .when(info.changes == 0 && info.ahead == 0 && !tree.main && !gone, |d| d.child(t(cx, "files.clean"))),
                             ),
                     )
                     .child(avatars)

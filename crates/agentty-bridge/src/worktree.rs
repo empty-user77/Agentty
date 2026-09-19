@@ -243,6 +243,31 @@ fn remove_in(tree: &Path, force: bool, managed: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Removes a linked working tree of the repository `repo` is in, when the user asks for it (the files
+/// panel's menu) — one Agentty made or one they made themselves. Never the project's own tree and
+/// never with `--force`: git refuses a tree with uncommitted or untracked files. With
+/// `delete_branch`, its branch goes too through `git branch -d`, which git refuses when the branch
+/// has commits nothing else has; a branch Agentty made (`agentty/…`) goes the same way when it is
+/// merged. Returns the branch that was asked to go but was kept.
+pub fn remove_linked(repo: &Path, tree: &Path, delete_branch: bool) -> Result<Option<String>> {
+    let trees = list(repo)?;
+    let main = trees.iter().find(|t| t.main).context("the repository has no working tree")?.path.clone();
+    let same =
+        |a: &Path| a.canonicalize().unwrap_or_else(|_| a.to_path_buf()) == tree.canonicalize().unwrap_or_else(|_| tree.to_path_buf());
+    let entry = trees.iter().find(|t| same(&t.path)).context("not a working tree of this repository")?;
+    ensure!(!entry.main, "the project's own working tree is never removed");
+    let branch = entry.branch.clone();
+    git(&main, &["worktree", "remove", &tree.to_string_lossy()])?;
+    let Some(branch) = branch.filter(|b| delete_branch || b.starts_with(BRANCH_PREFIX)) else { return Ok(None) };
+    let deleted = git(&main, &["branch", "-d", &branch]).is_ok();
+    Ok((!deleted && delete_branch).then_some(branch))
+}
+
+/// Forgets working trees whose folder is gone (`git worktree prune`).
+pub fn prune(repo: &Path) -> Result<()> {
+    git(repo, &["worktree", "prune"]).map(|_| ())
+}
+
 /// Commits on `tree`'s branch that the main working tree does not have yet.
 pub fn commits_ahead(tree: &Path, main_head: &str) -> u32 {
     if main_head.is_empty() || !main_head.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -284,6 +309,63 @@ mod tests {
         // Nothing to go by: the checked-out commit.
         assert_eq!(pick_base(None, refs(&[])), "HEAD");
         assert_eq!(pick_base(Some("origin/trunk"), refs(&["refs/heads/main"])), "HEAD");
+    }
+
+    /// Trees the user made are removed on request too, safely: never the project's own tree, never
+    /// one with changes, and a branch with unmerged commits stays.
+    #[test]
+    fn removes_linked_trees_on_request() {
+        if crate::process::command("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("agentty-worktree-linked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]).unwrap();
+        for (key, value) in [("user.email", "t@example.com"), ("user.name", "Tester"), ("commit.gpgsign", "false")] {
+            git(&repo, &["config", key, value]).unwrap();
+        }
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "a.txt"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "first"]).unwrap();
+        let add = |name: &str| {
+            let path = dir.join(name);
+            git(&repo, &["worktree", "add", "-q", "-b", name, &path.to_string_lossy()]).unwrap();
+            path
+        };
+
+        // The project's own tree: never.
+        assert!(remove_linked(&repo, &repo, false).is_err());
+
+        // A tree with changes stays; a clean one goes, and its branch only when asked.
+        let kept = add("kept-branch");
+        std::fs::write(kept.join("new.txt"), "x\n").unwrap();
+        assert!(remove_linked(&repo, &kept, false).is_err(), "untracked files keep the tree");
+        std::fs::remove_file(kept.join("new.txt")).unwrap();
+        assert_eq!(remove_linked(&repo, &kept, false).unwrap(), None);
+        assert!(!kept.exists());
+        assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/kept-branch"]).is_ok());
+
+        // Asked to delete a merged branch: gone. An unmerged one: kept, and said so.
+        let merged = add("merged");
+        assert_eq!(remove_linked(&repo, &merged, true).unwrap(), None);
+        assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/merged"]).is_err());
+        let ahead = add("ahead");
+        std::fs::write(ahead.join("b.txt"), "two\n").unwrap();
+        git(&ahead, &["add", "b.txt"]).unwrap();
+        git(&ahead, &["commit", "-q", "-m", "work"]).unwrap();
+        assert_eq!(remove_linked(&repo, &ahead, true).unwrap(), Some("ahead".to_string()));
+        assert!(!ahead.exists());
+        assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/ahead"]).is_ok());
+
+        // A tree whose folder was deleted by hand: prune forgets it.
+        let gone = add("gone");
+        std::fs::remove_dir_all(&gone).unwrap();
+        assert!(list(&repo).unwrap().iter().any(|t| t.prunable));
+        prune(&repo).unwrap();
+        assert_eq!(list(&repo).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

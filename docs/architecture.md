@@ -125,7 +125,9 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
   project's default branch (`worktree::base_ref`: the local branch `origin/HEAD` names, else the remote one, else
   `main` / `master`; the checked-out commit only when there is none), never from whatever the project folder has
   checked out. Shells, resumed sessions and the first session stay in the project. Only trees under that folder are
-  ever removed by Agentty (from the files panel, never with `--force`).
+  ever removed by Agentty on its own (the trash button in the files panel, never with `--force`). The panel's
+  right-click menu can also remove a linked tree the user made (`worktree::remove_linked`: never the project's own
+  tree, never `--force`, the branch only through `git branch -d`) and forget trees whose folder is gone (`prune`).
 - Agents typed into a terminal take the same path before they start: `shell_integration` wraps `claude` and `codex`
   (zsh, bash, PowerShell) with a function that runs `agentty worktree-for <agent>`. That sends `worktree\t{cwd,label}`
   on the pane's socket connection; `answer_worktree_request` checks every window for another agent pane in that tree,

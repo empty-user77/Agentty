@@ -19,6 +19,8 @@ All notable changes to this project are documented here. The format follows
 - `claude` or `codex` typed into a terminal in a project where another agent is at work starts in a working tree of
   its own, like sessions opened from the + menu.
 - Pages (Settings, Monitoring, …) have a home tab first that goes back to the start page.
+- Right-click a working tree in the files panel: show its files, open a terminal there, show it in the file manager,
+  copy its path, remove it (with its branch when that is merged) or clean up a tree whose folder is gone.
 - Releases include a Windows installer (`Agentty-X.Y.Z-windows-x64-setup.exe`, also as a `.zip`) for Windows 10 1809
   and later, and Linux packages for x86_64: `.deb` (Debian 12+, Ubuntu 22.04+) and `.rpm` (RHEL 9+, Fedora). The
   installer is per user and needs no administrator rights.

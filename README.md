@@ -60,6 +60,8 @@ each agent is doing and highlights the ones that need you.
 - **Files panel & working trees** — the folder structure and changes of the project you are in, docked right (⌥⌘B).
   A second AI session in the same project, opened from the + menu or typed into a terminal, starts in its own git
   worktree on a new branch from the project's default branch, so sessions never edit the same files; the panel shows
+  every working tree, who works in it and what changed there. Right-click a tree to open a terminal there, copy its
+  path, or remove it (and its branch once merged).
   every working tree, who works in it and what changed there.
 - **Docker** — in a project with a compose file, a Dockerfile or containers of its own, the status bar shows how many
   of its containers run (🐳 3 running). Click it for a panel with each compose service's image, state (running,
