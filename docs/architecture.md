@@ -78,6 +78,18 @@ background threads; the page polls status every 3 seconds only while visible. Br
   also advances the spinner (every 120 ms while an agent works, 700 ms otherwise).
 - `notifications.rs` uses `UNUserNotificationCenter` inside the app bundle (click → `TrayAction::Focus(pane)`) and
   falls back to `osascript` for unbundled development builds.
+- `workbench/notices.rs` records every notice. A permission request or question notifies even while Agentty is in
+  front (`notifyAnswerRequests`), except when that pane is the one in view (`pane_in_view`: window active, no page,
+  pane focused).
+- Chat messages: `agentty_bridge::notify` (Slack / Discord webhooks, Telegram `sendMessage`) and
+  `workbench/notify_settings.rs` (Settings → Notifications, `send_chat_notice`). Secrets are accepted only in their
+  service's shape (`https://hooks.slack.com/…`, `https://discord.com/api/webhooks/…`, `<digits>:<token>`), so a message
+  can't be sent anywhere else, and live in the credential store (`run.agentty.notify`, scoped to the data dir), read
+  once per run off the main thread. Errors carry the service and HTTP status only (never the URL, which holds the
+  secret). Redirects are not followed; Discord mentions are off. A message says what happened and which agent and
+  workspace; the notice text (the command or question) is added only with `chatNotify.details`. At most one message
+  per pane and kind every 30 s and 30 per 10 minutes. Debug driver: `chat-notify save|test|remove <channel> …`,
+  `chat-notify notice <kind>`; `probe` includes `chatNotify`.
 
 ## Live links
 

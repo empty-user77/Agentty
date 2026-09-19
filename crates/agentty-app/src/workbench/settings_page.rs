@@ -40,14 +40,25 @@ pub enum SettingsSection {
     Appearance,
     Browser,
     Shortcuts,
+    /// Desktop notifications and messages to chat services.
+    Notifications,
     /// Helper tools on Windows / Linux (hidden on macOS).
     System,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 8] =
-        [Self::General, Self::Project, Self::Accounts, Self::Appearance, Self::Browser, Self::Shortcuts, Self::System, Self::About];
+    pub const ALL: [SettingsSection; 9] = [
+        Self::General,
+        Self::Project,
+        Self::Accounts,
+        Self::Notifications,
+        Self::Appearance,
+        Self::Browser,
+        Self::Shortcuts,
+        Self::System,
+        Self::About,
+    ];
 
     /// Sections shown on this platform (the browser settings need the macOS web view).
     fn visible() -> impl Iterator<Item = SettingsSection> {
@@ -65,6 +76,7 @@ impl SettingsSection {
             Self::Appearance => "settings.appearance",
             Self::Browser => "settings.browser",
             Self::Shortcuts => "settings.shortcuts",
+            Self::Notifications => "settings.notifications",
             Self::System => "settings.system",
             Self::About => "settings.about",
         }
@@ -78,6 +90,7 @@ impl SettingsSection {
             Self::Appearance => "terminal",
             Self::Browser => "globe",
             Self::Shortcuts => "command",
+            Self::Notifications => "bell",
             Self::System => "wrench",
             Self::About => "sparkles",
         }
@@ -275,7 +288,12 @@ fn stepper(
         ))
 }
 
-fn toggle(id: &'static str, on: bool, change: impl Fn(&mut Settings) + 'static, cx: &mut Context<Workbench>) -> impl IntoElement {
+pub(super) fn toggle(
+    id: &'static str,
+    on: bool,
+    change: impl Fn(&mut Settings) + 'static,
+    cx: &mut Context<Workbench>,
+) -> impl IntoElement {
     let change = std::rc::Rc::new(change);
     div()
         .id(id)
@@ -1095,19 +1113,6 @@ impl Workbench {
                             t(cx, "settings.stop_servers_hint"),
                             toggle("stop-servers", prefs.stop_servers_on_close, |s| s.stop_servers_on_close = !s.stop_servers_on_close, cx),
                         ))
-                        .child(row(
-                            t(cx, "settings.system_notifications"),
-                            toggle(
-                                "system-notifications",
-                                prefs.system_notifications,
-                                |s| s.system_notifications = !s.system_notifications,
-                                cx,
-                            ),
-                        ))
-                        .child(row(
-                            t(cx, "settings.notify_when_focused"),
-                            toggle("notify-focused", prefs.notify_when_focused, |s| s.notify_when_focused = !s.notify_when_focused, cx),
-                        ))
                         .when(crate::platform::HAS_STATUS_ITEM, |d| {
                             d.child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
                         }),
@@ -1216,6 +1221,7 @@ impl Workbench {
                 )
                 .into_any_element(),
             SettingsSection::Shortcuts => render_shortcuts(cx).into_any_element(),
+            SettingsSection::Notifications => self.render_notification_settings(window, cx).into_any_element(),
             SettingsSection::System => self.render_system_check(cx).into_any_element(),
             SettingsSection::Browser => self.render_browser_settings(window, cx).into_any_element(),
             SettingsSection::About => self.render_about(cx).into_any_element(),

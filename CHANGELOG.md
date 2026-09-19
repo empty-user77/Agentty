@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Notifications: when an agent asks for permission or an answer, Agentty notifies you even while it is in front (unless
+  you are looking at that pane). Settings → Notifications can also send these to Slack or Discord (webhook) and
+  Telegram (bot), optionally also when an agent finishes; the command or question is included only if you turn that
+  on. Webhook URLs and bot tokens are kept in the Keychain.
 - Windows and Linux support. Terminals, agents, sessions, usage, Git, plugins and connectors work on both; panes use
   PowerShell on Windows. Shortcuts use Ctrl+Shift (⌘), Ctrl+Alt+Shift (⇧⌘), Ctrl+Alt (⌥⌘) and Alt+1…9 (⌘1…9) there,
   so Ctrl+letter stays with the shell. The in-app browser, menu bar item and mini mode remain macOS-only. See

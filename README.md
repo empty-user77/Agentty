@@ -39,7 +39,11 @@ each agent is doing and highlights the ones that need you.
   lists them, and keeps Agentty running after you close the window.
 - **Pane status bar** — model, context window and rate-limit usage meters, branch and folder for every agent pane; under the terminal or above it, items in your order.
 - **Notifications** — native macOS notifications when an agent finishes or needs input (click to open the pane), a
-  notification center, jump to the latest unread (⇧⌘U), and `agentty notify` for your own scripts.
+  notification center, jump to the latest unread (⇧⌘U), and `agentty notify` for your own scripts. When an agent needs
+  your answer you are told even while Agentty is in front (unless you are looking at that pane), and Settings →
+  Notifications can send a message to **Slack**, **Discord** (webhooks) or **Telegram** (a bot) as well — handy when
+  you are away from the computer. Webhook URLs and the bot token are kept in the Keychain; what the agent asks is only
+  included if you turn that on.
 - **Git** — a GitHub Desktop–style page: switch repositories and branches, fetch / pull / push, review diffs, commit
   selected files, browse history and merge branches. Click the branch in any pane header to switch branches, pull, push or copy its name.
 - **Extensions** — skills, subagents, commands, plugins and MCP servers for Claude Code and Codex in one place; add

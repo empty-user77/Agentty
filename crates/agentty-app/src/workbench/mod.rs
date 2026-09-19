@@ -22,6 +22,7 @@ mod install_hint;
 mod layout;
 pub mod mini;
 mod notices;
+mod notify_settings;
 mod onboarding;
 mod palette;
 pub mod panes;
@@ -253,6 +254,7 @@ pub struct Workbench {
     /// Window width at the last render, for sizing the panels docked at the right.
     viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
+    chat_notify: notify_settings::ChatNotifyState,
     split_drag: Option<layout::SplitDrag>,
     split_bounds: Rc<RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>>,
     /// Last laid-out bounds of each pane (responsive headers, file drops).
@@ -418,6 +420,7 @@ impl Workbench {
             docker: Default::default(),
             viewport_width: 1400.,
             browser_home_input: None,
+            chat_notify: Default::default(),
             split_drag: None,
             split_bounds: Rc::default(),
             pane_bounds: Rc::default(),
@@ -2096,6 +2099,7 @@ impl Workbench {
                         "files": self.files_panel.as_ref().map(|p| p.debug_state()),
                         "editor": self.editor_debug_state(cx),
                         "docker": self.docker.debug_state(),
+                        "chatNotify": self.chat_notify.debug_state(),
                         "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
                     })
@@ -2114,6 +2118,7 @@ impl Workbench {
             }
             "tree-menu" => self.debug_tree_menu(argument.parse().unwrap_or(0), cx),
             "docker" => self.debug_docker(argument, window, cx),
+            "chat-notify" => self.debug_chat_notify(argument, cx),
             "files" => match argument {
                 "" => self.toggle_files_panel(cx),
                 path => self.open_files_panel(Some(PathBuf::from(path)), cx),
@@ -2287,6 +2292,7 @@ impl Workbench {
                     "project" => settings_page::SettingsSection::Project,
                     "accounts" => settings_page::SettingsSection::Accounts,
                     "system" => settings_page::SettingsSection::System,
+                    "notifications" => settings_page::SettingsSection::Notifications,
                     _ => settings_page::SettingsSection::General,
                 };
                 cx.notify();

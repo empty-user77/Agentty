@@ -21,6 +21,7 @@ pub mod kimi;
 pub mod limits;
 pub mod metrics;
 pub mod model;
+pub mod notify;
 pub mod plugins;
 pub mod pricing;
 pub mod process;
