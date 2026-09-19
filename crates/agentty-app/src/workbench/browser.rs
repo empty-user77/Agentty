@@ -2,11 +2,12 @@
 //! Links open here or in the default browser, per Settings → General.
 
 use super::Workbench;
+use crate::i18n::t;
 use crate::settings::{settings, LinkOpener};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon_only, TypeScale};
-use crate::webview::{normalize_url_with, WebView};
+use crate::webview::{normalize_url_with, LoadError, WebView};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Subscription, Window};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -24,12 +25,23 @@ pub struct BrowserPanel {
     pub(super) pending: Option<String>,
     title: String,
     loading: bool,
+    /// Progress of the current load (0.0–1.0), shown as the bar under the toolbar.
+    progress: f32,
+    /// When the last load finished: the full bar stays up briefly so even a quick reload shows.
+    finished_at: Option<std::time::Instant>,
+    /// The page could not be opened: shown instead of the web view, with a retry.
+    error: Option<LoadError>,
     /// Last URL written into the address bar by navigation; anything else there is the user typing.
     synced_url: String,
     _subscription: Subscription,
 }
 
 impl BrowserPanel {
+    /// The load just finished and the full bar is still shown.
+    fn finishing(&self) -> bool {
+        self.finished_at.is_some_and(|at| at.elapsed() < Duration::from_millis(350))
+    }
+
     /// Address of the page shown (or about to be).
     pub(super) fn current_url(&self) -> Option<String> {
         self.pending.clone().or_else(|| self.webview.borrow().as_ref().and_then(|view| view.current_url()))
@@ -92,34 +104,67 @@ impl Workbench {
                 pending: Some(url.clone()),
                 title: String::new(),
                 loading: true,
+                progress: 0.,
+                finished_at: None,
+                error: None,
                 synced_url: url.clone(),
                 _subscription: subscription,
             });
-            // Follow navigation inside the page: address bar, title, spinner.
-            cx.spawn(async move |this, cx| loop {
-                cx.background_executor().timer(Duration::from_millis(600)).await;
-                let alive = this.update(cx, |this, cx| {
-                    let Some(browser) = this.browser.as_mut() else { return false };
-                    let (url, title, loading) = match browser.webview.borrow().as_ref() {
-                        Some(view) => (view.current_url(), view.title().unwrap_or_default(), view.is_loading()),
-                        None => return true,
-                    };
-                    let mut changed = title != browser.title || loading != browser.loading;
-                    browser.title = title;
-                    browser.loading = loading;
-                    let typing = browser.address.read(cx).text() != browser.synced_url;
-                    if let Some(url) = url.filter(|u| *u != browser.synced_url && !typing) {
-                        browser.address.update(cx, |i, cx| i.set_text(url.clone(), cx));
-                        browser.synced_url = url;
-                        changed = true;
+            // Follow navigation inside the page: address bar, title, progress bar. Polled quickly
+            // while a page loads so the bar moves smoothly, slowly otherwise.
+            cx.spawn(async move |this, cx| {
+                let mut interval = Duration::from_millis(600);
+                loop {
+                    cx.background_executor().timer(interval).await;
+                    let alive = this.update(cx, |this, cx| {
+                        let Some(browser) = this.browser.as_mut() else { return false };
+                        let (url, title, loading, progress, error) = match browser.webview.borrow().as_ref() {
+                            Some(view) => (
+                                view.current_url(),
+                                view.title().unwrap_or_default(),
+                                view.is_loading(),
+                                view.estimated_progress(),
+                                view.load_error(),
+                            ),
+                            None => return true,
+                        };
+                        let mut changed = title != browser.title
+                            || loading != browser.loading
+                            || (loading && progress != browser.progress)
+                            || error != browser.error;
+                        // The failed address stays in the address bar (the web view still has the
+                        // previous page's URL).
+                        if let Some(error) = error.as_ref().filter(|e| !e.url.is_empty() && browser.error.as_ref() != Some(e)) {
+                            browser.address.update(cx, |i, cx| i.set_text(error.url.clone(), cx));
+                            browser.synced_url = error.url.clone();
+                        }
+                        let failed = error.is_some();
+                        browser.error = error;
+                        if browser.loading && !loading {
+                            browser.finished_at = Some(std::time::Instant::now());
+                        }
+                        let finishing = browser.finishing();
+                        if !loading && !finishing && browser.finished_at.take().is_some() {
+                            changed = true; // the full bar goes away
+                        }
+                        interval = Duration::from_millis(if loading || finishing { 50 } else { 600 });
+                        browser.title = title;
+                        browser.loading = loading;
+                        browser.progress = if loading { progress } else { 1. };
+                        let typing = browser.address.read(cx).text() != browser.synced_url;
+                        if let Some(url) = url.filter(|u| *u != browser.synced_url && !typing && !failed) {
+                            browser.address.update(cx, |i, cx| i.set_text(url.clone(), cx));
+                            browser.synced_url = url;
+                            changed = true;
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                        true
+                    });
+                    if !matches!(alive, Ok(true)) {
+                        break;
                     }
-                    if changed {
-                        cx.notify();
-                    }
-                    true
-                });
-                if !matches!(alive, Ok(true)) {
-                    break;
                 }
             })
             .detach();
@@ -139,8 +184,35 @@ impl Workbench {
             if let (Some(url), Some(view)) = (browser.pending.clone(), browser.webview.borrow().as_ref()) {
                 view.load(&url);
                 browser.pending = None;
+                browser.loading = true;
+                browser.progress = 0.;
+                browser.finished_at = None;
+                browser.error = None;
+                // The address bar shows where it is going, as a browser does.
+                if browser.address.read(cx).text() != url {
+                    browser.address.update(cx, |i, cx| i.set_text(url.clone(), cx));
+                }
+                browser.synced_url = url;
             }
         }
+    }
+
+    /// The reload button and "Try again". A page that failed to load (a dev server not up yet)
+    /// is not the web view's URL — WebKit's reload would load the previous page, or nothing when
+    /// there was none — so the failed address is opened again instead.
+    pub(super) fn reload_browser(&mut self, cx: &mut Context<Self>) {
+        let Some(browser) = self.browser.as_mut() else { return };
+        if let Some(view) = browser.webview.borrow().as_ref() {
+            match (browser.error.take(), view.current_url()) {
+                (Some(error), _) if !error.url.is_empty() => view.load(&error.url),
+                (_, Some(_)) => view.reload(),
+                (_, None) => view.load(&browser_url(&browser.synced_url, cx)),
+            }
+        }
+        browser.loading = true;
+        browser.progress = 0.;
+        browser.finished_at = None;
+        cx.notify();
     }
 
     /// Whether something drawn by GPUI would sit on top of the native web view.
@@ -204,7 +276,9 @@ impl Workbench {
         let browser = self.browser.as_ref()?;
         let webview = browser.webview.clone();
         let hidden = self.overlay_open();
-        if hidden {
+        // A failed load shows its message in place of the page (the native view would cover it).
+        let covered = hidden || browser.error.is_some();
+        if covered {
             if let Some(view) = webview.borrow_mut().as_mut() {
                 view.hide();
             }
@@ -234,7 +308,7 @@ impl Workbench {
             .bg(hex(Chrome::SIDE_BAR))
             .child(nav("browser-back", "arrow-left", WebView::back, cx))
             .child(nav("browser-forward", "arrow-right", WebView::forward, cx))
-            .child(nav("browser-reload", "rotate-cw", WebView::reload, cx))
+            .child(icon_only("browser-reload", "rotate-cw", cx.listener(|this, _: &ClickEvent, _, cx| this.reload_browser(cx))))
             .child(
                 div()
                     .flex_1()
@@ -275,7 +349,7 @@ impl Workbench {
             |_, _, _| {},
             move |bounds, _, _, _| {
                 if let Some(view) = webview.borrow_mut().as_mut() {
-                    if !hidden {
+                    if !covered {
                         view.set_frame(bounds);
                     }
                 }
@@ -293,21 +367,68 @@ impl Workbench {
                 .flex_col()
                 .bg(hex(0xffffff))
                 .child(toolbar)
-                .child(div().flex_1().min_h_0().relative().child(content).when(hidden, |d| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .bg(hex(Chrome::EDITOR))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .t_small()
-                            .text_color(hex(Chrome::MUTED))
-                            .child(browser.title.clone()),
-                    )
-                }))
+                .child(progress_bar(browser.loading || browser.finishing(), browser.progress))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .relative()
+                        .child(content)
+                        .when_some(browser.error.clone().filter(|_| !hidden), |d, error| d.child(self.render_load_error(error, cx)))
+                        .when(hidden, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .bg(hex(Chrome::EDITOR))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .t_small()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .child(browser.title.clone()),
+                            )
+                        }),
+                )
                 .into_any_element(),
         )
     }
+}
+
+impl Workbench {
+    /// "This page couldn't be opened": the address, WebKit's reason and a retry.
+    fn render_load_error(&self, error: LoadError, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .absolute()
+            .inset_0()
+            .bg(hex(Chrome::EDITOR))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .px_6()
+            .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "browser.load_failed")))
+            .child(div().t_small().text_color(hex(Chrome::MUTED)).text_center().child(error.url))
+            .when(!error.message.is_empty(), |d| d.child(div().t_small().text_color(hex(Chrome::MUTED)).text_center().child(error.message)))
+            .child(div().pt_2().child(crate::ui::action_button(
+                "browser-retry",
+                t(cx, "browser.retry"),
+                cx.listener(|this, _: &ClickEvent, _, cx| this.reload_browser(cx)),
+            )))
+            .into_any_element()
+    }
+}
+
+/// A thin bar under the toolbar that fills while a page loads, like a browser's. Its own row (not
+/// drawn over the page): the native web view would cover it.
+fn progress_bar(shown: bool, progress: f32) -> gpui::Div {
+    // WebKit starts at 0.1; a sliver shows right away even before its first estimate.
+    let fill = progress.clamp(0.08, 1.);
+    div()
+        .h(px(3.))
+        .w_full()
+        .flex_shrink_0()
+        .bg(hex(Chrome::SIDE_BAR))
+        .when(shown, |d| d.child(div().h_full().w(gpui::relative(fill)).rounded_r_sm().bg(hex(Chrome::BLUE))))
 }

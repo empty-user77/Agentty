@@ -5,9 +5,12 @@
 #![allow(unexpected_cfgs)] // objc 0.2 macros check a `cargo-clippy` cfg
 
 use cocoa::foundation::{NSPoint, NSRect, NSSize};
-use objc::runtime::{Object, BOOL, NO, YES};
+use objc::declare::ClassDecl;
+use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
 use objc::{class, msg_send, sel, sel_impl};
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
+use std::sync::{Mutex, Once};
 
 type Id = *mut Object;
 
@@ -41,9 +44,79 @@ window.addEventListener('unhandledrejection', (e) => push('error', `Unhandled re
 /// Result of an asynchronous web view call, delivered on the main thread.
 pub type Reply = Box<dyn FnOnce(Result<String, String>)>;
 
+/// A page that could not be opened (no server answering, unknown host, TLS error, …).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadError {
+    pub url: String,
+    pub message: String,
+}
+
+/// Failed loads by web view (pointer), written by the navigation delegate on the main thread.
+static LOAD_ERRORS: Mutex<Option<HashMap<usize, LoadError>>> = Mutex::new(None);
+
+fn set_load_error(view: Id, error: Option<LoadError>) {
+    let mut errors = LOAD_ERRORS.lock().unwrap_or_else(|e| e.into_inner());
+    let errors = errors.get_or_insert_with(HashMap::new);
+    match error {
+        Some(error) => errors.insert(view as usize, error),
+        None => errors.remove(&(view as usize)),
+    };
+}
+
+extern "C" fn did_start(_: &Object, _: Sel, view: Id, _navigation: Id) {
+    set_load_error(view, None);
+}
+
+extern "C" fn did_fail(_: &Object, _: Sel, view: Id, _navigation: Id, error: Id) {
+    let (code, message, url) = unsafe {
+        let code: isize = msg_send![error, code];
+        let user_info: Id = msg_send![error, userInfo];
+        let url = if user_info.is_null() {
+            None
+        } else {
+            let text: Id = msg_send![user_info, objectForKey: ns_string("NSErrorFailingURLStringKey")];
+            let url: Id = msg_send![user_info, objectForKey: ns_string("NSErrorFailingURLKey")];
+            rust_string(text).or_else(|| if url.is_null() { None } else { rust_string(msg_send![url, absoluteString]) })
+        };
+        (code, rust_string(msg_send![error, localizedDescription]), url)
+    };
+    // -999: cancelled by a newer navigation (a click during a load), not a failure.
+    // 102: "frame load interrupted", which WebKit reports for downloads.
+    if code == -999 || code == 102 {
+        return;
+    }
+    let url = url.or_else(|| unsafe { current_url_of(view) }).unwrap_or_default();
+    set_load_error(view, Some(LoadError { url, message: message.unwrap_or_default() }));
+}
+
+/// `WKNavigationDelegate` that records failed loads in `LOAD_ERRORS`.
+fn delegate_class() -> &'static Class {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        let mut decl = ClassDecl::new("AgenttyWebNavigation", class!(NSObject)).expect("AgenttyWebNavigation registered twice");
+        unsafe {
+            decl.add_method(sel!(webView:didStartProvisionalNavigation:), did_start as extern "C" fn(&Object, Sel, Id, Id));
+            decl.add_method(sel!(webView:didFailProvisionalNavigation:withError:), did_fail as extern "C" fn(&Object, Sel, Id, Id, Id));
+            decl.add_method(sel!(webView:didFailNavigation:withError:), did_fail as extern "C" fn(&Object, Sel, Id, Id, Id));
+        }
+        decl.register();
+    });
+    Class::get("AgenttyWebNavigation").expect("AgenttyWebNavigation class")
+}
+
+unsafe fn current_url_of(view: Id) -> Option<String> {
+    let url: Id = msg_send![view, URL];
+    if url.is_null() {
+        return None;
+    }
+    rust_string(msg_send![url, absoluteString])
+}
+
 pub struct WebView {
     view: Id,
     parent: Id,
+    /// The navigation delegate (WebKit holds it weakly, so it is owned here).
+    delegate: Id,
     visible: bool,
 }
 
@@ -93,9 +166,11 @@ impl WebView {
                 let agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
                 let _: () = msg_send![view, setCustomUserAgent: ns_string(agent)];
             }
+            let delegate: Id = msg_send![delegate_class(), new];
+            let _: () = msg_send![view, setNavigationDelegate: delegate];
             let _: () = msg_send![view, setHidden: YES];
             let _: () = msg_send![parent, addSubview: view];
-            Some(Self { view, parent, visible: false })
+            Some(Self { view, parent, delegate, visible: false })
         }
     }
 
@@ -122,20 +197,20 @@ impl WebView {
         }
     }
 
+    /// Reloads from the server, not the cache: pages here are mostly dev servers that just changed.
     pub fn reload(&self) {
         unsafe {
-            let _: Id = msg_send![self.view, reload];
+            let _: Id = msg_send![self.view, reloadFromOrigin];
         }
     }
 
     pub fn current_url(&self) -> Option<String> {
-        unsafe {
-            let url: Id = msg_send![self.view, URL];
-            if url.is_null() {
-                return None;
-            }
-            rust_string(msg_send![url, absoluteString])
-        }
+        unsafe { current_url_of(self.view) }
+    }
+
+    /// Why the last page could not be opened, until the next navigation starts.
+    pub fn load_error(&self) -> Option<LoadError> {
+        LOAD_ERRORS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(&(self.view as usize)).cloned()
     }
 
     pub fn title(&self) -> Option<String> {
@@ -212,6 +287,12 @@ impl WebView {
         loading == YES
     }
 
+    /// How far the current load is, 0.0 to 1.0 (WebKit's estimate).
+    pub fn estimated_progress(&self) -> f32 {
+        let progress: f64 = unsafe { msg_send![self.view, estimatedProgress] };
+        progress.clamp(0., 1.) as f32
+    }
+
     /// Places the view over `bounds` (window coordinates, top-left origin) and shows it.
     pub fn set_frame(&mut self, bounds: gpui::Bounds<gpui::Pixels>) {
         unsafe {
@@ -244,9 +325,12 @@ impl WebView {
 
 impl Drop for WebView {
     fn drop(&mut self) {
+        set_load_error(self.view, None);
         unsafe {
+            let _: () = msg_send![self.view, setNavigationDelegate: std::ptr::null_mut::<Object>()];
             let _: () = msg_send![self.view, removeFromSuperview];
             let _: () = msg_send![self.view, release];
+            let _: () = msg_send![self.delegate, release];
         }
     }
 }

@@ -6,6 +6,12 @@ pub use crate::platform::url::normalize_url_with;
 
 pub type Reply = Box<dyn FnOnce(Result<String, String>)>;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadError {
+    pub url: String,
+    pub message: String,
+}
+
 const UNSUPPORTED: &str = "the in-app browser is only available on macOS";
 
 pub struct WebView {
@@ -33,6 +39,10 @@ impl WebView {
         None
     }
 
+    pub fn load_error(&self) -> Option<LoadError> {
+        None
+    }
+
     pub fn call_async(&self, _body: &str, _args: &[(&str, &str)], reply: Reply) {
         reply(Err(UNSUPPORTED.into()));
     }
@@ -43,6 +53,10 @@ impl WebView {
 
     pub fn is_loading(&self) -> bool {
         false
+    }
+
+    pub fn estimated_progress(&self) -> f32 {
+        0.
     }
 
     pub fn set_frame(&mut self, _bounds: gpui::Bounds<gpui::Pixels>) {}

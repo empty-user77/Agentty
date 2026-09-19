@@ -2196,6 +2196,7 @@ impl Workbench {
                     self.open_browser(Some(browser::browser_url(argument, cx)), cx);
                 }
             }
+            "browser-reload" => self.reload_browser(cx),
             "link" => self.open_link(argument.to_string(), cx),
             // `agentty-link agentty://…`: as if another app opened the link.
             "agentty-link" => self.open_agentty_link(argument, window, cx),

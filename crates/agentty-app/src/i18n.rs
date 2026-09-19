@@ -527,6 +527,8 @@ strings! {
     "status.mcp_disabled" => ["Disabled", "비활성", "無効", "已禁用"],
     "status.manage" => ["Manage in Extensions", "확장 기능에서 관리", "拡張機能で管理", "在扩展中管理"],
     "browser.address" => ["Search or enter address", "검색어 또는 주소 입력", "検索またはアドレスを入力", "搜索或输入网址"],
+    "browser.load_failed" => ["This page couldn't be opened", "페이지를 열 수 없습니다", "ページを開けませんでした", "无法打开此页面"],
+    "browser.retry" => ["Try again", "다시 시도", "再試行", "重试"],
     "settings.link_opener" => ["Open links (⌘-click in terminals) in", "링크 열기 (터미널에서 ⌘+클릭)", "リンクを開く（ターミナルで ⌘+クリック）", "打开链接（终端中 ⌘+点击）"],
     "settings.link_external" => ["Default browser", "외부 기본 브라우저", "既定のブラウザ", "默认浏览器"],
     "settings.link_inapp" => ["In-app browser", "인앱 브라우저", "アプリ内ブラウザ", "内置浏览器"],
