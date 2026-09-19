@@ -1,8 +1,14 @@
-//! System check (Windows and Linux): the tools Agentty relies on there, whether they are
-//! installed, and the command that installs each one (winget / the distribution's package
-//! manager / the vendor's installer). Shown in Settings → System check and on first launch when
-//! something important is missing. macOS has no such page: everything it needs ships with it.
+//! System check: the tools Agentty relies on, whether they are installed, and the command that
+//! installs each one (winget / the distribution's package manager / Homebrew / the vendor's
+//! installer). Shown in Settings → System check, on first launch when something important is
+//! missing, and as a bar on the start page until everything important is there.
+//!
+//! Tools are looked for where a fresh terminal would find them, not only on Agentty's own `PATH`
+//! (which a GUI app keeps from when it started): the registry's `PATH` on Windows, a new login
+//! shell's elsewhere, and the folders installers use ([`search_path`]). So "Recheck" finds a tool
+//! installed a moment ago without restarting Agentty.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,39 +51,69 @@ impl Tool {
     }
 }
 
-/// Anything required or recommended is missing (first-launch prompt).
+/// Anything required or recommended is missing: the environment isn't ready yet (first-launch
+/// prompt, the start page's bar, and the tour waits for it).
 pub fn needs_attention(tools: &[Tool]) -> bool {
     tools.iter().any(|t| t.missing() && t.need != Need::Optional)
 }
 
-/// First line of `<program> --version`, when the program is on PATH.
-fn version_of(name: &str) -> Option<String> {
-    let path = agentty_bridge::process::which(name)?;
-    let output = agentty_bridge::process::command(&path)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok();
-    let version =
-        output.map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or_default().trim().to_string()).unwrap_or_default();
-    Some(if version.is_empty() { path.display().to_string() } else { version })
+/// Where tools are looked for: Agentty's `PATH` plus what a new terminal would have now (the
+/// registry on Windows, a fresh login shell elsewhere) plus the folders installers use.
+pub fn search_path() -> OsString {
+    let base = agentty_bridge::process::current_path();
+    let mut extra: Vec<PathBuf> = Vec::new();
+    if let Some(login) = crate::plugins::process::login_shell_path() {
+        extra.extend(std::env::split_paths(&login));
+    }
+    extra.extend(agentty_bridge::process::tool_dirs());
+    agentty_bridge::process::merge_paths(&base, &extra)
 }
 
-fn path_of(name: &str) -> Option<String> {
-    agentty_bridge::process::which(name).map(|p| p.display().to_string())
+/// Looks tools up on one [`search_path`] (computed once per check).
+struct Probe {
+    path: OsString,
 }
 
-/// Runs every check for this platform (spawns `--version` probes; call off the UI thread).
+impl Probe {
+    fn which(&self, name: &str) -> Option<PathBuf> {
+        agentty_bridge::process::which_in(name, &self.path)
+    }
+
+    /// First line of `<program> --version`, when the program is found. It runs with the search
+    /// path, so a script it starts (`codex` is a Node.js script) finds its runtime too.
+    fn version_of(&self, name: &str) -> Option<String> {
+        let path = self.which(name)?;
+        let output = agentty_bridge::process::command(&path)
+            .arg("--version")
+            .env("PATH", &self.path)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok();
+        let version =
+            output.map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or_default().trim().to_string()).unwrap_or_default();
+        Some(if version.is_empty() { path.display().to_string() } else { version })
+    }
+
+    fn path_of(&self, name: &str) -> Option<String> {
+        self.which(name).map(|p| p.display().to_string())
+    }
+}
+
+/// Runs every check for this platform (spawns a login shell and `--version` probes; call off the
+/// UI thread).
 pub fn check() -> Vec<Tool> {
+    let probe = Probe { path: search_path() };
     #[cfg(windows)]
-    return windows_tools();
-    #[cfg(not(windows))]
-    linux_tools(&PackageManager::detect())
+    return windows_tools(&probe);
+    #[cfg(target_os = "macos")]
+    return macos_tools(&probe);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    linux_tools(&probe, &PackageManager::detect(&probe))
 }
 
 #[cfg(windows)]
-fn windows_tools() -> Vec<Tool> {
+fn windows_tools(probe: &Probe) -> Vec<Tool> {
     let winget =
         |id: &str| Some(format!("winget install --id {id} -e --source winget --accept-package-agreements --accept-source-agreements"));
     vec![
@@ -106,7 +142,7 @@ fn windows_tools() -> Vec<Tool> {
             purpose: "system.purpose.claude",
             install: Some("irm https://claude.ai/install.ps1 | iex".into()),
             guide: "https://docs.claude.com/en/docs/claude-code/setup",
-            found: version_of("claude"),
+            found: probe.version_of("claude"),
         },
         Tool {
             id: "node",
@@ -115,7 +151,7 @@ fn windows_tools() -> Vec<Tool> {
             purpose: "system.purpose.node",
             install: winget("OpenJS.NodeJS.LTS"),
             guide: "https://nodejs.org/",
-            found: version_of("node"),
+            found: probe.version_of("node"),
         },
         Tool {
             id: "codex",
@@ -124,7 +160,7 @@ fn windows_tools() -> Vec<Tool> {
             purpose: "system.purpose.codex",
             install: Some("npm install -g @openai/codex".into()),
             guide: "https://github.com/openai/codex",
-            found: version_of("codex"),
+            found: probe.version_of("codex"),
         },
         Tool {
             id: "pwsh",
@@ -133,7 +169,7 @@ fn windows_tools() -> Vec<Tool> {
             purpose: "system.purpose.pwsh",
             install: winget("Microsoft.PowerShell"),
             guide: "https://aka.ms/powershell",
-            found: version_of("pwsh"),
+            found: probe.version_of("pwsh"),
         },
         Tool {
             id: "winget",
@@ -142,7 +178,7 @@ fn windows_tools() -> Vec<Tool> {
             purpose: "system.purpose.winget",
             install: None,
             guide: "https://aka.ms/getwinget",
-            found: path_of("winget"),
+            found: probe.path_of("winget"),
         },
     ]
 }
@@ -160,7 +196,7 @@ fn parse_windows_build(version: &str) -> Option<u32> {
 
 /// The distribution's package manager, for install commands on Linux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 pub enum PackageManager {
     Apt,
     Dnf,
@@ -169,10 +205,10 @@ pub enum PackageManager {
     Unknown,
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 impl PackageManager {
-    fn detect() -> Self {
-        let has = |name: &str| agentty_bridge::process::which(name).is_some();
+    fn detect(probe: &Probe) -> Self {
+        let has = |name: &str| probe.which(name).is_some();
         if has("apt-get") {
             Self::Apt
         } else if has("dnf") {
@@ -198,8 +234,57 @@ impl PackageManager {
     }
 }
 
-#[cfg_attr(windows, allow(dead_code))]
-fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
+/// macOS: the agents and what they run on. The system's own tools (terminal, keychain, `open`)
+/// always ship with it; Git comes with the Command Line Tools.
+#[cfg(target_os = "macos")]
+fn macos_tools(probe: &Probe) -> Vec<Tool> {
+    let brew = probe.which("brew").is_some();
+    vec![
+        Tool {
+            id: "claude",
+            name: "Claude Code",
+            need: Need::Recommended,
+            purpose: "system.purpose.claude",
+            install: Some("curl -fsSL https://claude.ai/install.sh | bash".into()),
+            guide: "https://docs.claude.com/en/docs/claude-code/setup",
+            found: probe.version_of("claude"),
+        },
+        Tool {
+            id: "node",
+            name: "Node.js",
+            need: Need::Recommended,
+            purpose: "system.purpose.node",
+            install: brew.then(|| "brew install node".to_string()),
+            guide: "https://nodejs.org/en/download",
+            found: probe.version_of("node"),
+        },
+        Tool {
+            id: "codex",
+            name: "Codex CLI",
+            need: Need::Optional,
+            purpose: "system.purpose.codex",
+            install: Some("npm install -g @openai/codex".into()),
+            guide: "https://github.com/openai/codex",
+            found: probe.version_of("codex"),
+        },
+        Tool {
+            id: "git",
+            name: "Git (Command Line Tools)",
+            need: Need::Recommended,
+            purpose: "system.purpose.git",
+            install: Some("xcode-select --install".into()),
+            guide: "https://developer.apple.com/xcode/resources/",
+            // `/usr/bin/git` is a stub until the Command Line Tools are installed: ask it.
+            found: probe
+                .which("git")
+                .filter(|_| std::process::Command::new("xcode-select").arg("-p").output().is_ok_and(|o| o.status.success()))
+                .and_then(|_| probe.version_of("git")),
+        },
+    ]
+}
+
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+fn linux_tools(probe: &Probe, pm: &PackageManager) -> Vec<Tool> {
     let pm = *pm;
     vec![
         Tool {
@@ -209,7 +294,7 @@ fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.claude",
             install: Some("curl -fsSL https://claude.ai/install.sh | bash".into()),
             guide: "https://docs.claude.com/en/docs/claude-code/setup",
-            found: version_of("claude"),
+            found: probe.version_of("claude"),
         },
         Tool {
             id: "node",
@@ -218,7 +303,7 @@ fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.node",
             install: pm.install(["nodejs npm", "nodejs npm", "nodejs npm", "nodejs npm"]),
             guide: "https://nodejs.org/en/download/package-manager",
-            found: version_of("node"),
+            found: probe.version_of("node"),
         },
         Tool {
             id: "codex",
@@ -227,7 +312,7 @@ fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.codex",
             install: Some("npm install -g @openai/codex".into()),
             guide: "https://github.com/openai/codex",
-            found: version_of("codex"),
+            found: probe.version_of("codex"),
         },
         Tool {
             id: "git",
@@ -236,7 +321,7 @@ fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.git",
             install: pm.install(["git", "git", "git", "git"]),
             guide: "https://git-scm.com/download/linux",
-            found: version_of("git"),
+            found: probe.version_of("git"),
         },
         Tool {
             id: "secret-tool",
@@ -245,7 +330,7 @@ fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.secret_tool",
             install: pm.install(["libsecret-tools", "libsecret", "libsecret", "libsecret-tools"]),
             guide: "https://wiki.gnome.org/Projects/Libsecret",
-            found: path_of("secret-tool"),
+            found: probe.path_of("secret-tool"),
         },
         Tool {
             id: "xdg-open",
@@ -254,7 +339,7 @@ fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.xdg_open",
             install: pm.install(["xdg-utils", "xdg-utils", "xdg-utils", "xdg-utils"]),
             guide: "https://www.freedesktop.org/wiki/Software/xdg-utils/",
-            found: path_of("xdg-open"),
+            found: probe.path_of("xdg-open"),
         },
         Tool {
             id: "notify-send",
@@ -263,7 +348,7 @@ fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.notify_send",
             install: pm.install(["libnotify-bin", "libnotify", "libnotify", "libnotify-tools"]),
             guide: "https://gitlab.gnome.org/GNOME/libnotify",
-            found: path_of("notify-send"),
+            found: probe.path_of("notify-send"),
         },
         Tool {
             id: "lsof",
@@ -272,7 +357,7 @@ fn linux_tools(pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.lsof",
             install: pm.install(["lsof", "lsof", "lsof", "lsof"]),
             guide: "https://github.com/lsof-org/lsof",
-            found: path_of("lsof"),
+            found: probe.path_of("lsof"),
         },
     ]
 }
@@ -315,7 +400,8 @@ mod tests {
         assert!(!needs_attention(&[tool(Need::Optional, None), tool(Need::Required, Some("ok"))]));
         assert!(needs_attention(&[tool(Need::Recommended, None)]));
         // Every Linux entry has a guide and an i18n purpose.
-        for tool in linux_tools(&PackageManager::Apt) {
+        let probe = Probe { path: OsString::new() };
+        for tool in linux_tools(&probe, &PackageManager::Apt) {
             assert!(tool.guide.starts_with("https://") && tool.purpose.starts_with("system.purpose."), "{}", tool.id);
             assert!(tool.install.is_some(), "{}", tool.id);
         }

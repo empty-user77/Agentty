@@ -58,8 +58,9 @@ each agent is doing and highlights the ones that need you.
   the AI processes that are running, and a capture proxy that lists what your tabs talk to: start capture, open a tab,
   filter by endpoint. HTTPS stays encrypted (host, bytes and timing only); nothing is written to disk.
 - **Files panel & working trees** — the folder structure and changes of the project you are in, docked right (⌥⌘B).
-  A second AI session in the same project starts in its own git worktree, so sessions never edit the same files; the
-  panel shows every working tree, who works in it and what changed there.
+  A second AI session in the same project, opened from the + menu or typed into a terminal, starts in its own git
+  worktree on a new branch from the project's default branch, so sessions never edit the same files; the panel shows
+  every working tree, who works in it and what changed there.
 - **Resume where you left off** — `cd` into a folder with earlier Claude Code / Codex sessions and a bar offers to
   continue them in place. Search local sessions by title, conversation or path (⇧⌘O).
 - **Service status** — when Claude Code, Codex or Amp is degraded while you use it, a banner links to its status page.

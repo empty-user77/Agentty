@@ -14,10 +14,24 @@ All notable changes to this project are documented here. The format follows
   Settings → Apps), app icon and version information, single instance, and Settings → System check, which finds
   missing tools (Git for Windows, Node.js, Claude Code, Codex, PowerShell 7) and installs them with one click via
   winget. Newly installed tools are found without restarting Agentty. Linux gets the same System check.
+- System check on macOS (Claude Code, Node.js, Codex, Git). While something important is missing, the start page
+  shows a bar that leads to it.
+- `claude` or `codex` typed into a terminal in a project where another agent is at work starts in a working tree of
+  its own, like sessions opened from the + menu.
+- Pages (Settings, Monitoring, …) have a home tab first that goes back to the start page.
 
 ### Changed
 - API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);
   macOS keeps using the Keychain.
+- New session working trees start from the project's default branch instead of the branch the project folder has
+  checked out.
+- The first-run tour waits until the environment is ready (nothing important missing in the System check).
+
+### Fixed
+- Recheck in the System check finds tools installed while Agentty runs, including ones whose installer didn't add
+  them to `PATH` (Claude Code in `~/.local/bin`): Windows reads the registry's `PATH` correctly, and macOS and Linux
+  ask a fresh login shell.
+- The System check's description wraps instead of pushing the Recheck button off the page.
 
 ## [0.1.11] - 2026-09-19
 
