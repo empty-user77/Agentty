@@ -39,6 +39,7 @@ mod settings_page;
 mod status_menus;
 mod system_page;
 mod tab_menu;
+mod tasks;
 pub mod update;
 pub mod worktrees;
 
@@ -336,6 +337,10 @@ pub struct Workbench {
     /// Context last sent to plugins (serialized), to send only changes.
     plugin_context_key: String,
     prompt_dialog: Option<prompt_dialog::PromptDialog>,
+    /// Prompts (links, plugins) that arrived while the dialog showed another one.
+    prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
+    /// Parallel tasks agents asked for (`agentty tasks`), waiting for the user; the first is shown.
+    task_requests: std::collections::VecDeque<crate::agent_signal::TasksRequest>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
     install_hint: Option<(&'static str, &'static str, &'static str)>,
     /// The start page is shown even though workspaces exist (opened from the sidebar).
@@ -471,6 +476,8 @@ impl Workbench {
             welcome_scroll: gpui::ScrollHandle::new(),
             plugin_context_key: String::new(),
             prompt_dialog: None,
+            prompt_queue: std::collections::VecDeque::new(),
+            task_requests: std::collections::VecDeque::new(),
             welcome: false,
             install_hint: None,
             connect_pick: None,
@@ -1681,6 +1688,7 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_close_confirm(cx))
             .children(self.render_prompt_dialog(cx))
+            .children(self.render_tasks_dialog(cx))
             .children(self.render_harness_dialog(cx))
             .children(self.render_onboarding(cx))
             .children(self.render_toast(cx))
