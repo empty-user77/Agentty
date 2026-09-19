@@ -7,13 +7,14 @@ Set-Location (Join-Path $PSScriptRoot '..')
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x86_64' }
 $name = "agentty-$version-windows-$arch"
-$stage = Join-Path 'target\package' $name
+$target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }
+$stage = Join-Path $target "package\$name"
 
 cargo build --release -p agentty-app
 if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
-Copy-Item target\release\agentty.exe, LICENSE, THIRD_PARTY_NOTICES.md, packaging\windows\README.txt, packaging\windows\install.ps1, packaging\windows\install.cmd $stage
+Copy-Item (Join-Path $target 'release\agentty.exe'), LICENSE, THIRD_PARTY_NOTICES.md, packaging\windows\README.txt, packaging\windows\install.ps1, packaging\windows\install.cmd $stage
 
 New-Item -ItemType Directory -Force dist | Out-Null
 $zip = "dist\$name.zip"

@@ -1,8 +1,8 @@
 name: CI
 
+# Pull requests only: pushes to main (releases included) are checked locally by the pre-push hook
+# and the release skill's checks.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -12,8 +12,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Both jobs run on the self-hosted Apple silicon Mac (the repository is private, so only
-  # collaborators' pushes and pull requests reach it).
+  # All jobs run on the self-hosted Apple silicon Mac (check-linux in Docker there) except
+  # check-windows, which runs on a self-hosted Windows PC. The repository is private, so only
+  # collaborators' pull requests reach them.
   secrets:
     runs-on: [self-hosted, macOS, ARM64]
     steps:
@@ -24,11 +25,8 @@ jobs:
         run: python3 scripts/check-secrets.py --all
       - name: Security audit (forbidden files, personal data, weakened guarantees, guard wiring)
         run: python3 scripts/security-audit.py --all
-      - name: Scan commits in this push / pull request
-        if: github.event_name == 'pull_request' || github.event.before != '0000000000000000000000000000000000000000'
-        run: |
-          base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          python3 scripts/check-secrets.py --range "$base..${{ github.sha }}"
+      - name: Scan commits in this pull request
+        run: python3 scripts/check-secrets.py --range "${{ github.event.pull_request.base.sha }}..${{ github.sha }}"
 
   check:
     needs: secrets
@@ -51,71 +49,85 @@ jobs:
       - name: Build (release)
         run: cargo build --release -p agentty-app
 
-  # Linux and Windows builds: planned, not supported yet. Uncomment these jobs to re-enable them
-  # (they passed on the merge of PR #3). macOS above is the only build CI checks for now.
-  # check-linux:
-  #   needs: secrets
-  #   runs-on: ubuntu-24.04
-  #   steps:
-  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-  #     - name: Install system libraries
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y --no-install-recommends pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
-  #           libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev zsh
-  #     - name: Install toolchain
-  #       run: rustup toolchain install
-  #     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-  #     - name: Clippy
-  #       run: cargo clippy --workspace --all-targets -- -D warnings
-  #     - name: Test
-  #       run: cargo test --workspace
-  #     - name: Build (release)
-  #       run: cargo build --release -p agentty-app
-  #     - name: Package and install round trip
-  #       run: |
-  #         scripts/package-linux.sh
-  #         tar -xzf dist/agentty-*-linux-*.tar.gz -C target
-  #         prefix="$RUNNER_TEMP/agentty-prefix"
-  #         PREFIX="$prefix" target/agentty-*-linux-*/install.sh
-  #         test -x "$prefix/bin/agentty"
-  #         test -f "$prefix/share/applications/run.agentty.Agentty.desktop"
-  #         PREFIX="$prefix" target/agentty-*-linux-*/install.sh --uninstall
-  #         test ! -e "$prefix/bin/agentty"
-  #
-  # check-windows:
-  #   needs: secrets
-  #   runs-on: windows-2022
-  #   steps:
-  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-  #     - name: Install toolchain
-  #       run: rustup toolchain install
-  #     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-  #     - name: Clippy
-  #       run: cargo clippy --workspace --all-targets -- -D warnings
-  #     - name: Test
-  #       run: cargo test --workspace
-  #     - name: Build (release)
-  #       run: cargo build --release -p agentty-app
-  #     - name: Resources, package and install round trip
-  #       shell: pwsh
-  #       run: |
-  #         $info = (Get-Item target\release\agentty.exe).VersionInfo
-  #         if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
-  #         ./scripts/package-windows.ps1
-  #         $zip = Get-ChildItem dist\agentty-*-windows-*.zip | Select-Object -First 1
-  #         Expand-Archive $zip.FullName -DestinationPath target\installer-test -Force
-  #         powershell.exe -NoProfile -ExecutionPolicy Bypass -File target\installer-test\install.ps1 -NoLaunch
-  #         if ($LASTEXITCODE) { throw 'install.ps1 failed' }
-  #         $installed = Join-Path $env:LOCALAPPDATA 'Programs\Agentty'
-  #         foreach ($path in @("$installed\agentty.exe", 'HKCU:\Software\Classes\agentty\shell\open\command',
-  #                             'HKCU:\Software\Classes\Directory\shell\Agentty\command',
-  #                             'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Agentty')) {
-  #           if (-not (Test-Path $path)) { throw "missing after install: $path" }
-  #         }
-  #         if (-not ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' -contains $installed)) { throw 'not on PATH' }
-  #         powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$installed\install.ps1" -Uninstall
-  #         Start-Sleep -Seconds 5
-  #         foreach ($path in @('HKCU:\Software\Classes\agentty', "$installed\agentty.exe")) {
-  #           if (Test-Path $path) { throw "left behind after uninstall: $path" }
-  #         }
+  # Windows can't be built on the Mac (GPUI compiles its shaders with the Windows SDK's fxc.exe).
+  # The runner needs rustup, git and Visual Studio Build Tools (C++ workload + Windows SDK). The zip
+  # is uploaded as a workflow artifact: download it from the run's Summary page.
+  check-windows:
+    needs: secrets
+    runs-on: [self-hosted, Windows, X64]
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}\..\agentty-target
+    # Windows PowerShell refuses the runner's step scripts under the default execution policy
+    # (Restricted); bypass it for these steps only instead of changing the PC's policy.
+    defaults:
+      run:
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The runner keeps the PATH it started with (and a service may not get the user's PATH at
+      # all), so put rustup's default location on it explicitly.
+      - name: Put cargo on PATH
+        run: |
+          $bin = Join-Path $env:USERPROFILE '.cargo\bin'
+          if (-not (Test-Path (Join-Path $bin 'rustup.exe'))) { throw "rustup not found in $bin (runner user: $env:USERNAME)" }
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+      - name: Install toolchain
+        run: rustup toolchain install
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      # No install round trip here: the runner is a personal PC, and install.ps1 -Uninstall would
+      # remove an Agentty the user installed on it.
+      - name: Package
+        run: |
+          ./scripts/package-windows.ps1
+          $info = (Get-Item "$env:CARGO_TARGET_DIR\release\agentty.exe").VersionInfo
+          if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agentty-windows-x86_64
+          path: |
+            dist/agentty-*-windows-*.zip
+            dist/agentty-*-windows-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # Linux has no runner of its own: this job runs on the Mac and builds inside an Ubuntu container
+  # (Docker Desktop must be running). Apple silicon, so the build is linux-aarch64. Cargo's registry,
+  # the toolchain and target/ live in named volumes, so later runs reuse them.
+  check-linux:
+    needs: secrets
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Docker is running
+        run: docker info --format '{{.ServerVersion}} {{.Architecture}}' || { echo "::error::Docker Desktop is not running on the runner"; exit 1; }
+      - name: Clippy, test and package (Ubuntu 24.04)
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" -w /src \
+            -v agentty-linux-cargo:/root/.cargo \
+            -v agentty-linux-rustup:/root/.rustup \
+            -v agentty-linux-target:/src/target \
+            -e CARGO_TERM_COLOR=always \
+            ubuntu:24.04 bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive PATH="/root/.cargo/bin:$PATH"
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends ca-certificates curl build-essential git \
+                pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+                libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev zsh >/dev/null
+              command -v rustup >/dev/null || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --no-modify-path
+              rustup toolchain install
+              cargo clippy --workspace --all-targets -- -D warnings
+              cargo test --workspace
+              scripts/package-linux.sh
+            '
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agentty-linux-aarch64
+          path: |
+            dist/agentty-*-linux-*.tar.gz
+            dist/agentty-*-linux-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14

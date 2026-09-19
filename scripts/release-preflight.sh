@@ -46,8 +46,8 @@ if gh auth status >/dev/null 2>&1; then
     [[ "$(gh api "repos/$repo" --jq .permissions.push 2>/dev/null)" == "true" ]] && pass "active gh account can push to $repo" \
       || fail "active gh account cannot push to $repo (gh auth switch)"
   done
-  ci="$(gh run list --repo "$SOURCE_REPO" --branch main --limit 1 --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null)"
-  [[ "$ci" == "completed success" ]] && pass "latest CI on main is green" || fail "latest CI on main: ${ci:-unknown}"
+  # CI runs on pull requests only, so main has no CI run of its own: the release skill runs the same
+  # checks locally before tagging.
   latest="$(gh api "repos/$RELEASE_REPO/releases/latest" --jq .tag_name 2>/dev/null || echo "none")"
   newer="$(python3 -c 'import sys
 p=lambda s: tuple(int(x) for x in s.lstrip("v").split("."))
