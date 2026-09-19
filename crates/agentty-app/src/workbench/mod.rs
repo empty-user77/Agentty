@@ -8,6 +8,7 @@ mod browser_control;
 mod chrome;
 mod confirm;
 mod context_menu;
+mod db_page;
 mod docker_panel;
 mod drop_split;
 mod editor_host;
@@ -180,6 +181,8 @@ pub enum Page {
     Plugins,
     /// "Build my idea": describe an idea, an agent builds and previews it.
     Idea,
+    /// The active project's databases (only offered when it has some).
+    Database,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -250,6 +253,7 @@ pub struct Workbench {
     files_trees_drag: Option<(f32, f32)>,
     /// Docker of the active pane's project: the status bar chip and the panel docked at the right.
     docker: docker_panel::DockerState,
+    db: db_page::DbState,
     /// Window width at the last render, for sizing the panels docked at the right.
     viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
@@ -416,6 +420,7 @@ impl Workbench {
             files_resizing: false,
             files_trees_drag: None,
             docker: Default::default(),
+            db: Default::default(),
             viewport_width: 1400.,
             browser_home_input: None,
             split_drag: None,
@@ -1464,6 +1469,7 @@ impl Render for Workbench {
         self.prepare_plugin_panel(window, cx);
         self.prepare_files_panel(cx);
         self.prepare_docker(cx);
+        self.prepare_db(window, cx);
         self.advance_tour(cx);
         self.prepare_plugins_page(window, cx);
         self.broadcast_plugin_context(window, cx);
@@ -1494,6 +1500,7 @@ impl Render for Workbench {
             }
             Some(Page::Flow) => self.render_flow(window, cx).into_any_element(),
             Some(Page::Plugins) => self.render_plugins_page(cx).into_any_element(),
+            Some(Page::Database) => self.render_db_page(cx),
             Some(Page::Idea) => {
                 gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
@@ -1739,6 +1746,7 @@ impl Render for Workbench {
             .children(self.render_close_confirm(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_tasks_dialog(cx))
+            .children(self.render_db_approval(cx))
             .children(self.render_harness_dialog(cx))
             .children(self.render_onboarding(cx))
             .children(self.render_toast(cx))
@@ -1879,6 +1887,7 @@ impl Workbench {
             Page::Extensions => "extensions",
             Page::Plugins => "plugins",
             Page::Idea => "idea",
+            Page::Database => "database",
         };
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
         self.page = if self.page == Some(page) { None } else { Some(page) };
@@ -2096,6 +2105,7 @@ impl Workbench {
                         "files": self.files_panel.as_ref().map(|p| p.debug_state()),
                         "editor": self.editor_debug_state(cx),
                         "docker": self.docker.debug_state(),
+                        "db": self.db.debug_state(),
                         "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
                     })
@@ -2114,6 +2124,7 @@ impl Workbench {
             }
             "tree-menu" => self.debug_tree_menu(argument.parse().unwrap_or(0), cx),
             "docker" => self.debug_docker(argument, window, cx),
+            "db" => self.debug_db(argument, window, cx),
             "files" => match argument {
                 "" => self.toggle_files_panel(cx),
                 path => self.open_files_panel(Some(PathBuf::from(path)), cx),
@@ -2128,6 +2139,7 @@ impl Workbench {
                     "extensions" => Some(Page::Extensions),
                     "plugins" => Some(Page::Plugins),
                     "idea" => Some(Page::Idea),
+                    "db" => Some(Page::Database),
                     "git" => Some(Page::Git),
                     _ => None,
                 };

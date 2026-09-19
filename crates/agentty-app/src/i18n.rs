@@ -96,6 +96,102 @@ strings! {
     "welcome.plugins_body" => ["Add panels and commands, or build your own", "패널과 명령을 추가하거나 직접 만들기", "パネルやコマンドを追加、または自作する", "添加面板和命令，或自己开发"],
 
     "page.idea" => ["Build My Idea", "아이디어 실현", "アイデアを形に", "实现创意"],
+    "page.database" => ["Database", "데이터베이스", "データベース", "数据库"],
+    "db.tooltip" => ["This project's databases", "이 프로젝트의 데이터베이스", "このプロジェクトのデータベース", "此项目的数据库"],
+    "db.chip" => ["DB {n}", "DB {n}", "DB {n}", "DB {n}"],
+    "db.connections" => ["Connections", "연결", "接続", "连接"],
+    "db.add" => ["Add", "추가", "追加", "添加"],
+    "db.add_title" => ["Add a connection", "연결 추가", "接続を追加", "添加连接"],
+    "db.rds_hint" => [
+        "For Amazon RDS, use the instance endpoint as the host; TLS is used automatically.",
+        "Amazon RDS는 인스턴스 엔드포인트를 호스트에 입력하세요. TLS가 자동으로 사용됩니다.",
+        "Amazon RDS はインスタンスのエンドポイントをホストに入力してください。TLS は自動で使われます。",
+        "Amazon RDS 请将实例终端节点填为主机，会自动使用 TLS。"
+    ],
+    "db.no_connections" => [
+        "No database found in this project's configuration. Add one by hand.",
+        "이 프로젝트 설정에서 데이터베이스를 찾지 못했습니다. 직접 추가하세요.",
+        "このプロジェクトの設定にデータベースが見つかりません。手動で追加してください。",
+        "未在此项目的配置中找到数据库，请手动添加。"
+    ],
+    "db.from" => ["from {file}", "{file}에서 찾음", "{file} から検出", "来自 {file}"],
+    "db.manual" => ["added by hand", "직접 추가함", "手動で追加", "手动添加"],
+    "db.needs_password" => [
+        "The password is hidden (secret manager or environment): enter it",
+        "비밀번호가 숨겨져 있습니다(시크릿 매니저·환경 변수). 직접 입력하세요",
+        "パスワードが隠されています(シークレットマネージャー・環境変数)。入力してください",
+        "密码被隐藏（密钥管理器或环境变量），请输入"
+    ],
+    "db.needs_user" => ["No user name in the configuration", "설정에 사용자 이름이 없습니다", "設定にユーザー名がありません", "配置中没有用户名"],
+    "db.needs_host" => ["Enter a host", "호스트를 입력하세요", "ホストを入力してください", "请输入主机"],
+    "db.needs_database" => ["No database name in the configuration", "설정에 데이터베이스 이름이 없습니다", "設定にデータベース名がありません", "配置中没有数据库名"],
+    "db.enter_password" => ["Enter password", "비밀번호 입력", "パスワードを入力", "输入密码"],
+    "db.password" => ["Password", "비밀번호", "パスワード", "密码"],
+    "db.password_where" => [
+        "Kept in {store}, never shown to agents.",
+        "{store}에 보관되며 에이전트에게는 보이지 않습니다.",
+        "{store} に保存され、エージェントには見えません。",
+        "保存在 {store} 中，代理看不到。"
+    ],
+    "db.save" => ["Save", "저장", "保存", "保存"],
+    "db.remove" => ["Remove", "삭제", "削除", "删除"],
+    "db.tables" => ["Tables", "테이블", "テーブル", "表"],
+    "db.pick_table" => [
+        "Pick a table to see its rows, or run a read query above.",
+        "테이블을 선택해 데이터를 보거나 위에서 조회 쿼리를 실행하세요.",
+        "テーブルを選んで行を表示するか、上で参照クエリを実行してください。",
+        "选择一个表查看数据，或在上方运行查询。"
+    ],
+    "db.query_placeholder" => [
+        "SELECT … (MongoDB: find users {\"age\": 30})",
+        "SELECT … (MongoDB: find users {\"age\": 30})",
+        "SELECT … (MongoDB: find users {\"age\": 30})",
+        "SELECT … (MongoDB: find users {\"age\": 30})"
+    ],
+    "db.run" => ["Run", "실행", "実行", "运行"],
+    "db.loading" => ["Working…", "처리 중…", "処理中…", "处理中…"],
+    "db.rows" => ["{n} rows", "{n}행", "{n} 行", "{n} 行"],
+    "db.rows_first" => ["First {n} rows", "처음 {n}행", "最初の {n} 行", "前 {n} 行"],
+    "db.affected" => ["Done: {n} rows affected", "완료: {n}행 변경됨", "完了: {n} 行に影響", "完成：影响 {n} 行"],
+    "db.mongo_syntax" => [
+        "MongoDB: <operation> <collection> <JSON>, e.g. find users {\"age\": 30}",
+        "MongoDB: <작업> <컬렉션> <JSON> 형식입니다. 예: find users {\"age\": 30}",
+        "MongoDB: <操作> <コレクション> <JSON> の形式です。例: find users {\"age\": 30}",
+        "MongoDB：<操作> <集合> <JSON>，例如 find users {\"age\": 30}"
+    ],
+    "db.asker_you" => ["You (query box)", "나 (쿼리 입력창)", "自分 (クエリ入力欄)", "我（查询框）"],
+    "db.approve_title" => ["Run this statement?", "이 쿼리를 실행할까요?", "このクエリを実行しますか?", "要执行此语句吗？"],
+    "db.approve_asker" => ["Asked by", "요청", "依頼元", "请求方"],
+    "db.approve_conn" => ["Connection", "연결", "接続", "连接"],
+    "db.approve_kind" => ["Type", "종류", "種類", "类型"],
+    "db.kind_write" => ["data change", "데이터 변경", "データ変更", "数据修改"],
+    "db.kind_ddl" => ["schema change (DDL)", "스키마 변경(DDL)", "スキーマ変更(DDL)", "结构变更（DDL）"],
+    "db.approve_note" => [
+        "It runs exactly as shown, only if you press Execute. Reads never need this.",
+        "실행을 눌러야만 위 내용 그대로 실행됩니다. 조회는 승인이 필요 없습니다.",
+        "「実行」を押した場合のみ、表示どおりに実行されます。参照には承認は不要です。",
+        "只有点击“执行”才会按上面内容执行。查询不需要批准。"
+    ],
+    "db.execute" => ["Execute", "실행", "実行", "执行"],
+    "db.expired" => [
+        "Not run: the agent stopped waiting for this approval. Ask it again if still needed.",
+        "실행하지 않음: 에이전트가 승인 대기를 끝냈습니다. 필요하면 다시 요청하게 하세요.",
+        "実行しませんでした: エージェントが承認待ちを終了しました。必要なら再度依頼してください。",
+        "未执行：代理已停止等待批准。如仍需要，请让它重新请求。"
+    ],
+    "db.decline" => ["Decline", "거절", "拒否", "拒绝"],
+    "db.form.name" => ["Name", "이름", "名前", "名称"],
+    "db.form.host" => ["Host", "호스트", "ホスト", "主机"],
+    "db.form.port" => ["Port", "포트", "ポート", "端口"],
+    "db.form.database" => ["Database", "데이터베이스", "データベース", "数据库"],
+    "db.form.user" => ["User", "사용자", "ユーザー", "用户"],
+    "db.form.password" => ["Password", "비밀번호", "パスワード", "密码"],
+    "db.form.tls_off" => [
+        "No TLS (only for a database on this machine or a private network)",
+        "TLS 사용 안 함 (이 컴퓨터나 사설망의 DB에만)",
+        "TLS を使わない (このマシンまたはプライベートネットワークの DB のみ)",
+        "不使用 TLS（仅限本机或私有网络中的数据库）"
+    ],
     "idea.menu" => ["Build my idea", "아이디어 실현하기", "アイデアを形にする", "实现我的创意"],
     "idea.menu_body" => ["Describe it — agents build, preview and launch it", "말만 하면 에이전트가 개발·미리보기·출시까지", "伝えるだけでエージェントが開発・プレビュー・公開", "说出想法，智能体负责开发、预览和发布"],
     "launch.menu" => ["Launch to the web", "웹에 출시하기", "Web に公開する", "发布到网络"],

@@ -260,7 +260,7 @@ fn service_for(data_dir: Option<&std::ffi::OsStr>) -> String {
 }
 
 /// `base`, or `base.<tag of the data folder>` for a second install (see [`keychain_service`]).
-pub(crate) fn scoped_service(base: &str, data_dir: Option<&std::ffi::OsStr>) -> String {
+pub fn scoped_service(base: &str, data_dir: Option<&std::ffi::OsStr>) -> String {
     use sha2::{Digest, Sha256};
     match data_dir {
         None => base.to_string(),

@@ -18,6 +18,7 @@ alacritty_terminal = "0.26"
 anyhow.workspace = true
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 agentty-bridge = { path = "../agentty-bridge" }
+agentty-db = { path = "../agentty-db" }
 dirs.workspace = true
 futures = "0.3.34"
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }

@@ -38,6 +38,11 @@ All notable changes to this project are documented here. The format follows
   of its containers are running; clicking it opens a panel with each compose service's image, state and ports, start,
   stop, restart, `compose up -d`, `compose down` (confirmed first; volumes are kept) and logs in a new terminal tab.
   Without compose it lists the project's containers. Environment values are never shown.
+- Databases. In a project whose configuration names a database (`.env`, Spring `application.yml` / `.properties`,
+  Prisma, compose services), the status bar shows DB n and the database page lists its connections, tables and rows
+  and runs read queries. MySQL, MariaDB, PostgreSQL, Oracle, MongoDB and Amazon RDS. Hidden passwords are entered once
+  and kept in the Keychain; connections can also be added by hand. Agents read the same databases with `agentty db`;
+  a statement that writes or changes the schema runs only after the user approves the exact statement in a dialog.
 - Parallel tasks: an agent can split work into several sessions (`agentty tasks`). Agentty asks once ("Start N tasks
   at the same time?"); each task then starts right away in a split pane of the current tab, in its own worktree from
   the project's default branch, with its prompt already sent.
