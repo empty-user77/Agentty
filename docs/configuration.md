@@ -20,6 +20,11 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
   "askDirectory": true,
   "recentDirs": [],
   "resumeBar": true,
+  "autoWorktree": true,
+  "stopServersOnClose": true,
+  "browser": { "autoOpenServers": true },
+  "agentBarPosition": "top",
+  "hud": [{ "item": "model", "visible": true }, { "item": "context", "visible": true }],
   "harnessDetect": true,
   "harnessPatterns": [".team-harness", "tools/agent/*.yaml"],
   "harnessSubmit": true,
@@ -34,6 +39,11 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `cursorShape` | `block`, `beam`, `underline` |
 | `askDirectory` | Show the folder picker for new tabs and workspaces |
 | `resumeBar` | Offer earlier Claude Code / Codex sessions when a terminal enters their folder |
+| `autoWorktree` | A new AI session in a project where another one is at work starts in its own git worktree (`~/.agentty/worktrees/<project>-<hash>/<name>`, branch `agentty/<name>`) |
+| `stopServersOnClose` | Closing a tab, pane or workspace stops the local servers started in it (`SIGTERM`, then `SIGKILL`) |
+| `browser.autoOpenServers` | A local server started in a tab opens in the in-app browser once it answers with a page (only while links open in-app) |
+| `agentBarPosition` | `top` (default) or `bottom`: the AI CLI status bar, and the header of a split pane, above the terminal or under it |
+| `hud` | Items of the AI CLI status bar in order: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `plugins`, `worktree`, `branch`, `folder`. `model`, `context`, `status`, `branch` and `spacer` cannot be hidden. Easier in Settings → Appearance → Status bar |
 | `harnessDetect` | Offer to start work through a project's agent harness (see below) |
 | `harnessPatterns` | Extra harness patterns, relative to the project (`*` within a name, `**` any folders) |
 | `harnessSubmit` | Send the harness prompt right away (`false`: only type it in) |
@@ -76,6 +86,8 @@ The project root is the folder itself or a parent up to the repository root.
 A project counts as a harness when it has any of these:
 
 - `.harness`, `harness.json`, `harness.yaml`, `harness.yml` or `HARNESS.md`
+- a project skill named `harness` or `harness-<something>`: `<project>/.claude/skills/harness/SKILL.md` or
+  `<project>/.claude/skills/harness-*/SKILL.md` (exactly there: not nested deeper, not the user's `~/.claude`)
 - a `harness` list in `agentty.json`
 - a pattern you add in **Settings → Project**
 

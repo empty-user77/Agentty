@@ -382,6 +382,8 @@ impl Workbench {
                 self.persist(cx);
             }
             LaunchTarget::NewTab => self.open_tab(spec, window, cx),
+            LaunchTarget::SplitRight => self.split_with(spec, super::Axis::Horizontal, window, cx),
+            LaunchTarget::SplitDown => self.split_with(spec, super::Axis::Vertical, window, cx),
         }
         let pane = self.active_pane().ok_or("could not open a terminal")?;
         if let Some((text, delay)) = later {

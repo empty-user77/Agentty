@@ -180,19 +180,7 @@ impl Workbench {
                 cx.notify();
             }))
             .child(body);
-        div()
-            .absolute()
-            .top_full()
-            .left_0()
-            .child(
-                gpui::deferred(
-                    gpui::anchored()
-                        .snap_to_window_with_margin(px(8.))
-                        .child(div().mt_1().child(crate::ui::fade_in("agent-panel-fade", popover))),
-                )
-                .with_priority(3),
-            )
-            .into_any_element()
+        super::layout::bar_popover(crate::ui::fade_in("agent-panel-fade", popover), 3, cx).into_any_element()
     }
 
     fn render_subagents(&self, pane: &Pane, panel: &AgentPanel, cx: &mut Context<Self>) -> AnyElement {

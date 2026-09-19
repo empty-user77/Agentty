@@ -27,6 +27,7 @@ pub mod secret_store;
 pub mod service_status;
 pub mod update;
 pub mod usage;
+pub mod worktree;
 
 use anyhow::Result;
 use model::{Agent, SessionInfo, Turn};
@@ -149,19 +150,7 @@ pub fn session_stats(agent: Agent, id: &str) -> Option<SessionStats> {
     let tail = String::from_utf8_lossy(&bytes);
     let mut stats = SessionStats::default();
     match agent {
-        Agent::Claude => {
-            let line = tail.lines().rev().filter(|l| l.contains("\"type\":\"assistant\"") && l.contains("\"usage\"")).find_map(|l| {
-                let v: serde_json::Value = serde_json::from_str(l).ok()?;
-                let model = v["message"]["model"].as_str()?;
-                (!model.starts_with('<')).then_some(v)
-            })?;
-            let model = line["message"]["model"].as_str().unwrap_or_default().to_string();
-            let u = &line["message"]["usage"];
-            let n = |k: &str| u[k].as_u64().unwrap_or(0);
-            stats.context_used = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
-            stats.context_window = claude_context_window(&model);
-            stats.model = Some(model);
-        }
+        Agent::Claude => stats = claude_stats(tail.lines().rev())?,
         Agent::Codex => {
             for line in tail.lines().rev() {
                 if stats.model.is_none() && line.contains("\"type\":\"turn_context\"") {
@@ -187,6 +176,42 @@ pub fn session_stats(agent: Agent, id: &str) -> Option<SessionStats> {
         _ => {}
     }
     Some(stats)
+}
+
+/// Model and context of a Claude Code session, from its transcript lines newest first.
+///
+/// The prompt size of the latest request is the context in use — until `/compact` (or an automatic
+/// compaction) replaces the conversation with a summary. Nothing with `usage` is written then until
+/// the next prompt, so the boundary's own `postTokens` is the reading in between; without it the
+/// meter would keep showing the full window the compaction just emptied.
+fn claude_stats<'a>(lines: impl Iterator<Item = &'a str>) -> Option<SessionStats> {
+    let mut compacted_to = None;
+    for line in lines {
+        if compacted_to.is_none() && line.contains("\"compact_boundary\"") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if v["type"] == "system" && v["subtype"] == "compact_boundary" {
+                    // Older versions wrote no `postTokens`: a small floor still reads as "just compacted".
+                    compacted_to = Some(v["compactMetadata"]["postTokens"].as_u64().filter(|n| *n > 0).unwrap_or(1));
+                }
+            }
+            continue;
+        }
+        if !(line.contains("\"type\":\"assistant\"") && line.contains("\"usage\"")) {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Some(model) = v["message"]["model"].as_str().filter(|m| !m.starts_with('<')) else { continue };
+        let u = &v["message"]["usage"];
+        let n = |k: &str| u[k].as_u64().unwrap_or(0);
+        let prompt = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+        return Some(SessionStats {
+            context_used: compacted_to.unwrap_or(prompt),
+            context_window: claude_context_window(model),
+            model: Some(model.to_string()),
+            rate_limit_percent: None,
+        });
+    }
+    None
 }
 
 /// Whether the session's latest turn was stopped by the user (Esc), from the end of its transcript.
@@ -283,6 +308,26 @@ mod model_name_tests {
         assert!(!turn_interrupted(Agent::Claude, finished.into_iter()));
         let codex = [r#"{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}"#];
         assert!(turn_interrupted(Agent::Codex, codex.into_iter()));
+    }
+
+    #[test]
+    fn context_drops_as_soon_as_the_session_is_compacted() {
+        let turn = r#"{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":10,"cache_read_input_tokens":900000,"cache_creation_input_tokens":90}}}"#;
+        let boundary = r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":900100,"postTokens":14253}}"#;
+        let summary =
+            r#"{"type":"user","isCompactSummary":true,"message":{"content":"the word compact_boundary in prose changes nothing"}}"#;
+        // Newest first, as the tail of a transcript is read.
+        let full = super::claude_stats([turn].into_iter()).unwrap();
+        assert_eq!(full.context_used, 900_100);
+        let compacted = super::claude_stats([summary, boundary, turn].into_iter()).unwrap();
+        assert_eq!((compacted.context_used, compacted.context_window), (14_253, 1_000_000));
+        assert_eq!(compacted.model.as_deref(), Some("claude-opus-5"));
+        // The next prompt is the truth again, whatever the boundary below it said.
+        let next = r#"{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":5,"cache_read_input_tokens":30000,"cache_creation_input_tokens":0}}}"#;
+        assert_eq!(super::claude_stats([next, summary, boundary, turn].into_iter()).unwrap().context_used, 30_005);
+        // A boundary from a version that wrote no `postTokens` still empties the meter.
+        let old = r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":5}}"#;
+        assert_eq!(super::claude_stats([old, turn].into_iter()).unwrap().context_used, 1);
     }
 
     #[test]

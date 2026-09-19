@@ -1,7 +1,7 @@
 //! Detects agent harnesses: projects that declare one with a marker file (`.harness`,
-//! `HARNESS.md`, …), an `agentty.json` `"harness"` list or a user pattern, so work can be started
-//! through the project's commands and skills from the UI. Commands, skills or hooks alone
-//! (`.claude/`, `.codex/`) are too common to count as a harness.
+//! `HARNESS.md`, …), a project skill named `harness` or `harness-*`, an `agentty.json` `"harness"`
+//! list or a user pattern, so work can be started through the project's commands and skills from the
+//! UI. Commands, skills or hooks alone (`.claude/`, `.codex/`) are too common to count as a harness.
 //!
 //! Detection only looks at the project (never user-level configuration) and only follows the
 //! patterns' own path segments, so it is cheap enough to run whenever a terminal changes folder.
@@ -14,7 +14,19 @@ use std::path::{Path, PathBuf};
 
 /// Built-in patterns, relative to the project root. `*` and `?` match within a name, `**` any
 /// number of folders.
-pub const DEFAULT_PATTERNS: &[&str] = &[".harness", "harness.json", "harness.yaml", "harness.yml", "HARNESS.md"];
+///
+/// The last two are a project skill called `harness` or `harness-<something>`: exactly
+/// `<project>/.claude/skills/<name>/SKILL.md` — a real skill (not a stray file or folder of that
+/// name), in the project's own skills folder (not deeper, and never the user's `~/.claude`).
+pub const DEFAULT_PATTERNS: &[&str] = &[
+    ".harness",
+    "harness.json",
+    "harness.yaml",
+    "harness.yml",
+    "HARNESS.md",
+    ".claude/skills/harness/SKILL.md",
+    ".claude/skills/harness-*/SKILL.md",
+];
 
 /// Folders never searched by `**`.
 const SKIPPED_DIRS: &[&str] = &[".git", "node_modules", "target", "build", "dist", ".venv", "vendor", "Pods", ".next"];
@@ -311,6 +323,39 @@ mod tests {
         write(dir.join(".mcp.json"), r#"{"mcpServers":{}}"#);
         assert_eq!(detect_at(&dir, &[]), None);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_project_skill_named_harness_declares_one() {
+        let exact = project("skill-exact");
+        write(exact.join(".claude/skills/harness/SKILL.md"), "---\nname: harness\ndescription: How work runs here\n---\n");
+        let found = detect_at(&exact, &[]).expect("a skill called harness");
+        assert_eq!(found.matched, vec![".claude/skills/harness/SKILL.md".to_string()]);
+        assert_eq!(found.skills, 1);
+
+        let prefixed = project("skill-prefixed");
+        write(prefixed.join(".claude/skills/harness-review/SKILL.md"), "---\nname: harness-review\n---\n");
+        write(prefixed.join(".claude/skills/deploy/SKILL.md"), "---\nname: deploy\n---\n");
+        let found = detect_at(&prefixed, &[]).expect("a skill called harness-*");
+        assert_eq!(found.matched, vec![".claude/skills/harness-*/SKILL.md".to_string()]);
+        // From a folder inside the project it is still that project's harness.
+        std::fs::create_dir_all(prefixed.join("src/deep")).unwrap();
+        std::fs::create_dir_all(prefixed.join(".git")).unwrap();
+        assert_eq!(detect(&prefixed.join("src/deep"), &[]).map(|h| h.root), Some(prefixed.clone()));
+
+        // Only a real skill, only in the project's own `.claude/skills`, only with that name.
+        let not_one = project("skill-not");
+        write(not_one.join(".claude/skills/harness"), "a file, not a skill");
+        write(not_one.join(".claude/skills/harness-notes/README.md"), "a folder without SKILL.md");
+        write(not_one.join(".claude/skills/my-harness/SKILL.md"), "---\nname: my-harness\n---\n");
+        write(not_one.join(".claude/skills/harnessed/SKILL.md"), "---\nname: harnessed\n---\n");
+        write(not_one.join(".claude/skills/group/harness/SKILL.md"), "---\nname: nested\n---\n");
+        write(not_one.join("packages/app/.claude/skills/harness/SKILL.md"), "---\nname: elsewhere\n---\n");
+        write(not_one.join(".codex/skills/harness/SKILL.md"), "---\nname: codex\n---\n");
+        assert_eq!(detect_at(&not_one, &[]), None);
+        for dir in [exact, prefixed, not_one] {
+            std::fs::remove_dir_all(dir).ok();
+        }
     }
 
     #[test]

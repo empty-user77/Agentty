@@ -82,6 +82,7 @@ fn header_icon(
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
+        .relative()
         .tooltip(crate::ui::Tooltip::text(tooltip.0.to_string(), tooltip.1))
         .flex_shrink_0()
         .my_auto()
@@ -205,6 +206,7 @@ impl Workbench {
     }
 
     pub(super) fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let target = self.tour_target();
         let item =
             |id: &'static str, glyph: &'static str, active: bool, tooltip: &'static str, on_click: ViewAction, cx: &mut Context<Self>| {
                 // Panel titles are upper-case headings; the tooltip uses the menu names.
@@ -213,7 +215,7 @@ impl Workbench {
                     "panel.sessions" => ("menu.show_sessions", "⇧⌘S"),
                     "page.git" => (tooltip, "⇧⌘G"),
                     "page.flow" => (tooltip, "⇧⌘F"),
-                    "page.usage" => (tooltip, "⌥⌘U"),
+                    "page.monitoring" => (tooltip, "⌥⌘U"),
                     "page.extensions" => (tooltip, "⇧⌘X"),
                     "page.plugins" => (tooltip, ""),
                     "page.settings" => (tooltip, "⌘,"),
@@ -236,6 +238,8 @@ impl Workbench {
                         icon(glyph, IconSize::ACTIVITY, if active { hex(Chrome::BRIGHT) } else { hex(0x858585) })
                             .group_hover(id, |s| s.text_color(hex(Chrome::BRIGHT))),
                     )
+                    // The onboarding tour points here.
+                    .when(target == Some(id), |d| d.relative().child(crate::ui::pulse_ring(id, false)))
             };
         // One active item at a time: an open page wins over the side panel's item.
         let sidebar = |panel| self.page.is_none() && self.sidebar_open && self.panel == panel;
@@ -288,8 +292,8 @@ impl Workbench {
                     .child(item(
                         "activity-usage",
                         "chart-column",
-                        matches!(self.page, Some(Page::Usage | Page::Processes)),
-                        "page.usage",
+                        matches!(self.page, Some(Page::Usage | Page::Processes | Page::Proxy)),
+                        "page.monitoring",
                         Box::new(|this, cx| this.open_page(Page::Usage, cx)),
                         cx,
                     ))
@@ -822,10 +826,7 @@ impl Workbench {
 
     /// `:3000 :5173` chips for servers started in the workspace; a click opens them.
     fn render_port_chips(&self, ws: &Workspace, active: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let mut ports: Vec<u16> =
-            ws.tabs.iter().flat_map(|t| t.root.leaves()).filter_map(|p| self.ports.get(&p.read(cx).pane_id)).flatten().copied().collect();
-        ports.sort_unstable();
-        ports.dedup();
+        let ports = self.ports_of(ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id));
         if ports.is_empty() {
             return None;
         }
@@ -1096,9 +1097,11 @@ impl Workbench {
         // Tabs take the room they need (scrolling when crowded); the spacer gets the rest.
         let mut tabs = div().id("tabs").flex().flex_shrink().min_w_0().h_full().overflow_x_scroll();
         if let Some(page) = self.page {
-            // AI Usage and AI processes are two tabs of one page.
+            // Monitoring: AI usage, AI processes and the capture proxy are tabs of one page.
             let pages: Vec<(Page, &str)> = match page {
-                Page::Usage | Page::Processes => vec![(Page::Usage, t(cx, "page.usage")), (Page::Processes, t(cx, "page.processes"))],
+                Page::Usage | Page::Processes | Page::Proxy => {
+                    vec![(Page::Usage, t(cx, "page.usage")), (Page::Processes, t(cx, "page.processes")), (Page::Proxy, t(cx, "page.proxy"))]
+                }
                 Page::Git => vec![(page, t(cx, "page.git"))],
                 Page::Flow => vec![(page, t(cx, "page.flow"))],
                 Page::Settings => vec![(page, t(cx, "page.settings"))],
@@ -1263,6 +1266,16 @@ impl Workbench {
                     .when(!label.is_empty(), |d| d.child(label))
             };
 
+        // The control the onboarding tour asks for gets a pulsing ring.
+        let target = self.tour_target();
+        let ringed = |button: gpui::Stateful<gpui::Div>, id: &'static str| {
+            if target == Some(id) {
+                button.child(crate::ui::pulse_ring(id, false))
+            } else {
+                button
+            }
+        };
+
         div()
             .id("tab-strip")
             .h(px(TAB_HEIGHT))
@@ -1298,6 +1311,7 @@ impl Workbench {
                             return;
                         }
                         this.launcher_open = !this.launcher_open;
+                        this.launcher_target = LaunchTarget::NewTab;
                         // The menu opens below the button.
                         let position = event.position();
                         this.launcher_at = Some(gpui::point(position.x - px(12.), position.y + px(20.)));
@@ -1329,6 +1343,7 @@ impl Workbench {
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
                             this.launcher_at = Some(event.position);
                             this.launcher_open = true;
+                            this.launcher_target = LaunchTarget::NewTab;
                             this.notices_open = false;
                             this.detect_agents(cx);
                             cx.notify();
@@ -1385,28 +1400,37 @@ impl Workbench {
             })
             // Plugins with a panel, then cmux-style quick actions: icons only.
             .children(self.render_plugin_header_buttons(cx))
-            .child(header_icon(
+            .child(ringed(
+                header_icon(
+                    "header-browser",
+                    "globe",
+                    self.browser.is_some(),
+                    (t(cx, "tooltip.browser"), Some("⇧⌘B")),
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
+                ),
                 "header-browser",
-                "globe",
-                self.browser.is_some(),
-                (t(cx, "tooltip.browser"), Some("⇧⌘B")),
-                cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
             ))
             .when(crate::platform::HAS_MINI_MODE, |d| {
-                d.child(header_icon(
+                d.child(ringed(
+                    header_icon(
+                        "header-mini",
+                        "picture-in-picture-2",
+                        false,
+                        (t(cx, "mini.enter"), Some("⌃⌘M")),
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
+                    ),
                     "header-mini",
-                    "picture-in-picture-2",
-                    false,
-                    (t(cx, "mini.enter"), Some("⌃⌘M")),
-                    cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
                 ))
             })
-            .child(header_icon(
+            .child(ringed(
+                header_icon(
+                    "header-split-right",
+                    "columns-2",
+                    false,
+                    (t(cx, "split.right"), Some("⌘D")),
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
+                ),
                 "header-split-right",
-                "columns-2",
-                false,
-                (t(cx, "split.right"), Some("⌘D")),
-                cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
             ))
             .child(header_icon(
                 "header-split-down",
@@ -1414,6 +1438,18 @@ impl Workbench {
                 false,
                 (t(cx, "split.down"), Some("⇧⌘D")),
                 cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
+            ))
+            // The files panel docks at the right edge, so its button is the last one. A tree, not a
+            // framed panel: next to the split buttons a frame reads as one more way to split.
+            .child(ringed(
+                header_icon(
+                    "header-files",
+                    "list-tree",
+                    self.files_panel.is_some(),
+                    (t(cx, "files.title"), Some("⌥⌘B")),
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_files_panel(cx)),
+                ),
+                "header-files",
             ))
     }
 
@@ -1463,7 +1499,7 @@ impl Workbench {
                         .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)).border_color(hex(Chrome::ACCENT)))
                         .child(label)
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.request_launch(LaunchChoice::Model(kind, model.clone()), LaunchTarget::NewTab, window, cx)
+                            this.request_launch(LaunchChoice::Model(kind, model.clone()), this.launcher_target, window, cx)
                         })),
                 );
             }
@@ -1523,12 +1559,53 @@ impl Workbench {
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_launch(cx))),
             )
             .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            // Where what is picked below opens. A split starts in the tab's folder — and an agent
+            // there gets its own working tree when another one already works in the project.
+            .child({
+                let has_tab = self.active_pane().is_some();
+                let target = |id: &'static str, glyph: &'static str, label: &'static str, value: LaunchTarget, cx: &mut Context<Self>| {
+                    let active = self.launcher_target == value;
+                    div()
+                        .id(id)
+                        .flex_1()
+                        .h(px(26.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .t_small()
+                        .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::MUTED }))
+                        .when(active, |d| d.bg(hex(Chrome::SELECTED)))
+                        .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                        .child(icon(glyph, 12., hex(if active { Chrome::BRIGHT } else { Chrome::MUTED })))
+                        .child(t(cx, label))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.launcher_target = value;
+                            cx.notify();
+                        }))
+                };
+                div()
+                    .mx_2()
+                    .mb_1()
+                    .p_0p5()
+                    .flex()
+                    .gap_0p5()
+                    .rounded_md()
+                    .bg(hex(Chrome::PANEL))
+                    .child(target("launch-target-tab", "plus", "launcher.target_tab", LaunchTarget::NewTab, cx))
+                    .when(has_tab, |d| {
+                        d.child(target("launch-target-right", "columns-2", "launcher.target_right", LaunchTarget::SplitRight, cx))
+                            .child(target("launch-target-down", "rows-2", "launcher.target_down", LaunchTarget::SplitDown, cx))
+                    })
+            })
             .child(entry(
                 "launch-shell".into(),
                 Some("shell"),
                 t(cx, "welcome.terminal").into(),
                 "⌘T",
-                Box::new(|this, w, cx| this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, w, cx)),
+                Box::new(|this, w, cx| this.request_launch(PaneKind::Shell, this.launcher_target, w, cx)),
                 cx,
             ));
         if self.is_installed("claude") {
@@ -1538,7 +1615,7 @@ impl Workbench {
                     Some("claude"),
                     "Claude Code".into(),
                     "⌥⌘C",
-                    Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, LaunchTarget::NewTab, w, cx)),
+                    Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, this.launcher_target, w, cx)),
                     cx,
                 ))
                 .child(models(PaneKind::Claude, installed.claude_models.clone(), cx));
@@ -1549,7 +1626,7 @@ impl Workbench {
                 Some("codex"),
                 "Codex".into(),
                 "⌥⌘X",
-                Box::new(|this, w, cx| this.request_launch(PaneKind::Codex, LaunchTarget::NewTab, w, cx)),
+                Box::new(|this, w, cx| this.request_launch(PaneKind::Codex, this.launcher_target, w, cx)),
                 cx,
             ));
             if !installed.codex_models.is_empty() {
@@ -1566,7 +1643,7 @@ impl Workbench {
                 Box::new(move |this, w, cx| {
                     this.request_launch(
                         LaunchChoice::Command { title: title.clone(), command: command.clone() },
-                        LaunchTarget::NewTab,
+                        this.launcher_target,
                         w,
                         cx,
                     )
@@ -1619,7 +1696,7 @@ impl Workbench {
                         Box::new(move |this, w, cx| {
                             this.request_launch(
                                 LaunchChoice::Command { title: title.clone(), command: command.clone() },
-                                LaunchTarget::NewTab,
+                                this.launcher_target,
                                 w,
                                 cx,
                             )
@@ -1985,7 +2062,7 @@ impl Workbench {
             };
         let launch = (t(cx, "launch.menu").to_string(), t(cx, "launch.menu_body").to_string());
         let flow = (t(cx, "page.flow").to_string(), t(cx, "welcome.flow_body").to_string());
-        let usage = (t(cx, "page.usage").to_string(), t(cx, "welcome.usage_body").to_string());
+        let usage = (t(cx, "page.monitoring").to_string(), t(cx, "welcome.usage_body").to_string());
         let plugins = (t(cx, "page.plugins").to_string(), t(cx, "welcome.plugins_body").to_string());
         div().flex_1().min_w(px(280.)).flex().flex_col().gap_2().child(heading).child(
             div()

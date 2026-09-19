@@ -116,6 +116,10 @@ pub struct Settings {
     pub option_as_meta: bool,
     pub scrollback: usize,
     pub sidebar_width: f32,
+    /// Width of the files panel docked at the right edge.
+    pub files_panel_width: f32,
+    /// Height of its working-tree list once the user dragged it (0: as tall as its rows, up to a few).
+    pub files_panel_trees_height: f32,
     /// Ask for a starting folder whenever a new workspace is opened.
     pub ask_directory: bool,
     /// Also ask for new tabs (otherwise they open in the current tab's folder).
@@ -136,10 +140,20 @@ pub struct Settings {
     pub resume_bar: bool,
     /// Status bar (model, context, branch) above AI CLI panes.
     pub agent_bar: bool,
+    /// Whether that bar (and the header of a split pane) sits above the terminal or under it.
+    #[serde(deserialize_with = "crate::hud::lenient_position")]
+    pub agent_bar_position: crate::hud::HudPosition,
+    /// Items of that status bar, in order (`hud::normalized` fills in what a file is missing).
+    #[serde(deserialize_with = "crate::hud::lenient")]
+    pub hud: Vec<crate::hud::HudEntry>,
     /// Offer "Build my idea": the start page banner, the + menu and the command palette.
     pub idea_mode: bool,
     /// Ask before closing a pane, tab or workspace that was used.
     pub confirm_close: bool,
+    /// A new agent session in a project another agent already works in gets its own git worktree.
+    pub auto_worktree: bool,
+    /// Closing a pane stops the local servers (dev servers) started in it.
+    pub stop_servers_on_close: bool,
     /// Claude Code advisor for new Claude tabs.
     pub advisor: AdvisorChoice,
     /// Offer to start work through a project's agent harness when a terminal enters it.
@@ -152,6 +166,8 @@ pub struct Settings {
     pub harness_agent: HarnessAgent,
     /// The first-launch system check ran (Windows / Linux).
     pub setup_check_shown: bool,
+    /// The first-run onboarding was finished or skipped.
+    pub onboarding_done: bool,
 }
 
 /// Which agent starts work through a harness.
@@ -272,6 +288,8 @@ pub struct BrowserSettings {
     pub inspectable: bool,
     /// Give Claude Code / Codex started in Agentty tools to control this browser (MCP).
     pub agent_tools: bool,
+    /// A local server started in a tab opens here by itself (only while links open in-app).
+    pub auto_open_servers: bool,
 }
 
 impl Default for BrowserSettings {
@@ -287,6 +305,7 @@ impl Default for BrowserSettings {
             private_mode: false,
             inspectable: false,
             agent_tools: true,
+            auto_open_servers: true,
         }
     }
 }
@@ -306,6 +325,8 @@ impl Default for Settings {
             option_as_meta: false,
             scrollback: 10_000,
             sidebar_width: 280.0,
+            files_panel_width: 300.0,
+            files_panel_trees_height: 0.0,
             ask_directory: true,
             ask_directory_for_tabs: false,
             recent_dirs: Vec::new(),
@@ -318,14 +339,19 @@ impl Default for Settings {
             favorite_sessions: Vec::new(),
             resume_bar: true,
             agent_bar: true,
+            agent_bar_position: crate::hud::HudPosition::default(),
+            hud: crate::hud::default_layout(),
             idea_mode: true,
             confirm_close: true,
+            auto_worktree: true,
+            stop_servers_on_close: true,
             advisor: AdvisorChoice::Inherit,
             harness_detect: true,
             harness_patterns: Vec::new(),
             harness_submit: true,
             harness_agent: HarnessAgent::Auto,
             setup_check_shown: false,
+            onboarding_done: false,
         }
     }
 }

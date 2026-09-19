@@ -2,6 +2,7 @@
 
 use super::panes::{zoom_sizes, Axis, PaneNode};
 use super::{status_label, Pane, Tab, Workbench};
+use crate::hud::HudItem;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
@@ -134,11 +135,15 @@ impl Workbench {
     }
 
     fn render_pane(&self, pane: &Pane, split: bool, active: bool, cx: &mut Context<Self>) -> AnyElement {
-        let chip = pane.read(cx).git_branch.clone().filter(|_| split).map(|b| self.branch_chip(pane, b, cx));
-        let collab = split.then(|| self.render_collab_chips(pane, cx)).flatten();
-        let plugin_buttons = split.then(|| self.render_plugin_pane_buttons(pane, cx)).flatten();
+        let mut chip = pane.read(cx).git_branch.clone().filter(|_| split).map(|b| self.branch_chip(pane, b, cx));
+        let mut tree_chip = split.then(|| self.worktree_chip(pane, cx)).flatten();
+        let mut collab = split.then(|| self.render_collab_chips(pane, cx)).flatten();
+        let mut plugin_buttons = split.then(|| self.render_plugin_pane_buttons(pane, cx)).flatten();
+        let mut port_chips = split.then(|| self.port_chips(pane, cx)).flatten();
+        let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
         let view = pane.read(cx);
         let prefs_bar = crate::settings::settings(cx).agent_bar;
+        let bars_below = bars_below(cx);
         let width = self.pane_bounds.borrow().get(&pane.entity_id()).map(|b| f32::from(b.size.width)).unwrap_or(f32::MAX);
         let attention = view.attention;
         let border = if attention {
@@ -152,16 +157,14 @@ impl Workbench {
         let pane_for_focus = pane.clone();
 
         // Split pane header: which tool, where (project folder + path), its live status and branch.
-        let header = split.then(|| {
+        let mut header = split.then(|| {
             let (zoom, close) = (pane.clone(), pane.clone());
             let zoomed = self.zoomed.as_ref() == Some(pane);
-            let group = SharedString::from(format!("pane-{}", pane.entity_id().as_u64()));
             let cwd = view.display_cwd();
             let folder = cwd.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| crate::ui::tilde(&cwd));
             let agent_info = view.is_agent() && prefs_bar;
             div()
                 .id(("pane-header", pane.entity_id().as_u64() as usize))
-                .group(group.clone())
                 .h(px(PANE_HEADER_HEIGHT))
                 .flex_shrink_0()
                 .flex()
@@ -194,52 +197,93 @@ impl Workbench {
                         )
                         .child(crate::brand::avatar(view.tool_id(), 16.)),
                 )
-                .when_some(view.stats.as_ref().filter(|_| agent_info).and_then(model_label), |d, model| {
-                    d.child(div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(model))
+                // The items of the status bar, in the user's order (Settings → Appearance).
+                .map(|mut d| {
+                    for entry in hud.iter().filter(|e| e.visible) {
+                        d = match entry.item {
+                            HudItem::Model => d.when_some(view.stats.as_ref().filter(|_| agent_info).and_then(model_label), |d, model| {
+                                d.child(div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(model))
+                            }),
+                            HudItem::Context => d
+                                .when_some(view.stats.as_ref().filter(|_| agent_info).and_then(|s| s.context_percent()), |d, percent| {
+                                    d.child(meter("Context", percent))
+                                }),
+                            HudItem::Usage => d.when_some(view.usage_percent().filter(|_| agent_info && width >= 700.), |d, percent| {
+                                d.child(meter("Usage", percent))
+                            }),
+                            HudItem::Status => d.when(agent_info, |d| {
+                                d.child(
+                                    div()
+                                        .flex_shrink()
+                                        .min_w(px(40.))
+                                        .max_w(px(220.))
+                                        .truncate()
+                                        .text_color(hex(status_color))
+                                        .child(status.clone()),
+                                )
+                            }),
+                            HudItem::Elapsed => d.when_some(
+                                view.working_since.filter(|_| agent_info && width >= 560.).map(|t| format_elapsed(t.elapsed().as_secs())),
+                                |d, elapsed| d.child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child(elapsed)),
+                            ),
+                            HudItem::Links => d.children(collab.take()),
+                            HudItem::Spacer => d.child(div().flex_1()),
+                            HudItem::Ports => d.children(port_chips.take()),
+                            HudItem::Plugins => d.children(plugin_buttons.take()),
+                            HudItem::Worktree => d.children(tree_chip.take()),
+                            HudItem::Branch => d.children(chip.take()),
+                            // Where this pane is: project folder, with the path (cut in the middle) when
+                            // there is room; the whole path on hover, ⌘-click shows it in the file manager.
+                            HudItem::Folder => d.child(
+                                div()
+                                    .id(("pane-folder", pane.entity_id().as_u64() as usize))
+                                    .tooltip(crate::ui::Tooltip::text(crate::ui::tilde(&cwd), Some(REVEAL_HINT)))
+                                    .on_click({
+                                        let cwd = cwd.clone();
+                                        move |event: &ClickEvent, _, cx| {
+                                            if crate::keymap::link_modifier(&event.modifiers()) {
+                                                cx.stop_propagation();
+                                                crate::platform::reveal(&cwd);
+                                            }
+                                        }
+                                    })
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .min_w_0()
+                                    .flex_shrink()
+                                    // In a narrow pane the folder name gives way (…) instead of running into the branch.
+                                    .overflow_hidden()
+                                    .child(beside_text(icon("folder", 12., hex(Chrome::MUTED))))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_shrink()
+                                            .max_w(px(160.))
+                                            .truncate()
+                                            .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
+                                            .child(folder.clone()),
+                                    )
+                                    .when(width >= 620., |d| {
+                                        let room = ((width - 560.) / 7.5).clamp(14., 48.) as usize;
+                                        d.child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_color(hex(Chrome::MUTED))
+                                                .child(crate::ui::middle_ellipsis(&crate::ui::tilde(&cwd), room)),
+                                        )
+                                    }),
+                            ),
+                        };
+                    }
+                    d
                 })
-                .when_some(view.stats.as_ref().filter(|_| agent_info).and_then(|s| s.context_percent()), |d, percent| {
-                    d.child(meter("Context", percent))
-                })
-                .when(agent_info, |d| {
-                    d.child(div().flex_shrink().min_w(px(40.)).max_w(px(220.)).truncate().text_color(hex(status_color)).child(status))
-                })
-                .when_some(
-                    view.working_since.filter(|_| agent_info && width >= 560.).map(|t| format_elapsed(t.elapsed().as_secs())),
-                    |d, elapsed| d.child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child(elapsed)),
-                )
-                .children(collab)
-                .child(div().flex_1())
-                .children(plugin_buttons)
-                // Where this pane is: project folder, with the full path when there is room.
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .min_w_0()
-                        .flex_shrink()
-                        // In a narrow pane the folder name gives way (…) instead of running into the branch.
-                        .overflow_hidden()
-                        .child(icon("folder", 12., hex(Chrome::MUTED)))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_shrink()
-                                .max_w(px(160.))
-                                .truncate()
-                                .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
-                                .child(folder),
-                        )
-                        .when(width >= 620., |d| {
-                            d.child(div().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(crate::ui::tilde(&cwd)))
-                        }),
-                )
-                .children(chip)
                 .child(
                     div()
                         .flex()
                         .flex_shrink_0()
-                        .when(!active && !zoomed, |d| d.invisible().group_hover(group, |s| s.visible()))
+                        // Always there, in every pane: enlarging or closing a pane should not need a hover first.
                         .child(
                             small_icon_button(
                                 ("pane-zoom", pane.entity_id().as_u64() as usize),
@@ -271,7 +315,7 @@ impl Workbench {
         let resume_hint = self.render_resume_hint(pane, cx);
         let find_bar = self.render_find_bar(pane, cx);
         // Single agent panes get a slim live status bar; split panes carry the same info in their header.
-        let agent_bar = (!split && prefs_bar).then(|| self.render_agent_bar(pane, width, cx)).flatten();
+        let mut agent_bar = (!split && prefs_bar).then(|| self.render_agent_bar(pane, width, cx)).flatten();
         let widths = self.pane_bounds.clone();
         let id = pane.entity_id();
 
@@ -292,8 +336,8 @@ impl Workbench {
                 .absolute()
                 .size_full(),
             )
-            .children(header)
-            .children(agent_bar)
+            // The pane's bar: above the terminal, or under it (Settings → Appearance).
+            .when(!bars_below, |d| d.children(header.take()).children(agent_bar.take()))
             .children(resume_hint)
             // Cached: the grid is only re-laid out when this terminal notifies (output, cursor,
             // focus), not when unrelated parts of the window re-render (e.g. sidebar scrolling).
@@ -307,6 +351,8 @@ impl Workbench {
                     .children(drop_zones)
                     .children(connect_pick),
             )
+            .children(header)
+            .children(agent_bar)
             .into_any_element()
     }
 
@@ -354,6 +400,66 @@ enum SyncKind {
 }
 
 impl Workbench {
+    /// `:3000` chips for the local servers this pane started; a click opens them.
+    fn port_chips(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ports = self.ports_of(std::iter::once(pane.read(cx).pane_id));
+        if ports.is_empty() {
+            return None;
+        }
+        let mut row = div().flex().flex_shrink_0().items_center().gap_1();
+        for port in ports.into_iter().take(3) {
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("hud-port-{}-{port}", pane.entity_id().as_u64())))
+                    .px_1p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .bg(hex_alpha(Chrome::GREEN, 0.18))
+                    .text_color(hex(Chrome::GREEN))
+                    .hover(|s| s.bg(hex_alpha(Chrome::GREEN, 0.3)))
+                    .child(format!(":{port}"))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.open_link(format!("http://localhost:{port}"), cx);
+                    })),
+            );
+        }
+        Some(row.into_any_element())
+    }
+
+    /// Says that the pane works in a linked git worktree (a session's own copy of the project), and
+    /// which; a click shows that tree in the Files panel.
+    fn worktree_chip(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let view = pane.read(cx);
+        let name = view.worktree.clone()?;
+        let root = agentty_bridge::worktree::tree_root(&view.display_cwd())?;
+        Some(
+            div()
+                .id(("worktree-chip", pane.entity_id().as_u64() as usize))
+                .flex()
+                .flex_shrink()
+                .min_w(px(24.))
+                .items_center()
+                .gap_1()
+                .px_1p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .bg(hex_alpha(Chrome::PURPLE, 0.18))
+                .text_color(hex(Chrome::PURPLE))
+                .hover(|s| s.bg(hex_alpha(Chrome::PURPLE, 0.3)))
+                .tooltip(crate::ui::Tooltip::text(tf(cx, "worktree.chip", &[("name", &name)]), None))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.open_files_panel(Some(root.clone()), cx);
+                }))
+                .child(beside_text(icon("git-fork", 11., hex(Chrome::PURPLE))))
+                .child(div().min_w_0().max_w(px(140.)).truncate().child(name))
+                .into_any_element(),
+        )
+    }
+
     /// Clickable branch name; opens a dropdown of local branches for switching.
     fn branch_chip(&self, pane: &Pane, branch: String, cx: &mut Context<Self>) -> AnyElement {
         let id = pane.entity_id();
@@ -387,7 +493,7 @@ impl Workbench {
                     .text_color(hex(tint))
                     .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
                     .when(open.is_some(), |d| d.bg(hex(Chrome::HOVER)))
-                    .child(icon("git-branch", IconSize::INLINE, hex(tint)))
+                    .child(beside_text(icon("git-branch", IconSize::INLINE, hex(tint))))
                     .child(div().truncate().child(branch))
                     // `*` uncommitted changes, `↑N` commits not pushed yet.
                     .when(dirty, |d| d.child(div().flex_shrink_0().text_color(hex(Chrome::WARNING)).child("*")))
@@ -419,17 +525,8 @@ impl Workbench {
                     }))
                     .children(sync_bar)
                     .child(menu.picker.clone());
-                // Anchored right under the chip, left edges aligned.
-                d.child(
-                    div().absolute().top_full().left_0().child(
-                        gpui::deferred(
-                            gpui::anchored()
-                                .snap_to_window_with_margin(px(8.))
-                                .child(div().mt_1().child(crate::ui::fade_in("branch-menu-fade", popover))),
-                        )
-                        .with_priority(2),
-                    ),
-                )
+                // Anchored right under the chip (over it when the bar sits under the terminal), left edges aligned.
+                d.child(bar_popover(crate::ui::fade_in("branch-menu-fade", popover), 2, cx))
             })
             .into_any_element()
     }
@@ -704,9 +801,12 @@ impl Workbench {
     /// Always shows the model, context and branch; usage, elapsed time and the folder fold away
     /// as the pane narrows.
     fn render_agent_bar(&self, pane: &Pane, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let chip = pane.read(cx).git_branch.clone().map(|b| self.branch_chip(pane, b, cx));
-        let collab = self.render_collab_chips(pane, cx);
-        let plugin_buttons = self.render_plugin_pane_buttons(pane, cx);
+        let mut chip = pane.read(cx).git_branch.clone().map(|b| self.branch_chip(pane, b, cx));
+        let mut tree_chip = self.worktree_chip(pane, cx);
+        let mut collab = self.render_collab_chips(pane, cx);
+        let mut plugin_buttons = self.render_plugin_pane_buttons(pane, cx);
+        let mut port_chips = self.port_chips(pane, cx);
+        let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
         let view = pane.read(cx);
         let kind = view.agent_kind()?;
         let (status, status_color) = status_label(view, cx);
@@ -722,64 +822,123 @@ impl Workbench {
                 .px_3()
                 .overflow_hidden()
                 .bg(hex(Chrome::TAB_INACTIVE))
-                .border_b_1()
+                .map(|d| if bars_below(cx) { d.border_t_1() } else { d.border_b_1() })
                 .border_color(hex(Chrome::BORDER))
                 .t_small()
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_1p5()
-                        .child(crate::brand::avatar(crate::brand::kind_id(kind), 16.))
-                        // "[Opus 5 (1M context)]": the model says more than the agent name.
-                        .child(
-                            div()
-                                .text_color(hex(Chrome::BRIGHT))
-                                .child(view.stats.as_ref().and_then(model_label).unwrap_or_else(|| name.to_string())),
-                        ),
-                )
-                .when_some(view.stats.as_ref().and_then(|s| s.context_percent()), |d, percent| d.child(meter("Context", percent)))
-                .when_some(view.usage_percent().filter(|_| width >= 700.), |d, percent| {
-                    d.child(div().w(px(1.)).h(px(12.)).bg(hex(Chrome::BORDER))).child(meter("Usage", percent))
-                })
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink()
-                        .min_w(px(24.))
-                        .items_center()
-                        .gap_1()
-                        .px_1p5()
-                        .rounded_sm()
-                        .bg(hex_alpha(status_color, 0.15))
-                        .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(status_color)))
-                        .child(div().min_w_0().max_w(px(320.)).truncate().text_color(hex(status_color)).child(status)),
-                )
-                .when_some(
-                    view.working_since.map(|t| format_elapsed(t.elapsed().as_secs())).filter(|_| working && width >= 560.),
-                    |d, elapsed| d.child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child(elapsed)),
-                )
-                .children(collab)
-                .child(div().flex_1())
-                .children(plugin_buttons)
-                .children(chip)
-                .when(width >= 820., |d| {
-                    d.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .min_w_0()
-                            .flex_shrink()
-                            .text_color(hex(Chrome::MUTED))
-                            .child(icon("folder", IconSize::INLINE, hex(Chrome::MUTED)))
-                            .child(div().truncate().child(crate::ui::tilde(&view.display_cwd()))),
-                    )
+                // The items of the status bar, in the user's order (Settings → Appearance).
+                .map(|mut d| {
+                    for entry in hud.iter().filter(|e| e.visible) {
+                        d = match entry.item {
+                            HudItem::Model => d.child(
+                                div()
+                                    .flex()
+                                    .flex_shrink_0()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .child(crate::brand::avatar(crate::brand::kind_id(kind), 16.))
+                                    // "[Opus 5 (1M context)]": the model says more than the agent name.
+                                    .child(
+                                        div()
+                                            .text_color(hex(Chrome::BRIGHT))
+                                            .child(view.stats.as_ref().and_then(model_label).unwrap_or_else(|| name.to_string())),
+                                    ),
+                            ),
+                            HudItem::Context => d.when_some(view.stats.as_ref().and_then(|s| s.context_percent()), |d, percent| {
+                                d.child(meter("Context", percent))
+                            }),
+                            HudItem::Usage => {
+                                d.when_some(view.usage_percent().filter(|_| width >= 700.), |d, percent| d.child(meter("Usage", percent)))
+                            }
+                            HudItem::Status => d.child(
+                                div()
+                                    .flex()
+                                    .flex_shrink()
+                                    .min_w(px(24.))
+                                    .items_center()
+                                    .gap_1()
+                                    .px_1p5()
+                                    .rounded_sm()
+                                    .bg(hex_alpha(status_color, 0.15))
+                                    .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(status_color)))
+                                    .child(div().min_w_0().max_w(px(320.)).truncate().text_color(hex(status_color)).child(status.clone())),
+                            ),
+                            HudItem::Elapsed => d.when_some(
+                                view.working_since.map(|t| format_elapsed(t.elapsed().as_secs())).filter(|_| working && width >= 560.),
+                                |d, elapsed| d.child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child(elapsed)),
+                            ),
+                            HudItem::Links => d.children(collab.take()),
+                            HudItem::Spacer => d.child(div().flex_1()),
+                            HudItem::Ports => d.children(port_chips.take()),
+                            HudItem::Plugins => d.children(plugin_buttons.take()),
+                            HudItem::Worktree => d.children(tree_chip.take()),
+                            HudItem::Branch => d.children(chip.take()),
+                            HudItem::Folder => d.when(width >= 820., |d| {
+                                let cwd = view.display_cwd();
+                                let room = ((width - 760.) / 7.5).clamp(18., 60.) as usize;
+                                d.child(
+                                    div()
+                                        .id(("bar-folder", pane.entity_id().as_u64() as usize))
+                                        // The whole path on hover; ⌘-click shows the folder in the file manager.
+                                        .tooltip(crate::ui::Tooltip::text(crate::ui::tilde(&cwd), Some(REVEAL_HINT)))
+                                        .on_click({
+                                            let cwd = cwd.clone();
+                                            move |event: &ClickEvent, _, cx| {
+                                                if crate::keymap::link_modifier(&event.modifiers()) {
+                                                    cx.stop_propagation();
+                                                    crate::platform::reveal(&cwd);
+                                                }
+                                            }
+                                        })
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .min_w_0()
+                                        .flex_shrink()
+                                        .rounded_sm()
+                                        .text_color(hex(Chrome::MUTED))
+                                        .hover(|s| s.text_color(hex(Chrome::FOREGROUND)))
+                                        .child(beside_text(icon("folder", IconSize::INLINE, hex(Chrome::MUTED))))
+                                        // Cut in the middle (`~/code/…/src/app`): both ends say more than the start alone.
+                                        .child(div().truncate().child(crate::ui::middle_ellipsis(&crate::ui::tilde(&cwd), room))),
+                                )
+                            }),
+                        };
+                    }
+                    d
                 })
                 .into_any_element(),
         )
     }
+}
+
+/// Whether panes show their bar under the terminal instead of above it.
+pub(super) fn bars_below(cx: &gpui::App) -> bool {
+    crate::settings::settings(cx).agent_bar_position == crate::hud::HudPosition::Bottom
+}
+
+/// A popover that belongs to a chip of a pane's bar: it opens away from the bar, under the chip
+/// when the bar is above the terminal and over the chip when the bar is under it.
+pub(super) fn bar_popover(popover: impl IntoElement, priority: usize, cx: &gpui::App) -> gpui::Div {
+    let below = bars_below(cx);
+    let anchored = gpui::anchored()
+        .anchor(if below { gpui::Corner::BottomLeft } else { gpui::Corner::TopLeft })
+        .snap_to_window_with_margin(px(8.))
+        .child(div().map(|d| if below { d.mb_1() } else { d.mt_1() }).child(popover));
+    div()
+        .absolute()
+        .left_0()
+        .map(|d| if below { d.bottom_full() } else { d.top_full() })
+        .child(gpui::deferred(anchored).with_priority(priority))
+}
+
+/// Tooltip hint of a folder chip: ⌘-click (Ctrl-click on Windows / Linux) shows the folder.
+const REVEAL_HINT: &str = if cfg!(target_os = "macos") { "⌘ click → Finder" } else { "⌘ click → folder" };
+
+/// An icon that sits next to small text in a status row. The row centers both boxes, but the letters
+/// sit low in their line box (measured: the middle of the text is ~1.5 pt under the middle of the
+/// row), so an icon centered by the box reads as floating above its label. Lowered to the letters.
+fn beside_text(icon: gpui::Svg) -> gpui::Svg {
+    icon.relative().top(px(1.5))
 }
 
 fn small_icon_button(

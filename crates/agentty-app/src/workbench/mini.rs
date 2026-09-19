@@ -455,6 +455,7 @@ impl Workbench {
         if self.mini.is_some() {
             self.exit_mini(None, window, cx);
         } else {
+            self.onboarding_event(super::onboarding::TourEvent::MiniEntered, cx);
             self.enter_mini(window, cx);
         }
     }
@@ -535,6 +536,7 @@ impl Workbench {
     /// Closes the mini panel and grows the main window back from it.
     pub fn exit_mini(&mut self, focus: Option<u64>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mini) = self.mini.take() else { return };
+        self.onboarding_event(super::onboarding::TourEvent::MiniLeft, cx);
         let mini_frame = mini.handle.update(cx, |_, w, _| native::ns_window(w).map(native::frame)).ok().flatten();
         let _ = mini.handle.update(cx, |_, w, _| w.remove_window());
         if let Some(main) = native::ns_window(window) {

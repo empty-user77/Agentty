@@ -5,6 +5,10 @@ use std::borrow::Cow;
 
 const FILES: &[(&str, &[u8])] = &[
     ("icons/app-window.svg", include_bytes!("../assets/icons/app-window.svg")),
+    ("icons/git-fork.svg", include_bytes!("../assets/icons/git-fork.svg")),
+    ("icons/file.svg", include_bytes!("../assets/icons/file.svg")),
+    ("icons/lock.svg", include_bytes!("../assets/icons/lock.svg")),
+    ("icons/graduation-cap.svg", include_bytes!("../assets/icons/graduation-cap.svg")),
     ("icons/minus.svg", include_bytes!("../assets/icons/minus.svg")),
     ("icons/key-round.svg", include_bytes!("../assets/icons/key-round.svg")),
     ("icons/puzzle.svg", include_bytes!("../assets/icons/puzzle.svg")),

@@ -245,6 +245,7 @@ mod tests {
             ("cmd-shift-g", None),
             ("ctrl-cmd-m", None),
             ("cmd-shift-b", None),
+            ("cmd-alt-b", None),
             ("cmd-f", None),
             ("cmd-=", None),
             ("cmd-+", None),

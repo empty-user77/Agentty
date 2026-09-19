@@ -74,6 +74,14 @@ pub fn order_front_regardless(window: Id) {
     }
 }
 
+/// Sends the window behind every other one (the debug driver paints a hidden window and steps back).
+pub fn order_back(window: Id) {
+    unsafe {
+        let nil: Id = std::ptr::null_mut();
+        let () = msg_send![window, orderBack: nil];
+    }
+}
+
 pub fn window_number(window: Id) -> isize {
     unsafe { msg_send![window, windowNumber] }
 }

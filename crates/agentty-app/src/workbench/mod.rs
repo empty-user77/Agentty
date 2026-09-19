@@ -9,15 +9,18 @@ mod chrome;
 mod confirm;
 mod context_menu;
 mod drop_split;
+mod files_panel;
 mod find;
 pub mod flow;
 mod guide;
 mod harness;
+mod hud_settings;
 mod idea;
 mod install_hint;
 mod layout;
 pub mod mini;
 mod notices;
+mod onboarding;
 mod palette;
 pub mod panes;
 mod persist;
@@ -27,7 +30,9 @@ mod plugin_panel;
 mod plugins_page;
 mod processes;
 mod prompt_dialog;
+mod proxy_page;
 pub mod resume_hint;
+mod servers;
 mod service_status;
 mod session_viewer;
 mod settings_page;
@@ -35,6 +40,7 @@ mod status_menus;
 mod system_page;
 mod tab_menu;
 pub mod update;
+pub mod worktrees;
 
 use crate::agent_signal::AgentSignal;
 use crate::i18n::{t, tf};
@@ -83,6 +89,7 @@ actions!(
         OpenGit,
         OpenPlugins,
         ToggleBrowser,
+        ToggleFiles,
         FindInTerminal,
         ZoomIn,
         ZoomOut,
@@ -162,6 +169,8 @@ pub enum Page {
     Flow,
     Usage,
     Processes,
+    /// Monitoring → the capture proxy: what tabs talk to.
+    Proxy,
     Settings,
     Extensions,
     Plugins,
@@ -173,6 +182,10 @@ pub enum Page {
 pub enum LaunchTarget {
     NewTab,
     NewWorkspace,
+    /// A split of the current tab, right of / below the active pane. Goes through the same launch
+    /// path as a tab, so an agent started there gets its own working tree when the project is taken.
+    SplitRight,
+    SplitDown,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -208,6 +221,8 @@ pub struct Workbench {
     sidebar_open: bool,
     page: Option<Page>,
     launcher_open: bool,
+    /// Where the + menu opens what is picked: a tab (default each time it opens) or a split.
+    launcher_target: LaunchTarget,
     workspace_menu: Option<u64>,
     picker: Option<picker::Picker>,
     palette: Option<palette::Palette>,
@@ -219,6 +234,13 @@ pub struct Workbench {
     pane_subscriptions: HashMap<EntityId, Subscription>,
     sidebar_resizing: bool,
     browser_resizing: bool,
+    /// Files panel docked at the right edge (folder structure, changes, working trees).
+    files_panel: Option<files_panel::FilesPanel>,
+    files_resizing: bool,
+    /// Dragging the handle under the files panel's working-tree list: (pointer y, height) at the start.
+    files_trees_drag: Option<(f32, f32)>,
+    /// Window width at the last render, for sizing the panels docked at the right.
+    viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
     split_drag: Option<layout::SplitDrag>,
     split_bounds: Rc<RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>>,
@@ -275,8 +297,10 @@ pub struct Workbench {
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
     find_bar: Option<find::FindBar>,
-    /// Listening TCP ports by pane id.
-    ports: HashMap<u64, Vec<u16>>,
+    /// Panes already told that they share a working tree with another agent (once each).
+    shared_tree_warned: std::collections::HashSet<u64>,
+    /// Local servers started in panes: ports, auto-open, stopping them with their pane.
+    servers: servers::ServerWatch,
     installed_fonts: Option<Vec<String>>,
     /// Settings: the "more fonts" list of every installed family is expanded.
     font_list_open: bool,
@@ -313,6 +337,10 @@ pub struct Workbench {
     /// "Pick a pane to connect": the pane the link starts from.
     connect_pick: Option<u64>,
     plugins_page: plugins_page::PluginsPage,
+    /// First-run onboarding (dialog steps, then the follow-along tour card).
+    onboarding: Option<onboarding::Onboarding>,
+    /// Monitoring → Proxy: the capture table and its filter.
+    proxy: proxy_page::ProxyPage,
     next_id: u64,
 }
 
@@ -330,6 +358,12 @@ impl Workbench {
                 this.search_session_contents(cx);
             }
         });
+        let proxy_filter = cx.new(|cx| TextInput::localized("", "proxy.filter", window, cx));
+        let proxy_subscription = cx.subscribe(&proxy_filter, |_, _, event: &crate::text_input::TextInputEvent, cx| {
+            if matches!(event, crate::text_input::TextInputEvent::Changed) {
+                cx.notify();
+            }
+        });
         let mut this = Self {
             slot,
             closed: false,
@@ -342,6 +376,7 @@ impl Workbench {
             sidebar_open: true,
             page: None,
             launcher_open: false,
+            launcher_target: LaunchTarget::NewTab,
             workspace_menu: None,
             picker: None,
             palette: None,
@@ -353,6 +388,10 @@ impl Workbench {
             pane_subscriptions: HashMap::new(),
             sidebar_resizing: false,
             browser_resizing: false,
+            files_panel: None,
+            files_resizing: false,
+            files_trees_drag: None,
+            viewport_width: 1400.,
             browser_home_input: None,
             split_drag: None,
             split_bounds: Rc::default(),
@@ -397,7 +436,8 @@ impl Workbench {
             browser: None,
             browser_request: None,
             find_bar: None,
-            ports: HashMap::new(),
+            shared_tree_warned: Default::default(),
+            servers: Default::default(),
             installed_fonts: None,
             font_list_open: false,
             sessions_scroll: gpui::UniformListScrollHandle::new(),
@@ -426,40 +466,19 @@ impl Workbench {
             install_hint: None,
             connect_pick: None,
             plugins_page: Default::default(),
+            onboarding: None,
+            proxy: proxy_page::ProxyPage::new(proxy_filter, proxy_subscription),
             next_id: 1,
         };
         this.restore(window, cx);
         this.first_run_system_check(cx);
+        this.first_run_onboarding(cx);
         this.refresh_sessions(cx);
         this.detect_agents(cx);
         this.start_update_checks(cx);
         this.start_service_status_checks(cx);
         this.start_account_usage(cx);
-        // Listening ports per pane (dev servers), shown in the workspace list.
-        cx.spawn(async move |this, cx| loop {
-            let Ok(roots) = this.read_with(cx, |this, cx| {
-                this.all_panes().iter().filter_map(|p| Some((p.read(cx).pane_id, p.read(cx).shell_pid()?))).collect::<Vec<_>>()
-            }) else {
-                break;
-            };
-            let pids: Vec<u32> = roots.iter().map(|(_, pid)| *pid).collect();
-            let found = cx.background_spawn(async move { crate::procinfo::listening_ports(&pids) }).await;
-            let ports: HashMap<u64, Vec<u16>> =
-                roots.into_iter().filter_map(|(pane, pid)| Some((pane, found.get(&pid)?.clone()))).collect();
-            if this
-                .update(cx, |this, cx| {
-                    if this.ports != ports {
-                        this.ports = ports;
-                        cx.notify();
-                    }
-                })
-                .is_err()
-            {
-                break;
-            }
-            cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
-        })
-        .detach();
+        this.start_server_watch(cx);
         // New sessions (for the resume bar and the sessions list) show up without a manual refresh.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(std::time::Duration::from_secs(120)).await;
@@ -563,6 +582,7 @@ impl Workbench {
             TerminalEvent::TitleChanged | TerminalEvent::StatusChanged => {
                 // A shell that changed folder may have entered a project with an agent harness.
                 this.watch_harness(&pane, cx);
+                this.warn_about_shared_tree(&pane, cx);
                 cx.notify();
             }
             TerminalEvent::OpenLink(url) => this.open_link(url.clone(), cx),
@@ -610,6 +630,8 @@ impl Workbench {
     }
 
     fn remove_pane(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+        self.stop_servers_of(pane, cx);
+        self.onboarding_event(onboarding::TourEvent::PaneClosed, cx);
         if self.connect_pick == Some(pane.read(cx).pane_id) {
             self.connect_pick = None;
         }
@@ -825,6 +847,7 @@ impl Workbench {
 
     fn split(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
         let Some(active) = self.active_pane() else { return };
+        self.onboarding_event(onboarding::TourEvent::Split, cx);
         // New panes open where the user last was, following `cd`.
         let cwd = active.read(cx).current_dir();
         self.split_with(LaunchSpec::new(PaneKind::Shell, cwd), axis, window, cx);
@@ -874,6 +897,8 @@ impl Workbench {
         let ask = match target {
             LaunchTarget::NewTab => settings(cx).ask_directory_for_tabs || self.workspaces.is_empty() && settings(cx).ask_directory,
             LaunchTarget::NewWorkspace => settings(cx).ask_directory,
+            // A split belongs to the tab it is made in: it starts where that tab is.
+            LaunchTarget::SplitRight | LaunchTarget::SplitDown => false,
         };
         if ask {
             self.open_picker(choice, target, window, cx);
@@ -891,11 +916,31 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        update_settings(cx, |s| s.remember_dir(cwd.clone()));
+        if self.launch_in_own_tree(&choice, target, &cwd, window, cx) {
+            return;
+        }
+        self.launch_in(choice, target, cwd, None, window, cx);
+    }
+
+    /// Starts `choice` in `cwd`. `project` is the folder to remember instead, when `cwd` is a working
+    /// tree made for this session (recent folders list projects, not their session trees).
+    fn launch_in(
+        &mut self,
+        choice: crate::launch::LaunchChoice,
+        target: LaunchTarget,
+        cwd: PathBuf,
+        project: Option<&std::path::Path>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let remembered = project.map(std::path::Path::to_path_buf).unwrap_or_else(|| cwd.clone());
+        update_settings(cx, |s| s.remember_dir(remembered));
         let spec = choice.spec(cwd);
         match target {
             LaunchTarget::NewTab => self.open_tab(spec, window, cx),
             LaunchTarget::NewWorkspace => self.create_workspace(spec, window, cx),
+            LaunchTarget::SplitRight => self.split_with(spec, Axis::Horizontal, window, cx),
+            LaunchTarget::SplitDown => self.split_with(spec, Axis::Vertical, window, cx),
         }
     }
 
@@ -1277,14 +1322,39 @@ impl Workbench {
 
     fn on_root_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.pressed_button != Some(MouseButton::Left) {
-            if self.sidebar_resizing || self.browser_resizing || self.split_drag.is_some() || self.flow.is_dragging() {
+            if self.sidebar_resizing
+                || self.browser_resizing
+                || self.files_resizing
+                || self.files_trees_drag.is_some()
+                || self.split_drag.is_some()
+                || self.flow.is_dragging()
+            {
                 self.end_drags(cx);
             }
             return;
         }
-        if self.browser_resizing {
+        if let Some((start_y, start_height)) = self.files_trees_drag {
+            // Down makes the working-tree list taller; `trees_height` keeps it within its rows.
+            let height = (start_height + f32::from(event.position.y) - start_y).max(40.);
+            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
+                store.settings.files_panel_trees_height = height
+            });
+            cx.notify();
+        } else if self.files_resizing {
+            // The files panel is the last column: its splitter sits just left of it.
             let viewport = f32::from(window.viewport_size().width);
-            // The splitter sits just left of the panel.
+            let width = (viewport - f32::from(event.position.x) - 2.5)
+                .clamp(files_panel::MIN_WIDTH, (viewport - 420.0).max(files_panel::MIN_WIDTH));
+            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
+                store.settings.files_panel_width = width
+            });
+            cx.notify();
+        } else if self.browser_resizing {
+            // The splitter sits just left of the panel; the plugin and files panels may sit right of it.
+            let shown = self.docked_widths(cx).1;
+            let right =
+                self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH) + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
+            let viewport = f32::from(window.viewport_size().width) - right;
             let width = (viewport - f32::from(event.position.x) - 2.5).clamp(320.0, (viewport - 420.0).max(320.0));
             gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.browser.width = width);
             cx.notify();
@@ -1301,9 +1371,11 @@ impl Workbench {
     }
 
     fn end_drags(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_resizing || self.browser_resizing {
+        if self.sidebar_resizing || self.browser_resizing || self.files_resizing || self.files_trees_drag.is_some() {
             self.sidebar_resizing = false;
             self.browser_resizing = false;
+            self.files_resizing = false;
+            self.files_trees_drag = None;
             update_settings(cx, |_| {}); // persist the final width
         }
         if self.split_drag.take().is_some() {
@@ -1316,11 +1388,14 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_active = window.is_window_active();
+        self.viewport_width = f32::from(window.viewport_size().width);
         if let Some(git) = self.git.clone().filter(|_| self.page != Some(Page::Git)) {
             git.update(cx, |v, _| v.set_visible(false));
         }
         self.prepare_browser(window, cx);
         self.prepare_plugin_panel(window, cx);
+        self.prepare_files_panel(cx);
+        self.advance_tour(cx);
         self.prepare_plugins_page(window, cx);
         self.broadcast_plugin_context(window, cx);
         self.check_settings_toast(cx);
@@ -1340,6 +1415,7 @@ impl Render for Workbench {
                 gpui::AnyView::from(usage).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
             Some(Page::Processes) => self.render_processes(cx).into_any_element(),
+            Some(Page::Proxy) => self.render_proxy_page(cx).into_any_element(),
             Some(Page::Settings) => self.render_settings(window, cx).into_any_element(),
             Some(Page::Extensions) => gpui::AnyView::from(self.extensions_view(window, cx))
                 .cached(gpui::StyleRefinement::default().size_full())
@@ -1432,6 +1508,7 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenGit, _, cx| this.open_page(Page::Git, cx)))
             .on_action(cx.listener(|this, _: &OpenPlugins, _, cx| this.open_page(Page::Plugins, cx)))
             .on_action(cx.listener(|this, _: &ToggleBrowser, window, cx| this.toggle_browser(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleFiles, _, cx| this.toggle_files_panel(cx)))
             .on_action(cx.listener(|this, _: &FindInTerminal, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|_, _: &ZoomIn, _, cx| update_settings(cx, |s| s.font_size = (s.font_size + 1.).min(32.))))
             .on_action(cx.listener(|_, _: &ZoomOut, _, cx| update_settings(cx, |s| s.font_size = (s.font_size - 1.).max(8.))))
@@ -1508,7 +1585,12 @@ impl Render for Workbench {
                     if this.flow.is_dragging() {
                         this.finish_flow_drag(cx);
                     }
-                    if this.sidebar_resizing || this.browser_resizing || this.split_drag.is_some() {
+                    if this.sidebar_resizing
+                        || this.browser_resizing
+                        || this.files_resizing
+                        || this.files_trees_drag.is_some()
+                        || this.split_drag.is_some()
+                    {
                         this.end_drags(cx);
                     }
                 }),
@@ -1546,6 +1628,8 @@ impl Render for Workbench {
                                     d.children(self.render_browser_splitter(cx))
                                         .children(self.render_browser(cx))
                                         .children(self.render_plugin_panel(cx))
+                                        .children(self.render_files_splitter(cx))
+                                        .children(self.render_files_panel(cx))
                                 },
                             ))
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
@@ -1572,7 +1656,8 @@ impl Render for Workbench {
             .children(self.render_close_confirm(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_harness_dialog(cx))
-            .children(self.render_toast())
+            .children(self.render_onboarding(cx))
+            .children(self.render_toast(cx))
     }
 }
 
@@ -1617,10 +1702,15 @@ impl Workbench {
     }
 
     pub(super) fn show_toast(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.show_toast_for(text, 1800, cx);
+    }
+
+    /// A toast that stays for `millis` (something worth reading, not just a confirmation).
+    pub(super) fn show_toast_for(&mut self, text: impl Into<SharedString>, millis: u64, cx: &mut Context<Self>) {
         let id = self.toast.as_ref().map_or(1, |(_, id)| id + 1);
         self.toast = Some((text.into(), id));
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
+            cx.background_executor().timer(std::time::Duration::from_millis(millis)).await;
             let _ = this.update(cx, |this, cx| {
                 if this.toast.as_ref().is_some_and(|(_, current)| *current == id) {
                     this.toast = None;
@@ -1631,10 +1721,20 @@ impl Workbench {
         .detach();
     }
 
-    fn render_toast(&self) -> Option<impl IntoElement> {
+    fn render_toast(&self, cx: &gpui::App) -> Option<impl IntoElement> {
         let (text, id) = self.toast.clone()?;
+        // Left of the panels docked at the right: the browser is a native view, and anything drawn
+        // under it (a toast about a server that just stopped, say) would never be seen.
+        let docked = if self.page.is_none() {
+            let (browser, files) = self.docked_widths(cx);
+            self.browser.as_ref().map_or(0., |_| browser + 5.)
+                + self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
+                + self.files_panel.as_ref().map_or(0., |_| files + 5.)
+        } else {
+            0.
+        };
         Some(
-            div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).right(px(16.)).child(crate::ui::fade_in(
+            div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).right(px(16. + docked)).child(crate::ui::fade_in(
                 SharedString::from(format!("toast-{id}")),
                 div()
                     .flex()
@@ -1688,6 +1788,7 @@ impl Workbench {
             Page::Flow => "flow",
             Page::Usage => "usage",
             Page::Processes => "processes",
+            Page::Proxy => "proxy",
             Page::Settings => "settings",
             Page::Extensions => "extensions",
             Page::Plugins => "plugins",
@@ -1866,11 +1967,68 @@ impl Workbench {
                 })
                 .detach();
             }
+            // A window covered by others does not paint, and a pane only starts on its first paint:
+            // come to the front for a moment (no keyboard focus), then step back behind everything.
+            "paint" => {
+                if let Some(ns) = crate::native::ns_window(window) {
+                    crate::native::order_front_regardless(ns);
+                    window.refresh();
+                    cx.spawn(async move |_, cx| {
+                        cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                        crate::native::order_back(ns);
+                    })
+                    .detach();
+                }
+            }
+            "onboarding" => self.open_onboarding(cx),
+            "tour" => {
+                let state = self.debug_tour(argument, window, cx);
+                eprintln!("tour: {state}");
+            }
+            // One JSON line on stderr: what the new panels and watchers think is going on.
+            "probe" => {
+                let panes: Vec<serde_json::Value> = self
+                    .all_panes()
+                    .iter()
+                    .map(|p| {
+                        let v = p.read(cx);
+                        serde_json::json!({ "id": v.pane_id, "tool": v.tool_id(), "cwd": v.display_cwd(), "worktree": v.worktree, "branch": v.git_branch })
+                    })
+                    .collect();
+                let listeners: Vec<(u64, Vec<u16>)> =
+                    self.servers.listeners.iter().map(|(pane, l)| (*pane, l.iter().map(|l| l.port).collect())).collect();
+                let records: Vec<serde_json::Value> = crate::capture::records()
+                    .iter()
+                    .map(|r| serde_json::json!({ "pane": r.pane, "method": r.method, "endpoint": r.endpoint(), "path": r.path, "status": r.status, "sent": r.sent, "received": r.received, "open": r.duration_ms.is_none(), "error": r.error }))
+                    .collect();
+                eprintln!(
+                    "probe: {}",
+                    serde_json::json!({
+                        "panes": panes,
+                        "listeners": listeners,
+                        "browser": self.browser.as_ref().and_then(|b| b.current_url()),
+                        "files": self.files_panel.as_ref().map(|p| p.debug_state()),
+                        "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
+                        "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
+                    })
+                );
+            }
+            "capture" => match argument {
+                "stop" => crate::capture::stop(),
+                _ => {
+                    let _ = crate::capture::start();
+                }
+            },
+            "files" => match argument {
+                "" => self.toggle_files_panel(cx),
+                path => self.open_files_panel(Some(PathBuf::from(path)), cx),
+            },
             "page" => {
                 let page = match argument {
                     "flow" => Some(Page::Flow),
                     "usage" => Some(Page::Usage),
                     "processes" => Some(Page::Processes),
+                    "proxy" => Some(Page::Proxy),
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
                     "plugins" => Some(Page::Plugins),
@@ -2238,6 +2396,17 @@ impl Workbench {
             "workspace" => {
                 let (name, dir) = argument.split_once(' ').map(|(k, d)| (k, PathBuf::from(d))).unwrap_or((argument, home_dir()));
                 self.create_workspace(LaunchSpec::new(kind(name), dir), window, cx)
+            }
+            // Through the same path as the + menu (a session tree of its own when the project is taken).
+            "launch-agent" | "launch-split" | "launch-split-down" | "launch-workspace" => {
+                let (name, dir) = argument.split_once(' ').map(|(k, d)| (k, PathBuf::from(d))).unwrap_or((argument, home_dir()));
+                let target = match command {
+                    "launch-split" => LaunchTarget::SplitRight,
+                    "launch-split-down" => LaunchTarget::SplitDown,
+                    "launch-workspace" => LaunchTarget::NewWorkspace,
+                    _ => LaunchTarget::NewTab,
+                };
+                self.launch(kind(name).into(), target, dir, window, cx)
             }
             "picker" => self.open_picker(kind(argument).into(), LaunchTarget::NewTab, window, cx),
             "split" => self.split(if argument == "down" { Axis::Vertical } else { Axis::Horizontal }, window, cx),

@@ -12,12 +12,14 @@ mod branch_picker;
 mod brand;
 mod browser_cli;
 mod browser_mcp;
+mod capture;
 mod debug;
 mod extensions_view;
 // AppKit / WebKit on macOS; the same API from `platform/fallback/` on Windows and Linux.
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/file_drop.rs")]
 mod file_drop;
 mod git_view;
+mod hud;
 mod i18n;
 mod idea_view;
 mod instance;
@@ -257,11 +259,12 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action(t(cx, "page.git"), workbench::OpenGit),
                 MenuItem::action(t(cx, "page.flow"), workbench::OpenFlow),
-                MenuItem::action(t(cx, "page.usage"), workbench::OpenUsage),
+                MenuItem::action(t(cx, "page.monitoring"), workbench::OpenUsage),
                 MenuItem::action(t(cx, "page.extensions"), workbench::OpenExtensions),
                 MenuItem::action(t(cx, "page.plugins"), workbench::OpenPlugins),
                 MenuItem::separator(),
                 MenuItem::action(t(cx, "menu.browser"), workbench::ToggleBrowser),
+                MenuItem::action(t(cx, "files.title"), workbench::ToggleFiles),
                 MenuItem::action(t(cx, "menu.zoom_pane"), workbench::ToggleZoom),
                 MenuItem::separator(),
                 MenuItem::action(t(cx, "menu.font_bigger"), workbench::ZoomIn),
@@ -354,6 +357,7 @@ fn bind_keys(cx: &mut App) {
         key("cmd-shift-g", OpenGit, None),
         key("ctrl-cmd-m", ToggleMini, None),
         key("cmd-shift-b", ToggleBrowser, None),
+        key("cmd-alt-b", ToggleFiles, None),
         key("cmd-f", FindInTerminal, None),
         key("cmd-=", ZoomIn, None),
         key("cmd-+", ZoomIn, None),
