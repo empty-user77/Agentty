@@ -77,6 +77,11 @@ pub fn capture_own_window(_: &Path) -> Result<()> {
     anyhow::bail!("snapshots are only supported on macOS")
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn capture_window(_: u32, _: &Path) -> Result<()> {
+    anyhow::bail!("snapshots are only supported on macOS")
+}
+
 /// `\n` → CR, `\e` → ESC, `\xNN` → byte, for typing into panes.
 pub fn unescape(text: &str) -> String {
     let mut out = String::new();

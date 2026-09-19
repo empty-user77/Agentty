@@ -8,6 +8,10 @@
 #   ./scripts/build-dmg.sh publish    # prod + upload to GitHub release feed (draft)
 #                                     # AGENTTY_RELEASE_NOTES=<file.md> sets the (English) release notes
 #
+# The Windows installer and Linux packages are built by the "Release packages" workflow; fetch them into dist/ first
+# (scripts/fetch-release-packages.sh X.Y.Z). They go into SHA256SUMS and the release with the DMG. `publish` refuses to
+# run without all four unless AGENTTY_MAC_ONLY=1 (a macOS-only release); dev / prod include whichever exist.
+#
 # Prod credentials (never committed) come from the environment or `.env.agentty-prod`:
 #   AGENTTY_IDENTITY        "NAME (TEAMID)"  (the part after "Developer ID Application: ")
 #   AGENTTY_TEAM_ID         10-character Apple team id
@@ -77,6 +81,14 @@ VERSION="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json
 BUILD="$(date +%Y%m%d%H%M%S)"
 [[ -n "$VERSION" ]] || die "Could not read version"
 log "Version $VERSION (build $BUILD, $ARCH)"
+PLATFORM_NAMES=("$APP_NAME-$VERSION-windows-x64-setup.exe" "$APP_NAME-$VERSION-windows-x64-setup.zip"
+  "$APP_NAME-$VERSION-linux-amd64.deb" "$APP_NAME-$VERSION-linux-x86_64.rpm")
+# Check before the long build and notarization, not after.
+if [[ "$PUBLISH" == "true" && "${AGENTTY_MAC_ONLY:-}" != "1" ]]; then
+  for name in "${PLATFORM_NAMES[@]}"; do
+    [[ -s "$DIST/$name" ]] || die "dist/$name missing — run scripts/fetch-release-packages.sh $VERSION (or AGENTTY_MAC_ONLY=1 for a macOS-only release)"
+  done
+fi
 
 # ─── 3. Compile ───
 log "cargo build --release"
@@ -185,13 +197,20 @@ fi
 ZIP="$DIST/$APP_NAME-$VERSION-$ARCH.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
-(cd "$DIST" && shasum -a 256 "$(basename "$DMG")" "$(basename "$ZIP")" > "$APP_NAME-$VERSION-SHA256SUMS.txt")
+# Windows and Linux files from the release-packages workflow (scripts/fetch-release-packages.sh).
+PLATFORM_FILES=()
+MISSING=()
+for name in "${PLATFORM_NAMES[@]}"; do
+  if [[ -s "$DIST/$name" ]]; then PLATFORM_FILES+=("$DIST/$name"); else MISSING+=("$name"); fi
+done
+(( ${#MISSING[@]} == 0 )) || warn "not in this release: ${MISSING[*]}"
+(cd "$DIST" && shasum -a 256 "$(basename "$DMG")" "$(basename "$ZIP")" ${PLATFORM_FILES[@]+"${PLATFORM_FILES[@]##*/}"} > "$APP_NAME-$VERSION-SHA256SUMS.txt")
 ok "Checksums: $DIST/$APP_NAME-$VERSION-SHA256SUMS.txt"
 
 # ─── 9. Publish (draft) ───
 if [[ "$PUBLISH" == "true" ]]; then
   TAG="v$VERSION"
-  for asset in "$DMG" "$ZIP"; do
+  for asset in "$DMG" "$ZIP" ${PLATFORM_FILES[@]+"${PLATFORM_FILES[@]}"}; do
     [[ "$(basename "$asset")" == *"$VERSION"* ]] || die "refusing to upload $asset: name lacks version $VERSION"
   done
   if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
@@ -206,7 +225,8 @@ if [[ "$PUBLISH" == "true" ]]; then
     gh release edit "$TAG" --repo "$RELEASE_REPO" --notes-file "$AGENTTY_RELEASE_NOTES" >/dev/null
     ok "Release notes set from $AGENTTY_RELEASE_NOTES"
   fi
-  gh release upload "$TAG" --repo "$RELEASE_REPO" --clobber "$DMG" "$ZIP" "$DIST/$APP_NAME-$VERSION-SHA256SUMS.txt"
+  gh release upload "$TAG" --repo "$RELEASE_REPO" --clobber "$DMG" "$ZIP" ${PLATFORM_FILES[@]+"${PLATFORM_FILES[@]}"} \
+    "$DIST/$APP_NAME-$VERSION-SHA256SUMS.txt"
   ok "Uploaded to https://github.com/$RELEASE_REPO/releases (draft — review notes, then publish)"
 fi
 

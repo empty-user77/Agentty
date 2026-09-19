@@ -1,0 +1,91 @@
+# nfpm config for the .deb and .rpm packages (x86_64). Used by scripts/build-linux-packages.sh, which sets
+# VERSION and builds target/release/agentty first. Built on AlmaLinux 9 (glibc 2.34), so the packages run on
+# RHEL / Rocky / Alma 9+, Fedora, Debian 12+ and Ubuntu 22.04+.
+name: agentty
+arch: amd64
+platform: linux
+version: ${VERSION}
+release: 1
+section: devel
+priority: optional
+maintainer: Agentty contributors <yongyongdev@gmail.com>
+vendor: Agentty contributors
+homepage: https://www.agentty.run
+license: GPL-3.0-or-later
+description: |-
+  Multi-agent AI terminal.
+  Runs Claude Code, Codex and other coding agents side by side in terminal panes, with sessions, usage,
+  Git, plugins and connectors.
+
+contents:
+  - src: target/release/agentty
+    dst: /usr/bin/agentty
+    file_info:
+      mode: 0755
+  - src: packaging/linux/run.agentty.Agentty.desktop
+    dst: /usr/share/applications/run.agentty.Agentty.desktop
+    file_info:
+      mode: 0644
+  - src: crates/agentty-app/assets/brand/logo-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/agentty.png
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/agentty/LICENSE
+    file_info:
+      mode: 0644
+  - src: THIRD_PARTY_NOTICES.md
+    dst: /usr/share/doc/agentty/THIRD_PARTY_NOTICES.md
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  postremove: packaging/linux/postinstall.sh
+
+# The libraries the binary links or loads at run time (GPUI: xkbcommon, X11/xcb, Wayland, Vulkan, fontconfig).
+# The install check in the release workflow installs each package in a clean container and fails when `ldd`
+# reports a missing library.
+depends:
+  - libc6
+  - libgcc-s1
+  - libxkbcommon0
+  - libxkbcommon-x11-0
+  - libxcb1
+  - libx11-xcb1
+  - libwayland-client0
+  - libvulkan1
+  - libfontconfig1
+  - libfreetype6
+  - libzstd1
+recommends:
+  - mesa-vulkan-drivers
+  - git
+  - xdg-utils
+  - libnotify-bin
+  - libsecret-tools
+
+overrides:
+  rpm:
+    depends:
+      - glibc
+      - libgcc
+      - libxkbcommon
+      - libxkbcommon-x11
+      - libxcb
+      - libX11-xcb
+      - libwayland-client
+      - vulkan-loader
+      - fontconfig
+      - freetype
+      - libzstd
+    recommends:
+      - mesa-vulkan-drivers
+      - git
+      - xdg-utils
+      - libnotify
+      - libsecret
+
+rpm:
+  group: Development/Tools
+  summary: Multi-agent AI terminal

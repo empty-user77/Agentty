@@ -19,6 +19,11 @@ All notable changes to this project are documented here. The format follows
 - `claude` or `codex` typed into a terminal in a project where another agent is at work starts in a working tree of
   its own, like sessions opened from the + menu.
 - Pages (Settings, Monitoring, …) have a home tab first that goes back to the start page.
+- Releases include a Windows installer (`Agentty-X.Y.Z-windows-x64-setup.exe`, also as a `.zip`) for Windows 10 1809
+  and later, and Linux packages for x86_64: `.deb` (Debian 12+, Ubuntu 22.04+) and `.rpm` (RHEL 9+, Fedora). The
+  installer is per user and needs no administrator rights.
+- Windows: updates install in place — Agentty downloads the new installer, checks it against the release checksums,
+  runs it silently and restarts. On Linux, Agentty announces new versions and links to the packages.
 
 ### Changed
 - API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);

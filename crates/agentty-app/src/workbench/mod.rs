@@ -2121,8 +2121,8 @@ impl Workbench {
                         version: "0.2.0".into(),
                         notes: "- Faster startup\n- Git page".into(),
                         page_url: "https://github.com/empty-user77/agentty-releases/releases".into(),
-                        dmg_url: None,
-                        dmg_name: None,
+                        installer_url: None,
+                        installer_name: None,
                         checksums_url: None,
                     });
                     self.updates.popup = true;

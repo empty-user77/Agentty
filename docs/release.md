@@ -1,4 +1,4 @@
-# Building and releasing Agentty (macOS)
+# Building and releasing Agentty
 
 ```sh
 ./scripts/build-dmg.sh           # dev: local signature, no notarization → dist/Agentty-<ver>-arm64.dmg
@@ -7,8 +7,34 @@
 ./scripts/bump-version.sh patch  # 0.1.0 → 0.1.1 (minor | major | x.y.z)
 ./scripts/release-preflight.sh 0.1.3        # before bumping/tagging: repo, gh, CI, credentials, certificate, tools
 ./scripts/verify-release.sh 0.1.3           # after the build: signature, notarization, checksums, GA, draft assets
-./scripts/verify-release.sh 0.1.3 --published  # after publishing: update feed and downloaded DMG checksum
+./scripts/verify-release.sh 0.1.3 --published  # after publishing: update feed and downloaded installers' checksums
+./scripts/fetch-release-packages.sh 0.1.3   # after tagging: Windows installer and Linux packages from the workflow
+./scripts/build-linux-packages.sh --check   # local: .deb and .rpm in Docker, then install each in a clean container
+pwsh scripts/package-windows.ps1 -Installer # on Windows: zip + Inno Setup installer
 ```
+
+## Windows installer and Linux packages
+
+Each release also carries, built by the **Release packages** workflow (`.github/workflows/release-packages.yml`, on
+`v*` tag pushes and by hand with `gh workflow run release-packages.yml -f ref=<ref>`):
+
+| File | Built by | On |
+|---|---|---|
+| `Agentty-X.Y.Z-windows-x64-setup.exe` | `scripts/package-windows.ps1 -Installer` (Inno Setup, `packaging/windows/agentty.iss`) | self-hosted Windows PC |
+| `Agentty-X.Y.Z-windows-x64-setup.zip` | the same installer zipped, for browsers that block unsigned `.exe` downloads | self-hosted Windows PC |
+| `Agentty-X.Y.Z-linux-amd64.deb`, `Agentty-X.Y.Z-linux-x86_64.rpm` | `scripts/build-linux-packages.sh` (nfpm, `packaging/linux/nfpm.yaml`) | the Mac, in an x86_64 AlmaLinux 9 container |
+
+- The Windows PC needs Inno Setup 6 (`winget install JRSoftware.InnoSetup`); without it the job fails and says so. The
+  installer is per user (`PrivilegesRequired=lowest`, `%LOCALAPPDATA%\Programs\Agentty`), requires Windows 10 1809
+  (`MinVersion=10.0.17763`) and registers what `install.ps1` does. It is not code-signed.
+- The Linux build runs under emulation (`--platform linux/amd64`), so it is slow; named volumes keep the toolchain and
+  `target/`. AlmaLinux 9's glibc 2.34 makes the binary run on RHEL 9, Debian 12, Ubuntu 22.04 and newer. nfpm is
+  downloaded at a pinned version and checked against a pinned SHA-256. `--check` installs each package with `apt` /
+  `dnf` in a clean container and fails when a shared library is missing.
+- The workflow uploads the files as run artifacts only; it holds no token for `agentty-releases`.
+  `scripts/fetch-release-packages.sh X.Y.Z` downloads them into `dist/`, and `build-dmg.sh publish` puts them into
+  `SHA256SUMS.txt` and the draft release. `publish` stops before building if one is missing, unless
+  `AGENTTY_MAC_ONLY=1` (a macOS-only release, only with the maintainer's OK).
 
 ## What `prod` does
 
@@ -44,7 +70,7 @@ security find-identity -v -p codesigning | grep "Developer ID Application"
 ## Publishing
 
 `publish` requires an authenticated `gh` CLI. It creates (or refreshes) a **draft** release `v<version>` on
-`empty-user77/agentty-releases` with the DMG, zip and checksums. `AGENTTY_RELEASE_NOTES=<file.md>` sets the release
+`empty-user77/agentty-releases` with the DMG, zip, Windows and Linux files and checksums. `AGENTTY_RELEASE_NOTES=<file.md>` sets the release
 notes. Review the draft on GitHub, then publish.
 
 **Release notes are always written in English.** The full procedure (version bump, changelog, tag, notes, draft,
@@ -83,3 +109,10 @@ Installing an update:
 3. Copies it next to the running bundle, quits, swaps the bundles and relaunches.
 
 Development builds (not running from `Agentty.app`) only check; "Install" opens the release page.
+
+On Windows, a copy installed by the setup program (or by `install.ps1` into the same folder) downloads
+`*-windows-x64-setup.exe` the same way — GitHub over HTTPS only, into a new temp folder of its own, verified against
+`*-SHA256SUMS.txt` — then starts it with `/SILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /RELAUNCH /WAITPID=<pid>` and
+quits. The installer waits for that process, renames an `agentty.exe` that other Agentty processes (MCP servers) still
+run instead of closing them, installs and starts the new version. Linux builds announce the update and open the
+release page; the packages are installed with the package manager.
