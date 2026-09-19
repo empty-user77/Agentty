@@ -1674,6 +1674,7 @@ impl Render for Workbench {
             .when_some(self.picker.as_ref().map(|_| ()), |d, _| d.child(self.render_picker(cx)))
             .when_some(self.palette.as_ref().map(|_| ()), |d, _| d.child(self.render_palette(cx)))
             .children(self.render_tab_menu(cx))
+            .children(self.render_tree_menu(cx))
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
             .children((!self.updates.popup).then(|| self.render_update_badge(cx)).flatten())
@@ -2045,6 +2046,7 @@ impl Workbench {
                     let _ = crate::capture::start();
                 }
             },
+            "tree-menu" => self.debug_tree_menu(argument.parse().unwrap_or(0), cx),
             "files" => match argument {
                 "" => self.toggle_files_panel(cx),
                 path => self.open_files_panel(Some(PathBuf::from(path)), cx),
