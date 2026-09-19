@@ -221,10 +221,15 @@ impl LaunchSpec {
                     // after it is read as another config file ("Invalid MCP configuration").
                     args.extend(["--mcp-config".into(), inline_or_file("browser-mcp.json", browser_mcp_config())]);
                 }
+                // What Agentty offers the agent (guide + skills), passed along, never written into its settings.
+                args.extend(crate::agent_guide::claude_args());
                 args.extend(["--settings".into(), inline_or_file("claude-settings.json", claude_hook_settings())]);
             }
             PaneKind::Codex => {
                 args.extend(["codex".into(), "-c".into(), codex_notify_override()]);
+                if let Some(guide) = crate::agent_guide::codex_override() {
+                    args.extend(["-c".into(), guide]);
+                }
                 if crate::settings::browser_tools_enabled() {
                     args.extend(["-c".into(), codex_browser_mcp_override()]);
                 }

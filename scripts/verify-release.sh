@@ -3,9 +3,10 @@
 # verify-release.sh <version> [--published] — independently verifies release artifacts instead of trusting build logs.
 #
 # Local: app version, code signature and team, notarization (spctl + stapler) of app and DMG, checksums, and that the
-# GA credentials were compiled in. Remote: the GitHub release exists with exactly the DMG, zip and checksums.
-# --published additionally requires the release to be public and the update feed (releases/latest) to serve it, and
-# checks the downloaded DMG against the published checksums. Never prints credential values.
+# GA credentials were compiled in, and the Windows installer (+ its zip) and Linux .deb / .rpm are present and listed in
+# the checksums. Remote: the GitHub release exists with exactly those files. AGENTTY_MAC_ONLY=1 verifies a macOS-only
+# release. --published additionally requires the release to be public and the update feed (releases/latest) to serve
+# it, and checks the downloaded installers against the published checksums. Never prints credential values.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,9 +29,14 @@ echo "Verifying Agentty v$VERSION"
 DMG="$(ls "$DIST"/Agentty-"$VERSION"-release*-arm64.dmg 2>/dev/null | tail -n 1)"
 ZIP="$DIST/Agentty-$VERSION-arm64.zip"
 SUMS="$DIST/Agentty-$VERSION-SHA256SUMS.txt"
+PLATFORM=()
+if [[ "${AGENTTY_MAC_ONLY:-}" != "1" ]]; then
+  PLATFORM=("$DIST/Agentty-$VERSION-windows-x64-setup.exe" "$DIST/Agentty-$VERSION-windows-x64-setup.zip"
+    "$DIST/Agentty-$VERSION-linux-amd64.deb" "$DIST/Agentty-$VERSION-linux-x86_64.rpm")
+fi
 
 # ─── Local artifacts ───
-for f in "$APP" "$DMG" "$ZIP" "$SUMS"; do
+for f in "$APP" "$DMG" "$ZIP" "$SUMS" ${PLATFORM[@]+"${PLATFORM[@]}"}; do
   [[ -n "$f" && -e "$f" ]] && pass "exists: ${f#$ROOT/}" || fail "missing: ${f:-dist/Agentty-$VERSION-release*-arm64.dmg}"
 done
 
@@ -55,6 +61,9 @@ fi
 
 if [[ -f "$SUMS" ]]; then
   (cd "$DIST" && shasum -a 256 -c "$(basename "$SUMS")" >/dev/null 2>&1) && pass "checksums match" || fail "checksum mismatch"
+  for f in ${PLATFORM[@]+"${PLATFORM[@]}"}; do
+    grep -q "  $(basename "$f")\$" "$SUMS" && pass "listed in checksums: $(basename "$f")" || fail "not in checksums: $(basename "$f")"
+  done
 fi
 
 BIN="$APP/Contents/MacOS/agentty"
@@ -81,7 +90,8 @@ if [[ -z "$json" ]]; then
 else
   draft="$(jq -r .isDraft <<<"$json")"
   assets="$(jq -r '[.assets[].name] | sort | join(" ")' <<<"$json")"
-  expected="$(printf "%s\n" "$(basename "${DMG:-none}")" "$(basename "$ZIP")" "$(basename "$SUMS")" | sort | tr '\n' ' ' | sed 's/ $//')"
+  expected="$(printf "%s\n" "$(basename "${DMG:-none}")" "$(basename "$ZIP")" "$(basename "$SUMS")" ${PLATFORM[@]+"${PLATFORM[@]##*/}"} \
+    | sort | tr '\n' ' ' | sed 's/ $//')"
   [[ "$assets" == "$expected" ]] && pass "release assets: $assets" || fail "release assets are '$assets', expected '$expected'"
   if [[ "$PUBLISHED" == "true" ]]; then
     [[ "$draft" == "false" ]] && pass "release is published" || fail "release is still a draft"
@@ -91,11 +101,11 @@ else
     [[ "$latest" == v* ]] || latest=""
     [[ "$latest" == "v$VERSION" ]] && pass "update feed serves v$VERSION" || fail "update feed serves '${latest:-nothing}'"
     tmp="$(mktemp -d)"
-    if gh release download "v$VERSION" -R "$RELEASE_REPO" -p "*.dmg" -p "*SHA256SUMS.txt" -D "$tmp" >/dev/null 2>&1 \
-      && (cd "$tmp" && shasum -a 256 -c --ignore-missing ./*SHA256SUMS.txt >/dev/null 2>&1); then
-      pass "downloaded DMG matches published checksums"
+    if gh release download "v$VERSION" -R "$RELEASE_REPO" -p "*.dmg" -p "*.exe" -p "*.deb" -p "*.rpm" -p "*SHA256SUMS.txt" \
+      -D "$tmp" >/dev/null 2>&1 && (cd "$tmp" && shasum -a 256 -c --ignore-missing ./*SHA256SUMS.txt >/dev/null 2>&1); then
+      pass "downloaded installers match published checksums"
     else
-      fail "downloaded DMG does not match published checksums"
+      fail "downloaded installers do not match published checksums"
     fi
     rm -rf "$tmp"
   else
