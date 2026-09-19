@@ -1,8 +1,10 @@
 name: CI
 
-# Pull requests only: pushes to main (releases included) are checked locally by the pre-push hook
-# and the release skill's checks.
+# Every pull request, and every push to main: merged pull requests are combined there, and only a
+# run on main shows that the combination still builds and passes on all three platforms.
 on:
+  push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -14,7 +16,7 @@ env:
 jobs:
   # All jobs run on the self-hosted Apple silicon Mac (check-linux in Docker there) except
   # check-windows, which runs on a self-hosted Windows PC. The repository is private, so only
-  # collaborators' pull requests reach them.
+  # collaborators' pushes and pull requests reach them.
   secrets:
     runs-on: [self-hosted, macOS, ARM64]
     steps:
@@ -25,8 +27,11 @@ jobs:
         run: python3 scripts/check-secrets.py --all
       - name: Security audit (forbidden files, personal data, weakened guarantees, guard wiring)
         run: python3 scripts/security-audit.py --all
-      - name: Scan commits in this pull request
-        run: python3 scripts/check-secrets.py --range "${{ github.event.pull_request.base.sha }}..${{ github.sha }}"
+      - name: Scan commits in this push / pull request
+        if: github.event_name == 'pull_request' || github.event.before != '0000000000000000000000000000000000000000'
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          python3 scripts/check-secrets.py --range "$base..${{ github.sha }}"
 
   check:
     needs: secrets
