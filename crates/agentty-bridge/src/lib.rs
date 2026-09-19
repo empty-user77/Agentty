@@ -8,6 +8,7 @@ pub mod claude_trust;
 pub mod codex;
 pub mod connectors;
 pub mod context;
+pub mod docker;
 pub mod extensions;
 pub mod fsutil;
 pub mod gemini;

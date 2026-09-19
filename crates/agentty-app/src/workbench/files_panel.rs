@@ -292,12 +292,13 @@ impl Workbench {
         let prefs = crate::settings::settings(cx);
         let sidebar = if self.sidebar_open { prefs.sidebar_width } else { 0. };
         let plugin = self.plugin_panel.as_ref().map_or(0., |_| super::plugin_panel::PANEL_WIDTH);
-        let room = self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - plugin;
+        let docker = if self.docker.open { super::docker_panel::PANEL_WIDTH } else { 0. };
+        let room = self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - plugin - docker;
         docked_widths(room, self.browser.as_ref().map(|_| prefs.browser.width), self.files_panel.as_ref().map(|_| prefs.files_panel_width))
     }
 
     /// The working tree (or plain folder) the active pane works in.
-    fn active_tree(&self, cx: &gpui::App) -> Option<PathBuf> {
+    pub(super) fn active_tree(&self, cx: &gpui::App) -> Option<PathBuf> {
         let cwd = self
             .active_pane()
             .map(|p| p.read(cx).display_cwd())

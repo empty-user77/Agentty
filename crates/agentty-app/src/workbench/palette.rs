@@ -224,6 +224,7 @@ impl Workbench {
         }
         push(t(cx, "panel.sessions"), general, Some("⇧⌘S"), Rc::new(|this, _, cx| this.show_panel(SidePanel::Sessions, cx)));
         push(t(cx, "files.title"), general, Some("⌥⌘B"), Rc::new(|this, _, cx| this.toggle_files_panel(cx)));
+        push(t(cx, "docker.title"), general, None, Rc::new(|this, _, cx| this.toggle_docker_panel(cx)));
         push(t(cx, "onboarding.show_again"), general, None, Rc::new(|this, _, cx| this.open_onboarding(cx)));
         push(
             t(cx, "menu.toggle_sidebar"),
