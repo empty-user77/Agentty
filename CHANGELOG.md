@@ -24,6 +24,18 @@ All notable changes to this project are documented here. The format follows
   installer is per user and needs no administrator rights.
 - Windows: updates install in place — Agentty downloads the new installer, checks it against the release checksums,
   runs it silently and restarts. On Linux, Agentty announces new versions and links to the packages.
+- Docker panel. In a project with a compose file, a Dockerfile or containers of its own, the status bar shows how many
+  of its containers are running; clicking it opens a panel with each compose service's image, state and ports, start,
+  stop, restart, `compose up -d`, `compose down` (confirmed first; volumes are kept) and logs in a new terminal tab.
+  Without compose it lists the project's containers. Environment values are never shown.
+- Parallel tasks: an agent can split work into several sessions (`agentty tasks`). Agentty asks once ("Start N tasks
+  at the same time?"); each task then starts right away in a split pane of the current tab, in its own worktree from
+  the project's default branch, with its prompt already sent.
+- Claude Code and Codex started in Agentty get a short guide to what Agentty offers them, and Claude Code an Agentty
+  skill for parallel tasks, passed on the command line (Settings → General can turn it off).
+- Session worktrees of a project you trust in Claude Code are trusted too, so their sessions start without the folder
+  question.
+- Prompts from links and plugins that arrive while one is being shown wait for their turn instead of replacing it.
 
 ### Changed
 - API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);

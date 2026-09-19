@@ -61,6 +61,14 @@ each agent is doing and highlights the ones that need you.
   A second AI session in the same project, opened from the + menu or typed into a terminal, starts in its own git
   worktree on a new branch from the project's default branch, so sessions never edit the same files; the panel shows
   every working tree, who works in it and what changed there.
+- **Docker** — in a project with a compose file, a Dockerfile or containers of its own, the status bar shows how many
+  of its containers run (🐳 3 running). Click it for a panel with each compose service's image, state (running,
+  stopped, unhealthy) and ports; start, stop, restart, `compose up -d` and `compose down` (asked twice, volumes kept),
+  and logs in a new tab. Environment values from compose files are never shown.
+- **Parallel tasks** — ask an agent to split work up ("do A, B and C in parallel"): it asks Agentty
+  (`agentty tasks`), you confirm once, and each task starts right away in a split pane of the current tab, in its own
+  worktree from the project's default branch. Agents started in Agentty are told what Agentty offers them (a short
+  guide and skills passed on the command line; nothing is written into your projects or settings).
 - **Resume where you left off** — `cd` into a folder with earlier Claude Code / Codex sessions and a bar offers to
   continue them in place. Search local sessions by title, conversation or path (⇧⌘O).
 - **Service status** — when Claude Code, Codex or Amp is degraded while you use it, a banner links to its status page.

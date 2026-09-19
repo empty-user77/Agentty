@@ -150,6 +150,7 @@ pub const ICONS: &[&str] = &[
     "at-sign",
     "mail",
     "image",
+    "container",
 ];
 
 /// An icon named at runtime (plugins): the matching embedded icon, or a generic one.
