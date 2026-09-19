@@ -21,6 +21,8 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
   "recentDirs": [],
   "resumeBar": true,
   "autoWorktree": true,
+  "agentTasks": true,
+  "agentGuide": true,
   "stopServersOnClose": true,
   "browser": { "autoOpenServers": true },
   "agentBarPosition": "top",
@@ -39,6 +41,8 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `cursorShape` | `block`, `beam`, `underline` |
 | `askDirectory` | Show the folder picker for new tabs and workspaces |
 | `resumeBar` | Offer earlier Claude Code / Codex sessions when a terminal enters their folder |
+| `agentTasks` | Agents may ask (`agentty tasks`) to start parallel tasks in split panes, each in its own worktree; you confirm each request |
+| `agentGuide` | Claude Code and Codex started by Agentty get a short guide to Agentty's commands (and Claude Code Agentty's skills), passed on the command line |
 | `autoWorktree` | A new AI session in a project where another one is at work (opened from the + menu, or `claude` / `codex` typed into a terminal) starts in its own git worktree (`~/.agentty/worktrees/<project>-<hash>/<name>`, branch `agentty/<name>` from the project's default branch) |
 | `stopServersOnClose` | Closing a tab, pane or workspace stops the local servers started in it (`SIGTERM`, then `SIGKILL`) |
 | `browser.autoOpenServers` | A local server started in a tab opens in the in-app browser once it answers with a page (only while links open in-app) |

@@ -206,6 +206,12 @@ fn create_in(path: &Path, label: &str, managed: &Path) -> Result<Worktree> {
             }
         }
     };
+    // A session tree of a project the user trusts in Claude Code is trusted too: the session starts
+    // at once instead of asking about a folder that holds the same repository.
+    // (Tests never touch the real `~/.claude.json`.)
+    if !cfg!(test) {
+        let _ = crate::claude_trust::inherit_trust(&main.path, &target);
+    }
     let head = git(&target, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_default();
     Ok(Worktree { path: target, branch: Some(branch), head, main: false, managed: true, prunable: false })
 }
