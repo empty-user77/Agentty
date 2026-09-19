@@ -4,6 +4,7 @@
 // Release builds on Windows are GUI apps (no console window of their own).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod agent_guide;
 mod agent_signal;
 mod agents;
 mod ai_processes;
@@ -16,6 +17,7 @@ mod capture;
 mod debug;
 mod editor;
 mod extensions_view;
+mod tasks_cli;
 // AppKit / WebKit on macOS; the same API from `platform/fallback/` on Windows and Linux.
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/file_drop.rs")]
 mod file_drop;
@@ -105,6 +107,9 @@ fn sanitize_environment() {
                     | "AGENTTY_SOCKET_TOKEN"
                     | "AGENTTY_SHELL_DIR"
                     | "AGENTTY_USER_ZDOTDIR"
+                    | "AGENTTY_SHELL_API"
+                    | "AGENTTY_GUIDE_FILE"
+                    | "AGENTTY_PLUGIN_DIR"
             )
     };
     for (key, value) in std::env::vars_os() {
@@ -451,6 +456,11 @@ fn main() {
         std::process::exit(agent_signal::forward_signal(&args[2..]));
     }
 
+    // `agentty tasks …`: an agent starts work in parallel sessions (after the user agrees).
+    if args.get(1).map(String::as_str) == Some("tasks") {
+        std::process::exit(tasks_cli::run(&args[2..]));
+    }
+
     // `agentty worktree-for <agent>`: the shell wrappers ask for a working tree of the agent's own.
     if args.get(1).map(String::as_str) == Some("worktree-for") {
         std::process::exit(agent_signal::worktree_for(&args[2..]));
@@ -638,6 +648,17 @@ fn main() {
                             }
                             agent_signal::SocketMessage::Worktree(request) => {
                                 workbench::worktrees::answer_worktree_request(&windows, request, cx)
+                            }
+                            agent_signal::SocketMessage::Tasks(request) => {
+                                // The window holding the asking pane shows the question.
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.ask_to_start_tasks(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
                             }
                             agent_signal::SocketMessage::Open(arguments) => {
                                 queue_launch_arguments(&arguments);

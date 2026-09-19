@@ -16,8 +16,9 @@ that doesn't depend on AppKit or WebKit.
 | Menu bar item, mini mode | ✓ | — | — |
 | Reserved words (`claude zzzz`) | zsh / bash | PowerShell | zsh / bash |
 | Foreground program, cwd, ports | ✓ | Launch kind only | `/proc` |
-| Auto-update | Signed DMG | Release page | Release page |
 | File editor "Open in editor" (system default) | `open -t` (default text editor) | Notepad | An installed text editor (GNOME Text Editor, gedit, Kate, …); never `xdg-open` |
+| Install | DMG | Setup program (per user) or zip | `.deb` / `.rpm` (x86_64) |
+| Auto-update | Signed DMG | Setup program, silent, relaunches | Release page |
 
 ## Keyboard shortcuts
 
@@ -49,6 +50,20 @@ word, Ctrl+Home / End for the file). Shortcut labels in the UI are shown in the 
 ## Windows
 
 ### Install
+
+Requires Windows 10 version 1809 (build 17763, the first with ConPTY) or later, x64.
+
+`Agentty-X.Y.Z-windows-x64-setup.exe` (also offered inside `Agentty-X.Y.Z-windows-x64-setup.zip`, because Chrome
+blocks unsigned `.exe` downloads) installs for the current user without administrator rights into
+`%LOCALAPPDATA%\Programs\Agentty`: Start menu entry (desktop shortcut optional), `agentty://` links, "Open in Agentty"
+on folders and folder backgrounds, `agentty` on the user `PATH`, and an entry in Settings → Apps that uninstalls it.
+It is not code-signed yet, so SmartScreen asks first (More info → Run anyway). `/SILENT` installs without questions;
+`/RELAUNCH` starts Agentty afterwards. An agentty.exe still running from the folder (another session's MCP server) is
+renamed aside rather than closed, and removed by the next install. Settings in `%USERPROFILE%\.agentty` are kept on
+uninstall. The installer replaces the Settings → Apps entry of an `install.ps1` installation in the same folder.
+
+Updates: Agentty downloads the new setup program, checks it against the release's `SHA256SUMS.txt`, starts it
+silently and quits; the setup program waits for it to exit, installs and starts the new version.
 
 The release zip contains `agentty.exe`, `install.cmd` and `install.ps1`. Double-clicking `install.cmd` installs for the
 current user (no administrator rights) into `%LOCALAPPDATA%\Programs\Agentty` with a Start menu entry, `agentty://`
@@ -102,3 +117,14 @@ and workspace files. macOS does this through the system already.
 - Building on Windows needs Visual Studio Build Tools with the Windows SDK (C++ workload) and Rust from `rustup`.
 - Release builds are GUI-subsystem programs; `agentty notify` / `agentty browser` attach to the terminal they were
   started from.
+
+## Linux
+
+### Packages
+
+Releases carry `Agentty-X.Y.Z-linux-amd64.deb` (Debian 12+, Ubuntu 22.04+) and `Agentty-X.Y.Z-linux-x86_64.rpm`
+(RHEL / Rocky / Alma 9+, Fedora), x86_64 only. They install `/usr/bin/agentty`, the desktop entry (application menu
+and `agentty://` links) and the icon, and depend on the libraries GPUI loads (xkbcommon, xcb, Wayland, the Vulkan
+loader, fontconfig, freetype); a Vulkan driver (`mesa-vulkan-drivers`) is recommended. Install with
+`sudo apt install ./….deb` or `sudo dnf install ./….rpm`. Agentty announces new versions and opens the release page;
+the package manager installs them.

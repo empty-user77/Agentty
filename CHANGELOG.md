@@ -27,6 +27,25 @@ All notable changes to this project are documented here. The format follows
   editor" hands the file to VS Code, Cursor or the system's text editor (Settings → Project → File editor). Large,
   binary and non-UTF-8 files, and links to files outside the project, open read-only or with a notice. Project files
   are never run: formatter settings that are code are refused.
+- Right-click a working tree in the files panel: show its files, open a terminal there, show it in the file manager,
+  copy its path, remove it (with its branch when that is merged) or clean up a tree whose folder is gone.
+- Releases include a Windows installer (`Agentty-X.Y.Z-windows-x64-setup.exe`, also as a `.zip`) for Windows 10 1809
+  and later, and Linux packages for x86_64: `.deb` (Debian 12+, Ubuntu 22.04+) and `.rpm` (RHEL 9+, Fedora). The
+  installer is per user and needs no administrator rights.
+- Windows: updates install in place — Agentty downloads the new installer, checks it against the release checksums,
+  runs it silently and restarts. On Linux, Agentty announces new versions and links to the packages.
+- Docker panel. In a project with a compose file, a Dockerfile or containers of its own, the status bar shows how many
+  of its containers are running; clicking it opens a panel with each compose service's image, state and ports, start,
+  stop, restart, `compose up -d`, `compose down` (confirmed first; volumes are kept) and logs in a new terminal tab.
+  Without compose it lists the project's containers. Environment values are never shown.
+- Parallel tasks: an agent can split work into several sessions (`agentty tasks`). Agentty asks once ("Start N tasks
+  at the same time?"); each task then starts right away in a split pane of the current tab, in its own worktree from
+  the project's default branch, with its prompt already sent.
+- Claude Code and Codex started in Agentty get a short guide to what Agentty offers them, and Claude Code an Agentty
+  skill for parallel tasks, passed on the command line (Settings → General can turn it off).
+- Session worktrees of a project you trust in Claude Code are trusted too, so their sessions start without the folder
+  question.
+- Prompts from links and plugins that arrive while one is being shown wait for their turn instead of replacing it.
 
 ### Changed
 - API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);
@@ -36,7 +55,6 @@ All notable changes to this project are documented here. The format follows
 - The first-run tour waits until the environment is ready (nothing important missing in the System check).
 
 ### Fixed
-- Windows and Linux builds compile again (a macOS-only debug snapshot helper was called on every platform).
 - Recheck in the System check finds tools installed while Agentty runs, including ones whose installer didn't add
   them to `PATH` (Claude Code in `~/.local/bin`): Windows reads the registry's `PATH` correctly, and macOS and Linux
   ask a fresh login shell.

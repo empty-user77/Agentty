@@ -2230,6 +2230,7 @@ impl Workbench {
             .children(self.render_advisor_chip(cx))
             .children(cwd)
             .child(div().flex_1().min_w_0().truncate().children(self.status.clone()))
+            .children(self.render_docker_chip(cx))
             .children(self.render_status_icons(cx))
             .child(tf(cx, "count.terminals", &[("n", &terminals.to_string())]))
     }

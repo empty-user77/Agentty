@@ -1081,6 +1081,16 @@ impl Workbench {
                             toggle("auto-worktree", prefs.auto_worktree, |s| s.auto_worktree = !s.auto_worktree, cx),
                         ))
                         .child(row_with_hint(
+                            t(cx, "settings.agent_tasks"),
+                            t(cx, "settings.agent_tasks_hint"),
+                            toggle("agent-tasks", prefs.agent_tasks, |s| s.agent_tasks = !s.agent_tasks, cx),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.agent_guide"),
+                            t(cx, "settings.agent_guide_hint"),
+                            toggle("agent-guide", prefs.agent_guide, |s| s.agent_guide = !s.agent_guide, cx),
+                        ))
+                        .child(row_with_hint(
                             t(cx, "settings.stop_servers"),
                             t(cx, "settings.stop_servers_hint"),
                             toggle("stop-servers", prefs.stop_servers_on_close, |s| s.stop_servers_on_close = !s.stop_servers_on_close, cx),

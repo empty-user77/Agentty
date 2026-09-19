@@ -179,6 +179,12 @@ pub struct Settings {
     pub confirm_close: bool,
     /// A new agent session in a project another agent already works in gets its own git worktree.
     pub auto_worktree: bool,
+    /// Agents may ask (`agentty tasks`) to start parallel tasks in split panes; the user still
+    /// confirms every request.
+    pub agent_tasks: bool,
+    /// Agents started by Agentty get a short guide to what Agentty offers them (and Claude Code its
+    /// Agentty skills).
+    pub agent_guide: bool,
     /// Closing a pane stops the local servers (dev servers) started in it.
     pub stop_servers_on_close: bool,
     /// Claude Code advisor for new Claude tabs.
@@ -372,6 +378,8 @@ impl Default for Settings {
             idea_mode: true,
             confirm_close: true,
             auto_worktree: true,
+            agent_tasks: true,
+            agent_guide: true,
             stop_servers_on_close: true,
             advisor: AdvisorChoice::Inherit,
             harness_detect: true,
@@ -431,6 +439,9 @@ impl SettingsStore {
         if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases) {
             eprintln!("agentty: shell integration unavailable: {err:#}");
         }
+        if let Err(err) = crate::agent_guide::write_files() {
+            eprintln!("agentty: agent guide unavailable: {err:#}");
+        }
         cx.set_global(store);
     }
 
@@ -453,6 +464,11 @@ impl SettingsStore {
 /// Read from the settings file (launch specs are built without an `App`).
 pub fn browser_tools_enabled() -> bool {
     std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.browser.agent_tools)
+}
+
+/// Whether agents get Agentty's guide, read from the settings file like [`browser_tools_enabled`].
+pub fn agent_guide_enabled() -> bool {
+    std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.agent_guide)
 }
 
 /// The advisor for new Claude tabs, read from the settings file like [`browser_tools_enabled`].

@@ -162,6 +162,9 @@ pub enum SocketMessage {
     /// `worktree\t{"cwd":…,"label":…}` from `agentty worktree-for` (an agent typed into a shell);
     /// answered on `reply`.
     Worktree(WorktreeRequest),
+    /// `tasks\t{"cwd":…,"tasks":[…]}` from `agentty tasks`: an agent asks to start work in parallel
+    /// sessions; answered on `reply` once the user said yes or no.
+    Tasks(TasksRequest),
     /// `debug\t<command>\t<argument>`; only accepted when `AGENTTY_DEBUG=1`.
     Debug(String, String),
     /// `open\t["agentty://…", "/folder", …]` from a second launch (Windows / Linux single instance).
@@ -206,6 +209,61 @@ pub struct WorktreeRequest {
     /// `claude` or `codex`: folder name and branch suffix of the tree.
     pub label: String,
     /// One JSON line, as [`browser_reply`] makes it: the tree's path, or `null` to stay put.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// One piece of work an agent hands to a new session (`agentty tasks`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct TaskSpec {
+    pub title: String,
+    pub prompt: String,
+    /// `claude` (default) or `codex`.
+    #[serde(default)]
+    pub agent: Option<String>,
+}
+
+/// Limits on what an agent may ask for at once.
+pub const MAX_TASKS: usize = 6;
+const MAX_TITLE: usize = 80;
+const MAX_PROMPT: usize = 40_000;
+
+impl TaskSpec {
+    /// The task as it will be started, or why it can't be: a title and a prompt, bounded sizes, a
+    /// known agent. Titles lose control characters (they become tab names and branch labels).
+    pub fn checked(self) -> Result<TaskSpec, String> {
+        let title: String = self.title.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
+        if title.is_empty() || title.chars().count() > MAX_TITLE {
+            return Err(format!("every task needs a title of 1–{MAX_TITLE} characters"));
+        }
+        if self.prompt.trim().is_empty() || self.prompt.chars().count() > MAX_PROMPT {
+            return Err(format!("task \"{title}\": the prompt must be 1–{MAX_PROMPT} characters"));
+        }
+        let agent = self.agent.map(|a| a.to_lowercase());
+        if agent.as_deref().is_some_and(|a| !is_agent_label(a)) {
+            return Err(format!("task \"{title}\": agent must be claude or codex"));
+        }
+        Ok(TaskSpec { title, prompt: self.prompt, agent })
+    }
+}
+
+/// Parses and checks the tasks of a request (1 to [`MAX_TASKS`]).
+pub fn parse_tasks(value: &serde_json::Value) -> Result<Vec<TaskSpec>, String> {
+    let tasks: Vec<TaskSpec> = serde_json::from_value(value.clone()).map_err(|e| format!("tasks: {e}"))?;
+    if tasks.is_empty() || tasks.len() > MAX_TASKS {
+        return Err(format!("ask for 1–{MAX_TASKS} tasks at a time"));
+    }
+    tasks.into_iter().map(TaskSpec::checked).collect()
+}
+
+/// An agent asks to start `tasks` next to its own pane, each in a working tree of its own.
+#[derive(Debug, Clone)]
+pub struct TasksRequest {
+    /// The pane the connection belongs to (the asking agent).
+    pub pane: u64,
+    /// The asking agent's folder: the project the working trees are made from.
+    pub cwd: std::path::PathBuf,
+    pub tasks: Vec<TaskSpec>,
+    /// One JSON line, as [`browser_reply`] makes it.
     pub reply: std::sync::mpsc::Sender<String>,
 }
 
@@ -369,6 +427,29 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
             }
             continue;
         }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("tasks\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let cwd = std::path::PathBuf::from(request["cwd"].as_str().unwrap_or_default());
+            let response = match parse_tasks(&request["tasks"]) {
+                Ok(tasks) if cwd.is_absolute() => {
+                    let (reply, answer) = std::sync::mpsc::channel();
+                    if tx.unbounded_send(SocketMessage::Tasks(TasksRequest { pane, cwd, tasks, reply })).is_err() {
+                        return;
+                    }
+                    // The user decides in a dialog; give them time.
+                    answer
+                        .recv_timeout(Duration::from_secs(15 * 60))
+                        .unwrap_or_else(|_| browser_reply(Err("no answer from the user in time".into())))
+                }
+                Ok(_) => browser_reply(Err("bad request".into())),
+                Err(error) => browser_reply(Err(error)),
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
         // Single-instance hand-over (Windows / Linux only; macOS gets open events).
         if let Some(json) = line.strip_prefix("open\t").filter(|_| !cfg!(target_os = "macos") && caller != Caller::Nobody) {
             let arguments: Vec<String> = serde_json::from_str(json).unwrap_or_default();
@@ -483,6 +564,21 @@ mod tests {
     fn start_at(name: &str) -> (SignalSocket, UnboundedReceiver<SocketMessage>) {
         let path = std::env::temp_dir().join(format!("agentty-test-{}-{name}.sock", std::process::id()));
         start_with(crate::ipc::Listener::bind_path(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn tasks_are_checked_before_anyone_sees_them() {
+        let ok = serde_json::json!([{ "title": "  Docker\tpanel ", "prompt": "Build it" }, { "title": "Editor", "prompt": "x", "agent": "Codex" }]);
+        let tasks = parse_tasks(&ok).unwrap();
+        assert_eq!(tasks[0].title, "Dockerpanel");
+        assert_eq!(tasks[1].agent.as_deref(), Some("codex"));
+        assert!(parse_tasks(&serde_json::json!([])).is_err());
+        assert!(parse_tasks(&serde_json::json!([{ "title": "", "prompt": "x" }])).is_err());
+        assert!(parse_tasks(&serde_json::json!([{ "title": "a", "prompt": "  " }])).is_err());
+        assert!(parse_tasks(&serde_json::json!([{ "title": "a", "prompt": "x", "agent": "rm -rf" }])).is_err());
+        let many: Vec<_> = (0..MAX_TASKS + 1).map(|i| serde_json::json!({ "title": format!("t{i}"), "prompt": "x" })).collect();
+        assert!(parse_tasks(&serde_json::Value::Array(many)).is_err());
+        assert!(parse_tasks(&serde_json::json!({ "title": "a" })).is_err());
     }
 
     #[test]

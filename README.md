@@ -60,6 +60,8 @@ each agent is doing and highlights the ones that need you.
 - **Files panel & working trees** — the folder structure and changes of the project you are in, docked right (⌥⌘B).
   A second AI session in the same project, opened from the + menu or typed into a terminal, starts in its own git
   worktree on a new branch from the project's default branch, so sessions never edit the same files; the panel shows
+  every working tree, who works in it and what changed there. Right-click a tree to open a terminal there, copy its
+  path, or remove it (and its branch once merged).
   every working tree, who works in it and what changed there.
 - **File editor** — click a file in the files panel to view and edit it in a tab next to your terminals: syntax
   colors for Java, Kotlin, JavaScript, TypeScript / TSX, JSON, YAML, TOML, Markdown, Rust, Python, Go, shell, HTML,
@@ -67,6 +69,14 @@ each agent is doing and highlights the ones that need you.
   (Prettier, google-java-format, ktlint, rustfmt, gofmt, Black). Files changed by an agent reload by themselves.
   **Open in editor** hands the file to VS Code, Cursor or the system's text editor. Files are only ever read and
   written — never run.
+- **Docker** — in a project with a compose file, a Dockerfile or containers of its own, the status bar shows how many
+  of its containers run (🐳 3 running). Click it for a panel with each compose service's image, state (running,
+  stopped, unhealthy) and ports; start, stop, restart, `compose up -d` and `compose down` (asked twice, volumes kept),
+  and logs in a new tab. Environment values from compose files are never shown.
+- **Parallel tasks** — ask an agent to split work up ("do A, B and C in parallel"): it asks Agentty
+  (`agentty tasks`), you confirm once, and each task starts right away in a split pane of the current tab, in its own
+  worktree from the project's default branch. Agents started in Agentty are told what Agentty offers them (a short
+  guide and skills passed on the command line; nothing is written into your projects or settings).
 - **Resume where you left off** — `cd` into a folder with earlier Claude Code / Codex sessions and a bar offers to
   continue them in place. Search local sessions by title, conversation or path (⇧⌘O).
 - **Service status** — when Claude Code, Codex or Amp is degraded while you use it, a banner links to its status page.
@@ -76,7 +86,8 @@ each agent is doing and highlights the ones that need you.
 - **Terminal essentials** — find in scrollback (⌘F), font zoom (⌘= / ⌘- / ⌘0), drop files to paste their paths, mouse
   reporting for full-screen apps (Claude Code, vim, htop) with Shift to select.
 - **Status bar inventory** — skills, subagents and MCP servers (with live connection state) of the agent in the current tab.
-- **Auto-update** — checks the release channel at launch and hourly; signed, notarized updates install and relaunch.
+- **Auto-update** — checks the release channel at launch and hourly; updates install and relaunch on macOS (signed,
+  notarized) and Windows (checksum-verified installer); Linux links to the new packages.
 - **Command palette & reserved words** — fuzzy command palette (⇧⌘P) with custom commands from `agentty.json`, and
   shortcuts such as `claude yolo` → `claude --dangerously-skip-permissions`.
 - **Favorites** — star local sessions to pin them to the top.
@@ -85,7 +96,16 @@ each agent is doing and highlights the ones that need you.
 
 ## Install
 
-Download the notarized DMG from [agentty-releases](https://github.com/empty-user77/agentty-releases/releases), or build from source:
+Download from [agentty-releases](https://github.com/empty-user77/agentty-releases/releases):
+
+| Platform | File |
+|---|---|
+| macOS 13+ (Apple silicon) | `Agentty-X.Y.Z-release…-arm64.dmg` — notarized |
+| Windows 10 1809+ (x64) | `Agentty-X.Y.Z-windows-x64-setup.exe`, or the same installer in `…-setup.zip` — per user, no admin rights; not code-signed yet (SmartScreen: More info → Run anyway) |
+| Debian 12+ / Ubuntu 22.04+ (x86_64) | `Agentty-X.Y.Z-linux-amd64.deb` — `sudo apt install ./Agentty-*.deb` |
+| RHEL 9+ / Fedora (x86_64) | `Agentty-X.Y.Z-linux-x86_64.rpm` — `sudo dnf install ./Agentty-*.rpm` |
+
+Or build from source:
 
 ```sh
 git clone https://github.com/empty-user77/Agentty.git
@@ -101,11 +121,13 @@ Packaging, signing and notarization: see [docs/release.md](docs/release.md).
 Agentty also builds and runs on Windows 10/11 and Linux (X11 and Wayland) — see [docs/platforms.md](docs/platforms.md)
 for what differs.
 
-- **Windows**: `cargo build --release -p agentty-app`, or `pwsh scripts/package-windows.ps1` for a zip. Panes run
+- **Windows**: `cargo build --release -p agentty-app`, or `pwsh scripts/package-windows.ps1` for a zip (`-Installer`
+  also builds the setup program; needs Inno Setup 6). Panes run
   PowerShell (`pwsh` when installed); Claude Code needs Git for Windows for its hooks.
 - **Linux**: install the GPUI libraries (Debian/Ubuntu: `sudo apt install pkg-config libxkbcommon-dev
   libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libvulkan-dev libfontconfig-dev libzstd-dev`), then
   `cargo build --release -p agentty-app`, or `scripts/package-linux.sh` for a tarball with `install.sh`.
+  `scripts/build-linux-packages.sh` builds the x86_64 `.deb` and `.rpm` in Docker from any machine.
 
 Shortcuts are the same with ⌘ → Ctrl+Shift, ⇧⌘ → Ctrl+Alt+Shift, ⌥⌘ → Ctrl+Alt and ⌘1…9 → Alt+1…9, so Ctrl+letter
 stays with the shell.

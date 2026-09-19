@@ -8,6 +8,7 @@ mod browser_control;
 mod chrome;
 mod confirm;
 mod context_menu;
+mod docker_panel;
 mod drop_split;
 mod editor_host;
 mod files_panel;
@@ -40,6 +41,7 @@ mod settings_page;
 mod status_menus;
 mod system_page;
 mod tab_menu;
+mod tasks;
 pub mod update;
 pub mod worktrees;
 
@@ -246,6 +248,8 @@ pub struct Workbench {
     files_resizing: bool,
     /// Dragging the handle under the files panel's working-tree list: (pointer y, height) at the start.
     files_trees_drag: Option<(f32, f32)>,
+    /// Docker of the active pane's project: the status bar chip and the panel docked at the right.
+    docker: docker_panel::DockerState,
     /// Window width at the last render, for sizing the panels docked at the right.
     viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
@@ -343,6 +347,10 @@ pub struct Workbench {
     /// Context last sent to plugins (serialized), to send only changes.
     plugin_context_key: String,
     prompt_dialog: Option<prompt_dialog::PromptDialog>,
+    /// Prompts (links, plugins) that arrived while the dialog showed another one.
+    prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
+    /// Parallel tasks agents asked for (`agentty tasks`), waiting for the user; the first is shown.
+    task_requests: std::collections::VecDeque<crate::agent_signal::TasksRequest>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
     install_hint: Option<(&'static str, &'static str, &'static str)>,
     /// The start page is shown even though workspaces exist (opened from the sidebar).
@@ -407,6 +415,7 @@ impl Workbench {
             files_panel: None,
             files_resizing: false,
             files_trees_drag: None,
+            docker: Default::default(),
             viewport_width: 1400.,
             browser_home_input: None,
             split_drag: None,
@@ -482,6 +491,8 @@ impl Workbench {
             welcome_scroll: gpui::ScrollHandle::new(),
             plugin_context_key: String::new(),
             prompt_dialog: None,
+            prompt_queue: std::collections::VecDeque::new(),
+            task_requests: std::collections::VecDeque::new(),
             welcome: false,
             install_hint: None,
             connect_pick: None,
@@ -1404,8 +1415,9 @@ impl Workbench {
         } else if self.browser_resizing {
             // The splitter sits just left of the panel; the plugin and files panels may sit right of it.
             let shown = self.docked_widths(cx).1;
-            let right =
-                self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH) + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
+            let right = self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
+                + if self.docker.open { docker_panel::PANEL_WIDTH } else { 0. }
+                + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
             let viewport = f32::from(window.viewport_size().width) - right;
             let width = (viewport - f32::from(event.position.x) - 2.5).clamp(320.0, (viewport - 420.0).max(320.0));
             gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.browser.width = width);
@@ -1439,7 +1451,11 @@ impl Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let activated = window.is_window_active() && !self.window_active;
         self.window_active = window.is_window_active();
+        if activated {
+            self.docker_window_activated();
+        }
         self.viewport_width = f32::from(window.viewport_size().width);
         if let Some(git) = self.git.clone().filter(|_| self.page != Some(Page::Git)) {
             git.update(cx, |v, _| v.set_visible(false));
@@ -1447,6 +1463,7 @@ impl Render for Workbench {
         self.prepare_browser(window, cx);
         self.prepare_plugin_panel(window, cx);
         self.prepare_files_panel(cx);
+        self.prepare_docker(cx);
         self.advance_tour(cx);
         self.prepare_plugins_page(window, cx);
         self.broadcast_plugin_context(window, cx);
@@ -1692,6 +1709,7 @@ impl Render for Workbench {
                                     d.children(self.render_browser_splitter(cx))
                                         .children(self.render_browser(cx))
                                         .children(self.render_plugin_panel(cx))
+                                        .children(self.render_docker_panel(cx))
                                         .children(self.render_files_splitter(cx))
                                         .children(self.render_files_panel(cx))
                                 },
@@ -1712,6 +1730,7 @@ impl Render for Workbench {
             .when_some(self.picker.as_ref().map(|_| ()), |d, _| d.child(self.render_picker(cx)))
             .when_some(self.palette.as_ref().map(|_| ()), |d, _| d.child(self.render_palette(cx)))
             .children(self.render_tab_menu(cx))
+            .children(self.render_tree_menu(cx))
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
             .children((!self.updates.popup).then(|| self.render_update_badge(cx)).flatten())
@@ -1719,6 +1738,7 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_close_confirm(cx))
             .children(self.render_prompt_dialog(cx))
+            .children(self.render_tasks_dialog(cx))
             .children(self.render_harness_dialog(cx))
             .children(self.render_onboarding(cx))
             .children(self.render_toast(cx))
@@ -1794,6 +1814,7 @@ impl Workbench {
             let (browser, files) = self.docked_widths(cx);
             self.browser.as_ref().map_or(0., |_| browser + 5.)
                 + self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
+                + if self.docker.open { docker_panel::PANEL_WIDTH } else { 0. }
                 + self.files_panel.as_ref().map_or(0., |_| files + 5.)
         } else {
             0.
@@ -2074,6 +2095,7 @@ impl Workbench {
                         "browser": self.browser.as_ref().and_then(|b| b.current_url()),
                         "files": self.files_panel.as_ref().map(|p| p.debug_state()),
                         "editor": self.editor_debug_state(cx),
+                        "docker": self.docker.debug_state(),
                         "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
                     })
@@ -2090,6 +2112,8 @@ impl Workbench {
                 let (command, argument) = argument.split_once(' ').unwrap_or((argument, ""));
                 self.debug_editor(command, argument, window, cx);
             }
+            "tree-menu" => self.debug_tree_menu(argument.parse().unwrap_or(0), cx),
+            "docker" => self.debug_docker(argument, window, cx),
             "files" => match argument {
                 "" => self.toggle_files_panel(cx),
                 path => self.open_files_panel(Some(PathBuf::from(path)), cx),
@@ -2166,8 +2190,8 @@ impl Workbench {
                         version: "0.2.0".into(),
                         notes: "- Faster startup\n- Git page".into(),
                         page_url: "https://github.com/empty-user77/agentty-releases/releases".into(),
-                        dmg_url: None,
-                        dmg_name: None,
+                        installer_url: None,
+                        installer_name: None,
                         checksums_url: None,
                     });
                     self.updates.popup = true;
