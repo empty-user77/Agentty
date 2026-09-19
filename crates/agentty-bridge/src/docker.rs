@@ -359,9 +359,7 @@ fn parse_labels(text: &str) -> Labels {
     Labels {
         project: get("com.docker.compose.project"),
         working_dir: get("com.docker.compose.project.working_dir").map(PathBuf::from),
-        config_files: get("com.docker.compose.project.config_files")
-            .map(|v| v.split(',').map(PathBuf::from).filter(|p| p.is_absolute()).collect())
-            .unwrap_or_default(),
+        config_files: get("com.docker.compose.project.config_files").map(|v| v.split(',').map(PathBuf::from).collect()).unwrap_or_default(),
         service: get("com.docker.compose.service"),
     }
 }
@@ -427,7 +425,7 @@ fn compose_from_labels(containers: &[Container], root: &Path, files: &Files) -> 
     let files = if at_root || found.labels.config_files.iter().all(default) {
         Vec::new()
     } else {
-        found.labels.config_files.iter().filter(|f| f.is_file()).cloned().collect()
+        found.labels.config_files.iter().filter(|f| f.is_absolute() && f.is_file()).cloned().collect()
     };
     Some(Compose { dir, project, files })
 }
