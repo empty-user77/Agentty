@@ -106,8 +106,8 @@ git commit -am "chore: release vX.Y.Z"      # with the Co-Authored-By trailer
 git tag -a vX.Y.Z -m "Agentty vX.Y.Z"
 git push origin main && git push origin vX.Y.Z
 ```
-CI runs on pull requests only, so this push starts no CI run: the checks in step 3 are the gate. The tag push starts
-the **Release packages** workflow.
+The push to main starts CI: watch it (`gh run watch <id> --exit-status`) and fix failures before building. The tag
+push starts the **Release packages** workflow.
 
 ### 4b. Windows installer and Linux packages
 ```sh
