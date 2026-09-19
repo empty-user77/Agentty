@@ -143,6 +143,10 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// Width of the files panel docked at the right edge.
     pub files_panel_width: f32,
+    /// Width of the plugin panel docked right of the terminals.
+    pub plugin_panel_width: f32,
+    /// Width of the Docker panel docked right of the terminals.
+    pub docker_panel_width: f32,
     /// Height of its working-tree list once the user dragged it (0: as tall as its rows, up to a few).
     pub files_panel_trees_height: f32,
     /// Ask for a starting folder whenever a new workspace is opened.
@@ -359,6 +363,8 @@ impl Default for Settings {
             scrollback: 10_000,
             sidebar_width: 280.0,
             files_panel_width: 300.0,
+            plugin_panel_width: crate::workbench::side_panels::DEFAULT_PLUGIN_WIDTH,
+            docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
             files_panel_trees_height: 0.0,
             ask_directory: true,
             ask_directory_for_tabs: false,

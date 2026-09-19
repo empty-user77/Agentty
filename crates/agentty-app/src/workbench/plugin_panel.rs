@@ -13,8 +13,6 @@ use agentty_bridge::plugins::ui::{Gap, Node, TextStyle, Tone, UiEvent, Variant};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, FontWeight, SharedString, Subscription, Window};
 use std::time::Duration;
 
-pub const PANEL_WIDTH: f32 = 360.;
-
 /// A text field of a plugin panel, kept across renders.
 pub struct PluginInput {
     pub input: Entity<TextInput>,
@@ -134,6 +132,7 @@ impl Workbench {
 
     pub(super) fn render_plugin_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plugin_id = self.plugin_panel.clone()?;
+        let width = self.plugin_panel_width(cx);
         let plugin = plugins::plugin(cx, &plugin_id)?.clone();
         let manifest = plugin.manifest.clone()?;
         let close = icon_only_close(cx);
@@ -217,13 +216,11 @@ impl Workbench {
 
         Some(
             div()
-                .w(px(PANEL_WIDTH))
+                .w(px(width))
                 .flex_shrink_0()
                 .h_full()
                 .flex()
                 .flex_col()
-                .border_l_1()
-                .border_color(hex(Chrome::BORDER))
                 .bg(hex(Chrome::PANEL))
                 .child(header)
                 .child(

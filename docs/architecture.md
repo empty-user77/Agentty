@@ -198,6 +198,8 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
 
 ## Docker panel
 
+- The panel (like the plugin panel) is resizable: `workbench/side_panels.rs` draws the handle at its left edge and
+  keeps the width (`dockerPanelWidth`, `pluginPanelWidth`) between 240 px and whatever leaves the terminals 420 px.
 - `agentty_bridge::docker` looks at the project (working-tree root) of the active pane: a compose file
   (`compose.yaml`, `compose.yml`, `docker-compose.yml`, `docker-compose.yaml`) or a `Dockerfile` at its root, and its
   containers from `docker ps --all --format json`. Containers whose compose labels

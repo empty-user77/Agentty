@@ -14,6 +14,8 @@ use std::path::PathBuf;
 pub enum Destination {
     NewWorkspace,
     NewTab,
+    /// A split of the focused pane, in the tab shown now.
+    Split,
     Workspace(u64),
 }
 
@@ -46,6 +48,7 @@ impl Workbench {
         let destination = match (request.target, request.workspace_id) {
             (PromptTarget::Workspace, Some(id)) if self.workspaces.iter().any(|w| w.id == id) => Destination::Workspace(id),
             (PromptTarget::NewTab, _) if !self.workspaces.is_empty() => Destination::NewTab,
+            (PromptTarget::Split, _) if self.active_pane().is_some() => Destination::Split,
             _ => Destination::NewWorkspace,
         };
         let submit = request.submit;
@@ -72,6 +75,7 @@ impl Workbench {
         match dialog.destination {
             Destination::NewWorkspace => request.target = PromptTarget::NewWorkspace,
             Destination::NewTab => request.target = PromptTarget::NewTab,
+            Destination::Split => request.target = PromptTarget::Split,
             Destination::Workspace(id) => {
                 request.target = PromptTarget::Workspace;
                 request.workspace_id = Some(id);
@@ -189,6 +193,18 @@ impl Workbench {
                 cx,
             ));
         }
+        if let Some(pane) = self.active_pane() {
+            let view = pane.read(cx);
+            destinations = destinations.child(option(
+                "prompt-dest-split".into(),
+                "columns-2",
+                t(cx, "prompt.split_here").to_string(),
+                tf(cx, "prompt.split_here_detail", &[("name", &view.display_title()), ("folder", &tilde(&view.current_dir()))]),
+                dialog.destination == Destination::Split,
+                Destination::Split,
+                cx,
+            ));
+        }
         if !self.workspaces.is_empty() {
             destinations = destinations.child(
                 div().pt_2().pb_1().px_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "prompt.open_workspaces").to_uppercase()),
@@ -196,9 +212,15 @@ impl Workbench {
         }
         for ws in &self.workspaces {
             let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
-            let agent = panes.iter().find(|p| p.read(cx).agent_kind() == Some(dialog.kind));
-            let detail = match agent {
-                Some(pane) => format!("{} · {}", tilde(&ws.cwd), status_label(pane.read(cx), cx).0),
+            // Say what picking it does: typed into a waiting agent there, or a new tab (never a split).
+            let idle = panes.iter().find(|p| {
+                let view = p.read(cx);
+                view.agent_kind() == Some(dialog.kind) && view.is_running() && !view.is_busy()
+            });
+            let detail = match idle {
+                Some(pane) => {
+                    format!("{} · {}", tilde(&ws.cwd), tf(cx, "prompt.to_waiting_agent", &[("status", &status_label(pane.read(cx), cx).0)]))
+                }
                 None if ws.dormant.is_some() => format!("{} · {}", tilde(&ws.cwd), t(cx, "prompt.dormant")),
                 None => format!("{} · {}", tilde(&ws.cwd), t(cx, "prompt.new_agent_tab")),
             };

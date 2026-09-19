@@ -38,6 +38,7 @@ mod servers;
 mod service_status;
 mod session_viewer;
 mod settings_page;
+pub mod side_panels;
 mod status_menus;
 mod system_page;
 mod tab_menu;
@@ -246,6 +247,8 @@ pub struct Workbench {
     /// Files panel docked at the right edge (folder structure, changes, working trees).
     files_panel: Option<files_panel::FilesPanel>,
     files_resizing: bool,
+    /// A side panel (plugin, Docker) whose left edge is being dragged.
+    side_resizing: Option<side_panels::SidePanel>,
     /// Dragging the handle under the files panel's working-tree list: (pointer y, height) at the start.
     files_trees_drag: Option<(f32, f32)>,
     /// Docker of the active pane's project: the status bar chip and the panel docked at the right.
@@ -414,6 +417,7 @@ impl Workbench {
             browser_resizing: false,
             files_panel: None,
             files_resizing: false,
+            side_resizing: None,
             files_trees_drag: None,
             docker: Default::default(),
             viewport_width: 1400.,
@@ -1388,6 +1392,7 @@ impl Workbench {
             if self.sidebar_resizing
                 || self.browser_resizing
                 || self.files_resizing
+                || self.side_resizing.is_some()
                 || self.files_trees_drag.is_some()
                 || self.split_drag.is_some()
                 || self.flow.is_dragging()
@@ -1412,12 +1417,13 @@ impl Workbench {
                 store.settings.files_panel_width = width
             });
             cx.notify();
+        } else if let Some(panel) = self.side_resizing {
+            let viewport = f32::from(window.viewport_size().width);
+            self.drag_side_panel(panel, f32::from(event.position.x), viewport, cx);
         } else if self.browser_resizing {
             // The splitter sits just left of the panel; the plugin and files panels may sit right of it.
             let shown = self.docked_widths(cx).1;
-            let right = self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
-                + if self.docker.open { docker_panel::PANEL_WIDTH } else { 0. }
-                + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
+            let right = self.side_panels_total(cx) + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
             let viewport = f32::from(window.viewport_size().width) - right;
             let width = (viewport - f32::from(event.position.x) - 2.5).clamp(320.0, (viewport - 420.0).max(320.0));
             gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.browser.width = width);
@@ -1435,10 +1441,16 @@ impl Workbench {
     }
 
     fn end_drags(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_resizing || self.browser_resizing || self.files_resizing || self.files_trees_drag.is_some() {
+        if self.sidebar_resizing
+            || self.browser_resizing
+            || self.files_resizing
+            || self.side_resizing.is_some()
+            || self.files_trees_drag.is_some()
+        {
             self.sidebar_resizing = false;
             self.browser_resizing = false;
             self.files_resizing = false;
+            self.side_resizing = None;
             self.files_trees_drag = None;
             update_settings(cx, |_| {}); // persist the final width
         }
@@ -1669,6 +1681,7 @@ impl Render for Workbench {
                     if this.sidebar_resizing
                         || this.browser_resizing
                         || this.files_resizing
+                        || this.side_resizing.is_some()
                         || this.files_trees_drag.is_some()
                         || this.split_drag.is_some()
                     {
@@ -1708,7 +1721,11 @@ impl Render for Workbench {
                                 |d| {
                                     d.children(self.render_browser_splitter(cx))
                                         .children(self.render_browser(cx))
+                                        .when(self.plugin_panel.is_some(), |d| {
+                                            d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx))
+                                        })
                                         .children(self.render_plugin_panel(cx))
+                                        .when(self.docker.open, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx)))
                                         .children(self.render_docker_panel(cx))
                                         .children(self.render_files_splitter(cx))
                                         .children(self.render_files_panel(cx))
@@ -1813,8 +1830,7 @@ impl Workbench {
         let docked = if self.page.is_none() {
             let (browser, files) = self.docked_widths(cx);
             self.browser.as_ref().map_or(0., |_| browser + 5.)
-                + self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
-                + if self.docker.open { docker_panel::PANEL_WIDTH } else { 0. }
+                + self.side_panels_total(cx)
                 + self.files_panel.as_ref().map_or(0., |_| files + 5.)
         } else {
             0.
