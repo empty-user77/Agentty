@@ -12,8 +12,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Both jobs run on the self-hosted Apple silicon Mac (the repository is private, so only
+  # collaborators' pushes and pull requests reach it).
   secrets:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -30,7 +32,7 @@ jobs:
 
   check:
     needs: secrets
-    runs-on: macos-14
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The toolchain (and its rustfmt / clippy) comes from rust-toolchain.toml, same as locally.
