@@ -15,6 +15,7 @@ mod browser_cli;
 mod browser_mcp;
 mod capture;
 mod debug;
+mod editor;
 mod extensions_view;
 mod tasks_cli;
 // AppKit / WebKit on macOS; the same API from `platform/fallback/` on Windows and Linux.
@@ -301,7 +302,7 @@ pub fn set_app_menus(cx: &mut App) {
 }
 
 fn register_app_actions(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Quit, cx| request_quit(cx));
     cx.on_action(|_: &HideApp, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -401,6 +402,7 @@ fn bind_keys(cx: &mut App) {
         key("cmd-a", terminal::SelectAll, Some("Terminal")),
     ]);
     text_input::bind_keys(cx);
+    editor::bind_keys(cx);
 }
 
 /// Windows: a GUI-subsystem program started from a terminal has no console; subcommands that
@@ -770,6 +772,34 @@ fn reopen_window(slot: usize, cx: &mut App) {
         cx.activate(true);
     }
     set_app_menus(cx);
+}
+
+/// Quits — unless a window has files with unsaved changes in its editor: that window comes to
+/// the front and asks first (and quits from there when told to).
+pub fn request_quit(cx: &mut App) {
+    for handle in workbenches(cx) {
+        let asking = handle
+            .update(cx, |workbench, window, cx| {
+                let asking = workbench.ask_about_unsaved_files(editor::AfterDiscard::Quit, window, cx);
+                if asking {
+                    window.activate_window();
+                }
+                asking
+            })
+            .unwrap_or(false);
+        if asking {
+            cx.activate(true);
+            return;
+        }
+    }
+    cx.quit();
+}
+
+/// A quit was called off: every window asks about its unsaved files again next time.
+pub fn forget_discard_answers(cx: &mut App) {
+    for handle in workbenches(cx) {
+        let _ = handle.update(cx, |workbench, _, _| workbench.forget_discard_answer());
+    }
 }
 
 /// Agentty windows, main window first.

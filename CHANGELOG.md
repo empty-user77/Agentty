@@ -19,6 +19,14 @@ All notable changes to this project are documented here. The format follows
 - `claude` or `codex` typed into a terminal in a project where another agent is at work starts in a working tree of
   its own, like sessions opened from the + menu.
 - Pages (Settings, Monitoring, …) have a home tab first that goes back to the start page.
+- File editor: click a file in the files panel to view and edit it in a tab next to the terminals. Syntax colors for
+  Java, Kotlin, JavaScript, TypeScript / TSX, JSON, YAML, TOML, Markdown, Rust, Python, Go, shell, HTML, CSS, SQL and
+  more; undo / redo, IME input, atomic saves that keep file permissions, and a Format button that uses the installed
+  formatter (Prettier, google-java-format, ktlint, rustfmt, gofmt, Black) and says what to install when it is missing.
+  Files changed on disk (by an agent, git or another editor) reload, or ask when there are unsaved changes. "Open in
+  editor" hands the file to VS Code, Cursor or the system's text editor (Settings → Project → File editor). Large,
+  binary and non-UTF-8 files, and links to files outside the project, open read-only or with a notice. Project files
+  are never run: formatter settings that are code are refused.
 - Right-click a working tree in the files panel: show its files, open a terminal there, show it in the file manager,
   copy its path, remove it (with its branch when that is merged) or clean up a tree whose folder is gone.
 - Releases include a Windows installer (`Agentty-X.Y.Z-windows-x64-setup.exe`, also as a `.zip`) for Windows 10 1809

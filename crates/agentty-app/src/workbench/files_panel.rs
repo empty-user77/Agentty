@@ -119,6 +119,16 @@ pub(super) struct FilesPanel {
 }
 
 impl FilesPanel {
+    /// Marks `path` as the selected file (the one the editor shows).
+    pub(super) fn select(&mut self, path: &Path) {
+        self.selected = Some(path.to_path_buf());
+    }
+
+    /// Folder the panel shows (a working tree or a plain folder).
+    pub(super) fn root(&self) -> &Path {
+        &self.snapshot.root
+    }
+
     /// For the debug driver's `probe`.
     pub(super) fn debug_state(&self) -> serde_json::Value {
         serde_json::json!({
@@ -443,9 +453,17 @@ impl Workbench {
         }
     }
 
+    /// Opens a file of the panel in the editor (read and written there, never run).
+    fn edit_file(&mut self, path: &Path, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let Some(root) = self.files_panel.as_ref().map(|p| p.snapshot.root.clone()) else { return };
+        self.open_in_editor(path, &root, window, cx);
+    }
+
     /// Types the path into the active pane (shell-quoted, never submitted), like a dropped file.
     fn insert_path(&mut self, path: &Path, window: &mut gpui::Window, cx: &mut Context<Self>) {
         let Some(pane) = self.active_pane() else { return };
+        // The terminal it goes to comes to the front.
+        self.hide_editor();
         let base = pane.read(cx).display_cwd();
         let shown = path.strip_prefix(&base).map(Path::to_path_buf).unwrap_or_else(|_| path.to_path_buf());
         pane.update(cx, |view, _| view.drop_paths(&[dash_safe(shown)]));
@@ -1197,16 +1215,8 @@ impl Workbench {
                     .t_small()
                     .when(is_selected, |d| d.bg(hex(Chrome::SELECTED)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        if let Some(panel) = this.files_panel.as_mut() {
-                            panel.selected = Some(select.clone());
-                        }
-                        // A double click hands the path to the terminal, like dropping the file on it.
-                        if event.click_count() >= 2 {
-                            this.insert_path(&select, window, cx);
-                        }
-                        cx.notify();
-                    }))
+                    // A click opens the file in the editor; the path goes to the terminal from the row's button.
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.edit_file(&select, window, cx)))
                     .child(icon("file", 12., hex(color.unwrap_or(Chrome::MUTED))))
                     .child(div().flex_1().min_w_0().truncate().text_color(hex(color.unwrap_or(Chrome::FOREGROUND))).child(name.clone()))
                     .child(
@@ -1266,7 +1276,10 @@ impl Workbench {
                 Some((folder, name)) => (name.to_string(), folder.to_string()),
                 None => (file.path.clone(), String::new()),
             };
-            let (insert, reveal) = (path.clone(), path.clone());
+            let (insert, reveal, edit) = (path.clone(), path.clone(), path.clone());
+            // A deleted file has nothing left to open.
+            let deleted = file.kind == 'D';
+            let is_selected = panel.selected.as_ref() == Some(&path);
             list = list.child(
                 div()
                     .id(("files-change", index))
@@ -1277,7 +1290,11 @@ impl Workbench {
                     .items_center()
                     .gap_1p5()
                     .t_small()
+                    .when(is_selected, |d| d.bg(hex(Chrome::SELECTED)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .when(!deleted, |d| {
+                        d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.edit_file(&edit, window, cx)))
+                    })
                     .child(
                         div().flex_shrink_0().w(px(12.)).t_caption().text_color(hex(change_color(file.kind))).child(kind_label(file.kind)),
                     )
@@ -1295,12 +1312,16 @@ impl Workbench {
                                     "file-input",
                                     18.,
                                     12.,
-                                    cx.listener(move |this, _: &ClickEvent, window, cx| this.insert_path(&insert, window, cx)),
+                                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        this.insert_path(&insert, window, cx)
+                                    }),
                                 )
                                 .tooltip(Tooltip::text(t(cx, "files.insert_path"), None)),
                             )
                             .child(
-                                icon_only_sized(("files-change-show", index), "external-link", 18., 12., move |_: &ClickEvent, _, _| {
+                                icon_only_sized(("files-change-show", index), "external-link", 18., 12., move |_: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
                                     crate::platform::reveal(&reveal)
                                 })
                                 .tooltip(Tooltip::text(t(cx, "files.reveal"), None)),

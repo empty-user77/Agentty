@@ -194,8 +194,8 @@ impl Workbench {
                                 this.persist(cx);
                                 // Without a menu bar item, closing the main window ends Agentty.
                                 if slot == 0 {
-                                    cx.quit();
-                                } else {
+                                    cx.defer(crate::request_quit);
+                                } else if !this.ask_about_unsaved_files(crate::editor::AfterDiscard::CloseWindow, window, cx) {
                                     window.remove_window();
                                 }
                             }),
@@ -1169,9 +1169,11 @@ impl Workbench {
                 );
             }
         } else if let Some(ws) = self.workspaces.get(self.active_workspace) {
+            // While a file is shown in the editor, its tab is the active one.
+            let editing = self.editor_visible(cx);
             for (index, tab) in ws.tabs.iter().enumerate() {
                 let view = tab.active.read(cx);
-                let active = index == ws.active_tab;
+                let active = index == ws.active_tab && !editing;
                 let leaves = tab.root.leaves();
                 let attention = leaves.iter().any(|p| p.read(cx).attention);
                 // Session links in this tab (from the Session Flow), shown as a link mark.
@@ -1263,6 +1265,11 @@ impl Workbench {
                         ),
                 );
             }
+        }
+
+        // Files open in the editor, after the terminals.
+        if self.page.is_none() {
+            tabs = tabs.children(self.render_file_tabs(cx));
         }
 
         let _header_button =

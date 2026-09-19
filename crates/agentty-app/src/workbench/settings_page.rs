@@ -145,7 +145,14 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("shortcuts.open_link", "⌘ Click"),
         ],
     ),
+    (
+        EDITOR_SHORTCUTS,
+        &[("editor.save", "⌘S"), ("editor.format", "⇧⌥F"), ("editor.shortcut_undo_redo", "⌘Z  /  ⇧⌘Z"), ("editor.close_file", "⌘W")],
+    ),
 ];
+
+/// The file editor's group: a text field, so its shortcuts use plain Ctrl on Windows and Linux.
+const EDITOR_SHORTCUTS: &str = "editor.shortcuts_group";
 
 fn render_shortcuts(cx: &mut Context<Workbench>) -> Div {
     let mut list = div().flex().flex_col();
@@ -163,7 +170,10 @@ fn render_shortcuts(cx: &mut Context<Workbench>) -> Div {
                     .bg(hex(0x2a2a2a))
                     .t_small()
                     .text_color(hex(Chrome::BRIGHT))
-                    .child(crate::keymap::display(keys).into_owned()),
+                    .child(
+                        if *group == EDITOR_SHORTCUTS { crate::keymap::display_in_text(keys) } else { crate::keymap::display(keys) }
+                            .into_owned(),
+                    ),
             ));
         }
         list = list.child(block);
@@ -593,6 +603,16 @@ impl Workbench {
             ));
         }
 
+        let mut editors = div().flex().flex_wrap().gap_1();
+        for choice in crate::settings::ExternalEditor::ALL {
+            editors = editors.child(chip(
+                SharedString::from(format!("external-editor-{choice:?}")),
+                t(cx, choice.label_key()),
+                prefs.external_editor == choice,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.external_editor = choice)),
+            ));
+        }
+
         let pattern_chip = |text: String| {
             div()
                 .px_1p5()
@@ -676,6 +696,11 @@ impl Workbench {
                         toggle("ask-dir-tabs", prefs.ask_directory_for_tabs, |s| s.ask_directory_for_tabs = !s.ask_directory_for_tabs, cx),
                     )),
             )
+            .child(section(t(cx, "editor.settings_section")).child(row_with_hint(
+                t(cx, "editor.settings_external"),
+                t(cx, "editor.settings_external_hint"),
+                editors,
+            )))
             .child(
                 section(t(cx, "settings.project_harness"))
                     .child(row_with_hint(

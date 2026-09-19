@@ -63,6 +63,12 @@ each agent is doing and highlights the ones that need you.
   every working tree, who works in it and what changed there. Right-click a tree to open a terminal there, copy its
   path, or remove it (and its branch once merged).
   every working tree, who works in it and what changed there.
+- **File editor** — click a file in the files panel to view and edit it in a tab next to your terminals: syntax
+  colors for Java, Kotlin, JavaScript, TypeScript / TSX, JSON, YAML, TOML, Markdown, Rust, Python, Go, shell, HTML,
+  CSS, SQL and more, undo / redo, IME input, save (⌘S), and **Format** with the formatter you have installed
+  (Prettier, google-java-format, ktlint, rustfmt, gofmt, Black). Files changed by an agent reload by themselves.
+  **Open in editor** hands the file to VS Code, Cursor or the system's text editor. Files are only ever read and
+  written — never run.
 - **Docker** — in a project with a compose file, a Dockerfile or containers of its own, the status bar shows how many
   of its containers run (🐳 3 running). Click it for a panel with each compose service's image, state (running,
   stopped, unhealthy) and ports; start, stop, restart, `compose up -d` and `compose down` (asked twice, volumes kept),
@@ -147,6 +153,7 @@ stays with the shell.
 | Go to workspace / tab 1–9 | ⌘1…⌘9 / ⌃1…⌃9 |
 | Search local sessions | ⇧⌘O |
 | Git page: commit / push / fetch / refresh | ⌘↩ / ⌘P / ⇧⌘T / ⌘R |
+| File editor: save / format / close file | ⌘S / ⇧⌥F / ⌘W |
 | Copy / paste / select all / clear | ⌘C / ⌘V / ⌘A / ⌘K |
 
 The full list is in **Settings → Keyboard Shortcuts**.

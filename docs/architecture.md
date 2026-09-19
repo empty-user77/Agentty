@@ -157,9 +157,44 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
   replacing it.
 - `workbench/files_panel.rs` is the last column of the terminal area. It follows the active pane (or a tree picked in
   the panel), reads folders lazily, colors entries from `git status`, and lists the repository's working trees with the
-  panes working in each. Everything is read on a background thread every few seconds while the panel is open. Files
-  are never opened from it (a project file could be a script): a path can be typed into the terminal or revealed.
+  panes working in each. Everything is read on a background thread every few seconds while the panel is open. A click
+  on a file opens it in the file editor (below); a path can also be typed into the terminal or revealed. Nothing is
+  ever run from it (a project file could be a script).
 - `TerminalView::worktree` (set where the branch is) feeds the purple working-tree chip of the status bar.
+
+## File editor
+
+- `crates/agentty-app/src/editor/` is a small code editor for files opened from the files panel.
+  `workbench/editor_host.rs` puts it in place of the terminals while one of its files is shown and adds a tab per open
+  file after the terminal tabs; picking a terminal tab brings the terminals back, and the files stay open (unsaved
+  changes included) until their tabs close. Closing a tab, the window or the app with unsaved files asks first
+  (`crate::request_quit` for every way of quitting).
+- `buffer.rs` holds the text as lines with the cursor, selection and undo history (typing and backspacing are joined
+  into steps; an input method's composition becomes one step when committed). `element.rs` shapes and paints only the
+  lines on screen and keeps their geometry for mouse hits and IME popups.
+- `highlight.rs` colors lines with `syntect` and bat's grammars (`two-face`, pure-Rust regex engine) in a Dark+ palette.
+  Lines are highlighted top-down with the parser state cached per line, a few milliseconds per frame, so an edit
+  re-reads only from the changed line to the screen. Their licenses are in `assets/licenses/syntax-definitions.md`
+  (kept in sync by a test).
+- `file.rs` reads files (binary files and files over 20 MB are not opened; over 2 MB, with very long lines or not UTF-8
+  they are read-only) and saves atomically: a temporary file in the same folder, flushed, given the original's
+  permissions, renamed over it (a file with other hard links is rewritten in place). A link is written through to its
+  target; a target outside the project is read-only until the user allows editing. Line endings and a BOM are kept.
+  Open files are checked every 2 s: unchanged ones reload, ones with unsaved changes ask; saving over a file that
+  changed on disk asks too.
+- `format.rs` runs the installed formatter over the text (stdin → stdout, argument list, no shell): Prettier,
+  google-java-format, ktlint, rustfmt, gofmt, Black. It never runs project code: formatters inside the project are
+  ignored; Prettier always gets Agentty's own copy of the project's plain formatting options (read from JSON, TOML or
+  flat YAML, allowlisted — `plugins`, `overrides`, `parser` are dropped), and settings that are code
+  (`prettier.config.js`, a shared config package) or can't be read as plain data make it refuse; other data settings
+  are passed by path; the formatter starts in `data_dir()/formatter` with only absolute `PATH` folders, so nothing
+  picks a program by the project folder (rustup's toolchain file, version-manager shims).
+- `external.rs` opens the file in VS Code / Cursor (`--goto file:line:col`, the CLI inside the app bundle when it is not
+  on `PATH`) or the system's text editor (`open -t`, Notepad, an installed desktop text editor on Linux — never
+  `xdg-open`, which can hand a script to the program that runs it).
+- Saving resolves the path again (a folder may have become a link since), refuses a target outside the project unless
+  editing it was allowed, and asks about files changed on disk, also when saving everything before quitting. An
+  update's relaunch waits until no file has unsaved changes.
 
 ## Docker panel
 

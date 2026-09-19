@@ -314,7 +314,7 @@ impl Workbench {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => cx.quit(),
+                Ok(()) => cx.defer(crate::request_quit),
                 Err(err) => {
                     eprintln!("update: {err:#}");
                     this.updates.state = UpdateState::Failed(format!("{err:#}"));
@@ -330,6 +330,10 @@ impl Workbench {
         let UpdateState::Available(release) = self.updates.state.clone() else {
             return self.check_for_updates(true, cx);
         };
+        // Installing ends with a relaunch: unsaved files in the editor come first.
+        if self.show_unsaved_files(cx) {
+            return;
+        }
         if install_kind() == InstallKind::Manual || release.installer_url.is_none() {
             // Linux packages, development builds and releases without an installer for this system:
             // show the download page instead.
@@ -366,7 +370,7 @@ impl Workbench {
                 cx.background_executor().timer(Duration::from_millis(800)).await;
             }
             let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => cx.quit(),
+                Ok(()) => cx.defer(crate::request_quit),
                 Err(err) => {
                     this.updates.state = UpdateState::Failed(format!("{err:#}"));
                     cx.notify();
