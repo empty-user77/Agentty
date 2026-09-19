@@ -2,7 +2,8 @@
 //!
 //! When a second agent session starts in a working tree another session already uses, Agentty gives
 //! it a working tree of its own: `git worktree add` on a new branch `agentty/<name>`, from the
-//! commit the project is on. The trees live in Agentty's data folder (not inside the project, where
+//! project's default branch (see [`base_ref`]), not from whatever branch the project folder has
+//! checked out, so a session never builds on another session's unmerged work. The trees live in Agentty's data folder (not inside the project, where
 //! every search, watcher and build would walk into a second copy of the code):
 //!
 //! ```text
@@ -136,8 +137,38 @@ fn tree_name(label: &str, stamp: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..).map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") }).find(|name| !taken(name)).unwrap_or(base)
 }
 
+/// Where a new session tree starts: the repository's default branch — the local branch when there
+/// is one (it has the user's own commits), else the remote's — and the checked-out commit only in a
+/// repository without either. The default branch is what `origin/HEAD` names, else `main` or
+/// `master`. Nothing is fetched.
+pub fn base_ref(path: &Path) -> String {
+    let exists = |reference: &str| git(path, &["rev-parse", "--verify", "--quiet", &format!("{reference}^{{commit}}")]).is_ok();
+    let remote_default = git(path, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]).ok();
+    pick_base(remote_default.as_deref().map(str::trim), exists)
+}
+
+/// [`base_ref`] without git: `remote_default` is `origin/HEAD`'s short name (`origin/main`).
+fn pick_base(remote_default: Option<&str>, exists: impl Fn(&str) -> bool) -> String {
+    let named = remote_default.and_then(|r| r.strip_prefix("origin/")).filter(|name| !name.is_empty());
+    let candidates: Vec<&str> = match named {
+        Some(name) => vec![name],
+        None => vec!["main", "master"],
+    };
+    for name in candidates {
+        let (local, remote) = (format!("refs/heads/{name}"), format!("refs/remotes/origin/{name}"));
+        if exists(&local) {
+            return name.to_string();
+        }
+        if exists(&remote) {
+            return format!("origin/{name}");
+        }
+    }
+    "HEAD".into()
+}
+
 /// Creates a working tree for a new session of the project at `path`, on a new branch from the
-/// commit the project is on now. Uncommitted changes stay where they are, in the tree they were made.
+/// project's default branch ([`base_ref`]). Uncommitted changes stay where they are, in the tree
+/// they were made.
 pub fn create(path: &Path, label: &str) -> Result<Worktree> {
     create_in(path, label, &managed_dir())
 }
@@ -153,6 +184,7 @@ fn create_in(path: &Path, label: &str, managed: &Path) -> Result<Worktree> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(managed, std::fs::Permissions::from_mode(0o700));
     }
+    let base = base_ref(path);
     let stamp = chrono::Local::now().format("%m%d-%H%M").to_string();
     // The name is free when it is picked, but another session may take it a moment later (two tabs
     // opened at once): pick again, a few times, instead of failing the launch.
@@ -164,8 +196,7 @@ fn create_in(path: &Path, label: &str, managed: &Path) -> Result<Worktree> {
             tree_name(label, &stamp, |name| home.join(name).exists() || branches.lines().any(|b| b == format!("{BRANCH_PREFIX}{name}")));
         let (target, branch) = (home.join(&name), format!("{BRANCH_PREFIX}{name}"));
         let target_text = target.to_string_lossy().to_string();
-        // From the tree the session was asked for (its HEAD), not from wherever the main tree is.
-        match git(path, &["worktree", "add", "-b", &branch, &target_text, "HEAD"]) {
+        match git(path, &["worktree", "add", "--no-track", "-b", &branch, &target_text, &base]) {
             Ok(_) => break (target, branch),
             Err(err) if attempt < 4 && format!("{err:#}").contains("already exists") => continue,
             Err(err) => {
@@ -232,6 +263,21 @@ mod tests {
         assert_eq!(trees[1].name(), "claude-0918-1432");
         assert_eq!(trees[2].branch, None);
         assert!(trees[3].prunable);
+    }
+
+    #[test]
+    fn session_trees_start_from_the_default_branch() {
+        let refs = |known: &'static [&'static str]| move |r: &str| known.contains(&r);
+        // origin/HEAD names the default branch; the local branch wins over the remote one.
+        assert_eq!(pick_base(Some("origin/develop"), refs(&["refs/heads/develop", "refs/remotes/origin/develop"])), "develop");
+        assert_eq!(pick_base(Some("origin/develop"), refs(&["refs/remotes/origin/develop"])), "origin/develop");
+        // No origin/HEAD: main, then master.
+        assert_eq!(pick_base(None, refs(&["refs/heads/master"])), "master");
+        assert_eq!(pick_base(None, refs(&["refs/heads/main", "refs/heads/master"])), "main");
+        assert_eq!(pick_base(None, refs(&["refs/remotes/origin/main"])), "origin/main");
+        // Nothing to go by: the checked-out commit.
+        assert_eq!(pick_base(None, refs(&[])), "HEAD");
+        assert_eq!(pick_base(Some("origin/trunk"), refs(&["refs/heads/main"])), "HEAD");
     }
 
     #[test]
@@ -309,6 +355,15 @@ mod tests {
         assert!(!is_managed(&data.join("gone"), &data));
         remove_in(&tree.path, true, &data).unwrap();
         assert_eq!(list_in(&repo, &data).unwrap().len(), 1);
+
+        // The project folder on a feature branch: a new session still starts from the default branch.
+        git(&repo, &["checkout", "-q", "-b", "feature"]).unwrap();
+        std::fs::write(repo.join("feature.txt"), "wip\n").unwrap();
+        git(&repo, &["add", "feature.txt"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "wip"]).unwrap();
+        let tree = create_in(&repo, "codex", &data).unwrap();
+        assert!(tree.path.join("a.txt").exists() && !tree.path.join("feature.txt").exists());
+        remove_in(&tree.path, true, &data).unwrap();
 
         for dir in [&data, &repo] {
             let _ = std::fs::remove_dir_all(dir);

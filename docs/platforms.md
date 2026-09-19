@@ -56,8 +56,10 @@ links, "Open in Agentty" on folders, `agentty` on the user `PATH` and an entry i
 
 ### Tools (Settings → System check)
 
-On first launch Agentty checks what it uses and, when something important is missing, opens **Settings → System
-check**, which installs each tool in a new terminal tab with one click (or copies the command):
+Agentty checks what it uses on every start. On first launch, when something important (required or recommended) is
+missing, it opens **Settings → System check**, which installs each tool in a new terminal tab with one click (or
+copies the command). Until everything important is there, the start page shows a bar that leads to that page, and the
+first-run tour waits: it opens once a check finds the environment ready.
 
 | Tool | Need | Why | Install |
 |---|---|---|---|
@@ -70,11 +72,16 @@ check**, which installs each tool in a new terminal tab with one click (or copie
 | WinGet | recommended | the Install buttons | App Installer (Microsoft Store) |
 
 Tools installed while Agentty runs are found without a restart: panes and lookups use this process's `PATH` plus the
-user and machine `PATH` from the registry. Agentty sets `CLAUDE_CODE_GIT_BASH_PATH` to Git for Windows' `bash.exe` in
-panes (never WSL's) unless you set it yourself.
+user and machine `PATH` from the registry (read as stored and expanded, `%USERPROFILE%` and all), then the folders
+installers use whether or not they touched `PATH` (`%USERPROFILE%\.local\bin` for Claude Code, `%APPDATA%\npm`,
+`Program Files\nodejs`, `PowerShell\7`, `Git\cmd`). Agentty sets `CLAUDE_CODE_GIT_BASH_PATH` to Git for Windows'
+`bash.exe` in panes (never WSL's) unless you set it yourself.
 
 Linux gets the same page with `apt` / `dnf` / `pacman` / `zypper` commands (Claude Code, Node.js, Codex, Git,
-`secret-tool`, `xdg-utils`, `notify-send`, `lsof`).
+`secret-tool`, `xdg-utils`, `notify-send`, `lsof`), and macOS one for Claude Code, Node.js (Homebrew), Codex and Git
+(Command Line Tools). There a check asks a fresh login shell for its `PATH` (what `.zshrc` / `.profile` added since
+Agentty started) and also looks in `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `~/.volta/bin`,
+`~/.bun/bin`, `/opt/homebrew/bin` and `/usr/local/bin`.
 
 ### Single instance
 

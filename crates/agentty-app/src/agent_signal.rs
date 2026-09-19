@@ -159,6 +159,9 @@ pub enum SocketMessage {
     Signal(AgentSignal),
     /// `browser\t{"pane":…,"command":…,"args":[…]}` from `agentty browser`; answered on `reply`.
     Browser(BrowserRequest),
+    /// `worktree\t{"cwd":…,"label":…}` from `agentty worktree-for` (an agent typed into a shell);
+    /// answered on `reply`.
+    Worktree(WorktreeRequest),
     /// `debug\t<command>\t<argument>`; only accepted when `AGENTTY_DEBUG=1`.
     Debug(String, String),
     /// `open\t["agentty://…", "/folder", …]` from a second launch (Windows / Linux single instance).
@@ -191,6 +194,18 @@ pub struct BrowserRequest {
     pub command: String,
     pub args: Vec<String>,
     /// One JSON line: `{"ok":true,"result":…}` or `{"ok":false,"error":"…"}`.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// An agent about to start in a shell pane asks whether it should get a working tree of its own.
+#[derive(Debug, Clone)]
+pub struct WorktreeRequest {
+    /// The pane the connection belongs to.
+    pub pane: u64,
+    pub cwd: std::path::PathBuf,
+    /// `claude` or `codex`: folder name and branch suffix of the tree.
+    pub label: String,
+    /// One JSON line, as [`browser_reply`] makes it: the tree's path, or `null` to stay put.
     pub reply: std::sync::mpsc::Sender<String>,
 }
 
@@ -333,6 +348,27 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
             }
             continue;
         }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("worktree\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let cwd = std::path::PathBuf::from(request["cwd"].as_str().unwrap_or_default());
+            let label = request["label"].as_str().unwrap_or_default();
+            let response = if cwd.is_absolute() && is_agent_label(label) {
+                let (reply, answer) = std::sync::mpsc::channel();
+                let message = SocketMessage::Worktree(WorktreeRequest { pane, cwd, label: label.to_string(), reply });
+                if tx.unbounded_send(message).is_err() {
+                    return;
+                }
+                // Creating a tree is a `git worktree add`: seconds at most.
+                answer.recv_timeout(Duration::from_secs(30)).unwrap_or_else(|_| browser_reply(Err("timed out".into())))
+            } else {
+                browser_reply(Err("bad request".into()))
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
         // Single-instance hand-over (Windows / Linux only; macOS gets open events).
         if let Some(json) = line.strip_prefix("open\t").filter(|_| !cfg!(target_os = "macos") && caller != Caller::Nobody) {
             let arguments: Vec<String> = serde_json::from_str(json).unwrap_or_default();
@@ -356,6 +392,41 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
             }
         }
     }
+}
+
+/// The agents a shell pane asks a working tree for (`label` of [`WorktreeRequest`]).
+pub fn is_agent_label(label: &str) -> bool {
+    matches!(label, "claude" | "codex")
+}
+
+/// `agentty worktree-for <claude|codex>`: run by the shell wrappers right before an agent starts
+/// in a pane. Prints the working tree to start in when another agent already works in this folder
+/// (Agentty created it), nothing otherwise. Always exits 0 and stays quiet on errors, so the agent
+/// starts either way.
+pub fn worktree_for(args: &[String]) -> i32 {
+    use std::io::Write;
+    let (Some(label), Ok(socket), Ok(cwd)) = (args.first(), std::env::var("AGENTTY_SOCKET"), std::env::current_dir()) else {
+        return 0;
+    };
+    if !is_agent_label(label) {
+        return 0;
+    }
+    let Ok(mut stream) = crate::ipc::connect(&socket) else { return 0 };
+    let request = serde_json::json!({ "cwd": cwd, "label": label });
+    if writeln!(stream, "worktree\t{request}").is_err() {
+        return 0;
+    }
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(40)));
+    let mut line = String::new();
+    let _ = BufReader::new(stream).read_line(&mut line);
+    let reply: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
+    if let Some(path) = reply["result"]["path"].as_str() {
+        if let Some(message) = reply["result"]["message"].as_str() {
+            eprintln!("{message}");
+        }
+        println!("{path}");
+    }
+    0
 }
 
 /// `agentty notify <message>`: posts a notification for the pane this command runs in.

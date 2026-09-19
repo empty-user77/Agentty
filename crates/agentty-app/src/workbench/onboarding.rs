@@ -320,9 +320,11 @@ impl Onboarding {
 
 impl Workbench {
     /// Shown once, in the first window of a fresh install.
+    /// The tour is for an environment that works: it opens once the system check finds nothing
+    /// important missing (right after it runs at start, or after a Recheck), not before.
     pub(super) fn first_run_onboarding(&mut self, cx: &mut Context<Self>) {
         if self.slot == 0 && !settings(cx).onboarding_done && std::env::var("AGENTTY_BACKGROUND").as_deref() != Ok("1") {
-            self.open_onboarding(cx);
+            self.onboarding_waits_for_setup = true;
         }
     }
 

@@ -27,9 +27,18 @@ impl Workbench {
         })
     }
 
-    /// An agent typed into a shell (`claude` in a split, say) starts where the shell is: nothing can
-    /// move it afterwards. When another agent already works in that tree, say so once, and how to
-    /// get a tree of its own next time.
+    /// Whether an agent in a pane other than `pane_id` works in the working tree `root`.
+    pub(crate) fn tree_is_taken_by_other(&self, root: &Path, pane_id: u64, cx: &gpui::App) -> bool {
+        self.all_panes().iter().any(|pane| {
+            let view = pane.read(cx);
+            view.pane_id != pane_id && view.tool_id() != "shell" && tree_root(&view.display_cwd()).as_deref() == Some(root)
+        })
+    }
+
+    /// An agent typed into a shell (`claude` in a split, say) is normally moved to a tree of its own
+    /// by the shell wrapper before it starts (`answer_worktree_request`); one that still shares a
+    /// tree (a resumed session, a shell without Agentty's integration) can't be moved afterwards.
+    /// Say so once, and how to get a tree of its own next time.
     pub(super) fn warn_about_shared_tree(&mut self, pane: &super::Pane, cx: &mut Context<Self>) {
         let view = pane.read(cx);
         let by_hand = view.spec.kind == PaneKind::Shell && view.tool_id() != "shell";
@@ -102,6 +111,56 @@ impl Workbench {
         .detach();
         true
     }
+}
+
+/// `agentty worktree-for`: an agent typed into a shell pane is about to start in `request.cwd`. When
+/// another agent pane (in any window) already works in that tree, create one for it and answer
+/// with its path — the shell wrapper moves there before the agent starts. Otherwise answer `null`
+/// and it starts where it is.
+pub fn answer_worktree_request(
+    windows: &[gpui::WindowHandle<Workbench>],
+    request: crate::agent_signal::WorktreeRequest,
+    cx: &mut gpui::App,
+) {
+    use crate::agent_signal::browser_reply;
+    let stay = |request: &crate::agent_signal::WorktreeRequest| {
+        let _ = request.reply.send(browser_reply(Ok("null".into())));
+    };
+    let holder = windows.iter().copied().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx)));
+    let (Some(holder), Some(root)) = (holder, tree_root(&request.cwd)) else { return stay(&request) };
+    if !crate::settings::settings(cx).auto_worktree {
+        return stay(&request);
+    }
+    let taken = windows.iter().any(|w| w.read(cx).is_ok_and(|wb| wb.tree_is_taken_by_other(&root, request.pane, cx)));
+    if !taken {
+        return stay(&request);
+    }
+    let _ = holder.update(cx, |this, _, cx| this.show_toast(t(cx, "worktree.creating").to_string(), cx));
+    let (cwd, label) = (request.cwd.clone(), request.label.clone());
+    let task = cx.background_spawn(async move { agentty_bridge::worktree::create(&cwd, &label) });
+    cx.spawn(async move |cx| {
+        let created = task.await;
+        let _ = holder.update(cx, |this, _, cx| match created {
+            Ok(tree) => {
+                // The same folder inside the new tree (a package of a monorepo, say).
+                let inside = request.cwd.strip_prefix(&root).ok().map(|rest| tree.path.join(rest)).filter(|dir| dir.is_dir());
+                let branch = tree.branch.clone().unwrap_or_else(|| tree.name());
+                let answer = serde_json::json!({
+                    "path": inside.unwrap_or_else(|| tree.path.clone()),
+                    "message": tf(cx, "worktree.started_shell", &[("branch", &branch)]),
+                });
+                let _ = request.reply.send(browser_reply(Ok(answer.to_string())));
+                this.show_toast(tf(cx, "worktree.started", &[("branch", &branch)]), cx);
+                this.refresh_files_panel(cx);
+            }
+            Err(err) => {
+                eprintln!("agentty: could not create a working tree: {err:#}");
+                stay(&request);
+                this.show_toast(tf(cx, "worktree.failed", &[("error", &format!("{err:#}"))]), cx);
+            }
+        });
+    })
+    .detach();
 }
 
 /// Name of the linked working tree `path` is in (`None` in a project's own tree or outside git).

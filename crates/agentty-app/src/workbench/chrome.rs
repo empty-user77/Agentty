@@ -1097,6 +1097,25 @@ impl Workbench {
         // Tabs take the room they need (scrolling when crowded); the spacer gets the rest.
         let mut tabs = div().id("tabs").flex().flex_shrink().min_w_0().h_full().overflow_x_scroll();
         if let Some(page) = self.page {
+            // First: back to the start page.
+            tabs = tabs.child(
+                div()
+                    .id("page-tab-home")
+                    .h_full()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .px_3()
+                    .border_t_1()
+                    .border_r_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .bg(hex(Chrome::TAB_INACTIVE))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::EDITOR)))
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None))
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
+                    .child(icon("house", IconSize::INLINE, hex(Chrome::MUTED))),
+            );
             // Monitoring: AI usage, AI processes and the capture proxy are tabs of one page.
             let pages: Vec<(Page, &str)> = match page {
                 Page::Usage | Page::Processes | Page::Proxy => {
@@ -1916,6 +1935,8 @@ impl Workbench {
             .px_6()
             .pt(px(48.))
             .pb_8()
+            // Something important is missing: say so above everything else.
+            .when(starting.is_none(), |d| d.children(self.render_setup_banner(cx)))
             .child(header)
             .when_some(starting.clone(), |d, input| {
                 d.child(

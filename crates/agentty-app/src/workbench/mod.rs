@@ -345,6 +345,8 @@ pub struct Workbench {
     plugins_page: plugins_page::PluginsPage,
     /// First-run onboarding (dialog steps, then the follow-along tour card).
     onboarding: Option<onboarding::Onboarding>,
+    /// The first-run tour opens once the system check finds the environment ready.
+    onboarding_waits_for_setup: bool,
     /// Monitoring → Proxy: the capture table and its filter.
     proxy: proxy_page::ProxyPage,
     next_id: u64,
@@ -474,12 +476,13 @@ impl Workbench {
             connect_pick: None,
             plugins_page: Default::default(),
             onboarding: None,
+            onboarding_waits_for_setup: false,
             proxy: proxy_page::ProxyPage::new(proxy_filter, proxy_subscription),
             next_id: 1,
         };
         this.restore(window, cx);
-        this.first_run_system_check(cx);
         this.first_run_onboarding(cx);
+        this.startup_system_check(cx);
         this.refresh_sessions(cx);
         this.detect_agents(cx);
         this.start_update_checks(cx);
@@ -723,6 +726,8 @@ impl Workbench {
         self.session_viewer = None;
         self.launcher_open = false;
         self.detect_agents(cx);
+        // Tools may have been installed since: the start page's setup bar follows.
+        self.run_system_check(false, cx);
         window.focus(&self.focus_handle);
         cx.notify();
     }
@@ -2186,6 +2191,22 @@ impl Workbench {
                         self.resume_in_pane(&pane, session, window, cx);
                     }
                 }
+            }
+            // What Recheck on Settings → System check does; prints what was found once it is done.
+            "system-check" => {
+                self.run_system_check(false, cx);
+                cx.spawn(async move |this, cx| {
+                    while this.update(cx, |this, _| this.system_checking).unwrap_or(false) {
+                        cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
+                    }
+                    let _ = this.update(cx, |this, _| {
+                        for tool in this.system_check.iter().flatten() {
+                            eprintln!("system-check: {} = {:?}", tool.id, tool.found);
+                        }
+                        eprintln!("system-check: tour open = {}", this.onboarding.is_some());
+                    });
+                })
+                .detach();
             }
             "settings-section" => {
                 self.page = Some(Page::Settings);

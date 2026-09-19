@@ -53,7 +53,6 @@ impl SettingsSection {
     fn visible() -> impl Iterator<Item = SettingsSection> {
         Self::ALL.into_iter().filter(|s| match s {
             Self::Browser => crate::platform::HAS_WEBVIEW,
-            Self::System => !cfg!(target_os = "macos"),
             _ => true,
         })
     }

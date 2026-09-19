@@ -121,9 +121,16 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
 
 - `agentty_bridge::worktree` wraps `git worktree`. `workbench/worktrees.rs` hooks into `Workbench::launch`: a *new agent*
   session whose folder is a working tree another live agent pane already uses gets `git worktree add -b
-  agentty/<name>` under `data_dir()/worktrees/<project>-<hash>/` and starts there. Shells, resumed sessions and the
-  first session stay in the project. Only trees under that folder are ever removed by Agentty (from the files panel,
-  never with `--force`).
+  agentty/<name>` under `data_dir()/worktrees/<project>-<hash>/` and starts there. The branch starts from the
+  project's default branch (`worktree::base_ref`: the local branch `origin/HEAD` names, else the remote one, else
+  `main` / `master`; the checked-out commit only when there is none), never from whatever the project folder has
+  checked out. Shells, resumed sessions and the first session stay in the project. Only trees under that folder are
+  ever removed by Agentty (from the files panel, never with `--force`).
+- Agents typed into a terminal take the same path before they start: `shell_integration` wraps `claude` and `codex`
+  (zsh, bash, PowerShell) with a function that runs `agentty worktree-for <agent>`. That sends `worktree\t{cwd,label}`
+  on the pane's socket connection; `answer_worktree_request` checks every window for another agent pane in that tree,
+  creates one if so and answers its path, and the function `cd`s there before running the real program. `--version`,
+  subcommands like `mcp` and resumed sessions (`-c`, `--resume`, `codex resume`) stay where they are.
 - `workbench/files_panel.rs` is the last column of the terminal area. It follows the active pane (or a tree picked in
   the panel), reads folders lazily, colors entries from `git status`, and lists the repository's working trees with the
   panes working in each. Everything is read on a background thread every few seconds while the panel is open. Files

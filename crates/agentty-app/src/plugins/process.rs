@@ -273,19 +273,26 @@ fn login_path() -> String {
             // No login shell on Windows: the PATH a new login would get (see `current_path`).
             return agentty_bridge::process::current_path().to_string_lossy().into_owned();
         }
-        // Interactive as well as login: `.zshrc` is where many installs put themselves on PATH.
-        // `printenv` rather than `$PATH`: it prints the colon-separated form in every shell.
-        Command::new(crate::launch::LaunchSpec::shell_program())
-            .args(["-l", "-i", "-c", &format!("echo {PATH_MARKER}; printenv PATH")])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .and_then(|out| parse_login_path(&String::from_utf8_lossy(&out.stdout)))
-            .map(|login| if fallback.is_empty() { login.clone() } else { format!("{login}:{fallback}") })
-            .unwrap_or(fallback)
+        login_shell_path().map(|login| if fallback.is_empty() { login.clone() } else { format!("{login}:{fallback}") }).unwrap_or(fallback)
     })
     .clone()
+}
+
+/// PATH of a fresh login shell, asked now (not cached): picks up what an installer just added to
+/// `.zshrc` / `.profile`. Unix only; `None` when the shell didn't say.
+pub(crate) fn login_shell_path() -> Option<String> {
+    if cfg!(windows) {
+        return None;
+    }
+    // Interactive as well as login: `.zshrc` is where many installs put themselves on PATH.
+    // `printenv` rather than `$PATH`: it prints the colon-separated form in every shell.
+    Command::new(crate::launch::LaunchSpec::shell_program())
+        .args(["-l", "-i", "-c", &format!("echo {PATH_MARKER}; printenv PATH")])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .and_then(|out| parse_login_path(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// The PATH line among the banners and prompts of an interactive shell. It is found by the marker

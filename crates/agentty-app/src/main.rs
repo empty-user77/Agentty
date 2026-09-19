@@ -449,6 +449,11 @@ fn main() {
         std::process::exit(agent_signal::forward_signal(&args[2..]));
     }
 
+    // `agentty worktree-for <agent>`: the shell wrappers ask for a working tree of the agent's own.
+    if args.get(1).map(String::as_str) == Some("worktree-for") {
+        std::process::exit(agent_signal::worktree_for(&args[2..]));
+    }
+
     if args.get(1).map(String::as_str) == Some("notify") {
         if let Err(err) = agent_signal::send_notify(&args[2..].join(" ")) {
             eprintln!("agentty: {err:#}");
@@ -628,6 +633,9 @@ fn main() {
                                         let _ = request.reply.send(agent_signal::browser_reply(Err("no Agentty window".into())));
                                     }
                                 }
+                            }
+                            agent_signal::SocketMessage::Worktree(request) => {
+                                workbench::worktrees::answer_worktree_request(&windows, request, cx)
                             }
                             agent_signal::SocketMessage::Open(arguments) => {
                                 queue_launch_arguments(&arguments);

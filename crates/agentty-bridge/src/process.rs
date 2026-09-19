@@ -76,14 +76,17 @@ pub fn which(name: &str) -> Option<PathBuf> {
 /// The `PATH` for programs Agentty starts. On Windows a GUI app keeps the `PATH` it was started
 /// with, so a tool installed while Agentty runs (Git, Node.js, Claude Code, …) would stay
 /// invisible until a restart; the user and machine values from the registry — what a new login
-/// gets — are appended to this process's `PATH` (whose entries keep their order and priority).
-/// Elsewhere this is `$PATH`.
+/// gets — are appended to this process's `PATH` (whose entries keep their order and priority),
+/// then the folders installers put tools in without always adding them to `PATH`
+/// ([`tool_dirs`]). Elsewhere this is `$PATH`.
 pub fn current_path() -> std::ffi::OsString {
     let process = std::env::var_os("PATH").unwrap_or_default();
     #[cfg(windows)]
     {
         let registry = [registry::machine_path(), registry::user_path()];
-        let extra: Vec<PathBuf> = registry.iter().flatten().flat_map(|value| std::env::split_paths(value).collect::<Vec<_>>()).collect();
+        let mut extra: Vec<PathBuf> =
+            registry.iter().flatten().flat_map(|value| std::env::split_paths(value).collect::<Vec<_>>()).collect();
+        extra.extend(tool_dirs());
         merge_paths(&process, &extra)
     }
     #[cfg(not(windows))]
@@ -92,10 +95,47 @@ pub fn current_path() -> std::ffi::OsString {
     }
 }
 
+/// Folders agent CLIs and their runtimes install into, whether or not the installer put them on
+/// `PATH` (or the change reached Agentty yet): Claude Code's native installer (`~/.local/bin`),
+/// npm's global folder, Node.js, PowerShell 7, Homebrew, … Only folders that exist, and only
+/// absolute ones under the home folder or the system's program folders — never the current
+/// directory. They are searched after everything on `PATH`.
+pub fn tool_dirs() -> Vec<PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(home) = &home {
+        dirs.push(home.join(".local").join("bin"));
+    }
+    if cfg!(windows) {
+        let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
+        dirs.extend(var("APPDATA").map(|d| d.join("npm")));
+        for base in ["ProgramFiles", "ProgramW6432"] {
+            if let Some(dir) = var(base) {
+                dirs.push(dir.join("nodejs"));
+                dirs.push(dir.join("PowerShell").join("7"));
+                dirs.push(dir.join("Git").join("cmd"));
+            }
+        }
+        dirs.extend(var("LOCALAPPDATA").map(|d| d.join("Microsoft").join("WindowsApps")));
+    } else {
+        if let Some(home) = &home {
+            for sub in [".claude/local", ".npm-global/bin", ".volta/bin", ".bun/bin", ".cargo/bin"] {
+                dirs.push(home.join(sub));
+            }
+        }
+        // Homebrew (Apple silicon, Intel). Linux's Homebrew reaches PATH through the login shell.
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            dirs.push(PathBuf::from(dir));
+        }
+    }
+    dirs.retain(|dir| dir.is_absolute() && dir.is_dir());
+    dirs.dedup();
+    dirs
+}
+
 /// `base` followed by the entries of `extra` it doesn't have yet (case-insensitive on Windows,
 /// trailing separators ignored). Empty entries are dropped.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn merge_paths(base: &OsStr, extra: &[PathBuf]) -> std::ffi::OsString {
+pub fn merge_paths(base: &OsStr, extra: &[PathBuf]) -> std::ffi::OsString {
     let key = |p: &Path| {
         let text = p.to_string_lossy();
         let text = text.trim_end_matches(['/', '\\']);
@@ -153,22 +193,60 @@ fn git_roots(git: &Path) -> Vec<PathBuf> {
     roots
 }
 
+/// `%NAME%` replaced by `lookup(NAME)`, like Windows expands REG_EXPAND_SZ values; unknown names
+/// and a lone `%` stay as they are.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn expand_variables(text: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) if end > 0 => {
+                let name = &after[..end];
+                match lookup(name) {
+                    Some(value) => out.push_str(&value),
+                    None => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            _ => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(windows)]
 mod registry {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+        RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
     };
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    /// A string value, `%VARIABLES%` expanded (RegGetValueW expands REG_EXPAND_SZ).
+    /// A string value, `%VARIABLES%` expanded. RegGetValueW refuses `RRF_RT_REG_EXPAND_SZ`
+    /// without `RRF_NOEXPAND` (ERROR_INVALID_PARAMETER), and `Path` usually is REG_EXPAND_SZ: read
+    /// it as it is stored and expand it here.
     fn read(root: HKEY, key: &str, value: &str) -> Option<std::ffi::OsString> {
+        read_raw(root, key, value).map(|raw| super::expand_variables(&raw.to_string_lossy(), |name| std::env::var(name).ok()).into())
+    }
+
+    fn read_raw(root: HKEY, key: &str, value: &str) -> Option<std::ffi::OsString> {
         use std::os::windows::ffi::OsStringExt;
         let (key, value) = (wide(key), wide(value));
-        let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ;
+        let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
         let mut bytes: u32 = 0;
         // SAFETY: the first call only asks for the size; the second fills a buffer of that size.
         unsafe {
@@ -251,6 +329,37 @@ mod tests {
         same_as_first.push(std::path::MAIN_SEPARATOR_STR);
         let merged = merge_paths(&base, &[PathBuf::from(same_as_first), third.clone(), PathBuf::new()]);
         assert_eq!(std::env::split_paths(&merged).collect::<Vec<_>>(), vec![first, second, third]);
+    }
+
+    #[test]
+    fn expands_registry_variables() {
+        let lookup = |name: &str| match name {
+            "USERPROFILE" => Some(r"C:\Users\example".to_string()),
+            "SystemRoot" => Some(r"C:\Windows".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            expand_variables(r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;%SystemRoot%\system32", lookup),
+            r"C:\Users\example\AppData\Local\Microsoft\WindowsApps;C:\Windows\system32"
+        );
+        assert_eq!(expand_variables("%UNKNOWN%\\bin;100%;%%", lookup), "%UNKNOWN%\\bin;100%;%%");
+        assert_eq!(expand_variables("plain", lookup), "plain");
+    }
+
+    /// The machine `Path` is always there; reading it must work (it is REG_EXPAND_SZ).
+    #[test]
+    #[cfg(windows)]
+    fn reads_the_machine_path_from_the_registry() {
+        let path = registry::machine_path().expect("machine Path");
+        let text = path.to_string_lossy().to_lowercase();
+        assert!(text.contains("system32") && !text.contains('%'), "{text}");
+    }
+
+    #[test]
+    fn tool_dirs_are_absolute_and_exist() {
+        for dir in tool_dirs() {
+            assert!(dir.is_absolute() && dir.is_dir(), "{}", dir.display());
+        }
     }
 
     /// Relative and empty PATH entries mean the current directory: never searched.
