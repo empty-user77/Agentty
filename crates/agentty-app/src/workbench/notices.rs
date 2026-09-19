@@ -103,8 +103,7 @@ impl Workbench {
             // The pane is gone; its notices can't be acted on.
             self.mark_pane_read(pane_id);
         }
-        self.status = Some(t(cx, "notice.none_unread").into());
-        cx.notify();
+        self.set_status(t(cx, "notice.none_unread"), cx);
     }
 
     pub(super) fn render_notices(&self, cx: &mut Context<Self>) -> impl IntoElement {

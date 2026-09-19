@@ -206,6 +206,9 @@ pub struct Rename {
     _subscription: Subscription,
 }
 
+/// How long a status bar message stays.
+const STATUS_DURATION: std::time::Duration = std::time::Duration::from_secs(6);
+
 pub struct Workbench {
     /// Which Agentty window this is (0 = main); picks its layout file.
     pub slot: usize,
@@ -231,6 +234,8 @@ pub struct Workbench {
     sessions_loading: bool,
     session_filter: SessionFilter,
     status: Option<SharedString>,
+    /// Bumped per status message, so an older message's timer never clears a newer one.
+    status_generation: u64,
     pane_subscriptions: HashMap<EntityId, Subscription>,
     sidebar_resizing: bool,
     browser_resizing: bool,
@@ -385,6 +390,7 @@ impl Workbench {
             sessions_loading: false,
             session_filter: SessionFilter::All,
             status: None,
+            status_generation: 0,
             pane_subscriptions: HashMap::new(),
             sidebar_resizing: false,
             browser_resizing: false,
@@ -1061,8 +1067,22 @@ impl Workbench {
         .detach();
     }
 
+    /// A message in the status bar. It reports something that just happened, so it goes away
+    /// after a few seconds instead of staying until the next one (a closed link kept saying
+    /// "linked with …").
     fn set_status(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.status = Some(message.into());
+        self.status_generation += 1;
+        let generation = self.status_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(STATUS_DURATION).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.status_generation == generation && this.status.take().is_some() {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
         cx.notify();
     }
 

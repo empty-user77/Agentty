@@ -295,7 +295,7 @@ impl Workbench {
             ),
             cx,
         );
-        self.status = Some(tf(cx, "flow.direct_connected", &[("name", &target.name)]).into());
+        self.set_status(tf(cx, "flow.direct_connected", &[("name", &target.name)]), cx);
     }
 
     /// Agent panes that `pane_id` is not connected to yet, in display order.
@@ -498,7 +498,7 @@ impl Workbench {
                             this.deliver(to, handoff.prompt.clone(), cx);
                             this.set_edge_status(from, to, EdgeStatus::Shared(total));
                             let name = target.read(cx).display_title();
-                            this.status = Some(tf(cx, "flow.connected", &[("name", &name)]).into());
+                            this.set_status(tf(cx, "flow.connected", &[("name", &name)]), cx);
                         }
                     }
                     Err(err) if mode == ShareMode::Full => this.set_edge_status(from, to, EdgeStatus::Failed(format!("{err:#}"))),
