@@ -19,6 +19,12 @@ All notable changes to this project are documented here. The format follows
 - API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);
   macOS keeps using the Keychain.
 
+## [0.1.11] - 2026-09-19
+
+### Fixed
+- Status bar messages ("Linked with …" and others) go away after a few seconds instead of staying until the next
+  message, so a closed session link no longer looks linked.
+
 ## [0.1.10] - 2026-09-19
 
 ### Added
