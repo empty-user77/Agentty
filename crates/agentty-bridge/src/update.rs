@@ -257,6 +257,7 @@ pub fn private_download_dir(prefix: &str) -> Result<PathBuf> {
     for attempt in 0..16u32 {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
         let dir = base.join(format!("{prefix}-{}-{nanos:08x}{attempt}", std::process::id()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {

@@ -262,11 +262,10 @@ begin
   if CurStep = ssInstall then
     MoveExecutableAside;
   if CurStep = ssPostInstall then
-    DeletePreviousExecutables;
-  if CurStep = ssDone then
-    Installed := True;
-  if CurStep = ssPostInstall then
   begin
+    { The new files are in place: a later failure must not put the old agentty.exe back. }
+    Installed := True;
+    DeletePreviousExecutables;
     SetUserPath(True);
     { The zip's install.ps1 registers its own Settings > Apps entry for the same folder; this installer replaces it. }
     RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, LegacyUninstallKey);
