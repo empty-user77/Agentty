@@ -66,13 +66,53 @@ impl TrayAnchor {
 /// What the menu bar icon shows next to the mark.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TrayState {
+    /// Agents in the middle of a turn.
     pub working: usize,
-    pub waiting: usize,
+    /// Agents waiting for a permission or an answer.
+    pub asking: usize,
+    /// Agents that finished and haven't been looked at yet.
+    pub done: usize,
+}
+
+/// Spinner frames while agents work.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// The menu bar item's text: a turning spinner with how many work, then `●` with how many need an
+/// answer, and — only when nothing else is going on — `✓` with how many finished unseen.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn tray_title(state: &TrayState, frame: usize) -> String {
+    let mut parts = Vec::new();
+    if state.working > 0 {
+        parts.push(format!("{} {}", SPINNER[frame % SPINNER.len()], state.working));
+    }
+    if state.asking > 0 {
+        parts.push(format!("● {}", state.asking));
+    }
+    if parts.is_empty() && state.done > 0 {
+        parts.push(format!("✓ {}", state.done));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", parts.join("  "))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_title_says_working_asking_or_done() {
+        let state = |working, asking, done| TrayState { working, asking, done };
+        assert_eq!(tray_title(&state(0, 0, 0), 0), "");
+        assert_eq!(tray_title(&state(2, 0, 0), 0), " ⠋ 2");
+        assert_eq!(tray_title(&state(2, 0, 0), 1), " ⠙ 2", "the spinner turns");
+        assert_eq!(tray_title(&state(0, 1, 0), 0), " ● 1");
+        assert_eq!(tray_title(&state(0, 0, 3), 0), " ✓ 3", "finished agents get a check");
+        assert_eq!(tray_title(&state(1, 1, 3), 0), " ⠋ 1  ● 1", "work and questions come before done");
+    }
 
     #[test]
     fn keeps_popover_on_screen() {

@@ -607,7 +607,8 @@ fn main() {
                     for window in workbenches(cx) {
                         let Ok(next) = window.read(cx).map(|wb| wb.tray_state(cx)) else { continue };
                         state.working += next.working;
-                        state.waiting += next.waiting;
+                        state.asking += next.asking;
+                        state.done += next.done;
                     }
                     tray.update(&state);
                     state.working > 0
