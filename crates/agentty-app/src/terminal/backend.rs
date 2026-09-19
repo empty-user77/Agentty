@@ -121,6 +121,11 @@ impl Backend {
                 env.insert("CLAUDE_CODE_GIT_BASH_PATH".into(), bash.display().to_string());
             }
         }
+        // Where the shell wrapper finds Agentty's guide for a `claude` typed into the pane.
+        if crate::agent_guide::enabled() && crate::agent_guide::guide_file().is_file() {
+            env.insert("AGENTTY_GUIDE_FILE".into(), crate::agent_guide::guide_file().display().to_string());
+            env.insert("AGENTTY_PLUGIN_DIR".into(), crate::agent_guide::plugin_dir().display().to_string());
+        }
         env.extend(crate::shell_integration::environment(&program));
         env.extend(auth.pane_variables());
         // Monitoring → Proxy: tabs opened while capture is on are routed through the capture proxy.

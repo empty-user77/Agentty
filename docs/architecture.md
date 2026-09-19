@@ -130,7 +130,29 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
   (zsh, bash, PowerShell) with a function that runs `agentty worktree-for <agent>`. That sends `worktree\t{cwd,label}`
   on the pane's socket connection; `answer_worktree_request` checks every window for another agent pane in that tree,
   creates one if so and answers its path, and the function `cd`s there before running the real program. `--version`,
-  subcommands like `mcp` and resumed sessions (`-c`, `--resume`, `codex resume`) stay where they are.
+  subcommands like `mcp` and resumed sessions (`-c`, `--resume`, `codex resume`) stay where they are. The wrappers
+  only ask when the pane has `$AGENTTY_SHELL_API` (set by versions that answer), so wrapper files written by a newer
+  Agentty never start an older one that lacks the command.
+- A session tree of a project the user trusts in Claude Code inherits that trust (`claude_trust::inherit_trust` sets
+  `hasTrustDialogAccepted` on the tree's entry in `~/.claude.json`, nothing else, atomically), so the session starts
+  without the folder question. Projects nobody trusted (nor a folder above them) are still asked.
+
+## Agents and Agentty
+
+- `agent_guide.rs` writes a short English guide and a Claude Code plugin with the `agentty-parallel-tasks` skill to
+  `data_dir()/agent-guide/` at startup. Agent panes started by Agentty pass them on the command line (Claude Code
+  `--append-system-prompt-file` / `--plugin-dir`, Codex `-c developer_instructions=…` unless the user set their own);
+  a `claude` typed into a pane gets them from the shell wrapper (`$AGENTTY_GUIDE_FILE`, `$AGENTTY_PLUGIN_DIR`) unless
+  it is a subcommand or already has such options. Nothing is written into projects or agent settings. Settings →
+  General → "Tell agents what Agentty offers" turns it off.
+- `agentty tasks` (`tasks_cli.rs`) lets an agent hand pieces of work to new sessions: `tasks\t{cwd,tasks}` on the pane's
+  socket connection (checked: 1–6 tasks, titles and prompts bounded, agent `claude` / `codex`). `workbench/tasks.rs`
+  queues the request and shows one dialog per request; nothing starts without the user's click. On yes, every task
+  gets `worktree::create` from the asking agent's project and a pane split off the asking pane (right, then below),
+  started with its prompt (`Start::Prompt`, sent at once). The agent gets the titles, branches and folders back.
+  Settings → General → "Agents can start parallel tasks" refuses requests without asking.
+- Prompts from links and plugins that arrive while the "Send to…" dialog is open wait in a queue instead of
+  replacing it.
 - `workbench/files_panel.rs` is the last column of the terminal area. It follows the active pane (or a tree picked in
   the panel), reads folders lazily, colors entries from `git status`, and lists the repository's working trees with the
   panes working in each. Everything is read on a background thread every few seconds while the panel is open. Files

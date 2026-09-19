@@ -32,6 +32,11 @@ const PREVIEW_CHARS: usize = 4_000;
 
 impl Workbench {
     pub(super) fn open_prompt_dialog(&mut self, request: PromptRequest, _window: &mut Window, cx: &mut Context<Self>) {
+        // One question at a time: a request arriving while another is shown waits for its turn.
+        if self.prompt_dialog.is_some() {
+            self.prompt_queue.push_back(request);
+            return cx.notify();
+        }
         let kind = match request.agent.as_deref() {
             Some("codex") => PaneKind::Codex,
             Some("shell" | "terminal") => PaneKind::Shell,
@@ -50,6 +55,14 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Closes the dialog and shows the next waiting request, if any.
+    fn close_prompt_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_dialog = None;
+        if let Some(next) = self.prompt_queue.pop_front() {
+            self.open_prompt_dialog(next, window, cx);
+        }
+    }
+
     pub(super) fn confirm_prompt_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.prompt_dialog.as_ref() else { return };
         let mut request = dialog.request.clone();
@@ -65,7 +78,7 @@ impl Workbench {
             }
         }
         match self.deliver_prompt(request, window, cx) {
-            Ok(_) => self.prompt_dialog = None,
+            Ok(_) => self.close_prompt_dialog(window, cx),
             Err(error) => {
                 if let Some(dialog) = self.prompt_dialog.as_mut() {
                     dialog.error = Some(error);
@@ -365,7 +378,7 @@ impl Workbench {
                                 .gap_2()
                                 .child(button("prompt-cancel", t(cx, "confirm.cancel"), false).on_click(cx.listener(
                                     |this, _: &ClickEvent, window, cx| {
-                                        this.prompt_dialog = None;
+                                        this.close_prompt_dialog(window, cx);
                                         this.focus_active(window, cx);
                                         cx.notify();
                                     },

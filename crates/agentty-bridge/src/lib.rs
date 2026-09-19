@@ -4,6 +4,7 @@ pub mod agent_auth;
 pub mod agy;
 pub mod amp;
 pub mod claude;
+pub mod claude_trust;
 pub mod codex;
 pub mod connectors;
 pub mod context;
