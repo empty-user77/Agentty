@@ -202,6 +202,38 @@ impl Entry {
     }
 }
 
+/// Where the last list read is kept, so the page has something to show before the network
+/// answers — and still does when it cannot.
+fn cache_path() -> std::path::PathBuf {
+    // The same data directory everything else uses, and the same hook the tests move aside: a
+    // test must never write into the real ~/.agentty.
+    #[cfg(test)]
+    if let Some(root) = super::store::tests::ROOT.with(|root| root.borrow().clone()) {
+        return root.join("marketplace.json");
+    }
+    crate::fsutil::data_dir().join("marketplace.json")
+}
+
+/// The list as it was last read, and when. Nothing here is trusted any more than a fresh read:
+/// every entry goes through the same checks.
+pub fn cached() -> Option<(Vec<Entry>, std::time::SystemTime)> {
+    let path = cache_path();
+    let read_at = std::fs::metadata(&path).and_then(|meta| meta.modified()).ok()?;
+    let bytes = std::fs::read(&path).ok()?;
+    parse(&bytes).ok().filter(|entries| !entries.is_empty()).map(|entries| (entries, read_at))
+}
+
+fn keep(bytes: &[u8]) {
+    let path = cache_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
 /// The list, as the app can use it. Blocking: callers run it off the main thread.
 pub fn fetch() -> Result<Vec<Entry>> {
     let agent = crate::http::agent_builder().timeout(TIMEOUT).build();
@@ -211,7 +243,10 @@ pub fn fetch() -> Result<Vec<Entry>> {
     if bytes.len() > MAX_INDEX_BYTES {
         bail!("the marketplace list is larger than {} MB", MAX_INDEX_BYTES / 1024 / 1024);
     }
-    parse(&bytes)
+    let entries = parse(&bytes)?;
+    // Only a list that could be read is kept, so a broken one does not become what the page shows.
+    keep(&bytes);
+    Ok(entries)
 }
 
 /// Reads a list, keeping the entries that check out and leaving the rest.
@@ -343,6 +378,26 @@ mod tests {
         assert!(!module_host_allowed("elsewhere.example"));
         std::env::remove_var("AGENTTY_MARKETPLACE_INDEX");
         assert!(!module_host_allowed("plugins.example.com"));
+    }
+
+    /// What was read last time is kept, and read back through the same checks.
+    #[test]
+    fn the_list_is_kept_between_runs() {
+        super::super::store::tests::with_data_dir(|_| {
+            assert!(cached().is_none(), "nothing kept yet");
+            let list = serde_json::json!({ "apiVersion": 1, "plugins": [entry()] });
+            keep(list.to_string().as_bytes());
+            let (entries, _) = cached().expect("the list comes back");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].id, "hello-world");
+
+            // A file that is not a list at all is not what the page shows.
+            keep(b"not json");
+            assert!(cached().is_none());
+            // Neither is an empty one: there would be nothing to show anyway.
+            keep(serde_json::json!({ "apiVersion": 1, "plugins": [] }).to_string().as_bytes());
+            assert!(cached().is_none());
+        });
     }
 
     #[test]

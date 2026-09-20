@@ -27,6 +27,13 @@ All notable changes to this project are documented here. The format follows
   can go through an HTTP proxy the plugin names.
 - Agentty bundles no plugin modules: the ones it used to carry are published like everyone else's,
   with their source and their checksum where anyone can read them.
+- The marketplace list is kept between runs, so the Plugins page has something to show before the
+  network answers — and still does when it cannot reach it, saying how old what it shows is.
+  Plugins with a newer version in the marketplace say so in the list, and **Update all** takes
+  them one after another.
+- A plugin can put text on the clipboard (`host/copy`) — what a panel's "copy this" button needs.
+  Agent Rest Client uses it for **Copy as cURL**: the request as it would actually be sent, with
+  the environment's values filled in and every value quoted so a shell reads it back as one.
 - A marketplace: **Plugins → Marketplace** lists what
   [Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers, and installing
   one downloads its module and checks it against the checksum in the listing — a module that does

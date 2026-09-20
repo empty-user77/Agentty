@@ -23,6 +23,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("ui/setBadge", None),
     ("host/info", None),
     ("host/openUrl", None),
+    // Puts text on the clipboard: what a plugin's "copy this" button does.
+    ("host/copy", None),
     // Reveals a file in Finder, and tells the plugin whether a path exists: that is the user's
     // folders, so it needs the same permission as reading them.
     ("host/revealPath", Some("workspace.read")),

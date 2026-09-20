@@ -41,7 +41,19 @@ enum Market {
     Idle,
     Loading,
     Ready(Vec<market::Entry>),
+    /// The list kept from last time, while a fresh one is read — or because none could be.
+    Stale(Vec<market::Entry>, String),
     Failed(String),
+}
+
+impl Market {
+    /// What is in hand, whether it was just read or kept from last time.
+    fn entries(&self) -> &[market::Entry] {
+        match self {
+            Market::Ready(entries) | Market::Stale(entries, _) => entries,
+            _ => &[],
+        }
+    }
 }
 
 #[derive(Default)]
@@ -65,6 +77,8 @@ pub struct PluginsPage {
     market: Market,
     /// The marketplace plugin being downloaded.
     installing: Option<String>,
+    /// Plugins waiting their turn while "update everything" works through them.
+    update_queue: Vec<String>,
 }
 
 struct Inputs {
@@ -91,6 +105,8 @@ struct Row {
     version: String,
     publisher: String,
     description: String,
+    /// What else this plugin is called: searched, never shown.
+    keywords: String,
     icon: &'static str,
     origin: Origin,
 }
@@ -114,14 +130,20 @@ impl Workbench {
         if matches!(self.plugins_page.market, Market::Loading) {
             return;
         }
-        self.plugins_page.market = Market::Loading;
+        // What was read last time, so the page is not empty while the network answers.
+        self.plugins_page.market = match market::cached() {
+            Some((entries, at)) => Market::Stale(entries, ago(at, cx)),
+            None => Market::Loading,
+        };
         let task = cx.background_spawn(async move { market::fetch() });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.plugins_page.market = match result {
-                    Ok(entries) => Market::Ready(entries),
-                    Err(err) => Market::Failed(format!("{err:#}")),
+                this.plugins_page.market = match (result, std::mem::take(&mut this.plugins_page.market)) {
+                    (Ok(entries), _) => Market::Ready(entries),
+                    // The network failed, but last time's list is still worth showing.
+                    (Err(err), Market::Stale(entries, _)) => Market::Stale(entries, format!("{err:#}")),
+                    (Err(err), _) => Market::Failed(format!("{err:#}")),
                 };
                 cx.notify();
             });
@@ -130,10 +152,24 @@ impl Workbench {
     }
 
     fn market_entries(&self) -> &[market::Entry] {
-        match &self.plugins_page.market {
-            Market::Ready(entries) => entries,
-            _ => &[],
-        }
+        self.plugins_page.market.entries()
+    }
+
+    /// A marketplace entry newer than what is installed.
+    fn market_update(&self, plugin: &InstalledPlugin) -> Option<&market::Entry> {
+        self.market_entry(&plugin.id).filter(|entry| entry.newer_than(plugin))
+    }
+
+    /// Starts the next plugin waiting in an "update everything", if there is one.
+    fn next_queued_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(next) = self.plugins_page.update_queue.pop() else { return };
+        plugins::stop(&next, cx);
+        self.install_from_market(next, window, cx);
+    }
+
+    /// Every installed plugin the marketplace has a newer version of.
+    fn market_updates(&self, cx: &Context<Self>) -> Vec<String> {
+        plugins::host(cx).installed.iter().filter(|plugin| self.market_update(plugin).is_some()).map(|plugin| plugin.id.clone()).collect()
     }
 
     fn market_entry(&self, id: &str) -> Option<&market::Entry> {
@@ -142,7 +178,10 @@ impl Workbench {
 
     /// Downloads a marketplace plugin and installs it once its checksum matches.
     fn install_from_market(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(entry) = self.market_entry(&id).cloned() else { return };
+        let Some(entry) = self.market_entry(&id).cloned() else {
+            // It is no longer offered: the rest of a queue still gets its turn.
+            return self.next_queued_update(window, cx);
+        };
         if self.plugins_page.installing.is_some() {
             return;
         }
@@ -156,6 +195,8 @@ impl Workbench {
                 let _ = this.update(cx, |this, cx| {
                     this.plugins_page.installing = None;
                     this.after_install(result, window, cx);
+                    // "Update everything": the next one starts when this one is done.
+                    this.next_queued_update(window, cx);
                 });
             });
         })
@@ -372,6 +413,7 @@ impl Workbench {
             .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.plugins")))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.subtitle")))
             .child(div().flex_1())
+            .children(self.render_update_all(cx))
             .child(action_button(
                 "plugins-guide",
                 t(cx, "plugins.guide"),
@@ -412,6 +454,30 @@ impl Workbench {
             ))
     }
 
+    /// "3 updates" and the button that takes them all, when the marketplace has newer versions.
+    fn render_update_all(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let updates = self.market_updates(cx);
+        if updates.is_empty() {
+            return None;
+        }
+        let count = updates.len().to_string();
+        Some(
+            action_button(
+                "plugins-update-all",
+                tf(cx, "plugins.update_all", &[("n", &count)]),
+                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    let mut waiting = this.market_updates(cx);
+                    let Some(first) = waiting.pop() else { return };
+                    this.plugins_page.update_queue = waiting;
+                    plugins::stop(&first, cx);
+                    this.install_from_market(first, window, cx);
+                }),
+            )
+            .bg(hex_alpha(Chrome::ORANGE, 0.22))
+            .text_color(hex(Chrome::ORANGE)),
+        )
+    }
+
     /// A text field of the page (search, Git URL, name, idea).
     fn plugins_field(&self, input: Option<&Entity<TextInput>>) -> gpui::Div {
         div()
@@ -442,6 +508,7 @@ impl Workbench {
                 || row.name.to_lowercase().contains(&search)
                 || row.id.contains(&search)
                 || row.description.to_lowercase().contains(&search)
+                || row.keywords.contains(&search)
         };
         let installed_rows: Vec<Row> = installed.iter().map(Row::installed).filter(matches).collect();
         let catalog_rows: Vec<Row> = store::BUILTIN
@@ -481,6 +548,7 @@ impl Workbench {
         list = list.child(section(t(cx, "plugins.market").to_string()));
         match &page.market {
             Market::Loading | Market::Idle => list = list.child(hint(t(cx, "plugins.market_loading"))),
+            Market::Stale(_, note) => list = list.child(div().px_3().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(note.clone())),
             Market::Failed(error) => {
                 list = list
                     .child(hint(t(cx, "plugins.market_failed")))
@@ -572,10 +640,12 @@ impl Workbench {
             true => format!("{}…", row.description.chars().take(SUMMARY_CHARS).collect::<String>().trim_end()),
             false => row.description.clone(),
         };
-        let tag = match row.origin {
-            Origin::Builtin => Some((t(cx, "plugins.builtin").to_string(), Chrome::BLUE)),
-            Origin::Market => Some((t(cx, "plugins.market").to_string(), Chrome::PURPLE)),
-            Origin::Installed => None,
+        let update = plugins::plugin(cx, &row.id).and_then(|plugin| self.market_update(plugin).map(|entry| entry.version.clone()));
+        let tag = match (row.origin, update) {
+            (_, Some(version)) => Some((tf(cx, "plugins.update_to", &[("version", &version)]), Chrome::ORANGE)),
+            (Origin::Builtin, _) => Some((t(cx, "plugins.builtin").to_string(), Chrome::BLUE)),
+            (Origin::Market, _) => Some((t(cx, "plugins.market").to_string(), Chrome::PURPLE)),
+            (Origin::Installed, _) => None,
         };
         div()
             .id(SharedString::from(format!("plugin-row-{}", row.id)))
@@ -930,11 +1000,11 @@ impl Workbench {
             ));
         }
         // A newer version in the marketplace than the one installed.
-        if self.market_entry(&plugin.id).is_some_and(|entry| entry.newer_than(plugin)) {
+        if let Some(version) = self.market_update(plugin).map(|entry| entry.version.clone()) {
             let id = id.clone();
             row = row.child(action_button(
                 button_id("market-update"),
-                t(cx, "plugins.update"),
+                tf(cx, "plugins.update_to", &[("version", &version)]),
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
                     plugins::stop(&id, cx);
                     this.install_from_market(id.clone(), window, cx);
@@ -1269,6 +1339,7 @@ impl Row {
             version: entry.version.clone(),
             publisher: entry.publisher.clone(),
             description: entry.description.clone(),
+            keywords: entry.keywords.join(" ").to_lowercase(),
             icon: icon_named(entry.icon.as_deref()),
             origin: Origin::Market,
         }
@@ -1282,6 +1353,7 @@ impl Row {
             version: manifest.map(|m| m.version.clone()).unwrap_or_default(),
             publisher: manifest.map(|m| m.publisher.clone()).unwrap_or_default(),
             description: manifest.map(|m| m.description.clone()).unwrap_or_else(|| plugin.error.clone().unwrap_or_default()),
+            keywords: manifest.map(|m| m.keywords.join(" ").to_lowercase()).unwrap_or_default(),
             icon: icon_named(manifest.and_then(|m| m.icon.as_deref())),
             origin: Origin::Installed,
         }
@@ -1294,6 +1366,7 @@ impl Row {
             version: manifest.version.clone(),
             publisher: manifest.publisher.clone(),
             description: manifest.description.clone(),
+            keywords: manifest.keywords.join(" ").to_lowercase(),
             icon: icon_named(manifest.icon.as_deref()),
             origin: Origin::Builtin,
         }
@@ -1309,6 +1382,12 @@ fn source_key(source: Source) -> &'static str {
         Source::Dev => "plugins.source_dev",
         Source::Market => "plugins.market",
     }
+}
+
+/// "from 3m ago", for the list kept from last time — the same short form the sessions list uses.
+fn ago(at: std::time::SystemTime, cx: &Context<Workbench>) -> String {
+    let then = at.duration_since(std::time::UNIX_EPOCH).map(|since| since.as_millis() as u64).unwrap_or(0);
+    tf(cx, "plugins.market_kept", &[("when", &crate::ui::relative_time(crate::ui::now_ms(), then))])
 }
 
 fn detail_heading(title: String) -> impl IntoElement {

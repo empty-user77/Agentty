@@ -23,6 +23,8 @@ const LOG_BYTES: usize = 256 * 1024;
 const MAX_MESSAGES_PER_SECOND: u32 = 240;
 /// Windows are refreshed at most this often, however many messages arrive.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
+/// Characters a plugin may put on the clipboard at once.
+const MAX_COPY_CHARS: usize = 100_000;
 /// One notification per plugin per this long; the rest are dropped.
 const NOTIFY_INTERVAL: Duration = Duration::from_millis(700);
 /// `net/fetch` calls one plugin may have in flight. A request holds a background thread until it
@@ -505,6 +507,21 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 _ => Ok(Value::Array(storage::keys(plugin_id).into_iter().map(Value::String).collect())),
             };
             reply(result.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}"))), cx)
+        }
+        "host/copy" => {
+            let text = params.get("text").and_then(Value::as_str).unwrap_or_default();
+            if text.is_empty() {
+                return reply(Err((codes::INVALID_PARAMS, "nothing to copy".into())), cx);
+            }
+            // Bounded: the clipboard is the user's, and a plugin should not be able to fill it.
+            let text: String = text.chars().take(MAX_COPY_CHARS).collect();
+            // Writing to the clipboard is quiet by nature — what replaced what the user had
+            // copied is at least in the plugin's log.
+            if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
+                runtime.log(format!("copied {} characters to the clipboard", text.chars().count()));
+            }
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+            reply(Ok(Value::Null), cx)
         }
         "host/openUrl" => {
             let url = params.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
