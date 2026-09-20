@@ -178,9 +178,6 @@ pub enum EditCommand {
 /// view, so without this a selection on a page could not be copied at all.
 pub fn perform_in_page(command: EditCommand) -> bool {
     let views = VIEWS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if crate::debug::enabled() {
-        eprintln!("browser-edit: {command:?} views={}", views.len());
-    }
     for view in views {
         let view = view as Id;
         unsafe {
