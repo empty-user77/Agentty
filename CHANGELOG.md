@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-09-20
+
+### Added
+- The in-app browser keeps several pages at once. Each tab has its own view, so background tabs keep loading, and a
+  page that opens a new window (`window.open`, `target="_blank"`) becomes a tab instead of being dropped. Browser
+  shortcuts — reload, hard reload, new and close tab, address bar, back and forward — now work while the page has the
+  keyboard, and a hard reload drops the caches before fetching the page again.
+- A network panel under the page: how much the page pulled over the network, the requests it made with status, size
+  and time, and, for one of them, its headers and bodies. Its height is dragged from the top edge and kept.
+- Plugins are listed as small tiles side by side; opening one takes the whole row and shows its links, permissions,
+  folder and logs.
+- The status bar shows the branch the active terminal is on, and opens the Git page when clicked.
+
+### Fixed
+- Copy, paste and select all reach the page in the in-app browser instead of the terminal behind it.
+
 ## [0.1.12] - 2026-09-20
 
 ### Added
