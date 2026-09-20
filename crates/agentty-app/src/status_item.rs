@@ -111,8 +111,6 @@ pub fn watch_outside_clicks(on: bool) {
     }
 }
 
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
 pub struct StatusItem {
     item: Id,
     target: Id,
@@ -152,14 +150,10 @@ impl StatusItem {
 
     /// Advances the running animation.
     pub fn update(&mut self, state: &TrayState) {
-        let title = if state.working > 0 {
-            self.frame = (self.frame + 1) % SPINNER.len();
-            format!(" {} {}", SPINNER[self.frame], state.working)
-        } else if state.waiting > 0 {
-            format!(" ● {}", state.waiting)
-        } else {
-            String::new()
-        };
+        if state.working > 0 {
+            self.frame = (self.frame + 1) % crate::platform::tray::SPINNER.len();
+        }
+        let title = crate::platform::tray::tray_title(state, self.frame);
         if title != self.title {
             unsafe {
                 let button: Id = msg_send![self.item, button];

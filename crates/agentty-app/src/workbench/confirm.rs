@@ -20,6 +20,10 @@ pub struct CloseConfirm {
     pub dont_ask: bool,
     /// Closing it leaves the workspace empty, so the workspace goes away too.
     pub removes_workspace: bool,
+    /// Linked working trees only the closing panes work in: they can go with them.
+    pub trees: Vec<std::path::PathBuf>,
+    /// "Also remove these working trees and their branches" (off unless ticked).
+    pub remove_trees: bool,
 }
 
 impl Workbench {
@@ -42,14 +46,67 @@ impl Workbench {
         ws.dormant.is_none() && ws.tabs.iter().flat_map(|t| t.root.leaves()).all(|leaf| panes.contains(&leaf))
     }
 
-    /// Asks before closing unless the user turned confirmations off in settings.
+    /// Linked working trees (not a project's own folder) that the panes of `target` work in and no
+    /// other pane does: closing them can take the trees along.
+    fn trees_left_behind(&self, target: &CloseTarget, cx: &gpui::App) -> Vec<std::path::PathBuf> {
+        let closing = self.target_panes(target);
+        let tree_of =
+            |pane: &Pane| agentty_bridge::worktree::tree_root(&pane.read(cx).display_cwd()).filter(|root| root.join(".git").is_file());
+        let mut trees: Vec<std::path::PathBuf> = closing.iter().filter_map(tree_of).collect();
+        trees.sort();
+        trees.dedup();
+        let staying: Vec<std::path::PathBuf> = self.all_panes().iter().filter(|p| !closing.contains(p)).filter_map(tree_of).collect();
+        trees.retain(|tree| !staying.contains(tree));
+        trees
+    }
+
+    /// Asks before closing unless the user turned confirmations off in settings. Panes in a working
+    /// tree of their own always ask: that is where the tree can go with them.
     pub(super) fn request_close(&mut self, target: CloseTarget, window: &mut Window, cx: &mut Context<Self>) {
-        if !settings(cx).confirm_close {
+        let trees = self.trees_left_behind(&target, cx);
+        if !settings(cx).confirm_close && trees.is_empty() {
             return self.perform_close(target, window, cx);
         }
         let removes_workspace = !matches!(target, CloseTarget::Workspace(_)) && self.empties_workspace(&target);
-        self.close_confirm = Some(CloseConfirm { target, dont_ask: false, removes_workspace });
+        self.close_confirm = Some(CloseConfirm { target, dont_ask: false, removes_workspace, trees, remove_trees: false });
         cx.notify();
+    }
+
+    /// After their panes closed: removes the working trees and their branches. Git keeps what would be
+    /// lost — a tree with uncommitted changes, a branch with commits nothing else has — and a toast
+    /// says what went and what stayed.
+    fn remove_trees_after_close(&mut self, trees: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            // The panes' processes leave the folders first.
+            cx.background_executor().timer(std::time::Duration::from_millis(600)).await;
+            let results = cx
+                .background_spawn(async move {
+                    trees
+                        .into_iter()
+                        .map(|tree| {
+                            let name = tree.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            (name, agentty_bridge::worktree::remove_linked(&tree, &tree, true))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let lines: Vec<String> = results
+                    .iter()
+                    .map(|(name, result)| match result {
+                        Ok(None) => tf(cx, "worktree.removed", &[("name", name)]),
+                        Ok(Some(branch)) => tf(cx, "worktree.removed_branch_kept", &[("name", name), ("branch", branch)]),
+                        Err(err) if format!("{err:#}").contains("modified or untracked") => {
+                            tf(cx, "worktree.kept_dirty", &[("name", name)])
+                        }
+                        Err(err) => tf(cx, "worktree.remove_failed", &[("name", name), ("error", &format!("{err:#}"))]),
+                    })
+                    .collect();
+                this.show_toast_for(lines.join("\n"), 8000, cx);
+                this.refresh_files_panel(cx);
+            });
+        })
+        .detach();
     }
 
     pub(super) fn request_close_pane(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
@@ -128,6 +185,59 @@ impl Workbench {
                         .shadow_lg()
                         .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(title))
                         .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body))
+                        .when(!confirm.trees.is_empty(), |d| {
+                            let remove = confirm.remove_trees;
+                            let names = confirm
+                                .trees
+                                .iter()
+                                .map(|t| t.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            d.child(
+                                div()
+                                    .id("close-confirm-remove-trees")
+                                    .flex()
+                                    .items_start()
+                                    .gap_2()
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        if let Some(confirm) = this.close_confirm.as_mut() {
+                                            confirm.remove_trees = !confirm.remove_trees;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .mt(px(2.))
+                                            .size(px(14.))
+                                            .flex_shrink_0()
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hex(if remove { Chrome::ACCENT } else { Chrome::OVERLAY_BORDER }))
+                                            .bg(if remove { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .when(remove, |d| d.child(crate::ui::icon("check", 11., hex(Chrome::BRIGHT)))),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(tf(
+                                                cx,
+                                                "confirm.remove_trees",
+                                                &[("n", &confirm.trees.len().to_string())],
+                                            )))
+                                            .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(names))
+                                            .child(
+                                                div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "confirm.remove_trees_hint")),
+                                            ),
+                                    ),
+                            )
+                        })
                         .child(
                             div()
                                 .id("close-confirm-dont-ask")
@@ -177,6 +287,9 @@ impl Workbench {
                                             update_settings(cx, |s| s.confirm_close = false);
                                         }
                                         this.perform_close(confirm.target, window, cx);
+                                        if confirm.remove_trees && !confirm.trees.is_empty() {
+                                            this.remove_trees_after_close(confirm.trees, cx);
+                                        }
                                     },
                                 ))),
                         ),

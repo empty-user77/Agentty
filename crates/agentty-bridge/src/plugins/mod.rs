@@ -103,6 +103,8 @@ pub enum PromptTarget {
     Active,
     NewWorkspace,
     NewTab,
+    /// A new pane split off the focused one, in the current tab.
+    Split,
     /// `paneId`.
     Pane,
     /// An idle agent in `workspaceId`, or a new agent tab there.

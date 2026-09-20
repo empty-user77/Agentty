@@ -118,6 +118,19 @@ A project can name its own entry points in `agentty.json`:
 `command` gets the input appended; in a `prompt`, `{input}` is replaced by it. `agent` (`claude` or
 `codex`) is optional.
 
+## Databases
+
+Connections come from the project's own configuration (see `docs/architecture.md` → Databases); nothing needs to be
+set up when it holds host, user, password and database. Otherwise:
+
+- A hidden password (secret manager, environment variable set elsewhere): **Enter password** on the database page. It
+  is kept in the Keychain (Windows: Credential Manager, Linux: Secret Service) under `run.agentty.database`.
+- A database the configuration doesn't name: **Add** on the database page (engine, host, port, database, user,
+  password). Stored in `~/.agentty/db-connections.json` (`0600`) without the password. For Amazon RDS use the
+  instance endpoint as the host; TLS is used automatically. "No TLS" is meant for a database on this machine or a
+  private network.
+- Oracle needs Oracle Instant Client installed (`libclntsh` on the library path).
+
 ## Themes
 
 Drop iTerm2 color presets (`*.itermcolors`) into `~/.agentty/themes/` or use **Settings → Import .itermcolors…**.

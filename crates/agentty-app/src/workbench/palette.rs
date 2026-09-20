@@ -207,9 +207,14 @@ impl Workbench {
             (Page::Extensions, "page.extensions", "⇧⌘X"),
             (Page::Plugins, "page.plugins", ""),
             (Page::Idea, "page.idea", ""),
+            (Page::Database, "page.database", ""),
             (Page::Settings, "page.settings", "⌘,"),
         ] {
             if page == Page::Idea && !crate::settings::settings(cx).idea_mode {
+                continue;
+            }
+            // Only for a project with databases configured.
+            if page == Page::Database && self.db.connections.is_empty() {
                 continue;
             }
             push(

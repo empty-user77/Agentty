@@ -31,6 +31,13 @@ All notable changes to this project are documented here. The format follows
   editor" hands the file to VS Code, Cursor or the system's text editor (Settings → Project → File editor). Large,
   binary and non-UTF-8 files, and links to files outside the project, open read-only or with a notice. Project files
   are never run: formatter settings that are code are refused.
+- The Docker and plugin panels can be made wider or narrower by dragging their left edge; the width is kept.
+- Closing a tab or pane that worked in a working tree of its own offers "Also remove the working tree and its branch"
+  (off by default). Uncommitted changes keep the tree, and a branch with unmerged commits is kept.
+- "Send to…" (prompts from links and plugins) can add the session as a split pane in the current tab, and says what
+  an open workspace does with the prompt (typed into its waiting agent, or a new tab).
+- Agent sessions opened from links and plugins in a project where another agent works get a working tree of their own,
+  like sessions from the + menu.
 - Right-click a working tree in the files panel: show its files, open a terminal there, show it in the file manager,
   copy its path, remove it (with its branch when that is merged) or clean up a tree whose folder is gone.
 - Releases include a Windows installer (`Agentty-X.Y.Z-windows-x64-setup.exe`, also as a `.zip`) for Windows 10 1809
@@ -42,6 +49,11 @@ All notable changes to this project are documented here. The format follows
   of its containers are running; clicking it opens a panel with each compose service's image, state and ports, start,
   stop, restart, `compose up -d`, `compose down` (confirmed first; volumes are kept) and logs in a new terminal tab.
   Without compose it lists the project's containers. Environment values are never shown.
+- Databases. In a project whose configuration names a database (`.env`, Spring `application.yml` / `.properties`,
+  Prisma, compose services), the status bar shows DB n and the database page lists its connections, tables and rows
+  and runs read queries. MySQL, MariaDB, PostgreSQL, Oracle, MongoDB and Amazon RDS. Hidden passwords are entered once
+  and kept in the Keychain; connections can also be added by hand. Agents read the same databases with `agentty db`;
+  a statement that writes or changes the schema runs only after the user approves the exact statement in a dialog.
 - Parallel tasks: an agent can split work into several sessions (`agentty tasks`). Agentty asks once ("Start N tasks
   at the same time?"); each task then starts right away in a split pane of the current tab, in its own worktree from
   the project's default branch, with its prompt already sent.
@@ -52,6 +64,8 @@ All notable changes to this project are documented here. The format follows
 - Prompts from links and plugins that arrive while one is being shown wait for their turn instead of replacing it.
 
 ### Changed
+- The menu bar item tells finished agents apart from ones that need you: a spinner while agents work, `● N` for agents
+  waiting for a permission or an answer, and `✓ N` for agents that finished and haven't been looked at.
 - API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);
   macOS keeps using the Keychain.
 - New session working trees start from the project's default branch instead of the branch the project folder has

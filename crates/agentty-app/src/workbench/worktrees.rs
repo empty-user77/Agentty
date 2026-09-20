@@ -59,6 +59,33 @@ impl Workbench {
         }
     }
 
+    /// For launches that must return their pane right away (prompts from links and plugins): when the
+    /// working tree at `cwd` is taken by another agent, creates one for the new session now and
+    /// returns the folder to start in (the same subfolder inside it).
+    pub(super) fn own_tree_now(&mut self, kind: PaneKind, cwd: &Path, cx: &mut Context<Self>) -> Option<PathBuf> {
+        if !crate::settings::settings(cx).auto_worktree || kind == PaneKind::Shell {
+            return None;
+        }
+        let root = tree_root(cwd)?;
+        if !self.tree_is_taken(&root, cx) {
+            return None;
+        }
+        let label = label(&LaunchChoice::Kind(kind));
+        match agentty_bridge::worktree::create(cwd, &label) {
+            Ok(tree) => {
+                let inside = cwd.strip_prefix(&root).ok().map(|rest| tree.path.join(rest)).filter(|dir| dir.is_dir());
+                let branch = tree.branch.clone().unwrap_or_else(|| tree.name());
+                self.show_toast(tf(cx, "worktree.started", &[("branch", &branch)]), cx);
+                self.refresh_files_panel(cx);
+                Some(inside.unwrap_or(tree.path))
+            }
+            Err(err) => {
+                self.show_toast(tf(cx, "worktree.failed", &[("error", &format!("{err:#}"))]), cx);
+                None
+            }
+        }
+    }
+
     /// Starts `choice` in a working tree of its own when the one at `cwd` is taken. Returns whether
     /// it took over the launch.
     pub(super) fn launch_in_own_tree(

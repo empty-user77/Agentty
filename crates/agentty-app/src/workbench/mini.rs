@@ -405,7 +405,8 @@ impl Workbench {
         let agents = self.agent_summaries(cx);
         crate::status_item::TrayState {
             working: agents.iter().filter(|a| a.working).count(),
-            waiting: agents.iter().filter(|a| a.waiting).count(),
+            asking: agents.iter().filter(|a| a.needs_user).count(),
+            done: agents.iter().filter(|a| a.waiting && !a.working && !a.needs_user).count(),
         }
     }
 

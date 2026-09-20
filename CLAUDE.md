@@ -55,6 +55,9 @@ Before every commit and push: stage the change in its own command, run the `secu
 - After opening or updating a pull request, and after anything lands on main (merges included), check the CI run
   (`gh run list` / `gh run watch`) and fix it if it fails.
 - Every user-facing string goes through `i18n.rs` in all four languages (en / ko / ja / zh).
+- Every panel docked beside the terminals (files, browser, plugin, Docker, and any new one) is resizable by dragging
+  its edge from the first version: a readable minimum width, the width kept in the settings, and room always left for
+  the terminals. Reuse `workbench/side_panels.rs` (or the files panel's splitter) instead of a fixed width.
 - Prompts, rules and skills that ship in code or bundled docs (first messages to agents, build guides, plugin
   prompts, `.claude/skills`) are written in English only. They are not UI strings: they stay out of `i18n.rs` and
   the plugins' translated tables, and tell the agent which language to talk in (`Talk to me in {language}`).

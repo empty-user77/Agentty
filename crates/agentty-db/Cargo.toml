@@ -1,0 +1,26 @@
+[package]
+name = "agentty-db"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Database connections for Agentty: project detection, read-only guard, MySQL / MariaDB / PostgreSQL / Oracle / MongoDB"
+
+[dependencies]
+agentty-bridge = { path = "../agentty-bridge" }
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+url = "2.5.8"
+sha2 = "0.10"
+mysql = { version = "28", default-features = false, features = ["minimal-rust", "rustls-tls-ring"] }
+postgres = "0.19"
+tokio-postgres-rustls = { version = "0.14", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+webpki-roots = "0.26"
+mongodb = { version = "3.9", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver", "sync"] }
+oracle = "0.6"

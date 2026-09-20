@@ -8,6 +8,7 @@ mod browser_control;
 mod chrome;
 mod confirm;
 mod context_menu;
+mod db_page;
 mod docker_panel;
 mod drop_split;
 mod editor_host;
@@ -39,6 +40,7 @@ mod servers;
 mod service_status;
 mod session_viewer;
 mod settings_page;
+pub mod side_panels;
 mod status_menus;
 mod system_page;
 mod tab_menu;
@@ -181,6 +183,8 @@ pub enum Page {
     Plugins,
     /// "Build my idea": describe an idea, an agent builds and previews it.
     Idea,
+    /// The active project's databases (only offered when it has some).
+    Database,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -247,10 +251,13 @@ pub struct Workbench {
     /// Files panel docked at the right edge (folder structure, changes, working trees).
     files_panel: Option<files_panel::FilesPanel>,
     files_resizing: bool,
+    /// A side panel (plugin, Docker) whose left edge is being dragged.
+    side_resizing: Option<side_panels::SidePanel>,
     /// Dragging the handle under the files panel's working-tree list: (pointer y, height) at the start.
     files_trees_drag: Option<(f32, f32)>,
     /// Docker of the active pane's project: the status bar chip and the panel docked at the right.
     docker: docker_panel::DockerState,
+    db: db_page::DbState,
     /// Window width at the last render, for sizing the panels docked at the right.
     viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
@@ -416,8 +423,10 @@ impl Workbench {
             browser_resizing: false,
             files_panel: None,
             files_resizing: false,
+            side_resizing: None,
             files_trees_drag: None,
             docker: Default::default(),
+            db: Default::default(),
             viewport_width: 1400.,
             browser_home_input: None,
             chat_notify: Default::default(),
@@ -1391,6 +1400,7 @@ impl Workbench {
             if self.sidebar_resizing
                 || self.browser_resizing
                 || self.files_resizing
+                || self.side_resizing.is_some()
                 || self.files_trees_drag.is_some()
                 || self.split_drag.is_some()
                 || self.flow.is_dragging()
@@ -1415,12 +1425,13 @@ impl Workbench {
                 store.settings.files_panel_width = width
             });
             cx.notify();
+        } else if let Some(panel) = self.side_resizing {
+            let viewport = f32::from(window.viewport_size().width);
+            self.drag_side_panel(panel, f32::from(event.position.x), viewport, cx);
         } else if self.browser_resizing {
             // The splitter sits just left of the panel; the plugin and files panels may sit right of it.
             let shown = self.docked_widths(cx).1;
-            let right = self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
-                + if self.docker.open { docker_panel::PANEL_WIDTH } else { 0. }
-                + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
+            let right = self.side_panels_total(cx) + self.files_panel.as_ref().map_or(0., |_| shown + 5.);
             let viewport = f32::from(window.viewport_size().width) - right;
             let width = (viewport - f32::from(event.position.x) - 2.5).clamp(320.0, (viewport - 420.0).max(320.0));
             gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| store.settings.browser.width = width);
@@ -1438,10 +1449,16 @@ impl Workbench {
     }
 
     fn end_drags(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_resizing || self.browser_resizing || self.files_resizing || self.files_trees_drag.is_some() {
+        if self.sidebar_resizing
+            || self.browser_resizing
+            || self.files_resizing
+            || self.side_resizing.is_some()
+            || self.files_trees_drag.is_some()
+        {
             self.sidebar_resizing = false;
             self.browser_resizing = false;
             self.files_resizing = false;
+            self.side_resizing = None;
             self.files_trees_drag = None;
             update_settings(cx, |_| {}); // persist the final width
         }
@@ -1467,6 +1484,7 @@ impl Render for Workbench {
         self.prepare_plugin_panel(window, cx);
         self.prepare_files_panel(cx);
         self.prepare_docker(cx);
+        self.prepare_db(window, cx);
         self.advance_tour(cx);
         self.prepare_plugins_page(window, cx);
         self.broadcast_plugin_context(window, cx);
@@ -1497,6 +1515,7 @@ impl Render for Workbench {
             }
             Some(Page::Flow) => self.render_flow(window, cx).into_any_element(),
             Some(Page::Plugins) => self.render_plugins_page(cx).into_any_element(),
+            Some(Page::Database) => self.render_db_page(cx),
             Some(Page::Idea) => {
                 gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
@@ -1672,6 +1691,7 @@ impl Render for Workbench {
                     if this.sidebar_resizing
                         || this.browser_resizing
                         || this.files_resizing
+                        || this.side_resizing.is_some()
                         || this.files_trees_drag.is_some()
                         || this.split_drag.is_some()
                     {
@@ -1711,7 +1731,11 @@ impl Render for Workbench {
                                 |d| {
                                     d.children(self.render_browser_splitter(cx))
                                         .children(self.render_browser(cx))
+                                        .when(self.plugin_panel.is_some(), |d| {
+                                            d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx))
+                                        })
                                         .children(self.render_plugin_panel(cx))
+                                        .when(self.docker.open, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx)))
                                         .children(self.render_docker_panel(cx))
                                         .children(self.render_files_splitter(cx))
                                         .children(self.render_files_panel(cx))
@@ -1742,6 +1766,7 @@ impl Render for Workbench {
             .children(self.render_close_confirm(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_tasks_dialog(cx))
+            .children(self.render_db_approval(cx))
             .children(self.render_harness_dialog(cx))
             .children(self.render_onboarding(cx))
             .children(self.render_toast(cx))
@@ -1816,8 +1841,7 @@ impl Workbench {
         let docked = if self.page.is_none() {
             let (browser, files) = self.docked_widths(cx);
             self.browser.as_ref().map_or(0., |_| browser + 5.)
-                + self.plugin_panel.as_ref().map_or(0., |_| plugin_panel::PANEL_WIDTH)
-                + if self.docker.open { docker_panel::PANEL_WIDTH } else { 0. }
+                + self.side_panels_total(cx)
                 + self.files_panel.as_ref().map_or(0., |_| files + 5.)
         } else {
             0.
@@ -1882,6 +1906,7 @@ impl Workbench {
             Page::Extensions => "extensions",
             Page::Plugins => "plugins",
             Page::Idea => "idea",
+            Page::Database => "database",
         };
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
         self.page = if self.page == Some(page) { None } else { Some(page) };
@@ -2099,6 +2124,7 @@ impl Workbench {
                         "files": self.files_panel.as_ref().map(|p| p.debug_state()),
                         "editor": self.editor_debug_state(cx),
                         "docker": self.docker.debug_state(),
+                        "db": self.db.debug_state(),
                         "chatNotify": self.chat_notify.debug_state(),
                         "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
@@ -2118,6 +2144,7 @@ impl Workbench {
             }
             "tree-menu" => self.debug_tree_menu(argument.parse().unwrap_or(0), cx),
             "docker" => self.debug_docker(argument, window, cx),
+            "db" => self.debug_db(argument, window, cx),
             "chat-notify" => self.debug_chat_notify(argument, cx),
             "files" => match argument {
                 "" => self.toggle_files_panel(cx),
@@ -2133,6 +2160,7 @@ impl Workbench {
                     "extensions" => Some(Page::Extensions),
                     "plugins" => Some(Page::Plugins),
                     "idea" => Some(Page::Idea),
+                    "db" => Some(Page::Database),
                     "git" => Some(Page::Git),
                     _ => None,
                 };

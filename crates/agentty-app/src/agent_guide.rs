@@ -4,7 +4,8 @@
 //! passed on the command line: nothing is written into the user's projects or agent settings.
 //!
 //! The guide only describes commands that are safe to hand an agent: the in-app browser, pane
-//! notifications and `agentty tasks` (which always waits for the user). It holds no paths, names or
+//! notifications, `agentty tasks` (which always waits for the user) and `agentty db` (reads only; a write
+//! waits for the user's approval). It holds no paths, names or
 //! secrets of the user.
 
 use anyhow::Result;
@@ -27,6 +28,13 @@ A task's prompt must stand on its own: goal, relevant files, constraints, how to
 to commit, push and open a pull request when done. Do not edit the other tasks' worktrees yourself.
 - `agentty browser ...` drives Agentty's in-app browser (open a local dev server, read text, click, \
 type, screenshots, console). `agentty browser --help` lists the commands.
+- `agentty db ...` reads the databases of this project that Agentty knows (found in its \
+configuration or added by the user): `agentty db list`, `tables`, `describe <table>`, \
+`preview <table>`, `query \"<SELECT ...>\"`, `mongo <op> <collection> '<json>'`. Reads run at once and \
+cannot change anything. A statement that writes or changes the schema is shown to the user, who \
+executes or declines it; the command waits for that answer. Only send such a statement when the \
+user's task needs it, one change at a time, and never try to get around the approval (no writes \
+through other clients with credentials read from the project). `agentty db --help` has the details.
 - `agentty notify <message>` shows a notification for this pane when you finish something the user \
 is waiting for.
 

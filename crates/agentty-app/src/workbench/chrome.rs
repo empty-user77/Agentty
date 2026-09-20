@@ -1127,6 +1127,7 @@ impl Workbench {
                 Page::Extensions => vec![(page, t(cx, "page.extensions"))],
                 Page::Plugins => vec![(page, t(cx, "page.plugins"))],
                 Page::Idea => vec![(page, t(cx, "page.idea"))],
+                Page::Database => vec![(page, t(cx, "page.database"))],
             };
             for (tab_page, label) in pages {
                 let active = tab_page == page;
@@ -2231,6 +2232,7 @@ impl Workbench {
             .children(cwd)
             .child(div().flex_1().min_w_0().truncate().children(self.status.clone()))
             .children(self.render_docker_chip(cx))
+            .children(self.render_db_chip(cx))
             .children(self.render_status_icons(cx))
             .child(tf(cx, "count.terminals", &[("n", &terminals.to_string())]))
     }
