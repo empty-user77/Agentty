@@ -1,7 +1,7 @@
 //! Installed plugins (`~/.agentty/plugins/<id>`), their enabled state, the built-in catalog and
 //! installing from the catalog, a folder or a Git repository.
 
-use super::manifest::{valid_id, version_newer, Manifest, MANIFEST_FILE};
+use super::manifest::{relative_path, valid_id, version_newer, Manifest, MANIFEST_FILE};
 use crate::fsutil;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,8 @@ pub enum Source {
     Local,
     /// Linked for development: loaded from its own folder, never copied.
     Dev,
+    /// Downloaded from the marketplace.
+    Market,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +258,18 @@ pub fn install_builtin(id: &str) -> Result<InstalledPlugin> {
 pub fn builtin_update_available(plugin: &InstalledPlugin) -> bool {
     let (Some(installed), Source::Builtin) = (&plugin.manifest, plugin.source) else { return false };
     builtin(&plugin.id).is_some_and(|b| version_newer(&b.manifest().version, &installed.version))
+}
+
+/// Writes a plugin that is one module and a manifest: what the marketplace installs. The bytes
+/// were already weighed against the checksum in the entry; nothing reaches the plugins folder
+/// before that.
+pub fn install_module(manifest: &Manifest, module: &[u8], source: Source, origin: Option<String>) -> Result<InstalledPlugin> {
+    anyhow::ensure!(manifest.runtime == super::manifest::Runtime::Wasm, "only a module is installed this way");
+    manifest.validate()?;
+    let staging = staging_dir(&manifest.id)?;
+    write_file(&staging.join(MANIFEST_FILE), &serde_json::to_string_pretty(manifest)?)?;
+    write_bytes(&staging.join(relative_path(&manifest.main)?), module)?;
+    finish_install(manifest, &staging, source, origin)
 }
 
 /// Copies a plugin folder into the plugins directory.

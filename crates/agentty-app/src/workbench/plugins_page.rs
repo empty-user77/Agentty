@@ -12,6 +12,7 @@ use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{action_button, hint, icon, icon_named, tilde, IconSize, TypeScale};
 use agentty_bridge::model::Agent;
 use agentty_bridge::plugins::manifest::{Manifest, Runtime, Surface, PERMISSIONS};
+use agentty_bridge::plugins::market;
 use agentty_bridge::plugins::store::{self, InstalledPlugin, Source};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWeight, PathPromptOptions, SharedString, Window};
 
@@ -33,6 +34,16 @@ enum Tab {
     Logs,
 }
 
+/// The marketplace list, as the page has it.
+#[derive(Default)]
+enum Market {
+    #[default]
+    Idle,
+    Loading,
+    Ready(Vec<market::Entry>),
+    Failed(String),
+}
+
 #[derive(Default)]
 pub struct PluginsPage {
     /// Plugin to select and scroll to (from a link or the panel's settings button).
@@ -51,6 +62,9 @@ pub struct PluginsPage {
     inputs: Option<Inputs>,
     list_scroll: gpui::ScrollHandle,
     detail_scroll: gpui::ScrollHandle,
+    market: Market,
+    /// The marketplace plugin being downloaded.
+    installing: Option<String>,
 }
 
 struct Inputs {
@@ -60,7 +74,17 @@ struct Inputs {
     idea: Entity<TextInput>,
 }
 
-/// One row of the list: an installed plugin or a catalog entry.
+/// Where a row of the list comes from.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Origin {
+    Installed,
+    /// Shipped inside Agentty.
+    Builtin,
+    /// Offered by the marketplace.
+    Market,
+}
+
+/// One row of the list.
 struct Row {
     id: String,
     name: String,
@@ -68,7 +92,7 @@ struct Row {
     publisher: String,
     description: String,
     icon: &'static str,
-    installed: bool,
+    origin: Origin,
 }
 
 impl Workbench {
@@ -76,12 +100,66 @@ impl Workbench {
         if self.page != Some(Page::Plugins) || self.plugins_page.inputs.is_some() {
             return;
         }
+        self.fetch_market(cx);
         self.plugins_page.inputs = Some(Inputs {
             search: cx.new(|cx| TextInput::localized("", "plugins.search", window, cx)),
             git_url: cx.new(|cx| TextInput::localized("", "plugins.git_placeholder", window, cx)),
             name: cx.new(|cx| TextInput::localized("", "plugins.name_placeholder", window, cx)),
             idea: cx.new(|cx| TextInput::localized("", "plugins.idea_placeholder", window, cx)),
         });
+    }
+
+    /// Reads the marketplace list in the background. Called when the page opens and on Refresh.
+    fn fetch_market(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.plugins_page.market, Market::Loading) {
+            return;
+        }
+        self.plugins_page.market = Market::Loading;
+        let task = cx.background_spawn(async move { market::fetch() });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.plugins_page.market = match result {
+                    Ok(entries) => Market::Ready(entries),
+                    Err(err) => Market::Failed(format!("{err:#}")),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn market_entries(&self) -> &[market::Entry] {
+        match &self.plugins_page.market {
+            Market::Ready(entries) => entries,
+            _ => &[],
+        }
+    }
+
+    fn market_entry(&self, id: &str) -> Option<&market::Entry> {
+        self.market_entries().iter().find(|entry| entry.id == id)
+    }
+
+    /// Downloads a marketplace plugin and installs it once its checksum matches.
+    fn install_from_market(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.market_entry(&id).cloned() else { return };
+        if self.plugins_page.installing.is_some() {
+            return;
+        }
+        self.plugins_page.installing = Some(id.clone());
+        self.plugins_message(tf(cx, "plugins.downloading", &[("name", &entry.name)]), false, cx);
+        let task = cx.background_spawn(async move { market::install(&entry) });
+        let window = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = cx.update_window(window, |_, window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.plugins_page.installing = None;
+                    this.after_install(result, window, cx);
+                });
+            });
+        })
+        .detach();
     }
 
     fn plugins_message(&mut self, text: String, error: bool, cx: &mut Context<Self>) {
@@ -319,6 +397,7 @@ impl Workbench {
                 t(cx, "usage.refresh"),
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.plugins_page.message = None;
+                    this.fetch_market(cx);
                     plugins::reload(cx);
                 }),
             ))
@@ -389,6 +468,31 @@ impl Workbench {
             for row in &catalog_rows {
                 list = list.child(self.render_plugin_row(row, cx));
             }
+        }
+
+        // The marketplace: what is offered but not installed here yet.
+        let market_rows: Vec<Row> = self
+            .market_entries()
+            .iter()
+            .filter(|entry| !installed.iter().any(|plugin| plugin.id == entry.id))
+            .map(Row::market)
+            .filter(matches)
+            .collect();
+        list = list.child(section(t(cx, "plugins.market").to_string()));
+        match &page.market {
+            Market::Loading | Market::Idle => list = list.child(hint(t(cx, "plugins.market_loading"))),
+            Market::Failed(error) => {
+                list = list
+                    .child(hint(t(cx, "plugins.market_failed")))
+                    .child(div().px_3().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(error.clone()))
+            }
+            Market::Ready(_) if market_rows.is_empty() => {
+                list = list.child(hint(t(cx, if search.is_empty() { "plugins.market_empty" } else { "plugins.no_matches" })))
+            }
+            Market::Ready(_) => {}
+        }
+        for row in &market_rows {
+            list = list.child(self.render_plugin_row(row, cx));
         }
 
         div()
@@ -463,12 +567,16 @@ impl Workbench {
         let selected = self.plugins_page.selected.as_deref() == Some(row.id.as_str());
         let focused = self.plugins_page.focus.as_deref() == Some(row.id.as_str());
         let id = row.id.clone();
-        let state = row.installed.then(|| self.plugin_state(&row.id, cx));
+        let state = (row.origin == Origin::Installed).then(|| self.plugin_state(&row.id, cx));
         let summary = match row.description.chars().count() > SUMMARY_CHARS {
             true => format!("{}…", row.description.chars().take(SUMMARY_CHARS).collect::<String>().trim_end()),
             false => row.description.clone(),
         };
-        let builtin_tag = (!row.installed).then(|| t(cx, "plugins.builtin").to_string());
+        let tag = match row.origin {
+            Origin::Builtin => Some((t(cx, "plugins.builtin").to_string(), Chrome::BLUE)),
+            Origin::Market => Some((t(cx, "plugins.market").to_string(), Chrome::PURPLE)),
+            Origin::Installed => None,
+        };
         div()
             .id(SharedString::from(format!("plugin-row-{}", row.id)))
             .w_full()
@@ -531,7 +639,7 @@ impl Workbench {
                                         .child(div().t_caption().text_color(hex(color)).child(text)),
                                 )
                             })
-                            .when_some(builtin_tag, |d, tag| d.child(div().t_caption().text_color(hex(Chrome::BLUE)).child(tag))),
+                            .when_some(tag, |d, (label, color)| d.child(div().t_caption().text_color(hex(color)).child(label))),
                     ),
             )
     }
@@ -559,6 +667,8 @@ impl Workbench {
             self.render_installed_detail(plugin, cx)
         } else if let Some(manifest) = page.selected.as_ref().and_then(|id| store::builtin(id)).map(|builtin| builtin.manifest()) {
             self.render_catalog_detail(&manifest, cx)
+        } else if let Some(entry) = page.selected.as_ref().and_then(|id| self.market_entry(id)) {
+            self.render_market_detail(entry, cx)
         } else {
             div()
                 .w_full()
@@ -691,6 +801,60 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// A plugin the marketplace offers: what it is, where it comes from, and what installing it
+    /// would let it do.
+    fn render_market_detail(&self, entry: &market::Entry, cx: &mut Context<Self>) -> AnyElement {
+        let manifest = entry.manifest();
+        let badges = vec![(t(cx, "plugins.market").to_string(), Chrome::PURPLE)];
+        let id = entry.id.clone();
+        let installing = self.plugins_page.installing.as_deref() == Some(entry.id.as_str());
+        let size = format!("{} KB", entry.module.size.div_ceil(1024));
+        let mut info = vec![
+            (t(cx, "plugins.info.identifier").to_string(), entry.id.clone()),
+            (t(cx, "plugins.info.version").to_string(), entry.version.clone()),
+        ];
+        if !entry.license.is_empty() {
+            info.push((t(cx, "plugins.info.license").to_string(), entry.license.clone()));
+        }
+        info.push((t(cx, "plugins.info.runtime").to_string(), t(cx, "plugins.runtime.wasm").to_string()));
+        info.push((t(cx, "plugins.info.size").to_string(), size));
+        info.push((t(cx, "plugins.info.checksum").to_string(), entry.module.sha256.clone()));
+        div()
+            .w_full()
+            .p_6()
+            .max_w(px(900.))
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(self.render_detail_head(&manifest, badges, cx))
+            .child(div().flex().gap_2().child(action_button(
+                SharedString::from(format!("plugin-market-install-{}", entry.id)),
+                t(cx, if installing { "plugins.installing" } else { "plugins.install" }),
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.install_from_market(id.clone(), window, cx)),
+            )))
+            .child(self.render_tabs(cx))
+            .child(match self.plugins_page.tab {
+                Tab::Permissions => self.render_permissions(&manifest, cx).into_any_element(),
+                _ => div()
+                    .pt_4()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(self.render_project(&manifest, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(detail_heading(t(cx, "plugins.info").to_string()))
+                            .child(self.render_info_grid(info))
+                            .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.market_note"))),
+                    )
+                    .into_any_element(),
+            })
+            .into_any_element()
+    }
+
     fn render_installed_detail(&self, plugin: &InstalledPlugin, cx: &mut Context<Self>) -> AnyElement {
         let Some(manifest) = plugin.manifest.clone() else {
             let id = plugin.id.clone();
@@ -762,6 +926,18 @@ impl Workbench {
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
                     plugins::stop(&id, cx);
                     this.install_builtin_plugin(id.clone(), window, cx)
+                }),
+            ));
+        }
+        // A newer version in the marketplace than the one installed.
+        if self.market_entry(&plugin.id).is_some_and(|entry| entry.newer_than(plugin)) {
+            let id = id.clone();
+            row = row.child(action_button(
+                button_id("market-update"),
+                t(cx, "plugins.update"),
+                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    plugins::stop(&id, cx);
+                    this.install_from_market(id.clone(), window, cx);
                 }),
             ));
         }
@@ -1086,6 +1262,18 @@ impl Workbench {
 }
 
 impl Row {
+    fn market(entry: &market::Entry) -> Self {
+        Self {
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            version: entry.version.clone(),
+            publisher: entry.publisher.clone(),
+            description: entry.description.clone(),
+            icon: icon_named(entry.icon.as_deref()),
+            origin: Origin::Market,
+        }
+    }
+
     fn installed(plugin: &InstalledPlugin) -> Self {
         let manifest = plugin.manifest.as_ref();
         Self {
@@ -1095,7 +1283,7 @@ impl Row {
             publisher: manifest.map(|m| m.publisher.clone()).unwrap_or_default(),
             description: manifest.map(|m| m.description.clone()).unwrap_or_else(|| plugin.error.clone().unwrap_or_default()),
             icon: icon_named(manifest.and_then(|m| m.icon.as_deref())),
-            installed: true,
+            origin: Origin::Installed,
         }
     }
 
@@ -1107,7 +1295,7 @@ impl Row {
             publisher: manifest.publisher.clone(),
             description: manifest.description.clone(),
             icon: icon_named(manifest.icon.as_deref()),
-            installed: false,
+            origin: Origin::Builtin,
         }
     }
 }
@@ -1119,6 +1307,7 @@ fn source_key(source: Source) -> &'static str {
         Source::Git => "plugins.source_git",
         Source::Local => "plugins.source_local",
         Source::Dev => "plugins.source_dev",
+        Source::Market => "plugins.market",
     }
 }
 

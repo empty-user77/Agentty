@@ -24,6 +24,12 @@ All notable changes to this project are documented here. The format follows
   method, the headers, the body and response sizes, the redirects and the time, sends nothing of
   yours with the request, and writes each call to the plugin's log with the URL redacted. A request
   can go through an HTTP proxy the plugin names.
+- A marketplace: **Plugins → Marketplace** lists what
+  [Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers, and installing
+  one downloads its module and checks it against the checksum in the listing — a module that does
+  not match is refused before anything is written. Only WebAssembly plugins are offered there, so
+  what you install from a list reaches nothing but the permissions you saw before installing it.
+  Plugins you keep to yourself are still installed from a folder or a Git repository.
 - Agent Rest Client ships with Agentty and installs from the Plugins page in one click. An HTTP
   client as a plugin: requests with headers, a body and authorization;
   environments whose values fill in `{{placeholders}}` everywhere in a request; a collection of

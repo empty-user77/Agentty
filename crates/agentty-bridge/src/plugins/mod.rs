@@ -5,6 +5,7 @@
 
 pub mod link;
 pub mod manifest;
+pub mod market;
 pub mod net;
 pub mod storage;
 pub mod store;

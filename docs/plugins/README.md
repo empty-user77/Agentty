@@ -18,6 +18,7 @@ written in any language; the Node.js SDK makes it a few lines.
 - [Sending prompts](#sending-prompts)
 - [Sessions and terminals](#sessions-and-terminals)
 - [Links from other apps](#links-from-other-apps)
+- [The marketplace](#the-marketplace)
 - [Permissions and safety](#permissions-and-safety)
 - [Developing, debugging and sharing](#developing-debugging-and-sharing)
 - [Protocol for other languages](protocol.md)
@@ -317,6 +318,31 @@ opens `.md` files inside the Cosmica notes folder). For a minute after a link re
 Agentty routes that plugin's `injectPrompt` calls through **Send to…** and refuses `sendToTerminal` —
 clicks in the panel the link opened don't lift this, so a link can't turn one click into typing
 inside a terminal.
+
+## The marketplace
+
+**Plugins → Marketplace** lists what
+[Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers. Plugins are
+added there by pull request, and what is offered is **a WebAssembly module whose source is public**
+— nothing else. A plugin that runs as a program of yours (`node`, `python`, an executable) has
+everything you have; Agentty installs those from a folder or a Git repository, where you chose the
+source yourself.
+
+Installing one:
+
+1. Agentty reads `index.json` over HTTPS. Every entry is checked again here — its id, its text, its
+   permissions, the host its module comes from — and an entry that does not check out is left out
+   of the list rather than shown.
+2. The Plugins page shows what the plugin is, where its source is, its licence, the size of the
+   module and its checksum, and **what it may do** as full sentences under Permissions.
+3. On Install, Agentty downloads the module, weighs it against that checksum, and refuses it if
+   they differ. Nothing reaches the plugins folder before the checksum matches.
+
+Submitting one is `CONTRIBUTING.md` in that repository: build the module, publish it as a release
+asset, and open a pull request with an entry naming its URL, checksum and size.
+
+`AGENTTY_MARKETPLACE_INDEX` points Agentty at another list while you are writing one. A module may
+be served from a release of a repository, or from the same host as the list itself.
 
 ## Permissions and safety
 
