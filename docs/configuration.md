@@ -42,6 +42,8 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `cursorShape` | `block`, `beam`, `underline` |
 | `askDirectory` | Show the folder picker for new tabs and workspaces |
 | `resumeBar` | Offer earlier Claude Code / Codex sessions when a terminal enters their folder |
+| `notifyAnswerRequests` | An agent asking for permission or an answer notifies even while Agentty is in front, unless you are looking at that pane (default on) |
+| `chatNotify` | `slack`, `discord`, `telegram` (on / off), `telegramChat` (chat id), `onFinish` (also when an agent finishes), `details` (include what the agent asks). Webhook URLs and the bot token are set in Settings → Notifications and kept in the Keychain, never in this file |
 | `agentTasks` | Agents may ask (`agentty tasks`) to start parallel tasks in split panes, each in its own worktree; you confirm each request |
 | `agentGuide` | Claude Code and Codex started by Agentty get a short guide to Agentty's commands (and Claude Code Agentty's skills), passed on the command line |
 | `autoWorktree` | A new AI session in a project where another one is at work (opened from the + menu, or `claude` / `codex` typed into a terminal) starts in its own git worktree (`~/.agentty/worktrees/<project>-<hash>/<name>`, branch `agentty/<name>` from the project's default branch) |

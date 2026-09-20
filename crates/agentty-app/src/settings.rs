@@ -161,6 +161,11 @@ pub struct Settings {
     pub favorite_sessions: Vec<String>,
     /// Notify even while Agentty is the focused app.
     pub notify_when_focused: bool,
+    /// An agent asking for an answer (permission, question) always notifies, unless its pane is the
+    /// one in front.
+    pub notify_answer_requests: bool,
+    /// Messages to Slack / Discord / Telegram (their secrets live in the credential store).
+    pub chat_notify: ChatNotify,
     /// Menu bar icon; closing the window keeps Agentty running there.
     pub menu_bar: bool,
     pub link_opener: LinkOpener,
@@ -302,6 +307,42 @@ fn lenient_search_engine<'de, D: serde::Deserializer<'de>>(deserializer: D) -> R
     })
 }
 
+/// Which chat services get a message, and what. The webhook URLs and the bot token are in the
+/// credential store (`agentty_bridge::notify`), never here.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChatNotify {
+    pub slack: bool,
+    pub discord: bool,
+    pub telegram: bool,
+    /// Telegram chat the bot writes to (a number, or `@channel`).
+    pub telegram_chat: String,
+    /// Also when an agent finishes (by default only when one needs an answer).
+    pub on_finish: bool,
+    /// Include what the agent asks (the command, the question). Off: only who and where.
+    pub details: bool,
+}
+
+impl ChatNotify {
+    pub fn enabled(&self, channel: agentty_bridge::notify::Channel) -> bool {
+        use agentty_bridge::notify::Channel;
+        match channel {
+            Channel::Slack => self.slack,
+            Channel::Discord => self.discord,
+            Channel::Telegram => self.telegram,
+        }
+    }
+
+    pub fn set_enabled(&mut self, channel: agentty_bridge::notify::Channel, on: bool) {
+        use agentty_bridge::notify::Channel;
+        match channel {
+            Channel::Slack => self.slack = on,
+            Channel::Discord => self.discord = on,
+            Channel::Telegram => self.telegram = on,
+        }
+    }
+}
+
 /// In-app browser preferences.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -372,6 +413,8 @@ impl Default for Settings {
             aliases: Vec::new(),
             system_notifications: true,
             notify_when_focused: false,
+            notify_answer_requests: true,
+            chat_notify: ChatNotify::default(),
             menu_bar: true,
             link_opener: LinkOpener::InApp,
             external_editor: ExternalEditor::Auto,

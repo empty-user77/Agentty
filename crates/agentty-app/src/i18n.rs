@@ -1060,6 +1060,99 @@ strings! {
     "notice.message" => ["Message", "메시지", "メッセージ", "消息"],
     "notice.bell" => ["Terminal bell", "터미널 벨", "ターミナルベル", "终端响铃"],
     "settings.system_notifications" => ["Show macOS notifications when an agent finishes or needs input", "에이전트가 작업을 끝내거나 입력을 기다리면 macOS 알림 표시", "エージェントの完了や入力待ちを macOS 通知で表示", "智能体完成或等待输入时显示 macOS 通知"],
+    "settings.system_notifications_hint" => [
+        "While Agentty is in the background, or always with the options below",
+        "Agentty가 뒤에 있을 때 표시하며, 아래 옵션으로 항상 표시할 수도 있습니다",
+        "Agentty が背面にあるときに表示します。下のオプションで常に表示することもできます",
+        "Agentty 在后台时显示；也可通过下方选项始终显示"
+    ],
+    "settings.notifications" => ["Notifications", "알림", "通知", "通知"],
+    "settings.notifications_desktop" => ["Desktop", "데스크톱", "デスクトップ", "桌面"],
+    "settings.notifications_chat" => ["Chat apps", "메신저", "チャットアプリ", "聊天应用"],
+    "settings.notify_answer_requests" => [
+        "Always notify when an agent needs an answer",
+        "에이전트가 답변을 요청하면 항상 알림",
+        "エージェントが回答を求めたら常に通知",
+        "智能体需要回答时始终通知"
+    ],
+    "settings.notify_answer_requests_hint" => [
+        "Permission requests and questions, even while Agentty is in front — unless you are looking at that pane",
+        "권한 요청과 질문은 Agentty가 앞에 있어도 알립니다. 그 창을 보고 있을 때만 제외",
+        "権限リクエストと質問は Agentty が前面にあっても通知します(そのペインを見ているときを除く)",
+        "权限请求和提问即使 Agentty 在前台也会通知（正在查看该窗格时除外）"
+    ],
+    "settings.notify_when_focused_hint" => [
+        "Also when an agent finishes while Agentty is in front",
+        "Agentty가 앞에 있을 때 작업 완료도 알림",
+        "Agentty が前面にあるときも完了を通知",
+        "Agentty 在前台时也通知完成"
+    ],
+    "chat.intro" => [
+        "When an agent needs your answer, a message goes to the apps you set up here — handy when you are away from the computer.",
+        "에이전트가 답변을 요청하면 여기서 설정한 메신저로 메시지를 보냅니다. 자리를 비웠을 때 유용합니다.",
+        "エージェントが回答を求めると、ここで設定したアプリにメッセージを送ります。席を外しているときに便利です。",
+        "智能体需要你回答时，会向这里设置的应用发送消息，离开电脑时很方便。"
+    ],
+    "chat.connected" => ["Connected", "연결됨", "接続済み", "已连接"],
+    "chat.not_set_up" => ["Not set up", "설정 안 됨", "未設定", "未设置"],
+    "chat.slack_how" => [
+        "Paste an Incoming Webhook URL (Slack app → Incoming Webhooks → Add New Webhook).",
+        "Incoming Webhook URL을 붙여넣으세요 (Slack 앱 → Incoming Webhooks → Add New Webhook).",
+        "Incoming Webhook の URL を貼り付けてください (Slack アプリ → Incoming Webhooks → Add New Webhook)。",
+        "粘贴 Incoming Webhook URL（Slack 应用 → Incoming Webhooks → Add New Webhook）。"
+    ],
+    "chat.discord_how" => [
+        "Paste a webhook URL (channel settings → Integrations → Webhooks → New Webhook → Copy URL).",
+        "웹훅 URL을 붙여넣으세요 (채널 설정 → 연동 → 웹후크 → 새 웹후크 → URL 복사).",
+        "Webhook の URL を貼り付けてください (チャンネル設定 → 連携サービス → ウェブフック → 新しいウェブフック → URL をコピー)。",
+        "粘贴 Webhook URL（频道设置 → 整合 → Webhook → 新 Webhook → 复制 URL）。"
+    ],
+    "chat.telegram_how" => [
+        "Create a bot with @BotFather and paste its token. Then send your bot any message and press Find.",
+        "@BotFather로 봇을 만들고 토큰을 붙여넣으세요. 그다음 봇에게 아무 메시지나 보내고 찾기를 누르세요.",
+        "@BotFather でボットを作り、トークンを貼り付けてください。次にボットに何かメッセージを送り、「検索」を押します。",
+        "用 @BotFather 创建机器人并粘贴其令牌，然后给机器人发送任意消息并点击“查找”。"
+    ],
+    "chat.telegram_chat" => ["Chat ID", "채팅 ID", "チャット ID", "聊天 ID"],
+    "chat.telegram_chat_placeholder" => ["e.g. 123456789", "예: 123456789", "例: 123456789", "例如 123456789"],
+    "chat.telegram_no_chat" => [
+        "Enter the chat ID first (or send the bot a message and press Find)",
+        "먼저 채팅 ID를 입력하세요 (또는 봇에게 메시지를 보내고 찾기를 누르세요)",
+        "先にチャット ID を入力してください(またはボットにメッセージを送って「検索」)",
+        "请先输入聊天 ID（或给机器人发消息后点击“查找”）"
+    ],
+    "chat.telegram_find" => ["Find", "찾기", "検索", "查找"],
+    "chat.telegram_found" => ["Found {name} ({id})", "{name} ({id}) 찾음", "{name} ({id}) を検出", "找到 {name}（{id}）"],
+    "chat.save" => ["Save", "저장", "保存", "保存"],
+    "chat.saved" => ["Saved in the credential store", "자격 증명 저장소에 저장됨", "資格情報ストアに保存しました", "已保存到凭据存储"],
+    "chat.test" => ["Send test", "테스트 전송", "テスト送信", "发送测试"],
+    "chat.test_message" => [
+        "Agentty: notifications work. You will get a message here when an agent needs your answer.",
+        "Agentty: 알림이 연결되었습니다. 에이전트가 답변을 요청하면 여기로 메시지가 옵니다.",
+        "Agentty: 通知が届きました。エージェントが回答を求めるとここにメッセージが届きます。",
+        "Agentty：通知已连接。智能体需要你回答时会在这里收到消息。"
+    ],
+    "chat.test_sent" => ["Test message sent", "테스트 메시지를 보냈습니다", "テストメッセージを送信しました", "已发送测试消息"],
+    "chat.last_sent" => ["Last message sent", "마지막 메시지 전송됨", "最後のメッセージを送信しました", "已发送最新消息"],
+    "chat.remove" => ["Remove", "삭제", "削除", "删除"],
+    "chat.working" => ["Working…", "처리 중…", "処理中…", "处理中…"],
+    "chat.on_finish" => ["Also when an agent finishes", "작업 완료도 보내기", "完了時にも送信", "完成时也发送"],
+    "chat.on_finish_hint" => [
+        "By default only answer requests are sent",
+        "기본값은 답변 요청만 보냅니다",
+        "既定では回答リクエストのみ送信します",
+        "默认只发送回答请求"
+    ],
+    "chat.details" => ["Include what the agent asks", "요청 내용 포함", "依頼内容を含める", "包含请求内容"],
+    "chat.details_hint" => [
+        "The command or question is sent to the chat service. Off: only the agent and the workspace",
+        "명령이나 질문 내용이 메신저로 전송됩니다. 끄면 에이전트와 워크스페이스 이름만 보냅니다",
+        "コマンドや質問の内容がチャットサービスに送られます。オフ: エージェントとワークスペース名のみ",
+        "命令或问题内容会发送到聊天服务。关闭时只发送智能体和工作区名称"
+    ],
+    "chat.permission" => ["🔐 Permission needed", "🔐 권한 요청", "🔐 権限リクエスト", "🔐 需要权限"],
+    "chat.question" => ["❓ Your answer is needed", "❓ 답변 요청", "❓ 回答待ち", "❓ 需要你的回答"],
+    "chat.finished" => ["✅ Done", "✅ 작업 완료", "✅ 完了", "✅ 已完成"],
 
     "palette.placeholder" => ["Type a command, workspace or theme", "명령, 워크스페이스, 테마 검색", "コマンド・ワークスペース・テーマを検索", "搜索命令、工作区或主题"],
     "palette.general" => ["Command", "명령", "コマンド", "命令"],

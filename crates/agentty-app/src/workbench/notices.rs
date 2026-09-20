@@ -50,9 +50,14 @@ impl Workbench {
 
         let prefs = settings(cx);
         let background = !self.window_active || self.is_mini();
-        if prefs.system_notifications && kind != NoticeKind::Bell && (background || prefs.notify_when_focused) {
+        // The user is looking at this very pane: no need to tell them elsewhere.
+        let in_view = self.pane_in_view(pane_id, cx);
+        let asks = matches!(kind, NoticeKind::Permission | NoticeKind::Question);
+        let answer_request = asks && prefs.notify_answer_requests && !in_view;
+        if prefs.system_notifications && kind != NoticeKind::Bell && (background || prefs.notify_when_focused || answer_request) {
             crate::notifications::show(pane_id, &format!("{source} · {workspace}"), &text);
         }
+        self.send_chat_notice(pane_id, kind, &source, &workspace, &text, cx);
         if kind != NoticeKind::Bell {
             if let Some(mini) = self.mini.as_ref().map(|m| m.view.clone()) {
                 let title = view_title_for_bubble(&source, &workspace);
@@ -64,6 +69,11 @@ impl Workbench {
             self.move_workspace_to_top(id, cx);
         }
         cx.notify();
+    }
+
+    /// Whether the user is looking at this very pane (window in front, no page over the terminals).
+    pub(super) fn pane_in_view(&self, pane_id: u64, cx: &gpui::App) -> bool {
+        self.window_active && !self.is_mini() && self.page.is_none() && self.active_pane().is_some_and(|p| p.read(cx).pane_id == pane_id)
     }
 
     pub(super) fn mark_pane_read(&mut self, pane_id: u64) -> bool {
