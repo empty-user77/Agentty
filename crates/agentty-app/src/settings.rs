@@ -117,7 +117,7 @@ pub struct CommandAlias {
     pub command: String,
 }
 
-pub const SETTINGS_VERSION: u32 = 3;
+pub const SETTINGS_VERSION: u32 = 2;
 
 pub const BUNDLED_FONT: &str = "JetBrains Mono";
 /// Nerd Font-patched JetBrains Mono, used for Powerline / Nerd Font glyphs. (The symbols-only font
@@ -470,11 +470,6 @@ impl Settings {
                 self.theme = DEFAULT_THEME.into();
             }
             self.line_height = 1.0;
-        }
-        if self.settings_version < 3 {
-            // v3: usage statistics. An install from before the setting existed never saw the
-            // question, so it stays off until the user turns it on themselves.
-            self.analytics = false;
         }
         self.settings_version = SETTINGS_VERSION;
         self
