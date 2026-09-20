@@ -2211,9 +2211,9 @@ impl Workbench {
             PaneKind::Codex => with_version("Codex", self.installed.as_ref().and_then(|i| i.version("codex"))),
         });
         let cwd = active.map(|v| tilde(&v.display_cwd()));
-        // The workspace being looked at, not every workspace.
-        let terminals =
-            self.workspaces.get(self.active_workspace).map_or(0, |ws| ws.tabs.iter().map(|tab| tab.root.leaves().len()).sum::<usize>());
+        // The branch the active terminal is on (with • when it has uncommitted changes), which is
+        // what the far end of a status bar is for — a terminal count told nobody anything.
+        let branch = active.and_then(|v| v.git_branch.clone().map(|branch| (branch, v.git_dirty, v.worktree.clone())));
         div()
             .h(px(STATUS_BAR_HEIGHT))
             .flex_shrink_0()
@@ -2234,7 +2234,26 @@ impl Workbench {
             .children(self.render_docker_chip(cx))
             .children(self.render_db_chip(cx))
             .children(self.render_status_icons(cx))
-            .child(tf(cx, "count.terminals", &[("n", &terminals.to_string())]))
+            .children(branch.map(|(branch, dirty, worktree)| {
+                div()
+                    .id("status-branch")
+                    .h_full()
+                    .px_1p5()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "page.git"), Some("cmd-shift-g")))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_page(Page::Git, cx)))
+                    .child(icon("git-branch", 12., hex(Chrome::MUTED)))
+                    // Branch and worktree names come from the repository: keep them from pushing
+                    // the rest of the bar off screen.
+                    .child(div().max_w(px(220.)).truncate().child(if dirty { format!("{branch} •") } else { branch }))
+                    .children(
+                        worktree.map(|name| div().max_w(px(160.)).truncate().text_color(hex(Chrome::MUTED)).child(format!("({name})"))),
+                    )
+            }))
     }
 }
 

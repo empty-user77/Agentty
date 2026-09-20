@@ -12,6 +12,22 @@ pub struct LoadError {
     pub message: String,
 }
 
+/// A browser shortcut pressed inside the web view (never happens without one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserKey {
+    Reload,
+    HardReload,
+    NewTab,
+    CloseTab,
+    FocusAddress,
+    Back,
+    Forward,
+}
+
+pub const NET_TOTALS: &str = "";
+pub const NET_ENTRIES: &str = "";
+pub const NET_DETAIL: &str = "";
+
 const UNSUPPORTED: &str = "the in-app browser is only available on macOS";
 
 pub struct WebView {
@@ -23,6 +39,14 @@ impl WebView {
         None
     }
 
+    pub fn id(&self) -> usize {
+        0
+    }
+
+    pub fn has_keyboard(&self) -> bool {
+        false
+    }
+
     pub fn load(&self, _url: &str) {}
 
     pub fn back(&self) {}
@@ -30,6 +54,8 @@ impl WebView {
     pub fn forward(&self) {}
 
     pub fn reload(&self) {}
+
+    pub fn hard_reload(&self) {}
 
     pub fn current_url(&self) -> Option<String> {
         None
@@ -41,6 +67,10 @@ impl WebView {
 
     pub fn load_error(&self) -> Option<LoadError> {
         None
+    }
+
+    pub fn take_popups(&self) -> Vec<String> {
+        Vec::new()
     }
 
     pub fn call_async(&self, _body: &str, _args: &[(&str, &str)], reply: Reply) {
@@ -62,6 +92,10 @@ impl WebView {
     pub fn set_frame(&mut self, _bounds: gpui::Bounds<gpui::Pixels>) {}
 
     pub fn hide(&mut self) {}
+}
+
+pub fn take_key_commands(_views: &[usize]) -> Vec<(usize, BrowserKey)> {
+    Vec::new()
 }
 
 pub fn clear_website_data() {}

@@ -8,7 +8,7 @@ use crate::plugins::{self, RunState};
 use crate::settings::settings;
 use crate::text_input::TextInput;
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::{action_button, hint, icon, icon_named, tilde, IconSize, TypeScale};
+use crate::ui::{action_button, hint, icon, icon_named, icon_only_sized, tilde, IconSize, TypeScale};
 use agentty_bridge::model::Agent;
 use agentty_bridge::plugins::manifest::{Manifest, PERMISSIONS};
 use agentty_bridge::plugins::store::{self, InstalledPlugin, Source};
@@ -19,6 +19,11 @@ use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWei
 const AI_PROMPT: &str = "Build the Agentty plugin \"{name}\" in this folder. It should: {idea}\n\nRead CLAUDE.md and PLUGIN_GUIDE.md first. Keep agentty-plugin.json in sync with main.mjs, check the code with `node --check main.mjs`, and when you are done tell me to press Restart on the plugin in Agentty's Plugins page.\n\nTalk to me in {language}.";
 const AI_PROMPT_ASK: &str = "We are building the Agentty plugin \"{name}\" in this folder. Read CLAUDE.md and PLUGIN_GUIDE.md, then ask me what the plugin should do.\n\nTalk to me in {language}.";
 
+/// Width of a closed plugin tile: they sit side by side and wrap onto as many rows as needed.
+const CARD_WIDTH: f32 = 260.;
+/// How much of the description a closed tile shows.
+const SUMMARY_CHARS: usize = 82;
+
 #[derive(Default)]
 pub struct PluginsPage {
     /// Plugin to scroll to / highlight (from a link or the panel's settings button).
@@ -28,6 +33,8 @@ pub struct PluginsPage {
     /// A link that needs this built-in plugin: (plugin id, link), opened after installing it.
     pub pending_link: Option<(String, String)>,
     logs_open: Option<String>,
+    /// The card the user opened: it spans the row and shows everything about the plugin.
+    pub expanded: Option<String>,
     confirm_uninstall: Option<String>,
     busy: bool,
     inputs: Option<Inputs>,
@@ -64,6 +71,7 @@ impl Workbench {
                 plugins::reload(cx);
                 let name = plugin.name().to_string();
                 self.plugins_page.focus = Some(plugin.id.clone());
+                self.plugins_page.expanded = Some(plugin.id.clone());
                 self.plugins_message(tf(cx, "plugins.installed_ok", &[("name", &name)]), false, cx);
                 if let Some((_, link)) = self.plugins_page.pending_link.clone().filter(|(id, _)| *id == plugin.id) {
                     self.plugins_page.pending_link = None;
@@ -251,7 +259,7 @@ impl Workbench {
                 ))
         });
 
-        let mut installed_list = div().flex().flex_col().gap_2();
+        let mut installed_list = div().flex().flex_wrap().items_start().content_start().gap_2();
         if installed.is_empty() {
             installed_list = installed_list.child(hint(t(cx, "plugins.none_installed")));
         }
@@ -259,7 +267,7 @@ impl Workbench {
             installed_list = installed_list.child(self.render_installed_plugin(plugin, cx));
         }
 
-        let mut catalog = div().flex().flex_col().gap_2();
+        let mut catalog = div().flex().flex_wrap().items_start().content_start().gap_2();
         let available: Vec<Manifest> =
             store::BUILTIN.iter().map(|b| b.manifest()).filter(|m| !installed.iter().any(|p| p.id == m.id)).collect();
         if available.is_empty() {
@@ -381,59 +389,85 @@ impl Workbench {
             )
     }
 
+    /// Plugins are shown as small tiles side by side; the one the user opens takes the whole row
+    /// and shows its links, permissions, folder and logs.
     fn card(&self, id: &str, focused: bool) -> gpui::Stateful<gpui::Div> {
+        let open = self.expanded(id);
         div()
             .id(SharedString::from(format!("plugin-card-{id}")))
-            .p_4()
+            .p_2p5()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_1p5()
             .rounded_lg()
             .border_1()
             .border_color(hex(if focused { Chrome::ACCENT } else { Chrome::BORDER }))
             .bg(hex(Chrome::PANEL))
+            .when(open, |d| d.w_full())
+            .when(!open, |d| d.w(px(CARD_WIDTH)))
     }
 
-    fn render_card_head(&self, manifest: &Manifest, badges: Vec<(String, u32)>, cx: &mut Context<Self>) -> impl IntoElement {
+    fn expanded(&self, id: &str) -> bool {
+        self.plugins_page.expanded.as_deref() == Some(id)
+    }
+
+    /// Opens or closes a card (the ⌄ button and the card's own head).
+    fn toggle_plugin_card(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.plugins_page.expanded = if self.expanded(id) { None } else { Some(id.to_string()) };
+        if self.plugins_page.expanded.is_none() {
+            self.plugins_page.logs_open = None;
+        }
+        cx.notify();
+    }
+
+    /// Title row of a tile: icon, name, version and the button that opens the card.
+    fn render_card_head(&self, manifest: &Manifest, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = cx;
-        let mut head = div()
+        let open = self.expanded(&manifest.id);
+        let id = manifest.id.clone();
+        div()
             .flex()
             .items_center()
             .gap_2()
-            .child(div().size(px(32.)).flex_shrink_0().rounded_md().bg(hex(0x2a2a2a)).flex().items_center().justify_center().child(icon(
+            .child(div().size(px(24.)).flex_shrink_0().rounded_md().bg(hex(0x2a2a2a)).flex().items_center().justify_center().child(icon(
                 icon_named(manifest.icon.as_deref()),
-                IconSize::BUTTON,
+                IconSize::INLINE,
                 hex(Chrome::BRIGHT),
             )))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
+                    .flex_1()
                     .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .t_title()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(hex(Chrome::BRIGHT))
-                                    .child(manifest.name.clone()),
-                            )
-                            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("v{}", manifest.version))),
+                            .min_w_0()
+                            .truncate()
+                            .t_body()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(manifest.name.clone()),
                     )
-                    .when(!manifest.publisher.is_empty(), |d| {
-                        d.child(div().t_caption().text_color(hex(Chrome::MUTED)).child(manifest.publisher.clone()))
-                    }),
+                    .child(div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(format!("v{}", manifest.version))),
             )
-            .child(div().flex_1());
+            .child(icon_only_sized(
+                SharedString::from(format!("plugin-open-{}", manifest.id)),
+                if open { "chevron-up" } else { "chevron-down" },
+                20.,
+                12.,
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_plugin_card(&id, cx)),
+            ))
+    }
+
+    /// The little state and source tags under the title.
+    fn render_badges(&self, badges: Vec<(String, u32)>) -> impl IntoElement {
+        let mut row = div().flex().flex_wrap().gap_1();
         for (text, color) in badges {
-            head =
-                head.child(div().px_1p5().py_0p5().rounded_sm().bg(hex_alpha(color, 0.18)).t_caption().text_color(hex(color)).child(text));
+            row = row.child(div().px_1p5().py_0p5().rounded_sm().bg(hex_alpha(color, 0.18)).t_caption().text_color(hex(color)).child(text));
         }
-        head
+        row
     }
 
     /// Project links and the app a plugin is for ("Cosmica" → where to get it).
@@ -552,12 +586,13 @@ impl Workbench {
             badges.insert(0, (t(cx, "plugins.detected").to_string(), Chrome::SUCCESS));
         }
         let focused = self.plugins_page.focus.as_deref() == Some(manifest.id.as_str());
+        let open = self.expanded(&manifest.id);
         let id = manifest.id.clone();
         self.card(&manifest.id, focused)
-            .child(self.render_card_head(&manifest, badges, cx))
-            .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(manifest.description.clone()))
-            .child(self.render_project(&manifest, cx))
-            .child(self.render_capabilities(&manifest, cx))
+            .child(self.render_card_head(&manifest, cx))
+            .child(self.render_badges(badges))
+            .child(self.render_summary(&manifest.description, open))
+            .when(open, |d| d.child(self.render_project(&manifest, cx)).child(self.render_capabilities(&manifest, cx)))
             .child(div().flex().gap_2().child(action_button(
                 SharedString::from(format!("plugin-install-{}", manifest.id)),
                 t(cx, "plugins.install"),
@@ -566,15 +601,24 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// The description: one short line on a closed tile, everything once it is open.
+    fn render_summary(&self, description: &str, open: bool) -> impl IntoElement {
+        let text = match open || description.chars().count() <= SUMMARY_CHARS {
+            true => description.to_string(),
+            false => format!("{}…", description.chars().take(SUMMARY_CHARS).collect::<String>().trim_end()),
+        };
+        div().t_small().text_color(hex(Chrome::FOREGROUND)).child(text)
+    }
+
     fn render_installed_plugin(&self, plugin: &InstalledPlugin, cx: &mut Context<Self>) -> AnyElement {
         let focused = self.plugins_page.focus.as_deref() == Some(plugin.id.as_str());
         let Some(manifest) = plugin.manifest.clone() else {
             let id = plugin.id.clone();
             return self
                 .card(&plugin.id, focused)
-                .child(div().t_title().text_color(hex(Chrome::BRIGHT)).child(plugin.id.clone()))
-                .child(div().t_small().text_color(hex(Chrome::ERROR)).child(plugin.error.clone().unwrap_or_default()))
-                .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(tilde(&plugin.dir)))
+                .child(div().truncate().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(plugin.id.clone()))
+                .child(div().t_caption().text_color(hex(Chrome::ERROR)).child(plugin.error.clone().unwrap_or_default()))
+                .child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(tilde(&plugin.dir)))
                 .child(div().flex().gap_2().child(action_button(
                     SharedString::from(format!("plugin-remove-{}", plugin.id)),
                     t(cx, "plugins.uninstall"),
@@ -607,36 +651,38 @@ impl Workbench {
         let update = store::builtin_update_available(plugin);
 
         let button_id = |name: &str| SharedString::from(format!("plugin-{name}-{}", plugin.id));
-        let mut buttons = div().flex().flex_wrap().gap_2();
-        buttons = buttons.child(action_button(button_id("toggle"), t(cx, if enabled { "plugins.disable" } else { "plugins.enable" }), {
+        // A closed tile keeps the everyday buttons; the rest appear when the card is opened.
+        let mut primary = div().flex().flex_wrap().gap_1p5();
+        primary = primary.child(action_button(button_id("toggle"), t(cx, if enabled { "plugins.disable" } else { "plugins.enable" }), {
             let id = id.clone();
             cx.listener(move |this, _: &ClickEvent, _, cx| this.set_plugin_enabled(&id, !enabled, cx))
         }));
         if enabled && has_panel {
             let id = id.clone();
-            buttons = buttons.child(action_button(
+            primary = primary.child(action_button(
                 button_id("panel"),
                 t(cx, "plugins.open_panel"),
                 cx.listener(move |this, _: &ClickEvent, _, cx| this.open_plugin_panel(&id, cx)),
             ));
         }
-        if enabled {
-            let id = id.clone();
-            buttons = buttons.child(action_button(
-                button_id("restart"),
-                t(cx, "plugins.restart"),
-                cx.listener(move |_, _: &ClickEvent, _, cx| plugins::restart(&id, cx)),
-            ));
-        }
         if update {
             let id = id.clone();
-            buttons = buttons.child(action_button(
+            primary = primary.child(action_button(
                 button_id("update"),
                 t(cx, "plugins.update"),
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
                     plugins::stop(&id, cx);
                     this.install_builtin_plugin(id.clone(), window, cx)
                 }),
+            ));
+        }
+        let mut buttons = div().flex().flex_wrap().gap_1p5();
+        if enabled {
+            let id = id.clone();
+            buttons = buttons.child(action_button(
+                button_id("restart"),
+                t(cx, "plugins.restart"),
+                cx.listener(move |_, _: &ClickEvent, _, cx| plugins::restart(&id, cx)),
             ));
         }
         buttons = buttons.child(action_button(button_id("logs"), t(cx, if logs_open { "plugins.hide_logs" } else { "plugins.logs" }), {
@@ -693,21 +739,24 @@ impl Workbench {
                 .child(if lines.is_empty() { t(cx, "plugins.no_logs").to_string() } else { lines.join("\n") })
         });
         let failure = match &state {
-            RunState::Failed(error) if enabled => Some(div().t_small().text_color(hex(Chrome::ERROR)).child(error.clone())),
+            RunState::Failed(error) if enabled => Some(div().t_caption().text_color(hex(Chrome::ERROR)).child(error.clone())),
             _ => None,
         };
 
+        let open = self.expanded(&plugin.id);
         self.card(&plugin.id, focused)
-            .child(self.render_card_head(&manifest, badges, cx))
-            .when(!manifest.description.is_empty(), |d| {
-                d.child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(manifest.description.clone()))
+            .child(self.render_card_head(&manifest, cx))
+            .child(self.render_badges(badges))
+            .when(!manifest.description.is_empty(), |d| d.child(self.render_summary(&manifest.description, open)))
+            .when(open, |d| {
+                d.child(self.render_project(&manifest, cx))
+                    .child(self.render_capabilities(&manifest, cx))
+                    .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(tilde(&plugin.dir)))
             })
-            .child(self.render_project(&manifest, cx))
-            .child(self.render_capabilities(&manifest, cx))
-            .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(tilde(&plugin.dir)))
             .children(failure)
-            .child(buttons)
-            .children(logs)
+            .child(primary)
+            .when(open, |d| d.child(buttons))
+            .children(logs.filter(|_| open))
             .into_any_element()
     }
 

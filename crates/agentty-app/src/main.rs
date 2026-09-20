@@ -435,6 +435,7 @@ fn bind_keys(cx: &mut App) {
         key("cmd-shift-g", OpenGit, None),
         key("ctrl-cmd-m", ToggleMini, None),
         key("cmd-shift-b", ToggleBrowser, None),
+        key("cmd-shift-r", HardReloadBrowser, None),
         key("cmd-alt-b", ToggleFiles, None),
         key("cmd-f", FindInTerminal, None),
         key("cmd-=", ZoomIn, None),

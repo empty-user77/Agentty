@@ -359,6 +359,8 @@ pub struct BrowserSettings {
     pub home: String,
     /// Panel width in points.
     pub width: f32,
+    /// Height of the network panel under the page, in points.
+    pub network_height: f32,
     #[serde(deserialize_with = "lenient_search_engine")]
     pub search_engine: SearchEngine,
     pub javascript: bool,
@@ -383,6 +385,7 @@ impl Default for BrowserSettings {
         Self {
             home: "https://www.agentty.run".into(),
             width: 560.,
+            network_height: 260.,
             search_engine: SearchEngine::Google,
             javascript: true,
             popups: false,

@@ -127,6 +127,13 @@ impl TextInput {
         &self.content
     }
 
+    /// Gives this field the keyboard and selects what is in it (⌘L in the browser's address bar).
+    pub fn focus_and_select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle);
+        self.selected_range = 0..self.content.len();
+        cx.notify();
+    }
+
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.content = text.into();
         self.selected_range = self.content.len()..self.content.len();
