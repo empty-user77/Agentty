@@ -55,6 +55,8 @@ All notable changes to this project are documented here. The format follows
 - Prompts from links and plugins that arrive while one is being shown wait for their turn instead of replacing it.
 
 ### Changed
+- The menu bar item tells finished agents apart from ones that need you: a spinner while agents work, `● N` for agents
+  waiting for a permission or an answer, and `✓ N` for agents that finished and haven't been looked at.
 - API connector keys use the platform's credential store on Windows (Credential Manager) and Linux (Secret Service);
   macOS keeps using the Keychain.
 - New session working trees start from the project's default branch instead of the branch the project folder has
