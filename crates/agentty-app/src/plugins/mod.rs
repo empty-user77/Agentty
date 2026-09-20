@@ -2,6 +2,7 @@
 //! their calls to the window they concern. Plugins are shared by every Agentty window.
 
 pub mod process;
+pub mod wasm;
 
 use agentty_bridge::plugins::manifest::Manifest;
 use agentty_bridge::plugins::store::{self, InstalledPlugin};
@@ -24,6 +25,9 @@ const MAX_MESSAGES_PER_SECOND: u32 = 240;
 const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
 /// One notification per plugin per this long; the rest are dropped.
 const NOTIFY_INTERVAL: Duration = Duration::from_millis(700);
+/// `net/fetch` calls one plugin may have in flight. A request holds a background thread until it
+/// answers or times out, so a plugin cannot open as many as it likes.
+const MAX_CONCURRENT_FETCHES: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunState {
@@ -51,6 +55,8 @@ pub struct Runtime {
     notified_at: Option<Instant>,
     /// Bytes currently kept in `logs`.
     log_bytes: usize,
+    /// `net/fetch` calls this plugin has in flight.
+    fetches: u32,
 }
 
 impl Runtime {
@@ -67,6 +73,7 @@ impl Runtime {
             rate_window: None,
             notified_at: None,
             log_bytes: 0,
+            fetches: 0,
         }
     }
 
@@ -486,6 +493,7 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             })),
             cx,
         ),
+        "net/fetch" => fetch(plugin_id, request_id, params, cx),
         "host/openUrl" => {
             let url = params.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
             if url.starts_with("https://") || url.starts_with("http://") {
@@ -529,6 +537,69 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             }
         }
     }
+}
+
+/// `net/fetch`: the plugin's own HTTP request, made on a background thread and answered when it
+/// comes back. Agentty adds nothing to it — no cookie, no stored credential, no header of its own
+/// beyond what the HTTP client must set — so a plugin reaches exactly what it was given.
+fn fetch(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else {
+        // Nothing to answer: a request nobody waits for is not worth a network call.
+        if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
+            runtime.log("net/fetch needs a request id to be answered");
+        }
+        return;
+    };
+    let request: agentty_bridge::plugins::net::FetchRequest = match serde_json::from_value(params) {
+        Ok(request) => request,
+        Err(err) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("invalid request: {err}"))), cx),
+    };
+    let generation = host(cx).runtimes.get(&id).map_or(0, |runtime| runtime.generation);
+    // The log is the user's view of what a plugin reached; a token in the URL stays out of it.
+    let line = format!("{} {}", request.method.to_uppercase(), agentty_bridge::extensions::redact_url(&request.url));
+    let accepted = match host_mut(cx).runtimes.get_mut(&id) {
+        Some(runtime) if runtime.fetches < MAX_CONCURRENT_FETCHES => {
+            runtime.fetches += 1;
+            runtime.log(line);
+            true
+        }
+        Some(_) => false,
+        None => return,
+    };
+    if !accepted {
+        let message = format!("more than {MAX_CONCURRENT_FETCHES} requests at once");
+        return respond(&id, &request_id, Err((codes::UNAVAILABLE, message)), cx);
+    }
+    let task = cx.background_executor().spawn(async move { agentty_bridge::plugins::net::fetch(&request) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = cx.update(|cx| {
+            let answer = {
+                let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
+                runtime.fetches = runtime.fetches.saturating_sub(1);
+                // The plugin was restarted while this was in the air: the answer belongs to a
+                // plugin that is gone, and its request id means nothing to the one running now.
+                if runtime.generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(response) => {
+                        runtime.log(format!("  → {} ({} bytes, {} ms)", response.status, response.bytes, response.duration_ms));
+                        serde_json::to_value(response).map_err(|err| (codes::INTERNAL, err.to_string()))
+                    }
+                    Err(err) => {
+                        let message = format!("{err:#}");
+                        runtime.log(format!("  → failed: {message}"));
+                        Err((codes::INVALID_PARAMS, message))
+                    }
+                }
+            };
+            touch(cx);
+            respond(&id, &request_id, answer, cx);
+        });
+    })
+    .detach();
 }
 
 /// A plugin call that needs a window (prompts, terminals, sessions, notifications).

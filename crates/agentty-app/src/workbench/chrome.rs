@@ -255,6 +255,11 @@ impl Workbench {
             .border_color(hex(Chrome::BORDER))
             .child(
                 div()
+                    .id("activity-items")
+                    .flex_1()
+                    .min_h_0()
+                    // More plugins than fit: the bar scrolls rather than pushing Settings off it.
+                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
                     .child(item(
@@ -312,9 +317,10 @@ impl Workbench {
                         "page.plugins",
                         Box::new(|this, cx| this.open_page(Page::Plugins, cx)),
                         cx,
-                    )),
+                    ))
+                    .children(self.render_plugin_activity_items(cx)),
             )
-            .child(div().flex().flex_col().child(item(
+            .child(div().flex_shrink_0().flex().flex_col().child(item(
                 "activity-settings",
                 "settings",
                 self.page == Some(Page::Settings),
@@ -2231,6 +2237,7 @@ impl Workbench {
             .children(self.render_advisor_chip(cx))
             .children(cwd)
             .child(div().flex_1().min_w_0().truncate().children(self.status.clone()))
+            .children(self.render_plugin_status_items(cx))
             .children(self.render_docker_chip(cx))
             .children(self.render_db_chip(cx))
             .children(self.render_status_icons(cx))

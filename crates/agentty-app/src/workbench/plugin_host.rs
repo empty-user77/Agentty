@@ -450,8 +450,10 @@ impl Workbench {
         if self.page != Some(Page::Plugins) {
             self.open_page(Page::Plugins, cx);
         }
-        // Arriving at a named plugin, its card opens so everything about it is in view.
-        self.plugins_page.expanded = focus.clone();
+        // Arriving at a named plugin, it is the one the page opens on.
+        if focus.is_some() {
+            self.plugins_page.selected = focus.clone();
+        }
         self.plugins_page.focus = focus;
         cx.notify();
     }

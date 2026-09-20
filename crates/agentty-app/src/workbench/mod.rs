@@ -2441,6 +2441,28 @@ impl Workbench {
                 }
             }
             "plugin-install" => self.install_builtin_plugin(argument.to_string(), window, cx),
+            // `plugin-event <plugin> <element> <event> [value]`: what a click or a keystroke in a
+            // plugin's panel sends, without the mouse.
+            "plugin-event" => {
+                let mut parts = argument.splitn(4, ' ');
+                if let (Some(plugin), Some(element), Some(event)) = (parts.next(), parts.next(), parts.next()) {
+                    let value = parts.next().map(|value| serde_json::Value::String(value.to_string()));
+                    let event = agentty_bridge::plugins::ui::UiEvent {
+                        element: element.to_string(),
+                        event: event.to_string(),
+                        value,
+                        item: None,
+                        action: None,
+                    };
+                    self.send_plugin_event(plugin, event, cx);
+                }
+            }
+            // `plugin-folder <path>`: the "Install from folder" button without its file picker.
+            "plugin-folder" => {
+                let result = agentty_bridge::plugins::store::install_from_folder(std::path::Path::new(argument));
+                eprintln!("plugin-folder: {:?}", result.as_ref().map(|p| p.id.clone()).map_err(|e| format!("{e:#}")));
+                self.after_install_debug(result, window, cx);
+            }
             // `prompt-agent claude|codex|shell` picks the agent in the open "Send to…" dialog.
             "prompt-agent" => {
                 if let Some(dialog) = self.prompt_dialog.as_mut() {

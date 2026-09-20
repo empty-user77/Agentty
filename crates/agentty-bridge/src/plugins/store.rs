@@ -389,15 +389,18 @@ fn write_file(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
-/// Copies a folder, skipping VCS data and `node_modules` is kept (plugins may bundle dependencies).
+/// Copies a folder, skipping VCS data; `node_modules` is kept (plugins may bundle dependencies).
+/// A Rust plugin's `target/` is not: it holds gigabytes of build output, and the module it
+/// produced is already beside `agentty-plugin.json`.
 fn copy_tree(from: &Path, to: &Path, depth: usize) -> Result<()> {
     if depth > 12 {
         bail!("plugin folder is nested too deeply");
     }
+    let rust_build = depth == 0 && from.join("Cargo.toml").exists();
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)?.flatten() {
         let name = entry.file_name();
-        if name == ".git" || name == ".DS_Store" {
+        if name == ".git" || name == ".DS_Store" || (rust_build && name == "target") {
             continue;
         }
         let file_type = entry.file_type()?;
@@ -518,6 +521,49 @@ mod tests {
             uninstall("dev-plugin").unwrap();
             assert!(dev.exists(), "unlinking keeps the developer's folder");
             assert_eq!(installed().len(), 1);
+        });
+    }
+
+    /// A Rust plugin's folder holds its sources and, after a build, gigabytes of `target/`. What
+    /// gets installed is the module and the manifest, not the build output.
+    #[test]
+    fn installing_a_wasm_plugin_leaves_the_build_output_behind() {
+        with_data_dir(|root| {
+            let source = root.join("wasm-plugin");
+            std::fs::create_dir_all(source.join("target/wasm32-unknown-unknown/release")).unwrap();
+            std::fs::create_dir_all(source.join("src")).unwrap();
+            std::fs::write(
+                source.join(MANIFEST_FILE),
+                r#"{"id":"wasm-demo","name":"Demo","version":"1.0.0","runtime":"wasm","main":"demo.wasm"}"#,
+            )
+            .unwrap();
+            std::fs::write(source.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+            std::fs::write(source.join("src/lib.rs"), "// source").unwrap();
+            std::fs::write(source.join("demo.wasm"), b"\0asm").unwrap();
+            std::fs::write(source.join("target/wasm32-unknown-unknown/release/huge.rlib"), vec![0u8; 4096]).unwrap();
+
+            let installed = install_from_folder(&source).unwrap();
+            assert!(installed.active(), "{:?}", installed.error);
+            assert!(installed.dir.join("demo.wasm").exists());
+            assert!(installed.dir.join("src/lib.rs").exists());
+            assert!(!installed.dir.join("target").exists(), "target/ is not copied");
+            assert!(source.join("target").exists(), "the developer's build output is left alone");
+        });
+    }
+
+    /// A manifest that says `wasm` but points at a script is refused before it is installed.
+    #[test]
+    fn a_wasm_manifest_needs_a_module() {
+        with_data_dir(|root| {
+            let source = root.join("not-wasm");
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(
+                source.join(MANIFEST_FILE),
+                r#"{"id":"not-wasm","name":"No","version":"1.0.0","runtime":"wasm","main":"main.mjs"}"#,
+            )
+            .unwrap();
+            std::fs::write(source.join("main.mjs"), "").unwrap();
+            assert!(install_from_folder(&source).is_err());
         });
     }
 

@@ -466,7 +466,7 @@ fn mask_word(word: &str) -> String {
 
 /// A URL with everything that can carry a credential masked: user and password, token-like path
 /// segments, query values (by name or by looks) and the fragment.
-fn redact_url(url: &str) -> String {
+pub fn redact_url(url: &str) -> String {
     let Ok(parsed) = url::Url::parse(url) else { return if looks_like_token(url) { MASK.into() } else { url.to_string() } };
     let Some(host) = parsed.host_str() else { return url.to_string() };
     let mut out = format!("{}://", parsed.scheme());

@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Plugins can be written as compiled programs: a Rust crate built for WebAssembly, shipped as one
+  `.wasm` file that works on macOS, Windows and Linux. Agentty runs the module itself and hands it
+  three functions — send a message, write a log line, read the clock — so such a plugin has no
+  files, no processes and no network of its own, whatever its code says, and everything it asks for
+  goes through the permissions in its manifest. A Rust SDK (`sdk/rust`) and two examples
+  (`plugins/hello-rust`, `plugins/agent-rest-client`) are in the repository.
+- Plugins choose where their panel is reached from: the activity bar on the left (`sidebar`), the
+  tab strip above the terminals (`pane`, where they have always been) or the status bar at the
+  bottom (`status`). The activity bar scrolls once there are more items than fit.
+- `net.request`: a plugin may make HTTP requests to addresses it chooses. Agentty bounds the
+  method, the headers, the body and response sizes, the redirects and the time, sends nothing of
+  yours with the request, and writes each call to the plugin's log with the URL redacted.
+- The Plugins page is a list beside details: search, then the plugin's description, what it adds
+  and where, its permissions in full sentences, where it came from, how it runs and its log.
+
 ## [0.1.13] - 2026-09-20
 
 ### Added

@@ -65,6 +65,31 @@ pub enum Runtime {
     Python,
     /// `<main>` is an executable.
     Executable,
+    /// `<main>` is a WebAssembly module, run inside Agentty by an interpreter. It reaches nothing
+    /// but the host calls in this protocol: no files, no network, no environment, no processes.
+    Wasm,
+}
+
+impl Runtime {
+    /// Whether the plugin runs as a program of the user's, with everything the user can reach.
+    /// `wasm` does not: that is the point of it.
+    pub fn is_process(self) -> bool {
+        !matches!(self, Runtime::Wasm)
+    }
+}
+
+/// Where a plugin's panel is reached from. A plugin picks one place; `pane` is what plugins that
+/// say nothing have always had.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Surface {
+    /// An icon in the activity bar down the left edge, like Agentty's own pages.
+    Sidebar,
+    /// An icon in the tab strip above the terminals.
+    #[default]
+    Pane,
+    /// An icon at the left end of the status bar along the bottom.
+    Status,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -140,10 +165,14 @@ pub struct PanelContribution {
     pub title: String,
     #[serde(default)]
     pub icon: Option<String>,
+    /// Which of Agentty's three surfaces the panel's icon sits on.
+    #[serde(default)]
+    pub surface: Surface,
 }
 
 /// Capabilities a plugin must declare before the matching host methods work.
 pub const PERMISSIONS: &[(&str, &str)] = &[
+    ("net.request", "Make HTTP requests to the addresses you give it"),
     ("prompt.inject", "Start agent sessions or send prompts, after you pick where"),
     ("terminal.write", "Type into and submit prompts to open terminal panes directly"),
     ("session.read", "Read the conversation of AI sessions open in Agentty"),
@@ -173,7 +202,10 @@ impl Manifest {
         if self.api_version > API_VERSION {
             bail!("plugin \"{}\" needs a newer Agentty (plugin API {} > {API_VERSION})", self.id, self.api_version);
         }
-        relative_path(&self.main).with_context(|| format!("plugin \"{}\": invalid main", self.id))?;
+        let main = relative_path(&self.main).with_context(|| format!("plugin \"{}\": invalid main", self.id))?;
+        if self.runtime == Runtime::Wasm && main.extension().is_none_or(|e| e != "wasm") {
+            bail!("plugin \"{}\": a wasm plugin's main must be a .wasm module", self.id);
+        }
         let mut seen = std::collections::HashSet::new();
         for command in &self.contributes.commands {
             if command.id.trim().is_empty() || command.title.trim().is_empty() {
@@ -210,6 +242,11 @@ impl Manifest {
 
     pub fn has_permission(&self, permission: &str) -> bool {
         self.permissions.iter().any(|p| p == permission)
+    }
+
+    /// Where this plugin's panel is reached from (`Pane` when it contributes no panel).
+    pub fn surface(&self) -> Surface {
+        self.contributes.panel.as_ref().map_or(Surface::Pane, |panel| panel.surface)
     }
 
     pub fn starts_with_agentty(&self) -> bool {
@@ -285,6 +322,32 @@ mod tests {
         assert_eq!(command.when, When::Agent);
         assert!(manifest.has_permission("prompt.inject"));
         assert!(!manifest.has_permission("session.read"));
+        // Plugins written before surfaces existed keep the icon they had, in the tab strip.
+        assert_eq!(manifest.surface(), Surface::Pane);
+        assert!(manifest.runtime.is_process());
+    }
+
+    #[test]
+    fn a_panel_picks_one_surface() {
+        let mut json = sample();
+        json["contributes"]["panel"] = serde_json::json!({ "title": "Hello", "surface": "sidebar" });
+        assert_eq!(Manifest::parse(json.to_string().as_bytes()).unwrap().surface(), Surface::Sidebar);
+        json["contributes"]["panel"] = serde_json::json!({ "title": "Hello", "surface": "status" });
+        assert_eq!(Manifest::parse(json.to_string().as_bytes()).unwrap().surface(), Surface::Status);
+        json["contributes"]["panel"] = serde_json::json!({ "title": "Hello", "surface": "everywhere" });
+        assert!(Manifest::parse(json.to_string().as_bytes()).is_err(), "a made-up surface is refused");
+    }
+
+    #[test]
+    fn a_wasm_plugin_points_at_a_module() {
+        let mut json = sample();
+        json["runtime"] = serde_json::json!("wasm");
+        assert!(Manifest::parse(json.to_string().as_bytes()).is_err(), "main.mjs is not a module");
+        json["main"] = serde_json::json!("plugin.wasm");
+        let manifest = Manifest::parse(json.to_string().as_bytes()).unwrap();
+        assert_eq!(manifest.runtime, Runtime::Wasm);
+        // It is not a program of the user's: it reaches only what the host hands it.
+        assert!(!manifest.runtime.is_process());
     }
 
     #[test]

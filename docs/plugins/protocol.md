@@ -12,6 +12,7 @@ Agentty starts the plugin with its folder as the working directory:
 | `node` | `node <main>` (Node.js from the login shell PATH, Homebrew, Volta or nvm) |
 | `python` | `python3 <main>` |
 | `executable` | `<main>` |
+| `wasm` | none — `<main>` is a WebAssembly module Agentty runs itself (see [WebAssembly plugins](#webassembly-plugins)) |
 
 Messages are [JSON-RPC 2.0](https://www.jsonrpc.org/specification) objects, **one per line**, UTF-8,
 on stdin (Agentty → plugin) and stdout (plugin → Agentty). Lines longer than 16 MB are rejected.
@@ -55,10 +56,19 @@ when you don't care.
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
+| `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
 
 Agentty drops `ui/notify` calls that arrive faster than one per 700 ms (answering them normally), and
 stops a plugin that sends more than 240 messages a second. Context fields are limited by the
 plugin's permissions (see the guide).
+
+`net/fetch` is the only way a plugin reaches the network, and Agentty bounds it: `GET`, `HEAD`,
+`POST`, `PUT`, `PATCH`, `DELETE` and `OPTIONS` over `http` or `https`; at most 32 headers, none of
+them `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Upgrade` or `Expect`, and none
+carrying a line break; a request body up to 1 MB; 4 MB of the response (`truncated` says when more
+arrived); 3 redirects; a timeout of 15 s by default and 60 s at most; four requests in flight per
+plugin. Nothing of yours travels with the request — no cookie, no stored credential — only what the
+plugin puts in it. Each call is written to the plugin's log with the URL redacted.
 
 Errors use these codes:
 
@@ -83,6 +93,51 @@ Errors use these codes:
 ```
 
 (`→` Agentty to plugin, `←` plugin to Agentty. Request ids are per direction.)
+
+## WebAssembly plugins
+
+`"runtime": "wasm"` in `agentty-plugin.json` makes `main` a `.wasm` module that Agentty runs inside
+itself, on an interpreter — one file that works on macOS, Windows and Linux.
+
+A module can call the functions Agentty hands it and nothing else. There is no file, no socket, no
+environment variable, no process and no clock beyond a counter, so a WebAssembly plugin cannot read
+`~/.agentty`, your projects or your credentials however it is written. What it wants from Agentty
+it asks for with the same messages a process plugin writes to stdout, and the permissions in the
+manifest are checked the same way.
+
+The module exports:
+
+| Export | Meaning |
+|---|---|
+| `memory` | its linear memory (the standard export of a Rust or C module) |
+| `agentty_alloc(len: i32) -> i32` | a buffer of `len` bytes for Agentty to write a message into |
+| `agentty_on_message(ptr: i32, len: i32)` | one UTF-8 JSON message from Agentty |
+
+and imports, from the module named `agentty`:
+
+| Import | Meaning |
+|---|---|
+| `send(ptr: i32, len: i32)` | one UTF-8 JSON message to Agentty |
+| `log(ptr: i32, len: i32)` | one line for the plugin's log |
+| `now_ms() -> i64` | milliseconds since the Unix epoch |
+
+Messages are the same JSON-RPC objects as over stdio, one per call, without the newline. A module
+that imports anything else does not load. Agentty also refuses a module larger than 64 MB, caps its
+memory at 64 MB and gives each message a budget of work: a plugin that does not return is stopped
+with "did not finish in time", and one that sends more than 256 messages while handling a single
+one is stopped as well.
+
+The Rust SDK in `sdk/rust` hides all of this; `plugins/hello-rust` is a working example.
+
+## Surfaces
+
+`contributes.panel.surface` says where the plugin's icon goes. A plugin picks one:
+
+| `surface` | Where |
+|---|---|
+| `pane` (default) | the tab strip above the terminals |
+| `sidebar` | the activity bar down the left edge, with Agentty's own pages |
+| `status` | the status bar along the bottom |
 
 ## UI tree
 

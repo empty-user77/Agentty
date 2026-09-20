@@ -8,7 +8,7 @@ use crate::plugins::{self, RunState};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
-use agentty_bridge::plugins::manifest::When;
+use agentty_bridge::plugins::manifest::{Surface, When};
 use agentty_bridge::plugins::ui::{Gap, Node, TextStyle, Tone, UiEvent, Variant};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, FontWeight, SharedString, Subscription, Window};
 use std::time::Duration;
@@ -506,20 +506,29 @@ impl Workbench {
         }
     }
 
-    /// Tab-strip buttons of enabled plugins that have a panel.
-    pub(super) fn render_plugin_header_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let entries: Vec<(String, String, &'static str, String)> = plugins::active(cx)
+    /// Enabled plugins whose panel sits on `surface`: (id, title, icon, badge).
+    fn plugin_surface_entries(&self, surface: Surface, cx: &Context<Self>) -> Vec<(String, String, &'static str, String)> {
+        plugins::active(cx)
             .filter_map(|(plugin, manifest)| {
-                let panel = manifest.contributes.panel.as_ref()?;
+                let panel = manifest.contributes.panel.as_ref().filter(|_| manifest.surface() == surface)?;
                 let glyph = icon_named(panel.icon.as_deref().or(manifest.icon.as_deref()));
                 let badge = plugins::runtime(cx, &plugin.id).map(|r| r.badge.clone()).unwrap_or_default();
                 Some((plugin.id.clone(), panel.title.clone(), glyph, badge))
             })
-            .collect();
-        entries
+            .collect()
+    }
+
+    /// Whether this plugin's panel is the one on screen.
+    fn plugin_panel_open(&self, id: &str) -> bool {
+        self.plugin_panel.as_deref() == Some(id) && self.page.is_none()
+    }
+
+    /// Tab-strip buttons of plugins that put their panel there (the default surface).
+    pub(super) fn render_plugin_header_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.plugin_surface_entries(Surface::Pane, cx)
             .into_iter()
             .map(|(id, title, glyph, badge)| {
-                let open = self.plugin_panel.as_deref() == Some(id.as_str()) && self.page.is_none();
+                let open = self.plugin_panel_open(&id);
                 let target = id.clone();
                 div()
                     .id(SharedString::from(format!("header-plugin-{id}")))
@@ -539,6 +548,82 @@ impl Workbench {
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_plugin_panel(&target, cx)))
                     .child(icon(glyph, IconSize::BUTTON, hex(if open { Chrome::BRIGHT } else { Chrome::FOREGROUND })))
+                    .when(!badge.is_empty(), |d| d.child(div().t_caption().text_color(hex(Chrome::BRIGHT)).child(badge)))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Activity-bar items of plugins that ask for the sidebar. They look and behave like
+    /// Agentty's own items, and the bar scrolls once there are more than fit.
+    pub(super) fn render_plugin_activity_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.plugin_surface_entries(Surface::Sidebar, cx)
+            .into_iter()
+            .map(|(id, title, glyph, badge)| {
+                let open = self.plugin_panel_open(&id);
+                let target = id.clone();
+                let element_id = SharedString::from(format!("activity-plugin-{id}"));
+                div()
+                    .id(element_id.clone())
+                    .group(element_id.clone())
+                    .tooltip(Tooltip::text(title, None))
+                    .w_full()
+                    .h(px(48.))
+                    .flex_shrink_0()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .border_l_2()
+                    .border_color(if open { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_plugin_panel(&target, cx)))
+                    .child(
+                        icon(glyph, IconSize::ACTIVITY, if open { hex(Chrome::BRIGHT) } else { hex(0x858585) })
+                            .group_hover(element_id, |s| s.text_color(hex(Chrome::BRIGHT))),
+                    )
+                    .when(!badge.is_empty(), |d| {
+                        // The bar is only so wide: enough of the badge to read at a glance.
+                        let badge: String = badge.chars().take(3).collect();
+                        d.child(
+                            div()
+                                .absolute()
+                                .bottom(px(6.))
+                                .right(px(4.))
+                                .px_1()
+                                .rounded_sm()
+                                .bg(hex(Chrome::ACCENT))
+                                .t_caption()
+                                .text_color(hex(Chrome::BRIGHT))
+                                .child(badge),
+                        )
+                    })
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Status-bar items of plugins that ask for the bottom bar, at the left end of it.
+    pub(super) fn render_plugin_status_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.plugin_surface_entries(Surface::Status, cx)
+            .into_iter()
+            .map(|(id, title, glyph, badge)| {
+                let open = self.plugin_panel_open(&id);
+                let target = id.clone();
+                div()
+                    .id(SharedString::from(format!("status-plugin-{id}")))
+                    .tooltip(Tooltip::text(title, None))
+                    .h_full()
+                    .px_1p5()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_1()
+                    .cursor_pointer()
+                    .when(open, |d| d.bg(hex(Chrome::SELECTED)))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_plugin_panel(&target, cx)))
+                    .child(icon(glyph, 13., hex(if open { Chrome::BRIGHT } else { Chrome::MUTED })))
                     .when(!badge.is_empty(), |d| d.child(div().t_caption().text_color(hex(Chrome::BRIGHT)).child(badge)))
                     .into_any_element()
             })

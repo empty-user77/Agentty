@@ -5,6 +5,7 @@
 
 pub mod link;
 pub mod manifest;
+pub mod net;
 pub mod store;
 pub mod ui;
 
@@ -24,6 +25,9 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     // folders, so it needs the same permission as reading them.
     ("host/revealPath", Some("workspace.read")),
     ("context/get", None),
+    // The plugin's own HTTP requests. Nothing of Agentty's travels with them: no cookies, no
+    // stored credentials, only what the plugin puts in the request.
+    ("net/fetch", Some("net.request")),
     ("prompt/inject", Some("prompt.inject")),
     ("terminal/send", Some("terminal.write")),
     ("session/get", Some("session.read")),

@@ -12,6 +12,7 @@ written in any language; the Node.js SDK makes it a few lines.
 - [Quick start](#quick-start)
 - [Manifest](#manifest-agentty-pluginjson)
 - [Node.js SDK](#nodejs-sdk)
+- [Rust and WebAssembly](#rust-and-webassembly)
 - [Panel UI](#panel-ui)
 - [Context](#context)
 - [Sending prompts](#sending-prompts)
@@ -87,7 +88,7 @@ appears in the tab strip, the command in the palette (⇧⌘P) and as a button a
 | `id` | required | 2–40 characters `a-z 0-9 -`; must equal the folder name |
 | `name`, `version` | required | shown in the store; `version` is `major.minor.patch` |
 | `main` | required | entry point, relative to the plugin folder |
-| `runtime` | `node` | `node` (Node.js 18+ from the login shell PATH), `python` (`python3 main`), or `executable` |
+| `runtime` | `node` | `node` (Node.js 18+ from the login shell PATH), `python` (`python3 main`), `executable`, or `wasm` (see [Rust and WebAssembly](#rust-and-webassembly)) |
 | `apiVersion` | `1` | plugin API version the plugin was written for |
 | `description`, `publisher`, `homepage`, `keywords` | | store listing; `homepage` must be `https://` |
 | `links` | `[]` | up to 6 `{ "label", "url" }` (https) shown as buttons on the store card — project site, docs, source |
@@ -96,7 +97,7 @@ appears in the tab strip, the command in the palette (⇧⌘P) and as a button a
 | `permissions` | `[]` | see [Permissions](#permissions-and-safety) |
 | `activationEvents` | `[]` | `["onStartup"]` starts the plugin with Agentty; otherwise on first use |
 | `detect` | `[]` | paths (`~` allowed) of an app the plugin integrates with; found → "Recommended" in the store |
-| `contributes.panel` | | `{ "title", "icon" }` — a panel docked right of the terminals |
+| `contributes.panel` | | `{ "title", "icon", "surface" }` — a panel docked right of the terminals. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom) |
 | `contributes.commands[]` | | `{ "id", "title", "description", "icon", "paneBar", "when", "palette" }` |
 
 Commands appear in the command palette (unless `"palette": false`). With `"paneBar": true` they also
@@ -148,6 +149,62 @@ settings and caches), `AGENTTY_VERSION`, `AGENTTY_LANGUAGE`, `AGENTTY_BIN`.
 
 > Never write to stdout yourself (`console.log`): stdout carries the protocol. Use `plugin.log()` or
 > `console.error()`.
+
+## Rust and WebAssembly
+
+A plugin can also be a compiled program. `"runtime": "wasm"` makes `main` a `.wasm` module that
+Agentty runs inside itself, so one file works on macOS, Windows and Linux and the plugin reaches
+nothing of yours: no files, no processes, no network of its own. Everything goes through the
+protocol, where the permissions above are checked.
+
+The Rust SDK is `sdk/rust` in the Agentty repository:
+
+```toml
+# Cargo.toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+agentty-plugin = { path = "…/sdk/rust" }
+```
+
+```rust
+use agentty_plugin::{export_plugin, ui, Host, Plugin, UiEvent};
+
+#[derive(Default)]
+struct Hello {
+    clicks: u32,
+}
+
+impl Plugin for Hello {
+    fn panel_open(&mut self, host: &Host) {
+        host.set_panel(ui::column(vec![
+            ui::text(format!("Clicked {} times", self.clicks)),
+            ui::button("go", "Click me"),
+        ]));
+    }
+
+    fn ui_event(&mut self, host: &Host, event: UiEvent) {
+        if event.element == "go" {
+            self.clicks += 1;
+            self.panel_open(host);
+        }
+    }
+}
+
+export_plugin!(Hello);
+```
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown
+cp target/wasm32-unknown-unknown/release/hello.wasm hello.wasm   # next to agentty-plugin.json
+```
+
+Then **Plugins → Install from Folder…** and pick the folder. Two examples are in the repository:
+`plugins/hello-rust` (a panel and a counter, no permissions at all) and `plugins/agent-rest-client`
+(an HTTP client, `net.request`). The wire format and the module's ABI are in
+[the protocol](protocol.md#webassembly-plugins).
 
 ## Panel UI
 
@@ -267,11 +324,16 @@ inside a terminal.
 | `terminal.write` | `sendToTerminal` — typing into open panes without asking |
 | `session.read` | `getSession` — reading AI conversations |
 | `workspace.read` | `listWorkspaces` |
+| `net.request` | `net/fetch` — HTTP requests to addresses the plugin chooses |
 
 The store shows these before installing. A call without its permission fails with code `-32001`.
 
-Plugins run as your user with the same file and network access as any program you start, so only
-install plugins you trust. When writing one:
+A plugin with `runtime` `node`, `python` or `executable` runs as your user, with the same file and
+network access as any program you start, so only install those if you trust them. A `wasm` plugin
+does not: it reaches only what this protocol gives it, whatever its code says. The Plugins page
+names which of the two a plugin is, under **About → Runs as**.
+
+When writing one:
 
 - Ask only for the permissions you use.
 - Never read or send credentials. If you read another app's config, pick just the fields you need
