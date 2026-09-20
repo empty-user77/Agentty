@@ -8,6 +8,10 @@
 #   ./scripts/build-dmg.sh publish    # prod + upload to GitHub release feed (draft)
 #                                     # AGENTTY_RELEASE_NOTES=<file.md> sets the (English) release notes
 #
+# prod and publish compile a private `git worktree` of HEAD, not this checkout, so an edit made while cargo runs can
+# never end up in a signed build; they refuse to start when the working tree has uncommitted changes, or when the
+# v<version> tag exists and is not HEAD. That worktree has its own target/, so those builds are cold (a few minutes).
+#
 # The Windows installer and Linux packages are built by the "Release packages" workflow; fetch them into dist/ first
 # (scripts/fetch-release-packages.sh X.Y.Z). They go into SHA256SUMS and the release with the DMG. `publish` refuses to
 # run without all four unless AGENTTY_MAC_ONLY=1 (a macOS-only release); dev / prod include whichever exist.
@@ -91,9 +95,32 @@ if [[ "$PUBLISH" == "true" && "${AGENTTY_MAC_ONLY:-}" != "1" ]]; then
 fi
 
 # ─── 3. Compile ───
-log "cargo build --release"
-cargo build --release -p agentty-app
-BIN="$ROOT/target/release/agentty"
+# dev builds what you have in front of you. prod and publish build a private git worktree of HEAD
+# instead: this checkout is shared — an agent session editing a file while cargo runs would otherwise
+# land inside a signed, notarized build, and nothing downstream would notice. The worktree has its own
+# target/, so a release build is never served a stale artifact from the shared one either.
+if [[ "$MODE" == "dev" ]]; then
+  log "cargo build --release"
+  cargo build --release -p agentty-app
+  BIN="$ROOT/target/release/agentty"
+else
+  git -C "$ROOT" diff --quiet HEAD -- \
+    || die "the working tree has uncommitted changes; a release is built from committed source (commit or stash first)"
+  HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
+  # The tag exists by now for a normal release; when it does, it must be the commit being built.
+  if git -C "$ROOT" rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+    TAG_SHA="$(git -C "$ROOT" rev-parse "v$VERSION^{commit}")"
+    [[ "$TAG_SHA" == "$HEAD_SHA" ]] || die "v$VERSION points at ${TAG_SHA:0:12}, HEAD is ${HEAD_SHA:0:12} — check out the tag you are releasing"
+  fi
+  SRC="$(mktemp -d "${TMPDIR:-/tmp}/agentty-release-XXXXXX")"
+  rmdir "$SRC"  # git worktree add wants to create the folder itself
+  cleanup_src() { git -C "$ROOT" worktree remove --force "$SRC" >/dev/null 2>&1 || rm -rf "$SRC"; }
+  trap cleanup_src EXIT
+  git -C "$ROOT" worktree add --detach "$SRC" "$HEAD_SHA" >/dev/null
+  log "cargo build --release (isolated checkout of ${HEAD_SHA:0:12})"
+  (cd "$SRC" && cargo build --release -p agentty-app)
+  BIN="$SRC/target/release/agentty"
+fi
 [[ -x "$BIN" ]] || die "release binary not found at $BIN"
 
 # ─── 4. Assemble .app ───
