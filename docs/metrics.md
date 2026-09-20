@@ -32,10 +32,16 @@ use GA's **Realtime** report or **DebugView**.
 Every event also carries `app_version`, `os_version` and a random install ID (`client_id`, stored
 in `~/.agentty/install_id`). Parameters are checked against an allow-list and must be short
 identifiers — paths, commands, prompts, output, repository and branch names are never sent.
-Events are queued and sent once a minute. There is no in-app setting; `DO_NOT_TRACK=1` in the environment turns it
-off.
+Events are queued and sent once a minute.
+
+## Turning it off
+
+**Settings → General → Share anonymous usage statistics** (`analytics` in `settings.json`, on by default) is the
+consent switch: turning it off stops queueing right away and drops whatever was queued before the next upload.
+`DO_NOT_TRACK=1` in the environment turns it off regardless of the setting, and builds without the credentials above
+send nothing either way.
 
 ## Implementation
 
 `crates/agentty-bridge/src/metrics.rs` (allow-list, GA request) and
-`crates/agentty-app/src/metrics.rs` (queue and call sites).
+`crates/agentty-app/src/metrics.rs` (queue, consent check and call sites).

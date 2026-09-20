@@ -11,9 +11,16 @@ fn os_version() -> &'static str {
     VERSION.get_or_init(crate::platform::os_version)
 }
 
-/// Queues `event` (dropped unless analytics is built in and not turned off by `DO_NOT_TRACK`).
-pub fn track(_cx: &App, event: &'static str, props: Value) {
-    if !agentty_bridge::metrics::enabled() {
+/// Whether usage events may be collected right now: built in, not turned off by `DO_NOT_TRACK`,
+/// and consented to in Settings.
+fn allowed(cx: &App) -> bool {
+    agentty_bridge::metrics::enabled() && crate::settings::settings(cx).analytics
+}
+
+/// Queues `event` (dropped unless analytics is built in, consented to, and not turned off by
+/// `DO_NOT_TRACK`).
+pub fn track(cx: &App, event: &'static str, props: Value) {
+    if !allowed(cx) {
         return;
     }
     if let Some(event) = agentty_bridge::metrics::event(event, &props, env!("CARGO_PKG_VERSION"), os_version()) {
@@ -31,6 +38,10 @@ pub fn start_uploads(cx: &mut App) {
     cx.spawn(async move |cx| loop {
         cx.background_executor().timer(std::time::Duration::from_secs(60)).await;
         let events = QUEUE.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        // Consent can be withdrawn between two uploads: whatever was queued before is dropped.
+        if !cx.update(|cx| allowed(cx)).unwrap_or(false) {
+            continue;
+        }
         if !events.is_empty() {
             cx.background_executor().spawn(async move { agentty_bridge::metrics::send(events) }).await;
         }

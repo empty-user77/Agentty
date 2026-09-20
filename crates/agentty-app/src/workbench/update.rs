@@ -617,6 +617,9 @@ pub const AUTHOR: &str = "Ray Lee";
 pub const AUTHOR_EMAIL: &str = "yongyongdev@gmail.com";
 pub const AUTHOR_URL: &str = "https://github.com/empty-user77";
 pub const WEBSITE: &str = "https://www.agentty.run";
+pub const PRIVACY_URL: &str = "https://www.agentty.run/privacy-policy";
+pub const TERMS_URL: &str = "https://www.agentty.run/terms-of-service";
+pub const EULA_URL: &str = "https://www.agentty.run/eula";
 
 impl Workbench {
     /// "About Agentty" from the app menu: icon, version, author and a GitHub link.

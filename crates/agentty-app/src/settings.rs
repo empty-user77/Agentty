@@ -206,6 +206,11 @@ pub struct Settings {
     pub harness_submit: bool,
     /// Agent that starts harness work.
     pub harness_agent: HarnessAgent,
+    /// Consent to anonymous usage statistics (Google Analytics: which features were used, app and
+    /// OS version, a random installation id — never personal data, paths, commands, prompts or
+    /// output). `DO_NOT_TRACK=1` turns it off regardless, and builds without analytics credentials
+    /// send nothing either way.
+    pub analytics: bool,
     /// The first-launch system check ran (Windows / Linux).
     pub setup_check_shown: bool,
     /// The first-run onboarding was finished or skipped.
@@ -435,6 +440,7 @@ impl Default for Settings {
             harness_patterns: Vec::new(),
             harness_submit: true,
             harness_agent: HarnessAgent::Auto,
+            analytics: true,
             setup_check_shown: false,
             onboarding_done: false,
         }

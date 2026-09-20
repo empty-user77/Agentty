@@ -562,6 +562,9 @@ impl Workbench {
                                 "https://github.com/empty-user77/agentty-releases/releases",
                             ))
                             .child(link("about-license", "GPL-3.0-or-later".into(), "https://www.gnu.org/licenses/gpl-3.0.html"))
+                            .child(link("about-privacy", t(cx, "legal.privacy").into(), super::update::PRIVACY_URL))
+                            .child(link("about-terms", t(cx, "legal.terms").into(), super::update::TERMS_URL))
+                            .child(link("about-eula", t(cx, "legal.eula").into(), super::update::EULA_URL))
                             .child(action_button(
                                 "about-onboarding",
                                 t(cx, "onboarding.show_again"),
@@ -1112,6 +1115,11 @@ impl Workbench {
                             t(cx, "settings.stop_servers"),
                             t(cx, "settings.stop_servers_hint"),
                             toggle("stop-servers", prefs.stop_servers_on_close, |s| s.stop_servers_on_close = !s.stop_servers_on_close, cx),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.analytics"),
+                            t(cx, "settings.analytics_hint"),
+                            toggle("analytics", prefs.analytics, |s| s.analytics = !s.analytics, cx),
                         ))
                         .when(crate::platform::HAS_STATUS_ITEM, |d| {
                             d.child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
