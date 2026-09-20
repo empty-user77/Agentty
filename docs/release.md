@@ -39,7 +39,11 @@ Each release also carries, built by the **Release packages** workflow (`.github/
 
 ## What `prod` does
 
-1. `cargo build --release -p agentty-app`
+1. `cargo build --release -p agentty-app` in a private `git worktree` of HEAD — not this checkout. The repository is
+   shared with agent sessions, and an edit landing while cargo runs would be signed and notarized along with
+   everything else. `prod` and `publish` therefore refuse to start when the working tree has uncommitted changes, or
+   when a `v<version>` tag exists that is not HEAD. That worktree has its own `target/`, so a release build starts
+   cold and takes a few minutes. `dev` still builds this checkout, which is the point of a dev build.
 2. Assembles `dist/Agentty.app` (`packaging/macos/Info.plist.in`, `Agentty.icns`, license files)
 3. Signs with **hardened runtime** and `packaging/macos/entitlements.plist`
 4. Creates and signs `dist/Agentty-<ver>-release<timestamp>-arm64.dmg`
