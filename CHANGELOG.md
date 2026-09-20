@@ -33,7 +33,8 @@ All notable changes to this project are documented here. The format follows
   are never run: formatter settings that are code are refused.
 - The Docker and plugin panels can be made wider or narrower by dragging their left edge; the width is kept.
 - Closing a tab or pane that worked in a working tree of its own offers "Also remove the working tree and its branch"
-  (off by default). Uncommitted changes keep the tree, and a branch with unmerged commits is kept.
+  (off by default). Uncommitted changes keep the tree, and a branch with unmerged commits is kept. "Don't ask again"
+  in that dialog stops the question without changing "Ask before closing".
 - "Send to…" (prompts from links and plugins) can add the session as a split pane in the current tab, and says what
   an open workspace does with the prompt (typed into its waiting agent, or a new tab).
 - Agent sessions opened from links and plugins in a project where another agent works get a working tree of their own,

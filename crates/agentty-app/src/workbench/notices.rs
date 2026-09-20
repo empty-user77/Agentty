@@ -71,9 +71,16 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Whether the user is looking at this very pane (window in front, no page over the terminals).
+    /// Whether the user is looking at this very pane: the window is in front, no page covers the
+    /// terminals, and the pane is one of the tab's split panes — not only its focused one, since
+    /// every pane of the tab on screen is equally in view.
     pub(super) fn pane_in_view(&self, pane_id: u64, cx: &gpui::App) -> bool {
-        self.window_active && !self.is_mini() && self.page.is_none() && self.active_pane().is_some_and(|p| p.read(cx).pane_id == pane_id)
+        if !self.window_active || self.is_mini() || self.page.is_some() {
+            return false;
+        }
+        let Some(ws) = self.workspaces.get(self.active_workspace) else { return false };
+        let Some(tab) = ws.tabs.get(ws.active_tab) else { return false };
+        tab.root.leaves().iter().any(|pane| pane.read(cx).pane_id == pane_id)
     }
 
     pub(super) fn mark_pane_read(&mut self, pane_id: u64) -> bool {

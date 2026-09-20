@@ -242,9 +242,10 @@ impl LaunchSpec {
             }
         }
         if let Start::Prompt(prompt) = &self.start {
-            // A prompt that starts with a dash is an option to Claude Code ("unknown option") unless
-            // options are ended first.
-            if self.kind == PaneKind::Claude {
+            // A prompt that starts with a dash is read as an option by either CLI ("unknown option",
+            // or worse: a flag the prompt's author chose) unless options are ended first. Prompts
+            // reach here from links, plugins and `agentty tasks`, so their text is not the user's.
+            if matches!(self.kind, PaneKind::Claude | PaneKind::Codex) {
                 args.push("--".into());
             }
             args.push(prompt.clone());

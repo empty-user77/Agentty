@@ -754,6 +754,13 @@ impl Workbench {
                 t(cx, "onboarding.opt_idea"),
                 t(cx, "onboarding.opt_idea_body"),
                 switch("onboarding-idea", prefs.idea_mode, |s| s.idea_mode = !s.idea_mode, cx).into_any_element(),
+            ))
+            .child(row(
+                "chart-column",
+                Chrome::MUTED,
+                t(cx, "settings.analytics"),
+                t(cx, "onboarding.opt_analytics_body"),
+                switch("onboarding-analytics", prefs.analytics, |s| s.analytics = !s.analytics, cx).into_any_element(),
             ));
 
         div()

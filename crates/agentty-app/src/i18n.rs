@@ -159,6 +159,19 @@ strings! {
         "MongoDB: <操作> <コレクション> <JSON> の形式です。例: find users {\"age\": 30}",
         "MongoDB：<操作> <集合> <JSON>，例如 find users {\"age\": 30}"
     ],
+    "db.statement_empty" => ["The statement is empty.", "실행할 문장이 비어 있습니다.", "文が空です。", "语句为空。"],
+    "db.statement_too_long" => [
+        "This statement is longer than {n} characters. Shorten it so it can be read before it runs.",
+        "문장이 {n}자를 넘습니다. 실행 전에 읽을 수 있도록 줄여 주세요.",
+        "この文は {n} 文字を超えています。実行前に読めるよう短くしてください。",
+        "该语句超过 {n} 个字符。请缩短以便在执行前阅读。"
+    ],
+    "db.statement_hidden" => [
+        "This statement holds a character ({code}) that would not be shown the way the database reads it.",
+        "이 문장에는 데이터베이스가 읽는 것과 다르게 표시되는 문자({code})가 있습니다.",
+        "この文には、データベースが読む内容と異なって表示される文字（{code}）が含まれています。",
+        "该语句包含会与数据库读取方式不一致地显示的字符（{code}）。"
+    ],
     "db.asker_you" => ["You (query box)", "나 (쿼리 입력창)", "自分 (クエリ入力欄)", "我（查询框）"],
     "db.approve_title" => ["Run this statement?", "이 쿼리를 실행할까요?", "このクエリを実行しますか?", "要执行此语句吗？"],
     "db.approve_asker" => ["Asked by", "요청", "依頼元", "请求方"],
@@ -370,6 +383,7 @@ strings! {
     "onboarding.opt_notify" => ["Notifications", "알림", "通知", "通知"],
     "onboarding.opt_notify_body" => ["When an agent finishes or waits for you", "에이전트가 끝났거나 답을 기다릴 때 알려 줌", "エージェントの完了時や入力待ちのときに通知", "代理完成或等待回答时通知"],
     "onboarding.opt_idea" => ["Idea mode", "아이디어 모드", "アイデアモード", "创意模式"],
+    "onboarding.opt_analytics_body" => ["Which features were used, app and system version, a random install id — no personal data", "어떤 기능을 썼는지, 앱과 시스템 버전, 무작위 설치 ID만 — 개인정보는 수집하지 않습니다", "使った機能、アプリとシステムのバージョン、ランダムなインストール ID のみ — 個人情報は収集しません", "仅收集使用了哪些功能、应用与系统版本、随机安装 ID — 不收集个人信息"],
     "onboarding.opt_idea_body" => ["“Build my idea” on the start page", "시작 화면에 “아이디어 실현하기” 표시", "スタート画面に「アイデアを実現」を表示", "在起始页显示“实现我的想法”"],
     "onboarding.to_tour" => ["Next: try the features", "다음: 기능 따라 하기", "次へ: 機能を試す", "下一步：体验功能"],
     "onboarding.finish" => ["Finish", "완료", "完了", "完成"],

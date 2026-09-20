@@ -33,6 +33,10 @@ impl Stream {
         self.inner.set_read_timeout(timeout)
     }
 
+    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.inner.set_write_timeout(timeout)
+    }
+
     /// Done writing (the other end sees end of input), reading stays open.
     pub fn shutdown_write(&self) {
         let _ = self.inner.shutdown(std::net::Shutdown::Write);

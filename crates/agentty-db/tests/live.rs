@@ -52,7 +52,7 @@ fn sql_engine(engine: Engine, port: u16, user: &str) {
         "INSERT INTO items VALUES (1, 'apple'), (2, 'pear'), (3, 'plum')",
     ];
     for statement in setup {
-        assert!(classify_sql(statement).needs_approval(), "{statement}");
+        assert!(classify_sql(engine, statement).needs_approval(), "{statement}");
         session.write(statement).unwrap_or_else(|e| panic!("{statement}: {e:#}"));
     }
     let tables = session.tables().unwrap();
@@ -62,9 +62,27 @@ fn sql_engine(engine: Engine, port: u16, user: &str) {
     let preview = session.preview("items", 2).unwrap();
     assert!(preview.truncated && preview.rows.len() == 2);
     let read = "SELECT name FROM items WHERE id = 3";
-    assert_eq!(classify_sql(read), Verdict::Read);
+    assert_eq!(classify_sql(engine, read), Verdict::Read);
     let result = session.read(read, 100).unwrap();
     assert_eq!(result.rows[0][0].as_str(), Some("plum"));
+    // A batch never reaches the server on the read path, whatever the classifier made of it.
+    let batch = "SELECT 1; DELETE FROM items";
+    assert!(session.read(batch, 10).is_err(), "{engine:?}: the read path must refuse several statements");
+    assert_eq!(session.read("SELECT count(*) AS n FROM items", 10).unwrap().rows.len(), 1);
+    // Reads that are not plain SELECTs still work through the single-statement gate.
+    assert!(session.read("WITH t AS (SELECT 1 AS a) SELECT * FROM t", 10).is_ok(), "{engine:?}: CTE");
+    match engine {
+        Engine::Postgres => {
+            assert!(session.read("SHOW server_version", 10).is_ok(), "SHOW");
+            assert!(session.read("EXPLAIN SELECT 1", 10).is_ok(), "EXPLAIN");
+        }
+        Engine::MySql | Engine::MariaDb => {
+            assert!(session.read("SHOW TABLES", 10).is_ok(), "SHOW TABLES");
+            assert!(session.read("DESCRIBE items", 10).is_ok(), "DESCRIBE");
+            assert!(session.read("EXPLAIN SELECT 1", 10).is_ok(), "EXPLAIN");
+        }
+        _ => {}
+    }
     // The second line of defense: even called directly, a read can't change anything.
     assert!(session.read("DELETE FROM items", 100).is_err(), "{engine:?}: a read-only transaction refuses writes");
     assert!(session.read("UPDATE items SET name = 'x'", 100).is_err());
@@ -73,7 +91,7 @@ fn sql_engine(engine: Engine, port: u16, user: &str) {
     let n = &count.rows[0][0];
     assert!(n.as_i64() == Some(3) || n.as_u64() == Some(3) || n.as_str() == Some("3"), "{n:?}");
     // An approved query shows its rows.
-    let approved = session.approved("SELECT name FROM items ORDER BY id", 10).unwrap();
+    let approved = session.approved(engine, "SELECT name FROM items ORDER BY id", 10).unwrap();
     assert_eq!(approved.rows.len(), 3);
     let changed = session.write("DELETE FROM items WHERE id = 1").unwrap();
     assert_eq!(changed.affected, Some(1));

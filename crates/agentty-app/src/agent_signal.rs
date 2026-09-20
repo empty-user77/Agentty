@@ -368,9 +368,11 @@ fn start_with(listener: crate::ipc::Listener) -> anyhow::Result<(SignalSocket, U
             let launcher_token = launcher_token.clone();
             #[cfg(unix)]
             let caller = authenticate(&mut stream, None);
-            // The debug driver (`AGENTTY_DEBUG=1`, development only) connects from outside a pane.
+            // The debug driver (`AGENTTY_DEBUG=1`, development only) connects from outside a pane,
+            // so it arrives as `Caller::Launcher`. `Caller::Nobody` means another account on this
+            // machine, which is refused even then: the driver types into the window and writes files.
             #[cfg(unix)]
-            if caller == Caller::Nobody && !debug {
+            if caller == Caller::Nobody {
                 continue;
             }
             // One thread per connection: a browser request waits for its answer, and signals from
@@ -534,7 +536,10 @@ pub fn worktree_for(args: &[String]) -> i32 {
     if writeln!(stream, "worktree\t{request}").is_err() {
         return 0;
     }
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(40)));
+    // The shell is waiting to start an agent: a busy or wedged Agentty must not hold the
+    // command line. Agentty answers within this, or the agent starts where it was typed.
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
     let mut line = String::new();
     let _ = BufReader::new(stream).read_line(&mut line);
     let reply: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
