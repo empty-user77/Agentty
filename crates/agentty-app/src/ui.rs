@@ -41,6 +41,7 @@ pub const ICONS: &[&str] = &[
     "file",
     "lock",
     "graduation-cap",
+    "x-twitter",
     "circle-dot",
     "key-round",
     "minus",
@@ -321,6 +322,25 @@ pub fn action_button(
     label: impl Into<SharedString>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    action_button_base(id, on_click).child(label.into())
+}
+
+/// [`action_button`] with an icon before the label.
+pub fn action_button_with_icon(
+    id: impl Into<ElementId>,
+    icon_name: &'static str,
+    label: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    action_button_base(id, on_click)
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .child(icon(icon_name, IconSize::INLINE, hex(Chrome::FOREGROUND)))
+        .child(label.into())
+}
+
+fn action_button_base(id: impl Into<ElementId>, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Stateful<Div> {
     div()
         .id(id)
         .flex_shrink_0()
@@ -333,7 +353,6 @@ pub fn action_button(
         .text_color(hex(Chrome::FOREGROUND))
         .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
         .on_click(on_click)
-        .child(label.into())
 }
 
 /// Segmented-control style option.

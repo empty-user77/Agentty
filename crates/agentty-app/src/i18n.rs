@@ -302,6 +302,7 @@ strings! {
     "settings.agent_guide" => ["Tell agents what Agentty offers", "에이전트에게 Agentty 사용법 알려주기", "エージェントに Agentty の使い方を伝える", "告知智能体 Agentty 的功能"],
     "settings.agent_guide_hint" => ["Claude Code and Codex started by Agentty get a short guide to Agentty's commands (browser, notifications, parallel tasks, worktrees); Claude Code also gets Agentty's skills. Nothing is written into your projects or settings.", "Agentty로 시작한 Claude Code와 Codex에 Agentty 명령(브라우저, 알림, 병렬 작업, 워크트리) 안내를 전달하고, Claude Code에는 Agentty 스킬도 함께 넣습니다. 프로젝트나 설정 파일에는 아무것도 쓰지 않습니다.", "Agentty で起動した Claude Code と Codex に Agentty のコマンド（ブラウザ、通知、並列タスク、ワークツリー）の案内を渡し、Claude Code には Agentty のスキルも渡します。プロジェクトや設定ファイルには何も書き込みません。", "由 Agentty 启动的 Claude Code 和 Codex 会收到 Agentty 命令（浏览器、通知、并行任务、工作树）的简短说明，Claude Code 还会获得 Agentty 技能。不会写入你的项目或设置文件。"],
     "menu.legal" => ["Terms & Policies", "약관 및 정책", "規約とポリシー", "条款与政策"],
+    "about.guide" => ["Guide", "가이드", "ガイド", "指南"],
     "legal.privacy" => ["Privacy Policy", "개인정보 처리방침", "プライバシーポリシー", "隐私政策"],
     "legal.terms" => ["Terms of Service", "이용약관", "利用規約", "服务条款"],
     "legal.eula" => ["License Agreement (EULA)", "최종 사용자 라이선스 계약(EULA)", "使用許諾契約（EULA）", "最终用户许可协议（EULA）"],
