@@ -63,7 +63,38 @@ use i18n::t;
 use std::borrow::Cow;
 use workbench::Workbench;
 
-actions!(agentty, [Quit, NewWindow]);
+actions!(agentty, [Quit, NewWindow, GetSupport]);
+
+/// Opens a page of the guide at agentty.run in the language Agentty is showing (English for the
+/// languages the guide is not written in). An empty `page` opens the guide's front page.
+#[derive(Clone, PartialEq, Eq, Default, Debug, gpui::Action)]
+#[action(namespace = agentty, no_json)]
+pub struct OpenGuide {
+    pub page: &'static str,
+}
+
+impl OpenGuide {
+    fn url(&self, cx: &App) -> String {
+        guide_url(crate::settings::settings(cx).language.code(), self.page)
+    }
+}
+
+/// The guide's address for a language code and a page. The guide is written in the four languages
+/// Agentty speaks; English is served without a prefix, and every other language reads it.
+pub fn guide_url(language: &str, page: &str) -> String {
+    let website = workbench::update::WEBSITE;
+    let prefix = match language {
+        "ko" | "ja" | "zh" => format!("/{language}"),
+        _ => String::new(),
+    };
+    match page.is_empty() {
+        true => format!("{website}{prefix}/docs"),
+        false => format!("{website}{prefix}/docs/{page}"),
+    }
+}
+
+/// Where to report a problem or ask for help.
+const SUPPORT_URL: &str = "https://github.com/empty-user77/agentty-releases/issues";
 
 const FONTS: &[&[u8]] = &[
     include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
@@ -305,6 +336,31 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::action(t(cx, "menu.previous_workspace"), workbench::PreviousWorkspace),
             ],
         },
+        Menu {
+            name: t(cx, "menu.help").into(),
+            items: vec![
+                MenuItem::action(t(cx, "help.guide"), OpenGuide { page: "" }),
+                MenuItem::action(t(cx, "help.quick_start"), OpenGuide { page: "quick-start" }),
+                MenuItem::separator(),
+                MenuItem::submenu(Menu {
+                    name: t(cx, "help.features").into(),
+                    items: vec![
+                        MenuItem::action(t(cx, "help.agent_status"), OpenGuide { page: "agent-status" }),
+                        MenuItem::action(t(cx, "help.sessions"), OpenGuide { page: "session-flow" }),
+                        MenuItem::action(t(cx, "help.git"), OpenGuide { page: "agent-git" }),
+                        MenuItem::action(t(cx, "help.databases"), OpenGuide { page: "databases" }),
+                        MenuItem::action(t(cx, "help.docker"), OpenGuide { page: "docker" }),
+                        MenuItem::action(t(cx, "help.plugins"), OpenGuide { page: "plugins-overview" }),
+                    ],
+                }),
+                MenuItem::action(t(cx, "help.shortcuts"), OpenGuide { page: "keyboard-shortcuts" }),
+                MenuItem::action(t(cx, "help.settings"), OpenGuide { page: "settings" }),
+                MenuItem::separator(),
+                MenuItem::action(t(cx, "help.troubleshooting"), OpenGuide { page: "troubleshooting" }),
+                MenuItem::action(t(cx, "help.faq"), OpenGuide { page: "faq" }),
+                MenuItem::action(t(cx, "help.support"), GetSupport),
+            ],
+        },
     ]);
     // GPUI only registers a menu literally named "Window"; register the localized one so AppKit
     // lists open windows there and in the Dock menu.
@@ -313,6 +369,11 @@ pub fn set_app_menus(cx: &mut App) {
 
 fn register_app_actions(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| request_quit(cx));
+    cx.on_action(|action: &OpenGuide, cx| {
+        let url = action.url(cx);
+        cx.open_url(&url);
+    });
+    cx.on_action(|_: &GetSupport, cx| cx.open_url(SUPPORT_URL));
     cx.on_action(|_: &HideApp, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -908,8 +969,18 @@ fn with_workbench(cx: &mut App, f: impl FnOnce(&mut Workbench, &mut gpui::Window
 
 #[cfg(test)]
 mod tests {
-    use super::file_url_path;
+    use super::{file_url_path, guide_url};
     use std::path::PathBuf;
+
+    #[test]
+    fn the_guide_opens_in_the_language_agentty_speaks() {
+        assert_eq!(guide_url("en", ""), "https://www.agentty.run/docs");
+        assert_eq!(guide_url("ko", ""), "https://www.agentty.run/ko/docs");
+        assert_eq!(guide_url("ja", "databases"), "https://www.agentty.run/ja/docs/databases");
+        assert_eq!(guide_url("zh", "faq"), "https://www.agentty.run/zh/docs/faq");
+        // A language the guide is not written in reads the English pages.
+        assert_eq!(guide_url("fr", "quick-start"), "https://www.agentty.run/docs/quick-start");
+    }
 
     #[test]
     fn reads_links_and_folders_from_arguments() {

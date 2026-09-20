@@ -620,7 +620,6 @@ pub const WEBSITE: &str = "https://www.agentty.run";
 pub const PRIVACY_URL: &str = "https://www.agentty.run/privacy-policy";
 pub const TERMS_URL: &str = "https://www.agentty.run/terms-of-service";
 pub const EULA_URL: &str = "https://www.agentty.run/eula";
-pub const DOCS_URL: &str = "https://www.agentty.run/docs";
 pub const X_URL: &str = "https://x.com/raylee_world";
 
 impl Workbench {

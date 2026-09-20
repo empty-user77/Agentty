@@ -30,7 +30,6 @@ pub(super) enum Task {
     Files,
     Flow,
     Mini,
-    Monitoring,
 }
 
 /// Something the user did that a step waits for and that leaves no state behind to look at.
@@ -76,10 +75,6 @@ struct Guide {
     steps: Vec<TourStep>,
 }
 
-fn in_monitoring(w: &Workbench) -> bool {
-    matches!(w.page, Some(Page::Usage | Page::Processes | Page::Proxy))
-}
-
 impl Task {
     fn all() -> Vec<Task> {
         let mut tasks = vec![Task::Split, Task::Flow];
@@ -89,7 +84,7 @@ impl Task {
         if crate::platform::HAS_WEBVIEW {
             tasks.push(Task::Browser);
         }
-        tasks.extend([Task::Files, Task::Monitoring]);
+        tasks.push(Task::Files);
         tasks
     }
 
@@ -253,43 +248,6 @@ impl Task {
                         Some("header-files"),
                         Check::State(|w| w.files_panel.is_none()),
                         Some(|w, _, cx| w.toggle_files_panel(cx)),
-                    ),
-                ],
-            },
-            Task::Monitoring => Guide {
-                glyph: "chart-column",
-                title: "onboarding.monitoring",
-                what: "onboarding.monitoring_what",
-                steps: vec![
-                    step(
-                        "onboarding.monitoring_1",
-                        "onboarding.monitoring_1_done",
-                        Some("⌥⌘U"),
-                        Some("activity-usage"),
-                        Check::State(in_monitoring),
-                        Some(|w, _, cx| w.open_page(Page::Usage, cx)),
-                    ),
-                    step(
-                        "onboarding.monitoring_2",
-                        "onboarding.monitoring_2_done",
-                        None,
-                        None,
-                        Check::State(|w| w.page == Some(Page::Proxy)),
-                        Some(|w, _, cx| {
-                            w.page = Some(Page::Proxy);
-                            cx.notify();
-                        }),
-                    ),
-                    step(
-                        "onboarding.monitoring_3",
-                        "onboarding.monitoring_3_done",
-                        Some("⌥⌘U"),
-                        Some("activity-usage"),
-                        Check::State(|w| !in_monitoring(w)),
-                        Some(|w, _, cx| {
-                            w.page = None;
-                            cx.notify();
-                        }),
                     ),
                 ],
             },

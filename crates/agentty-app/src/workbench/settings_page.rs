@@ -556,7 +556,10 @@ impl Workbench {
                             .flex()
                             .gap_2()
                             .child(link("about-website", "agentty.run".into(), super::update::WEBSITE))
-                            .child(link("about-docs", t(cx, "about.guide").into(), super::update::DOCS_URL))
+                            .child(action_button("about-docs", t(cx, "about.guide"), move |_, _, cx| {
+                                let url = crate::guide_url(settings(cx).language.code(), "");
+                                cx.open_url(&url);
+                            }))
                             .child(crate::ui::action_button_with_icon("about-x", "x-twitter", "@raylee_world", |_, _, cx| {
                                 cx.open_url(super::update::X_URL)
                             }))
