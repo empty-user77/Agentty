@@ -12,7 +12,9 @@ pub struct LoadError {
     pub message: String,
 }
 
-/// A browser shortcut pressed inside the web view (never happens without one).
+/// A browser shortcut pressed inside the web view. The panel matches on these, but without a web
+/// view nothing ever makes one, so this build only reads the type.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrowserKey {
     Reload,
