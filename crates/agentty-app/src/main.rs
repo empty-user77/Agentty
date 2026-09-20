@@ -221,6 +221,15 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action(t(cx, "menu.settings"), workbench::OpenSettings),
                 MenuItem::separator(),
+                MenuItem::submenu(Menu {
+                    name: t(cx, "menu.legal").into(),
+                    items: vec![
+                        MenuItem::action(t(cx, "legal.privacy"), workbench::OpenPrivacyPolicy),
+                        MenuItem::action(t(cx, "legal.terms"), workbench::OpenTerms),
+                        MenuItem::action(t(cx, "legal.eula"), workbench::OpenEula),
+                    ],
+                }),
+                MenuItem::separator(),
                 MenuItem::action(t(cx, "menu.hide"), HideApp),
                 MenuItem::action(t(cx, "menu.hide_others"), HideOthers),
                 MenuItem::action(t(cx, "menu.show_all"), ShowAll),

@@ -23,4 +23,5 @@ We aim to acknowledge reports within 3 business days and to ship a fix or mitiga
 - Agentty does not rewrite Claude Code or Codex configuration files; hooks and the statusline wrapper are passed per
   launch, and the wrapper still runs the user's own statusline.
 - API connector credentials are stored in the macOS Keychain, never in `connectors.json`, agent configs or logs.
-- Release builds send anonymous usage events (no paths, commands, prompts or output); see `docs/metrics.md`.
+- Release builds send anonymous usage events (no paths, commands, prompts or output) unless the user turns them off
+  in Settings → General or sets `DO_NOT_TRACK=1`; see `docs/metrics.md`.

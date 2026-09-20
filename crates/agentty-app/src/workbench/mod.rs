@@ -104,6 +104,9 @@ actions!(
         CheckForUpdates,
         SearchSessions,
         ShowAbout,
+        OpenPrivacyPolicy,
+        OpenTerms,
+        OpenEula,
         GoToTab1,
         GoToTab2,
         GoToTab3,
@@ -1628,6 +1631,9 @@ impl Render for Workbench {
                 this.about_open = true;
                 cx.notify();
             }))
+            .on_action(|_: &OpenPrivacyPolicy, _, cx| cx.open_url(update::PRIVACY_URL))
+            .on_action(|_: &OpenTerms, _, cx| cx.open_url(update::TERMS_URL))
+            .on_action(|_: &OpenEula, _, cx| cx.open_url(update::EULA_URL))
             .on_action(cx.listener(|this, _: &GoToTab1, window, cx| this.activate_tab(0, window, cx)))
             .on_action(cx.listener(|this, _: &GoToTab2, window, cx| this.activate_tab(1, window, cx)))
             .on_action(cx.listener(|this, _: &GoToTab3, window, cx| this.activate_tab(2, window, cx)))
