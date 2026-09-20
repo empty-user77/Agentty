@@ -224,6 +224,44 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
 - Debug driver: `docker` toggles the panel; `docker refresh|up|down|start:<svc>|stop:<svc>|restart:<svc>|logs:<svc>`,
   and `probe` includes the panel's state.
 
+## Databases
+
+- `crates/agentty-db`: `detect` finds connections in the project root's configuration (`.env*`, Spring
+  `application(-profile).properties|yml`, Prisma `datasource`, compose services of MySQL / MariaDB / PostgreSQL /
+  MongoDB / Oracle images). `${VAR}`, `${VAR:default}`, `env("VAR")` and `$VAR` are filled from the `.env` files; a
+  value that stays a reference (secret manager, environment set elsewhere, encrypted value) becomes a missing field the
+  user enters. Files over 256 KB are skipped. Nothing is written into the project.
+- `store` adds what the user entered: passwords in the credential store (service `run.agentty.database`, scoped to the
+  data folder like connectors, account = the connection id) and hand-added connections in
+  `<data dir>/db-connections.json` (`0600`, no secrets). Detected connection ids are a hash of project and address, so
+  a saved password follows the connection, not the file. Alike names get the engine (`shop (MySQL)`).
+- `guard` decides what may run without asking. `classify_sql` says `Read` only for one statement that starts with
+  `SELECT`, `SHOW`, `DESCRIBE` / `DESC`, `EXPLAIN` (not `EXPLAIN ANALYZE`), `WITH … SELECT`, `VALUES`, `TABLE` and holds
+  no write keyword (`INTO`, `FOR UPDATE`, `SET`, locking reads, …); several statements, executable comments (`/*!`,
+  `/*+`), dollar quoting, backslashes in strings or an unterminated quote are never reads. A call of anything but a
+  known built-in that only computes (`COUNT`, `DATE_FORMAT`, `COALESCE`, …) asks too: stored functions, packages and
+  extensions can write despite a read-only transaction (Oracle autonomous transactions, `dblink_exec`, UDFs). An
+  approved statement that returns rows shows them. `classify_mongo` accepts
+  `find`, `count`, `distinct`, `listCollections` and aggregations made of known read stages (`$out`, `$merge` or an
+  unknown stage need approval).
+- `engine::Session` opens one connection per operation. Reads run inside a read-only transaction that is rolled back
+  (MySQL / MariaDB `START TRANSACTION READ ONLY`, PostgreSQL `BEGIN READ ONLY`, Oracle `SET TRANSACTION READ ONLY`),
+  so a statement the classifier got wrong still can't change anything. Rows are capped (200 on the page, 500 for
+  agents) and cells cut at 4000 characters. Table names reach SQL only after `check_name` and quoting.
+- TLS: off for `localhost` / `127.0.0.1` / `::1` or when the configuration says so (`sslmode=disable`, `useSSL=false`,
+  …); required otherwise, verified against the system roots plus the embedded Amazon RDS CA bundle
+  (`certs/rds-global-bundle.crt`: public certificates from https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem). MongoDB credentials go on the client options, never in a URI
+  that could end up in an error; connection errors name the connection by host, user and database only.
+- `workbench/db_page.rs`: the chip and page follow the active pane's working tree (like the Docker panel). The query
+  box and `agentty db` (`db_cli.rs`, socket line `db\t{json}`, accepted only from a pane's own connection) share one
+  path: a `Read` runs at once; anything else is queued as an approval — asker, connection, kind and the exact statement
+  — and runs only after **Execute**. The agent's command waits for that answer (15 minutes; an approval older than
+  that is not run). Passwords are never part of a reply, the page or a log.
+- Debug driver: `db` opens the page; `db refresh|select <n>|table <name>|query <text>|execute|decline|password <n>
+  <text>`; `probe` includes the page's state.
+- Live tests against real servers: `AGENTTY_DB_LIVE=1 cargo test -p agentty-db --test live` (containers in the file's
+  header).
+
 ## Local servers
 
 `workbench/servers.rs` samples listening TCP ports under each pane's shell every few seconds (`procinfo::listeners`,

@@ -165,6 +165,9 @@ pub enum SocketMessage {
     /// `tasks\t{"cwd":…,"tasks":[…]}` from `agentty tasks`: an agent asks to start work in parallel
     /// sessions; answered on `reply` once the user said yes or no.
     Tasks(TasksRequest),
+    /// `db\t{"cwd":…,"action":…}` from `agentty db`: an agent reads a project database, or asks to
+    /// change it; answered on `reply` (writes only after the user approved the exact statement).
+    Db(DbRequest),
     /// `debug\t<command>\t<argument>`; only accepted when `AGENTTY_DEBUG=1`.
     Debug(String, String),
     /// `open\t["agentty://…", "/folder", …]` from a second launch (Windows / Linux single instance).
@@ -263,6 +266,19 @@ pub struct TasksRequest {
     /// The asking agent's folder: the project the working trees are made from.
     pub cwd: std::path::PathBuf,
     pub tasks: Vec<TaskSpec>,
+    /// One JSON line, as [`browser_reply`] makes it.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// An agent asks something of a database of its project (`agentty db`).
+#[derive(Debug, Clone)]
+pub struct DbRequest {
+    /// The pane the connection belongs to (the asking agent).
+    pub pane: u64,
+    /// The asking agent's folder: the project whose connections apply.
+    pub cwd: std::path::PathBuf,
+    /// `{"action": "list" | "tables" | "describe" | "preview" | "query" | "mongo", "conn": …, …}`.
+    pub args: serde_json::Value,
     /// One JSON line, as [`browser_reply`] makes it.
     pub reply: std::sync::mpsc::Sender<String>,
 }
@@ -443,6 +459,27 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 }
                 Ok(_) => browser_reply(Err("bad request".into())),
                 Err(error) => browser_reply(Err(error)),
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("db\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let cwd = std::path::PathBuf::from(request["cwd"].as_str().unwrap_or_default());
+            let response = if cwd.is_absolute() && request["action"].is_string() {
+                let (reply, answer) = std::sync::mpsc::channel();
+                if tx.unbounded_send(SocketMessage::Db(DbRequest { pane, cwd, args: request, reply })).is_err() {
+                    return;
+                }
+                // A write waits for the user's approval; give them time.
+                answer
+                    .recv_timeout(Duration::from_secs(15 * 60))
+                    .unwrap_or_else(|_| browser_reply(Err("no answer in time (a write needs the user's approval in Agentty)".into())))
+            } else {
+                browser_reply(Err("bad request".into()))
             };
             if let Some(writer) = writer.as_mut() {
                 use std::io::Write;

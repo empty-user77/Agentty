@@ -14,6 +14,7 @@ mod brand;
 mod browser_cli;
 mod browser_mcp;
 mod capture;
+mod db_cli;
 mod debug;
 mod editor;
 mod extensions_view;
@@ -461,6 +462,11 @@ fn main() {
         std::process::exit(tasks_cli::run(&args[2..]));
     }
 
+    // `agentty db …`: an agent reads the project's databases (writes wait for the user).
+    if args.get(1).map(String::as_str) == Some("db") {
+        std::process::exit(db_cli::run(&args[2..]));
+    }
+
     // `agentty worktree-for <agent>`: the shell wrappers ask for a working tree of the agent's own.
     if args.get(1).map(String::as_str) == Some("worktree-for") {
         std::process::exit(agent_signal::worktree_for(&args[2..]));
@@ -655,6 +661,17 @@ fn main() {
                                 match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
                                     Some(window) => {
                                         let _ = window.update(cx, |workbench, _, cx| workbench.ask_to_start_tasks(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
+                            agent_signal::SocketMessage::Db(request) => {
+                                // The window holding the asking pane shows the approval dialog.
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.answer_db_request(request, cx));
                                     }
                                     None => {
                                         let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
