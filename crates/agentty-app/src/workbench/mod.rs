@@ -95,6 +95,7 @@ actions!(
         OpenGit,
         OpenPlugins,
         ToggleBrowser,
+        HardReloadBrowser,
         ToggleFiles,
         FindInTerminal,
         ZoomIn,
@@ -258,6 +259,8 @@ pub struct Workbench {
     side_resizing: Option<side_panels::SidePanel>,
     /// Dragging the handle under the files panel's working-tree list: (pointer y, height) at the start.
     files_trees_drag: Option<(f32, f32)>,
+    /// Dragging the top edge of the browser's network panel: (mouse y at the start, its height).
+    browser_net_drag: Option<(f32, f32)>,
     /// Docker of the active pane's project: the status bar chip and the panel docked at the right.
     docker: docker_panel::DockerState,
     db: db_page::DbState,
@@ -433,6 +436,7 @@ impl Workbench {
             files_resizing: false,
             side_resizing: None,
             files_trees_drag: None,
+            browser_net_drag: None,
             docker: Default::default(),
             db: Default::default(),
             viewport_width: 1400.,
@@ -1439,6 +1443,7 @@ impl Workbench {
                 || self.files_resizing
                 || self.side_resizing.is_some()
                 || self.files_trees_drag.is_some()
+                || self.browser_net_drag.is_some()
                 || self.split_drag.is_some()
                 || self.flow.is_dragging()
             {
@@ -1446,7 +1451,15 @@ impl Workbench {
             }
             return;
         }
-        if let Some((start_y, start_height)) = self.files_trees_drag {
+        if let Some((start_y, start_height)) = self.browser_net_drag {
+            // Dragging up makes the network panel taller; the page above keeps a readable height.
+            let viewport = f32::from(window.viewport_size().height);
+            let height = (start_height + start_y - f32::from(event.position.y)).clamp(90., (viewport - 260.).max(90.));
+            gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
+                store.settings.browser.network_height = height
+            });
+            cx.notify();
+        } else if let Some((start_y, start_height)) = self.files_trees_drag {
             // Down makes the working-tree list taller; `trees_height` keeps it within its rows.
             let height = (start_height + f32::from(event.position.y) - start_y).max(40.);
             gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
@@ -1491,12 +1504,14 @@ impl Workbench {
             || self.files_resizing
             || self.side_resizing.is_some()
             || self.files_trees_drag.is_some()
+            || self.browser_net_drag.is_some()
         {
             self.sidebar_resizing = false;
             self.browser_resizing = false;
             self.files_resizing = false;
             self.side_resizing = None;
             self.files_trees_drag = None;
+            self.browser_net_drag = None;
             update_settings(cx, |_| {}); // persist the final width
         }
         if self.split_drag.take().is_some() {
@@ -1595,6 +1610,11 @@ impl Render for Workbench {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
+                // ⌘W in the browser's address bar closes that page, not a terminal.
+                if this.browser_address_focused(window, cx) {
+                    let index = this.browser.as_ref().map(|b| b.active).unwrap_or_default();
+                    return this.close_browser_tab(index, window, cx);
+                }
                 if this.page.take().is_some() {
                     this.focus_active(window, cx);
                     return cx.notify();
@@ -1642,7 +1662,24 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenExtensions, _, cx| this.open_page(Page::Extensions, cx)))
             .on_action(cx.listener(|this, _: &OpenGit, _, cx| this.open_page(Page::Git, cx)))
             .on_action(cx.listener(|this, _: &OpenPlugins, _, cx| this.open_page(Page::Plugins, cx)))
+            // The Edit menu's ⌘C / ⌘V / ⌘A land here when no terminal is focused; a page in the
+            // in-app browser still needs them, since a menu key equivalent never reaches it.
+            .on_action(cx.listener(|_, _: &crate::terminal::Copy, _, _| {
+                crate::webview::perform_in_page(crate::webview::EditCommand::Copy);
+            }))
+            .on_action(cx.listener(|_, _: &crate::terminal::Paste, _, _| {
+                crate::webview::perform_in_page(crate::webview::EditCommand::Paste);
+            }))
+            .on_action(cx.listener(|_, _: &crate::terminal::SelectAll, _, _| {
+                crate::webview::perform_in_page(crate::webview::EditCommand::SelectAll);
+            }))
             .on_action(cx.listener(|this, _: &ToggleBrowser, window, cx| this.toggle_browser(window, cx)))
+            // ⌘⇧R inside the page is caught by the web view itself; here it works from the terminals too.
+            .on_action(cx.listener(|this, _: &HardReloadBrowser, _, cx| {
+                if this.browser.is_some() {
+                    this.reload_browser(true, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleFiles, _, cx| this.toggle_files_panel(cx)))
             .on_action(cx.listener(|this, _: &FindInTerminal, window, cx| {
                 // The terminal behind the editor is not on screen to search.
@@ -1733,6 +1770,7 @@ impl Render for Workbench {
                         || this.files_resizing
                         || this.side_resizing.is_some()
                         || this.files_trees_drag.is_some()
+                        || this.browser_net_drag.is_some()
                         || this.split_drag.is_some()
                     {
                         this.end_drags(cx);
@@ -2161,6 +2199,7 @@ impl Workbench {
                         "panes": panes,
                         "listeners": listeners,
                         "browser": self.browser.as_ref().and_then(|b| b.current_url()),
+                        "browserTabs": self.browser.as_ref().map(|b| b.debug_state()),
                         "files": self.files_panel.as_ref().map(|p| p.debug_state()),
                         "editor": self.editor_debug_state(cx),
                         "docker": self.docker.debug_state(),
@@ -2381,7 +2420,16 @@ impl Workbench {
                     self.open_browser(Some(browser::browser_url(argument, cx)), cx);
                 }
             }
-            "browser-reload" => self.reload_browser(cx),
+            "browser-reload" => self.reload_browser(argument == "hard", cx),
+            // `browser-tab [url]`, `browser-tab close <index>`, `browser-tab select <index>`.
+            "browser-tab" => match argument.split_once(' ') {
+                Some(("close", index)) => self.close_browser_tab(index.parse().unwrap_or(0), window, cx),
+                Some(("select", index)) => self.select_browser_tab(index.parse().unwrap_or(0), cx),
+                _ if argument.is_empty() => self.open_browser_tab(None, cx),
+                _ => self.open_browser_tab(Some(browser::browser_url(argument, cx)), cx),
+            },
+            // `browser-net` opens or closes the network panel; `browser-net <id>` opens one call.
+            "browser-net" => self.debug_browser_network(argument, cx),
             "link" => self.open_link(argument.to_string(), cx),
             // `agentty-link agentty://…`: as if another app opened the link.
             "agentty-link" => self.open_agentty_link(argument, window, cx),

@@ -91,8 +91,7 @@ impl Workbench {
             _ => {}
         }
         // Everything else needs the web view, which appears on the next frame after `open`.
-        let ready =
-            self.browser.as_ref().is_some_and(|b| b.webview.borrow().is_some() && b.pending.is_none()) && self.browser_request.is_none();
+        let ready = self.browser.as_ref().is_some_and(|b| b.ready()) && self.browser_request.is_none();
         if !ready {
             if self.browser.is_none() && self.browser_request.is_none() {
                 return send(Err("the browser is not open — run `agentty browser open [url]` first".into()));
@@ -110,7 +109,7 @@ impl Workbench {
             return;
         }
         let Some(browser) = self.browser.as_ref() else { return };
-        let webview = browser.webview.clone();
+        let webview = browser.webview();
         let borrowed = webview.borrow();
         let Some(view) = borrowed.as_ref() else { return };
         let js = |body: &str, args: &[(&str, &str)]| view.call_async(body, args, Box::new(send.clone()));

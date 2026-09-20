@@ -1196,7 +1196,12 @@ impl TerminalView {
         }
     }
 
+    // The Edit menu's ⌘C / ⌘V / ⌘A reach this terminal even while the in-app browser's page has
+    // the keyboard (a menu key equivalent never gets to a native view), so the page gets them first.
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if crate::webview::perform_in_page(crate::webview::EditCommand::Copy) {
+            return;
+        }
         let text = self.backend.as_ref().and_then(|b| b.term.lock().selection_to_string());
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -1204,6 +1209,9 @@ impl TerminalView {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+        if crate::webview::perform_in_page(crate::webview::EditCommand::Paste) {
+            return;
+        }
         let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) else { return };
         let bytes = if self.mode().contains(TermMode::BRACKETED_PASTE) {
             format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', "")).into_bytes()
@@ -1219,6 +1227,9 @@ impl TerminalView {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if crate::webview::perform_in_page(crate::webview::EditCommand::SelectAll) {
+            return;
+        }
         if let Some(backend) = &self.backend {
             let mut term = backend.term.lock();
             let top = term.grid().topmost_line();
