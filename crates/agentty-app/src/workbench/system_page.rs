@@ -86,16 +86,34 @@ impl Workbench {
         )
     }
 
+    /// The pane an install command of this tool is still running in, if its tab is still open.
+    fn install_tab(&self, id: &str) -> Option<crate::workbench::Pane> {
+        let entity = self.system_installs.iter().find(|(tool, _)| *tool == id).map(|(_, entity)| *entity)?;
+        self.all_panes().into_iter().find(|pane| pane.entity_id() == entity)
+    }
+
+    /// Runs the install command in a new terminal tab. The System check page stays on screen —
+    /// several tools are usually missing at once, and leaving after every click would mean walking
+    /// back to Settings → System check for each one. A second click goes to the tab already
+    /// installing that tool instead of starting it over.
     fn install_tool(&mut self, tool: &Tool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pane) = self.install_tab(tool.id) {
+            return self.reveal_pane(&pane, window, cx);
+        }
         let Some(command) = tool.install.clone() else { return };
         let spec = LaunchSpec::shell_command(command, format!("Install {}", tool.name), setup_check::install_dir());
-        self.open_tab(spec, window, cx);
+        if let Some(pane) = self.open_tab_behind(spec, window, cx) {
+            self.system_installs.push((tool.id, pane.entity_id()));
+        }
     }
 
     pub(super) fn render_system_check(&mut self, cx: &mut Context<Self>) -> Div {
         if self.system_check.is_none() && !self.system_checking {
             self.run_system_check(false, cx);
         }
+        // Installs whose tab was closed are no longer running: offer Install again.
+        let live: std::collections::HashSet<gpui::EntityId> = self.all_panes().iter().map(|pane| pane.entity_id()).collect();
+        self.system_installs.retain(|(_, entity)| live.contains(entity));
         let tools = self.system_check.clone().unwrap_or_default();
         // The text wraps next to the button (min_w_0): without it the row takes the text's
         // one-line width and pushes the button out of the page.
@@ -129,10 +147,11 @@ impl Workbench {
             if tool.missing() {
                 if let Some(command) = tool.install.clone() {
                     let target = tool.clone();
+                    let running = self.install_tab(tool.id).is_some();
                     buttons = buttons
                         .child(action_button(
                             SharedString::from(format!("system-install-{index}")),
-                            t(cx, "system.install"),
+                            t(cx, if running { "system.installing" } else { "system.install" }),
                             cx.listener(move |this, _: &ClickEvent, window, cx| this.install_tool(&target, window, cx)),
                         ))
                         .child(action_button(SharedString::from(format!("system-copy-{index}")), t(cx, "system.copy"), move |_, _, cx| {

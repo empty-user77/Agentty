@@ -350,6 +350,11 @@ pub struct Workbench {
     /// Settings → System check results (Windows / Linux), and whether a check is running.
     system_check: Option<Vec<crate::setup_check::Tool>>,
     system_checking: bool,
+    /// Tool id → the pane its install command runs in, so a second click goes to that tab instead
+    /// of starting the install again. The entity id, never the entity itself: holding a pane here
+    /// would keep it alive after its tab was closed, and dropping the pane is what ends what runs
+    /// in it (`terminal::backend`'s `Drop` signals the process group).
+    system_installs: Vec<(&'static str, gpui::EntityId)>,
     harness_pattern_form: Option<settings_page::HarnessPatternForm>,
     /// Plugin whose panel is docked right of the terminals.
     plugin_panel: Option<String>,
@@ -499,6 +504,7 @@ impl Workbench {
             accounts_form: None,
             system_check: None,
             system_checking: false,
+            system_installs: Vec::new(),
             harness_pattern_form: None,
             plugin_panel: None,
             plugin_inputs: HashMap::new(),
@@ -843,6 +849,34 @@ impl Workbench {
         self.focus_active(window, cx);
         self.persist(cx);
         cx.notify();
+    }
+
+    /// Adds a tab and makes it the workspace's active one, but leaves the page that is on screen
+    /// where it is. Settings → System check uses it: installing one tool must not throw the user
+    /// off the page when two more are still missing. Returns the new pane, or `None` when there
+    /// was no workspace yet and the tab had to take over.
+    pub(super) fn open_tab_behind(&mut self, spec: LaunchSpec, window: &mut Window, cx: &mut Context<Self>) -> Option<Pane> {
+        self.welcome = false;
+        if self.workspaces.is_empty() {
+            self.create_workspace(spec, window, cx);
+            return None;
+        }
+        let pane = self.spawn_pane(spec, cx);
+        let ws = &mut self.workspaces[self.active_workspace];
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone() });
+        ws.active_tab = ws.tabs.len() - 1;
+        self.persist(cx);
+        cx.notify();
+        Some(pane)
+    }
+
+    /// Brings the tab holding a pane to the front, leaving whatever page was on screen.
+    pub(super) fn reveal_pane(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((workspace, tab)) = self.locate(pane) else { return };
+        if workspace != self.active_workspace {
+            self.activate_workspace(workspace, window, cx);
+        }
+        self.activate_tab(tab, window, cx);
     }
 
     pub fn activate_workspace(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
