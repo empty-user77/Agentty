@@ -187,13 +187,15 @@ impl Session {
             Session::MySql(conn) => {
                 use mysql::prelude::Queryable;
                 conn.query_drop("START TRANSACTION READ ONLY")?;
-                let result = mysql_rows(conn, sql, limit);
+                let result = mysql_rows(conn, sql, limit, true);
                 let _ = conn.query_drop("ROLLBACK");
                 result
             }
             Session::Postgres(client) => {
                 let mut tx = client.build_transaction().read_only(true).start()?;
-                let result = postgres_rows(&mut tx, sql, limit);
+                // Parse first: the extended protocol refuses a string holding several statements,
+                // so nothing the guard never classified can ride along with the read below.
+                let result = tx.prepare(sql).map_err(anyhow::Error::from).and_then(|_| postgres_rows(&mut tx, sql, limit));
                 let _ = tx.rollback();
                 result
             }
@@ -209,13 +211,14 @@ impl Session {
 
     /// Runs a statement the user approved: one that returns rows (a `SELECT` calling a function the
     /// guard doesn't know) shows them; anything else runs as [`Session::write`]. Committed either way.
-    pub fn approved(&mut self, sql: &str, limit: usize) -> Result<QueryResult> {
-        if !crate::guard::returns_rows(sql) {
+    pub fn approved(&mut self, engine: Engine, sql: &str, limit: usize) -> Result<QueryResult> {
+        if !crate::guard::returns_rows(engine, sql) {
             return self.write(sql);
         }
         let sql = sql.trim().trim_end_matches(';');
         match self {
-            Session::MySql(conn) => mysql_rows(conn, sql, limit),
+            // The user approved this exact text, so it runs as written (batches included).
+            Session::MySql(conn) => mysql_rows(conn, sql, limit, false),
             Session::Postgres(client) => {
                 let mut tx = client.transaction()?;
                 let result = postgres_rows(&mut tx, sql, limit)?;
@@ -418,9 +421,19 @@ fn mysql_value(value: mysql::Value) -> Value {
     }
 }
 
-fn mysql_rows(conn: &mut mysql::Conn, sql: &str, limit: usize) -> Result<QueryResult> {
+/// `prepared` sends the statement over the binary protocol, which runs exactly one statement. Reads
+/// use it: the text protocol takes a batch (the driver always negotiates `CLIENT_MULTI_STATEMENTS`
+/// and cannot turn it off), so a statement the guard never classified could ride along with a read.
+fn mysql_rows(conn: &mut mysql::Conn, sql: &str, limit: usize, prepared: bool) -> Result<QueryResult> {
     use mysql::prelude::Queryable;
-    let mut result = conn.query_iter(sql)?;
+    if prepared {
+        mysql_collect(conn.exec_iter(sql, ())?, limit)
+    } else {
+        mysql_collect(conn.query_iter(sql)?, limit)
+    }
+}
+
+fn mysql_collect<P: mysql::prelude::Protocol>(mut result: mysql::QueryResult<'_, '_, '_, P>, limit: usize) -> Result<QueryResult> {
     let mut out = QueryResult::default();
     if let Some(set) = result.iter() {
         out.columns = set.columns().as_ref().iter().map(|c| c.name_str().to_string()).collect();

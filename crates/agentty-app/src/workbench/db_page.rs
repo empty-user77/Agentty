@@ -42,14 +42,15 @@ pub enum Job {
 }
 
 impl Job {
-    fn verdict(&self) -> Verdict {
+    fn verdict(&self, engine: Engine) -> Verdict {
         match self {
-            Job::Sql(sql) => classify_sql(sql),
+            Job::Sql(sql) => classify_sql(engine, sql),
             Job::Mongo { op, args, .. } => classify_mongo(*op, Some(args)),
         }
     }
 
-    /// The statement as the approval dialog shows it.
+    /// The statement as the approval dialog shows it — the same text that runs, because a
+    /// statement only becomes a job after [`checked_statement`] has accepted it.
     fn describe(&self) -> String {
         match self {
             Job::Sql(sql) => sql.trim().to_string(),
@@ -60,13 +61,69 @@ impl Job {
     }
 }
 
+/// The longest statement accepted at all: the dialog has to stay readable, and what the user can't
+/// read they can't approve.
+const MAX_STATEMENT: usize = 8_000;
+
+/// Why a statement can't be shown as it would run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unshowable {
+    Empty,
+    TooLong,
+    /// A character that would be rendered differently from how the server reads it.
+    Hidden(char),
+}
+
+impl Unshowable {
+    /// For an agent, which is told in English (like every other answer on the socket).
+    fn english(self) -> String {
+        match self {
+            Unshowable::Empty => "the statement is empty".into(),
+            Unshowable::TooLong => format!("the statement is longer than {MAX_STATEMENT} characters"),
+            Unshowable::Hidden(c) => {
+                format!("the statement holds a character that would not be shown as it runs (U+{:04X})", c as u32)
+            }
+        }
+    }
+
+    fn message(self, cx: &gpui::App) -> String {
+        match self {
+            Unshowable::Empty => t(cx, "db.statement_empty").to_string(),
+            Unshowable::TooLong => tf(cx, "db.statement_too_long", &[("n", &MAX_STATEMENT.to_string())]),
+            Unshowable::Hidden(c) => tf(cx, "db.statement_hidden", &[("code", &format!("U+{:04X}", c as u32))]),
+        }
+    }
+}
+
+/// A statement the approval dialog can show truthfully, or why it can't. Characters that make the
+/// rendered text differ from the text that runs (direction overrides, zero-width marks, other
+/// control characters) are refused rather than stripped, so the dialog never shows something the
+/// server would read differently.
+fn checked_statement(text: &str) -> Result<String, Unshowable> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(Unshowable::Empty);
+    }
+    if text.chars().count() > MAX_STATEMENT {
+        return Err(Unshowable::TooLong);
+    }
+    let hidden = |c: char| {
+        matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+            || (c.is_control() && c != '\n' && c != '\t' && c != '\r')
+    };
+    match text.chars().find(|c| hidden(*c)) {
+        Some(c) => Err(Unshowable::Hidden(c)),
+        None => Ok(text.to_string()),
+    }
+}
+
 /// Runs `job` on a fresh session: a read inside a read-only transaction, a write as approved.
 fn run_job(config: &ConnectionConfig, job: &Job, write: bool, limit: usize) -> anyhow::Result<QueryResult> {
     // Checked again here, before connecting: nothing reaches the read path that isn't a read.
-    anyhow::ensure!(write || job.verdict() == Verdict::Read, "this statement changes data: it needs the user's approval");
+    anyhow::ensure!(write || job.verdict(config.engine) == Verdict::Read, "this statement changes data: it needs the user's approval");
     let mut session = Session::connect(config)?;
     match job {
-        Job::Sql(sql) if write => session.approved(sql, limit.max(1)),
+        Job::Sql(sql) if write => session.approved(config.engine, sql, limit.max(1)),
         Job::Sql(sql) => session.read(sql, limit),
         Job::Mongo { op, collection, args } if write => session.mongo_write(*op, collection, args),
         Job::Mongo { op, collection, args } => session.mongo_read(*op, collection, args, limit),
@@ -297,6 +354,13 @@ impl Workbench {
     fn run_db_query(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.selected_connection().cloned() else { return };
         let Some(text) = self.db.query.as_ref().map(|q| q.read(cx).text().trim().to_string()).filter(|t| !t.is_empty()) else { return };
+        let text = match checked_statement(&text) {
+            Ok(text) => text,
+            Err(problem) => {
+                self.db.message = Some((problem.message(cx), true));
+                return cx.notify();
+            }
+        };
         let job = if connection.config.engine == Engine::MongoDb {
             // `find users {"age": 30}` style: operation, collection, JSON arguments.
             let mut parts = text.splitn(3, char::is_whitespace);
@@ -310,7 +374,7 @@ impl Workbench {
         } else {
             Job::Sql(text)
         };
-        let verdict = job.verdict();
+        let verdict = job.verdict(connection.config.engine);
         if verdict.needs_approval() {
             let asker = t(cx, "db.asker_you").to_string();
             self.queue_db_approval(asker, connection, job, verdict, None, cx);
@@ -519,8 +583,11 @@ impl Workbench {
                     self.run_db_query(cx);
                 }
             }
+            // Never answers for an agent: the debug driver runs with the app's environment, which a
+            // pane's agent inherits, so it must not be a way to approve one's own statement.
             "execute" | "decline" => {
-                if let Some(id) = self.db.approvals.front().map(|a| a.id) {
+                if let Some(approval) = self.db.approvals.front().filter(|a| a.reply.is_none()) {
+                    let id = approval.id;
                     self.db.front_since = None;
                     self.answer_db_approval(id, verb == "execute", cx);
                 }
@@ -544,13 +611,26 @@ impl Workbench {
     /// `agentty db …` from an agent pane. Listing never shows passwords; reads run at once; writes and
     /// schema changes wait for the user in the approval dialog.
     pub fn answer_db_request(&mut self, request: DbRequest, cx: &mut Context<Self>) {
-        let asker = self
-            .all_panes()
-            .into_iter()
-            .find(|p| p.read(cx).pane_id == request.pane)
-            .map(|p| p.read(cx).display_title())
-            .unwrap_or_default();
-        let project = agentty_bridge::worktree::tree_root(&request.cwd).unwrap_or_else(|| request.cwd.clone());
+        let pane = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == request.pane);
+        let asker = pane.as_ref().map(|p| p.read(cx).display_title()).unwrap_or_default();
+        // The folder the pane was opened in decides which databases it reaches — not the folder
+        // named in the request, which is wherever the shell has since been told to go. Otherwise an
+        // agent could `cd` into any other project and read it with the password the user once
+        // entered there.
+        let Some(home) = pane.map(|p| p.read(cx).spec.cwd.clone()) else {
+            let _ = request.reply.send(browser_reply(Err("this pane is gone".into())));
+            return;
+        };
+        let home_root = agentty_bridge::worktree::tree_root(&home).unwrap_or(home);
+        let asked = agentty_bridge::worktree::tree_root(&request.cwd).unwrap_or_else(|| request.cwd.clone());
+        if asked != home_root && !asked.starts_with(&home_root) {
+            let _ = request.reply.send(browser_reply(Err(format!(
+                "this pane reaches only the databases of {}: run `agentty db` from that project",
+                tilde(&home_root)
+            ))));
+            return;
+        }
+        let project = home_root;
         let args = request.args.clone();
         let reply = request.reply.clone();
         cx.spawn(async move |this, cx| {
@@ -617,7 +697,10 @@ impl Workbench {
                         .detach();
                         return;
                     }
-                    "query" if connection.config.engine != Engine::MongoDb => Job::Sql(args["sql"].as_str().unwrap_or("").to_string()),
+                    "query" if connection.config.engine != Engine::MongoDb => match checked_statement(args["sql"].as_str().unwrap_or("")) {
+                        Ok(sql) => Job::Sql(sql),
+                        Err(problem) => return fail(problem.english()),
+                    },
                     "mongo" if connection.config.engine == Engine::MongoDb => {
                         let Some(op) = args["op"].as_str().and_then(MongoOp::parse) else { return fail("unknown MongoDB operation".into()) };
                         Job::Mongo { op, collection: args["collection"].as_str().unwrap_or("").to_string(), args: args["args"].clone() }
@@ -626,7 +709,7 @@ impl Workbench {
                     "mongo" => return fail("this is a SQL connection: use `agentty db query …`".into()),
                     _ => return fail(format!("unknown action {action}")),
                 };
-                let verdict = job.verdict();
+                let verdict = job.verdict(connection.config.engine);
                 if verdict.needs_approval() {
                     this.queue_db_approval(asker, connection, job, verdict, Some(reply), cx);
                     return;
@@ -1187,14 +1270,28 @@ mod tests {
     #[test]
     fn jobs_describe_themselves_and_classify() {
         let job = Job::Sql("DELETE FROM users WHERE id = 1".into());
-        assert_eq!(job.verdict(), Verdict::Write);
+        assert_eq!(job.verdict(Engine::MySql), Verdict::Write);
         assert_eq!(job.describe(), "DELETE FROM users WHERE id = 1");
         let job = Job::Mongo { op: MongoOp::DropCollection, collection: "users".into(), args: Value::Null };
-        assert_eq!(job.verdict(), Verdict::Ddl);
+        assert_eq!(job.verdict(Engine::MongoDb), Verdict::Ddl);
         assert!(job.describe().starts_with("db.users.drop("));
-        assert_eq!(Job::Sql("select 1".into()).verdict(), Verdict::Read);
+        assert_eq!(Job::Sql("select 1".into()).verdict(Engine::MySql), Verdict::Read);
         assert_eq!(cell_text(&Value::Null), "NULL");
         assert_eq!(cell_text(&serde_json::json!({"a": 1})), "{\"a\":1}");
+    }
+
+    /// The dialog shows what runs: a statement that would render differently is refused outright.
+    #[test]
+    fn statements_that_would_not_read_as_they_run_are_refused() {
+        assert_eq!(checked_statement("  select 1  ").unwrap(), "select 1");
+        assert!(checked_statement("").is_err());
+        assert!(checked_statement(&"x".repeat(MAX_STATEMENT + 1)).is_err());
+        // A right-to-left override would show the clauses in another order than they run.
+        assert!(checked_statement("select 1 \u{202e} delete from users").is_err());
+        assert!(checked_statement("select\u{200b}1").is_err());
+        assert!(checked_statement("select 1\u{0}").is_err());
+        // Newlines and tabs are how people write SQL.
+        assert!(checked_statement("select 1\n\tfrom t").is_ok());
     }
 
     #[test]

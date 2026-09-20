@@ -157,14 +157,26 @@ pub fn save_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
         return Err(std::io::Error::other("refusing to replace a link; save to the file it points at"));
     }
     if meta.as_ref().is_some_and(hard_linked) {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).truncate(true);
-        // Never through a link put there since the check above.
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
-        let mut file = options.open(target)?;
-        file.write_all(bytes)?;
-        return file.sync_all();
+        // Other links share this inode, so the file has to keep it and a rename is out. Writing in
+        // place truncates first, so the old content is read aside and put back when the write fails
+        // partway (a full disk, an I/O error): a save still never leaves half a file.
+        let previous = std::fs::read(target)?;
+        let open_in_place = || {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).truncate(true);
+            // Never through a link put there since the check above.
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
+            options.open(target)
+        };
+        let mut file = open_in_place()?;
+        let result = file.write_all(bytes).and_then(|()| file.sync_all());
+        if result.is_err() {
+            if let Ok(mut file) = open_in_place() {
+                let _ = file.write_all(&previous).and_then(|()| file.sync_all());
+            }
+        }
+        return result;
     }
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -185,7 +197,13 @@ pub fn save_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
         if let Some(meta) = &meta {
             std::fs::set_permissions(&temp, meta.permissions())?;
         }
-        std::fs::rename(&temp, target)
+        std::fs::rename(&temp, target)?;
+        // The rename itself is only durable once the folder is flushed too.
+        #[cfg(unix)]
+        if let Ok(dir) = std::fs::File::open(dir) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temp);

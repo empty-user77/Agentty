@@ -232,7 +232,19 @@ fn run(program: &Path, args: &[OsString], dir: Option<&Path>, timeout: Duration)
 pub fn short_error(text: &str) -> String {
     let line = text.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("docker failed");
     let lower = line.to_lowercase();
-    if ["environment", "interpolat", "password", "secret", "token"].iter().any(|word| lower.contains(word)) {
+    if ["environment", "interpolat", "password", "secret", "token", "credential", "passwd", "api_key", "apikey"]
+        .iter()
+        .any(|word| lower.contains(word))
+    {
+        return "docker compose could not read the compose file".into();
+    }
+    // Any `NAME=value` in the quoted text is a variable with its value: never worth the risk.
+    if line.split_whitespace().any(|word| {
+        let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '=' && c != '_');
+        word.split_once('=').is_some_and(|(name, value)| {
+            !name.is_empty() && !value.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        })
+    }) {
         return "docker compose could not read the compose file".into();
     }
     let line = line.strip_prefix("Error response from daemon: ").unwrap_or(line);

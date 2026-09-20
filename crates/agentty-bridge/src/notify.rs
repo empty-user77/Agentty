@@ -174,6 +174,9 @@ pub fn send(channel: Channel, chat: Option<&str>, text: &str) -> Result<()> {
     let (url, body) = request(channel, &secret, chat, text)?;
     let agent = crate::http::agent_builder().redirects(0).timeout(Duration::from_secs(15)).build();
     match agent.post(&url).set("User-Agent", "Agentty").send_json(body) {
+        // Redirects are off, so a 3xx arrives as success: Slack answers an unknown webhook with a
+        // 302, and calling that "sent" would leave the user believing notifications work.
+        Ok(response) if !(200..300).contains(&response.status()) => bail!("{} answered {}", channel.label(), response.status()),
         Ok(_) => Ok(()),
         Err(ureq::Error::Status(status, response)) => {
             // Telegram explains what's wrong ("chat not found"); its text never holds the token.

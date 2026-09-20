@@ -186,6 +186,9 @@ pub struct Settings {
     pub idea_mode: bool,
     /// Ask before closing a pane, tab or workspace that was used.
     pub confirm_close: bool,
+    /// Ask, when closing the last pane working in a linked working tree, whether to remove that
+    /// tree and its branch. Off means never ask and never remove — the tree simply stays.
+    pub ask_remove_trees: bool,
     /// A new agent session in a project another agent already works in gets its own git worktree.
     pub auto_worktree: bool,
     /// Agents may ask (`agentty tasks`) to start parallel tasks in split panes; the user still
@@ -431,6 +434,7 @@ impl Default for Settings {
             hud: crate::hud::default_layout(),
             idea_mode: true,
             confirm_close: true,
+            ask_remove_trees: true,
             auto_worktree: true,
             agent_tasks: true,
             agent_guide: true,

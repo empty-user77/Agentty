@@ -63,7 +63,7 @@ impl Workbench {
     /// Asks before closing unless the user turned confirmations off in settings. Panes in a working
     /// tree of their own always ask: that is where the tree can go with them.
     pub(super) fn request_close(&mut self, target: CloseTarget, window: &mut Window, cx: &mut Context<Self>) {
-        let trees = self.trees_left_behind(&target, cx);
+        let trees = if settings(cx).ask_remove_trees { self.trees_left_behind(&target, cx) } else { Vec::new() };
         if !settings(cx).confirm_close && trees.is_empty() {
             return self.perform_close(target, window, cx);
         }
@@ -284,7 +284,17 @@ impl Workbench {
                                     |this, _: &ClickEvent, window, cx| {
                                         let Some(confirm) = this.close_confirm.take() else { return };
                                         if confirm.dont_ask {
-                                            update_settings(cx, |s| s.confirm_close = false);
+                                            // Asked only because a working tree would be left
+                                            // behind? Then that is the question to silence — the
+                                            // user's "ask before closing" setting stays as it is.
+                                            let only_trees = !settings(cx).confirm_close;
+                                            update_settings(cx, |s| {
+                                                if only_trees {
+                                                    s.ask_remove_trees = false;
+                                                } else {
+                                                    s.confirm_close = false;
+                                                }
+                                            });
                                         }
                                         this.perform_close(confirm.target, window, cx);
                                         if confirm.remove_trees && !confirm.trees.is_empty() {

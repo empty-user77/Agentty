@@ -55,8 +55,9 @@ fn wrapped(aliases: &[CommandAlias]) -> BTreeMap<String, Vec<&CommandAlias>> {
 
 /// First words that don't start a new session in the folder (`--version`, `mcp`, …) and flags that
 /// resume one: a resumed conversation belongs to the folder it was held in, so it stays there.
+/// `exec` is Codex's scripted one-shot run — it belongs where the script started it.
 const STAY_FIRST: &str =
-    "-v|--version|-h|--help|resume|mcp|config|doctor|update|install|login|logout|setup-token|plugin|completion|migrate-installer";
+    "-v|--version|-h|--help|resume|exec|mcp|config|doctor|update|install|login|logout|setup-token|plugin|completion|migrate-installer";
 const STAY_ANY: &str = "-c|--continue|-r|--resume|--resume=*";
 
 fn single_quote(text: &str) -> String {

@@ -8,6 +8,7 @@
 //! exception there — MySQL commits implicitly before DDL, even in a read-only transaction — which is
 //! why DDL never classifies as a read.
 
+use crate::model::Engine;
 use serde::Serialize;
 
 /// What a statement would do.
@@ -428,13 +429,14 @@ const READ_FUNCTIONS: &[&str] = &[
 
 /// Whether a statement returns rows (starts like a read), whatever else it may do: an approved
 /// `SELECT my_function()` still shows its result.
-pub fn returns_rows(sql: &str) -> bool {
-    normalize(sql).and_then(|text| text.split_whitespace().next().map(|w| READ_STARTS.contains(&w))).unwrap_or(false)
+pub fn returns_rows(engine: Engine, sql: &str) -> bool {
+    normalize(engine, sql).and_then(|text| text.split_whitespace().next().map(|w| READ_STARTS.contains(&w))).unwrap_or(false)
 }
 
-/// Classifies one SQL statement (MySQL / MariaDB / PostgreSQL / Oracle).
-pub fn classify_sql(sql: &str) -> Verdict {
-    let Some(text) = normalize(sql) else { return Verdict::Write };
+/// Classifies one SQL statement. The engine decides how the text is read: a comment in one dialect
+/// is an operator in another, and a statement the reader mis-lexes is a statement it mis-classifies.
+pub fn classify_sql(engine: Engine, sql: &str) -> Verdict {
+    let Some(text) = normalize(engine, sql) else { return Verdict::Write };
     let words: Vec<&str> = text.split_whitespace().collect();
     let Some(first) = words.first().copied() else { return Verdict::Write };
     if DDL_STARTS.contains(&first) {
@@ -443,14 +445,16 @@ pub fn classify_sql(sql: &str) -> Verdict {
     if !READ_STARTS.contains(&first) {
         return Verdict::Write;
     }
-    // EXPLAIN ANALYZE runs the statement it explains.
-    if first == "EXPLAIN" && words.get(1).is_some_and(|w| w.starts_with("ANALY")) {
+    // EXPLAIN ANALYZE runs the statement it explains — in PostgreSQL also as `EXPLAIN (ANALYZE) …`,
+    // and Oracle's `EXPLAIN PLAN FOR …` writes its rows into PLAN_TABLE.
+    if first == "EXPLAIN" && (words.iter().any(|w| w.starts_with("ANALY")) || words.get(1) == Some(&"PLAN")) {
         return Verdict::Write;
     }
     // A call into code the reader doesn't know: `name (` where `name` is neither a keyword nor a
-    // built-in that only computes. Schema-qualified (`pkg.fn(`) and quoted names count as unknown.
+    // built-in that only computes. `(` and `)` are tokens of their own, so a call is always the
+    // pair `name (`. Schema-qualified (`pkg.fn(`) and quoted names count as unknown.
     for pair in words.windows(2) {
-        if pair[1].starts_with('(') {
+        if pair[1] == "(" {
             let name = pair[0];
             let known = PAREN_KEYWORDS.contains(&name) || READ_FUNCTIONS.contains(&name);
             let is_name = name.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '.');
@@ -459,13 +463,15 @@ pub fn classify_sql(sql: &str) -> Verdict {
             }
         }
     }
-    let spaced = format!(" {} ", words.join(" "));
-    if WRITE_WORDS.iter().any(|w| {
-        if w.ends_with('_') {
-            spaced.contains(&format!(" {w}")) || spaced.contains(&format!("({w}")) || spaced.contains(&format!(".{w}"))
-        } else {
-            spaced.contains(&format!(" {w} ")) || spaced.contains(&format!(" {w}(")) || spaced.contains(&format!("({w} "))
-        }
+    // Write words are matched against whole tokens, not as substrings of the joined text: a word
+    // glued to a `.` (`orders_seq.NEXTVAL`) must still count.
+    let tokens: Vec<&str> = words.iter().map(|w| w.trim_start_matches('.')).collect();
+    if WRITE_WORDS.iter().any(|w| match w.split_once(' ') {
+        // Two-word entries (`FOR UPDATE`) are adjacent tokens.
+        Some((a, b)) => tokens.windows(2).any(|pair| pair[0] == a && pair[1] == b),
+        // A prefix entry (`DBMS_`, `UTL_`) matches any token that starts with it.
+        None if w.ends_with('_') => tokens.iter().any(|t| t.starts_with(w)),
+        None => tokens.contains(w),
     }) {
         return Verdict::Write;
     }
@@ -474,8 +480,14 @@ pub fn classify_sql(sql: &str) -> Verdict {
 
 /// The statement upper-cased with comments, string literals and quoted names blanked, so only its
 /// keywords remain — or `None` when it can't be read safely: several statements, an unterminated
-/// quote or comment, or a MySQL executable comment (`/*! … */`, which the server runs).
-fn normalize(sql: &str) -> Option<String> {
+/// quote or comment, or an executable comment (`/*! … */`, `/*M! … */`, which the server runs).
+///
+/// Read with the target engine's own rules. Taking the union of every dialect's comment syntax
+/// would hide statements from the reader that the server still runs: MySQL needs whitespace after
+/// `--` (`1--1` is arithmetic), and `#` starts a comment only there — in PostgreSQL it is an
+/// operator, in Oracle an identifier character.
+fn normalize(engine: Engine, sql: &str) -> Option<String> {
+    let mysql_family = matches!(engine, Engine::MySql | Engine::MariaDb);
     let chars: Vec<char> = sql.chars().collect();
     let mut out = String::with_capacity(sql.len());
     let mut i = 0;
@@ -483,16 +495,18 @@ fn normalize(sql: &str) -> Option<String> {
     while i < chars.len() {
         let c = chars[i];
         let next = chars.get(i + 1).copied();
+        // MySQL and MariaDB only treat `--` as a comment when whitespace (or the end) follows.
+        let dash_comment = c == '-' && next == Some('-') && (!mysql_family || chars.get(i + 2).is_none_or(|c| c.is_whitespace()));
         match c {
-            '-' if next == Some('-') => {
+            _ if dash_comment => {
                 while i < chars.len() && chars[i] != '\n' {
                     i += 1;
                 }
                 out.push(' ');
                 continue;
             }
-            '#' => {
-                // MySQL line comment.
+            '#' if mysql_family => {
+                // MySQL line comment. Elsewhere `#` falls through to the identifier branch below.
                 while i < chars.len() && chars[i] != '\n' {
                     i += 1;
                 }
@@ -500,8 +514,11 @@ fn normalize(sql: &str) -> Option<String> {
                 continue;
             }
             '/' if next == Some('*') => {
-                if chars.get(i + 2) == Some(&'!') || chars.get(i + 2) == Some(&'+') {
-                    // Executed by MySQL / an Oracle hint: never treated as a comment.
+                let executable = matches!(chars.get(i + 2), Some('!') | Some('+'))
+                    // MariaDB also runs `/*M! … */`.
+                    || (matches!(chars.get(i + 2), Some('M') | Some('m')) && chars.get(i + 3) == Some(&'!'));
+                if executable {
+                    // Executed by MySQL / MariaDB, or an Oracle hint: never treated as a comment.
                     return None;
                 }
                 let end = (i + 2..chars.len().saturating_sub(1)).find(|&j| chars[j] == '*' && chars[j + 1] == '/')?;
@@ -547,13 +564,16 @@ fn normalize(sql: &str) -> Option<String> {
             // A second statement after `;`.
             return None;
         }
-        if c.is_alphanumeric() || c == '_' {
+        // `$` and `#` are identifier characters in these engines (`evil$fn`, Oracle's `sys#fn`):
+        // blanking them would leave only the tail of a name, which can be an allowed one.
+        if c.is_alphanumeric() || c == '_' || c == '$' || c == '#' {
             out.extend(c.to_uppercase());
-        } else if c == '(' || c == '.' {
+        } else if c == '.' {
             out.push(' ');
             out.push(c);
-        } else if "=<>+-*/%|&^~!,:".contains(c) {
-            // Operators stay as words of their own: `x = (SELECT …)` is not a call of `x`.
+        } else if c == '(' || c == ')' || "=<>+-*/%|&^~!,:".contains(c) {
+            // Parens and operators stay as words of their own: `x = (SELECT …)` is not a call of
+            // `x`, and `(evil(1))` is still a call of `evil`.
             out.push(' ');
             out.push(c);
             out.push(' ');
@@ -629,11 +649,29 @@ impl MongoOp {
     }
 }
 
+/// Whether a filter or document holds an operator that runs code on the server.
+fn runs_code(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .any(|(key, value)| matches!(key.as_str(), "$where" | "$function" | "$accumulator" | "$expr_code") || runs_code(value)),
+        serde_json::Value::Array(items) => items.iter().any(runs_code),
+        _ => false,
+    }
+}
+
 /// Classifies a MongoDB operation. An aggregation that writes its result (`$out`, `$merge`) is a
 /// write; so is any stage the reader doesn't know, since new stages may write.
 pub fn classify_mongo(op: MongoOp, pipeline: Option<&serde_json::Value>) -> Verdict {
     match op {
-        MongoOp::Find | MongoOp::Count | MongoOp::Distinct | MongoOp::ListCollections => Verdict::Read,
+        MongoOp::Find | MongoOp::Count | MongoOp::Distinct | MongoOp::ListCollections => {
+            // A filter can carry code the server runs ($where, $function, $accumulator): that is
+            // not a plain read, whatever the operation around it is.
+            if pipeline.is_some_and(runs_code) {
+                return Verdict::Write;
+            }
+            Verdict::Read
+        }
         MongoOp::Aggregate => {
             let known = [
                 "$match",
@@ -688,6 +726,18 @@ pub fn classify_mongo(op: MongoOp, pipeline: Option<&serde_json::Value>) -> Verd
 mod tests {
     use super::*;
 
+    const SQL_ENGINES: [Engine; 4] = [Engine::MySql, Engine::MariaDb, Engine::Postgres, Engine::Oracle];
+
+    /// A verdict that must be the same whichever engine reads the statement.
+    fn verdict(sql: &str) -> Verdict {
+        let mut verdicts = SQL_ENGINES.into_iter().map(|engine| (engine, classify_sql(engine, sql)));
+        let (first_engine, first) = verdicts.next().expect("one engine");
+        for (engine, other) in verdicts {
+            assert_eq!(other, first, "{engine:?} and {first_engine:?} disagree on {sql}");
+        }
+        first
+    }
+
     #[test]
     fn calls_into_unknown_code_ask_first() {
         for read in [
@@ -699,7 +749,7 @@ mod tests {
             "SELECT ROW_NUMBER() OVER (PARTITION BY a ORDER BY b) FROM t",
             "SELECT o.id FROM orders o JOIN (SELECT id FROM users) u ON (o.user_id = u.id)",
         ] {
-            assert_eq!(classify_sql(read), Verdict::Read, "{read}");
+            assert_eq!(verdict(read), Verdict::Read, "{read}");
         }
         for call in [
             "SELECT my_pkg.do_things(1) FROM dual",
@@ -710,7 +760,7 @@ mod tests {
             "SELECT \"weird\"(1)",
             "SELECT * FROM users WHERE id = my_function (1)",
         ] {
-            assert_eq!(classify_sql(call), Verdict::Write, "{call}");
+            assert_eq!(verdict(call), Verdict::Write, "{call}");
         }
     }
 
@@ -731,7 +781,7 @@ mod tests {
             "SELECT * FROM users /* no writes here */ WHERE id = 1",
             "TABLE users",
         ] {
-            assert_eq!(classify_sql(sql), Verdict::Read, "{sql}");
+            assert_eq!(verdict(sql), Verdict::Read, "{sql}");
         }
     }
 
@@ -760,7 +810,7 @@ mod tests {
             "SELECT 'a\\'; DROP TABLE t; -- '",
             "",
         ] {
-            assert!(classify_sql(sql).needs_approval(), "{sql}");
+            assert!(verdict(sql).needs_approval(), "{sql}");
         }
     }
 
@@ -768,7 +818,7 @@ mod tests {
     fn schema_changes_are_ddl() {
         for sql in ["CREATE TABLE t (id int)", "drop table users", "ALTER TABLE users ADD x int", "truncate users", "GRANT ALL ON *.* TO x"]
         {
-            assert_eq!(classify_sql(sql), Verdict::Ddl, "{sql}");
+            assert_eq!(verdict(sql), Verdict::Ddl, "{sql}");
         }
     }
 
@@ -789,10 +839,74 @@ mod tests {
             // Case games.
             "SeLeCt * FrOm t FoR uPdAtE",
         ] {
-            assert!(classify_sql(sql).needs_approval(), "{sql}");
+            assert!(verdict(sql).needs_approval(), "{sql}");
         }
         // Keywords inside strings and quoted names don't count either way.
-        assert_eq!(classify_sql("SELECT 'DROP TABLE x' FROM t"), Verdict::Read);
+        assert_eq!(verdict("SELECT 'DROP TABLE x' FROM t"), Verdict::Read);
+    }
+
+    /// A comment in one dialect is arithmetic or an operator in another: reading a statement with
+    /// the wrong dialect's rules hides whatever follows from the guard, while the server still runs it.
+    #[test]
+    fn a_comment_the_engine_ignores_cannot_hide_a_statement() {
+        for engine in [Engine::MySql, Engine::MariaDb] {
+            // The server needs whitespace after `--`; `1--1` is `1 - (-1)`, so the rest still runs.
+            assert!(classify_sql(engine, "SELECT 1--1;COMMIT;DELETE FROM users").needs_approval());
+            assert!(classify_sql(engine, "SELECT 1--1;DROP TABLE users").needs_approval());
+            // MariaDB runs `/*M! … */` the way MySQL runs `/*! … */`.
+            assert!(classify_sql(engine, "SELECT 1 /*M!99999 ; DROP TABLE users */").needs_approval());
+            // With whitespace it really is a comment.
+            assert_eq!(classify_sql(engine, "SELECT 1 -- 1;DELETE FROM users"), Verdict::Read);
+            // `#` is a comment here.
+            assert_eq!(classify_sql(engine, "SELECT 1#2"), Verdict::Read);
+        }
+        for engine in [Engine::Postgres, Engine::Oracle] {
+            // `#` is an operator (PostgreSQL) or a name character (Oracle), never a comment.
+            assert!(classify_sql(engine, "SELECT 1#2;COMMIT;DROP TABLE users").needs_approval());
+            // `--` is a comment with or without whitespace.
+            assert_eq!(classify_sql(engine, "SELECT 1--1"), Verdict::Read);
+        }
+    }
+
+    /// One more paren used to make a call invisible to the reader.
+    #[test]
+    fn a_paren_does_not_hide_a_call() {
+        for sql in [
+            "SELECT (sys_eval('id'))",
+            "SELECT ((my_writer(1)))",
+            "SELECT COUNT(dblink_exec('dbname=x', 'DELETE FROM t'))",
+            "SELECT MAX(my_autonomous_writer(id)) FROM t",
+        ] {
+            assert!(verdict(sql).needs_approval(), "{sql}");
+        }
+    }
+
+    /// `$` and `#` belong to the name around them: blanking them leaves an allowed name behind.
+    #[test]
+    fn name_characters_are_not_blanked() {
+        for engine in SQL_ENGINES {
+            assert!(classify_sql(engine, "SELECT evil$count(1)").needs_approval(), "{engine:?}");
+        }
+        assert!(classify_sql(Engine::Oracle, "SELECT sys#evil_fn(1) FROM dual").needs_approval());
+        assert!(classify_sql(Engine::Postgres, "SELECT evil#fn(1)").needs_approval());
+    }
+
+    /// A write word glued to a `.` is still a write word.
+    #[test]
+    fn write_words_count_after_a_dot() {
+        assert!(verdict("SELECT orders_seq.NEXTVAL FROM dual").needs_approval());
+        assert!(verdict("SELECT my_pkg.EXECUTE FROM dual").needs_approval());
+        // And a word that only contains one isn't: `nextvalue` is a column.
+        assert_eq!(verdict("SELECT nextvalue FROM t"), Verdict::Read);
+    }
+
+    /// EXPLAIN that really runs the statement (or writes a plan) asks first.
+    #[test]
+    fn explain_that_runs_the_statement_asks() {
+        assert!(classify_sql(Engine::Postgres, "EXPLAIN (ANALYZE) SELECT 1").needs_approval());
+        assert!(classify_sql(Engine::Postgres, "EXPLAIN (ANALYZE, BUFFERS) SELECT 1").needs_approval());
+        assert!(classify_sql(Engine::Oracle, "EXPLAIN PLAN FOR SELECT 1 FROM dual").needs_approval());
+        assert_eq!(classify_sql(Engine::Postgres, "EXPLAIN SELECT 1"), Verdict::Read);
     }
 
     #[test]
@@ -806,6 +920,13 @@ mod tests {
         assert_eq!(classify_mongo(MongoOp::Aggregate, Some(&merge)), Verdict::Write);
         let unknown = serde_json::json!([{ "$someNewStage": {} }]);
         assert_eq!(classify_mongo(MongoOp::Aggregate, Some(&unknown)), Verdict::Write);
+        // A filter that runs code on the server is not a plain read.
+        let js = serde_json::json!({ "$where": "this.a == 1" });
+        assert_eq!(classify_mongo(MongoOp::Find, Some(&js)), Verdict::Write);
+        let nested = serde_json::json!({ "a": { "$function": { "body": "…" } } });
+        assert_eq!(classify_mongo(MongoOp::Count, Some(&nested)), Verdict::Write);
+        let plain = serde_json::json!({ "age": 30 });
+        assert_eq!(classify_mongo(MongoOp::Find, Some(&plain)), Verdict::Read);
         assert_eq!(classify_mongo(MongoOp::DeleteMany, None), Verdict::Write);
         assert_eq!(classify_mongo(MongoOp::DropCollection, None), Verdict::Ddl);
         assert_eq!(MongoOp::parse("insertMany"), Some(MongoOp::InsertMany));

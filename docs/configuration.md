@@ -48,6 +48,7 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `agentTasks` | Agents may ask (`agentty tasks`) to start parallel tasks in split panes, each in its own worktree; you confirm each request |
 | `agentGuide` | Claude Code and Codex started by Agentty get a short guide to Agentty's commands (and Claude Code Agentty's skills), passed on the command line |
 | `autoWorktree` | A new AI session in a project where another one is at work (opened from the + menu, or `claude` / `codex` typed into a terminal) starts in its own git worktree (`~/.agentty/worktrees/<project>-<hash>/<name>`, branch `agentty/<name>` from the project's default branch) |
+| `askRemoveTrees` | Closing the last pane working in a linked working tree asks whether to remove that tree and its branch (default on). Off means the tree simply stays; "Don't ask again" in that dialog turns it off |
 | `stopServersOnClose` | Closing a tab, pane or workspace stops the local servers started in it (`SIGTERM`, then `SIGKILL`) |
 | `browser.autoOpenServers` | A local server started in a tab opens in the in-app browser once it answers with a page (only while links open in-app) |
 | `agentBarPosition` | `top` (default) or `bottom`: the AI CLI status bar, and the header of a split pane, above the terminal or under it |

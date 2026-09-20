@@ -353,18 +353,38 @@ impl CodeEditor {
 
     // -- files ------------------------------------------------------------------------------
 
-    /// Opens `path` (from the project `project`), or shows it when it is already open.
+    /// Opens `path` (from the project `project`), or shows it when it is already open. The file is
+    /// read on a background thread: a click in the files panel must not stop the window — the file
+    /// can be on a network volume, an undownloaded cloud placeholder, or simply large.
     pub fn open(&mut self, path: &Path, project: &Path, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(index) = self.docs.iter().position(|d| d.path == path) {
             self.active = index;
-        } else {
-            let doc = load_document(path, project);
-            self.docs.push(doc);
-            self.active = self.docs.len() - 1;
+            window.focus(&self.focus_handle);
+            self.tabs_changed(cx);
+            return cx.notify();
         }
-        window.focus(&self.focus_handle);
-        self.tabs_changed(cx);
-        cx.notify();
+        let (path, project) = (path.to_path_buf(), project.to_path_buf());
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let (read, of) = (path.clone(), project.clone());
+            let opened = cx.background_spawn(async move { file::open(&read, &of) }).await;
+            let _ = cx.update_window(handle, |_, window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    // Asked for twice while it was read: show the one that is already open.
+                    match this.docs.iter().position(|d| d.path == path) {
+                        Some(index) => this.active = index,
+                        None => {
+                            this.docs.push(document(&path, &project, opened));
+                            this.active = this.docs.len() - 1;
+                        }
+                    }
+                    window.focus(&this.focus_handle);
+                    this.tabs_changed(cx);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     pub fn tabs(&self) -> Vec<TabInfo> {
@@ -726,11 +746,27 @@ impl CodeEditor {
 
     fn notice_action(&mut self, action: NoticeAction, cx: &mut Context<Self>) {
         let Some(doc) = self.docs.get_mut(self.active) else { return };
-        match action {
-            NoticeAction::Reload => doc.reload(file::open(&doc.path, &doc.project)),
-            // Theirs is overwritten on the next save.
-            NoticeAction::KeepMine => doc.stamp = Stamp::of(&doc.target),
+        if action == NoticeAction::Reload {
+            // Read off the UI thread, like opening: the file is on whatever volume it is on.
+            let (path, project) = (doc.path.clone(), doc.project.clone());
+            return cx
+                .spawn(async move |this, cx| {
+                    let (read, of) = (path.clone(), project.clone());
+                    let opened = cx.background_spawn(async move { file::open(&read, &of) }).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(doc) = this.docs.iter_mut().find(|d| d.path == path) {
+                            doc.reload(opened);
+                            doc.disk_changed = false;
+                            doc.notice = None;
+                        }
+                        this.tabs_changed(cx);
+                        cx.notify();
+                    });
+                })
+                .detach();
         }
+        // Theirs is overwritten on the next save.
+        doc.stamp = Stamp::of(&doc.target);
         doc.disk_changed = false;
         doc.notice = None;
         self.tabs_changed(cx);
@@ -1320,7 +1356,8 @@ fn highlights_for(language: Language, path: &Path, first_line: &str) -> Highligh
     Highlights::new(grammar)
 }
 
-fn load_document(path: &Path, project: &Path) -> Document {
+/// The document for a file already read from disk ([`file::open`] runs off the UI thread).
+fn document(path: &Path, project: &Path, opened: Opened) -> Document {
     let language = Language::detect(path);
     let mut doc = Document {
         path: path.to_path_buf(),
@@ -1341,7 +1378,7 @@ fn load_document(path: &Path, project: &Path) -> Document {
         disk_changed: false,
         checking: false,
     };
-    match file::open(path, project) {
+    match opened {
         Opened::Text(file) => {
             doc.buffer = Buffer::new(&file.text);
             // Big files stay uncolored: coloring them would cost more than it helps.
