@@ -494,6 +494,18 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             cx,
         ),
         "net/fetch" => fetch(plugin_id, request_id, params, cx),
+        // The plugin's own folder: what it keeps between runs. A wasm plugin has no files of its
+        // own, so without this it forgets everything each time it starts.
+        "storage/get" | "storage/set" | "storage/keys" => {
+            use agentty_bridge::plugins::storage;
+            let key = params.get("key").and_then(Value::as_str).unwrap_or_default().to_string();
+            let result = match method {
+                "storage/get" => storage::get(plugin_id, &key).map(|value| json!({ "key": key, "value": value })),
+                "storage/set" => storage::set(plugin_id, &key, params.get("value").cloned().unwrap_or(Value::Null)).map(|()| Value::Null),
+                _ => Ok(Value::Array(storage::keys(plugin_id).into_iter().map(Value::String).collect())),
+            };
+            reply(result.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}"))), cx)
+        }
         "host/openUrl" => {
             let url = params.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
             if url.starts_with("https://") || url.starts_with("http://") {
@@ -590,7 +602,8 @@ fn fetch(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App
                     }
                     Err(err) => {
                         let message = format!("{err:#}");
-                        runtime.log(format!("  → failed: {message}"));
+                        // The message may quote the URL, and a URL may carry a token.
+                        runtime.log(format!("  → failed: {}", agentty_bridge::extensions::mask_words(&message)));
                         Err((codes::INVALID_PARAMS, message))
                     }
                 }

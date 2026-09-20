@@ -326,6 +326,10 @@ inside a terminal.
 | `workspace.read` | `listWorkspaces` |
 | `net.request` | `net/fetch` — HTTP requests to addresses the plugin chooses |
 
+`storage/get`, `storage/set` and `storage/keys` need no permission: they are the plugin's own
+folder (`<data dir>/plugin-data/<id>/storage.json`, `0600`), up to 64 keys and a megabyte. A
+WebAssembly plugin has no files of its own, so that is how it remembers anything.
+
 The store shows these before installing. A call without its permission fails with code `-32001`.
 
 A plugin with `runtime` `node`, `python` or `executable` runs as your user, with the same file and

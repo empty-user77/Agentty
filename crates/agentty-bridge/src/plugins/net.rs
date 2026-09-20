@@ -43,6 +43,10 @@ pub struct FetchRequest {
     pub body: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `http://host:port` (with `user:password@` if the proxy asks for it). The request goes
+    /// through it instead of straight out.
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 fn get() -> String {
@@ -73,6 +77,7 @@ struct Checked {
     headers: Vec<(String, String)>,
     body: Option<String>,
     timeout: Duration,
+    proxy: Option<String>,
 }
 
 fn check(request: &FetchRequest) -> Result<Checked> {
@@ -126,7 +131,30 @@ fn check(request: &FetchRequest) -> Result<Checked> {
         other => other.clone(),
     };
     let timeout = request.timeout_ms.map_or(DEFAULT_TIMEOUT, |ms| Duration::from_millis(ms).clamp(Duration::from_millis(100), MAX_TIMEOUT));
-    Ok(Checked { method, url, headers, body, timeout })
+    let proxy = match request.proxy.as_deref().map(str::trim).filter(|proxy| !proxy.is_empty()) {
+        Some(proxy) => Some(check_proxy(proxy)?),
+        None => None,
+    };
+    Ok(Checked { method, url, headers, body, timeout, proxy })
+}
+
+/// The proxy a plugin asks to go through, as text `ureq` accepts. HTTP proxies only: SOCKS is not
+/// compiled in, and a proxy that is not one of these is refused rather than quietly ignored.
+fn check_proxy(proxy: &str) -> Result<String> {
+    if proxy.len() > MAX_URL || proxy.chars().any(|c| c.is_control() || c == ' ') {
+        bail!("that is not a proxy address");
+    }
+    let parsed = url::Url::parse(proxy).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        bail!("a proxy must be http:// or https://");
+    }
+    let Some(host) = parsed.host_str() else { bail!("the proxy has no host") };
+    let credentials = match (parsed.username(), parsed.password()) {
+        ("", None) => String::new(),
+        (user, password) => format!("{user}:{}@", password.unwrap_or_default()),
+    };
+    let port = parsed.port().map(|port| format!(":{port}")).unwrap_or_default();
+    Ok(format!("{}://{credentials}{host}{port}", parsed.scheme()))
 }
 
 /// RFC 9110 token characters — what a header name may contain.
@@ -148,7 +176,11 @@ fn is_metadata_host(url: &url::Url) -> bool {
 /// Sends the request. Blocking: callers run it off the main thread.
 pub fn fetch(request: &FetchRequest) -> Result<FetchResponse> {
     let checked = check(request)?;
-    let agent = crate::http::agent_builder().timeout(checked.timeout).redirects(MAX_REDIRECTS).build();
+    let mut builder = crate::http::agent_builder().timeout(checked.timeout).redirects(MAX_REDIRECTS);
+    if let Some(proxy) = &checked.proxy {
+        builder = builder.proxy(ureq::Proxy::new(proxy).map_err(|_| anyhow::anyhow!("that proxy address cannot be used"))?);
+    }
+    let agent = builder.build();
     let started = Instant::now();
     let mut call = agent.request_url(&checked.method, &checked.url);
     for (name, value) in &checked.headers {
@@ -230,6 +262,20 @@ mod tests {
         ] {
             assert!(check(&request(bad.clone())).is_err(), "accepted {bad}");
         }
+    }
+
+    #[test]
+    fn a_proxy_is_checked_like_the_url() {
+        let ok = check(&request(serde_json::json!({ "url": "https://example.com", "proxy": "http://127.0.0.1:8888" }))).unwrap();
+        assert_eq!(ok.proxy.as_deref(), Some("http://127.0.0.1:8888"));
+        // Credentials are kept, since that is how a proxy asks for them.
+        let creds = check_proxy("http://user:example_not_a_real_password@proxy.example:3128").unwrap();
+        assert!(creds.starts_with("http://user:"));
+        for bad in ["socks5://127.0.0.1:1080", "ftp://proxy.example", "127.0.0.1:8888", "http://", "http://proxy.example\r\nX: y"] {
+            assert!(check_proxy(bad).is_err(), "accepted {bad}");
+        }
+        // Nothing asked for, nothing used.
+        assert!(check(&request(serde_json::json!({ "url": "https://example.com" }))).unwrap().proxy.is_none());
     }
 
     #[test]

@@ -56,7 +56,10 @@ when you don't care.
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
-| `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
+| `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
+| `storage/get` | | `{ key }` | `{ key, value }` (`value` is null when unset) |
+| `storage/set` | | `{ key, value }` (null removes it) | `null` |
+| `storage/keys` | | `{}` | `[key]` |
 
 Agentty drops `ui/notify` calls that arrive faster than one per 700 ms (answering them normally), and
 stops a plugin that sends more than 240 messages a second. Context fields are limited by the
@@ -67,8 +70,16 @@ plugin's permissions (see the guide).
 them `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Upgrade` or `Expect`, and none
 carrying a line break; a request body up to 1 MB; 4 MB of the response (`truncated` says when more
 arrived); 3 redirects; a timeout of 15 s by default and 60 s at most; four requests in flight per
-plugin. Nothing of yours travels with the request — no cookie, no stored credential — only what the
-plugin puts in it. Each call is written to the plugin's log with the URL redacted.
+plugin. `proxy` is an `http://` or `https://` address (with `user:password@` when the proxy asks for
+it) the request goes through. Nothing of yours travels with the request — no cookie, no stored
+credential — only what the plugin puts in it. Each call is written to the plugin's log with the URL
+redacted.
+
+`storage/*` is what a plugin remembers between runs: one JSON document in its own folder
+(`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. Keys are
+lower-case letters, digits, `.`, `-` and `_`; at most 64 of them, and a megabyte in total. A plugin
+that runs as a process can write its own files instead; a WebAssembly plugin has no files, so this
+is how it keeps anything.
 
 Errors use these codes:
 
@@ -149,7 +160,9 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                   style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value? }
+input    { id, placeholder?, value?, multiline? }
+                                            multiline: pasted line breaks reach the plugin whole
+                                            as a `change` event; the field still shows one line
 list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }], empty? }
                                             item tone colors its icon (same values as badge)
 choice   { id, options: [{ value, label }], value? }

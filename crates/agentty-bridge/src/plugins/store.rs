@@ -19,6 +19,10 @@ pub fn plugins_dir() -> PathBuf {
 
 /// Private working folder of a plugin (`AGENTTY_PLUGIN_DATA`).
 pub fn plugin_data_dir(id: &str) -> PathBuf {
+    #[cfg(test)]
+    if let Some(root) = tests::ROOT.with(|r| r.borrow().clone()) {
+        return root.join("plugin-data").join(id);
+    }
     fsutil::data_dir().join("plugin-data").join(id)
 }
 
@@ -416,7 +420,7 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Every script of a built-in plugin's folder is embedded: one left out would make the
@@ -448,7 +452,7 @@ mod tests {
         pub static ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
     }
 
-    fn with_data_dir(test: impl FnOnce(&Path)) {
+    pub(crate) fn with_data_dir(test: impl FnOnce(&Path)) {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("agentty-plugins-test-{}-{n}", std::process::id()));

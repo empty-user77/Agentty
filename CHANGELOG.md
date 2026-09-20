@@ -17,7 +17,17 @@ All notable changes to this project are documented here. The format follows
   bottom (`status`). The activity bar scrolls once there are more items than fit.
 - `net.request`: a plugin may make HTTP requests to addresses it chooses. Agentty bounds the
   method, the headers, the body and response sizes, the redirects and the time, sends nothing of
-  yours with the request, and writes each call to the plugin's log with the URL redacted.
+  yours with the request, and writes each call to the plugin's log with the URL redacted. A request
+  can go through an HTTP proxy the plugin names.
+- Agent Rest Client, an HTTP client as a plugin: requests with headers, a body and authorization;
+  environments whose values fill in `{{placeholders}}` everywhere in a request; a collection of
+  saved requests; a proxy and a timeout; and the response with its status, time, size, headers and
+  pretty-printed JSON.
+- Plugins can keep things between runs (`storage/get`, `storage/set`, `storage/keys`): one
+  document in the plugin's own folder, up to 64 keys and a megabyte, in a file only you can read.
+  A plugin needs no permission for its own folder.
+- A panel's text field can take a multi-line paste whole (`"multiline": true`), for bodies and
+  other long text a plugin keeps itself.
 - The Plugins page is a list beside details: search, then the plugin's description, what it adds
   and where, its permissions in full sentences, where it came from, how it runs and its log.
 

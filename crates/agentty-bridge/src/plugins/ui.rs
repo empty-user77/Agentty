@@ -56,6 +56,11 @@ pub enum Node {
         /// Applied when it differs from the previous value the plugin sent.
         #[serde(default)]
         value: String,
+        /// Text pasted with line breaks reaches the plugin whole, as a `change` event, instead of
+        /// being flattened into the one line the field shows. For bodies and other long text a
+        /// plugin keeps itself.
+        #[serde(default)]
+        multiline: bool,
     },
     /// Rows with a title, optional subtitle and per-row buttons. Clicking a row sends `select`.
     List {
@@ -245,15 +250,25 @@ impl Node {
     }
 
     /// Every input's id and plugin-provided value, for syncing text fields.
-    pub fn inputs(&self, out: &mut Vec<(String, String, String)>) {
+    pub fn inputs(&self, out: &mut Vec<InputField>) {
         match self {
             Node::Column { children, .. } | Node::Row { children, .. } | Node::Section { children, .. } => {
                 children.iter().for_each(|c| c.inputs(out))
             }
-            Node::Input { id, placeholder, value } => out.push((id.clone(), placeholder.clone(), value.clone())),
+            Node::Input { id, placeholder, value, multiline } => {
+                out.push(InputField { id: id.clone(), placeholder: placeholder.clone(), value: value.clone(), multiline: *multiline })
+            }
             _ => {}
         }
     }
+}
+
+/// A text field of a panel, as the window needs it.
+pub struct InputField {
+    pub id: String,
+    pub placeholder: String,
+    pub value: String,
+    pub multiline: bool,
 }
 
 #[cfg(test)]
@@ -279,10 +294,25 @@ mod tests {
         .unwrap();
         let mut inputs = Vec::new();
         tree.inputs(&mut inputs);
-        assert_eq!(inputs, vec![("q".to_string(), "Search".to_string(), String::new())]);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!((inputs[0].id.as_str(), inputs[0].placeholder.as_str(), inputs[0].value.as_str()), ("q", "Search", ""));
+        assert!(!inputs[0].multiline, "a field is one line unless it says otherwise");
         let Node::Column { children, .. } = &tree else { panic!("not a column") };
         let Node::List { items, .. } = &children[2] else { panic!("not a list") };
         assert_eq!((items[0].tone, items[1].tone), (Tone::Neutral, Tone::Success));
+    }
+
+    #[test]
+    fn a_field_can_take_a_multi_line_paste() {
+        let tree = Node::from_value(json!({
+            "type": "column",
+            "children": [{ "type": "input", "id": "body", "multiline": true, "value": "{}" }]
+        }))
+        .unwrap();
+        let mut inputs = Vec::new();
+        tree.inputs(&mut inputs);
+        assert!(inputs[0].multiline);
+        assert_eq!(inputs[0].value, "{}");
     }
 
     #[test]

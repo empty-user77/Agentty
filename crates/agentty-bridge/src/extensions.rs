@@ -400,9 +400,11 @@ fn is_name(name: &str) -> bool {
 }
 
 /// Words separated by spaces, `;`, `,`, quotes and brackets; the separators stay as they are.
+///
+/// Also used for text that may carry a URL with a token in it (a plugin's network error, say).
 /// A word is masked for what it is, after `Bearer` / `Basic` / `Token`, or as the value of a name
 /// that says so with the quotes of JSON in between (`"apiKey": "…"`).
-fn mask_words(text: &str) -> String {
+pub fn mask_words(text: &str) -> String {
     #[derive(PartialEq)]
     enum Next {
         Anything,

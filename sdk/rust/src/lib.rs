@@ -176,6 +176,18 @@ impl Host {
         self.call("prompt/inject", params)
     }
 
+    /// Reads what the plugin kept under `key`; the answer arrives in [`Plugin::answer`] as
+    /// `{ key, value }`, with `value` null when nothing was stored.
+    pub fn storage_get(&self, key: &str) -> u64 {
+        self.call("storage/get", json!({ "key": key }))
+    }
+
+    /// Keeps `value` under `key` in the plugin's own folder. `Value::Null` removes it. Keys are
+    /// lower-case letters, digits, `.`, `-` and `_`.
+    pub fn storage_set(&self, key: &str, value: Value) {
+        self.notify("storage/set", json!({ "key": key, "value": value }));
+    }
+
     /// Any method of the protocol, answered in [`Plugin::answer`].
     pub fn call(&self, method: &str, params: Value) -> u64 {
         let mut next = self.next_id.borrow_mut();
@@ -249,6 +261,9 @@ pub struct FetchRequest {
     pub body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// `http://host:port` — the request goes through this proxy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
 }
 
 impl FetchRequest {
@@ -263,6 +278,18 @@ impl FetchRequest {
 
     pub fn body(mut self, body: impl Into<String>) -> Self {
         self.body = Some(body.into());
+        self
+    }
+
+    /// Sends the request through a proxy; an empty string means none.
+    pub fn proxy(mut self, proxy: impl Into<String>) -> Self {
+        let proxy = proxy.into();
+        self.proxy = (!proxy.trim().is_empty()).then_some(proxy);
+        self
+    }
+
+    pub fn timeout_ms(mut self, ms: u64) -> Self {
+        self.timeout_ms = Some(ms);
         self
     }
 }

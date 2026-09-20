@@ -7,6 +7,7 @@ name = "agent-rest-client"
 version = "0.1.0"
 dependencies = [
  "agentty-plugin",
+ "serde",
  "serde_json",
 ]
 

@@ -40,6 +40,12 @@ pub fn input(id: impl Into<String>, placeholder: impl Into<String>, value: impl 
     json!({ "type": "input", "id": id.into(), "placeholder": placeholder.into(), "value": value.into() })
 }
 
+/// A field whose pasted line breaks reach the plugin whole (a request body, a note). The field
+/// itself shows one line; show the text back with [`styled_text`] and `"code"`.
+pub fn input_multiline(id: impl Into<String>, placeholder: impl Into<String>, value: impl Into<String>) -> Value {
+    json!({ "type": "input", "id": id.into(), "placeholder": placeholder.into(), "value": value.into(), "multiline": true })
+}
+
 pub fn choice(id: impl Into<String>, options: &[(&str, &str)], value: impl Into<String>) -> Value {
     let options: Vec<Value> = options.iter().map(|(v, label)| json!({ "value": v, "label": label })).collect();
     json!({ "type": "choice", "id": id.into(), "options": options, "value": value.into() })
@@ -82,5 +88,6 @@ mod tests {
         assert_eq!(tree["children"][0]["children"][1]["id"], "go");
         assert_eq!(tree["children"][1]["type"], "divider");
         assert_eq!(choice("m", &[("GET", "GET")], "GET")["options"][0]["value"], "GET");
+        assert_eq!(input_multiline("body", "…", "")["multiline"], true);
     }
 }
