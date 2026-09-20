@@ -314,9 +314,7 @@ impl Workbench {
     pub(super) fn docked_widths(&self, cx: &gpui::App) -> (f32, f32) {
         let prefs = crate::settings::settings(cx);
         let sidebar = if self.sidebar_open { prefs.sidebar_width } else { 0. };
-        let plugin = self.plugin_panel.as_ref().map_or(0., |_| super::plugin_panel::PANEL_WIDTH);
-        let docker = if self.docker.open { super::docker_panel::PANEL_WIDTH } else { 0. };
-        let room = self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - plugin - docker;
+        let room = self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - self.side_panels_total(cx);
         docked_widths(room, self.browser.as_ref().map(|_| prefs.browser.width), self.files_panel.as_ref().map(|_| prefs.files_panel_width))
     }
 

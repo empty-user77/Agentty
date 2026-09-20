@@ -315,9 +315,13 @@ impl Workbench {
                 type_into(&pane, text, request.submit, false, cx);
                 pane
             }
-            PromptTarget::NewWorkspace | PromptTarget::NewTab => {
+            PromptTarget::NewWorkspace | PromptTarget::NewTab | PromptTarget::Split => {
                 let cwd = request.cwd.clone().filter(|p| p.is_dir()).unwrap_or_else(|| self.default_cwd(cx));
-                let target = if request.target == PromptTarget::NewTab { LaunchTarget::NewTab } else { LaunchTarget::NewWorkspace };
+                let target = match request.target {
+                    PromptTarget::NewTab => LaunchTarget::NewTab,
+                    PromptTarget::Split => LaunchTarget::SplitRight,
+                    _ => LaunchTarget::NewWorkspace,
+                };
                 self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, target, window, cx)?
             }
             PromptTarget::Workspace => {
@@ -363,6 +367,9 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Pane, String> {
+        // A new agent in a project another agent works in gets a working tree of its own, like one
+        // opened from the + menu.
+        let cwd = if kind.agent().is_some() { self.own_tree_now(kind, &cwd, cx).unwrap_or(cwd) } else { cwd };
         let (spec, later) = match (kind.agent(), submit) {
             // The agent starts with the prompt as its first message.
             (Some(agent), true) => {

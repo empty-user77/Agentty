@@ -17,7 +17,6 @@ use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, FontWeight, Sha
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub const PANEL_WIDTH: f32 = 340.;
 const REFRESH_EVERY: Duration = Duration::from_secs(4);
 const INSTALL_URL: &str = "https://docs.docker.com/get-started/get-docker/";
 
@@ -322,6 +321,7 @@ impl Workbench {
         if !self.docker.open {
             return None;
         }
+        let width = self.docker_panel_width(cx);
         let state = &self.docker;
         let overview = state.overview.as_ref();
         let project = state.root.as_ref().and_then(|r| r.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -380,13 +380,11 @@ impl Workbench {
         Some(
             div()
                 .id("docker-panel")
-                .w(px(PANEL_WIDTH))
+                .w(px(width))
                 .flex_shrink_0()
                 .h_full()
                 .flex()
                 .flex_col()
-                .border_l_1()
-                .border_color(hex(Chrome::BORDER))
                 .bg(hex(Chrome::PANEL))
                 .child(header)
                 .child(body)

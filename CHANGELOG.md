@@ -27,6 +27,13 @@ All notable changes to this project are documented here. The format follows
   editor" hands the file to VS Code, Cursor or the system's text editor (Settings → Project → File editor). Large,
   binary and non-UTF-8 files, and links to files outside the project, open read-only or with a notice. Project files
   are never run: formatter settings that are code are refused.
+- The Docker and plugin panels can be made wider or narrower by dragging their left edge; the width is kept.
+- Closing a tab or pane that worked in a working tree of its own offers "Also remove the working tree and its branch"
+  (off by default). Uncommitted changes keep the tree, and a branch with unmerged commits is kept.
+- "Send to…" (prompts from links and plugins) can add the session as a split pane in the current tab, and says what
+  an open workspace does with the prompt (typed into its waiting agent, or a new tab).
+- Agent sessions opened from links and plugins in a project where another agent works get a working tree of their own,
+  like sessions from the + menu.
 - Right-click a working tree in the files panel: show its files, open a terminal there, show it in the file manager,
   copy its path, remove it (with its branch when that is merged) or clean up a tree whose folder is gone.
 - Releases include a Windows installer (`Agentty-X.Y.Z-windows-x64-setup.exe`, also as a `.zip`) for Windows 10 1809
