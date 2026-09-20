@@ -17,6 +17,8 @@ use std::time::Duration;
 
 /// Longest single turn returned by `session/get`.
 const TURN_TEXT_LIMIT: usize = 20_000;
+/// Panes plugins may be told about at once.
+const MAX_WATCHED_PANES: usize = 32;
 
 fn status_id(pane: &Pane, cx: &gpui::App) -> &'static str {
     let view = pane.read(cx);
@@ -120,6 +122,63 @@ impl Workbench {
         })
     }
 
+    /// Remembers that `plugin` started `pane`, so `pane/status` reaches it as that pane works.
+    fn watch_pane_for(&mut self, pane: u64, plugin: &str, cx: &mut Context<Self>) {
+        // Only a plugin allowed to see agent status is told about one.
+        if !ContextScope::of(plugin, cx).places {
+            return;
+        }
+        // At most a handful: a plugin that opens sessions endlessly is not owed a list of them.
+        if self.plugin_panes.len() >= MAX_WATCHED_PANES {
+            return;
+        }
+        self.plugin_panes.insert(pane, (plugin.to_string(), ""));
+    }
+
+    /// Tells each plugin how the panes it started are getting on, when that changed. This is what
+    /// a step of an AgentOS waits for: the agent it set to work has finished, or is asking.
+    pub(super) fn broadcast_pane_status(&mut self, cx: &mut Context<Self>) {
+        if self.plugin_panes.is_empty() {
+            return;
+        }
+        let panes = self.all_panes();
+        let mut changed: Vec<(String, Value)> = Vec::new();
+        let mut gone: Vec<u64> = Vec::new();
+        for (pane_id, (plugin, last)) in self.plugin_panes.iter_mut() {
+            let Some(pane) = panes.iter().find(|pane| pane.read(cx).pane_id == *pane_id) else {
+                // The pane was closed: say so once, then forget it.
+                if *last != "closed" {
+                    changed.push((plugin.clone(), json!({ "paneId": pane_id, "status": "closed", "running": false })));
+                }
+                gone.push(*pane_id);
+                continue;
+            };
+            let status = status_id(pane, cx);
+            if status == *last {
+                continue;
+            }
+            *last = status;
+            let view = pane.read(cx);
+            changed.push((
+                plugin.clone(),
+                json!({
+                    "paneId": pane_id,
+                    "status": status,
+                    "running": view.is_running(),
+                    "agent": crate::brand::kind_id(view.agent_kind().unwrap_or(PaneKind::Shell)),
+                    "title": view.display_title(),
+                    "cwd": view.display_cwd(),
+                }),
+            ));
+        }
+        for pane in gone {
+            self.plugin_panes.remove(&pane);
+        }
+        for (plugin, params) in changed {
+            plugins::send_if_running(&plugin, "pane/status", params, cx);
+        }
+    }
+
     /// Sends the context to running plugins when it changed (focused pane, its status or folder).
     pub(super) fn broadcast_plugin_context(&mut self, window: &Window, cx: &mut Context<Self>) {
         let running = plugins::running_plugins(cx);
@@ -215,6 +274,10 @@ impl Workbench {
                         call.reply(Ok(json!({ "status": "asked" })), cx);
                     } else {
                         let result = self.deliver_prompt(request, window, cx);
+                        // The pane this plugin set to work: it hears how that pane gets on.
+                        if let Ok(pane) = &result {
+                            self.watch_pane_for(*pane, &call.plugin, cx);
+                        }
                         call.reply(
                             result.map(|pane| json!({ "status": "sent", "paneId": pane })).map_err(|e| (codes::INVALID_PARAMS, e)),
                             cx,

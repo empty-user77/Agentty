@@ -1,0 +1,17 @@
+{
+  "id": "blogger-agentos",
+  "name": "Blogger AgentOS",
+  "version": "0.1.0",
+  "publisher": "Agentty",
+  "description": "Writes a post in three steps — outline, draft, edit — by asking an agent you can watch, and checking what comes back before moving on.",
+  "icon": "pencil",
+  "runtime": "wasm",
+  "main": "blogger-agentos.wasm",
+  "apiVersion": 1,
+  "contributes": {
+    "commands": [{ "id": "blogger-agentos.open", "title": "Blogger AgentOS: open", "icon": "pencil" }],
+    "panel": { "title": "Blogger AgentOS", "icon": "pencil", "surface": "sidebar", "mode": "push" }
+  },
+  "permissions": ["prompt.inject", "session.read", "workspace.read"],
+  "keywords": ["agentos", "workflow", "writing", "rust", "wasm"]
+}

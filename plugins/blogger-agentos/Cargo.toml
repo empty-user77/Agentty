@@ -1,0 +1,24 @@
+[package]
+name = "blogger-agentos"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "The skeleton of an AgentOS: a plugin that runs work through Agentty's agents, step by step"
+
+# Built for wasm32-unknown-unknown, not with Agentty.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+agentty-plugin = { path = "../../sdk/rust" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

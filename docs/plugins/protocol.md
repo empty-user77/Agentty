@@ -32,6 +32,7 @@ with the same 16 MB line limit as stdout.
 | `ui/event` | notification | `{ element, event, value?, item?, action?, context }` |
 | `context/changed` | notification | `{ context }` |
 | `url/open` | notification | `{ path, query, url, context }` |
+| `pane/status` | notification | `{ paneId, status, running, agent, title, cwd }` — a pane this plugin started changed what it is doing (`workspace.read`) |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin (a command, the panel
@@ -51,6 +52,7 @@ when you don't care.
 | `context/get` | | `{}` | context |
 | `host/info` | | `{}` | `{ version, apiVersion, language }` |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
+| `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
@@ -74,6 +76,18 @@ plugin. `proxy` is an `http://` or `https://` address (with `user:password@` whe
 it) the request goes through. Nothing of yours travels with the request — no cookie, no stored
 credential — only what the plugin puts in it. Each call is written to the plugin's log with the URL
 redacted.
+
+`host/timer` is how a plugin waits: a request answered once the time has passed. 100 ms at the
+shortest, an hour at the longest, eight at a time. A module runs only while it is handling a
+message, so this is the whole of how it comes back to something later — answering it is all the
+plugin gets, which is why it is not a way to run in the background.
+
+`pane/status` is how a plugin hears that an agent it started has finished. A plugin learns a pane
+id from `prompt/inject` (`{ status: "sent", paneId }`); Agentty remembers which plugin started
+which pane and tells only that plugin, when that pane's status changes — `working`, `idle`,
+`finished`, `permission`, `question`, `interrupted`, `exited`, or `closed` once. It needs
+`workspace.read`, the permission that already means "see agent status". At most 32 panes are
+followed at a time. [AgentOS plugins](agentos.md) are built on this and `host/timer`.
 
 `storage/*` is what a plugin remembers between runs: one JSON document in its own folder
 (`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. Keys are

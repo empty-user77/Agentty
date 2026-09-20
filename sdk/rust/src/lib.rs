@@ -90,6 +90,11 @@ pub trait Plugin: 'static {
     fn link(&mut self, host: &Host, path: &str, query: &Value) {
         let _ = (host, path, query);
     }
+    /// A pane this plugin started changed what it is doing: `working`, `idle`, `finished`,
+    /// `permission`, `question`, `interrupted`, `exited` or `closed`. Needs `workspace.read`.
+    fn pane_status(&mut self, host: &Host, status: PaneStatus) {
+        let _ = (host, status);
+    }
     /// An answer to something the plugin asked Agentty for (`Host::fetch`, `Host::call`).
     fn answer(&mut self, host: &Host, id: u64, result: Result<Value, String>) {
         let _ = (host, id, result);
@@ -176,6 +181,13 @@ impl Host {
         self.call("prompt/inject", params)
     }
 
+    /// Waits. The answer arrives in [`Plugin::answer`] once `ms` have passed: a module runs only
+    /// while it is handling a message, so this is how it comes back to something later. 100 ms at
+    /// the shortest, an hour at the longest, eight waits at a time.
+    pub fn wait(&self, ms: u64) -> u64 {
+        self.call("host/timer", json!({ "ms": ms }))
+    }
+
     /// Reads what the plugin kept under `key`; the answer arrives in [`Plugin::answer`] as
     /// `{ key, value }`, with `value` null when nothing was stored.
     pub fn storage_get(&self, key: &str) -> u64 {
@@ -246,6 +258,36 @@ impl UiEvent {
 
     pub fn is_on(&self) -> bool {
         self.value.as_ref().and_then(Value::as_bool).unwrap_or(false)
+    }
+}
+
+/// How a pane this plugin started is getting on.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneStatus {
+    pub pane_id: u64,
+    /// `working`, `idle`, `finished`, `permission`, `question`, `interrupted`, `exited`, `closed`.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub running: bool,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub cwd: String,
+}
+
+impl PaneStatus {
+    /// Whether the agent has stopped working and is waiting for a person.
+    pub fn is_done(&self) -> bool {
+        matches!(self.status.as_str(), "finished" | "idle" | "exited" | "closed")
+    }
+
+    /// Whether the agent is asking for something and cannot go on alone.
+    pub fn needs_user(&self) -> bool {
+        matches!(self.status.as_str(), "permission" | "question")
     }
 }
 
@@ -391,6 +433,11 @@ impl Runner {
                 let query = params.get("query").cloned().unwrap_or(Value::Null);
                 self.plugin.link(&self.host, &path, &query);
             }
+            "pane/status" => {
+                if let Ok(status) = serde_json::from_value::<PaneStatus>(params.clone()) {
+                    self.plugin.pane_status(&self.host, status);
+                }
+            }
             "context/changed" => {
                 let context = self.host.context();
                 self.plugin.context(&self.host, &context);
@@ -470,6 +517,9 @@ mod tests {
         fn link(&mut self, _: &Host, path: &str, _: &Value) {
             Self::note(format!("link {path}"));
         }
+        fn pane_status(&mut self, _: &Host, status: PaneStatus) {
+            Self::note(format!("pane {} {}", status.pane_id, status.status));
+        }
     }
 
     fn runner() -> Runner {
@@ -484,11 +534,12 @@ mod tests {
         runner.handle(r#"{"jsonrpc":"2.0","method":"command/execute","params":{"command":"hello.say"}}"#);
         runner.handle(r#"{"jsonrpc":"2.0","method":"ui/event","params":{"element":"go","event":"change","value":"typed"}}"#);
         runner.handle(r#"{"jsonrpc":"2.0","method":"url/open","params":{"path":"open","query":{}}}"#);
+        runner.handle(r#"{"jsonrpc":"2.0","method":"pane/status","params":{"paneId":7,"status":"finished"}}"#);
         runner.handle(r#"{"jsonrpc":"2.0","id":7,"result":{"status":200}}"#);
         runner.handle(r#"{"jsonrpc":"2.0","id":8,"error":{"code":-32602,"message":"no"}}"#);
         assert_eq!(
             seen(),
-            ["init hello", "command hello.say", "event go change typed", "link open", "answer 7 ok", "answer 8 failed"]
+            ["init hello", "command hello.say", "event go change typed", "link open", "pane 7 finished", "answer 7 ok", "answer 8 failed"]
         );
         // The context that came with `initialize` is kept for the plugin to read.
         assert_eq!(runner.host.context()["language"], "ko");
@@ -510,6 +561,16 @@ mod tests {
         assert_eq!(host.call("net/fetch", Value::Null), 1);
         assert_eq!(host.call("net/fetch", Value::Null), 2);
         assert_eq!(host.fetch(FetchRequest::new("GET", "https://example.com")), 3);
+    }
+
+    #[test]
+    fn a_pane_says_when_it_is_done_or_stuck() {
+        let done: PaneStatus = serde_json::from_value(json!({ "paneId": 7, "status": "finished", "running": true })).unwrap();
+        assert!(done.is_done() && !done.needs_user());
+        let asking: PaneStatus = serde_json::from_value(json!({ "paneId": 7, "status": "permission" })).unwrap();
+        assert!(asking.needs_user() && !asking.is_done());
+        let working: PaneStatus = serde_json::from_value(json!({ "paneId": 7, "status": "working" })).unwrap();
+        assert!(!working.is_done() && !working.needs_user());
     }
 
     #[test]

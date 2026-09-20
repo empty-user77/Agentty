@@ -19,6 +19,7 @@ written in any language; the Node.js SDK makes it a few lines.
 - [Sessions and terminals](#sessions-and-terminals)
 - [Links from other apps](#links-from-other-apps)
 - [The marketplace](#the-marketplace)
+- [AgentOS plugins](agentos.md)
 - [Permissions and safety](#permissions-and-safety)
 - [Developing, debugging and sharing](#developing-debugging-and-sharing)
 - [Protocol for other languages](protocol.md)

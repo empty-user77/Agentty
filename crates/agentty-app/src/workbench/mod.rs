@@ -366,6 +366,9 @@ pub struct Workbench {
     plugin_mode_menu: bool,
     /// Plugin panels that have a window of their own, by plugin id.
     plugin_windows: HashMap<String, gpui::WindowHandle<plugin_window::PluginWindow>>,
+    /// Panes a plugin started, and the status each was last told about: how a plugin hears that
+    /// the agent it set to work has finished.
+    plugin_panes: HashMap<u64, (String, &'static str)>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
@@ -518,6 +521,7 @@ impl Workbench {
             plugin_panel: None,
             plugin_mode_menu: false,
             plugin_windows: HashMap::new(),
+            plugin_panes: HashMap::new(),
             plugin_inputs: HashMap::new(),
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
@@ -1547,6 +1551,7 @@ impl Render for Workbench {
         self.advance_tour(cx);
         self.prepare_plugins_page(window, cx);
         self.broadcast_plugin_context(window, cx);
+        self.broadcast_pane_status(cx);
         self.check_settings_toast(cx);
         // Name the window after what it shows, so several Agentty windows can be told apart in the
         // Dock menu and Mission Control.

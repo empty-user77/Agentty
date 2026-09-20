@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- A plugin can wait (`host/timer`) and can hear how the agents it started are getting on
+  (`pane/status`, with `workspace.read`) — what a plugin needs to walk a piece of work through
+  several agent sessions. `docs/plugins/agentos.md` describes that shape, and
+  `plugins/blogger-agentos` is a skeleton of it: outline, draft and edit, each one asked of an
+  agent you can watch and checked before the next one is offered.
 - Plugins can be written as compiled programs: a Rust crate built for WebAssembly, shipped as one
   `.wasm` file that works on macOS, Windows and Linux. Agentty runs the module itself and hands it
   three functions — send a message, write a log line, read the clock — so such a plugin has no

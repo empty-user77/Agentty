@@ -28,6 +28,10 @@ const NOTIFY_INTERVAL: Duration = Duration::from_millis(700);
 /// `net/fetch` calls one plugin may have in flight. A request holds a background thread until it
 /// answers or times out, so a plugin cannot open as many as it likes.
 const MAX_CONCURRENT_FETCHES: u32 = 4;
+/// `host/timer` waits one plugin may have running, and how long one may be.
+const MAX_TIMERS: u32 = 8;
+const MIN_TIMER: Duration = Duration::from_millis(100);
+const MAX_TIMER: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunState {
@@ -57,6 +61,8 @@ pub struct Runtime {
     log_bytes: usize,
     /// `net/fetch` calls this plugin has in flight.
     fetches: u32,
+    /// `host/timer` waits this plugin is in.
+    timers: u32,
 }
 
 impl Runtime {
@@ -74,6 +80,7 @@ impl Runtime {
             notified_at: None,
             log_bytes: 0,
             fetches: 0,
+            timers: 0,
         }
     }
 
@@ -494,6 +501,7 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             cx,
         ),
         "net/fetch" => fetch(plugin_id, request_id, params, cx),
+        "host/timer" => timer(plugin_id, request_id, params, cx),
         // The plugin's own folder: what it keeps between runs. A wasm plugin has no files of its
         // own, so without this it forgets everything each time it starts.
         "storage/get" | "storage/set" | "storage/keys" => {
@@ -549,6 +557,46 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             }
         }
     }
+}
+
+/// `host/timer`: a request answered once the time has passed. A module runs only while it is
+/// handling a message, so this is the whole of how it waits — and answering it is all the plugin
+/// gets, which is why it is not a way to run in the background.
+fn timer(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else {
+        if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
+            runtime.log("host/timer needs a request id to be answered");
+        }
+        return;
+    };
+    let wait = Duration::from_millis(params.get("ms").and_then(Value::as_u64).unwrap_or(0)).clamp(MIN_TIMER, MAX_TIMER);
+    let generation = host(cx).runtimes.get(&id).map_or(0, |runtime| runtime.generation);
+    let accepted = match host_mut(cx).runtimes.get_mut(&id) {
+        Some(runtime) if runtime.timers < MAX_TIMERS => {
+            runtime.timers += 1;
+            true
+        }
+        Some(_) => false,
+        None => return,
+    };
+    if !accepted {
+        return respond(&id, &request_id, Err((codes::UNAVAILABLE, format!("more than {MAX_TIMERS} waits at once"))), cx);
+    }
+    cx.spawn(async move |cx| {
+        let started = Instant::now();
+        cx.background_executor().timer(wait).await;
+        let _ = cx.update(|cx| {
+            let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
+            runtime.timers = runtime.timers.saturating_sub(1);
+            // The plugin was restarted while it waited: this answer belongs to the one that is gone.
+            if runtime.generation != generation {
+                return;
+            }
+            respond(&id, &request_id, Ok(json!({ "elapsedMs": started.elapsed().as_millis() as u64 })), cx);
+        });
+    })
+    .detach();
 }
 
 /// `net/fetch`: the plugin's own HTTP request, made on a background thread and answered when it

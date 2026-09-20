@@ -23,6 +23,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("ui/setBadge", None),
     ("host/info", None),
     ("host/openUrl", None),
+    // A module has no clock and no loop of its own: this is how it waits.
+    ("host/timer", None),
     // Reveals a file in Finder, and tells the plugin whether a path exists: that is the user's
     // folders, so it needs the same permission as reading them.
     ("host/revealPath", Some("workspace.read")),
