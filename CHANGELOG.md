@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-09-20
+
 ### Added
 - Notifications: when an agent asks for permission or an answer, Agentty notifies you even while it is in front (unless
   you are looking at that pane). Settings → Notifications can also send these to Slack or Discord (webhook) and
@@ -63,6 +65,10 @@ All notable changes to this project are documented here. The format follows
 - Session worktrees of a project you trust in Claude Code are trusted too, so their sessions start without the folder
   question.
 - Prompts from links and plugins that arrive while one is being shown wait for their turn instead of replacing it.
+- Help menu: the guide at agentty.run/docs, the quick start, pages for agent status, sessions, Git, databases, Docker
+  and plugins, keyboard shortcuts, settings, troubleshooting and the FAQ, and a link for support. Each opens in the
+  language Agentty is showing (English, Korean, Japanese or Chinese; other languages open the English page).
+- Settings → About links to the guide, the privacy policy, the terms and the license.
 
 ### Changed
 - The menu bar item tells finished agents apart from ones that need you: a spinner while agents work, `● N` for agents
@@ -72,12 +78,15 @@ All notable changes to this project are documented here. The format follows
 - New session working trees start from the project's default branch instead of the branch the project folder has
   checked out.
 - The first-run tour waits until the environment is ready (nothing important missing in the System check).
+- The first-run tour is five steps instead of six.
 
 ### Fixed
 - Recheck in the System check finds tools installed while Agentty runs, including ones whose installer didn't add
   them to `PATH` (Claude Code in `~/.local/bin`): Windows reads the registry's `PATH` correctly, and macOS and Linux
   ask a fresh login shell.
 - The System check's description wraps instead of pushing the Recheck button off the page.
+- Installing a tool from the System check keeps the page open, so the other missing tools can be started right away.
+  While an install runs, its button leads to the tab it runs in instead of starting it again.
 
 ## [0.1.11] - 2026-09-19
 
