@@ -81,7 +81,7 @@ impl OpenGuide {
 
 /// The guide's address for a language code and a page. The guide is written in the four languages
 /// Agentty speaks; English is served without a prefix, and every other language reads it.
-fn guide_url(language: &str, page: &str) -> String {
+pub fn guide_url(language: &str, page: &str) -> String {
     let website = workbench::update::WEBSITE;
     let prefix = match language {
         "ko" | "ja" | "zh" => format!("/{language}"),
