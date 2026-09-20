@@ -53,17 +53,6 @@ jobs:
         run: cargo test --workspace
       - name: Build (release)
         run: cargo build --release -p agentty-app
-      # The plugins written in Rust are their own crates, outside the workspace, built for
-      # WebAssembly. `cargo test --workspace` never touches them, so a change to the SDK that
-      # breaks a plugin would go unnoticed. (The module Agentty ships is committed; a test in
-      # agentty-app checks that it loads and speaks the ABI.)
-      - name: Plugins written in Rust (wasm32)
-        run: |
-          rustup target add wasm32-unknown-unknown
-          (cd sdk/rust && cargo test)
-          for plugin in plugins/hello-rust plugins/agent-rest-client; do
-            (cd "$plugin" && cargo test && cargo build --release --target wasm32-unknown-unknown)
-          done
 
   # Windows can't be built on the Mac (GPUI compiles its shaders with the Windows SDK's fxc.exe).
   # The runner needs rustup, git and Visual Studio Build Tools (C++ workload + Windows SDK). The zip

@@ -10,8 +10,9 @@ All notable changes to this project are documented here. The format follows
   `.wasm` file that works on macOS, Windows and Linux. Agentty runs the module itself and hands it
   three functions — send a message, write a log line, read the clock — so such a plugin has no
   files, no processes and no network of its own, whatever its code says, and everything it asks for
-  goes through the permissions in its manifest. A Rust SDK (`sdk/rust`) and two examples
-  (`plugins/hello-rust`, `plugins/agent-rest-client`) are in the repository.
+  goes through the permissions in its manifest. The Rust SDK and two worked examples live in the
+  [marketplace repository](https://github.com/empty-user77/Agentty-Marketplace), which is where
+  plugins are published.
 - A plugin panel opens the way it suits: docked beside the terminals (as before), floating over the
   window, in a window of its own that can be moved and resized, or filling the whole area. The
   plugin says which it prefers; the layout button in the panel's header changes it and remembers.
@@ -24,14 +25,15 @@ All notable changes to this project are documented here. The format follows
   method, the headers, the body and response sizes, the redirects and the time, sends nothing of
   yours with the request, and writes each call to the plugin's log with the URL redacted. A request
   can go through an HTTP proxy the plugin names.
+- Agentty bundles no plugin modules: the ones it used to carry are published like everyone else's,
+  with their source and their checksum where anyone can read them.
 - A marketplace: **Plugins → Marketplace** lists what
   [Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers, and installing
   one downloads its module and checks it against the checksum in the listing — a module that does
   not match is refused before anything is written. Only WebAssembly plugins are offered there, so
   what you install from a list reaches nothing but the permissions you saw before installing it.
   Plugins you keep to yourself are still installed from a folder or a Git repository.
-- Agent Rest Client ships with Agentty and installs from the Plugins page in one click. An HTTP
-  client as a plugin: requests with headers, a body and authorization;
+- Agent Rest Client, installed from the marketplace in one click. An HTTP client as a plugin: requests with headers, a body and authorization;
   environments whose values fill in `{{placeholders}}` everywhere in a request; a collection of
   saved requests; a proxy and a timeout; and the response with its status, time, size, headers and
   pretty-printed JSON.

@@ -353,29 +353,6 @@ mod tests {
         assert!(error.contains("could not be loaded"), "{error}");
     }
 
-    /// Every module shipped inside Agentty loads on this host, exports the two functions and
-    /// imports nothing but `agentty`'s three. A module built from stale source, or one that grew
-    /// an import through a dependency, fails here rather than on someone's machine.
-    #[test]
-    fn the_modules_agentty_ships_speak_the_protocol() {
-        let mut checked = 0;
-        for plugin in agentty_bridge::plugins::store::BUILTIN {
-            let manifest = plugin.manifest();
-            if manifest.runtime != agentty_bridge::plugins::manifest::Runtime::Wasm {
-                continue;
-            }
-            let (_, bytes) = plugin
-                .binary
-                .iter()
-                .find(|(name, _)| *name == manifest.main)
-                .unwrap_or_else(|| panic!("{}: the module named by the manifest is not embedded", manifest.id));
-            Runner::from_bytes(bytes, Arc::new(|_| {}))
-                .unwrap_or_else(|err| panic!("{}: the module Agentty ships does not load: {err}", manifest.id));
-            checked += 1;
-        }
-        assert!(checked > 0, "no WebAssembly plugin is shipped; this test would pass on anything");
-    }
-
     #[test]
     fn rubbish_is_not_a_module() {
         let dir = std::env::temp_dir().join(format!("agentty-wasm-bad-{}", std::process::id()));
