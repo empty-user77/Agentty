@@ -59,7 +59,7 @@ impl Workbench {
             tree.inputs(&mut fields);
         }
         self.plugin_inputs.retain(|(owner, id), _| *owner == plugin && fields.iter().any(|field| field.id == *id));
-        for agentty_bridge::plugins::ui::InputField { id, placeholder, value, multiline } in fields {
+        for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows } in fields {
             let key = (plugin.clone(), id.clone());
             if let Some(existing) = self.plugin_inputs.get_mut(&key) {
                 if existing.applied != value {
@@ -76,12 +76,8 @@ impl Workbench {
             }
             // Built empty and filled, so the caret sits at the end instead of selecting everything.
             let input = cx.new(|cx| {
-                let mut input = TextInput::new("", placeholder, window, cx);
-                if multiline {
-                    // A pasted body keeps its lines: the field shows one line, the plugin gets
-                    // the text whole and decides what to show.
-                    input = input.keep_pasted_lines();
-                }
+                // More than one row is a text area: Enter adds a line and a paste keeps its own.
+                let mut input = TextInput::new("", placeholder, window, cx).multiline(rows);
                 input.set_text(value.clone(), cx);
                 input
             });
@@ -127,18 +123,6 @@ impl Workbench {
                             });
                         })
                         .detach();
-                    }
-                    // Text pasted with line breaks: the field keeps the one line it showed, and
-                    // the plugin is handed everything that was pasted.
-                    TextInputEvent::PastedLines(pasted) => {
-                        let event = UiEvent {
-                            element: element.clone(),
-                            event: "change".into(),
-                            value: Some(pasted.clone().into()),
-                            item: None,
-                            action: None,
-                        };
-                        this.send_plugin_event(&owner, event, cx);
                     }
                     _ => {}
                 }

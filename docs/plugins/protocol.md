@@ -160,9 +160,9 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                   style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, multiline? }
-                                            multiline: pasted line breaks reach the plugin whole
-                                            as a `change` event; the field still shows one line
+input    { id, placeholder?, value?, rows? }
+                                            rows > 1: a text area that many lines tall (max 24);
+                                            Enter adds a line and a paste keeps its line breaks
 list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }], empty? }
                                             item tone colors its icon (same values as badge)
 choice   { id, options: [{ value, label }], value? }

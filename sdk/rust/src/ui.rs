@@ -40,10 +40,10 @@ pub fn input(id: impl Into<String>, placeholder: impl Into<String>, value: impl 
     json!({ "type": "input", "id": id.into(), "placeholder": placeholder.into(), "value": value.into() })
 }
 
-/// A field whose pasted line breaks reach the plugin whole (a request body, a note). The field
-/// itself shows one line; show the text back with [`styled_text`] and `"code"`.
-pub fn input_multiline(id: impl Into<String>, placeholder: impl Into<String>, value: impl Into<String>) -> Value {
-    json!({ "type": "input", "id": id.into(), "placeholder": placeholder.into(), "value": value.into(), "multiline": true })
+/// A field of several lines (a request body, a note): Enter adds a line and a paste keeps its
+/// own. At most 24 rows.
+pub fn textarea(id: impl Into<String>, placeholder: impl Into<String>, value: impl Into<String>, rows: usize) -> Value {
+    json!({ "type": "input", "id": id.into(), "placeholder": placeholder.into(), "value": value.into(), "rows": rows.max(2) })
 }
 
 pub fn choice(id: impl Into<String>, options: &[(&str, &str)], value: impl Into<String>) -> Value {
@@ -88,6 +88,6 @@ mod tests {
         assert_eq!(tree["children"][0]["children"][1]["id"], "go");
         assert_eq!(tree["children"][1]["type"], "divider");
         assert_eq!(choice("m", &[("GET", "GET")], "GET")["options"][0]["value"], "GET");
-        assert_eq!(input_multiline("body", "…", "")["multiline"], true);
+        assert_eq!(textarea("body", "…", "", 10)["rows"], 10);
     }
 }

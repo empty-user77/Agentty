@@ -201,10 +201,12 @@ cargo build --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/hello.wasm hello.wasm   # next to agentty-plugin.json
 ```
 
-Then **Plugins → Install from Folder…** and pick the folder. Two examples are in the repository:
+Then **Plugins → Install from Folder…** and pick the folder. Two are in the repository:
 `plugins/hello-rust` (a panel and a counter, no permissions at all) and `plugins/agent-rest-client`
-(an HTTP client, `net.request`). The wire format and the module's ABI are in
-[the protocol](protocol.md#webassembly-plugins).
+(an HTTP client with environments, a collection and a proxy, `net.request`). The second ships
+inside Agentty — its module is committed and installs from the Plugins page in one click — so its
+folder is also the worked example of a plugin that is more than a demo. The wire format and the
+module's ABI are in [the protocol](protocol.md#webassembly-plugins).
 
 ## Panel UI
 

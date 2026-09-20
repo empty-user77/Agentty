@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub const MAX_NODES: usize = 2_000;
 pub const MAX_DEPTH: usize = 12;
 pub const MAX_TEXT: usize = 20_000;
+/// Lines a text area may be tall.
+pub const MAX_ROWS: usize = 24;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -56,11 +58,10 @@ pub enum Node {
         /// Applied when it differs from the previous value the plugin sent.
         #[serde(default)]
         value: String,
-        /// Text pasted with line breaks reaches the plugin whole, as a `change` event, instead of
-        /// being flattened into the one line the field shows. For bodies and other long text a
-        /// plugin keeps itself.
+        /// Lines the field shows. More than one makes it a text area: Enter adds a line, a paste
+        /// keeps its line breaks, and the field is that many lines tall (at most 24).
         #[serde(default)]
-        multiline: bool,
+        rows: usize,
     },
     /// Rows with a title, optional subtitle and per-row buttons. Clicking a row sends `select`.
     List {
@@ -255,8 +256,8 @@ impl Node {
             Node::Column { children, .. } | Node::Row { children, .. } | Node::Section { children, .. } => {
                 children.iter().for_each(|c| c.inputs(out))
             }
-            Node::Input { id, placeholder, value, multiline } => {
-                out.push(InputField { id: id.clone(), placeholder: placeholder.clone(), value: value.clone(), multiline: *multiline })
+            Node::Input { id, placeholder, value, rows } => {
+                out.push(InputField { id: id.clone(), placeholder: placeholder.clone(), value: value.clone(), rows: (*rows).min(MAX_ROWS) })
             }
             _ => {}
         }
@@ -268,7 +269,8 @@ pub struct InputField {
     pub id: String,
     pub placeholder: String,
     pub value: String,
-    pub multiline: bool,
+    /// More than one: a text area of that many lines.
+    pub rows: usize,
 }
 
 #[cfg(test)]
@@ -296,23 +298,28 @@ mod tests {
         tree.inputs(&mut inputs);
         assert_eq!(inputs.len(), 1);
         assert_eq!((inputs[0].id.as_str(), inputs[0].placeholder.as_str(), inputs[0].value.as_str()), ("q", "Search", ""));
-        assert!(!inputs[0].multiline, "a field is one line unless it says otherwise");
+        assert_eq!(inputs[0].rows, 0, "a field is one line unless it says otherwise");
         let Node::Column { children, .. } = &tree else { panic!("not a column") };
         let Node::List { items, .. } = &children[2] else { panic!("not a list") };
         assert_eq!((items[0].tone, items[1].tone), (Tone::Neutral, Tone::Success));
     }
 
     #[test]
-    fn a_field_can_take_a_multi_line_paste() {
+    fn a_field_can_be_a_text_area() {
         let tree = Node::from_value(json!({
             "type": "column",
-            "children": [{ "type": "input", "id": "body", "multiline": true, "value": "{}" }]
+            "children": [{ "type": "input", "id": "body", "rows": 10, "value": "{\n  \"a\": 1\n}" }]
         }))
         .unwrap();
         let mut inputs = Vec::new();
         tree.inputs(&mut inputs);
-        assert!(inputs[0].multiline);
-        assert_eq!(inputs[0].value, "{}");
+        assert_eq!(inputs[0].rows, 10);
+        assert!(inputs[0].value.contains('\n'));
+        // However tall a plugin asks for, the panel is not filled with one field.
+        let tall = Node::from_value(json!({ "type": "input", "id": "b", "rows": 400 })).unwrap();
+        let mut inputs = Vec::new();
+        tall.inputs(&mut inputs);
+        assert_eq!(inputs[0].rows, MAX_ROWS);
     }
 
     #[test]

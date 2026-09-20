@@ -10,21 +10,26 @@ the method, the headers, the sizes, the redirects and the time, adds nothing of 
 request, and writes each call to the plugin's log with the URL redacted. What you save is kept in
 this plugin's own folder under `plugin-data`, in a file only you can read.
 
-## Build and install
+## Installing it
+
+It ships inside Agentty: **Plugins → Agent Rest Client → Install**. Its icon then appears in the
+activity bar on the left.
+
+## Building it
 
 ```sh
 ./build.sh
 ```
 
-Then in Agentty: **Plugins → Install from Folder…** and pick this folder. Its icon appears in the
-activity bar on the left.
+That writes `agent-rest-client.wasm` beside the manifest — the same file Agentty embeds, which is
+committed so the plugin installs in one click. Rebuild it whenever the source here changes, and
+install this folder with **Plugins → Install from Folder…** to try a build before committing it.
 
 ## The four views
 
 **Request** — method, URL (Enter sends it), Save with a name, headers as rows, authorization
-(bearer token, basic, or an API key header), a body for `POST` / `PUT` / `PATCH`, and the response.
-Paste a JSON body and its line breaks are kept: the field shows a summary, the body itself is shown
-below it, and **Format JSON** tidies it.
+(bearer token, basic, or an API key header), a body for `POST` / `PUT` / `PATCH` in a field of ten
+lines, and the response. **Format JSON** tidies the body.
 
 **Environments** — name an environment, give it values, and use `{{name}}` anywhere in a request:
 the URL, a header, the body, a token, even the proxy. What has no value is left as it is and
@@ -38,5 +43,4 @@ timeout in seconds (60 at most).
 ## What is not here
 
 Postman's tests and scripting: this plugin runs no JavaScript. Cookies are not kept between
-requests, and a request body is pasted rather than typed over many lines — Agentty's panel fields
-are single-line.
+requests, and there is no form or file upload — a body is text.

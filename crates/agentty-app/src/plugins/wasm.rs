@@ -152,13 +152,20 @@ impl Runner {
             return Err(format!("the module is larger than {} MB", MAX_MODULE_BYTES / 1024 / 1024));
         }
         let bytes = std::fs::read(entry).map_err(|e| format!("could not read the module: {e}"))?;
+        Self::from_bytes(&bytes, events)
+    }
+
+    fn from_bytes(bytes: &[u8], events: Arc<dyn Fn(ProcessEvent) + Send + Sync>) -> Result<Self, String> {
+        if bytes.len() as u64 > MAX_MODULE_BYTES {
+            return Err(format!("the module is larger than {} MB", MAX_MODULE_BYTES / 1024 / 1024));
+        }
         let mut config = wasmi::Config::default();
         // Fuel is what ends a plugin that never returns; without it a loop in the guest would hold
         // its thread for good.
         config.consume_fuel(true);
         let engine = Engine::new(&config);
         // Validating: a module that is not well-formed is refused before anything of it runs.
-        let module = Module::new(&engine, &bytes[..]).map_err(|e| format!("not a valid WebAssembly module: {e}"))?;
+        let module = Module::new(&engine, bytes).map_err(|e| format!("not a valid WebAssembly module: {e}"))?;
         let limits = StoreLimitsBuilder::new().memory_size(MAX_MEMORY_BYTES).table_elements(MAX_TABLE_ELEMENTS).instances(1).build();
         let state = HostState { events: events.clone(), memory: None, limits, sent: 0 };
         let mut store = Store::new(&engine, state);
@@ -344,6 +351,29 @@ mod tests {
         let error = Runner::load(&path, Arc::new(|_| {})).err().expect("an unknown import is refused");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(error.contains("could not be loaded"), "{error}");
+    }
+
+    /// Every module shipped inside Agentty loads on this host, exports the two functions and
+    /// imports nothing but `agentty`'s three. A module built from stale source, or one that grew
+    /// an import through a dependency, fails here rather than on someone's machine.
+    #[test]
+    fn the_modules_agentty_ships_speak_the_protocol() {
+        let mut checked = 0;
+        for plugin in agentty_bridge::plugins::store::BUILTIN {
+            let manifest = plugin.manifest();
+            if manifest.runtime != agentty_bridge::plugins::manifest::Runtime::Wasm {
+                continue;
+            }
+            let (_, bytes) = plugin
+                .binary
+                .iter()
+                .find(|(name, _)| *name == manifest.main)
+                .unwrap_or_else(|| panic!("{}: the module named by the manifest is not embedded", manifest.id));
+            Runner::from_bytes(bytes, Arc::new(|_| {}))
+                .unwrap_or_else(|err| panic!("{}: the module Agentty ships does not load: {err}", manifest.id));
+            checked += 1;
+        }
+        assert!(checked > 0, "no WebAssembly plugin is shipped; this test would pass on anything");
     }
 
     #[test]

@@ -184,20 +184,10 @@ fn cut(text: &str, limit: usize) -> String {
     }
 }
 
-/// What the one-line body field shows. A body of one line is edited in the field; a body with
-/// line breaks cannot be, so the field is left empty to type or paste a new one into, and the body
-/// itself is drawn below it.
-fn body_field(body: &str) -> String {
-    match body.lines().count() > 1 {
-        true => String::new(),
-        false => body.to_string(),
-    }
-}
-
-/// The line about a body the field cannot show.
+/// The line under the body field: how much is in it.
 fn body_note(body: &str) -> Option<String> {
     let lines = body.lines().count();
-    (lines > 1).then(|| format!("{lines} lines, {} characters — typing or pasting replaces it", body.chars().count()))
+    (!body.is_empty()).then(|| format!("{lines} lines, {} characters", body.chars().count()))
 }
 
 // ----------------------------------------------------------------------------- the plugin
@@ -379,14 +369,11 @@ impl AgentRestClient {
 
         if self.request.has_body() {
             let mut body = vec![
-                ui::input_multiline("body", "Body — paste JSON here, line breaks are kept", body_field(&self.request.body)),
+                ui::textarea("body", "{\n  \"name\": \"value\"\n}", self.request.body.clone(), 10),
                 ui::row(vec![ui::button("body.format", "Format JSON"), ui::button("body.clear", "Clear")]),
             ];
             if let Some(note) = body_note(&self.request.body) {
                 body.push(ui::styled_text(note, "muted"));
-            }
-            if !self.request.body.trim().is_empty() {
-                body.push(ui::styled_text(cut(&self.request.body, BODY_SHOWN), "code"));
             }
             children.push(ui::section("Body", body));
         }
@@ -827,14 +814,9 @@ mod tests {
     }
 
     #[test]
-    fn the_body_field_holds_one_line_and_says_so_for_more() {
-        // One line is edited in the field itself.
-        assert_eq!(body_field(""), "");
-        assert_eq!(body_field("{\"a\":1}"), "{\"a\":1}");
-        assert!(body_note("{\"a\":1}").is_none());
-        // More than one line cannot be: the field stays empty so what is typed replaces the body
-        // instead of being appended to a summary of it.
-        assert_eq!(body_field("{\n  \"a\": 1\n}"), "");
+    fn the_body_says_how_much_is_in_it() {
+        assert!(body_note("").is_none());
+        assert!(body_note("{\"a\":1}").unwrap().starts_with("1 lines"));
         assert!(body_note("{\n  \"a\": 1\n}").unwrap().starts_with("3 lines"));
         assert_eq!(pretty_json("{\"a\":1}").as_deref(), Some("{\n  \"a\": 1\n}"));
         assert!(pretty_json("not json").is_none());
