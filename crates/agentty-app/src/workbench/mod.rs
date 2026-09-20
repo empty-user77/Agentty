@@ -1662,6 +1662,17 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenExtensions, _, cx| this.open_page(Page::Extensions, cx)))
             .on_action(cx.listener(|this, _: &OpenGit, _, cx| this.open_page(Page::Git, cx)))
             .on_action(cx.listener(|this, _: &OpenPlugins, _, cx| this.open_page(Page::Plugins, cx)))
+            // The Edit menu's ⌘C / ⌘V / ⌘A land here when no terminal is focused; a page in the
+            // in-app browser still needs them, since a menu key equivalent never reaches it.
+            .on_action(cx.listener(|_, _: &crate::terminal::Copy, _, _| {
+                crate::webview::perform_in_page(crate::webview::EditCommand::Copy);
+            }))
+            .on_action(cx.listener(|_, _: &crate::terminal::Paste, _, _| {
+                crate::webview::perform_in_page(crate::webview::EditCommand::Paste);
+            }))
+            .on_action(cx.listener(|_, _: &crate::terminal::SelectAll, _, _| {
+                crate::webview::perform_in_page(crate::webview::EditCommand::SelectAll);
+            }))
             .on_action(cx.listener(|this, _: &ToggleBrowser, window, cx| this.toggle_browser(window, cx)))
             // ⌘⇧R inside the page is caught by the web view itself; here it works from the terminals too.
             .on_action(cx.listener(|this, _: &HardReloadBrowser, _, cx| {

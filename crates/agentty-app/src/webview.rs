@@ -162,6 +162,46 @@ static LOAD_ERRORS: Mutex<Option<HashMap<usize, LoadError>>> = Mutex::new(None);
 static POPUPS: Mutex<Option<HashMap<usize, Vec<String>>>> = Mutex::new(None);
 /// Browser shortcuts pressed inside a web view, oldest first, with the view they came from.
 static KEYS: Mutex<Vec<(usize, BrowserKey)>> = Mutex::new(Vec::new());
+/// Every web view that exists right now, so [`perform_in_page`] can find the focused page.
+static VIEWS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// A standard editing command, as the Edit menu names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditCommand {
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+/// Runs an editing command on the in-app browser page that has the keyboard, and says whether one
+/// did. The Edit menu's ⌘C carries a GPUI action, and a menu key equivalent never reaches a native
+/// view, so without this a selection on a page could not be copied at all.
+pub fn perform_in_page(command: EditCommand) -> bool {
+    let views = VIEWS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if crate::debug::enabled() {
+        eprintln!("browser-edit: {command:?} views={}", views.len());
+    }
+    for view in views {
+        let view = view as Id;
+        unsafe {
+            let Some(responder) = keyboard_responder(&*view) else { continue };
+            let selector = match command {
+                // The Edit menu wires ⌘X to the same action as ⌘C, so a page's cut copies.
+                EditCommand::Copy => sel!(copy:),
+                EditCommand::Paste => sel!(paste:),
+                EditCommand::SelectAll => sel!(selectAll:),
+            };
+            // Whether or not there was anything to copy, the page had the keyboard: the terminal
+            // behind it must not act on the same ⌘C.
+            let handled: BOOL = msg_send![responder, tryToPerform: selector with: std::ptr::null_mut::<Object>()];
+            if crate::debug::enabled() {
+                eprintln!("browser-edit: {command:?} handled={}", handled == YES);
+            }
+            return true;
+        }
+    }
+    false
+}
 
 fn set_load_error(view: Id, error: Option<LoadError>) {
     let mut errors = LOAD_ERRORS.lock().unwrap_or_else(|e| e.into_inner());
@@ -266,29 +306,34 @@ fn delegate_class() -> &'static Class {
     Class::get("AgenttyWebNavigation").expect("AgenttyWebNavigation class")
 }
 
-/// Whether the keyboard is inside this web view (the first responder is it or one of its subviews).
-unsafe fn holds_keyboard(view: &Object) -> bool {
+/// The first responder, when the keyboard is inside this web view (it or one of its subviews).
+unsafe fn keyboard_responder(view: &Object) -> Option<Id> {
     let window: Id = msg_send![view, window];
     if window.is_null() {
-        return false;
+        return None;
     }
     let responder: Id = msg_send![window, firstResponder];
     if responder.is_null() {
-        return false;
+        return None;
     }
     let is_view: BOOL = msg_send![responder, isKindOfClass: class!(NSView)];
     if is_view != YES {
-        return false;
+        return None;
     }
     let target = view as *const Object as Id;
     let mut current = responder;
     while !current.is_null() {
         if current == target {
-            return true;
+            return Some(responder);
         }
         current = msg_send![current, superview];
     }
-    false
+    None
+}
+
+/// Whether the keyboard is inside this web view.
+unsafe fn holds_keyboard(view: &Object) -> bool {
+    keyboard_responder(view).is_some()
 }
 
 /// Browser shortcuts (reload, hard reload, new/close tab, back, forward, address bar). WebKit
@@ -302,10 +347,34 @@ extern "C" fn perform_key_equivalent(this: &Object, _: Sel, event: Id) -> BOOL {
     const ALTERNATE: u64 = 1 << 19;
     unsafe {
         let flags: u64 = msg_send![event, modifierFlags];
-        if flags & COMMAND != 0 && flags & (CONTROL | ALTERNATE) == 0 && holds_keyboard(this) {
+        let responder = if flags & COMMAND != 0 && flags & (CONTROL | ALTERNATE) == 0 { keyboard_responder(this) } else { None };
+        if let Some(responder) = responder {
             let characters: Id = msg_send![event, charactersIgnoringModifiers];
             let key = rust_string(characters).unwrap_or_default().to_lowercase();
             let shift = flags & SHIFT != 0;
+            // Copy, cut, paste, select all and undo: the app's Edit menu only carries GPUI
+            // actions, which go to the GPUI focus tree — never to a native view. Handing the
+            // standard selector to the responder chain is what makes ⌘C work on a page.
+            let editing = match (key.as_str(), shift) {
+                ("c", false) => Some(sel!(copy:)),
+                ("x", false) => Some(sel!(cut:)),
+                ("v", false) => Some(sel!(paste:)),
+                ("a", false) => Some(sel!(selectAll:)),
+                ("z", false) => Some(sel!(undo:)),
+                ("z", true) => Some(sel!(redo:)),
+                _ => None,
+            };
+            if let Some(selector) = editing {
+                // Walked from the responder that has the keyboard, not from `NSApp`: the app may
+                // not be the active one, and then it has no key window to start from.
+                let handled: BOOL = msg_send![responder, tryToPerform: selector with: std::ptr::null_mut::<Object>()];
+                if crate::debug::enabled() {
+                    eprintln!("browser-key: editing {key} handled={}", handled == YES);
+                }
+                if handled == YES {
+                    return YES;
+                }
+            }
             let command = match (key.as_str(), shift) {
                 ("r", true) => Some(BrowserKey::HardReload),
                 ("r", false) => Some(BrowserKey::Reload),
@@ -412,6 +481,7 @@ impl WebView {
             let _: () = msg_send![view, setUIDelegate: delegate];
             let _: () = msg_send![view, setHidden: YES];
             let _: () = msg_send![parent, addSubview: view];
+            VIEWS.lock().unwrap_or_else(|e| e.into_inner()).push(view as usize);
             Some(Self { view, parent, delegate, visible: false })
         }
     }
@@ -612,6 +682,7 @@ impl Drop for WebView {
             popups.remove(&id);
         }
         KEYS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(view, _)| *view != id);
+        VIEWS.lock().unwrap_or_else(|e| e.into_inner()).retain(|view| *view != id);
         unsafe {
             let _: () = msg_send![self.view, setNavigationDelegate: std::ptr::null_mut::<Object>()];
             let _: () = msg_send![self.view, setUIDelegate: std::ptr::null_mut::<Object>()];

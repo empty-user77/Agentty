@@ -26,6 +26,19 @@ pub enum BrowserKey {
     Forward,
 }
 
+/// A standard editing command; without a web view there is never a page to run one in.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditCommand {
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+pub fn perform_in_page(_command: EditCommand) -> bool {
+    false
+}
+
 pub const NET_TOTALS: &str = "";
 pub const NET_ENTRIES: &str = "";
 pub const NET_DETAIL: &str = "";
