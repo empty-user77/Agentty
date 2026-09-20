@@ -12,6 +12,11 @@ All notable changes to this project are documented here. The format follows
   files, no processes and no network of its own, whatever its code says, and everything it asks for
   goes through the permissions in its manifest. A Rust SDK (`sdk/rust`) and two examples
   (`plugins/hello-rust`, `plugins/agent-rest-client`) are in the repository.
+- A plugin panel opens the way it suits: docked beside the terminals (as before), floating over the
+  window, in a window of its own that can be moved and resized, or filling the whole area. The
+  plugin says which it prefers; the layout button in the panel's header changes it and remembers.
+  A docked panel can no longer be dragged so wide that the rest of the window is squeezed — past
+  what fits, it becomes an overlay.
 - Plugins choose where their panel is reached from: the activity bar on the left (`sidebar`), the
   tab strip above the terminals (`pane`, where they have always been) or the status bar at the
   bottom (`status`). The activity bar scrolls once there are more items than fit.

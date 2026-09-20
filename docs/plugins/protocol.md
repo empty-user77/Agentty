@@ -140,7 +140,7 @@ one is stopped as well.
 
 The Rust SDK in `sdk/rust` hides all of this; `plugins/hello-rust` is a working example.
 
-## Surfaces
+## Surfaces and how a panel opens
 
 `contributes.panel.surface` says where the plugin's icon goes. A plugin picks one:
 
@@ -149,6 +149,19 @@ The Rust SDK in `sdk/rust` hides all of this; `plugins/hello-rust` is a working 
 | `pane` (default) | the tab strip above the terminals |
 | `sidebar` | the activity bar down the left edge, with Agentty's own pages |
 | `status` | the status bar along the bottom |
+
+`contributes.panel.mode` says how the panel opens. The user can change it from the panel's layout
+button, and their choice is kept; this is what it does first:
+
+| `mode` | |
+|---|---|
+| `push` (default) | docked beside the terminals, which move over to make room |
+| `overlay` | floating above the window at its right edge; nothing else moves |
+| `window` | a window of its own, which can be moved and resized |
+| `full` | the whole area the terminals and pages use |
+
+A docked panel never takes so much room that the rest of the window is squeezed: dragged past what
+can be docked, it becomes an overlay.
 
 ## UI tree
 

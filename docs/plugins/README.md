@@ -97,7 +97,7 @@ appears in the tab strip, the command in the palette (⇧⌘P) and as a button a
 | `permissions` | `[]` | see [Permissions](#permissions-and-safety) |
 | `activationEvents` | `[]` | `["onStartup"]` starts the plugin with Agentty; otherwise on first use |
 | `detect` | `[]` | paths (`~` allowed) of an app the plugin integrates with; found → "Recommended" in the store |
-| `contributes.panel` | | `{ "title", "icon", "surface" }` — a panel docked right of the terminals. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom) |
+| `contributes.panel` | | `{ "title", "icon", "surface", "mode" }` — the panel the plugin fills with UI. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom). `mode` picks how it opens: `push` (default, docked beside the terminals), `overlay` (floating over them), `window` (a window of its own) or `full` (the whole area). The user can change the mode and their choice is kept |
 | `contributes.commands[]` | | `{ "id", "title", "description", "icon", "paneBar", "when", "palette" }` |
 
 Commands appear in the command palette (unless `"palette": false`). With `"paneBar": true` they also

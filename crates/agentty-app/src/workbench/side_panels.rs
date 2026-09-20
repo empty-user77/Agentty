@@ -5,6 +5,7 @@
 
 use super::Workbench;
 use crate::theme::{hex, Chrome};
+use agentty_bridge::plugins::manifest::PanelMode;
 use gpui::{div, prelude::*, px, AnyElement, Context, SharedString};
 
 /// Narrowest a side panel gets.
@@ -21,9 +22,28 @@ pub enum SidePanel {
 }
 
 impl Workbench {
-    /// Width of the plugin panel as shown (0 while it is closed).
+    /// Width the plugin panel is drawn at, wherever it is drawn.
+    pub(super) fn plugin_panel_shown_width(&self, cx: &gpui::App) -> f32 {
+        crate::settings::settings(cx).plugin_panel_width.max(MIN_WIDTH)
+    }
+
+    /// Width the plugin panel takes from the window's layout: nothing unless it is docked, and
+    /// never more than leaves the terminals their room — everything else on the row (the activity
+    /// bar, the workspace list, the other panels) is counted first.
     pub(super) fn plugin_panel_width(&self, cx: &gpui::App) -> f32 {
-        self.plugin_panel.as_ref().map_or(0., |_| crate::settings::settings(cx).plugin_panel_width.max(MIN_WIDTH))
+        let Some(plugin) = self.plugin_panel.as_ref() else { return 0. };
+        if !self.plugin_panel_mode(plugin, cx).is_docked() {
+            return 0.;
+        }
+        self.plugin_panel_shown_width(cx).min(self.dockable_width(cx).max(MIN_WIDTH))
+    }
+
+    /// The most the plugin panel may take while docked.
+    pub(super) fn dockable_width(&self, cx: &gpui::App) -> f32 {
+        let prefs = crate::settings::settings(cx);
+        let sidebar = if self.sidebar_open { prefs.sidebar_width } else { 0. };
+        let others = self.docker_panel_width(cx) + if self.docker.open { 5. } else { 0. };
+        self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - others - 5. - MIN_TERMINALS
     }
 
     /// Width of the Docker panel as shown (0 while it is closed).
@@ -35,10 +55,32 @@ impl Workbench {
         }
     }
 
-    /// Everything the side panels take, their handles included.
+    /// Everything the side panels take, their handles included. A panel that floats, fills the
+    /// area or has a window of its own takes nothing.
     pub(super) fn side_panels_total(&self, cx: &gpui::App) -> f32 {
         let handle = |shown: bool| if shown { 5. } else { 0. };
-        self.plugin_panel_width(cx) + handle(self.plugin_panel.is_some()) + self.docker_panel_width(cx) + handle(self.docker.open)
+        let plugin = self.plugin_panel_width(cx);
+        plugin + handle(plugin > 0.) + self.docker_panel_width(cx) + handle(self.docker.open)
+    }
+
+    /// How this plugin's panel opens: what the user chose, else what the plugin asks for.
+    pub(super) fn plugin_panel_mode(&self, plugin: &str, cx: &gpui::App) -> PanelMode {
+        if let Some(mode) = crate::settings::settings(cx).plugin_panel_modes.get(plugin).and_then(|id| PanelMode::from_id(id)) {
+            return mode;
+        }
+        crate::plugins::plugin(cx, plugin).and_then(|p| p.manifest.as_ref()).map(|m| m.panel_mode()).unwrap_or_default()
+    }
+
+    pub(super) fn set_plugin_panel_mode(&mut self, plugin: &str, mode: PanelMode, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let plugin = plugin.to_string();
+        let id = mode.id().to_string();
+        let chosen = plugin.clone();
+        crate::settings::update_settings(cx, |settings| {
+            settings.plugin_panel_modes.insert(chosen, id);
+        });
+        // A panel that moved into a window of its own, or out of one, is opened or closed there.
+        self.sync_plugin_window(&plugin, mode, window, cx);
+        cx.notify();
     }
 
     /// The drag handle at the left edge of `panel` (a hairline at rest, lit while hovered or dragged).
@@ -76,14 +118,37 @@ impl Workbench {
 
     /// While a side panel's handle is dragged: its new width from the pointer's x position (its right
     /// edge is left of whatever is docked further right: the Docker panel, the files panel).
-    pub(super) fn drag_side_panel(&mut self, panel: SidePanel, pointer_x: f32, viewport: f32, cx: &mut Context<Self>) {
+    pub(super) fn drag_side_panel(
+        &mut self,
+        panel: SidePanel,
+        pointer_x: f32,
+        viewport: f32,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
         let files = self.files_panel.as_ref().map_or(0., |_| self.docked_widths(cx).1 + 5.);
         let right = match panel {
             SidePanel::Docker => files,
             SidePanel::Plugin => files + self.docker_panel_width(cx) + if self.docker.open { 5. } else { 0. },
         };
         let edge = viewport - right;
-        let width = side_width(edge, pointer_x);
+        // A plugin panel dragged wider than the window can dock stops taking room from it and
+        // floats above it instead — the rest of the window keeps its shape.
+        let floating = match (panel, self.plugin_panel.clone()) {
+            (SidePanel::Plugin, Some(plugin)) => {
+                let mode = self.plugin_panel_mode(&plugin, cx);
+                let dockable = self.dockable_width(cx);
+                let wanted = edge - pointer_x - 2.5;
+                if mode == PanelMode::Push && wanted > dockable {
+                    self.set_plugin_panel_mode(&plugin, PanelMode::Overlay, window, cx);
+                }
+                !self.plugin_panel_mode(&plugin, cx).is_docked()
+            }
+            _ => false,
+        };
+        // A floating panel may be as wide as the window bar its left edge; a docked one leaves the
+        // terminals their room.
+        let width = if floating { (edge - pointer_x - 2.5).clamp(MIN_WIDTH, edge) } else { side_width(edge, pointer_x) };
         gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| match panel {
             SidePanel::Plugin => store.settings.plugin_panel_width = width,
             SidePanel::Docker => store.settings.docker_panel_width = width,

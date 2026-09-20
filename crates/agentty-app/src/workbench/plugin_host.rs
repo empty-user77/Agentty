@@ -156,8 +156,11 @@ impl Workbench {
         }
         if let Some(previous) = self.plugin_panel.take() {
             plugins::notify_plugin(&previous, "panel/close", json!({ "context": self.plugin_context(&previous, None, cx) }), cx);
+            self.close_plugin_window(&previous, cx);
         }
+        // A panel that fills the area takes the place of a page, so an open page steps aside.
         self.page = None;
+        self.plugin_mode_menu = false;
         self.plugin_panel = Some(plugin.to_string());
         plugins::notify_plugin(plugin, "panel/open", json!({ "context": self.plugin_context(plugin, None, cx) }), cx);
         cx.notify();
@@ -172,8 +175,10 @@ impl Workbench {
     }
 
     pub(super) fn close_plugin_panel(&mut self, cx: &mut Context<Self>) {
+        self.plugin_mode_menu = false;
         if let Some(previous) = self.plugin_panel.take() {
             plugins::notify_plugin(&previous, "panel/close", json!({ "context": self.plugin_context(&previous, None, cx) }), cx);
+            self.close_plugin_window(&previous, cx);
         }
         cx.notify();
     }

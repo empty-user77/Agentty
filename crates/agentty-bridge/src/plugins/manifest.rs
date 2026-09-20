@@ -168,6 +168,47 @@ pub struct PanelContribution {
     /// Which of Agentty's three surfaces the panel's icon sits on.
     #[serde(default)]
     pub surface: Surface,
+    /// How the panel opens. The user can change it; this is what it does first.
+    #[serde(default)]
+    pub mode: PanelMode,
+}
+
+/// How a panel takes its place in the window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelMode {
+    /// Docked beside the terminals, which move over to make room.
+    #[default]
+    Push,
+    /// Floating above the window at its right edge; nothing else moves.
+    Overlay,
+    /// A window of its own, which can be moved and resized like any other.
+    Window,
+    /// The whole area the terminals and pages use, like the Git page.
+    Full,
+}
+
+impl PanelMode {
+    pub const ALL: &'static [PanelMode] = &[PanelMode::Push, PanelMode::Overlay, PanelMode::Window, PanelMode::Full];
+
+    /// The name used in `agentty-plugin.json` and in the settings.
+    pub fn id(self) -> &'static str {
+        match self {
+            PanelMode::Push => "push",
+            PanelMode::Overlay => "overlay",
+            PanelMode::Window => "window",
+            PanelMode::Full => "full",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<PanelMode> {
+        PanelMode::ALL.iter().copied().find(|mode| mode.id() == id)
+    }
+
+    /// Whether the panel sits in the window's layout (and so takes room from it).
+    pub fn is_docked(self) -> bool {
+        self == PanelMode::Push
+    }
 }
 
 /// Capabilities a plugin must declare before the matching host methods work.
@@ -247,6 +288,11 @@ impl Manifest {
     /// Where this plugin's panel is reached from (`Pane` when it contributes no panel).
     pub fn surface(&self) -> Surface {
         self.contributes.panel.as_ref().map_or(Surface::Pane, |panel| panel.surface)
+    }
+
+    /// How this plugin's panel opens until the user says otherwise.
+    pub fn panel_mode(&self) -> PanelMode {
+        self.contributes.panel.as_ref().map_or(PanelMode::Push, |panel| panel.mode)
     }
 
     pub fn starts_with_agentty(&self) -> bool {
@@ -336,6 +382,22 @@ mod tests {
         assert_eq!(Manifest::parse(json.to_string().as_bytes()).unwrap().surface(), Surface::Status);
         json["contributes"]["panel"] = serde_json::json!({ "title": "Hello", "surface": "everywhere" });
         assert!(Manifest::parse(json.to_string().as_bytes()).is_err(), "a made-up surface is refused");
+    }
+
+    #[test]
+    fn a_panel_opens_the_way_it_asks_to() {
+        let mut json = sample();
+        assert_eq!(Manifest::parse(json.to_string().as_bytes()).unwrap().panel_mode(), PanelMode::Push);
+        for (name, mode) in
+            [("overlay", PanelMode::Overlay), ("window", PanelMode::Window), ("full", PanelMode::Full), ("push", PanelMode::Push)]
+        {
+            json["contributes"]["panel"] = serde_json::json!({ "title": "Hello", "mode": name });
+            assert_eq!(Manifest::parse(json.to_string().as_bytes()).unwrap().panel_mode(), mode);
+            assert_eq!(PanelMode::from_id(name), Some(mode));
+        }
+        json["contributes"]["panel"] = serde_json::json!({ "title": "Hello", "mode": "sideways" });
+        assert!(Manifest::parse(json.to_string().as_bytes()).is_err(), "a made-up mode is refused");
+        assert_eq!(PanelMode::from_id("sideways"), None);
     }
 
     #[test]

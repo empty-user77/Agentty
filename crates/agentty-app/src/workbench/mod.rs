@@ -31,6 +31,7 @@ mod persist;
 mod picker;
 mod plugin_host;
 mod plugin_panel;
+mod plugin_window;
 mod plugins_page;
 mod processes;
 mod prompt_dialog;
@@ -361,6 +362,10 @@ pub struct Workbench {
     harness_pattern_form: Option<settings_page::HarnessPatternForm>,
     /// Plugin whose panel is docked right of the terminals.
     plugin_panel: Option<String>,
+    /// The panel's layout menu is open.
+    plugin_mode_menu: bool,
+    /// Plugin panels that have a window of their own, by plugin id.
+    plugin_windows: HashMap<String, gpui::WindowHandle<plugin_window::PluginWindow>>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
@@ -511,6 +516,8 @@ impl Workbench {
             system_installs: Vec::new(),
             harness_pattern_form: None,
             plugin_panel: None,
+            plugin_mode_menu: false,
+            plugin_windows: HashMap::new(),
             plugin_inputs: HashMap::new(),
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
@@ -1477,7 +1484,7 @@ impl Workbench {
             cx.notify();
         } else if let Some(panel) = self.side_resizing {
             let viewport = f32::from(window.viewport_size().width);
-            self.drag_side_panel(panel, f32::from(event.position.x), viewport, cx);
+            self.drag_side_panel(panel, f32::from(event.position.x), viewport, window, cx);
         } else if self.browser_resizing {
             // The splitter sits just left of the panel; the plugin and files panels may sit right of it.
             let shown = self.docked_widths(cx).1;
@@ -1804,21 +1811,30 @@ impl Render for Workbench {
                             .flex_col()
                             .child(self.render_tab_strip(cx))
                             .children(self.render_service_banner(cx))
-                            .child(div().flex_1().min_h_0().flex().child(div().flex_1().min_w_0().h_full().child(main)).when(
-                                self.page.is_none(),
-                                |d| {
-                                    d.children(self.render_browser_splitter(cx))
-                                        .children(self.render_browser(cx))
-                                        .when(self.plugin_panel.is_some(), |d| {
-                                            d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx))
-                                        })
-                                        .children(self.render_plugin_panel(cx))
-                                        .when(self.docker.open, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx)))
-                                        .children(self.render_docker_panel(cx))
-                                        .children(self.render_files_splitter(cx))
-                                        .children(self.render_files_panel(cx))
-                                },
-                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    // A floating or full-area panel is drawn over this row.
+                                    .relative()
+                                    .child(div().flex_1().min_w_0().h_full().child(main))
+                                    .when(self.page.is_none(), |d| {
+                                        let docked = self.plugin_panel_width(cx) > 0.;
+                                        d.children(self.render_browser_splitter(cx))
+                                            .children(self.render_browser(cx))
+                                            .when(docked, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx)))
+                                            .children(self.render_plugin_panel(cx))
+                                            .when(self.docker.open, |d| {
+                                                d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx))
+                                            })
+                                            .children(self.render_docker_panel(cx))
+                                            .children(self.render_files_splitter(cx))
+                                            .children(self.render_files_panel(cx))
+                                            // Over everything on this row, whatever else is docked.
+                                            .children(self.render_plugin_overlay(cx))
+                                    }),
+                            )
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
                             .when(self.notices_open, |d| {
                                 d.child(
@@ -2441,6 +2457,14 @@ impl Workbench {
                 }
             }
             "plugin-install" => self.install_builtin_plugin(argument.to_string(), window, cx),
+            // `plugin-mode <plugin> push|overlay|window|full`: how its panel opens.
+            "plugin-mode" => {
+                if let Some((plugin, mode)) = argument.split_once(' ') {
+                    if let Some(mode) = agentty_bridge::plugins::manifest::PanelMode::from_id(mode.trim()) {
+                        self.set_plugin_panel_mode(plugin, mode, window, cx);
+                    }
+                }
+            }
             // `plugin-event <plugin> <element> <event> [value]`: what a click or a keystroke in a
             // plugin's panel sends, without the mouse.
             "plugin-event" => {
