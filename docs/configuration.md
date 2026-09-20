@@ -150,3 +150,26 @@ Claude model prices are built in. For other models (e.g. those used by Codex), a
 
 Fields: `input`, `output`, and optional `cacheRead` (default 10% of input), `cacheWrite` (125%), `cacheWrite1h` (200%).
 The values above are placeholders — use your provider's published pricing.
+
+## Files Agentty keeps
+
+Everything lives under `~/.agentty` (or `$AGENTTY_DATA_DIR`). Secrets are never in these files: they are in the OS
+credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+
+| Path | Purpose |
+|---|---|
+| `settings.json` | Preferences (language, theme, font, …) |
+| `workspaces.json` | Saved workspaces, tabs, splits and groups |
+| `themes/*.itermcolors` | Imported color themes |
+| `pricing.json` | Optional model prices for non-Claude models |
+| `handoffs/` | Context documents created by migrations and Session Flow |
+| `connectors.json` | API connector definitions |
+| `db-connections.json` | Database connections added by hand (`0600`) |
+| `agent-auth.json` | Sign-in method for new Claude Code / Codex tabs (Settings → Accounts) |
+| `codex-home/` | Private Codex home for API-key / `auth.json` sign-in (`auth.json` `0600`) |
+| `plugins/` | Installed plugins (`state.json` records which are enabled) |
+| `plugin-data/<id>/` | Private data of each plugin |
+| `prompts/` | Long prompts from plugins and links, handed to agents as files |
+| `worktrees/<project>-<hash>/` | Working trees created for agent sessions |
+
+`agentty.json` in a project (or `commands.json` beside `settings.json`) adds command palette entries.

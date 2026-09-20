@@ -128,3 +128,30 @@ and `agentty://` links) and the icon, and depend on the libraries GPUI loads (xk
 loader, fontconfig, freetype); a Vulkan driver (`mesa-vulkan-drivers`) is recommended. Install with
 `sudo apt install ./….deb` or `sudo dnf install ./….rpm`. Agentty announces new versions and opens the release page;
 the package manager installs them.
+
+## Building
+
+macOS needs the Xcode command line tools; every platform needs the Rust toolchain pinned in `rust-toolchain.toml`.
+
+```sh
+cargo run --release -p agentty-app
+```
+
+### Windows
+
+`cargo build --release -p agentty-app`, or `pwsh scripts/package-windows.ps1` for a zip. `-Installer` also builds the
+setup program (needs Inno Setup 6). Panes run PowerShell (`pwsh` when installed), and Claude Code needs Git for
+Windows for its hooks.
+
+### Linux
+
+Install the libraries GPUI loads, then build:
+
+```sh
+sudo apt install pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+  libx11-xcb-dev libvulkan-dev libfontconfig-dev libzstd-dev
+cargo build --release -p agentty-app
+```
+
+`scripts/package-linux.sh` makes a tarball with an `install.sh`, and `scripts/build-linux-packages.sh` builds the
+x86_64 `.deb` and `.rpm` in Docker from any machine.
