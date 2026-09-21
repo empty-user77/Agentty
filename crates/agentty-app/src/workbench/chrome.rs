@@ -1648,8 +1648,12 @@ impl Workbench {
                                 this.move_tab_into_tab(dragged, index, window, cx)
                             }
                         }))
-                        // The logo, in one plain tone, breathing while that tab's agent works.
-                        .child(crate::brand::avatar_working(view.tool_id(), 14., view.status.in_turn(), view.pane_id))
+                        // No logo here: the tab strip sits right under the workspace card that
+                        // already says which agent this is, and a row of them only drew the eye.
+                        // What is left is the one thing a tab alone can say — it is working.
+                        .when(view.status.in_turn(), |d| {
+                            d.child(crate::ui::dot_spinner(("tab-working", view.pane_id as usize), 12., hex_alpha(Chrome::BRIGHT, 0.9)))
+                        })
                         .child(div().truncate().child(view.display_title()))
                         .when(leaves.len() > 1, |d| {
                             d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("⊞{}", leaves.len())))
