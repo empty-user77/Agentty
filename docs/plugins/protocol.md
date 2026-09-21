@@ -114,7 +114,13 @@ than one question outstanding tells them apart by `title`, which is the one it g
 
 Status arrives whether or not anything is being drawn: a window behind another, or one on a locked
 screen, is not drawn, and a plugin waiting for an agent must not be waiting for the user to come
-back.
+back. While any pane is watched, Agentty looks every 400 ms of its own accord, and stops looking
+when the last one is done.
+
+A pane is `idle` from the moment it opens, before the agent has picked the prompt up, so `idle`
+alone does not mean finished — wait until that pane has been `working` at least once. And an agent
+between two tool calls is idle for a moment, so a stop is worth giving a second or two before its
+session is read as the answer.
 
 `storage/*` is what a plugin remembers between runs: one JSON document in its own folder
 (`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. It goes
