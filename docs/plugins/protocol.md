@@ -1,7 +1,17 @@
-# Agentty plugin protocol (API version 1)
+# Agentty plugin protocol (API version 2)
 
 For writing plugins without the Node.js SDK. Read the [plugin guide](README.md) first; this page
 only describes the wire format.
+
+| Version | What it added |
+|---|---|
+| 1 | the panel, commands, links, `storage/*`, `net/fetch`, `prompt/inject`, `session/get` |
+| 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
+
+A plugin that uses something a version added says so, with `apiVersion` in its manifest and in its
+marketplace entry. An Agentty that speaks less than that says to update rather than installing a
+module it cannot run; a manifest that leaves the field out is read as version 1, which is what it
+was before the field existed.
 
 ## Transport
 
@@ -127,7 +137,7 @@ Errors use these codes:
 ## Example session
 
 ```
-→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"apiVersion":1,"plugin":{"id":"hello",…},"language":"en","context":{…}}}
+→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"apiVersion":2,"plugin":{"id":"hello",…},"language":"en","context":{…}}}
 → {"jsonrpc":"2.0","method":"panel/open","params":{"context":{…}}}
 ← {"jsonrpc":"2.0","id":1,"result":{}}
 ← {"jsonrpc":"2.0","id":1,"method":"ui/setPanel","params":{"tree":{"type":"column","children":[{"type":"button","id":"go","label":"Go"}]}}}

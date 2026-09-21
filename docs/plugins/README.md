@@ -91,7 +91,7 @@ appears in the tab strip, the command in the palette (⇧⌘P) and as a button a
 | `name`, `version` | required | shown in the store; `version` is `major.minor.patch` |
 | `main` | required | entry point, relative to the plugin folder |
 | `runtime` | `node` | `node` (Node.js 18+ from the login shell PATH), `python` (`python3 main`), `executable`, or `wasm` (see [Rust and WebAssembly](#rust-and-webassembly)) |
-| `apiVersion` | `1` | plugin API version the plugin was written for |
+| `apiVersion` | `1` | the plugin protocol this was written for — `2` for anything using `host/timer` or `pane/status`. Left out it is `1`, and an Agentty that speaks less than it says to update rather than running what it cannot |
 | `description`, `publisher`, `homepage`, `keywords` | | store listing; `homepage` must be `https://` |
 | `links` | `[]` | up to 6 `{ "label", "url" }` (https) shown as buttons on the store card — project site, docs, source |
 | `requires` | | `{ "name", "url", "note" }`: the app or service the plugin is for. The card says whether it was found (see `detect`) and offers the link when it wasn't |
