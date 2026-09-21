@@ -137,6 +137,7 @@ impl Runtime {
     fn abandon(&mut self) {
         self.generation += 1;
         self.fetches = 0;
+        self.timers = 0;
     }
 
     /// Whether a URL may be opened now. `host/openUrl` needs no permission — a plugin's "read
@@ -644,11 +645,14 @@ fn timer(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App
         cx.background_executor().timer(wait).await;
         let _ = cx.update(|cx| {
             let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
-            runtime.timers = runtime.timers.saturating_sub(1);
-            // The plugin was restarted while it waited: this answer belongs to the one that is gone.
+            // The plugin was restarted while it waited: this answer belongs to the one that is
+            // gone, and its place in the count went with it — taking one off now would be taking
+            // it off a wait the new plugin is in. A wait may be an hour long, so a plugin that
+            // inherited eight of them could not wait at all for that hour.
             if runtime.generation != generation {
                 return;
             }
+            runtime.timers = runtime.timers.saturating_sub(1);
             respond(&id, &request_id, Ok(json!({ "elapsedMs": started.elapsed().as_millis() as u64 })), cx);
         });
     })
@@ -787,10 +791,12 @@ mod tests {
     fn a_restart_does_not_inherit_the_requests_of_the_plugin_before_it() {
         let mut runtime = Runtime::new();
         runtime.fetches = MAX_CONCURRENT_FETCHES;
+        runtime.timers = MAX_TIMERS;
         let before = runtime.generation;
         runtime.abandon();
         assert!(runtime.generation > before, "answers meant for the old plugin are told apart");
         assert_eq!(runtime.fetches, 0, "the new plugin starts with nothing in the air");
+        assert_eq!(runtime.timers, 0, "and in no wait it did not ask for");
     }
 
     #[test]

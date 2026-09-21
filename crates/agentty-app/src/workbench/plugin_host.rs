@@ -19,6 +19,8 @@ use std::time::Duration;
 const TURN_TEXT_LIMIT: usize = 20_000;
 /// Panes plugins may be told about at once.
 const MAX_WATCHED_PANES: usize = 32;
+/// How often a watched pane is looked at when nothing is being drawn.
+const PANE_POLL: std::time::Duration = std::time::Duration::from_millis(400);
 
 fn status_id(pane: &Pane, cx: &gpui::App) -> &'static str {
     let view = pane.read(cx);
@@ -92,6 +94,25 @@ fn kind_named(name: Option<&str>) -> PaneKind {
     }
 }
 
+/// What a watched pane is owed: nothing, the status it has moved to, or one last word that it is
+/// gone. A status a plugin has already been told is not repeated — a pane says `working` on every
+/// look while an agent works, and a plugin is not owed that fifty times.
+#[derive(Debug, PartialEq, Eq)]
+enum PaneNews {
+    Nothing,
+    Changed(&'static str),
+    Closed,
+}
+
+fn pane_news(status: Option<&'static str>, last: &str) -> PaneNews {
+    match status {
+        Some(status) if status == last => PaneNews::Nothing,
+        Some(status) => PaneNews::Changed(status),
+        None if last == "closed" => PaneNews::Nothing,
+        None => PaneNews::Closed,
+    }
+}
+
 impl Workbench {
     fn workspace_json(&self, index: usize, with_panes: bool, scope: ContextScope, cx: &gpui::App) -> Value {
         let ws: &Workspace = &self.workspaces[index];
@@ -123,6 +144,11 @@ impl Workbench {
     }
 
     /// Remembers that `plugin` started `pane`, so `pane/status` reaches it as that pane works.
+    pub(super) fn watch_pane_for_plugin(&mut self, pane: u64, plugin: &str, cx: &mut Context<Self>) {
+        self.watch_pane_for(pane, plugin, cx);
+    }
+
+    /// Remembers that `plugin` started `pane`, so `pane/status` reaches it as that pane works.
     fn watch_pane_for(&mut self, pane: u64, plugin: &str, cx: &mut Context<Self>) {
         // Only a plugin allowed to see agent status is told about one.
         if !ContextScope::of(plugin, cx).places {
@@ -133,6 +159,34 @@ impl Workbench {
             return;
         }
         self.plugin_panes.insert(pane, (plugin.to_string(), ""));
+        self.poll_pane_status(cx);
+    }
+
+    /// Keeps `pane/status` arriving when nothing is being drawn.
+    ///
+    /// A pane's status is read while the window is drawn, and a window nobody is looking at — one
+    /// behind another, one on a locked screen — is not drawn at all. A plugin waiting for the
+    /// agent it set to work would then be waiting for the user to come back, which is the one
+    /// thing an AgentOS must not need. So while any pane is watched, Agentty looks anyway.
+    fn poll_pane_status(&mut self, cx: &mut Context<Self>) {
+        if self.plugin_pane_poll {
+            return;
+        }
+        self.plugin_pane_poll = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(PANE_POLL).await;
+                let watching = this.update(cx, |this, cx| {
+                    this.broadcast_pane_status(cx);
+                    !this.plugin_panes.is_empty()
+                });
+                if !matches!(watching, Ok(true)) {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, _| this.plugin_pane_poll = false);
+        })
+        .detach();
     }
 
     /// Tells each plugin how the panes it started are getting on, when that changed. This is what
@@ -145,19 +199,25 @@ impl Workbench {
         let mut changed: Vec<(String, Value)> = Vec::new();
         let mut gone: Vec<u64> = Vec::new();
         for (pane_id, (plugin, last)) in self.plugin_panes.iter_mut() {
-            let Some(pane) = panes.iter().find(|pane| pane.read(cx).pane_id == *pane_id) else {
-                // The pane was closed: say so once, then forget it.
-                if *last != "closed" {
+            let pane = panes.iter().find(|pane| pane.read(cx).pane_id == *pane_id);
+            let status = pane.map(|pane| status_id(pane, cx));
+            match pane_news(status, last) {
+                // The pane was closed: said once, because the pane stops being watched here.
+                PaneNews::Closed => {
                     changed.push((plugin.clone(), json!({ "paneId": pane_id, "status": "closed", "running": false })));
+                    gone.push(*pane_id);
+                    continue;
                 }
-                gone.push(*pane_id);
-                continue;
-            };
-            let status = status_id(pane, cx);
-            if status == *last {
-                continue;
+                PaneNews::Nothing => {
+                    if pane.is_none() {
+                        gone.push(*pane_id);
+                    }
+                    continue;
+                }
+                PaneNews::Changed(status) => *last = status,
             }
-            *last = status;
+            let Some(pane) = pane else { continue };
+            let status = *last;
             let view = pane.read(cx);
             changed.push((
                 plugin.clone(),
@@ -284,6 +344,7 @@ impl Workbench {
             "prompt/inject" => match serde_json::from_value::<PromptRequest>(params) {
                 Ok(mut request) => {
                     request.source = Some(call.plugin_name.clone());
+                    request.plugin = Some(call.plugin.clone());
                     if request.target == PromptTarget::Ask {
                         self.open_prompt_dialog(request, window, cx);
                         call.reply(Ok(json!({ "status": "asked" })), cx);
@@ -553,4 +614,31 @@ fn type_into(pane: &Pane, text: String, submit: bool, allow_shell_enter: bool, c
             view.insert_text(&text);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pane_news, PaneNews};
+
+    #[test]
+    fn a_plugin_hears_a_status_once_and_not_on_every_look() {
+        // The first look after a prompt was sent.
+        assert_eq!(pane_news(Some("working"), ""), PaneNews::Changed("working"));
+        // Every look while the agent works.
+        assert_eq!(pane_news(Some("working"), "working"), PaneNews::Nothing);
+        // The one a step is waiting for.
+        assert_eq!(pane_news(Some("finished"), "working"), PaneNews::Changed("finished"));
+        // And back to work when the plugin sends the next prompt.
+        assert_eq!(pane_news(Some("working"), "finished"), PaneNews::Changed("working"));
+    }
+
+    #[test]
+    fn a_pane_that_is_gone_is_said_once() {
+        assert_eq!(pane_news(None, "working"), PaneNews::Closed);
+        // A pane opened and closed between two looks is still reported: "it is gone" is the
+        // answer a plugin waiting on it needs.
+        assert_eq!(pane_news(None, ""), PaneNews::Closed);
+        // And never twice.
+        assert_eq!(pane_news(None, "closed"), PaneNews::Nothing);
+    }
 }

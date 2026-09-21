@@ -97,6 +97,15 @@ which pane and tells only that plugin, when that pane's status changes — `work
 `workspace.read`, the permission that already means "see agent status". At most 32 panes are
 followed at a time. [AgentOS plugins](agentos.md) are built on this and `host/timer`.
 
+A prompt the user placed themselves is followed too: `target: "ask"` answers `{ status: "asked" }`
+with no pane id, because there is none yet, and the session the user picks is watched all the same
+— its first `pane/status` is where the plugin learns which pane it became. A plugin that has more
+than one question outstanding tells them apart by `title`, which is the one it gave the prompt.
+
+Status arrives whether or not anything is being drawn: a window behind another, or one on a locked
+screen, is not drawn, and a plugin waiting for an agent must not be waiting for the user to come
+back.
+
 `storage/*` is what a plugin remembers between runs: one JSON document in its own folder
 (`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. Keys are
 lower-case letters, digits, `.`, `-` and `_`; at most 64 of them, and a megabyte in total. A plugin

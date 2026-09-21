@@ -111,7 +111,8 @@ user's behalf:
   tab they can take over. An AgentOS that runs unattended is a plugin that writes to the user's
   repositories through an agent while they are not looking.
 - **A link is not a run.** A plugin that a link reached cannot type into terminals and its prompts
-  go through the "Send to…" dialog (`link_guarded`). An AgentOS started that way asks first.
+  go through the "Send to…" dialog (`link_guarded`). An AgentOS started that way asks first — and
+  it still follows the session the user placed, so asking costs it nothing but a turn.
 
 ## The example
 

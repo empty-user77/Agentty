@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - A plugin can wait (`host/timer`) and can hear how the agents it started are getting on
-  (`pane/status`, with `workspace.read`) — what a plugin needs to walk a piece of work through
+  (`pane/status`, with `workspace.read`, whether or not the window is being drawn) — what a plugin needs to walk a piece of work through
   several agent sessions. `docs/plugins/agentos.md` describes that shape, and Blogger AgentOS in
   the marketplace is a skeleton of it: outline, draft and edit, each one asked of an agent you can
   watch and checked before the next one is offered.

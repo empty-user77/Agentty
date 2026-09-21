@@ -470,6 +470,8 @@ pub struct Workbench {
     /// Panes a plugin started, and the status each was last told about: how a plugin hears that
     /// the agent it set to work has finished.
     plugin_panes: HashMap<u64, (String, &'static str)>,
+    /// Whether the loop that looks at those panes while nothing is drawn is already running.
+    plugin_pane_poll: bool,
     /// Plugins whose own window has been asked for but not yet opened — opening is deferred, and
     /// without this the next frame would ask for a second one.
     plugin_windows_opening: std::collections::HashSet<String>,
@@ -642,6 +644,7 @@ impl Workbench {
             plugin_mode_menu: false,
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
+            plugin_pane_poll: false,
             plugin_windows_opening: std::collections::HashSet::new(),
             plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),

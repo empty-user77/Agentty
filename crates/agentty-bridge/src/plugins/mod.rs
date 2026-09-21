@@ -149,6 +149,11 @@ pub struct PromptRequest {
     /// Who asked, shown in the dialog (a plugin name or an app).
     #[serde(default)]
     pub source: Option<String>,
+    /// The plugin that asked, by id. Set by the host beside `source`, never read from the wire:
+    /// a plugin must not be able to name another one. It is what tells Agentty whose pane the
+    /// dialog's answer became, so a plugin hears about a session the user placed by hand.
+    #[serde(skip)]
+    pub plugin: Option<String>,
 }
 
 fn default_submit() -> bool {
@@ -167,6 +172,7 @@ impl Default for PromptRequest {
             cwd: None,
             submit: true,
             source: None,
+            plugin: None,
         }
     }
 }
