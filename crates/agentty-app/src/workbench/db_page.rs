@@ -29,6 +29,8 @@ const AGENT_MAX_ROWS: usize = 500;
 /// Result grid: columns are as wide as what they hold, between these bounds.
 const COLUMN_MIN_WIDTH: f32 = 90.;
 const COLUMN_MAX_WIDTH: f32 = 420.;
+/// Dragging a column goes further than measuring one: a long text column is read by widening it.
+const COLUMN_DRAG_MAX_WIDTH: f32 = 900.;
 /// Width per character at the grid's text size, for sizing a column to its content.
 const COLUMN_CHAR_WIDTH: f32 = 7.1;
 /// The row-number gutter, like a spreadsheet's.
@@ -48,6 +50,17 @@ pub struct DbQueryDrag;
 pub struct DbColumnDrag;
 
 impl gpui::Render for DbColumnDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// Dragging the right edge of a result column. Which column is in the handler's own closure; the
+/// payload only has to exist for GPUI to track the drag.
+#[derive(Clone, Copy)]
+pub struct DbGridDrag;
+
+impl gpui::Render for DbGridDrag {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
     }
@@ -219,6 +232,9 @@ pub(super) struct DbState {
     tables_width: f32,
     /// Row the user clicked in the result grid, shown in full below it.
     picked_row: Option<usize>,
+    /// Widths the user dragged a result column to, by column name. A column not in here is as
+    /// wide as what it holds; keying by name keeps the width when the same query runs again.
+    grid_widths: std::collections::HashMap<String, f32>,
     /// Scroll position of the result grid, so it can carry scrollbars both ways.
     grid_scroll: gpui::ScrollHandle,
     password: Option<(String, Entity<TextInput>)>,
@@ -1197,7 +1213,9 @@ impl Workbench {
                     .max()
                     .unwrap_or(0);
                 let chars = longest.max(name.chars().count()) as f32;
-                (chars * COLUMN_CHAR_WIDTH + 20.).clamp(COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH)
+                let measured = (chars * COLUMN_CHAR_WIDTH + 20.).clamp(COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH);
+                // What the user dragged this column to wins over what it measures.
+                self.db.grid_widths.get(name).copied().unwrap_or(measured)
             })
             .collect();
         let width = px(ROW_NUMBER_WIDTH + widths.iter().sum::<f32>());
@@ -1221,16 +1239,41 @@ impl Workbench {
             .bg(hex(Chrome::PANEL))
             .child(number_cell("#".into(), true))
             .children(result.columns.iter().enumerate().map(|(i, c)| {
+                let name = c.clone();
+                let start = widths[i];
                 div()
+                    .relative()
                     .w(px(widths[i]))
                     .flex_shrink_0()
-                    .px_2()
-                    .py_1()
-                    .truncate()
-                    .t_small()
-                    .font_weight(crate::theme::EMPHASIS)
-                    .text_color(hex(Chrome::BRIGHT))
-                    .child(c.clone())
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .truncate()
+                            .t_small()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(c.clone()),
+                    )
+                    // The edge between this column and the next one, as in any table.
+                    .child(
+                        div()
+                            .id(("db-grid-resize", i))
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right(px(-2.))
+                            .w(px(5.))
+                            .cursor(gpui::CursorStyle::ResizeLeftRight)
+                            .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                            .on_drag(DbGridDrag, |_, _, _, cx| cx.new(|_| DbGridDrag))
+                            .on_drag_move(cx.listener(move |this, event: &gpui::DragMoveEvent<DbGridDrag>, _, cx| {
+                                let delta = f32::from(event.event.position.x) - f32::from(event.bounds.origin.x);
+                                let current = this.db.grid_widths.get(&name).copied().unwrap_or(start);
+                                this.db.grid_widths.insert(name.clone(), (current + delta).clamp(COLUMN_MIN_WIDTH, COLUMN_DRAG_MAX_WIDTH));
+                                cx.notify();
+                            })),
+                    )
             }));
         let picked = self.db.picked_row;
         let rows = result.rows.iter().enumerate().map(|(i, row)| {

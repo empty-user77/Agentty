@@ -635,7 +635,40 @@ mod tests {
 
     #[test]
     fn pull_reports_what_arrived() {
-        let repo = temp_repo("pull-outcome");
+        let upstream = temp_repo("pull-outcome-upstream");
+        std::fs::write(upstream.join("kept.txt"), "one\n").unwrap();
+        std::fs::write(upstream.join("gone.txt"), "bye\n").unwrap();
+        git(&upstream, &["add", "-A"]).unwrap();
+        git(&upstream, &["commit", "-qm", "start"]).unwrap();
+
+        // A clone of it, so the pull is a real fast-forward over a real remote.
+        let clone = std::env::temp_dir().join(format!("agentty-git-pull-outcome-clone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&clone);
+        git(std::env::temp_dir().as_path(), &["clone", "-q", &upstream.display().to_string(), &clone.display().to_string()]).unwrap();
+        git(&clone, &["config", "user.email", "t@example.com"]).unwrap();
+        git(&clone, &["config", "user.name", "Tester"]).unwrap();
+
+        // Nothing new yet.
+        assert_eq!(pull(&clone).unwrap(), PullOutcome::default());
+
+        // One commit adding a file, changing another and deleting a third.
+        std::fs::write(upstream.join("added.txt"), "new\n").unwrap();
+        std::fs::write(upstream.join("kept.txt"), "two\n").unwrap();
+        std::fs::remove_file(upstream.join("gone.txt")).unwrap();
+        git(&upstream, &["add", "-A"]).unwrap();
+        git(&upstream, &["commit", "-qm", "work"]).unwrap();
+
+        let outcome = pull(&clone).unwrap();
+        assert_eq!(outcome, PullOutcome { commits: 1, added: 1, modified: 1, deleted: 1 });
+        assert_eq!(outcome.files(), 3);
+
+        std::fs::remove_dir_all(upstream).ok();
+        std::fs::remove_dir_all(clone).ok();
+    }
+
+    #[test]
+    fn pull_without_a_remote_fails() {
+        let repo = temp_repo("pull-no-remote");
         // Nothing to pull without a remote: the call fails rather than claiming changes.
         assert!(pull(&repo).is_err());
         std::fs::remove_dir_all(repo).ok();

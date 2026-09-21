@@ -598,7 +598,7 @@ strings! {
     "launcher.other_agents" => ["OTHER AGENTS", "다른 에이전트", "その他のエージェント", "其他智能体"],
     "launcher.local_models" => ["LOCAL MODELS (OLLAMA)", "로컬 모델 (Ollama)", "ローカルモデル (Ollama)", "本地模型 (Ollama)"],
     "launcher.no_agents" => ["No AI agents found. Install Claude Code or Codex to start one here.", "설치된 AI 에이전트가 없습니다. Claude Code나 Codex를 설치하면 여기서 바로 시작할 수 있습니다.", "AI エージェントが見つかりません。Claude Code か Codex をインストールしてください。", "未找到 AI 智能体。安装 Claude Code 或 Codex 后即可在此启动。"],
-    "mini.peek_expand" => ["Open the full window", "크게 하기", "大きく表示", "放大显示"],
+    "mini.peek_expand" => ["Open the full window", "크게 보기", "大きく表示", "放大显示"],
     "mini.enter" => ["Mini Mode", "미니 모드", "ミニモード", "迷你模式"],
     "mini.no_agents" => ["No agents running", "실행 중인 에이전트 없음", "実行中のエージェントなし", "没有运行中的智能体"],
     "mini.working" => ["{n} working", "{n}개 작업 중", "{n} 件作業中", "{n} 个工作中"],

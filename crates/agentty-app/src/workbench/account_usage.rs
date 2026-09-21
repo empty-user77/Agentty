@@ -48,6 +48,13 @@ impl AccountUsage {
         "—".into()
     }
 
+    /// Whether this account has anything to say. Codex has no built-in price table, so a real,
+    /// busy account can have no cost at all — it is kept for its tokens, and an account that only
+    /// reported plan limits is kept for those.
+    pub fn worth_showing(&self) -> bool {
+        self.cost.is_some() || self.tokens > 0 || self.limits.is_some()
+    }
+
     /// How long ago the plan limits were observed, when that is long enough to matter.
     pub fn stale_for(&self, now_ms: u64) -> Option<u64> {
         let captured = self.limits.as_ref()?.captured_ms;
@@ -105,7 +112,7 @@ fn compute(scanner: &Mutex<UsageScanner>, now_ms: u64) -> Vec<AccountUsage> {
             let tokens = recent.iter().map(|r| r.input + r.output + r.cache_read + r.cache_write).sum();
             AccountUsage { agent, cost, tokens, limits: agentty_bridge::limits::latest(agent, now_ms) }
         })
-        .filter(|u| u.cost.is_some() || u.tokens > 0 || u.limits.is_some())
+        .filter(AccountUsage::worth_showing)
         .collect()
 }
 
@@ -143,5 +150,22 @@ impl Workbench {
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug this filter had: an account with tokens but no price (Codex) was dropped, so a
+    /// signed-in user saw nothing at all.
+    #[test]
+    fn an_account_without_a_price_is_still_shown() {
+        let usage = |cost, tokens| AccountUsage { agent: Agent::Codex, cost, tokens, limits: None };
+        assert!(usage(None, 120_000).worth_showing());
+        assert_eq!(usage(None, 120_000).cost_label(), "120.0K tok");
+        assert!(usage(Some(4.2), 0).worth_showing());
+        assert!(!usage(None, 0).worth_showing());
+        assert_eq!(usage(None, 0).cost_label(), "—");
     }
 }
