@@ -55,7 +55,7 @@ All notable changes to this project are documented here. The format follows
   pretty-printed JSON.
 - Plugins can keep things between runs (`storage/get`, `storage/set`, `storage/keys`): one
   document in the plugin's own folder, up to 64 keys and a megabyte, in a file only you can read.
-  A plugin needs no permission for its own folder.
+  A plugin needs no permission for its own folder, and what it kept goes when it is uninstalled.
 - A panel's text field can be a text area (`"rows": 10`): Enter adds a line, a paste keeps its line
   breaks, and Up and Down walk through the lines. For request bodies and anything else that is
   longer than a line.

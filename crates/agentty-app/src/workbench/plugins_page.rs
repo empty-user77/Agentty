@@ -315,7 +315,10 @@ impl Workbench {
             return;
         }
         self.plugins_page.busy = true;
-        self.plugins_message(tf(cx, "plugins.cloning", &[("name", &url)]), false, cx);
+        // The address may carry a token; what is put on the page is what anyone looking over a
+        // shoulder, or at a screenshot, sees.
+        let shown = agentty_bridge::extensions::redact_url(&url);
+        self.plugins_message(tf(cx, "plugins.cloning", &[("name", &shown)]), false, cx);
         let task = cx.background_spawn(async move { store::install_from_git(&url) });
         let window = window.window_handle();
         cx.spawn(async move |this, cx| {
@@ -376,6 +379,8 @@ impl Workbench {
 
     fn uninstall_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         self.plugins_page.confirm_uninstall = None;
+        // Read before it goes: afterwards there is nothing left to ask what it was called.
+        let name = plugins::plugin(cx, id).map_or_else(|| id.to_string(), |plugin| plugin.name().to_string());
         plugins::stop(id, cx);
         self.drop_plugin_panel(id, cx);
         match store::uninstall(id) {
@@ -384,7 +389,7 @@ impl Workbench {
                 if self.plugins_page.selected.as_deref() == Some(id) {
                     self.plugins_page.selected = None;
                 }
-                self.plugins_message(tf(cx, "plugins.uninstalled", &[("name", id)]), false, cx);
+                self.plugins_message(tf(cx, "plugins.uninstalled", &[("name", &name)]), false, cx);
             }
             Err(err) => self.plugins_message(format!("{err:#}"), true, cx),
         }

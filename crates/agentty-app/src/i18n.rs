@@ -1345,7 +1345,7 @@ strings! {
     "plugins.install_continue" => ["Install and Continue", "설치 후 계속", "インストールして続行", "安装并继续"],
     "plugins.installed_ok" => ["{name} is installed", "{name} 설치 완료", "{name} をインストールしました", "已安装 {name}"],
     "plugins.uninstall" => ["Uninstall", "제거", "アンインストール", "卸载"],
-    "plugins.confirm_uninstall" => ["Click again to uninstall", "한 번 더 누르면 제거", "もう一度押すと削除", "再次点击以卸载"],
+    "plugins.confirm_uninstall" => ["Click again to remove it and its data", "한 번 더 누르면 데이터까지 제거", "もう一度押すとデータごと削除", "再次点击，连同数据一起卸载"],
     "plugins.uninstalled" => ["{name} was uninstalled", "{name}을(를) 제거했습니다", "{name} を削除しました", "已卸载 {name}"],
     "plugins.enable" => ["Enable", "사용", "有効にする", "启用"],
     "plugins.disable" => ["Disable", "사용 안 함", "無効にする", "停用"],

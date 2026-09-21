@@ -107,7 +107,10 @@ screen, is not drawn, and a plugin waiting for an agent must not be waiting for 
 back.
 
 `storage/*` is what a plugin remembers between runs: one JSON document in its own folder
-(`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. Keys are
+(`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. It goes
+when the plugin is uninstalled — what a plugin kept is what it was given — and an update leaves it
+alone. A file that is no longer readable as JSON is moved aside as `storage.corrupt.json` rather
+than written over, so nothing the plugin had is lost without trace. Keys are
 lower-case letters, digits, `.`, `-` and `_`; at most 64 of them, and a megabyte in total. A plugin
 that runs as a process can write its own files instead; a WebAssembly plugin has no files, so this
 is how it keeps anything.

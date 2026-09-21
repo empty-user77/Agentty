@@ -74,6 +74,13 @@ impl StateFile {
         std::fs::create_dir_all(plugins_dir())?;
         let tmp = state_path().with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
+        // It says what the user installed and where from — nobody else's business, and it is
+        // written before it is narrowed nowhere: the mode travels with the rename.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
         std::fs::rename(tmp, state_path())?;
         Ok(())
     }
@@ -311,13 +318,16 @@ pub fn install_from_git(url: &str) -> Result<InstalledPlugin> {
         .context("git is not available")?;
     if !output.status.success() {
         let _ = std::fs::remove_dir_all(&tmp);
-        bail!("git clone failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+        // git repeats the address it was given, and the address may have carried a token.
+        bail!("git clone failed: {}", crate::extensions::mask_words(String::from_utf8_lossy(&output.stderr).trim()));
     }
     // Copied like a folder install, so symlinks in the repository can't point outside the plugin.
     let result = Manifest::load(&tmp).and_then(|manifest| {
         let staging = staging_dir(&manifest.id)?;
         copy_tree(&tmp, &staging, 0)?;
-        finish_install(&manifest, &staging, Source::Git, Some(url.to_string()))
+        // Where it came from is worth keeping; the token somebody pasted into the address is not,
+        // and `state.json` outlives the moment it was pasted.
+        finish_install(&manifest, &staging, Source::Git, Some(crate::extensions::redact_url(url)))
     });
     let _ = std::fs::remove_dir_all(&tmp);
     result
@@ -362,6 +372,11 @@ pub fn create_plugin(name: &str) -> Result<InstalledPlugin> {
 }
 
 /// Removes an installed plugin (a development link is only unlinked; its folder stays).
+///
+/// What the plugin kept goes with it. That folder holds what the user gave the plugin — an HTTP
+/// client's saved requests hold the tokens they were sent with — and a plugin that is no longer
+/// installed has no business leaving them on disk. An update does not come through here: it
+/// replaces the plugin's folder and leaves its data alone.
 pub fn uninstall(id: &str) -> Result<()> {
     if !valid_id(id) {
         bail!("invalid plugin id");
@@ -373,6 +388,12 @@ pub fn uninstall(id: &str) -> Result<()> {
         if dir.exists() {
             std::fs::remove_dir_all(&dir).with_context(|| format!("could not remove {}", dir.display()))?;
         }
+    }
+    // A development link keeps its own folder, but what it kept while it ran was Agentty's to
+    // hold and is removed either way.
+    let data = plugin_data_dir(id);
+    if data.exists() {
+        std::fs::remove_dir_all(&data).with_context(|| format!("could not remove {}", data.display()))?;
     }
     state.plugins.remove(id);
     state.save()
@@ -500,6 +521,60 @@ pub(crate) mod tests {
         test(&dir);
         ROOT.with(|r| *r.borrow_mut() = None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_token_in_a_git_address_is_not_what_is_kept() {
+        // Someone pastes the address their host gave them. It is used, and then it is gone:
+        // `state.json` is read long after the moment it was pasted.
+        let with_credentials = "https://someone:ghp_example_not_a_real_token@github.com/someone/a-plugin.git";
+        let kept = crate::extensions::redact_url(with_credentials);
+        assert!(!kept.contains("ghp_example_not_a_real_token"), "{kept}");
+        assert!(!kept.contains("someone:"), "{kept}");
+        // And what it is for — which repository — is still readable.
+        assert!(kept.contains("github.com/someone/a-plugin.git"), "{kept}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_is_installed_is_written_where_only_the_user_can_read_it() {
+        use std::os::unix::fs::PermissionsExt;
+        with_data_dir(|_| {
+            install_builtin("cosmica").unwrap();
+            let mode = std::fs::metadata(state_path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        });
+    }
+
+    #[test]
+    fn what_a_plugin_kept_goes_when_the_plugin_does() {
+        with_data_dir(|_| {
+            let plugin = install_builtin("cosmica").unwrap();
+            // What the plugin kept while it ran: an HTTP client's saved requests hold the tokens
+            // they were sent with, and an uninstalled plugin should not leave them behind.
+            super::super::storage::set(&plugin.id, "token", serde_json::json!("example_not_a_real_value")).unwrap();
+            let data = plugin_data_dir(&plugin.id);
+            assert!(data.exists());
+
+            uninstall(&plugin.id).unwrap();
+            assert!(!plugins_dir().join(&plugin.id).exists());
+            assert!(!data.exists(), "what the plugin kept is still on disk");
+            assert!(installed().is_empty());
+
+            // And uninstalling something that kept nothing is not an error.
+            uninstall("never-installed").unwrap();
+        });
+    }
+
+    #[test]
+    fn an_update_leaves_what_the_plugin_kept_alone() {
+        with_data_dir(|_| {
+            let plugin = install_builtin("cosmica").unwrap();
+            super::super::storage::set(&plugin.id, "saved", serde_json::json!("a request")).unwrap();
+            // Installing over it is what an update does.
+            install_builtin("cosmica").unwrap();
+            assert_eq!(super::super::storage::get(&plugin.id, "saved").unwrap(), "a request");
+        });
     }
 
     #[cfg(unix)]
