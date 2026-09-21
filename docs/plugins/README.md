@@ -350,8 +350,15 @@ Installing one:
    of the list rather than shown.
 2. The Plugins page shows what the plugin is, where its source is, its licence, the size of the
    module and its checksum, and **what it may do** as full sentences under Permissions.
-3. On Install, Agentty downloads the module, weighs it against that checksum, and refuses it if
-   they differ. Nothing reaches the plugins folder before the checksum matches.
+3. On Install, Agentty downloads the module and refuses it unless it is exactly the length the
+   entry claims, hashes to the checksum the entry claims, and begins with the bytes that make a
+   file a WebAssembly module. Nothing reaches the plugins folder before all three hold — the
+   length and the magic matter as much as the hash, because a hash only proves the bytes are the
+   ones the entry meant, not that they are a module.
+
+A module is served from `github.com`, `raw.githubusercontent.com` or `objects.githubusercontent.com`
+and nowhere else, whatever the entry says. Its `size` is the module's exact length rather than a
+ceiling, so it changes with every build.
 
 An entry says which plugin protocol its module is built against (`apiVersion`, `1` when left out).
 An Agentty that speaks an older one still lists the plugin, but says it needs a newer Agentty
