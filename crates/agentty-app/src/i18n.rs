@@ -1635,6 +1635,52 @@ mod tests {
         }
     }
 
+    /// Every language of a string fills in the same values.
+    ///
+    /// `tf` replaces `{name}` with what the caller passed. A language that lost one during an
+    /// edit does not fail, and does not look wrong in the source — it silently drops the number,
+    /// the filename or the plugin name for everyone reading in that language, and nobody reading
+    /// the English would ever see it. This is the shape of mistake that translating one language
+    /// at a time makes.
+    #[test]
+    fn every_language_of_a_string_fills_in_the_same_values() {
+        fn placeholders(text: &str) -> std::collections::BTreeSet<String> {
+            let mut found = std::collections::BTreeSet::new();
+            let mut rest = text;
+            while let Some(open) = rest.find('{') {
+                rest = &rest[open + 1..];
+                // `{{` is a literal brace, not a placeholder.
+                if rest.starts_with('{') {
+                    rest = &rest[1..];
+                    continue;
+                }
+                let Some(close) = rest.find('}') else { break };
+                let name = &rest[..close];
+                // A placeholder is a name; anything else is prose that happens to have braces
+                // around it, like a JSON example.
+                if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+                    found.insert(name.to_string());
+                }
+                rest = &rest[close + 1..];
+            }
+            found
+        }
+
+        let languages = ["English", "Korean", "Japanese", "Chinese"];
+        for key in KEYS {
+            let row = lookup(key).unwrap();
+            let expected = placeholders(row[0]);
+            for (index, text) in row.iter().enumerate().skip(1) {
+                let found = placeholders(text);
+                assert_eq!(
+                    found, expected,
+                    "{key}: the {} text fills in {found:?} where the English fills in {expected:?}",
+                    languages[index]
+                );
+            }
+        }
+    }
+
     #[test]
     #[cfg(not(target_os = "macos"))]
     fn shortcuts_follow_the_platform() {
