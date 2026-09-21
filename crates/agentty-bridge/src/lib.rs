@@ -80,14 +80,16 @@ pub fn load(agent: Agent, id: &str) -> Result<(Option<String>, Vec<Turn>)> {
 pub fn delete(session: &SessionInfo) -> Result<()> {
     let path = &session.path;
     anyhow::ensure!(path.is_file(), "session file is gone: {}", path.display());
-    // Only ever a transcript inside an agent's own session folder.
+    // Only ever a transcript inside an agent's own session folder. Each reader says where its own
+    // sessions live, so the guard cannot drift from where the files actually are — spelling these
+    // out here had it refusing every Amp session, whose folder is not the one the list guessed.
     let roots = [
-        fsutil::home().join(".claude").join("projects"),
-        fsutil::home().join(".codex").join("sessions"),
-        fsutil::home().join(".agy"),
-        fsutil::home().join(".amp"),
-        fsutil::home().join(".gemini"),
-        fsutil::home().join(".kimi"),
+        claude::session_root(),
+        codex::session_root(),
+        agy::session_root(),
+        amp::session_root(),
+        gemini::session_root(),
+        kimi::session_root(),
     ];
     // `..` is refused rather than resolved: a transcript path never has one, and without this the
     // check below would accept a path that climbs back out of the folder it starts in.
@@ -419,6 +421,14 @@ mod tests {
 
         // A file that is gone is reported rather than silently accepted.
         assert!(delete(&session).is_err());
+
+        // Every agent's own folder is covered: a session file under any of them is accepted by
+        // the root check (this one still fails, on the file being gone).
+        for root in [amp::session_root(), agy::session_root(), kimi::session_root()] {
+            let under = SessionInfo { path: root.join("whatever.json"), ..session.clone() };
+            let refusal = delete(&under).unwrap_err().to_string();
+            assert!(refusal.contains("session file is gone"), "{} was refused by the root check: {refusal}", root.display());
+        }
 
         // A path that climbs out of an agent's session folder is refused too.
         let climbing = SessionInfo {

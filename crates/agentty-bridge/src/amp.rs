@@ -6,6 +6,11 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+/// Where this agent keeps its sessions, for the guard on deleting one.
+pub fn session_root() -> PathBuf {
+    threads_dir()
+}
+
 fn threads_dir() -> PathBuf {
     fsutil::home().join(".local").join("share").join("amp").join("threads")
 }

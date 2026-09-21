@@ -64,22 +64,27 @@ pub fn redact_head(head: &str) -> String {
     };
     let mut out = String::new();
     for (index, line) in head.split("\r\n").take_while(|l| !l.is_empty()).enumerate() {
-        if index > 0 {
-            if let Some((name, _)) = line.split_once(':') {
-                out.push_str(name);
-                out.push_str(if secret(name) { ": ***\n" } else { ": " });
-                if !secret(name) {
-                    out.push_str(line.split_once(':').map(|(_, v)| v.trim()).unwrap_or_default());
-                    out.push('\n');
-                }
-                continue;
-            }
-        }
-        out.push_str(line);
-        out.push('\n');
+        // Checked before the line, not after one particular kind of line: a header block can be
+        // tens of kilobytes of cookies, and every record keeps one of these.
         if out.len() > MAX_RECORDED_HEAD {
             out.push_str("…\n");
             break;
+        }
+        match line.split_once(':').filter(|_| index > 0) {
+            Some((name, _)) if secret(name) => {
+                out.push_str(name);
+                out.push_str(": ***\n");
+            }
+            Some((name, value)) => {
+                out.push_str(name);
+                out.push_str(": ");
+                out.push_str(value.trim());
+                out.push('\n');
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
         }
     }
     out
@@ -542,6 +547,8 @@ fn serve(mut client: TcpStream, shared: &Arc<Shared>) {
         sent += forwarded.len() as u64;
         if records_heads() {
             if let Some(id) = record {
+                // No slicing here: a byte index into a string can fall inside a character, and
+                // `redact_head` stops on its own once it has kept enough.
                 let head = redact_head(&forwarded);
                 update(shared, id, |r| r.request_head = Some(head.clone()));
             }
@@ -584,6 +591,8 @@ fn serve(mut client: TcpStream, shared: &Arc<Shared>) {
             // Only the head: the relay stops reading text at the blank line, the body is untouched.
             if records_heads() {
                 if let Some((shared, id)) = &live {
+                    // A byte slice, not a string slice: `from_utf8_lossy` takes whatever bytes it
+                    // is given, so a cut inside a character cannot panic here.
                     let text = String::from_utf8_lossy(&chunk[..chunk.len().min(MAX_RECORDED_HEAD)]).to_string();
                     let head = redact_head(&text);
                     update(shared, *id, |r| r.response_head = Some(head.clone()));
@@ -722,6 +731,22 @@ mod tests {
         assert!(!redacted.contains("abcdef"));
         assert!(!redacted.contains("xyz"));
         assert!(!redacted.contains("12345"));
+    }
+
+    /// A long header block is cut off. Before, the size check sat on a branch that an ordinary
+    /// `Name: value` line never reached, so a head of any size was kept whole.
+    #[test]
+    fn a_long_head_is_cut_off() {
+        let mut head = String::from("GET / HTTP/1.1\r\nHost: api.example.com\r\n");
+        for i in 0..2_000 {
+            head.push_str(&format!("X-Trace-{i}: {}\r\n", "v".repeat(40)));
+        }
+        head.push_str("\r\n");
+        let redacted = redact_head(&head);
+        assert!(redacted.ends_with("…\n"), "it says it was cut");
+        assert!(redacted.len() < MAX_RECORDED_HEAD + 200, "kept {} bytes", redacted.len());
+        // What came first is still there.
+        assert!(redacted.starts_with("GET / HTTP/1.1\n"));
     }
 
     #[test]

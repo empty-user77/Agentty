@@ -232,9 +232,13 @@ pub(super) struct DbState {
     tables_width: f32,
     /// Row the user clicked in the result grid, shown in full below it.
     picked_row: Option<usize>,
-    /// Widths the user dragged a result column to, by column name. A column not in here is as
-    /// wide as what it holds; keying by name keeps the width when the same query runs again.
-    grid_widths: std::collections::HashMap<String, f32>,
+    /// Widths the user dragged a result column to, by position and name. A column not in here is
+    /// as wide as what it holds. The name keeps the width across a re-run of the same query; the
+    /// position keeps two same-named columns (a self-join's two `id`s) apart.
+    grid_widths: std::collections::HashMap<(usize, String), f32>,
+    /// What each column of the current result measures. Worked out once when the result arrives:
+    /// measuring every cell of 200 rows again on every frame is work the grid does not need.
+    grid_measured: Vec<f32>,
     /// Scroll position of the result grid, so it can carry scrollbars both ways.
     grid_scroll: gpui::ScrollHandle,
     password: Option<(String, Entity<TextInput>)>,
@@ -246,6 +250,19 @@ pub(super) struct DbState {
 }
 
 impl DbState {
+    /// Shows a query result, measuring its columns once here rather than on every frame.
+    fn show_result(&mut self, result: QueryResult) {
+        self.grid_measured = measure_columns(&result);
+        self.picked_row = None;
+        self.result = Some(result);
+    }
+
+    fn clear_result(&mut self) {
+        self.grid_measured.clear();
+        self.picked_row = None;
+        self.result = None;
+    }
+
     pub(super) fn debug_state(&self) -> Value {
         serde_json::json!({
             "root": self.root,
@@ -259,6 +276,32 @@ impl DbState {
             "message": self.message,
             "approvals": self.approvals.len(),
         })
+    }
+}
+
+/// How wide each column of a result wants to be, from what it holds. An id column should not take
+/// the room a message column needs, so this is measured rather than shared out evenly.
+fn measure_columns(result: &QueryResult) -> Vec<f32> {
+    result
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let longest = result.rows.iter().filter_map(|row| row.get(i)).map(cell_chars).max().unwrap_or(0);
+            let chars = longest.max(name.chars().count()) as f32;
+            (chars * COLUMN_CHAR_WIDTH + 20.).clamp(COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH)
+        })
+        .collect()
+}
+
+/// The length of a cell as text, without building that text: measuring a result allocated a string
+/// per cell, and a result has as many cells as it has rows times columns.
+fn cell_chars(value: &Value) -> usize {
+    const LONGEST_THAT_MATTERS: usize = 120;
+    match value {
+        Value::Null => 4,
+        Value::String(s) => s.chars().take(LONGEST_THAT_MATTERS).count(),
+        other => other.to_string().chars().take(LONGEST_THAT_MATTERS).count(),
     }
 }
 
@@ -300,7 +343,7 @@ impl Workbench {
                 self.db.selected = None;
                 self.db.tables.clear();
                 self.db.table = None;
-                self.db.result = None;
+                self.db.clear_result();
                 self.db.message = None;
                 self.db.stale = true;
             }
@@ -367,7 +410,7 @@ impl Workbench {
         self.db.selected = Some(id.clone());
         self.db.tables.clear();
         self.db.table = None;
-        self.db.result = None;
+        self.db.clear_result();
         self.db.message = None;
         let Some(connection) = self.selected_connection().cloned() else { return };
         // Only a password missing is not a reason to refuse: plenty of local databases have none,
@@ -411,7 +454,7 @@ impl Workbench {
                 }
                 this.db.busy = false;
                 match result {
-                    Ok(result) => this.db.result = Some(result),
+                    Ok(result) => this.db.show_result(result),
                     Err(err) => this.db.message = Some((format!("{err:#}"), true)),
                 }
                 cx.notify();
@@ -515,7 +558,7 @@ impl Workbench {
                     this.db.busy = false;
                 }
                 match result {
-                    Ok(result) if write && result.affected.is_none() && for_page => this.db.result = Some(result),
+                    Ok(result) if write && result.affected.is_none() && for_page => this.db.show_result(result),
                     Ok(result) if write => {
                         // Show the table again with the change (the page's own statements).
                         if let Some(table) = this.db.table.clone().filter(|_| for_page) {
@@ -523,7 +566,7 @@ impl Workbench {
                         }
                         this.db.message = Some((tf(cx, "db.affected", &[("n", &result.affected.unwrap_or(0).to_string())]), false));
                     }
-                    Ok(result) if for_page => this.db.result = Some(result),
+                    Ok(result) if for_page => this.db.show_result(result),
                     Ok(_) => {}
                     Err(err) if for_page || write => this.db.message = Some((format!("{err:#}"), true)),
                     Err(_) => {}
@@ -1197,25 +1240,14 @@ impl Workbench {
     }
 
     fn render_db_grid(&self, result: &QueryResult, cx: &mut Context<Self>) -> AnyElement {
-        // Columns as wide as what they actually hold, so an id column stops taking the room a
-        // message column needs. Only the rows on screen would matter, but a result is capped
-        // anyway, and measuring all of them keeps the width from jumping while scrolling.
+        // Measured when the result arrived; what the user dragged a column to wins over it.
         let widths: Vec<f32> = result
             .columns
             .iter()
             .enumerate()
             .map(|(i, name)| {
-                let longest = result
-                    .rows
-                    .iter()
-                    .filter_map(|row| row.get(i))
-                    .map(|value| cell_text(value).chars().take(120).count())
-                    .max()
-                    .unwrap_or(0);
-                let chars = longest.max(name.chars().count()) as f32;
-                let measured = (chars * COLUMN_CHAR_WIDTH + 20.).clamp(COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH);
-                // What the user dragged this column to wins over what it measures.
-                self.db.grid_widths.get(name).copied().unwrap_or(measured)
+                let measured = self.db.grid_measured.get(i).copied().unwrap_or(COLUMN_MIN_WIDTH);
+                self.db.grid_widths.get(&(i, name.clone())).copied().unwrap_or(measured)
             })
             .collect();
         let width = px(ROW_NUMBER_WIDTH + widths.iter().sum::<f32>());
@@ -1269,8 +1301,9 @@ impl Workbench {
                             .on_drag(DbGridDrag, |_, _, _, cx| cx.new(|_| DbGridDrag))
                             .on_drag_move(cx.listener(move |this, event: &gpui::DragMoveEvent<DbGridDrag>, _, cx| {
                                 let delta = f32::from(event.event.position.x) - f32::from(event.bounds.origin.x);
-                                let current = this.db.grid_widths.get(&name).copied().unwrap_or(start);
-                                this.db.grid_widths.insert(name.clone(), (current + delta).clamp(COLUMN_MIN_WIDTH, COLUMN_DRAG_MAX_WIDTH));
+                                let key = (i, name.clone());
+                                let current = this.db.grid_widths.get(&key).copied().unwrap_or(start);
+                                this.db.grid_widths.insert(key, (current + delta).clamp(COLUMN_MIN_WIDTH, COLUMN_DRAG_MAX_WIDTH));
                                 cx.notify();
                             })),
                     )
@@ -1697,6 +1730,29 @@ mod tests {
         assert_eq!(Job::Sql("select 1".into()).verdict(Engine::MySql), Verdict::Read);
         assert_eq!(cell_text(&Value::Null), "NULL");
         assert_eq!(cell_text(&serde_json::json!({"a": 1})), "{\"a\":1}");
+    }
+
+    /// Columns are measured once, off the values themselves: the old code built a string per cell
+    /// and did it again on every frame.
+    #[test]
+    fn columns_are_measured_from_what_they_hold() {
+        let result = QueryResult {
+            columns: vec!["id".into(), "note".into()],
+            rows: vec![
+                vec![serde_json::json!(1), serde_json::json!("a longer note than the id column")],
+                vec![serde_json::json!(2), Value::Null],
+            ],
+            truncated: false,
+            affected: None,
+        };
+        let widths = measure_columns(&result);
+        assert_eq!(widths.len(), 2);
+        assert!(widths[1] > widths[0], "the note column is wider than the id column");
+        assert!(widths.iter().all(|w| (COLUMN_MIN_WIDTH..=COLUMN_MAX_WIDTH).contains(w)));
+        // Measuring never builds the cell's text.
+        assert_eq!(cell_chars(&Value::Null), "NULL".len());
+        assert_eq!(cell_chars(&serde_json::json!("한글")), 2);
+        assert_eq!(cell_chars(&serde_json::json!("x".repeat(500))), 120);
     }
 
     /// The dialog shows what runs: a statement that would render differently is refused outright.

@@ -1345,16 +1345,16 @@ pub fn is_local_url(url: &str) -> bool {
             .unwrap_or(authority),
     };
     let host = host.trim_end_matches('.').to_ascii_lowercase();
-    host == "localhost"
-        || host == "127.0.0.1"
-        || host == "0.0.0.0"
-        || host == "::1"
-        || host.ends_with(".localhost")
-        || host.ends_with(".local")
-        || host.ends_with(".test")
-        || host.starts_with("192.168.")
-        || host.starts_with("10.")
-        || host.is_empty()
+    // An address is judged as an address, not by how it is spelled: "10.evil.com" and
+    // "192.168.example.com" are ordinary public names that a prefix test would call local.
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified(),
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+        };
+    }
+    // `.localhost`, `.local` and `.test` are reserved for exactly this (RFC 6761, RFC 6762).
+    host.is_empty() || host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") || host.ends_with(".test")
 }
 
 #[cfg(test)]
@@ -1380,6 +1380,26 @@ mod link_tests {
             "https://vercel.com/dashboard",
         ] {
             assert!(!is_local_url(url), "{url} needs the signed-in browser");
+        }
+    }
+
+    /// A name is not an address: a public host that merely starts or ends like a local one goes to
+    /// the signed-in browser like any other.
+    #[test]
+    fn a_public_name_that_looks_local_is_not() {
+        for url in [
+            "http://10.evil.example/steal",
+            "http://192.168.example.com/",
+            "http://127.0.0.1.example.com/",
+            "http://localhost.example.com/",
+            "http://10.0.0.1.example.com/",
+            "http://127.0.0.1@example.com/",
+        ] {
+            assert!(!is_local_url(url), "{url} is a public name");
+        }
+        // Real private addresses still are local, including the Docker range a prefix test missed.
+        for url in ["http://172.17.0.2:8080/", "http://10.0.0.7:3000/", "http://169.254.1.1/"] {
+            assert!(is_local_url(url), "{url} is on this network");
         }
     }
 

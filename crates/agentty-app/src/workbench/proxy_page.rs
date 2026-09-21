@@ -24,6 +24,16 @@ pub(super) struct ProxyPage {
     watching: bool,
     error: Option<String>,
     scroll: gpui::UniformListScrollHandle,
+    /// Records passing the chips and the filter, newest first. Worked out when what it depends on
+    /// changes rather than on every frame: with headers recorded a record carries two of them, and
+    /// the list holds thousands.
+    visible: Vec<Record>,
+    /// What `visible` was worked out from: the capture revision, the filter text, the chip.
+    visible_key: Option<(u64, String, Option<String>)>,
+    /// Whether the machine's own proxy settings point here, read off disk by the watcher.
+    system_on: bool,
+    /// A `networksetup` exchange is running; the button waits rather than starting a second one.
+    system_busy: bool,
 }
 
 impl ProxyPage {
@@ -38,6 +48,10 @@ impl ProxyPage {
             watching: false,
             error: None,
             scroll: gpui::UniformListScrollHandle::new(),
+            visible: Vec::new(),
+            visible_key: None,
+            system_on: false,
+            system_busy: false,
         }
     }
 }
@@ -98,6 +112,13 @@ impl Workbench {
                     this.proxy.records = capture::records();
                     cx.notify();
                 }
+                // Whether the machine points here is a file on disk; the bar asks the watcher for
+                // it rather than reading it on every frame.
+                let system_on = crate::platform::system_proxy::saved_previous().is_some();
+                if system_on != this.proxy.system_on {
+                    this.proxy.system_on = system_on;
+                    cx.notify();
+                }
                 true
             });
             if !matches!(open, Ok(true)) {
@@ -113,24 +134,38 @@ impl Workbench {
         self.all_panes().iter().find(|p| p.read(cx).pane_id == id).map(|p| p.read(cx).display_title()).unwrap_or_else(|| format!("#{id}"))
     }
 
-    /// Records that pass the endpoint chip and the text filter, newest first.
-    fn visible_records(&self, cx: &gpui::App) -> Vec<Record> {
+    /// Brings `proxy.visible` up to date: the records that pass the endpoint chip and the text
+    /// filter, newest first. It is rebuilt only when the capture, the filter or the chip changed —
+    /// a record can carry two recorded heads, so filtering the whole list on every frame moved
+    /// megabytes for nothing.
+    fn refresh_visible(&mut self, cx: &gpui::App) {
         let query = self.proxy.filter.read(cx).text().trim().to_string();
-        self.proxy
+        let key = (self.proxy.revision, query, self.proxy.endpoint.clone());
+        if self.proxy.visible_key.as_ref() == Some(&key) {
+            return;
+        }
+        let (_, query, endpoint) = &key;
+        let titles: Vec<(Option<u64>, String)> = self.proxy.records.iter().map(|r| (r.pane, self.pane_title(r.pane, cx))).collect();
+        self.proxy.visible = self
+            .proxy
             .records
             .iter()
+            .enumerate()
             .rev()
-            .filter(|r| self.proxy.endpoint.as_ref().is_none_or(|e| &r.endpoint() == e))
-            .filter(|r| query.is_empty() || matches(r, &self.pane_title(r.pane, cx), &query))
-            .cloned()
-            .collect()
+            .filter(|(_, r)| endpoint.as_ref().is_none_or(|e| &r.endpoint() == e))
+            .filter(|(i, r)| query.is_empty() || matches(r, &titles[*i].1, query))
+            .map(|(_, r)| r.clone())
+            .collect();
+        self.proxy.visible_key = Some(key);
     }
 
     pub(super) fn render_proxy_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         self.watch_capture(cx);
+        self.refresh_visible(cx);
         let recording = capture::is_recording();
         let port = capture::port();
-        let visible = self.visible_records(cx);
+        let shown = self.proxy.visible.len();
+        let (sent, received): (u64, u64) = self.proxy.visible.iter().fold((0, 0), |acc, r| (acc.0 + r.sent, acc.1 + r.received));
         let total = self.proxy.records.len();
 
         let toggle = div()
@@ -186,7 +221,9 @@ impl Workbench {
 
         // The whole machine, not just Agentty's tabs. It changes the system's own proxy settings,
         // so it says what it does, needs the administrator password, and puts them back when off.
-        let system_on = crate::platform::system_proxy::saved_previous().is_some();
+        // Read by the watcher, not here: this runs on every frame and that reads a file.
+        let system_on = self.proxy.system_on;
+        let system_busy = self.proxy.system_busy;
         let system = crate::platform::system_proxy::supported().then(|| {
             div()
                 .id("proxy-system")
@@ -204,9 +241,14 @@ impl Workbench {
                 .text_color(hex(if system_on { Chrome::BRIGHT } else { Chrome::MUTED }))
                 .tooltip(crate::ui::Tooltip::text(t(cx, "proxy.system_hint"), None))
                 .hover(|s| s.border_color(hex(Chrome::WARNING)))
+                .when(system_busy, |d| d.opacity(0.6))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_system_capture(cx)))
                 .child(icon("globe", IconSize::INLINE, hex(if system_on { Chrome::WARNING } else { Chrome::MUTED })))
-                .child(t(cx, if system_on { "proxy.system_off" } else { "proxy.system_on" }))
+                .child(if system_busy {
+                    t(cx, "proxy.system_working").to_string()
+                } else {
+                    t(cx, if system_on { "proxy.system_off" } else { "proxy.system_on" }).to_string()
+                })
         });
 
         let state = match (recording, port) {
@@ -333,10 +375,9 @@ impl Workbench {
             .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(tf(
                 cx,
                 "proxy.count",
-                &[("shown", &visible.len().to_string()), ("total", &total.to_string())],
+                &[("shown", &shown.to_string()), ("total", &total.to_string())],
             )));
 
-        let (sent, received): (u64, u64) = visible.iter().fold((0, 0), |acc, r| (acc.0 + r.sent, acc.1 + r.received));
         let columns = div()
             .h(px(ROW_HEIGHT))
             .flex_shrink_0()
@@ -358,7 +399,7 @@ impl Workbench {
             .child(div().w(px(76.)).flex_shrink_0().text_right().child(format!("↓ {}", bytes(received))))
             .child(div().w(px(70.)).flex_shrink_0().text_right().child(t(cx, "proxy.col_time_taken")));
 
-        let table: AnyElement = if visible.is_empty() {
+        let table: AnyElement = if shown == 0 {
             let text = if total > 0 {
                 t(cx, "proxy.no_match")
             } else if recording {
@@ -377,10 +418,14 @@ impl Workbench {
                 .child(
                     gpui::uniform_list(
                         "proxy-rows",
-                        visible.len(),
+                        shown,
                         cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                            let rows = this.visible_records(cx);
-                            range.filter_map(|i| rows.get(i).map(|record| this.render_proxy_row(i, record, cx))).collect::<Vec<_>>()
+                            this.refresh_visible(cx);
+                            // Only the rows actually on screen are copied out, so the borrow ends
+                            // before they are rendered.
+                            let rows: Vec<(usize, Record)> =
+                                range.filter_map(|i| this.proxy.visible.get(i).map(|r| (i, r.clone()))).collect();
+                            rows.into_iter().map(|(i, record)| this.render_proxy_row(i, &record, cx)).collect::<Vec<_>>()
                         }),
                     )
                     .track_scroll(handle)
@@ -417,28 +462,56 @@ impl Workbench {
     }
 
     /// Sends the machine's own traffic through the capture proxy, or puts the settings back.
+    ///
+    /// `networksetup` is a subprocess per network service and takes a moment each; the whole
+    /// exchange runs in the background, or the window would stand still for seconds on one click.
     pub(super) fn toggle_system_capture(&mut self, cx: &mut Context<Self>) {
         use crate::platform::system_proxy;
-        if let Some(previous) = system_proxy::saved_previous() {
+        if self.proxy.system_busy {
+            return;
+        }
+        let previous = system_proxy::saved_previous();
+        if previous.is_none() {
+            if !capture::is_recording() {
+                self.proxy.error = capture::start().err().map(|err| err.to_string());
+            }
+            if capture::port().is_none() {
+                return cx.notify();
+            }
+        }
+        let port = capture::port();
+        self.proxy.system_busy = true;
+        self.proxy.error = None;
+        // Stop serving untokened connections before the settings go back, so nothing else on the
+        // machine is listed once it is no longer pointed here.
+        if previous.is_some() {
             capture::set_allow_system(false);
-            match system_proxy::restore(&previous) {
-                Ok(()) => self.show_toast(t(cx, "proxy.system_restored"), cx),
-                Err(err) => self.proxy.error = Some(format!("{err}")),
+        }
+        let work = cx.background_spawn(async move {
+            match previous {
+                Some(previous) => system_proxy::restore(&previous).map(|()| false),
+                None => system_proxy::enable(port.expect("checked above")).map(|_| true),
             }
-            return cx.notify();
-        }
-        if !capture::is_recording() {
-            self.proxy.error = capture::start().err().map(|err| err.to_string());
-        }
-        let Some(port) = capture::port() else { return cx.notify() };
-        match system_proxy::enable(port) {
-            Ok(_) => {
-                // Only now: until the machine is actually pointed here, the token is the only way in.
-                capture::set_allow_system(true);
-                self.show_toast(t(cx, "proxy.system_applied"), cx);
-            }
-            Err(err) => self.proxy.error = Some(format!("{err}")),
-        }
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.proxy.system_busy = false;
+                match outcome {
+                    Ok(enabled) => {
+                        // Only now: until the machine is actually pointed here, the token is the
+                        // only way in.
+                        capture::set_allow_system(enabled);
+                        this.proxy.system_on = enabled;
+                        let message = t(cx, if enabled { "proxy.system_applied" } else { "proxy.system_restored" });
+                        this.show_toast(message, cx);
+                    }
+                    Err(err) => this.proxy.error = Some(format!("{err}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
     }
 

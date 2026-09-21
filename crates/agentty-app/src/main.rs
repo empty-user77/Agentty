@@ -891,6 +891,9 @@ pub fn request_quit(cx: &mut App) {
             eprintln!("agentty: could not put the system proxy settings back: {err}");
         }
     }
+    // The sleep lock is held by a child process, which outlives Agentty unless it is let go of
+    // here: quitting with "Prevent sleep" on would otherwise keep the machine awake for good.
+    platform::wakelock::set(false);
     cx.quit();
 }
 

@@ -181,6 +181,12 @@ fn cluster_links(pairs: impl Iterator<Item = (usize, usize)>) -> LinkedWorkspace
         }
         // The cluster hangs off the workspace the first of its links started from.
         let root = root_of.get(&from).copied().unwrap_or(from);
+        // A link back to the root — the "two way" button on an edge, or any ring of links — has
+        // nothing to move: taking the root's own list apart here would leave its members listed
+        // under no root at all, and the sidebar would stop showing them.
+        if to == root {
+            continue;
+        }
         // Whatever already hangs off the joining workspace comes along with it.
         let moving: Vec<usize> = std::iter::once(to).chain(members.remove(&to).unwrap_or_default()).collect();
         for index in moving {
@@ -1106,6 +1112,25 @@ mod tests {
         assert_eq!(clusters.members.get(&0), Some(&vec![1, 2, 3]));
         assert_eq!(clusters.members.get(&1), None);
         assert_eq!(clusters.followers.len(), 3);
+    }
+
+    /// A link back to the workspace a cluster already hangs off — the "two way" button on an edge
+    /// — must not take the cluster apart: its members would be listed nowhere at all.
+    #[test]
+    fn a_link_back_to_the_root_keeps_the_cluster() {
+        let both_ways = cluster_links([(0, 1), (1, 0)].into_iter());
+        assert_eq!(both_ways.members.get(&0), Some(&vec![1]));
+        assert_eq!(both_ways.followers.len(), 1);
+        // The same closing a longer ring.
+        let ring = cluster_links([(0, 1), (1, 2), (2, 0)].into_iter());
+        assert_eq!(ring.members.get(&0), Some(&vec![1, 2]));
+        assert_eq!(ring.followers.len(), 2);
+        // Whatever the shape, every follower is listed under exactly one root.
+        for clusters in [both_ways, ring] {
+            let listed: Vec<usize> = clusters.members.values().flatten().copied().collect();
+            assert_eq!(listed.len(), clusters.followers.len());
+            assert!(listed.iter().all(|i| clusters.followers.contains(i)));
+        }
     }
 
     #[test]

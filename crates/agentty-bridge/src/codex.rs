@@ -9,6 +9,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+/// Where this agent keeps its sessions, for the guard on deleting one.
+pub fn session_root() -> PathBuf {
+    codex_dir().join("sessions")
+}
+
 fn codex_dir() -> PathBuf {
     fsutil::home().join(".codex")
 }

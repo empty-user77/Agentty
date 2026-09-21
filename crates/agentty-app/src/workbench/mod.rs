@@ -283,6 +283,9 @@ pub struct Rename {
 
 /// How long a branch's pull request is remembered before asking GitHub again.
 const PR_REFRESH: std::time::Duration = std::time::Duration::from_secs(180);
+/// Pull-request lookups started in one pass; the rest wait for the next one. Each is a `gh`
+/// process talking to GitHub, so a window full of branches asks for a few at a time.
+const PR_LOOKUPS_AT_ONCE: usize = 4;
 
 /// Continuing a session whose context is at least this full offers to compact it first.
 const COMPACT_OFFER_AT: f64 = 80.0;
@@ -684,6 +687,9 @@ impl Workbench {
         });
         cx.on_app_quit(|this, cx| {
             this.persist(cx);
+            // Whichever way the app is going down: the sleep lock is a child process and would
+            // outlive it. Letting go of it twice is a no-op.
+            crate::platform::wakelock::set(false);
             async {}
         })
         .detach();
@@ -745,7 +751,14 @@ impl Workbench {
         crate::metrics::track(cx, "pane_opened", serde_json::json!({ "tool": tool }));
         let pane = cx.new(|cx| TerminalView::new(spec, cx));
         let subscription = cx.subscribe(&pane, |this, pane, event: &TerminalEvent, cx| match event {
-            TerminalEvent::Exited => this.remove_pane(&pane, cx),
+            TerminalEvent::Exited => {
+                // A process ending on its own closes its tab as surely as the ✕ does, so the tab
+                // is remembered here too. Without it the workspace would fall dormant on whatever
+                // tab happened to be first in its history, and the one that just ended was lost.
+                // A single split ending is not a tab closing, and records nothing.
+                this.remember_closed_tabs(std::slice::from_ref(&pane), cx);
+                this.remove_pane(&pane, cx);
+            }
             TerminalEvent::Activated => {
                 let pane_id = pane.read(cx).pane_id;
                 if this.mark_pane_read(pane_id) {
@@ -1360,10 +1373,17 @@ impl Workbench {
             }
         }
         let now = std::time::Instant::now();
+        let mut started = 0;
         for key in wanted {
             if self.pull_requests.get(&key).is_some_and(|(_, at)| now.duration_since(*at) < PR_REFRESH) {
                 continue;
             }
+            // A few at a time: the rest are picked up on the next pass, since only the ones
+            // actually started are marked as looked up.
+            if started >= PR_LOOKUPS_AT_ONCE {
+                break;
+            }
+            started += 1;
             // Marked as looked up right away, so a slow `gh` is not started again every frame.
             self.pull_requests.entry(key.clone()).or_insert((None, now)).1 = now;
             let (repo, branch) = key.clone();
@@ -1500,23 +1520,32 @@ impl Workbench {
         };
         crate::native::open_color_panel(current.unwrap_or(ACCENTS[0]));
         self.color_picking = Some(target);
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(std::time::Duration::from_millis(120)).await;
-            let keep_going = this
-                .update(cx, |this, cx| {
-                    if this.color_picking != Some(target) || !crate::native::color_panel_visible() {
-                        this.color_picking = None;
-                        return false;
-                    }
-                    if let Some(color) = crate::native::color_panel_color() {
-                        this.set_color(target, Some(color), cx);
-                    }
-                    true
-                })
-                .unwrap_or(false);
-            if !keep_going {
-                break;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(120)).await;
+                let keep_going = this
+                    .update(cx, |this, cx| {
+                        // Another target took the panel over: this loop is the old one and leaves
+                        // quietly. Clearing the flag here would stop the new loop as well.
+                        if this.color_picking != Some(target) {
+                            return false;
+                        }
+                        if !crate::native::color_panel_visible() {
+                            this.color_picking = None;
+                            return false;
+                        }
+                        if let Some(color) = crate::native::color_panel_color() {
+                            this.apply_color(target, Some(color), cx);
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
             }
+            // The colour the panel was left on is the one that is kept.
+            let _ = this.update(cx, |this, cx| this.persist(cx));
         })
         .detach();
         cx.notify();
@@ -1524,6 +1553,15 @@ impl Workbench {
 
     /// Paints `target` with `color` (`None` clears it) and saves the layout.
     pub(super) fn set_color(&mut self, target: chrome::ColorTarget, color: Option<u32>, cx: &mut Context<Self>) {
+        if self.apply_color(target, color, cx) {
+            self.persist(cx);
+        }
+    }
+
+    /// Colours the target without saving, for the live preview while the colour panel is open:
+    /// following a slider would otherwise write the whole layout to disk several times a second.
+    /// Returns whether anything changed.
+    fn apply_color(&mut self, target: chrome::ColorTarget, color: Option<u32>, cx: &mut Context<Self>) -> bool {
         let changed = match target {
             chrome::ColorTarget::Workspace(id) => match self.workspaces.iter_mut().find(|w| w.id == id) {
                 Some(ws) if ws.color != color => {
@@ -1541,9 +1579,9 @@ impl Workbench {
             },
         };
         if changed {
-            self.persist(cx);
             cx.notify();
         }
+        changed
     }
 
     /// Records every tab whose panes are all in `closing` as a recently closed tab of its
