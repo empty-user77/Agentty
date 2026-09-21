@@ -38,6 +38,36 @@ impl gpui::Render for PluginWindow {
     }
 }
 
+/// What [`Workbench::reconcile_plugin_windows`] has decided: which windows go, and which one to
+/// open. Pure on purpose — the rule is what three bugs were in, and it is worth a test that needs
+/// no screen.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct WindowPlan {
+    close: Vec<String>,
+    open: Option<String>,
+}
+
+/// Exactly one window may exist: the open panel's, and only while its mode says so. A window that
+/// is already open, or already on its way, is not opened twice.
+fn window_plan<'a>(
+    panel: Option<&str>,
+    mode: Option<PanelMode>,
+    open: impl Iterator<Item = &'a str>,
+    opening: impl Iterator<Item = &'a str>,
+) -> WindowPlan {
+    let keep = panel.filter(|_| mode == Some(PanelMode::Window));
+    let open: Vec<&str> = open.collect();
+    let mut plan = WindowPlan { close: open.iter().filter(|id| keep != Some(**id)).map(|id| id.to_string()).collect(), open: None };
+    // Sorted, so a plan over a map with no order of its own is the same plan every time.
+    plan.close.sort();
+    let Some(plugin) = keep else { return plan };
+    if open.contains(&plugin) || opening.into_iter().any(|id| id == plugin) {
+        return plan;
+    }
+    plan.open = Some(plugin.to_string());
+    plan
+}
+
 impl Workbench {
     /// Brings the windows in line with the panel that is open. Every way a panel can be opened —
     /// an icon on any surface, the Plugins page, the command palette, an idea, the plugin asking
@@ -45,17 +75,19 @@ impl Workbench {
     /// with. A call site that has to remember to do this itself is a call site that forgets, and
     /// a `window`-mode panel that opens no window shows the user nothing at all.
     pub(super) fn reconcile_plugin_windows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Exactly one window may exist: the open panel's, and only while its mode says so.
-        let keep = self.plugin_panel.clone().filter(|plugin| self.plugin_panel_mode(plugin, cx) == PanelMode::Window);
-        let stale: Vec<String> = self.plugin_windows.keys().filter(|id| keep.as_deref() != Some(id.as_str())).cloned().collect();
-        for id in stale {
+        let mode = self.plugin_panel.clone().map(|plugin| self.plugin_panel_mode(&plugin, cx));
+        let plan = window_plan(
+            self.plugin_panel.as_deref(),
+            mode,
+            self.plugin_windows.keys().map(String::as_str),
+            self.plugin_windows_opening.iter().map(String::as_str),
+        );
+        for id in plan.close {
             self.close_plugin_window(&id, cx);
         }
-        let Some(plugin) = keep else { return };
-        if self.plugin_windows.contains_key(&plugin) || self.plugin_windows_opening.contains(&plugin) {
-            return;
+        if let Some(plugin) = plan.open {
+            self.open_plugin_window(&plugin, window, cx);
         }
-        self.open_plugin_window(&plugin, window, cx);
     }
 
     /// Brings a panel's own window to the front, for when the user asks for a panel that is
@@ -134,5 +166,66 @@ impl Workbench {
             self.plugin_windows_closing.insert(plugin.to_string());
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{window_plan, WindowPlan};
+    use agentty_bridge::plugins::manifest::PanelMode;
+
+    fn plan(panel: Option<&str>, mode: Option<PanelMode>, open: &[&str], opening: &[&str]) -> WindowPlan {
+        window_plan(panel, mode, open.iter().copied(), opening.iter().copied())
+    }
+
+    #[test]
+    fn a_window_mode_panel_gets_a_window() {
+        assert_eq!(plan(Some("hello"), Some(PanelMode::Window), &[], &[]), WindowPlan { close: vec![], open: Some("hello".into()) });
+    }
+
+    #[test]
+    fn a_panel_docked_or_floating_or_filling_the_area_gets_none() {
+        for mode in [PanelMode::Push, PanelMode::Overlay, PanelMode::Full] {
+            assert_eq!(plan(Some("hello"), Some(mode), &[], &[]), WindowPlan::default(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn the_window_goes_when_the_panel_leaves_it() {
+        // The mode was changed from `window` to `push`: the window closes and the panel stays.
+        assert_eq!(plan(Some("hello"), Some(PanelMode::Push), &["hello"], &[]), WindowPlan { close: vec!["hello".into()], open: None });
+    }
+
+    #[test]
+    fn the_window_goes_when_its_plugin_does() {
+        // Disabled, uninstalled, or the panel simply closed: nothing is left behind.
+        assert_eq!(plan(None, None, &["hello"], &[]), WindowPlan { close: vec!["hello".into()], open: None });
+    }
+
+    #[test]
+    fn another_plugin_s_window_is_not_left_open_behind_this_one() {
+        assert_eq!(
+            plan(Some("hello"), Some(PanelMode::Window), &["other"], &[]),
+            WindowPlan { close: vec!["other".into()], open: Some("hello".into()) }
+        );
+    }
+
+    #[test]
+    fn a_window_that_exists_is_not_opened_again() {
+        assert_eq!(plan(Some("hello"), Some(PanelMode::Window), &["hello"], &[]), WindowPlan::default());
+    }
+
+    #[test]
+    fn a_window_on_its_way_is_not_opened_again() {
+        // Opening is deferred to after the update; without this the next frame asks for a second.
+        assert_eq!(plan(Some("hello"), Some(PanelMode::Window), &[], &["hello"]), WindowPlan::default());
+    }
+
+    #[test]
+    fn every_stale_window_goes_at_once() {
+        assert_eq!(
+            plan(Some("hello"), Some(PanelMode::Window), &["one", "two"], &[]),
+            WindowPlan { close: vec!["one".into(), "two".into()], open: Some("hello".into()) }
+        );
     }
 }

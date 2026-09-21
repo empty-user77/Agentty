@@ -1382,6 +1382,7 @@ strings! {
     "plugins.perm.workspace" => ["See workspaces and folders", "작업공간·폴더 보기", "ワークスペースとフォルダを参照", "查看工作区和文件夹"],
     "plugins.market" => ["Marketplace", "마켓플레이스", "マーケットプレイス", "插件市场"],
     "plugins.market_kept" => ["The list read {when} ago, while a new one is read.", "{when} 전에 읽은 목록입니다. 새로 읽는 중.", "{when} 前に読み込んだ一覧です。新しく読み込み中。", "这是 {when} 前读取的列表，正在重新读取。"],
+    "plugins.market_kept_now" => ["The list read a moment ago, while a new one is read.", "방금 읽은 목록입니다. 새로 읽는 중.", "先ほど読み込んだ一覧です。新しく読み込み中。", "这是刚刚读取的列表，正在重新读取。"],
     "plugins.update_all" => ["Update all ({n})", "모두 업데이트 ({n})", "すべて更新 ({n})", "全部更新 ({n})"],
     "plugins.update_to" => ["Update to {version}", "{version}로 업데이트", "{version} に更新", "更新到 {version}"],
     "plugins.market_loading" => ["Reading the marketplace…", "마켓플레이스를 읽는 중…", "マーケットプレイスを読み込み中…", "正在读取插件市场…"],

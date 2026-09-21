@@ -3221,6 +3221,9 @@ impl Workbench {
                 }
             }
             "plugin-install" => self.install_builtin_plugin(argument.to_string(), window, cx),
+            // `plugin-market refresh|install <id>|update-all|uninstall <id>`: the marketplace's
+            // own buttons, so its paths can be driven without the mouse.
+            "plugin-market" => self.debug_market(argument, window, cx),
             // `plugin-enable <plugin> on|off`: the switch on the Plugins page, which is also how a
             // panel (and a panel's own window) is meant to go away when its plugin does.
             "plugin-enable" => {
@@ -3293,7 +3296,7 @@ impl Workbench {
                         plugin.id,
                         plugin.enabled,
                         runtime.map(|r| r.state.clone()),
-                        panel.chars().take(600).collect::<String>(),
+                        panel.chars().take(8000).collect::<String>(),
                         runtime.map(|r| r.logs.iter().rev().take(6).cloned().collect::<Vec<_>>())
                     );
                 }
