@@ -55,12 +55,22 @@ pub fn set_record_heads(on: bool) {
 pub fn redact_head(head: &str) -> String {
     let secret = |name: &str| {
         let name = name.trim().to_ascii_lowercase();
-        matches!(name.as_str(), "authorization" | "proxy-authorization" | "cookie" | "set-cookie")
-            || name.ends_with("-token")
+        // Whole names first: a credential header is not always spelled with hyphens. `apikey` is
+        // what Supabase's own client sends, and plain `token` / `secret` are common enough.
+        matches!(
+            name.as_str(),
+            "authorization" | "proxy-authorization" | "cookie" | "set-cookie" | "apikey" | "token" | "secret" | "password" | "session"
+        ) || name.ends_with("-token")
             || name.ends_with("-key")
             || name.ends_with("-secret")
+            || name.ends_with("-password")
+            || name.ends_with("_token")
+            || name.ends_with("_key")
+            || name.ends_with("_secret")
             || name.contains("api-key")
+            || name.contains("apikey")
             || name.contains("auth")
+            || name.contains("credential")
     };
     let mut out = String::new();
     for (index, line) in head.split("\r\n").take_while(|l| !l.is_empty()).enumerate() {
@@ -731,6 +741,20 @@ mod tests {
         assert!(!redacted.contains("abcdef"));
         assert!(!redacted.contains("xyz"));
         assert!(!redacted.contains("12345"));
+    }
+
+    /// Credential headers are not all spelled with hyphens: `apikey` is what Supabase's client
+    /// sends, and it went through unmasked.
+    #[test]
+    fn credential_headers_without_hyphens_are_masked_too() {
+        let head = "GET /rest/v1/rows HTTP/1.1\r\nHost: project.supabase.example\r\napikey: sb_example_not_a_real_key\r\nToken: example_not_a_real_token\r\nX-Client-Info: supabase-js/2.0\r\n\r\n";
+        let redacted = redact_head(head);
+        assert!(redacted.contains("apikey: ***"), "{redacted}");
+        assert!(redacted.contains("Token: ***"), "{redacted}");
+        assert!(!redacted.contains("not_a_real"), "no credential survives: {redacted}");
+        // What is not a credential still reads normally.
+        assert!(redacted.contains("X-Client-Info: supabase-js/2.0"));
+        assert!(redacted.contains("Host: project.supabase.example"));
     }
 
     /// A long header block is cut off. Before, the size check sat on a branch that an ordinary

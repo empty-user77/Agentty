@@ -113,6 +113,12 @@ pub fn enable(port: u16) -> std::io::Result<Previous> {
         }
     }
     let previous = Previous { services: services.iter().map(|s| read_service(s)).collect() };
+    // Another Agentty (a second data dir, a dev build beside the real one) already has the machine
+    // pointed at its own capture port. Recording that as "what was there before" would lose the
+    // user's real settings for good, so this refuses instead.
+    if previous.services.iter().any(|s| s.secure_enabled && is_loopback(&s.secure_server) && s.secure_port != port) {
+        return Err(std::io::Error::other("the machine already goes through another local proxy — turn that one off first"));
+    }
     save_previous(&previous);
     let port = port.to_string();
     for service in &services {
@@ -143,10 +149,14 @@ pub fn restore(previous: &Previous) -> std::io::Result<()> {
             failure.get_or_insert(err);
         }
     }
-    let _ = std::fs::remove_file(state_file());
     match failure {
+        // The record stays on disk: the machine is still pointed somewhere it should not be, and
+        // the next launch is the only chance left to put it back.
         Some(err) => Err(err),
-        None => Ok(()),
+        None => {
+            let _ = std::fs::remove_file(state_file());
+            Ok(())
+        }
     }
 }
 
@@ -183,6 +193,28 @@ mod tests {
         assert_eq!(parse_proxy(text), (true, "127.0.0.1".to_string(), 51234));
         let off = "Enabled: No\nServer: \nPort: 0\nAuthenticated Proxy Enabled: 0\n";
         assert_eq!(parse_proxy(off), (false, String::new(), 0));
+    }
+
+    /// A failed restore keeps the record: it is the only way the next launch can put the settings
+    /// back, and deleting it stranded the machine on a dead port.
+    #[test]
+    fn a_failed_restore_keeps_what_it_could_not_put_back() {
+        let previous = Previous {
+            services: vec![ServiceProxy {
+                service: "No Such Service".into(),
+                web_enabled: false,
+                web_server: String::new(),
+                web_port: 0,
+                secure_enabled: false,
+                secure_server: String::new(),
+                secure_port: 0,
+            }],
+        };
+        save_previous(&previous);
+        // `networksetup` cannot know this service, so the restore fails on every platform.
+        assert!(restore(&previous).is_err());
+        assert!(saved_previous().is_some(), "the record is still there to try again");
+        let _ = std::fs::remove_file(state_file());
     }
 
     #[test]

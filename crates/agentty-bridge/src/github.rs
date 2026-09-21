@@ -31,7 +31,9 @@ impl PullRequest {
 
 /// The pull request GitHub has for `branch` in `repo`, if any.
 pub fn pull_request(repo: &Path, branch: &str) -> Option<PullRequest> {
-    if branch.is_empty() || !repo.is_dir() {
+    // A ref may be named `--web` or `--repo=someone/else`, and it would be read as a flag rather
+    // than as the branch to ask about. `git::checkout` guards the same way before running `git`.
+    if branch.is_empty() || branch.starts_with('-') || !repo.is_dir() {
         return None;
     }
     let output = process::command("gh")
@@ -73,5 +75,13 @@ mod tests {
     fn a_branch_without_a_repository_has_no_pull_request() {
         assert!(pull_request(Path::new("/definitely/not/a/repo"), "main").is_none());
         assert!(pull_request(Path::new("."), "").is_none());
+    }
+
+    /// A branch out of a repository someone else wrote is not allowed to turn into a flag.
+    #[test]
+    fn a_branch_that_looks_like_a_flag_is_refused() {
+        for branch in ["--web", "--repo=someone/else", "-R"] {
+            assert!(pull_request(Path::new("."), branch).is_none(), "{branch} must not reach gh");
+        }
     }
 }
