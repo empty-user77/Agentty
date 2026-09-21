@@ -72,11 +72,18 @@ plugin's permissions (see the guide).
 `POST`, `PUT`, `PATCH`, `DELETE` and `OPTIONS` over `http` or `https`; at most 32 headers, none of
 them `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Upgrade` or `Expect`, and none
 carrying a line break; a request body up to 1 MB; 4 MB of the response (`truncated` says when more
-arrived); 3 redirects; a timeout of 15 s by default and 60 s at most; four requests in flight per
-plugin. `proxy` is an `http://` or `https://` address (with `user:password@` when the proxy asks for
-it) the request goes through. Nothing of yours travels with the request — no cookie, no stored
+arrived); a timeout of 15 s by default and 60 s at most; four requests in flight per plugin.
+`proxy` is an `http://` or `https://` address (with `user:password@` when the proxy asks for it)
+the request goes through. Nothing of yours travels with the request — no cookie, no stored
 credential — only what the plugin puts in it. Each call is written to the plugin's log with the URL
 redacted.
+
+Up to 3 redirects are followed, and each address they name goes through the same checks as the one
+the plugin asked for: `http` or `https`, and not a link-local or metadata address — otherwise a
+server could answer `302 Location: http://169.254.169.254/…` and walk past them. An `Authorization`
+or `Cookie` header is not carried to another host, and a redirected `POST`, `PUT` or `PATCH`
+becomes a `GET` without its body unless the answer was `307` or `308`. `url` in the response is the
+address the answer came from.
 
 `host/timer` is how a plugin waits: a request answered once the time has passed. 100 ms at the
 shortest, an hour at the longest, eight at a time. A module runs only while it is handling a

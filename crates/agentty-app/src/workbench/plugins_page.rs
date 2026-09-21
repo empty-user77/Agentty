@@ -188,6 +188,12 @@ impl Workbench {
             return self.next_queued_update(window, cx);
         }
         if self.plugins_page.installing.is_some() {
+            // Something else is already downloading. Every caller stops the plugin before asking
+            // for this, so dropping it here would leave a plugin stopped for an update that never
+            // comes: it waits its turn instead, and the install in flight starts it when it ends.
+            if !self.plugins_page.update_queue.contains(&id) {
+                self.plugins_page.update_queue.push(id);
+            }
             return;
         }
         self.plugins_page.installing = Some(id.clone());
@@ -234,6 +240,49 @@ impl Workbench {
     /// The debug driver's `plugin-folder`: finishing an install the same way the button does.
     pub(super) fn after_install_debug(&mut self, result: anyhow::Result<InstalledPlugin>, window: &mut Window, cx: &mut Context<Self>) {
         self.after_install(result, window, cx);
+    }
+
+    /// The debug driver's `plugin-market`: the marketplace's buttons without the mouse, so the
+    /// install, update and "update everything" paths can be driven end to end in a test.
+    pub(super) fn debug_market(&mut self, argument: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let (command, rest) = argument.split_once(' ').unwrap_or((argument, ""));
+        match command.trim() {
+            "refresh" => self.fetch_market(cx),
+            "install" => {
+                let id = rest.trim().to_string();
+                plugins::stop(&id, cx);
+                self.install_from_market(id, window, cx);
+            }
+            "update-all" => {
+                if self.plugins_page.installing.is_some() || !self.plugins_page.update_queue.is_empty() {
+                    eprintln!("plugin-market: an update is already running");
+                    return;
+                }
+                let mut waiting = self.market_updates(cx);
+                let Some(first) = waiting.pop() else {
+                    eprintln!("plugin-market: nothing to update");
+                    return;
+                };
+                self.plugins_page.update_queue = waiting;
+                plugins::stop(&first, cx);
+                self.install_from_market(first, window, cx);
+            }
+            "uninstall" => self.uninstall_plugin(rest.trim(), cx),
+            other => eprintln!("plugin-market: no such command {other:?}"),
+        }
+        eprintln!(
+            "plugin-market: market={} installing={:?} queue={:?} message={:?}",
+            match &self.plugins_page.market {
+                Market::Idle => "idle".to_string(),
+                Market::Loading => "loading".to_string(),
+                Market::Ready(entries) => format!("ready({})", entries.len()),
+                Market::Stale(entries, why) => format!("stale({}, {why})", entries.len()),
+                Market::Failed(err) => format!("failed({err})"),
+            },
+            self.plugins_page.installing,
+            self.plugins_page.update_queue,
+            self.plugins_page.message,
+        );
     }
 
     /// The debug driver's `plugin-enable`: the switch on the Plugins page, without the mouse.
@@ -474,6 +523,11 @@ impl Workbench {
                 "plugins-update-all",
                 tf(cx, "plugins.update_all", &[("n", &count)]),
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    // Pressing it again while the first round is still going would build a second
+                    // queue over the first and stop a plugin whose turn would never come.
+                    if this.plugins_page.installing.is_some() || !this.plugins_page.update_queue.is_empty() {
+                        return;
+                    }
                     let mut waiting = this.market_updates(cx);
                     let Some(first) = waiting.pop() else { return };
                     this.plugins_page.update_queue = waiting;
@@ -1415,7 +1469,13 @@ fn source_key(source: Source) -> &'static str {
 /// "from 3m ago", for the list kept from last time — the same short form the sessions list uses.
 fn ago(at: std::time::SystemTime, cx: &Context<Workbench>) -> String {
     let then = at.duration_since(std::time::UNIX_EPOCH).map(|since| since.as_millis() as u64).unwrap_or(0);
-    tf(cx, "plugins.market_kept", &[("when", &crate::ui::relative_time(crate::ui::now_ms(), then))])
+    let when = crate::ui::relative_time(crate::ui::now_ms(), then);
+    // Under a minute `relative_time` says "now", and "read now ago" is not a sentence in any of
+    // the four languages.
+    if when == "now" {
+        return t(cx, "plugins.market_kept_now").to_string();
+    }
+    tf(cx, "plugins.market_kept", &[("when", &when)])
 }
 
 fn detail_heading(title: String) -> impl IntoElement {

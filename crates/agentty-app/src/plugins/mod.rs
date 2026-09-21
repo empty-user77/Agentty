@@ -130,6 +130,15 @@ impl Runtime {
         }
     }
 
+    /// The process this runtime had is going, and whatever it still sends belongs to a plugin
+    /// that no longer runs. The requests it left in the air go with it: they run to their
+    /// timeout, but they are not part of what the next one is allowed to have outstanding —
+    /// otherwise a plugin restarted mid-request could make none of its own for a minute.
+    fn abandon(&mut self) {
+        self.generation += 1;
+        self.fetches = 0;
+    }
+
     /// Whether a URL may be opened now. `host/openUrl` needs no permission — a plugin's "read
     /// this in your browser" button — and the flood limit only ends a plugin after 240 messages,
     /// which is 240 browser tabs. One at a time is all a button ever needs.
@@ -375,7 +384,7 @@ pub fn stop(id: &str, cx: &mut App) {
             process.stop();
         }
         // Whatever the old process still sends while it shuts down is ignored.
-        runtime.generation += 1;
+        runtime.abandon();
         runtime.state = RunState::Stopped;
         runtime.panel = None;
         runtime.badge.clear();
@@ -432,7 +441,7 @@ pub fn handle(envelope: Envelope, cx: &mut App) {
                 // let it go through `stop`, which asks, then signals, rather than dropping it.
                 if let Some(process) = runtime.process.take() {
                     runtime.stopping = true;
-                    runtime.generation += 1;
+                    runtime.abandon();
                     process.stop();
                 }
             }
@@ -528,9 +537,16 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             let result = match method {
                 "storage/get" => storage::get(plugin_id, &key).map(|value| json!({ "key": key, "value": value })),
                 "storage/set" => storage::set(plugin_id, &key, params.get("value").cloned().unwrap_or(Value::Null)).map(|()| Value::Null),
-                _ => Ok(Value::Array(storage::keys(plugin_id).into_iter().map(Value::String).collect())),
+                _ => storage::keys(plugin_id).map(|keys| Value::Array(keys.into_iter().map(Value::String).collect())),
             };
-            reply(result.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}"))), cx)
+            // A key that is not a key is the plugin's mistake; a folder that cannot be read is
+            // the machine's, and a plugin that cannot tell them apart retries the wrong one.
+            let code = match method {
+                "storage/keys" => codes::INTERNAL,
+                _ if storage::valid_key(&key) => codes::INTERNAL,
+                _ => codes::INVALID_PARAMS,
+            };
+            reply(result.map_err(|err| (code, format!("{err:#}"))), cx)
         }
         "host/copy" => {
             let text = params.get("text").and_then(Value::as_str).unwrap_or_default();
@@ -677,12 +693,14 @@ fn fetch(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App
         let _ = cx.update(|cx| {
             let answer = {
                 let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
-                runtime.fetches = runtime.fetches.saturating_sub(1);
                 // The plugin was restarted while this was in the air: the answer belongs to a
                 // plugin that is gone, and its request id means nothing to the one running now.
+                // Its place in the count went with it — `stop` cleared the count, and taking one
+                // off now would be taking it off the requests the new one has in the air.
                 if runtime.generation != generation {
                     return;
                 }
+                runtime.fetches = runtime.fetches.saturating_sub(1);
                 match result {
                     Ok(response) => {
                         runtime.log(format!("  → {} ({} bytes, {} ms)", response.status, response.bytes, response.duration_ms));
@@ -763,6 +781,16 @@ mod tests {
         assert!(!runtime.may_open_url(), "a plugin cannot open a second URL straight away");
         runtime.opened_url_at = Some(Instant::now() - OPEN_URL_INTERVAL);
         assert!(runtime.may_open_url());
+    }
+
+    #[test]
+    fn a_restart_does_not_inherit_the_requests_of_the_plugin_before_it() {
+        let mut runtime = Runtime::new();
+        runtime.fetches = MAX_CONCURRENT_FETCHES;
+        let before = runtime.generation;
+        runtime.abandon();
+        assert!(runtime.generation > before, "answers meant for the old plugin are told apart");
+        assert_eq!(runtime.fetches, 0, "the new plugin starts with nothing in the air");
     }
 
     #[test]

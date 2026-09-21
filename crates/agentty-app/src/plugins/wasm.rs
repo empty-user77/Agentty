@@ -309,6 +309,159 @@ mod tests {
         wasm
     }
 
+    /// The same module shape as [`echo_module`], with the body of `agentty_on_message` given.
+    /// `locals` is the count of extra `i32` locals the body uses (the two parameters are 0 and 1).
+    /// Sections are sized as they are written, so a body of any length assembles.
+    fn module_with(locals: u32, body: &[u8]) -> Vec<u8> {
+        fn leb(mut value: u32, out: &mut Vec<u8>) {
+            loop {
+                let byte = (value & 0x7f) as u8;
+                value >>= 7;
+                if value == 0 {
+                    out.push(byte);
+                    return;
+                }
+                out.push(byte | 0x80);
+            }
+        }
+        fn section(id: u8, payload: &[u8], out: &mut Vec<u8>) {
+            out.push(id);
+            leb(payload.len() as u32, out);
+            out.extend_from_slice(payload);
+        }
+        fn vector(count: u32, payload: &[u8]) -> Vec<u8> {
+            let mut out = Vec::new();
+            leb(count, &mut out);
+            out.extend_from_slice(payload);
+            out
+        }
+
+        let mut wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        // Types: 0 = (i32,i32)->(), 1 = (i32)->(i32)
+        section(0x01, &vector(2, &[0x60, 0x02, 0x7f, 0x7f, 0x00, 0x60, 0x01, 0x7f, 0x01, 0x7f]), &mut wasm);
+        // Import: "agentty" "send", type 0 — the only function the module is given.
+        let mut import = vec![0x07];
+        import.extend_from_slice(b"agentty");
+        import.push(0x04);
+        import.extend_from_slice(b"send");
+        import.extend_from_slice(&[0x00, 0x00]);
+        section(0x02, &vector(1, &import), &mut wasm);
+        // Functions: agentty_alloc (type 1), agentty_on_message (type 0)
+        section(0x03, &vector(2, &[0x01, 0x00]), &mut wasm);
+        // Memory: one page, no declared maximum — the store's limits are what bound it.
+        section(0x05, &vector(1, &[0x00, 0x01]), &mut wasm);
+        let mut exports = Vec::new();
+        for (name, kind, index) in [("memory", 0x02u8, 0u8), ("agentty_alloc", 0x00, 1), ("agentty_on_message", 0x00, 2)] {
+            leb(name.len() as u32, &mut exports);
+            exports.extend_from_slice(name.as_bytes());
+            exports.push(kind);
+            exports.push(index);
+        }
+        section(0x07, &vector(3, &exports), &mut wasm);
+        // Code: alloc returns a fixed offset; on_message runs the body it was given.
+        let alloc = vec![0x00, 0x41, 0xc0, 0x00, 0x0b];
+        let mut on_message = Vec::new();
+        if locals == 0 {
+            on_message.push(0x00);
+        } else {
+            on_message.push(0x01);
+            leb(locals, &mut on_message);
+            on_message.push(0x7f);
+        }
+        on_message.extend_from_slice(body);
+        let mut code = Vec::new();
+        leb(2, &mut code);
+        leb(alloc.len() as u32, &mut code);
+        code.extend_from_slice(&alloc);
+        leb(on_message.len() as u32, &mut code);
+        code.extend_from_slice(&on_message);
+        section(0x0a, &code, &mut wasm);
+        wasm
+    }
+
+    /// Runs one message through a module built from `body` and gives back what it sent and how
+    /// the call ended.
+    fn run_module(locals: u32, body: &[u8], message: &str) -> (Result<(), String>, Vec<ProcessEvent>) {
+        let dir = std::env::temp_dir().join(format!("agentty-wasm-limit-{}-{:?}", std::process::id(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("limit.wasm");
+        std::fs::write(&path, module_with(locals, body)).unwrap();
+        let collected = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = collected.clone();
+        let mut runner = Runner::load(&path, Arc::new(move |event| sink.lock().unwrap().push(event))).expect("the module loads");
+        let result = runner.dispatch(message);
+        let _ = std::fs::remove_dir_all(&dir);
+        let events = std::mem::take(&mut *collected.lock().unwrap());
+        (result, events)
+    }
+
+    const MESSAGE: &str = r#"{"jsonrpc":"2.0","method":"ui/showPanel","params":{}}"#;
+
+    /// The budget is spent before this returns, which is a tenth of a second in a release build
+    /// and some seconds in a debug one — the price of proving that a plugin cannot hang.
+    #[test]
+    fn a_module_that_never_returns_is_stopped_rather_than_hanging_agentty() {
+        // (loop (br 0)) — the shortest program that never ends.
+        let (result, _) = run_module(0, &[0x03, 0x40, 0x0c, 0x00, 0x0b, 0x0b], MESSAGE);
+        let error = result.expect_err("a message that never finishes is an error, not a hang");
+        assert!(error.contains("did not finish in time"), "{error}");
+    }
+
+    #[test]
+    fn a_module_that_answers_one_message_with_a_flood_is_trapped() {
+        // while (i += 1) < 1000 { send(ptr, len) } — far past what one message may send.
+        #[rustfmt::skip]
+        let body = [
+            0x02, 0x40,                         // block
+            0x03, 0x40,                         //   loop
+            0x20, 0x00, 0x20, 0x01, 0x10, 0x00, //     send(p0, p1)
+            0x20, 0x02, 0x41, 0x01, 0x6a,       //     local 2 + 1
+            0x22, 0x02,                         //     local.tee 2
+            0x41, 0xe8, 0x07, 0x4e,             //     >= 1000
+            0x0d, 0x01,                         //     br_if 1 (leave the block)
+            0x0c, 0x00,                         //     br 0   (round again)
+            0x0b,                               //   end loop
+            0x0b,                               // end block
+            0x0b,                               // end function
+        ];
+        let (result, events) = run_module(1, &body, MESSAGE);
+        let error = result.expect_err("a flood ends the call");
+        assert!(error.contains("agentty_on_message failed"), "{error}");
+        let sent = events.iter().filter(|event| matches!(event, ProcessEvent::Message(_))).count();
+        assert!(sent <= MAX_MESSAGES_PER_DISPATCH as usize, "{sent} messages got through");
+    }
+
+    #[test]
+    fn a_message_larger_than_the_protocol_allows_is_refused_before_it_is_read() {
+        // send(0, 0x7fffffff): a length no buffer has, and one that must not be turned into a read.
+        #[rustfmt::skip]
+        let body = [
+            0x41, 0x00,                                     // i32.const 0
+            0x41, 0xff, 0xff, 0xff, 0xff, 0x07,             // i32.const 0x7fffffff
+            0x10, 0x00,                                     // send
+            0x0b,
+        ];
+        let (result, events) = run_module(0, &body, MESSAGE);
+        assert!(result.is_err(), "a message that size ends the call");
+        assert!(!events.iter().any(|event| matches!(event, ProcessEvent::Message(_))), "nothing was delivered");
+    }
+
+    #[test]
+    fn a_message_pointing_outside_the_module_s_memory_is_refused() {
+        // send(0x40000000, 16): a pointer a page-sized memory does not have.
+        #[rustfmt::skip]
+        let body = [
+            0x41, 0x80, 0x80, 0x80, 0x80, 0x04, // i32.const 0x40000000
+            0x41, 0x10,                         // i32.const 16
+            0x10, 0x00,                         // send
+            0x0b,
+        ];
+        let (result, events) = run_module(0, &body, MESSAGE);
+        let error = result.expect_err("reading out of bounds ends the call");
+        assert!(error.contains("out of bounds"), "{error}");
+        assert!(!events.iter().any(|event| matches!(event, ProcessEvent::Message(_))));
+    }
+
     fn run_echo(message: &str) -> Vec<ProcessEvent> {
         let dir = std::env::temp_dir().join(format!("agentty-wasm-test-{}-{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&dir).unwrap();
