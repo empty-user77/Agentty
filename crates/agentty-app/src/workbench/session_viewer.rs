@@ -173,7 +173,14 @@ impl Workbench {
                 })
                 .size_full()
                 .pb_4();
-                div().relative().flex_1().min_h_0().child(rows).child(crate::ui::list_scrollbar(viewer.list.clone())).into_any_element()
+                div()
+                    .relative()
+                    .group(crate::ui::SCROLL_GROUP)
+                    .flex_1()
+                    .min_h_0()
+                    .child(rows)
+                    .child(crate::ui::list_scrollbar(viewer.list.clone()))
+                    .into_any_element()
             }
         };
         Some(div().size_full().flex().flex_col().bg(hex(Chrome::EDITOR)).child(header).child(body).into_any_element())

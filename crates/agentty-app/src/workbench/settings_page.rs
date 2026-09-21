@@ -1130,11 +1130,6 @@ impl Workbench {
                             toggle("analytics", prefs.analytics, |s| s.analytics = !s.analytics, cx),
                         ))
                         .child(row_with_hint(
-                            t(cx, "settings.compact_workspaces"),
-                            t(cx, "settings.compact_workspaces_hint"),
-                            toggle("compact-workspaces", prefs.compact_workspaces, |s| s.compact_workspaces = !s.compact_workspaces, cx),
-                        ))
-                        .child(row_with_hint(
                             t(cx, "settings.prevent_sleep"),
                             // On when asked but no lock held: the tool that holds it is missing.
                             if prefs.prevent_sleep && !crate::platform::wakelock::active() {
@@ -1300,7 +1295,7 @@ impl Workbench {
 
         let scroll = self.settings_scroll.clone();
         div().size_full().flex().bg(hex(Chrome::EDITOR)).child(nav).child(
-            div().relative().flex_1().min_w_0().h_full().child(crate::ui::scrollbar(scroll.clone())).child(
+            div().relative().group(crate::ui::SCROLL_GROUP).flex_1().min_w_0().h_full().child(crate::ui::scrollbar(scroll.clone())).child(
                 div().id("settings-page").size_full().overflow_y_scroll().track_scroll(&scroll).child(
                     div()
                         .max_w(px(820.))

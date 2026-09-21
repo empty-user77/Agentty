@@ -343,10 +343,21 @@ impl Workbench {
             SidePanel::Workspaces => div()
                 .flex()
                 .gap_0p5()
-                .child(
-                    icon_only("sidebar-home", "house", cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
-                        .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None)),
-                )
+                // How the cards are drawn, where they are: the start page has its own tab now, so
+                // this is the one thing the list's own header should carry.
+                .child({
+                    let compact = settings(cx).compact_workspaces;
+                    icon_only(
+                        "sidebar-density",
+                        // `rows-2` reads as the roomy card list, `list` as the thin one: the icon
+                        // shows what a click would switch to.
+                        if compact { "rows-2" } else { "list" },
+                        cx.listener(|_, _: &ClickEvent, _, cx| {
+                            crate::settings::update_settings(cx, |s| s.compact_workspaces = !s.compact_workspaces);
+                        }),
+                    )
+                    .tooltip(crate::ui::Tooltip::text(t(cx, if compact { "workspaces.as_cards" } else { "workspaces.as_list" }), None))
+                })
                 .child(
                     icon_only(
                         "sidebar-new-group",
@@ -441,6 +452,7 @@ impl Workbench {
                             }))
                             .child(body),
                     )
+                    .group(crate::ui::SCROLL_GROUP)
                     .child(crate::ui::scrollbar(self.sidebar_scroll.clone()))
                     .into_any_element(),
             })
@@ -1335,6 +1347,7 @@ impl Workbench {
                     .size_full()
                     .px_2(),
                 )
+                .group(crate::ui::SCROLL_GROUP)
                 .child(crate::ui::scrollbar(base))
                 .into_any_element()
         };
@@ -1469,26 +1482,28 @@ impl Workbench {
     pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // Tabs take the room they need (scrolling when crowded); the spacer gets the rest.
         let mut tabs = div().id("tabs").flex().flex_shrink().min_w_0().h_full().overflow_x_scroll();
+        // The start page is always the first tab, whatever else is open: it is how everything else
+        // is reached, and hunting for it depended on which screen you happened to be on.
+        let home_active = self.welcome && self.page.is_none();
+        tabs = tabs.child(
+            div()
+                .id("page-tab-home")
+                .h_full()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .px_3()
+                .border_t_1()
+                .border_r_1()
+                .border_color(hex(Chrome::BORDER))
+                .bg(hex(if home_active { Chrome::EDITOR } else { Chrome::TAB_INACTIVE }))
+                .cursor_pointer()
+                .hover(|s| s.bg(hex(Chrome::EDITOR)))
+                .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None))
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
+                .child(icon("house", IconSize::INLINE, hex(if home_active { Chrome::BRIGHT } else { Chrome::MUTED }))),
+        );
         if let Some(page) = self.page {
-            // First: back to the start page.
-            tabs = tabs.child(
-                div()
-                    .id("page-tab-home")
-                    .h_full()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .px_3()
-                    .border_t_1()
-                    .border_r_1()
-                    .border_color(hex(Chrome::BORDER))
-                    .bg(hex(Chrome::TAB_INACTIVE))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hex(Chrome::EDITOR)))
-                    .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None))
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
-                    .child(icon("house", IconSize::INLINE, hex(Chrome::MUTED))),
-            );
             // Monitoring: AI usage, AI processes, the capture proxy and what the agents can use
             // (skills, subagents, MCP servers) are tabs of one page. The extension tabs carry the
             // category they open, since they are all the same page underneath.
@@ -2301,6 +2316,7 @@ impl Workbench {
                     .pb(px(FOOTER_HEIGHT))
                     .child(page),
             )
+            .group(crate::ui::SCROLL_GROUP)
             .child(crate::ui::scrollbar(self.welcome_scroll.clone()))
             .child(self.render_welcome_footer(cx))
     }

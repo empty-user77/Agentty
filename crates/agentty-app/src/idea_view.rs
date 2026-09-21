@@ -579,6 +579,7 @@ impl Render for IdeaView {
             .relative()
             .bg(hex(Chrome::EDITOR))
             .child(div().id("idea-scroll").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(page))
+            .group(crate::ui::SCROLL_GROUP)
             .child(crate::ui::scrollbar(self.scroll.clone()))
     }
 }

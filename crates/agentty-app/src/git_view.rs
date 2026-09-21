@@ -1036,6 +1036,7 @@ impl GitView {
                     .track_scroll(handle)
                     .size_full(),
                 )
+                .group(crate::ui::SCROLL_GROUP)
                 .child(crate::ui::scrollbar(base))
                 .into_any_element()
         };
@@ -1164,6 +1165,7 @@ impl GitView {
                 .track_scroll(handle)
                 .size_full(),
             )
+            .group(crate::ui::SCROLL_GROUP)
             .child(crate::ui::scrollbar(base))
     }
 
@@ -1223,6 +1225,7 @@ impl GitView {
                     .track_scroll(handle)
                     .size_full(),
                 )
+                .group(crate::ui::SCROLL_GROUP)
                 .child(crate::ui::scrollbar(base))
                 .into_any_element()
         };

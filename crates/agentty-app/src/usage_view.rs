@@ -269,6 +269,7 @@ impl Render for UsageView {
                     .track_scroll(&self.scroll)
                     .child(div().px_6().py_5().flex().flex_col().gap_4().child(header).child(body)),
             )
+            .group(crate::ui::SCROLL_GROUP)
             .child(crate::ui::scrollbar(self.scroll.clone()))
     }
 }

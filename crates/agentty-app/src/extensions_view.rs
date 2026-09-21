@@ -164,6 +164,7 @@ impl ExtensionsView {
                         .text_color(hex(Chrome::FOREGROUND))
                         .child(text),
                 )
+                .group(crate::ui::SCROLL_GROUP)
                 .child(crate::ui::scrollbar(self.detail_scroll.clone()))
                 .into_any_element(),
         };
@@ -625,6 +626,7 @@ impl Render for ExtensionsView {
                     .track_scroll(&self.scroll)
                     .relative()
                     .child(div().px_6().py_4().child(body))
+                    .group(crate::ui::SCROLL_GROUP)
                     .child(crate::ui::scrollbar(self.scroll.clone())),
             )
             .children(self.render_detail(cx))

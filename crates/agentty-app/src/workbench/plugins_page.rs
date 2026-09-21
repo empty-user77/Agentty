@@ -385,6 +385,7 @@ impl Workbench {
                             .child(create)
                             .child(install),
                     )
+                    .group(crate::ui::SCROLL_GROUP)
                     .child(crate::ui::scrollbar(page.scroll.clone())),
             )
     }

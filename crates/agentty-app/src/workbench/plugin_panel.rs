@@ -232,6 +232,7 @@ impl Workbench {
                         .track_scroll(&self.plugin_scroll)
                         .relative()
                         .child(body)
+                        .group(crate::ui::SCROLL_GROUP)
                         .child(crate::ui::scrollbar(self.plugin_scroll.clone())),
                 )
                 .into_any_element(),

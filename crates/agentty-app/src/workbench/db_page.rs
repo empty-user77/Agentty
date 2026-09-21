@@ -1390,6 +1390,7 @@ impl Workbench {
                             .track_scroll(&self.db.grid_scroll)
                             .child(div().flex().flex_col().child(header).children(rows)),
                     )
+                    .group(crate::ui::SCROLL_GROUP)
                     .child(crate::ui::scrollbar(self.db.grid_scroll.clone()))
                     .child(crate::ui::scrollbar_h(self.db.grid_scroll.clone())),
             )

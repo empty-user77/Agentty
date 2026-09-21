@@ -552,7 +552,7 @@ pub fn money(value: f64) -> String {
 /// never lags a frame behind and costs nothing when content fits.
 /// [`scrollbar`] for a virtual `list`.
 pub fn list_scrollbar(state: gpui::ListState) -> impl IntoElement {
-    gpui::canvas(
+    let bar = gpui::canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             let viewport = state.viewport_bounds();
@@ -568,15 +568,22 @@ pub fn list_scrollbar(state: gpui::ListState) -> impl IntoElement {
             window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, 0.18)).corner_radii(px(3.)));
         },
     )
-    .absolute()
-    .top_0()
-    .right_0()
-    .h_full()
-    .w(px(10.))
+    .size_full();
+    hidden_until_pointed_at(bar).absolute().top_0().right_0().h_full().w(px(10.))
+}
+
+/// The group a floating scrollbar watches: it stays out of sight until the pointer is somewhere
+/// inside the area it belongs to, the way the system's own overlay bars do. Every container that
+/// hosts one declares this group with `.group(SCROLL_GROUP)`; without it the bar never shows.
+pub const SCROLL_GROUP: &str = "scroll-area";
+
+/// Wraps a painted bar so it only shows while the pointer is inside the area it belongs to.
+fn hidden_until_pointed_at(bar: impl IntoElement) -> gpui::Div {
+    div().invisible().group_hover(SCROLL_GROUP, |s| s.visible()).child(bar)
 }
 
 pub fn scrollbar(handle: gpui::ScrollHandle) -> impl IntoElement {
-    gpui::canvas(
+    let bar = gpui::canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             let viewport = handle.bounds();
@@ -593,17 +600,14 @@ pub fn scrollbar(handle: gpui::ScrollHandle) -> impl IntoElement {
             window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, 0.18)).corner_radii(px(3.)));
         },
     )
-    .absolute()
-    .top_0()
-    .right_0()
-    .h_full()
-    .w(px(10.))
+    .size_full();
+    hidden_until_pointed_at(bar).absolute().top_0().right_0().h_full().w(px(10.))
 }
 
 /// The same bar along the bottom, for a table that is wider than its pane: without it a grid of
 /// many columns gives no sign that there is more to the right.
 pub fn scrollbar_h(handle: gpui::ScrollHandle) -> impl IntoElement {
-    gpui::canvas(
+    let bar = gpui::canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             let viewport = handle.bounds();
@@ -620,11 +624,8 @@ pub fn scrollbar_h(handle: gpui::ScrollHandle) -> impl IntoElement {
             window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, 0.18)).corner_radii(px(3.)));
         },
     )
-    .absolute()
-    .left_0()
-    .bottom_0()
-    .w_full()
-    .h(px(10.))
+    .size_full();
+    hidden_until_pointed_at(bar).absolute().left_0().bottom_0().w_full().h(px(10.))
 }
 
 #[cfg(test)]
