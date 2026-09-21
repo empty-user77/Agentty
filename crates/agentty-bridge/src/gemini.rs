@@ -10,6 +10,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Where this agent keeps its sessions, for the guard on deleting one.
+pub fn session_root() -> PathBuf {
+    tmp_dir()
+}
+
 fn tmp_dir() -> PathBuf {
     fsutil::home().join(".gemini").join("tmp")
 }

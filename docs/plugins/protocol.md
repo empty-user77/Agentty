@@ -53,6 +53,7 @@ when you don't care.
 | `host/info` | | `{}` | `{ version, apiVersion, language }` |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
+| `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
 | `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
@@ -152,7 +153,8 @@ memory at 64 MB and gives each message a budget of work: a plugin that does not 
 with "did not finish in time", and one that sends more than 256 messages while handling a single
 one is stopped as well.
 
-The Rust SDK in `sdk/rust` hides all of this; `plugins/hello-rust` is a working example.
+The Rust SDK hides all of this: it is in the [marketplace repository](https://github.com/empty-user77/Agentty-Marketplace/tree/main/sdk/rust),
+with [`hello-rust`](https://github.com/empty-user77/Agentty-Marketplace/tree/main/src/hello-rust) as a working example.
 
 ## Surfaces and how a panel opens
 

@@ -12,7 +12,7 @@ use agentty_bridge::extensions::{
     discover, mcp_add_command, mcp_remove_command, Extension, ExtensionKind, McpScope, McpServerSpec, McpTransport, Scope, CATALOG,
 };
 use agentty_bridge::model::Agent;
-use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, EventEmitter, FontWeight, SharedString, Subscription, Window};
+use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, EventEmitter, SharedString, Subscription, Window};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -164,6 +164,7 @@ impl ExtensionsView {
                         .text_color(hex(Chrome::FOREGROUND))
                         .child(text),
                 )
+                .group(crate::ui::SCROLL_GROUP)
                 .child(crate::ui::scrollbar(self.detail_scroll.clone()))
                 .into_any_element(),
         };
@@ -216,7 +217,7 @@ impl ExtensionsView {
                                         .min_w_0()
                                         .truncate()
                                         .t_large()
-                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .font_weight(crate::theme::EMPHASIS)
                                         .text_color(hex(Chrome::BRIGHT))
                                         .child(item.name.clone()),
                                 )
@@ -285,16 +286,9 @@ impl ExtensionsView {
         view
     }
 
-    /// Development helper: switch agent/category by name (`claude:mcp`, `codex:connectors`, …).
-    pub fn debug_select(&mut self, spec: &str, cx: &mut Context<Self>) {
-        if let Some(index) = spec.strip_prefix("detail:").and_then(|i| i.parse::<usize>().ok()) {
-            if let Some(item) = self.items.get(&self.agent).and_then(|items| items.get(index)).cloned() {
-                self.open_detail(item, cx);
-            }
-            return;
-        }
-        let (agent, category) = spec.split_once(':').unwrap_or((spec, "all"));
-        self.agent = if agent == "codex" { Agent::Codex } else { Agent::Claude };
+    /// Shows one category by name, for the page tabs that open straight into it.
+    pub fn show_category(&mut self, category: &str, cx: &mut Context<Self>) {
+        self.detail = None;
         self.category = match category {
             "skills" => Category::Kind(ExtensionKind::Skill),
             "agents" => Category::Kind(ExtensionKind::Agent),
@@ -305,6 +299,32 @@ impl ExtensionsView {
             _ => Category::All,
         };
         cx.notify();
+    }
+
+    /// Which category is shown, by the same names [`show_category`](Self::show_category) takes.
+    pub fn category_id(&self) -> &'static str {
+        match self.category {
+            Category::All => "all",
+            Category::Connectors => "connectors",
+            Category::Kind(ExtensionKind::Skill) => "skills",
+            Category::Kind(ExtensionKind::Agent) => "agents",
+            Category::Kind(ExtensionKind::Command) => "commands",
+            Category::Kind(ExtensionKind::Plugin) => "plugins",
+            Category::Kind(ExtensionKind::Mcp) => "mcp",
+        }
+    }
+
+    /// Development helper: switch agent/category by name (`claude:mcp`, `codex:connectors`, …).
+    pub fn debug_select(&mut self, spec: &str, cx: &mut Context<Self>) {
+        if let Some(index) = spec.strip_prefix("detail:").and_then(|i| i.parse::<usize>().ok()) {
+            if let Some(item) = self.items.get(&self.agent).and_then(|items| items.get(index)).cloned() {
+                self.open_detail(item, cx);
+            }
+            return;
+        }
+        let (agent, category) = spec.split_once(':').unwrap_or((spec, "all"));
+        self.agent = if agent == "codex" { Agent::Codex } else { Agent::Claude };
+        self.show_category(category, cx);
     }
 
     pub fn set_project(&mut self, project: Option<PathBuf>, cx: &mut Context<Self>) {
@@ -523,18 +543,19 @@ impl Render for ExtensionsView {
             ));
         }
 
-        let header =
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.extensions")))
-                .child(agents)
-                .children(self.project.as_ref().map(|p| {
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.extensions")))
+            .child(agents)
+            .children(
+                self.project.as_ref().map(|p| {
                     div().px_1p5().py_0p5().rounded_sm().bg(hex(0x2a2a2a)).t_small().text_color(hex(Chrome::MUTED)).child(tilde(p))
-                }))
-                .child(action_button("ext-reload", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx))))
-                .child(div().flex_1());
+                }),
+            )
+            .child(action_button("ext-reload", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx))))
+            .child(div().flex_1());
 
         let message = self.message.clone().map(|(text, error)| {
             div()
@@ -605,6 +626,7 @@ impl Render for ExtensionsView {
                     .track_scroll(&self.scroll)
                     .relative()
                     .child(div().px_6().py_4().child(body))
+                    .group(crate::ui::SCROLL_GROUP)
                     .child(crate::ui::scrollbar(self.scroll.clone())),
             )
             .children(self.render_detail(cx))
@@ -681,7 +703,7 @@ impl ExtensionsView {
                                 div()
                                     .font_family(crate::settings::BUNDLED_FONT)
                                     .t_body()
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(crate::theme::EMPHASIS)
                                     .text_color(hex(Chrome::BRIGHT))
                                     .child(item.name.clone()),
                             )
@@ -825,7 +847,9 @@ impl ExtensionsView {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(entry.title))
+                                .child(
+                                    div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(entry.title),
+                                )
                                 .child(
                                     div().px_1().rounded_sm().bg(hex(0x333333)).t_caption().text_color(hex(Chrome::MUTED)).child(transport),
                                 )
@@ -851,7 +875,11 @@ impl ExtensionsView {
                     .items_center()
                     .gap_3()
                     .child(
-                        div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.catalog_title")),
+                        div()
+                            .t_title()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(t(cx, "ext.catalog_title")),
                     )
                     .child(div().flex_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "ext.catalog_hint")))
                     .child(div().w(px(260.)).child(field(&self.catalog_token))),
@@ -894,7 +922,7 @@ impl ExtensionsView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.mcp_add")))
+            .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.mcp_add")))
             .child(
                 div()
                     .flex()
@@ -944,7 +972,7 @@ impl ExtensionsView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.conn_add")))
+            .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.conn_add")))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "ext.conn_hint")))
             .child(div().flex().items_center().gap_2().child(label(t(cx, "ext.lbl_name"))).child(field(&c.name)))
             .child(div().flex().items_center().gap_2().child(label(t(cx, "ext.lbl_base"))).child(field(&c.base_url)))
@@ -1040,7 +1068,7 @@ impl ExtensionsView {
                                         div()
                                             .font_family(crate::settings::BUNDLED_FONT)
                                             .t_body()
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .font_weight(crate::theme::EMPHASIS)
                                             .text_color(hex(Chrome::BRIGHT))
                                             .child(connector.server_name()),
                                     )

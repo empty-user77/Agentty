@@ -34,6 +34,13 @@ actions!(terminal, [Copy, Paste, Clear, SelectAll]);
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 const SPAWN_FALLBACK_DELAY: Duration = Duration::from_millis(400);
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
+/// Shortest gap between repaints caused by program output. A TUI that redraws itself hundreds of
+/// times a second (Codex) would otherwise redraw the whole window that often — burning CPU and
+/// making the mouse pointer flicker, because every frame re-applies the platform cursor.
+const REPAINT_INTERVAL: Duration = Duration::from_millis(16);
+/// How often a terminal that failed to start is retried, and how many times.
+const SPAWN_RETRY_DELAY: Duration = Duration::from_millis(250);
+const MAX_SPAWN_ATTEMPTS: usize = 3;
 /// Probes (one per second) of a silent screen after which an open turn is treated as over, so a
 /// missing Stop hook cannot leave a pane saying "Thinking…" for the rest of the day.
 const THINKING_GIVES_UP_TICKS: u8 = 90;
@@ -276,6 +283,11 @@ pub struct TerminalView {
     /// Whether the pane had keyboard focus in the last painted frame.
     focused: bool,
     _events: Option<Task<()>>,
+    /// Failed starts so far; a few are retried before the pane shows the error.
+    spawn_attempts: usize,
+    /// Output repaint coalescing: when the last one went out, and the timer for the pending one.
+    last_repaint: Instant,
+    repaint_pending: Option<Task<()>>,
     _blink: Task<()>,
     _probe: Task<()>,
 }
@@ -380,6 +392,9 @@ impl TerminalView {
             model_probe: None,
             focused: false,
             _events: None,
+            spawn_attempts: 0,
+            last_repaint: Instant::now(),
+            repaint_pending: None,
             _blink: blink,
             _probe: probe,
         }
@@ -411,7 +426,27 @@ impl TerminalView {
                     }
                 }));
             }
-            Err(err) => self.error = Some(format!("{err:#}")),
+            // Starting a terminal can fail for a moment (descriptors, a busy PTY device). Retry a
+            // few times before giving up, so a burst of opening and closing panes doesn't leave a
+            // dead one behind.
+            Err(err) => {
+                self.error = Some(format!("{err:#}"));
+                if self.spawn_attempts < MAX_SPAWN_ATTEMPTS {
+                    self.spawn_attempts += 1;
+                    let wait = SPAWN_RETRY_DELAY * self.spawn_attempts as u32;
+                    self.spawned = false;
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(wait).await;
+                        let _ = this.update(cx, |view, cx| {
+                            if !view.spawned {
+                                view.error = None;
+                                view.spawn(last_grid_size(), cx);
+                            }
+                        });
+                    })
+                    .detach();
+                }
+            }
         }
         cx.notify();
     }
@@ -743,6 +778,7 @@ impl TerminalView {
         self._events = None;
         self.spawned = false;
         self.error = None;
+        self.spawn_attempts = 0;
         self.pending_input.clear();
         self.agent_seen = false;
         self.forget_agent_state();
@@ -777,6 +813,9 @@ impl TerminalView {
             Some((prefix, rest)) if prefix.contains('@') && !prefix.contains(' ') && !rest.is_empty() => rest.trim(),
             _ => title,
         };
+        // Agent CLIs put their own mark in front of the window title ("✳ Claude Code"). Next to
+        // the logo it reads as two icons, so the mark goes.
+        let title = strip_agent_mark(title);
         if title.is_empty() {
             self.spec.title.clone()
         } else if title == "~" {
@@ -1142,7 +1181,30 @@ impl TerminalView {
                 }
             }
         }
-        cx.notify();
+        self.request_repaint(cx);
+    }
+
+    /// Repaints at most once per [`REPAINT_INTERVAL`], always painting the last output: a burst of
+    /// program output becomes one frame instead of one frame per write.
+    fn request_repaint(&mut self, cx: &mut Context<Self>) {
+        let since = self.last_repaint.elapsed();
+        if since >= REPAINT_INTERVAL {
+            self.last_repaint = Instant::now();
+            self.repaint_pending = None;
+            return cx.notify();
+        }
+        if self.repaint_pending.is_some() {
+            return;
+        }
+        let wait = REPAINT_INTERVAL - since;
+        self.repaint_pending = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |view, cx| {
+                view.repaint_pending = None;
+                view.last_repaint = Instant::now();
+                cx.notify();
+            });
+        }));
     }
 
     pub fn write(&mut self, bytes: Vec<u8>) {
@@ -1211,6 +1273,13 @@ impl TerminalView {
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if crate::webview::perform_in_page(crate::webview::EditCommand::Paste) {
             return;
+        }
+        // Copied files, and copied images (written out as a file): paste the paths, the way a drop
+        // does — an agent can read a path, not clipboard image data.
+        let paths = crate::file_drop::clipboard_paths();
+        if !paths.is_empty() {
+            self.drop_paths(&paths);
+            return cx.notify();
         }
         let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) else { return };
         let bytes = if self.mode().contains(TermMode::BRACKETED_PASTE) {
@@ -1488,7 +1557,20 @@ impl Render for TerminalView {
         let container = div().id("terminal").key_context("Terminal").track_focus(&self.focus_handle).size_full().bg(background);
 
         if let Some(error) = &self.error {
-            return container.p_4().text_color(hex(Chrome::ERROR)).child(format!("Failed to start terminal: {error}"));
+            let message = format!("Failed to start terminal: {error}");
+            return container.p_4().flex().flex_col().gap_3().items_start().text_color(hex(Chrome::ERROR)).child(message).child(
+                crate::ui::action_button(
+                    "terminal-retry",
+                    crate::i18n::t(cx, "terminal.retry"),
+                    cx.listener(|view, _: &gpui::ClickEvent, _, cx| {
+                        view.error = None;
+                        view.spawn_attempts = 0;
+                        view.spawned = false;
+                        view.spawn(last_grid_size(), cx);
+                        cx.notify();
+                    }),
+                ),
+            );
         }
 
         container
@@ -1531,7 +1613,7 @@ impl TerminalView {
         let label = match target {
             LinkTarget::Url(_) => crate::i18n::t(cx, "terminal.open_link"),
             LinkTarget::Path(path) if path.is_dir() => crate::i18n::t(cx, "terminal.open_folder"),
-            LinkTarget::Path(_) => crate::i18n::t(cx, "terminal.reveal_file"),
+            LinkTarget::Path(_) => crate::i18n::t(cx, "terminal.open_file"),
         };
         Some(
             div()
@@ -2194,6 +2276,26 @@ mod screen_tests {
 /// bracketed paste early, so everything after it would arrive as real keystrokes and run — the same
 /// reason a clipboard paste strips them. Without bracketed paste the text is kept on one line, so it
 /// is never submitted by a newline of its own.
+/// Drops a decorative glyph an agent CLI puts in front of its window title (`✳`, `✶`, `●` …).
+/// Letters, digits, `~`, `/` and quotes are titles, not marks, so they stay.
+pub fn strip_agent_mark(title: &str) -> &str {
+    let mut rest = title;
+    for _ in 0..2 {
+        let mut chars = rest.chars();
+        let Some(first) = chars.next() else { break };
+        let is_mark = !first.is_alphanumeric() && !first.is_ascii_punctuation() && !first.is_whitespace();
+        if !is_mark {
+            break;
+        }
+        let after = chars.as_str().trim_start();
+        if after.is_empty() {
+            break;
+        }
+        rest = after;
+    }
+    rest
+}
+
 fn paste_payload(text: &str, bracketed: bool) -> Vec<u8> {
     let cleaned: String =
         text.replace("\r\n", "\n").replace('\r', "\n").chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).collect();
@@ -2332,11 +2434,36 @@ pub fn url_at(line: &[char], column: usize) -> Option<String> {
             let start_byte = search + found;
             let start = chars.iter().position(|(b, _)| *b == start_byte)?;
             let mut end = start;
-            while end < chars.len() && !chars[end].1.is_whitespace() && !matches!(chars[end].1, '"' | '\'' | '<' | '>' | '`' | '|') {
+            // A closing bracket the URL never opened belongs to the text around it, as in
+            // "(see https://example.com/a)" or "…/BR-1516)을".
+            let (mut parens, mut squares, mut braces) = (0i32, 0i32, 0i32);
+            while end < chars.len() {
+                let c = chars[end].1;
+                if c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | '|') {
+                    break;
+                }
+                match c {
+                    '(' => parens += 1,
+                    '[' => squares += 1,
+                    '{' => braces += 1,
+                    ')' if parens == 0 => break,
+                    ']' if squares == 0 => break,
+                    '}' if braces == 0 => break,
+                    ')' => parens -= 1,
+                    ']' => squares -= 1,
+                    '}' => braces -= 1,
+                    _ => {}
+                }
                 end += 1;
             }
-            // Trailing punctuation usually ends a sentence rather than the URL.
-            while end > start && matches!(chars[end - 1].1, '.' | ',' | ';' | ':' | ')' | ']' | '}' | '!' | '?') {
+            // Text written straight after a URL is not part of it — a Korean particle ("…을"),
+            // Japanese or Chinese. A URL carries those percent-encoded (RFC 3986), never literally.
+            while end > start && !chars[end - 1].1.is_ascii() {
+                end -= 1;
+            }
+            // Trailing punctuation usually ends a sentence rather than the URL. Closing brackets
+            // are not listed: the scan above already stopped at any the URL had not opened.
+            while end > start && matches!(chars[end - 1].1, '.' | ',' | ';' | ':' | '!' | '?') {
                 end -= 1;
             }
             if (start..end).contains(&char_col) && end > start + scheme.len() {
@@ -2351,6 +2478,32 @@ pub fn url_at(line: &[char], column: usize) -> Option<String> {
 #[cfg(test)]
 mod link_tests {
     use super::{path_at, url_at, url_ranges};
+
+    #[test]
+    fn agent_marks_leave_the_title_alone() {
+        use super::strip_agent_mark;
+        assert_eq!(strip_agent_mark("✳ Claude Code"), "Claude Code");
+        assert_eq!(strip_agent_mark("✳ ✻ Agentty-09 session setup"), "Agentty-09 session setup");
+        assert_eq!(strip_agent_mark("Claude Code"), "Claude Code");
+        assert_eq!(strip_agent_mark("~/Agentty/Agentty-Web"), "~/Agentty/Agentty-Web");
+        assert_eq!(strip_agent_mark("한글 제목"), "한글 제목");
+        // Nothing but a mark: keep it rather than leave the tab nameless.
+        assert_eq!(strip_agent_mark("✳"), "✳");
+    }
+
+    #[test]
+    fn url_stops_at_text_around_it() {
+        let line: Vec<char> = "보세요 https://team.atlassian.net/browse/BR-1516)을 확인".chars().collect();
+        let start = line.iter().position(|c| *c == 'h').unwrap();
+        assert_eq!(url_at(&line, start + 5).as_deref(), Some("https://team.atlassian.net/browse/BR-1516"));
+        let wrapped: Vec<char> = "(see https://example.com/a) ok".chars().collect();
+        assert_eq!(url_at(&wrapped, 8).as_deref(), Some("https://example.com/a"));
+        // Brackets the URL opened itself stay in it (wiki links).
+        let nested: Vec<char> = "https://en.wikipedia.org/wiki/Foo_(bar) x".chars().collect();
+        assert_eq!(url_at(&nested, 5).as_deref(), Some("https://en.wikipedia.org/wiki/Foo_(bar)"));
+        let korean: Vec<char> = "https://example.com/a을 열어".chars().collect();
+        assert_eq!(url_at(&korean, 5).as_deref(), Some("https://example.com/a"));
+    }
 
     #[test]
     fn finds_url_ranges_and_paths() {

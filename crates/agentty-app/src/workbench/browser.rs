@@ -241,10 +241,19 @@ impl BrowserPanel {
 
 impl Workbench {
     /// Opens `url` according to the user's choice (in-app panel or the default browser).
+    /// Opens a link the app produced (a pull request, a port, a ⌘-click in a terminal).
+    ///
+    /// Anything that is not on this machine goes to the browser the user is already signed in to:
+    /// a pull request, a ticket or a cloud console asks for a login, and signing in inside the
+    /// embedded browser is a fight nobody should have. The in-app browser keeps what it is good
+    /// at — a dev server, a local page, a file — and its own address bar still loads anything the
+    /// user types there on purpose.
     pub(super) fn open_link(&mut self, url: String, cx: &mut Context<Self>) {
-        match settings(cx).link_opener {
-            LinkOpener::External => cx.open_url(&url),
-            LinkOpener::InApp => self.open_browser(Some(url), cx),
+        let in_app = settings(cx).link_opener == LinkOpener::InApp && is_local_url(&url);
+        if in_app {
+            self.open_browser(Some(url), cx);
+        } else {
+            cx.open_url(&url);
         }
     }
 
@@ -1006,7 +1015,7 @@ impl Workbench {
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::SIDE_BAR))
             .t_caption()
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(crate::theme::EMPHASIS)
             .text_color(hex(Chrome::MUTED))
             .child(t(cx, "browser.network").to_uppercase())
             .child(div().flex_1())
@@ -1159,7 +1168,7 @@ impl Workbench {
                         .child(text)
                 };
                 let section = |title: &str| {
-                    div().pt_1().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(title.to_uppercase())
+                    div().pt_1().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title.to_uppercase())
                 };
                 let headers = |list: &[(String, String)]| list.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
                 let status = match (detail.status, detail.error.is_empty()) {
@@ -1317,4 +1326,87 @@ fn progress_bar(shown: bool, progress: f32) -> gpui::Div {
         .flex_shrink_0()
         .bg(hex(Chrome::SIDE_BAR))
         .when(shown, |d| d.child(div().h_full().w(gpui::relative(fill)).rounded_r_sm().bg(hex(Chrome::BLUE))))
+}
+
+/// Whether a URL points at this machine: a dev server, a local file, a page served from here.
+pub fn is_local_url(url: &str) -> bool {
+    let rest = match url.split_once("://") {
+        Some(("file", _)) => return true,
+        Some((_, rest)) => rest,
+        None => url,
+    };
+    // Strip credentials and take the host part of `host:port/path?query`.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default().rsplit('@').next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or_default(),
+        None => authority
+            .rsplit_once(':')
+            .map(|(host, port)| if port.chars().all(|c| c.is_ascii_digit()) { host } else { authority })
+            .unwrap_or(authority),
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    // An address is judged as an address, not by how it is spelled: "10.evil.com" and
+    // "192.168.example.com" are ordinary public names that a prefix test would call local.
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified(),
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+        };
+    }
+    // `.localhost`, `.local` and `.test` are reserved for exactly this (RFC 6761, RFC 6762).
+    host.is_empty() || host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") || host.ends_with(".test")
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::is_local_url;
+
+    #[test]
+    fn only_this_machine_is_local() {
+        for url in [
+            "http://localhost:3000/app",
+            "http://127.0.0.1:8080",
+            "https://app.localhost/x",
+            "file:///Users/me/notes.md",
+            "http://192.168.1.14:5173",
+            "http://mybox.local:9000",
+        ] {
+            assert!(is_local_url(url), "{url} should be local");
+        }
+        for url in [
+            "https://github.com/empty-user77/Agentty/pull/28",
+            "https://team.atlassian.net/browse/BR-1516",
+            "https://console.cloud.google.com/",
+            "https://vercel.com/dashboard",
+        ] {
+            assert!(!is_local_url(url), "{url} needs the signed-in browser");
+        }
+    }
+
+    /// A name is not an address: a public host that merely starts or ends like a local one goes to
+    /// the signed-in browser like any other.
+    #[test]
+    fn a_public_name_that_looks_local_is_not() {
+        for url in [
+            "http://10.evil.example/steal",
+            "http://192.168.example.com/",
+            "http://127.0.0.1.example.com/",
+            "http://localhost.example.com/",
+            "http://10.0.0.1.example.com/",
+            "http://127.0.0.1@example.com/",
+        ] {
+            assert!(!is_local_url(url), "{url} is a public name");
+        }
+        // Real private addresses still are local, including the Docker range a prefix test missed.
+        for url in ["http://172.17.0.2:8080/", "http://10.0.0.7:3000/", "http://169.254.1.1/"] {
+            assert!(is_local_url(url), "{url} is on this network");
+        }
+    }
+
+    #[test]
+    fn credentials_and_ports_do_not_confuse_it() {
+        assert!(is_local_url("http://user:pw@localhost:3000/"));
+        assert!(!is_local_url("https://user@github.com/o/r/pull/1"));
+        assert!(is_local_url("http://[::1]:7000/"));
+    }
 }

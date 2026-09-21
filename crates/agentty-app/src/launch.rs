@@ -34,6 +34,16 @@ impl PaneKind {
     }
 }
 
+impl PaneKind {
+    /// The agent's own command for compacting its context window, when it has one.
+    pub fn compact_command(self) -> Option<&'static str> {
+        match self {
+            PaneKind::Claude | PaneKind::Codex => Some("/compact"),
+            PaneKind::Shell => None,
+        }
+    }
+}
+
 impl From<Agent> for PaneKind {
     fn from(agent: Agent) -> Self {
         match agent {

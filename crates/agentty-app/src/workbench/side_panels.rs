@@ -14,11 +14,13 @@ pub const MIN_WIDTH: f32 = 240.;
 const MIN_TERMINALS: f32 = 420.;
 pub const DEFAULT_PLUGIN_WIDTH: f32 = 360.;
 pub const DEFAULT_DOCKER_WIDTH: f32 = 340.;
+pub const DEFAULT_DATABASE_WIDTH: f32 = 380.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SidePanel {
     Plugin,
     Docker,
+    Database,
 }
 
 impl Workbench {
@@ -55,12 +57,26 @@ impl Workbench {
         }
     }
 
+    /// Width of the database panel as shown (0 while it is closed).
+    pub(super) fn db_panel_width(&self, cx: &gpui::App) -> f32 {
+        if self.db.panel_open {
+            crate::settings::settings(cx).db_panel_width.max(MIN_WIDTH)
+        } else {
+            0.
+        }
+    }
+
     /// Everything the side panels take, their handles included. A panel that floats, fills the
     /// area or has a window of its own takes nothing.
     pub(super) fn side_panels_total(&self, cx: &gpui::App) -> f32 {
         let handle = |shown: bool| if shown { 5. } else { 0. };
         let plugin = self.plugin_panel_width(cx);
-        plugin + handle(plugin > 0.) + self.docker_panel_width(cx) + handle(self.docker.open)
+        plugin
+            + handle(plugin > 0.)
+            + self.docker_panel_width(cx)
+            + handle(self.docker.open)
+            + self.db_panel_width(cx)
+            + handle(self.db.panel_open)
     }
 
     /// How this plugin's panel opens: what the user chose, else what the plugin asks for.
@@ -71,15 +87,14 @@ impl Workbench {
         crate::plugins::plugin(cx, plugin).and_then(|p| p.manifest.as_ref()).map(|m| m.panel_mode()).unwrap_or_default()
     }
 
-    pub(super) fn set_plugin_panel_mode(&mut self, plugin: &str, mode: PanelMode, window: &mut gpui::Window, cx: &mut Context<Self>) {
-        let plugin = plugin.to_string();
+    pub(super) fn set_plugin_panel_mode(&mut self, plugin: &str, mode: PanelMode, _window: &mut gpui::Window, cx: &mut Context<Self>) {
         let id = mode.id().to_string();
-        let chosen = plugin.clone();
+        let chosen = plugin.to_string();
         crate::settings::update_settings(cx, |settings| {
             settings.plugin_panel_modes.insert(chosen, id);
         });
-        // A panel that moved into a window of its own, or out of one, is opened or closed there.
-        self.sync_plugin_window(&plugin, mode, window, cx);
+        // A panel that moved into a window of its own, or out of one, is opened or closed by
+        // `reconcile_plugin_windows` on the next render — the one place that does it.
         cx.notify();
     }
 
@@ -127,9 +142,13 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         let files = self.files_panel.as_ref().map_or(0., |_| self.docked_widths(cx).1 + 5.);
+        let docker = self.docker_panel_width(cx) + if self.docker.open { 5. } else { 0. };
+        let database = self.db_panel_width(cx) + if self.db.panel_open { 5. } else { 0. };
+        // Docked right to left: files, database, Docker, plugin.
         let right = match panel {
-            SidePanel::Docker => files,
-            SidePanel::Plugin => files + self.docker_panel_width(cx) + if self.docker.open { 5. } else { 0. },
+            SidePanel::Database => files,
+            SidePanel::Docker => files + database,
+            SidePanel::Plugin => files + database + docker,
         };
         let edge = viewport - right;
         // A plugin panel dragged wider than the window can dock stops taking room from it and
@@ -152,6 +171,7 @@ impl Workbench {
         gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| match panel {
             SidePanel::Plugin => store.settings.plugin_panel_width = width,
             SidePanel::Docker => store.settings.docker_panel_width = width,
+            SidePanel::Database => store.settings.db_panel_width = width,
         });
         cx.notify();
     }

@@ -1,11 +1,5 @@
 /target
 /dist
-# Plugin examples and the Rust SDK are built on their own (plugins/*/build.sh)
-/plugins/*/target
-/sdk/rust/target
-# Built modules: the source is what is committed, except the one that ships inside Agentty
-*.wasm
-!/plugins/agent-rest-client/agent-rest-client.wasm
 .DS_Store
 *.profraw
 # Left behind by the Python scanners and hooks

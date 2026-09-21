@@ -159,7 +159,8 @@ Agentty runs inside itself, so one file works on macOS, Windows and Linux and th
 nothing of yours: no files, no processes, no network of its own. Everything goes through the
 protocol, where the permissions above are checked.
 
-The Rust SDK is `sdk/rust` in the Agentty repository:
+The Rust SDK is `sdk/rust` in the
+[marketplace repository](https://github.com/empty-user77/Agentty-Marketplace/tree/main/sdk/rust), beside the plugins written with it:
 
 ```toml
 # Cargo.toml
@@ -167,7 +168,7 @@ The Rust SDK is `sdk/rust` in the Agentty repository:
 crate-type = ["cdylib"]
 
 [dependencies]
-agentty-plugin = { path = "…/sdk/rust" }
+agentty-plugin = { path = "…/sdk/rust" }   # or a git dependency on that repository
 ```
 
 ```rust
@@ -203,12 +204,13 @@ cargo build --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/hello.wasm hello.wasm   # next to agentty-plugin.json
 ```
 
-Then **Plugins → Install from Folder…** and pick the folder. Two are in the repository:
-`plugins/hello-rust` (a panel and a counter, no permissions at all) and `plugins/agent-rest-client`
-(an HTTP client with environments, a collection and a proxy, `net.request`). The second ships
-inside Agentty — its module is committed and installs from the Plugins page in one click — so its
-folder is also the worked example of a plugin that is more than a demo. The wire format and the
-module's ABI are in [the protocol](protocol.md#webassembly-plugins).
+Then **Plugins → Install from Folder…** and pick the folder, or publish it and add it to the
+[marketplace](https://github.com/empty-user77/Agentty-Marketplace). Two worked examples are there, source and all:
+[`hello-rust`](https://github.com/empty-user77/Agentty-Marketplace/tree/main/src/hello-rust) (a panel and a counter, no permissions at all)
+and [`agent-rest-client`](https://github.com/empty-user77/Agentty-Marketplace/tree/main/src/agent-rest-client) (an HTTP client with
+environments, a collection and a proxy, `net.request`). Both install from **Plugins →
+Marketplace**. The wire format and the module's ABI are in
+[the protocol](protocol.md#webassembly-plugins).
 
 ## Panel UI
 
@@ -323,9 +325,9 @@ inside a terminal.
 ## The marketplace
 
 **Plugins → Marketplace** lists what
-[Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers. Plugins are
-added there by pull request, and what is offered is **a WebAssembly module whose source is public**
-— nothing else. A plugin that runs as a program of yours (`node`, `python`, an executable) has
+[Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers. Plugins are added there by pull request, and what is
+offered is **a WebAssembly module whose source is public** — nothing else. Agentty's own plugins
+are there too, on the same footing: nothing is bundled into the application. A plugin that runs as a program of yours (`node`, `python`, an executable) has
 everything you have; Agentty installs those from a folder or a Git repository, where you chose the
 source yourself.
 
@@ -338,6 +340,12 @@ Installing one:
    module and its checksum, and **what it may do** as full sentences under Permissions.
 3. On Install, Agentty downloads the module, weighs it against that checksum, and refuses it if
    they differ. Nothing reaches the plugins folder before the checksum matches.
+
+An entry says which plugin protocol its module is built against (`apiVersion`, `1` when left out).
+An Agentty that speaks an older one still lists the plugin, but says it needs a newer Agentty
+instead of offering to install it, and does not count a version it cannot run as an update to one
+already installed. Without that, a plugin written against a later protocol would install anywhere
+and fail at the first call the older app does not have.
 
 Submitting one is `CONTRIBUTING.md` in that repository: build the module, publish it as a release
 asset, and open a pull request with an entry naming its URL, checksum and size.

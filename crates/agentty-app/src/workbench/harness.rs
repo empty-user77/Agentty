@@ -10,7 +10,7 @@ use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{chip, icon, tilde, IconSize, TypeScale};
 use agentty_bridge::harness::{Entry, EntryKind, Harness};
 use agentty_bridge::model::Agent;
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWeight, SharedString, Subscription, Window};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, SharedString, Subscription, Window};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -352,7 +352,7 @@ impl Workbench {
                                 .child(
                                     div()
                                         .t_title()
-                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .font_weight(crate::theme::EMPHASIS)
                                         .text_color(hex(Chrome::BRIGHT))
                                         .child(t(cx, "harness.title")),
                                 )

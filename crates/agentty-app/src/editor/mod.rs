@@ -387,6 +387,23 @@ impl CodeEditor {
         .detach();
     }
 
+    /// Replaces the text of the document being edited. For a host that drives the editor as an
+    /// input field (the SQL query box); a file editor never has its text set from outside.
+    pub fn set_active_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let Some(doc) = self.docs.get_mut(self.active) else { return };
+        let end = doc.buffer.end();
+        doc.buffer.replace(buffer::Pos::default(), end, text, buffer::EditKind::Other);
+        doc.autoscroll = true;
+        doc.sync_highlights();
+        cx.notify();
+    }
+
+    /// Text of the document being edited, for a host that uses the editor as an input (the SQL
+    /// query box) rather than as a file editor.
+    pub fn active_text(&self) -> Option<String> {
+        self.docs.get(self.active).map(|doc| doc.buffer.text())
+    }
+
     pub fn tabs(&self) -> Vec<TabInfo> {
         self.docs
             .iter()
@@ -1226,7 +1243,7 @@ impl CodeEditor {
                         .border_1()
                         .border_color(hex(Chrome::OVERLAY_BORDER))
                         .shadow_lg()
-                        .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(title))
+                        .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title))
                         .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body))
                         .child(row),
                 ),

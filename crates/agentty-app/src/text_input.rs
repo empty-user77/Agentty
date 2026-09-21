@@ -9,6 +9,7 @@ use gpui::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::i18n::t;
 use crate::theme::{hex, hex_alpha, Chrome};
 
 actions!(
@@ -73,6 +74,8 @@ pub struct TextInput {
     scroll_line: usize,
     /// Each visible line of the last paint: where it starts in the content, and its layout.
     last_lines: Vec<(usize, ShapedLine)>,
+    /// Right-click menu, at the position it was opened.
+    menu_at: Option<Point<Pixels>>,
     _blur: Option<gpui::Subscription>,
 }
 
@@ -111,6 +114,7 @@ impl TextInput {
             rows: 0,
             scroll_line: 0,
             last_lines: Vec::new(),
+            menu_at: None,
             _blur: Some(blur),
         }
     }
@@ -771,6 +775,79 @@ impl TextElement {
     }
 }
 
+impl TextInput {
+    /// The right-click menu. macOS's own palette supplies emoji and symbols; the rest are this
+    /// field's own commands, so they work here exactly as the keyboard shortcuts do.
+    fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let at = self.menu_at?;
+        let has_selection = !self.selected_range.is_empty() && !self.masked;
+        let item = |id: &'static str, label: String, enabled: bool, action: MenuAction, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .rounded_sm()
+                .text_color(crate::theme::hex(if enabled { crate::theme::Chrome::BRIGHT } else { crate::theme::Chrome::MUTED }))
+                .when(enabled, |d| {
+                    d.cursor_pointer()
+                        .hover(|s| s.bg(crate::theme::hex(crate::theme::Chrome::ACCENT)))
+                        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| this.run_menu(action, window, cx)))
+                })
+                .child(label)
+        };
+        Some(
+            div().absolute().left(px(f32::from(at.x - self.last_bounds.map(|b| b.origin.x).unwrap_or(px(0.))))).top(px(18.)).child(
+                gpui::deferred(
+                    crate::ui::popover()
+                        .id("text-input-menu")
+                        .w(px(220.))
+                        .occlude()
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.menu_at = None;
+                            cx.notify();
+                        }))
+                        .child(item("ti-emoji", t(cx, "input.emoji").to_string(), true, MenuAction::Emoji, cx))
+                        .child(div().my_1().h(px(1.)).bg(crate::theme::hex(crate::theme::Chrome::OVERLAY_BORDER)))
+                        .child(item("ti-cut", t(cx, "input.cut").to_string(), has_selection, MenuAction::Cut, cx))
+                        .child(item("ti-copy", t(cx, "input.copy").to_string(), has_selection, MenuAction::Copy, cx))
+                        .child(item("ti-paste", t(cx, "input.paste").to_string(), true, MenuAction::Paste, cx))
+                        .child(item(
+                            "ti-select-all",
+                            t(cx, "input.select_all").to_string(),
+                            !self.content.is_empty(),
+                            MenuAction::SelectAll,
+                            cx,
+                        )),
+                )
+                .with_priority(4),
+            ),
+        )
+    }
+
+    fn run_menu(&mut self, action: MenuAction, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_at = None;
+        match action {
+            MenuAction::Emoji => crate::native::show_character_palette(),
+            MenuAction::Cut => self.cut(&Cut, window, cx),
+            MenuAction::Copy => self.copy(&Copy, window, cx),
+            MenuAction::Paste => self.paste(&Paste, window, cx),
+            MenuAction::SelectAll => self.select_all(&SelectAll, window, cx),
+        }
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+}
+
+/// What an item of the right-click menu does.
+#[derive(Clone, Copy)]
+enum MenuAction {
+    Emoji,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
 impl Render for TextInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -814,7 +891,19 @@ impl Render for TextInput {
                     cx.emit(TextInputEvent::Down);
                 }
             }))
+            // The right-click menu is placed against this element.
+            .relative()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            // Right-click: emoji and symbols, and the edit commands, the way a text field should.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&this.focus_handle);
+                    this.menu_at = Some(event.position);
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
@@ -824,6 +913,7 @@ impl Render for TextInput {
             .w_full()
             .line_height(px(20.))
             .child(TextElement { input: cx.entity() })
+            .children(self.render_menu(cx))
     }
 }
 

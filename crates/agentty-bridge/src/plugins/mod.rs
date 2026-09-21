@@ -25,6 +25,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("host/openUrl", None),
     // A module has no clock and no loop of its own: this is how it waits.
     ("host/timer", None),
+    // Puts text on the clipboard: what a plugin's "copy this" button does.
+    ("host/copy", None),
     // Reveals a file in Finder, and tells the plugin whether a path exists: that is the user's
     // folders, so it needs the same permission as reading them.
     ("host/revealPath", Some("workspace.read")),

@@ -9,6 +9,8 @@ pub enum TrayAction {
     ToggleMini,
     Focus(u64),
     OpenUsage,
+    /// Read spend and plan limits again now.
+    RefreshUsage,
     Quit,
     /// The menu bar icon was clicked.
     TogglePopover,

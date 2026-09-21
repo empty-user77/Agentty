@@ -141,6 +141,15 @@ impl Workbench {
         let mut plugin_buttons = split.then(|| self.render_plugin_pane_buttons(pane, cx)).flatten();
         let mut port_chips = split.then(|| self.port_chips(pane, cx)).flatten();
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
+        let mut context_meter = {
+            let shown = split && pane.read(cx).is_agent() && crate::settings::settings(cx).agent_bar;
+            pane.read(cx)
+                .stats
+                .as_ref()
+                .filter(|_| shown)
+                .and_then(|s| s.context_percent())
+                .map(|percent| self.context_meter(pane, percent, cx))
+        };
         let view = pane.read(cx);
         let prefs_bar = crate::settings::settings(cx).agent_bar;
         let bars_below = bars_below(cx);
@@ -204,13 +213,11 @@ impl Workbench {
                             HudItem::Model => d.when_some(view.stats.as_ref().filter(|_| agent_info).and_then(model_label), |d, model| {
                                 d.child(div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(model))
                             }),
-                            HudItem::Context => d
-                                .when_some(view.stats.as_ref().filter(|_| agent_info).and_then(|s| s.context_percent()), |d, percent| {
-                                    d.child(meter("Context", percent))
-                                }),
-                            HudItem::Usage => d.when_some(view.usage_percent().filter(|_| agent_info && width >= 700.), |d, percent| {
-                                d.child(meter("Usage", percent))
-                            }),
+                            HudItem::Context => d.children(context_meter.take()),
+                            HudItem::Usage => d.when_some(
+                                view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && agent_info && width >= 700.),
+                                |d, percent| d.child(meter("Usage", percent)),
+                            ),
                             HudItem::Status => d.when(agent_info, |d| {
                                 d.child(
                                     div()
@@ -488,13 +495,15 @@ impl Workbench {
                     .gap_1()
                     .px_1()
                     .rounded_sm()
-                    .max_w(px(180.))
+                    // No cap: a branch name is what says where the work is going, and
+                    // "agentty/claude-0921-2…" says nothing. The folder gives way instead.
+                    .flex_shrink_0()
                     .cursor_pointer()
                     .text_color(hex(tint))
                     .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
                     .when(open.is_some(), |d| d.bg(hex(Chrome::HOVER)))
                     .child(beside_text(icon("git-branch", IconSize::INLINE, hex(tint))))
-                    .child(div().truncate().child(branch))
+                    .child(div().flex_shrink_0().child(branch))
                     // `*` uncommitted changes, `↑N` commits not pushed yet.
                     .when(dirty, |d| d.child(div().flex_shrink_0().text_color(hex(Chrome::WARNING)).child("*")))
                     .when_some(ahead.filter(|n| *n > 0), |d, n| {
@@ -614,9 +623,9 @@ impl Workbench {
         cx.notify();
         let task = cx.background_spawn(async move {
             match kind {
-                SyncKind::Pull => agentty_bridge::git::pull(&repo),
+                SyncKind::Pull => agentty_bridge::git::pull(&repo).map(Some),
                 SyncKind::Push => match branch {
-                    Some(branch) => agentty_bridge::git::push(&repo, &branch, has_upstream),
+                    Some(branch) => agentty_bridge::git::push(&repo, &branch, has_upstream).map(|()| None),
                     None => Err(anyhow::anyhow!("detached HEAD")),
                 },
             }
@@ -625,9 +634,21 @@ impl Workbench {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 let message = match (&result, kind) {
-                    (Ok(()), SyncKind::Pull) => t(cx, "branch.pulled").to_string(),
-                    (Ok(()), SyncKind::Push) => t(cx, "branch.pushed").to_string(),
-                    (Err(err), _) => err.to_string().lines().last().unwrap_or_default().to_string(),
+                    // "3 commits · 12 files (+4 ~7 -1)": say what arrived, so "done" is checkable.
+                    (Ok(Some(pulled)), _) if pulled.files() > 0 => tf(
+                        cx,
+                        "branch.pulled_changes",
+                        &[
+                            ("commits", &pulled.commits.to_string()),
+                            ("files", &pulled.files().to_string()),
+                            ("added", &pulled.added.to_string()),
+                            ("modified", &pulled.modified.to_string()),
+                            ("deleted", &pulled.deleted.to_string()),
+                        ],
+                    ),
+                    (Ok(_), SyncKind::Pull) => t(cx, "branch.pulled").to_string(),
+                    (Ok(_), SyncKind::Push) => t(cx, "branch.pushed").to_string(),
+                    (Err(err), _) => agentty_bridge::git::failure_reason(&err.to_string()),
                 };
                 let repo = this.branch_menu.as_ref().map(|m| m.repo.clone());
                 if let Some(menu) = this.branch_menu.as_mut() {
@@ -807,6 +828,8 @@ impl Workbench {
         let mut plugin_buttons = self.render_plugin_pane_buttons(pane, cx);
         let mut port_chips = self.port_chips(pane, cx);
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
+        let mut context_meter =
+            pane.read(cx).stats.as_ref().and_then(|s| s.context_percent()).map(|percent| self.context_meter(pane, percent, cx));
         let view = pane.read(cx);
         let kind = view.agent_kind()?;
         let (status, status_color) = status_label(view, cx);
@@ -829,26 +852,19 @@ impl Workbench {
                 .map(|mut d| {
                     for entry in hud.iter().filter(|e| e.visible) {
                         d = match entry.item {
+                            // The model, without the logo: the tab strip and the card already say
+                            // which agent this is, and the bar needs the room.
                             HudItem::Model => d.child(
                                 div()
-                                    .flex()
                                     .flex_shrink_0()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .child(crate::brand::avatar(crate::brand::kind_id(kind), 16.))
-                                    // "[Opus 5 (1M context)]": the model says more than the agent name.
-                                    .child(
-                                        div()
-                                            .text_color(hex(Chrome::BRIGHT))
-                                            .child(view.stats.as_ref().and_then(model_label).unwrap_or_else(|| name.to_string())),
-                                    ),
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .child(view.stats.as_ref().and_then(model_label).unwrap_or_else(|| name.to_string())),
                             ),
-                            HudItem::Context => d.when_some(view.stats.as_ref().and_then(|s| s.context_percent()), |d, percent| {
-                                d.child(meter("Context", percent))
-                            }),
-                            HudItem::Usage => {
-                                d.when_some(view.usage_percent().filter(|_| width >= 700.), |d, percent| d.child(meter("Usage", percent)))
-                            }
+                            HudItem::Context => d.children(context_meter.take()),
+                            HudItem::Usage => d
+                                .when_some(view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && width >= 700.), |d, percent| {
+                                    d.child(meter("Usage", percent))
+                                }),
                             HudItem::Status => d.child(
                                 div()
                                     .flex()
@@ -872,36 +888,9 @@ impl Workbench {
                             HudItem::Plugins => d.children(plugin_buttons.take()),
                             HudItem::Worktree => d.children(tree_chip.take()),
                             HudItem::Branch => d.children(chip.take()),
-                            HudItem::Folder => d.when(width >= 820., |d| {
-                                let cwd = view.display_cwd();
-                                let room = ((width - 760.) / 7.5).clamp(18., 60.) as usize;
-                                d.child(
-                                    div()
-                                        .id(("bar-folder", pane.entity_id().as_u64() as usize))
-                                        // The whole path on hover; ⌘-click shows the folder in the file manager.
-                                        .tooltip(crate::ui::Tooltip::text(crate::ui::tilde(&cwd), Some(REVEAL_HINT)))
-                                        .on_click({
-                                            let cwd = cwd.clone();
-                                            move |event: &ClickEvent, _, cx| {
-                                                if crate::keymap::link_modifier(&event.modifiers()) {
-                                                    cx.stop_propagation();
-                                                    crate::platform::reveal(&cwd);
-                                                }
-                                            }
-                                        })
-                                        .flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .min_w_0()
-                                        .flex_shrink()
-                                        .rounded_sm()
-                                        .text_color(hex(Chrome::MUTED))
-                                        .hover(|s| s.text_color(hex(Chrome::FOREGROUND)))
-                                        .child(beside_text(icon("folder", IconSize::INLINE, hex(Chrome::MUTED))))
-                                        // Cut in the middle (`~/code/…/src/app`): both ends say more than the start alone.
-                                        .child(div().truncate().child(crate::ui::middle_ellipsis(&crate::ui::tilde(&cwd), room))),
-                                )
-                            }),
+                            // The folder is in the app's status bar (bottom left); this bar has
+                            // the model, the branch and the status to fit.
+                            HudItem::Folder => d,
                         };
                     }
                     d
@@ -932,7 +921,7 @@ pub(super) fn bar_popover(popover: impl IntoElement, priority: usize, cx: &gpui:
 }
 
 /// Tooltip hint of a folder chip: ⌘-click (Ctrl-click on Windows / Linux) shows the folder.
-const REVEAL_HINT: &str = if cfg!(target_os = "macos") { "⌘ click → Finder" } else { "⌘ click → folder" };
+pub(super) const REVEAL_HINT: &str = if cfg!(target_os = "macos") { "⌘ click → Finder" } else { "⌘ click → folder" };
 
 /// An icon that sits next to small text in a status row. The row centers both boxes, but the letters
 /// sit low in their line box (measured: the middle of the text is ~1.5 pt under the middle of the
@@ -960,6 +949,37 @@ fn small_icon_button(
 }
 
 /// Label + slim progress bar + percentage, colored by how full it is.
+impl Workbench {
+    /// Context meter for an agent pane's bar. Past [`super::COMPACT_OFFER_AT`] it also offers the
+    /// agent's own compaction command, typed in rather than sent: compacting is the user's call.
+    fn context_meter(&self, pane: &Pane, percent: f64, cx: &mut Context<Self>) -> gpui::Div {
+        let command = pane.read(cx).agent_kind().and_then(|kind| kind.compact_command());
+        let Some(command) = command.filter(|_| percent >= super::COMPACT_OFFER_AT) else { return meter("Context", percent) };
+        let target = pane.clone();
+        meter("Context", percent).child(
+            div()
+                .id(("context-compact", pane.entity_id().as_u64() as usize))
+                .flex_shrink_0()
+                .p_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(hex(Chrome::ORANGE))
+                .hover(|s| s.bg(hex_alpha(Chrome::ORANGE, 0.16)))
+                .tooltip(crate::ui::Tooltip::text(crate::i18n::tf(cx, "context.compact_hint", &[("command", command)]), None))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.focus_pane(&target, window, cx);
+                    target.update(cx, |view, _| view.insert_text(command));
+                }))
+                .child(icon("minimize-2", 11., hex(Chrome::ORANGE))),
+        )
+    }
+}
+
+/// Plan usage only earns a place in the bar once it is worth watching; under this it is left to
+/// the menu bar popover and the Usage page.
+const USAGE_SHOWN_AT: f64 = 50.0;
+
 fn meter(label: &'static str, percent: f64) -> gpui::Div {
     let color = match percent {
         p if p >= 90.0 => Chrome::ERROR,

@@ -132,7 +132,7 @@ impl Workbench {
             return group.id;
         }
         let id = self.next_id();
-        self.groups.push(Group { id, name: IDEA_GROUP.into(), collapsed: false });
+        self.groups.push(Group { id, name: IDEA_GROUP.into(), collapsed: false, color: None });
         id
     }
 

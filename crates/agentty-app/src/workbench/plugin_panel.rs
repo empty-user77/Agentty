@@ -10,7 +10,7 @@ use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
 use agentty_bridge::plugins::manifest::{PanelMode, Surface, When};
 use agentty_bridge::plugins::ui::{Gap, Node, TextStyle, Tone, UiEvent, Variant};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, FontWeight, SharedString, Subscription, Window};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, SharedString, Subscription, Window};
 use std::time::Duration;
 
 /// A text field of a plugin panel, kept across renders.
@@ -45,15 +45,18 @@ impl Workbench {
     /// Creates and syncs the panel's text fields; called from render before drawing.
     pub(super) fn prepare_plugin_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(plugin) = self.plugin_panel.clone() else {
+            self.reconcile_plugin_windows(window, cx);
             self.plugin_inputs.clear();
             return;
         };
-        // A plugin that was disabled or removed closes its panel.
+        // A plugin that was disabled or removed closes its panel, and its own window with it.
         if plugins::plugin(cx, &plugin).is_none_or(|p| !p.active()) {
-            self.plugin_panel = None;
+            self.drop_plugin_panel(&plugin, cx);
+            self.reconcile_plugin_windows(window, cx);
             self.plugin_inputs.clear();
             return;
         }
+        self.reconcile_plugin_windows(window, cx);
         let mut fields = Vec::new();
         if let Some(tree) = plugins::runtime(cx, &plugin).and_then(|r| r.panel.as_ref()) {
             tree.inputs(&mut fields);
@@ -162,7 +165,7 @@ impl Workbench {
                     .min_w_0()
                     .truncate()
                     .t_body()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(crate::theme::EMPHASIS)
                     .text_color(hex(Chrome::BRIGHT))
                     .child(panel_title),
             )
@@ -246,6 +249,7 @@ impl Workbench {
                         .track_scroll(&self.plugin_scroll)
                         .relative()
                         .child(body)
+                        .group(crate::ui::SCROLL_GROUP)
                         .child(crate::ui::scrollbar(self.plugin_scroll.clone())),
                 )
                 .into_any_element(),
@@ -361,7 +365,7 @@ impl Workbench {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(div().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(title.to_uppercase()))
+                    .child(div().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title.to_uppercase()))
                     .child(column)
                     .into_any_element()
             }
@@ -384,7 +388,7 @@ impl Workbench {
             Node::Text { text, style } => {
                 let base = div().min_w_0().whitespace_normal();
                 match style {
-                    TextStyle::Title => base.t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)),
+                    TextStyle::Title => base.t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)),
                     TextStyle::Muted => base.t_small().text_color(hex(Chrome::MUTED)),
                     TextStyle::Small => base.t_caption().text_color(hex(Chrome::MUTED)),
                     TextStyle::Code => base
@@ -623,13 +627,10 @@ impl Workbench {
     }
 
     /// An icon on any of the three surfaces: opens or closes the panel, wherever that panel goes.
-    pub(super) fn toggle_plugin_surface(&mut self, plugin: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self.plugin_panel_open(plugin);
-        let mode = self.plugin_panel_mode(plugin, cx);
+    pub(super) fn toggle_plugin_surface(&mut self, plugin: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        // The window the panel may need is opened by `reconcile_plugin_windows` on the next
+        // render, the same as for every other way a panel opens.
         self.toggle_plugin_panel(plugin, cx);
-        if !open && self.plugin_panel.as_deref() == Some(plugin) {
-            self.sync_plugin_window(plugin, mode, window, cx);
-        }
     }
 
     /// Tab-strip buttons of plugins that put their panel there (the default surface).

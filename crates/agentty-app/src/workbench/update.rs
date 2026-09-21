@@ -542,7 +542,7 @@ impl Workbench {
                             .items_center()
                             .gap_3()
                             .child(gpui::img("brand/logo.png").size(px(40.)).flex_shrink_0())
-                            .child(div().t_large().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(title)),
+                            .child(div().t_large().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title)),
                     )
                     .when(!body.is_empty(), |d| d.child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body)))
                     .when_some(detail, |d, detail| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).line_clamp(3).child(detail)))
@@ -645,7 +645,7 @@ impl Workbench {
                 .child(
                     div()
                         .t_heading()
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .font_weight(crate::theme::EMPHASIS)
                         .text_color(hex(Chrome::BRIGHT))
                         .child(format!("Agentty v{CURRENT_VERSION}")),
                 )

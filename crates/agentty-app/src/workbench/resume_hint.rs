@@ -55,7 +55,7 @@ impl Workbench {
             return None;
         }
         let dir = view.display_cwd();
-        if dir == home_dir() || self.resume_dismissed.contains(&(view.pane_id, dir.clone())) {
+        if dir == home_dir() {
             return None;
         }
         let sessions = if offer_sessions { self.sessions_in(&dir) } else { Vec::new() };
@@ -64,6 +64,36 @@ impl Workbench {
             return None;
         }
         let pane_id = view.pane_id;
+        // Folded away rather than dismissed: a thin strip brings it back, and the ⌄ never gets
+        // mistaken for the split pane's close button.
+        if self.resume_dismissed.contains(&(pane_id, dir.clone())) {
+            let reopen_dir = dir.clone();
+            return Some(
+                div()
+                    .id(("resume-collapsed", pane_id as usize))
+                    .flex_shrink_0()
+                    .h(px(18.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .cursor_pointer()
+                    .bg(hex_alpha(Chrome::ACCENT, 0.07))
+                    .border_b_1()
+                    .border_color(hex_alpha(Chrome::ACCENT, 0.2))
+                    .t_caption()
+                    .text_color(hex(Chrome::MUTED))
+                    .hover(|s| s.bg(hex_alpha(Chrome::ACCENT, 0.14)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.resume_dismissed.remove(&(pane_id, reopen_dir.clone()));
+                        cx.notify();
+                    }))
+                    .child(div().flex_1().min_w_0().truncate().child(t(cx, "resume.expand")))
+                    // At the right end, where the ⌃ that folded it away was.
+                    .child(icon("chevron-down", 10., hex(Chrome::MUTED)))
+                    .into_any_element(),
+            );
+        }
         let now = now_ms();
         let dismiss_dir = dir.clone();
         let menu_open = self.resume_menu == Some(pane_id) && !sessions.is_empty();
@@ -117,7 +147,23 @@ impl Workbench {
                 }))
         };
 
-        if let Some(harness) = harness {
+        let secondary = |id: SharedString, label: SharedString| {
+            div()
+                .id(id)
+                .flex_shrink_0()
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(hex(Chrome::BORDER))
+                .text_color(hex(Chrome::MUTED))
+                .cursor_pointer()
+                .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::FOREGROUND)))
+                .child(label)
+        };
+
+        // Continuing earlier work is the main offer; a harness is an extra way in, not a takeover.
+        if let Some(harness) = harness.clone().filter(|_| sessions.is_empty()) {
             // A harness comes first: starting work through it is the main offer; earlier sessions stay a click away.
             let flavor = match (harness.claude, harness.codex) {
                 (true, false) => "Claude ",
@@ -165,10 +211,20 @@ impl Workbench {
             if sessions.len() > 1 {
                 bar = bar.child(menu_button(t(cx, "resume.choose").into(), cx));
             }
+            if let Some(harness) = harness {
+                let (start_pane, start_harness) = (pane.clone(), harness.clone());
+                bar = bar.child(
+                    secondary(SharedString::from(format!("harness-start-{pane_id}")), t(cx, "harness.start_bar").into()).on_click(
+                        cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.open_harness_dialog(start_pane.clone(), start_harness.clone(), window, cx)
+                        }),
+                    ),
+                );
+            }
         }
         bar = bar.child(crate::ui::icon_only(
-            ("resume-dismiss", pane_id as usize),
-            "x",
+            ("resume-collapse", pane_id as usize),
+            "chevron-up",
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.resume_dismissed.insert((pane_id, dismiss_dir.clone()));
                 this.resume_menu = None;

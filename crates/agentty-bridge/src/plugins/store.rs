@@ -150,8 +150,6 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<()> {
 pub struct BuiltinPlugin {
     pub manifest_json: &'static str,
     pub files: &'static [(&'static str, &'static str)],
-    /// Files that are not text — a WebAssembly module, an icon.
-    pub binary: &'static [(&'static str, &'static [u8])],
 }
 
 impl BuiltinPlugin {
@@ -166,12 +164,6 @@ macro_rules! embedded {
     };
 }
 
-macro_rules! embedded_bytes {
-    ($path:literal) => {
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../", $path))
-    };
-}
-
 /// The Node.js SDK every JavaScript plugin can import (`./agentty-plugin.mjs`).
 pub const NODE_SDK: &str = embedded!("sdk/node/agentty-plugin.mjs");
 pub const NODE_SDK_TYPES: &str = embedded!("sdk/node/agentty-plugin.d.ts");
@@ -183,16 +175,6 @@ pub const PROTOCOL: &str = embedded!("docs/plugins/protocol.md");
 
 pub const BUILTIN: &[BuiltinPlugin] = &[
     BuiltinPlugin {
-        manifest_json: embedded!("plugins/agent-rest-client/agentty-plugin.json"),
-        files: &[
-            ("agentty-plugin.json", embedded!("plugins/agent-rest-client/agentty-plugin.json")),
-            ("README.md", embedded!("plugins/agent-rest-client/README.md")),
-        ],
-        // A Rust program built for WebAssembly: `plugins/agent-rest-client/build.sh` makes this
-        // file from the source beside it, and it is committed so the plugin installs in one click.
-        binary: &[("agent-rest-client.wasm", embedded_bytes!("plugins/agent-rest-client/agent-rest-client.wasm"))],
-    },
-    BuiltinPlugin {
         manifest_json: embedded!("plugins/cosmica/agentty-plugin.json"),
         files: &[
             ("agentty-plugin.json", embedded!("plugins/cosmica/agentty-plugin.json")),
@@ -201,7 +183,6 @@ pub const BUILTIN: &[BuiltinPlugin] = &[
             ("README.md", embedded!("plugins/cosmica/README.md")),
             ("agentty-plugin.mjs", NODE_SDK),
         ],
-        binary: &[],
     },
     BuiltinPlugin {
         manifest_json: embedded!("plugins/launch/agentty-plugin.json"),
@@ -219,7 +200,6 @@ pub const BUILTIN: &[BuiltinPlugin] = &[
             ("README.md", embedded!("plugins/launch/README.md")),
             ("agentty-plugin.mjs", NODE_SDK),
         ],
-        binary: &[],
     },
 ];
 
@@ -247,9 +227,6 @@ pub fn install_builtin(id: &str) -> Result<InstalledPlugin> {
     let staging = staging_dir(&manifest.id)?;
     for (name, contents) in plugin.files {
         write_file(&staging.join(name), contents)?;
-    }
-    for (name, bytes) in plugin.binary {
-        write_bytes(&staging.join(name), bytes)?;
     }
     finish_install(&manifest, &staging, Source::Builtin, None)
 }
@@ -469,7 +446,7 @@ pub(crate) mod tests {
     #[test]
     fn builtin_plugins_embed_every_script() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for plugin in BUILTIN.iter().filter(|plugin| plugin.manifest().runtime != super::super::manifest::Runtime::Wasm) {
+        for plugin in BUILTIN {
             let id = plugin.manifest().id;
             let dir = root.join("plugins").join(&id);
             let mut scripts = Vec::new();
@@ -521,17 +498,10 @@ pub(crate) mod tests {
     fn builtin_plugins_are_valid() {
         for plugin in BUILTIN {
             let manifest = plugin.manifest();
-            let text = plugin.files.iter().any(|(name, _)| *name == manifest.main);
-            let binary = plugin.binary.iter().any(|(name, _)| *name == manifest.main);
-            assert!(text || binary, "{} misses its entry point", manifest.id);
-            // A module is shipped as bytes, a script as text; mixing them up would write a
-            // .wasm full of replacement characters.
-            assert_eq!(
-                manifest.runtime == super::super::manifest::Runtime::Wasm,
-                binary,
-                "{}: a wasm plugin's entry point is embedded as bytes",
-                manifest.id
-            );
+            assert!(plugin.files.iter().any(|(name, _)| *name == manifest.main), "{} misses its entry point", manifest.id);
+            // Agentty ships scripts, not modules: a plugin that is a module comes from the
+            // marketplace, where its source and its checksum are.
+            assert!(manifest.runtime.is_process(), "{} is a module; those are not bundled", manifest.id);
         }
     }
 

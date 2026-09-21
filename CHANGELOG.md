@@ -8,15 +8,16 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - A plugin can wait (`host/timer`) and can hear how the agents it started are getting on
   (`pane/status`, with `workspace.read`) — what a plugin needs to walk a piece of work through
-  several agent sessions. `docs/plugins/agentos.md` describes that shape, and
-  `plugins/blogger-agentos` is a skeleton of it: outline, draft and edit, each one asked of an
-  agent you can watch and checked before the next one is offered.
+  several agent sessions. `docs/plugins/agentos.md` describes that shape, and Blogger AgentOS in
+  the marketplace is a skeleton of it: outline, draft and edit, each one asked of an agent you can
+  watch and checked before the next one is offered.
 - Plugins can be written as compiled programs: a Rust crate built for WebAssembly, shipped as one
   `.wasm` file that works on macOS, Windows and Linux. Agentty runs the module itself and hands it
   three functions — send a message, write a log line, read the clock — so such a plugin has no
   files, no processes and no network of its own, whatever its code says, and everything it asks for
-  goes through the permissions in its manifest. A Rust SDK (`sdk/rust`) and two examples
-  (`plugins/hello-rust`, `plugins/agent-rest-client`) are in the repository.
+  goes through the permissions in its manifest. The Rust SDK and two worked examples live in the
+  [marketplace repository](https://github.com/empty-user77/Agentty-Marketplace), which is where
+  plugins are published.
 - A plugin panel opens the way it suits: docked beside the terminals (as before), floating over the
   window, in a window of its own that can be moved and resized, or filling the whole area. The
   plugin says which it prefers; the layout button in the panel's header changes it and remembers.
@@ -29,14 +30,22 @@ All notable changes to this project are documented here. The format follows
   method, the headers, the body and response sizes, the redirects and the time, sends nothing of
   yours with the request, and writes each call to the plugin's log with the URL redacted. A request
   can go through an HTTP proxy the plugin names.
+- Agentty bundles no plugin modules: the ones it used to carry are published like everyone else's,
+  with their source and their checksum where anyone can read them.
+- The marketplace list is kept between runs, so the Plugins page has something to show before the
+  network answers — and still does when it cannot reach it, saying how old what it shows is.
+  Plugins with a newer version in the marketplace say so in the list, and **Update all** takes
+  them one after another.
+- A plugin can put text on the clipboard (`host/copy`) — what a panel's "copy this" button needs.
+  Agent Rest Client uses it for **Copy as cURL**: the request as it would actually be sent, with
+  the environment's values filled in and every value quoted so a shell reads it back as one.
 - A marketplace: **Plugins → Marketplace** lists what
   [Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers, and installing
   one downloads its module and checks it against the checksum in the listing — a module that does
   not match is refused before anything is written. Only WebAssembly plugins are offered there, so
   what you install from a list reaches nothing but the permissions you saw before installing it.
   Plugins you keep to yourself are still installed from a folder or a Git repository.
-- Agent Rest Client ships with Agentty and installs from the Plugins page in one click. An HTTP
-  client as a plugin: requests with headers, a body and authorization;
+- Agent Rest Client, installed from the marketplace in one click. An HTTP client as a plugin: requests with headers, a body and authorization;
   environments whose values fill in `{{placeholders}}` everywhere in a request; a collection of
   saved requests; a proxy and a timeout; and the response with its status, time, size, headers and
   pretty-printed JSON.
@@ -48,6 +57,47 @@ All notable changes to this project are documented here. The format follows
   longer than a line.
 - The Plugins page is a list beside details: search, then the plugin's description, what it adds
   and where, its permissions in full sentences, where it came from, how it runs and its log.
+
+## [0.1.14] - 2026-09-22
+
+### Added
+- Workspace cards redesigned: name, branch and path, pull request and open ports, with a bar marking a pane that is
+  waiting for you. A workspace that is closed goes dormant instead of disappearing, and its card reads the same
+  before and after it is opened again. Workspaces and groups can be given colours, renamed in place, and dragged
+  with the list scrolling under the pointer.
+- Closing the last tab of a workspace no longer removes the workspace. Each workspace keeps its recently closed tabs,
+  and reopening one restores its splits.
+- Session links: pick any pane in the window to link to, and the workspaces a link connects are gathered under the
+  one it started from. Unlinking puts the list straight back.
+- A database panel beside the terminals, with a SQL editor and a result grid — row numbers, NULLs, row detail, and
+  columns dragged to a width that is kept per column name.
+- A capture proxy that records the requests and responses of a terminal, with credentials in them redacted. It applies
+  to terminals that are already open, and it can point this machine's proxy settings at it while it runs and put them
+  back afterwards.
+- The start page is a tab of its own, wherever you are. The workspace list's header now switches between the thin
+  list and the roomy cards, and what was last picked is what comes back.
+- Skills, agents and MCP servers are tabs of the monitoring page, beside usage, processes and the capture proxy.
+- Picking a file in the files panel's changes tab opens it as a diff — hunk headers, both line numbers, added and
+  removed lines — with the file itself one click away.
+- Resume offers to compact a session whose context is nearly full, and jumps to the pane a session is already running
+  in. Sessions can be deleted.
+- The status bar carries the path of the active terminal, and the AI bar carries the context meter, with a compact
+  action past 80%.
+- Agentty keeps the machine awake while an agent is working.
+
+### Changed
+- Korean calls a workspace 작업공간.
+- Pull reports what arrived instead of printing raw git output, and branches and pull requests are read for
+  workspaces that are folded away.
+- Usage keeps an account that has tokens but no price, refreshes faster, and can be refreshed by hand; the plan meter
+  appears from 50% up.
+- Floating scrollbars stay out of the way until the pointer is inside the area they belong to.
+- Links: text that follows a URL is no longer swallowed by it, file paths open in the editor, and pull requests open
+  in the external browser.
+
+### Fixed
+- MySQL connects with utf8mb4, and a missing password no longer stops the table list from loading.
+- Files and images pasted from the clipboard reach the terminal.
 
 ## [0.1.13] - 2026-09-20
 

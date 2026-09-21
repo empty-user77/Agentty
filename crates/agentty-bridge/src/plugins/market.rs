@@ -23,6 +23,9 @@ pub const API_VERSION: u32 = 1;
 const MAX_INDEX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MODULE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ENTRIES: usize = 500;
+/// An `apiVersion` beyond this is not a future protocol, it is a typo or rubbish, and the entry is
+/// dropped rather than listed as needing a newer Agentty.
+const MAX_API_VERSION: u32 = 1000;
 const MAX_NAME: usize = 60;
 const MAX_DESCRIPTION: usize = 300;
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -68,7 +71,15 @@ pub struct Entry {
     pub mode: PanelMode,
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// The plugin protocol the module is built against. An entry that leaves it out is from
+    /// before the field existed, which can only mean the first one.
+    #[serde(default = "first_api_version")]
+    pub api_version: u32,
     pub module: Module,
+}
+
+fn first_api_version() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -142,6 +153,9 @@ impl Entry {
         if let Some(homepage) = &entry.homepage {
             https_host(homepage, "homepage")?;
         }
+        if entry.api_version == 0 || entry.api_version > MAX_API_VERSION {
+            bail!("apiVersion is between 1 and {MAX_API_VERSION}");
+        }
         for permission in &entry.permissions {
             if !PERMISSIONS.iter().any(|(name, _)| name == permission) {
                 bail!("unknown permission {permission}");
@@ -179,7 +193,7 @@ impl Entry {
             requires: None,
             main: format!("{}.wasm", self.id),
             runtime: super::manifest::Runtime::Wasm,
-            api_version: super::manifest::API_VERSION,
+            api_version: self.api_version,
             activation_events: Vec::new(),
             contributes: super::manifest::Contributes {
                 commands: Vec::new(),
@@ -197,8 +211,46 @@ impl Entry {
     }
 
     /// Whether this entry is newer than what is installed.
+    /// Whether this Agentty speaks the protocol the module is built against. An entry that needs
+    /// a newer one is still listed — the page says so instead of offering to install it.
+    pub fn supported(&self) -> bool {
+        self.api_version <= super::manifest::API_VERSION
+    }
+
     pub fn newer_than(&self, installed: &InstalledPlugin) -> bool {
-        installed.manifest.as_ref().is_some_and(|m| version_newer(&self.version, &m.version))
+        self.supported() && installed.manifest.as_ref().is_some_and(|m| version_newer(&self.version, &m.version))
+    }
+}
+
+/// Where the last list read is kept, so the page has something to show before the network
+/// answers — and still does when it cannot.
+fn cache_path() -> std::path::PathBuf {
+    // The same data directory everything else uses, and the same hook the tests move aside: a
+    // test must never write into the real ~/.agentty.
+    #[cfg(test)]
+    if let Some(root) = super::store::tests::ROOT.with(|root| root.borrow().clone()) {
+        return root.join("marketplace.json");
+    }
+    crate::fsutil::data_dir().join("marketplace.json")
+}
+
+/// The list as it was last read, and when. Nothing here is trusted any more than a fresh read:
+/// every entry goes through the same checks.
+pub fn cached() -> Option<(Vec<Entry>, std::time::SystemTime)> {
+    let path = cache_path();
+    let read_at = std::fs::metadata(&path).and_then(|meta| meta.modified()).ok()?;
+    let bytes = std::fs::read(&path).ok()?;
+    parse(&bytes).ok().filter(|entries| !entries.is_empty()).map(|entries| (entries, read_at))
+}
+
+fn keep(bytes: &[u8]) {
+    let path = cache_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
     }
 }
 
@@ -211,7 +263,10 @@ pub fn fetch() -> Result<Vec<Entry>> {
     if bytes.len() > MAX_INDEX_BYTES {
         bail!("the marketplace list is larger than {} MB", MAX_INDEX_BYTES / 1024 / 1024);
     }
-    parse(&bytes)
+    let entries = parse(&bytes)?;
+    // Only a list that could be read is kept, so a broken one does not become what the page shows.
+    keep(&bytes);
+    Ok(entries)
 }
 
 /// Reads a list, keeping the entries that check out and leaving the rest.
@@ -237,6 +292,9 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Entry>> {
 /// Downloads the module, weighs it against the entry, and installs the plugin. Nothing is written
 /// where Agentty looks for plugins until the checksum matches.
 pub fn install(entry: &Entry) -> Result<InstalledPlugin> {
+    if !entry.supported() {
+        bail!("\"{}\" needs a newer Agentty (plugin API {} > {})", entry.id, entry.api_version, super::manifest::API_VERSION);
+    }
     let module = download(entry)?;
     store::install_module(&entry.manifest(), &module, Source::Market, Some(entry.source.clone()))
 }
@@ -343,6 +401,60 @@ mod tests {
         assert!(!module_host_allowed("elsewhere.example"));
         std::env::remove_var("AGENTTY_MARKETPLACE_INDEX");
         assert!(!module_host_allowed("plugins.example.com"));
+    }
+
+    /// What was read last time is kept, and read back through the same checks.
+    #[test]
+    fn the_list_is_kept_between_runs() {
+        super::super::store::tests::with_data_dir(|_| {
+            assert!(cached().is_none(), "nothing kept yet");
+            let list = serde_json::json!({ "apiVersion": 1, "plugins": [entry()] });
+            keep(list.to_string().as_bytes());
+            let (entries, _) = cached().expect("the list comes back");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].id, "hello-world");
+
+            // A file that is not a list at all is not what the page shows.
+            keep(b"not json");
+            assert!(cached().is_none());
+            // Neither is an empty one: there would be nothing to show anyway.
+            keep(serde_json::json!({ "apiVersion": 1, "plugins": [] }).to_string().as_bytes());
+            assert!(cached().is_none());
+        });
+    }
+
+    #[test]
+    fn an_entry_without_an_api_version_is_the_first_protocol() {
+        let parsed = Entry::checked(entry()).expect("a good entry");
+        assert_eq!(parsed.api_version, 1);
+        assert!(parsed.supported());
+        // The manifest carries the entry's protocol, not whatever this Agentty happens to speak.
+        assert_eq!(parsed.manifest().api_version, 1);
+    }
+
+    #[test]
+    fn an_entry_built_against_a_newer_protocol_is_listed_but_not_installed() {
+        let newer = crate::plugins::manifest::API_VERSION + 1;
+        let mut value = entry();
+        value["apiVersion"] = json!(newer);
+        // It survives checking, so the page can say why it cannot be installed...
+        let parsed = Entry::checked(value).expect("still an entry");
+        assert!(!parsed.supported());
+        // ...install refuses it even when something reaches past the page...
+        let refusal = install(&parsed).expect_err("install refuses it").to_string();
+        assert!(refusal.contains("needs a newer Agentty"), "{refusal}");
+        // ...and the manifest it would produce is one the loader itself refuses.
+        assert_eq!(parsed.manifest().api_version, newer);
+        assert!(parsed.manifest().validate().is_err(), "a manifest needing a newer Agentty must not load");
+    }
+
+    #[test]
+    fn rubbish_api_versions_are_dropped() {
+        for bad in [json!(0), json!(MAX_API_VERSION + 1), json!(u32::MAX)] {
+            let mut value = entry();
+            value["apiVersion"] = bad.clone();
+            assert!(Entry::checked(value).is_err(), "apiVersion {bad} must be refused");
+        }
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crate::launch::{home_dir, LaunchSpec, PaneKind};
 use crate::settings::{settings, update_settings, Language, LinkOpener, Settings};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{chip, icon, IconSize, TypeScale};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString, Window};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -520,7 +520,7 @@ impl Workbench {
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, title)))
+                        .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, title)))
                         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, body))),
                 )
         };
@@ -533,7 +533,7 @@ impl Workbench {
                         .child(
                             div()
                                 .t_heading()
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .font_weight(crate::theme::EMPHASIS)
                                 .text_color(hex(Chrome::BRIGHT))
                                 .child(t(cx, "onboarding.welcome")),
                         )
@@ -730,7 +730,7 @@ impl Workbench {
                     .child(
                         div()
                             .t_heading()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::BRIGHT))
                             .child(t(cx, "onboarding.basics")),
                     )
@@ -816,7 +816,7 @@ impl Workbench {
                 .items_center()
                 .justify_center()
                 .t_caption()
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(crate::theme::EMPHASIS)
                 .when(is_done, |d| d.bg(hex_alpha(Chrome::SUCCESS, 0.25)).child(icon("check", 12., hex(Chrome::SUCCESS))))
                 .when(is_now, |d| d.bg(hex(Chrome::WARNING)).text_color(hex(0x1e1e1e)).child((index + 1).to_string()))
                 .when(!is_done && !is_now, |d| d.bg(hex(0x3a3a3a)).text_color(hex(Chrome::MUTED)).child((index + 1).to_string()));
@@ -921,7 +921,7 @@ impl Workbench {
                     .items_center()
                     .gap_2()
                     .child(crate::brand::tinted_tile(Chrome::BLUE, 30.).child(icon(guide.glyph, IconSize::BUTTON, hex(Chrome::BLUE))))
-                    .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, guide.title))),
+                    .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, guide.title))),
             )
             .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, guide.what)))
             .child(steps)

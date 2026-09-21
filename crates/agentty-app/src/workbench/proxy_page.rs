@@ -7,7 +7,7 @@ use crate::i18n::{t, tf};
 use crate::text_input::TextInput;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{action_button, icon, IconSize, TypeScale};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWeight, SharedString, Subscription};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, SharedString, Subscription};
 use std::time::Duration;
 
 const ROW_HEIGHT: f32 = 24.;
@@ -19,9 +19,21 @@ pub(super) struct ProxyPage {
     revision: u64,
     /// Endpoint picked from the chips.
     endpoint: Option<String>,
+    /// Connection whose details are shown under the table.
+    picked: Option<u64>,
     watching: bool,
     error: Option<String>,
     scroll: gpui::UniformListScrollHandle,
+    /// Records passing the chips and the filter, newest first. Worked out when what it depends on
+    /// changes rather than on every frame: with headers recorded a record carries two of them, and
+    /// the list holds thousands.
+    visible: Vec<Record>,
+    /// What `visible` was worked out from: the capture revision, the filter text, the chip.
+    visible_key: Option<(u64, String, Option<String>)>,
+    /// Whether the machine's own proxy settings point here, read off disk by the watcher.
+    system_on: bool,
+    /// A `networksetup` exchange is running; the button waits rather than starting a second one.
+    system_busy: bool,
 }
 
 impl ProxyPage {
@@ -32,9 +44,14 @@ impl ProxyPage {
             records: Vec::new(),
             revision: 0,
             endpoint: None,
+            picked: None,
             watching: false,
             error: None,
             scroll: gpui::UniformListScrollHandle::new(),
+            visible: Vec::new(),
+            visible_key: None,
+            system_on: false,
+            system_busy: false,
         }
     }
 }
@@ -95,6 +112,13 @@ impl Workbench {
                     this.proxy.records = capture::records();
                     cx.notify();
                 }
+                // Whether the machine points here is a file on disk; the bar asks the watcher for
+                // it rather than reading it on every frame.
+                let system_on = crate::platform::system_proxy::saved_previous().is_some();
+                if system_on != this.proxy.system_on {
+                    this.proxy.system_on = system_on;
+                    cx.notify();
+                }
                 true
             });
             if !matches!(open, Ok(true)) {
@@ -110,24 +134,38 @@ impl Workbench {
         self.all_panes().iter().find(|p| p.read(cx).pane_id == id).map(|p| p.read(cx).display_title()).unwrap_or_else(|| format!("#{id}"))
     }
 
-    /// Records that pass the endpoint chip and the text filter, newest first.
-    fn visible_records(&self, cx: &gpui::App) -> Vec<Record> {
+    /// Brings `proxy.visible` up to date: the records that pass the endpoint chip and the text
+    /// filter, newest first. It is rebuilt only when the capture, the filter or the chip changed —
+    /// a record can carry two recorded heads, so filtering the whole list on every frame moved
+    /// megabytes for nothing.
+    fn refresh_visible(&mut self, cx: &gpui::App) {
         let query = self.proxy.filter.read(cx).text().trim().to_string();
-        self.proxy
+        let key = (self.proxy.revision, query, self.proxy.endpoint.clone());
+        if self.proxy.visible_key.as_ref() == Some(&key) {
+            return;
+        }
+        let (_, query, endpoint) = &key;
+        let titles: Vec<(Option<u64>, String)> = self.proxy.records.iter().map(|r| (r.pane, self.pane_title(r.pane, cx))).collect();
+        self.proxy.visible = self
+            .proxy
             .records
             .iter()
+            .enumerate()
             .rev()
-            .filter(|r| self.proxy.endpoint.as_ref().is_none_or(|e| &r.endpoint() == e))
-            .filter(|r| query.is_empty() || matches(r, &self.pane_title(r.pane, cx), &query))
-            .cloned()
-            .collect()
+            .filter(|(_, r)| endpoint.as_ref().is_none_or(|e| &r.endpoint() == e))
+            .filter(|(i, r)| query.is_empty() || matches(r, &titles[*i].1, query))
+            .map(|(_, r)| r.clone())
+            .collect();
+        self.proxy.visible_key = Some(key);
     }
 
     pub(super) fn render_proxy_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         self.watch_capture(cx);
+        self.refresh_visible(cx);
         let recording = capture::is_recording();
         let port = capture::port();
-        let visible = self.visible_records(cx);
+        let shown = self.proxy.visible.len();
+        let (sent, received): (u64, u64) = self.proxy.visible.iter().fold((0, 0), |acc, r| (acc.0 + r.sent, acc.1 + r.received));
         let total = self.proxy.records.len();
 
         let toggle = div()
@@ -156,6 +194,63 @@ impl Workbench {
                 cx.notify();
             }));
 
+        // Off by default, and it never touches HTTPS: only the heads of plain requests are kept.
+        let recording_heads = capture::records_heads();
+        let heads = div()
+            .id("proxy-heads")
+            .flex_shrink_0()
+            .h(px(28.))
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .rounded_md()
+            .cursor_pointer()
+            .t_small()
+            .border_1()
+            .border_color(hex(if recording_heads { Chrome::ACCENT } else { Chrome::BORDER }))
+            .text_color(hex(if recording_heads { Chrome::BRIGHT } else { Chrome::MUTED }))
+            .tooltip(crate::ui::Tooltip::text(t(cx, "proxy.record_heads_hint"), None))
+            .hover(|s| s.border_color(hex(Chrome::ACCENT)))
+            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                capture::set_record_heads(!capture::records_heads());
+                cx.notify();
+            }))
+            .child(icon(if recording_heads { "eye" } else { "list" }, IconSize::INLINE, hex(Chrome::MUTED)))
+            .child(t(cx, "proxy.record_heads"));
+
+        // The whole machine, not just Agentty's tabs. It changes the system's own proxy settings,
+        // so it says what it does, needs the administrator password, and puts them back when off.
+        // Read by the watcher, not here: this runs on every frame and that reads a file.
+        let system_on = self.proxy.system_on;
+        let system_busy = self.proxy.system_busy;
+        let system = crate::platform::system_proxy::supported().then(|| {
+            div()
+                .id("proxy-system")
+                .flex_shrink_0()
+                .h(px(28.))
+                .px_3()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .rounded_md()
+                .cursor_pointer()
+                .t_small()
+                .border_1()
+                .border_color(hex(if system_on { Chrome::WARNING } else { Chrome::BORDER }))
+                .text_color(hex(if system_on { Chrome::BRIGHT } else { Chrome::MUTED }))
+                .tooltip(crate::ui::Tooltip::text(t(cx, "proxy.system_hint"), None))
+                .hover(|s| s.border_color(hex(Chrome::WARNING)))
+                .when(system_busy, |d| d.opacity(0.6))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_system_capture(cx)))
+                .child(icon("globe", IconSize::INLINE, hex(if system_on { Chrome::WARNING } else { Chrome::MUTED })))
+                .child(if system_busy {
+                    t(cx, "proxy.system_working").to_string()
+                } else {
+                    t(cx, if system_on { "proxy.system_off" } else { "proxy.system_on" }).to_string()
+                })
+        });
+
         let state = match (recording, port) {
             (true, Some(port)) => tf(cx, "proxy.state_on", &[("port", &port.to_string())]),
             (false, Some(_)) => t(cx, "proxy.state_paused").to_string(),
@@ -165,7 +260,7 @@ impl Workbench {
             .flex()
             .items_center()
             .gap_3()
-            .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.proxy")))
+            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.proxy")))
             .child(
                 div()
                     .flex_1()
@@ -186,6 +281,13 @@ impl Workbench {
                     this.request_launch(crate::launch::PaneKind::Shell, super::LaunchTarget::NewTab, window, cx);
                 }),
             ))
+            // Panes that were already open keep the environment they started with; typing the
+            // variables into their shell is the one way to route them without restarting them.
+            .child(action_button(
+                "proxy-apply-open",
+                t(cx, "proxy.apply_open"),
+                cx.listener(|this, _: &ClickEvent, _, cx| this.apply_capture_to_open_panes(cx)),
+            ))
             .child(action_button(
                 "proxy-clear",
                 t(cx, "proxy.clear"),
@@ -195,6 +297,8 @@ impl Workbench {
                     cx.notify();
                 }),
             ))
+            .child(heads)
+            .children(system)
             .child(toggle);
 
         let hint = div()
@@ -271,10 +375,9 @@ impl Workbench {
             .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(tf(
                 cx,
                 "proxy.count",
-                &[("shown", &visible.len().to_string()), ("total", &total.to_string())],
+                &[("shown", &shown.to_string()), ("total", &total.to_string())],
             )));
 
-        let (sent, received): (u64, u64) = visible.iter().fold((0, 0), |acc, r| (acc.0 + r.sent, acc.1 + r.received));
         let columns = div()
             .h(px(ROW_HEIGHT))
             .flex_shrink_0()
@@ -285,7 +388,7 @@ impl Workbench {
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .t_caption()
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(crate::theme::EMPHASIS)
             .text_color(hex(Chrome::MUTED))
             .child(div().w(px(64.)).flex_shrink_0().child(t(cx, "proxy.col_time")))
             .child(div().w(px(130.)).flex_shrink_0().child(t(cx, "proxy.col_tab")))
@@ -296,7 +399,7 @@ impl Workbench {
             .child(div().w(px(76.)).flex_shrink_0().text_right().child(format!("↓ {}", bytes(received))))
             .child(div().w(px(70.)).flex_shrink_0().text_right().child(t(cx, "proxy.col_time_taken")));
 
-        let table: AnyElement = if visible.is_empty() {
+        let table: AnyElement = if shown == 0 {
             let text = if total > 0 {
                 t(cx, "proxy.no_match")
             } else if recording {
@@ -315,15 +418,20 @@ impl Workbench {
                 .child(
                     gpui::uniform_list(
                         "proxy-rows",
-                        visible.len(),
+                        shown,
                         cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                            let rows = this.visible_records(cx);
-                            range.filter_map(|i| rows.get(i).map(|record| this.render_proxy_row(i, record, cx))).collect::<Vec<_>>()
+                            this.refresh_visible(cx);
+                            // Only the rows actually on screen are copied out, so the borrow ends
+                            // before they are rendered.
+                            let rows: Vec<(usize, Record)> =
+                                range.filter_map(|i| this.proxy.visible.get(i).map(|r| (i, r.clone()))).collect();
+                            rows.into_iter().map(|(i, record)| this.render_proxy_row(i, &record, cx)).collect::<Vec<_>>()
                         }),
                     )
                     .track_scroll(handle)
                     .size_full(),
                 )
+                .group(crate::ui::SCROLL_GROUP)
                 .child(crate::ui::scrollbar(base))
                 .into_any_element()
         };
@@ -349,8 +457,187 @@ impl Workbench {
                     .border_1()
                     .border_color(hex(Chrome::BORDER))
                     .child(columns)
-                    .child(table),
+                    .child(table)
+                    .children(self.render_proxy_detail(cx)),
             )
+    }
+
+    /// Sends the machine's own traffic through the capture proxy, or puts the settings back.
+    ///
+    /// `networksetup` is a subprocess per network service and takes a moment each; the whole
+    /// exchange runs in the background, or the window would stand still for seconds on one click.
+    pub(super) fn toggle_system_capture(&mut self, cx: &mut Context<Self>) {
+        use crate::platform::system_proxy;
+        if self.proxy.system_busy {
+            return;
+        }
+        let previous = system_proxy::saved_previous();
+        if previous.is_none() {
+            if !capture::is_recording() {
+                self.proxy.error = capture::start().err().map(|err| err.to_string());
+            }
+            if capture::port().is_none() {
+                return cx.notify();
+            }
+        }
+        let port = capture::port();
+        self.proxy.system_busy = true;
+        self.proxy.error = None;
+        // Stop serving untokened connections before the settings go back, so nothing else on the
+        // machine is listed once it is no longer pointed here.
+        if previous.is_some() {
+            capture::set_allow_system(false);
+        }
+        let work = cx.background_spawn(async move {
+            match previous {
+                Some(previous) => system_proxy::restore(&previous).map(|()| false),
+                None => system_proxy::enable(port.expect("checked above")).map(|_| true),
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.proxy.system_busy = false;
+                match outcome {
+                    Ok(enabled) => {
+                        // Only now: until the machine is actually pointed here, the token is the
+                        // only way in.
+                        capture::set_allow_system(enabled);
+                        this.proxy.system_on = enabled;
+                        let message = t(cx, if enabled { "proxy.system_applied" } else { "proxy.system_restored" });
+                        this.show_toast(message, cx);
+                    }
+                    Err(err) => this.proxy.error = Some(format!("{err}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Types the proxy variables into every shell pane that is open, so terminals started before
+    /// capture was turned on are routed too. Agent panes are left alone: text typed into an agent
+    /// is a prompt, not a shell command.
+    pub(super) fn apply_capture_to_open_panes(&mut self, cx: &mut Context<Self>) {
+        if !capture::is_recording() {
+            self.proxy.error = capture::start().err().map(|err| err.to_string());
+        }
+        let mut applied = 0;
+        let mut skipped = 0;
+        for pane in self.all_panes() {
+            let (pane_id, is_agent) = {
+                let view = pane.read(cx);
+                (view.pane_id, view.is_agent() || view.live_tool.is_some())
+            };
+            if is_agent {
+                skipped += 1;
+                continue;
+            }
+            let exports: String = capture::pane_environment(pane_id)
+                .into_iter()
+                .map(|(name, value)| format!("export {name}={}", crate::launch::shell_quote(&value)))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if exports.is_empty() {
+                continue;
+            }
+            pane.update(cx, |view, cx| view.submit_prompt(exports, cx));
+            applied += 1;
+        }
+        let message = tf(cx, "proxy.applied", &[("n", &applied.to_string()), ("skipped", &skipped.to_string())]);
+        self.show_toast(message, cx);
+        cx.notify();
+    }
+
+    /// Everything known about the picked connection. An HTTPS tunnel has only its outside: the
+    /// bytes inside it are never read, so there is no request or response text to show.
+    fn render_proxy_detail(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let picked = self.proxy.picked?;
+        let record = self.proxy.records.iter().find(|r| r.id == picked)?;
+        let row = |label: String, value: String| {
+            div()
+                .flex()
+                .gap_2()
+                .px_3()
+                .py_0p5()
+                .t_small()
+                .child(div().w(px(120.)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(label))
+                .child(div().flex_1().min_w_0().font_family("JetBrains Mono").text_color(hex(Chrome::BRIGHT)).child(value))
+        };
+        let block = |title: String, text: String| {
+            div().flex().flex_col().px_3().py_1().child(div().t_caption().text_color(hex(Chrome::MUTED)).child(title)).child(
+                div()
+                    .mt_0p5()
+                    .p_2()
+                    .rounded_md()
+                    .bg(hex(Chrome::PANEL))
+                    .t_small()
+                    .font_family("JetBrains Mono")
+                    .text_color(hex(Chrome::FOREGROUND))
+                    .child(text),
+            )
+        };
+        let mut detail = div()
+            .id("proxy-detail")
+            .flex_shrink_0()
+            .max_h(px(280.))
+            .overflow_y_scroll()
+            .border_t_1()
+            .border_color(hex(Chrome::BORDER))
+            .bg(hex(Chrome::EDITOR))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1p5()
+                    .child(div().flex_1().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(format!(
+                        "{} {}{}",
+                        record.method,
+                        record.endpoint(),
+                        record.path
+                    )))
+                    .child(crate::ui::icon_only(
+                        "proxy-detail-close",
+                        "x",
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.proxy.picked = None;
+                            cx.notify();
+                        }),
+                    )),
+            )
+            .child(row(t(cx, "proxy.col_time").to_string(), clock(record.started_ms)))
+            .child(row(t(cx, "proxy.col_tab").to_string(), self.pane_title(record.pane, cx)))
+            .child(row(t(cx, "proxy.col_host").to_string(), format!("{}:{}", record.host, record.port)))
+            .child(row(t(cx, "proxy.col_status").to_string(), record.status.map(|s| s.to_string()).unwrap_or_else(|| "—".into())))
+            .child(row(t(cx, "proxy.col_sent").to_string(), bytes(record.sent)))
+            .child(row(t(cx, "proxy.col_received").to_string(), bytes(record.received)))
+            .child(row(
+                t(cx, "proxy.col_time_taken").to_string(),
+                record.duration_ms.map(duration).unwrap_or_else(|| t(cx, "proxy.open").to_string()),
+            ));
+        if let Some(error) = &record.error {
+            detail = detail.child(row(t(cx, "proxy.failed").to_string(), error.clone()));
+        }
+        match (&record.request_head, &record.response_head) {
+            (None, None) if record.method == "CONNECT" => {
+                detail = detail.child(div().px_3().py_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "proxy.tunnel_only")));
+            }
+            (request, response) => {
+                if let Some(text) = request {
+                    detail = detail.child(block(t(cx, "proxy.request_head").to_string(), text.clone()));
+                }
+                if let Some(text) = response {
+                    detail = detail.child(block(t(cx, "proxy.response_head").to_string(), text.clone()));
+                }
+                if request.is_none() && response.is_none() {
+                    detail = detail.child(div().px_3().py_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "proxy.no_heads")));
+                }
+            }
+        }
+        Some(detail.into_any_element())
     }
 
     fn render_proxy_row(&self, index: usize, record: &Record, cx: &mut Context<Self>) -> AnyElement {
@@ -371,6 +658,8 @@ impl Workbench {
         let method_color = if record.method == "CONNECT" { Chrome::PURPLE } else { Chrome::BLUE };
         let endpoint = record.endpoint();
         let pick = endpoint.clone();
+        let id = record.id;
+        let picked = self.proxy.picked == Some(id);
         div()
             .id(("proxy-row", index))
             .w_full()
@@ -380,9 +669,15 @@ impl Workbench {
             .items_center()
             .gap_2()
             .t_small()
+            .cursor_pointer()
             .font_family("JetBrains Mono")
             .when(index % 2 == 1, |d| d.bg(hex_alpha(0xffffff, 0.025)))
+            .when(picked, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.35)))
             .hover(|s| s.bg(hex(Chrome::HOVER)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.proxy.picked = if this.proxy.picked == Some(id) { None } else { Some(id) };
+                cx.notify();
+            }))
             .when_some(record.error.clone(), |d, error| d.tooltip(crate::ui::Tooltip::text(error, None)))
             .child(div().w(px(64.)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(clock(record.started_ms)))
             .child(div().w(px(130.)).flex_shrink_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(self.pane_title(record.pane, cx)))
@@ -395,7 +690,9 @@ impl Workbench {
                     .flex()
                     .gap_1()
                     .cursor_pointer()
+                    // Filters by this endpoint; picking the row for its details is the rest of it.
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
                         this.proxy.endpoint = Some(pick.clone());
                         cx.notify();
                     }))
@@ -435,6 +732,8 @@ mod tests {
             received: 0,
             duration_ms: Some(1),
             error: None,
+            request_head: None,
+            response_head: None,
         }
     }
 

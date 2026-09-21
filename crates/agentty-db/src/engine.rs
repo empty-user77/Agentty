@@ -378,7 +378,10 @@ fn connect_mysql(config: &ConnectionConfig) -> Result<Session> {
         .db_name(config.database.clone())
         .tcp_connect_timeout(Some(CONNECT_TIMEOUT))
         .read_timeout(Some(QUERY_TIMEOUT))
-        .write_timeout(Some(QUERY_TIMEOUT));
+        .write_timeout(Some(QUERY_TIMEOUT))
+        // Without this the server hands text over in its own default encoding (often latin1) and
+        // every non-ASCII value arrives as mojibake.
+        .init(vec!["SET NAMES utf8mb4"]);
     if tls_for(config) == Tls::Required {
         let mut ssl = mysql::SslOpts::default();
         if config.is_rds() {

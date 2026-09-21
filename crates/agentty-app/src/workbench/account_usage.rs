@@ -6,17 +6,22 @@ use agentty_bridge::limits::{time_left, AgentLimits};
 use agentty_bridge::model::Agent;
 use agentty_bridge::usage::UsageScanner;
 use gpui::{App, AppContext as _, Context};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 const DAYS: i64 = 7;
-const REFRESH: Duration = Duration::from_secs(300);
+const REFRESH: Duration = Duration::from_secs(120);
+/// Plan limits older than this are shown with when they were observed: agents only write them
+/// while they work, so a fresh login can leave the last known window hours behind.
+const STALE_MS: u64 = 3 * 3_600_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountUsage {
     pub agent: Agent,
     /// Spend over the last `DAYS` days (`None` when no request had a known price).
     pub cost: Option<f64>,
+    /// Tokens over the last `DAYS` days: what an agent without a price table can still show.
+    pub tokens: u64,
     pub limits: Option<AgentLimits>,
 }
 
@@ -31,9 +36,29 @@ impl AccountUsage {
         parts.join(" · ")
     }
 
-    /// "$661", or "—" when no request had a known price.
+    /// "$661"; tokens instead when no price is known for the models (Codex has none built in),
+    /// and "—" when nothing was used at all.
     pub fn cost_label(&self) -> String {
-        self.cost.map(crate::ui::money).unwrap_or_else(|| "—".into())
+        if let Some(cost) = self.cost {
+            return crate::ui::money(cost);
+        }
+        if self.tokens > 0 {
+            return format!("{} tok", crate::ui::compact_number(self.tokens));
+        }
+        "—".into()
+    }
+
+    /// Whether this account has anything to say. Codex has no built-in price table, so a real,
+    /// busy account can have no cost at all — it is kept for its tokens, and an account that only
+    /// reported plan limits is kept for those.
+    pub fn worth_showing(&self) -> bool {
+        self.cost.is_some() || self.tokens > 0 || self.limits.is_some()
+    }
+
+    /// How long ago the plan limits were observed, when that is long enough to matter.
+    pub fn stale_for(&self, now_ms: u64) -> Option<u64> {
+        let captured = self.limits.as_ref()?.captured_ms;
+        (now_ms.saturating_sub(captured) >= STALE_MS).then(|| now_ms.saturating_sub(captured))
     }
 
     /// Every known plan-limit window: the 5-hour one, then the weekly one.
@@ -84,15 +109,16 @@ fn compute(scanner: &Mutex<UsageScanner>, now_ms: u64) -> Vec<AccountUsage> {
             let recent: Vec<_> = usage.requests.iter().filter(|r| r.timestamp_ms >= since).collect();
             let priced: Vec<f64> = recent.iter().filter_map(|r| r.cost).collect();
             let cost = (!priced.is_empty()).then(|| priced.iter().sum());
-            AccountUsage { agent, cost, limits: agentty_bridge::limits::latest(agent, now_ms) }
+            let tokens = recent.iter().map(|r| r.input + r.output + r.cache_read + r.cache_write).sum();
+            AccountUsage { agent, cost, tokens, limits: agentty_bridge::limits::latest(agent, now_ms) }
         })
-        .filter(|u| u.cost.is_some() || u.limits.is_some())
+        .filter(AccountUsage::worth_showing)
         .collect()
 }
 
 impl Workbench {
     pub(super) fn start_account_usage(&mut self, cx: &mut Context<Self>) {
-        let scanner: Arc<Mutex<UsageScanner>> = Arc::default();
+        let scanner = self.usage_scanner.clone();
         cx.spawn(async move |this, cx| loop {
             let scanner = scanner.clone();
             let usage = cx.background_spawn(async move { compute(&scanner, crate::ui::now_ms()) }).await;
@@ -110,5 +136,36 @@ impl Workbench {
             cx.background_executor().timer(REFRESH).await;
         })
         .detach();
+    }
+
+    /// Reads spend and plan limits again right now (the menu bar's refresh button): an agent that
+    /// just logged in or finished a turn shows up without waiting for the next poll.
+    pub fn refresh_account_usage(&mut self, cx: &mut Context<Self>) {
+        let scanner = self.usage_scanner.clone();
+        cx.spawn(async move |this, cx| {
+            let usage = cx.background_spawn(async move { compute(&scanner, crate::ui::now_ms()) }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.account_usage = usage;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug this filter had: an account with tokens but no price (Codex) was dropped, so a
+    /// signed-in user saw nothing at all.
+    #[test]
+    fn an_account_without_a_price_is_still_shown() {
+        let usage = |cost, tokens| AccountUsage { agent: Agent::Codex, cost, tokens, limits: None };
+        assert!(usage(None, 120_000).worth_showing());
+        assert_eq!(usage(None, 120_000).cost_label(), "120.0K tok");
+        assert!(usage(Some(4.2), 0).worth_showing());
+        assert!(!usage(None, 0).worth_showing());
+        assert_eq!(usage(None, 0).cost_label(), "—");
     }
 }

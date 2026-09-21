@@ -23,8 +23,12 @@ const LOG_BYTES: usize = 256 * 1024;
 const MAX_MESSAGES_PER_SECOND: u32 = 240;
 /// Windows are refreshed at most this often, however many messages arrive.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
+/// Characters a plugin may put on the clipboard at once.
+const MAX_COPY_CHARS: usize = 100_000;
 /// One notification per plugin per this long; the rest are dropped.
 const NOTIFY_INTERVAL: Duration = Duration::from_millis(700);
+/// The shortest gap between two URLs one plugin may open in the browser.
+const OPEN_URL_INTERVAL: Duration = Duration::from_millis(700);
 /// `net/fetch` calls one plugin may have in flight. A request holds a background thread until it
 /// answers or times out, so a plugin cannot open as many as it likes.
 const MAX_CONCURRENT_FETCHES: u32 = 4;
@@ -57,6 +61,8 @@ pub struct Runtime {
     rate_window: Option<(Instant, u32)>,
     /// When this plugin last showed a notification.
     notified_at: Option<Instant>,
+    /// When this plugin last had a URL opened in the browser.
+    opened_url_at: Option<Instant>,
     /// Bytes currently kept in `logs`.
     log_bytes: usize,
     /// `net/fetch` calls this plugin has in flight.
@@ -78,6 +84,7 @@ impl Runtime {
             link_tainted: false,
             rate_window: None,
             notified_at: None,
+            opened_url_at: None,
             log_bytes: 0,
             fetches: 0,
             timers: 0,
@@ -121,6 +128,17 @@ impl Runtime {
                 false
             }
         }
+    }
+
+    /// Whether a URL may be opened now. `host/openUrl` needs no permission — a plugin's "read
+    /// this in your browser" button — and the flood limit only ends a plugin after 240 messages,
+    /// which is 240 browser tabs. One at a time is all a button ever needs.
+    fn may_open_url(&mut self) -> bool {
+        let allowed = self.opened_url_at.is_none_or(|at| at.elapsed() >= OPEN_URL_INTERVAL);
+        if allowed {
+            self.opened_url_at = Some(Instant::now());
+        }
+        allowed
     }
 
     /// Whether a notification may be shown now (the rest are dropped).
@@ -514,14 +532,36 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             };
             reply(result.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}"))), cx)
         }
+        "host/copy" => {
+            let text = params.get("text").and_then(Value::as_str).unwrap_or_default();
+            if text.is_empty() {
+                return reply(Err((codes::INVALID_PARAMS, "nothing to copy".into())), cx);
+            }
+            // Bounded: the clipboard is the user's, and a plugin should not be able to fill it.
+            let text: String = text.chars().take(MAX_COPY_CHARS).collect();
+            // Writing to the clipboard is quiet by nature — what replaced what the user had
+            // copied is at least in the plugin's log.
+            if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
+                runtime.log(format!("copied {} characters to the clipboard", text.chars().count()));
+            }
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+            reply(Ok(Value::Null), cx)
+        }
         "host/openUrl" => {
             let url = params.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
-            if url.starts_with("https://") || url.starts_with("http://") {
-                cx.open_url(&url);
-                reply(Ok(Value::Null), cx)
-            } else {
-                reply(Err((codes::INVALID_PARAMS, "only http(s) URLs can be opened".into())), cx)
+            if !(url.starts_with("https://") || url.starts_with("http://")) {
+                return reply(Err((codes::INVALID_PARAMS, "only http(s) URLs can be opened".into())), cx);
             }
+            if !host_mut(cx).runtimes.get_mut(plugin_id).is_some_and(Runtime::may_open_url) {
+                // Refused rather than dropped: a plugin that opens a URL on a click has one click
+                // to answer for, and a plugin looping sees that it is being held back.
+                if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
+                    runtime.log(format!("openUrl held back: {}", agentty_bridge::extensions::redact_url(&url)));
+                }
+                return reply(Err((codes::UNAVAILABLE, "one URL at a time".into())), cx);
+            }
+            cx.open_url(&url);
+            reply(Ok(Value::Null), cx)
         }
         "host/revealPath" => {
             let path = std::path::PathBuf::from(params.get("path").and_then(Value::as_str).unwrap_or_default());
@@ -714,6 +754,15 @@ mod tests {
         assert!(!runtime.may_notify(), "the second notification is dropped");
         runtime.notified_at = Some(Instant::now() - NOTIFY_INTERVAL);
         assert!(runtime.may_notify());
+    }
+
+    #[test]
+    fn one_url_at_a_time() {
+        let mut runtime = Runtime::new();
+        assert!(runtime.may_open_url());
+        assert!(!runtime.may_open_url(), "a plugin cannot open a second URL straight away");
+        runtime.opened_url_at = Some(Instant::now() - OPEN_URL_INTERVAL);
+        assert!(runtime.may_open_url());
     }
 
     #[test]

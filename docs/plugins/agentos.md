@@ -115,9 +115,10 @@ user's behalf:
 
 ## The example
 
-`plugins/blogger-agentos` is the skeleton: three steps, the state machine above, the panel that
-shows it. It is there to be read and to be run — not to be a product. A real one is mostly its
-prompts, and those are written by whoever knows the trade.
+`src/blogger-agentos` in the [marketplace repository](https://github.com/empty-user77/Agentty-Marketplace/tree/main/src/blogger-agentos)
+is the skeleton: three steps, the state machine above, the panel that shows it. It is there to be
+read and to be run — not to be a product. A real one is mostly its prompts, and those are written
+by whoever knows the trade.
 
 ## Open questions
 

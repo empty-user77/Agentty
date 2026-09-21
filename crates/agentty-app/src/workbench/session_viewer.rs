@@ -7,7 +7,7 @@ use crate::launch::{home_dir, LaunchSpec};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, now_ms, relative_time, tilde, IconSize, TypeScale};
 use agentty_bridge::model::{Role, SessionInfo, Turn};
-use gpui::{div, list, prelude::*, px, AnyElement, App, ClickEvent, Context, FontWeight, ListAlignment, ListState, SharedString, Window};
+use gpui::{div, list, prelude::*, px, AnyElement, App, ClickEvent, Context, ListAlignment, ListState, SharedString, Window};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -107,7 +107,7 @@ impl Workbench {
                     .child(
                         div()
                             .t_title()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(crate::theme::EMPHASIS)
                             .truncate()
                             .text_color(hex(Chrome::BRIGHT))
                             .child(session.title.clone()),
@@ -173,7 +173,14 @@ impl Workbench {
                 })
                 .size_full()
                 .pb_4();
-                div().relative().flex_1().min_h_0().child(rows).child(crate::ui::list_scrollbar(viewer.list.clone())).into_any_element()
+                div()
+                    .relative()
+                    .group(crate::ui::SCROLL_GROUP)
+                    .flex_1()
+                    .min_h_0()
+                    .child(rows)
+                    .child(crate::ui::list_scrollbar(viewer.list.clone()))
+                    .into_any_element()
             }
         };
         Some(div().size_full().flex().flex_col().bg(hex(Chrome::EDITOR)).child(header).child(body).into_any_element())
@@ -227,7 +234,7 @@ fn render_turn(index: usize, turn: &Turn, agent: agentty_bridge::model::Agent, c
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().t_small().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(label))
+                .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(label))
                 .child(text),
         )
         .into_any_element()
