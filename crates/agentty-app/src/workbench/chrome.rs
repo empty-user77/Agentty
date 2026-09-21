@@ -899,10 +899,12 @@ impl Workbench {
                             .flex_1()
                             .min_w(px(60.))
                             .truncate()
-                            // Bold and a size up from the lines under it: the name is what a card
-                            // is found by, and at one size and weight they all read as one block.
+                            // Heavier and a size up from the lines under it: the name is what a
+                            // card is found by, and at one size and weight they all read as one
+                            // block. The chrome's own emphasis weight, not full bold — the size
+                            // difference already does most of the separating.
                             .t_title()
-                            .font_weight(gpui::FontWeight::BOLD)
+                            .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::BRIGHT))
                             // Double-click the name to rename (handled on mouse down so the first
                             // click's focus change can't end the edit).
