@@ -338,7 +338,8 @@ from a stranger: never open an address it hands you without knowing what it is.
 
 **Plugins → Marketplace** lists what
 [Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers. Plugins are added there by pull request, and what is
-offered is **a WebAssembly module whose source is public** — nothing else. Agentty's own plugins
+offered is **a WebAssembly module whose source is public** — on GitHub, GitLab, Codeberg or
+SourceHut — and nothing else. Agentty's own plugins
 are there too, on the same footing: nothing is bundled into the application. A plugin that runs as a program of yours (`node`, `python`, an executable) has
 everything you have; Agentty installs those from a folder or a Git repository, where you chose the
 source yourself.
