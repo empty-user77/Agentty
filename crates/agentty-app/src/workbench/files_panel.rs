@@ -125,6 +125,13 @@ impl FilesPanel {
     }
 
     /// Folder the panel shows (a working tree or a plain folder).
+    /// The change recorded for `path`, so its diff is asked for the right way (an untracked file
+    /// has no diff to ask git for).
+    pub(super) fn change_for(&self, path: &Path) -> Option<agentty_bridge::git::FileChange> {
+        let relative = path.strip_prefix(&self.snapshot.root).ok()?.to_string_lossy().into_owned();
+        self.snapshot.changes.iter().find(|c| c.path == relative).cloned()
+    }
+
     pub(super) fn root(&self) -> &Path {
         &self.snapshot.root
     }
@@ -1291,8 +1298,9 @@ impl Workbench {
                     .t_small()
                     .when(is_selected, |d| d.bg(hex(Chrome::SELECTED)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    // Picked from the changes tab, so the question is what changed about it.
                     .when(!deleted, |d| {
-                        d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.edit_file(&edit, window, cx)))
+                        d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_file_diff(&edit, cx)))
                     })
                     .child(
                         div().flex_shrink_0().w(px(12.)).t_caption().text_color(hex(change_color(file.kind))).child(kind_label(file.kind)),

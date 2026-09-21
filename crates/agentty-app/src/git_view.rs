@@ -1335,7 +1335,8 @@ impl GitView {
     }
 }
 
-fn diff_row(line: &DiffLine, gutter: f32, font: SharedString) -> AnyElement {
+/// One line of a diff, as AgentGit draws it. Shared so the files panel's diff reads the same.
+pub fn diff_row(line: &DiffLine, gutter: f32, font: SharedString) -> AnyElement {
     let (bg, fg, sign) = match line.kind {
         LineKind::Added => (Some(hex_alpha(0x2ea043, 0.16)), Chrome::FOREGROUND, "+"),
         LineKind::Removed => (Some(hex_alpha(0xf85149, 0.16)), Chrome::FOREGROUND, "-"),

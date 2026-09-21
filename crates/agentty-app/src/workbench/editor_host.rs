@@ -17,6 +17,7 @@ impl Workbench {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "file_editor" }));
         let editor = self.editor_entity(window, cx);
         editor.update(cx, |editor, cx| editor.open(path, project, window, cx));
+        self.file_diff = None;
         self.page = None;
         self.session_viewer = None;
         self.launcher_open = false;
@@ -75,12 +76,13 @@ impl Workbench {
         editor
     }
 
-    /// Whether the editor is what the main area shows right now.
+    /// Whether the editor is what the main area shows right now. A diff counts: it takes the same
+    /// place, and it is what picking a changed file opens.
     pub(super) fn editor_visible(&self, cx: &gpui::App) -> bool {
         self.editor_shown
             && self.page.is_none()
             && self.session_viewer.is_none()
-            && self.editor.as_ref().is_some_and(|e| !e.read(cx).is_empty())
+            && (self.file_diff.is_some() || self.editor.as_ref().is_some_and(|e| !e.read(cx).is_empty()))
     }
 
     /// Back to the terminals (the files stay open in their tabs).
@@ -91,6 +93,9 @@ impl Workbench {
     pub(super) fn render_editor(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.editor_visible(cx) {
             return None;
+        }
+        if let Some(diff) = self.render_file_diff(cx) {
+            return Some(diff);
         }
         self.editor.clone().map(|editor| editor.into_any_element())
     }

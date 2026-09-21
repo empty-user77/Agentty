@@ -13,6 +13,7 @@ mod db_page;
 mod docker_panel;
 mod drop_split;
 mod editor_host;
+mod file_diff;
 mod files_panel;
 mod find;
 pub mod flow;
@@ -407,6 +408,8 @@ pub struct Workbench {
     /// File editor (files opened from the files panel), and whether it is what the main area shows.
     editor: Option<Entity<crate::editor::CodeEditor>>,
     editor_shown: bool,
+    /// What changed about a file, shown where the editor is (the files panel's "changes" tab).
+    file_diff: Option<file_diff::FileDiff>,
     editor_subscription: Option<Subscription>,
     /// The user already answered "unsaved files — quit / close anyway?".
     discard_confirmed: bool,
@@ -582,6 +585,7 @@ impl Workbench {
             session_viewer: None,
             editor: None,
             editor_shown: false,
+            file_diff: None,
             editor_subscription: None,
             discard_confirmed: false,
             pending_editor_open: None,
