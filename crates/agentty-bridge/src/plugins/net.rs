@@ -80,6 +80,12 @@ struct Checked {
     proxy: Option<String>,
 }
 
+/// [`check`] for the tests in the crate that cover what a plugin can send.
+#[cfg(test)]
+pub(super) fn check_for_test(request: &FetchRequest) -> Result<()> {
+    check(request).map(|_| ())
+}
+
 fn check(request: &FetchRequest) -> Result<Checked> {
     let method = request.method.trim().to_ascii_uppercase();
     if !METHODS.contains(&method.as_str()) {
