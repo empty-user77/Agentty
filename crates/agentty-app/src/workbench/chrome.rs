@@ -279,19 +279,19 @@ impl Workbench {
                         cx,
                     ))
                     .child(item(
-                        "activity-git",
-                        "git-branch",
-                        self.page == Some(Page::Git),
-                        "page.git",
-                        Box::new(|this, cx| this.open_page(Page::Git, cx)),
-                        cx,
-                    ))
-                    .child(item(
                         "activity-flow",
                         "workflow",
                         self.page == Some(Page::Flow),
                         "page.flow",
                         Box::new(|this, cx| this.open_page(Page::Flow, cx)),
+                        cx,
+                    ))
+                    .child(item(
+                        "activity-git",
+                        "git-branch",
+                        self.page == Some(Page::Git),
+                        "page.git",
+                        Box::new(|this, cx| this.open_page(Page::Git, cx)),
                         cx,
                     ))
                     .child(item(
