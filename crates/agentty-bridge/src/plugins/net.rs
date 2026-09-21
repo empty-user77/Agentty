@@ -170,13 +170,28 @@ fn is_token_byte(b: u8) -> bool {
 
 /// The link-local address cloud providers answer instance credentials on. Agentty runs on
 /// desktops, where nothing listens there — but a plugin has no business asking either.
+///
+/// An IPv6 address that carries an IPv4 one inside it (`::ffff:169.254.169.254`) is that IPv4
+/// address as far as the operating system is concerned, so it is that one here too: checking only
+/// the IPv6 prefix would have let a plugin write the same address a different way and go straight
+/// past this.
 fn is_metadata_host(url: &url::Url) -> bool {
     match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.octets()[..2] == [169, 254],
-        Some(url::Host::Ipv6(ip)) => ip.segments()[0] & 0xffc0 == 0xfe80,
-        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("metadata.google.internal"),
+        Some(url::Host::Ipv4(ip)) => is_metadata_v4(ip),
+        Some(url::Host::Ipv6(ip)) => match ip.to_ipv4_mapped().or_else(|| ip.to_ipv4()) {
+            Some(ip) => is_metadata_v4(ip),
+            None => ip.segments()[0] & 0xffc0 == 0xfe80,
+        },
+        Some(url::Host::Domain(name)) => {
+            let name = name.trim_end_matches('.');
+            name.eq_ignore_ascii_case("metadata.google.internal") || name.eq_ignore_ascii_case("metadata")
+        }
         None => false,
     }
+}
+
+fn is_metadata_v4(ip: std::net::Ipv4Addr) -> bool {
+    ip.octets()[..2] == [169, 254]
 }
 
 /// Whether a status is one that names another address to go to.
@@ -417,6 +432,29 @@ mod tests {
 
     fn ok(body: &str) -> String {
         format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    }
+
+    #[test]
+    fn the_metadata_address_is_refused_however_it_is_written() {
+        // The same address, spelled four ways. Checking only the IPv6 prefix let the third and
+        // fourth through, and the operating system connects to 169.254.169.254 for all of them.
+        for written in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://169.254.0.1/",
+            "http://[::ffff:169.254.169.254]/latest/meta-data/",
+            "http://[::ffff:a9fe:a9fe]/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://metadata.google.internal./computeMetadata/v1/",
+        ] {
+            let Err(err) = check(&request(serde_json::json!({ "url": written }))) else {
+                panic!("{written} was allowed");
+            };
+            assert!(format!("{err:#}").contains("not reachable from a plugin"), "{written}: {err:#}");
+        }
+        // And an ordinary address is still ordinary.
+        for fine in ["https://example.com/", "http://[2606:4700::1111]/", "http://169.253.1.1/"] {
+            assert!(check(&request(serde_json::json!({ "url": fine }))).is_ok(), "{fine}");
+        }
     }
 
     #[test]

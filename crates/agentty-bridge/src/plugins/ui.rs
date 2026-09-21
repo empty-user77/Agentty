@@ -219,6 +219,16 @@ impl Node {
                 text.push('…');
             }
         };
+        // Everything the plugin wrote that reaches the screen. A node's cost to draw is the
+        // number of things in it, not the number of nodes it is, so a `choice` of half a million
+        // options is one node and would wedge the window while it laid them out.
+        let more = |count: &mut usize, n: usize| -> Result<(), String> {
+            *count += n;
+            if *count > MAX_NODES {
+                return Err(format!("UI tree has more than {MAX_NODES} elements"));
+            }
+            Ok(())
+        };
         match self {
             Node::Column { children, .. } | Node::Row { children, .. } => {
                 for child in children {
@@ -232,20 +242,43 @@ impl Node {
                 }
             }
             Node::Text { text, .. } | Node::Badge { text, .. } | Node::Spinner { text } => cut(text),
-            Node::List { items, .. } => {
-                *count += items.len();
-                if *count > MAX_NODES {
-                    return Err(format!("UI tree has more than {MAX_NODES} elements"));
+            Node::List { items, empty, .. } => {
+                if let Some(empty) = empty.as_mut() {
+                    cut(empty);
                 }
+                more(count, items.len())?;
                 for item in items {
+                    more(count, item.actions.len())?;
                     cut(&mut item.title);
-                    if let Some(subtitle) = item.subtitle.as_mut() {
-                        cut(subtitle);
+                    for text in [item.subtitle.as_mut(), item.detail.as_mut(), item.icon.as_mut()].into_iter().flatten() {
+                        cut(text);
+                    }
+                    for action in &mut item.actions {
+                        for text in [action.label.as_mut(), action.icon.as_mut(), action.tooltip.as_mut()].into_iter().flatten() {
+                            cut(text);
+                        }
                     }
                 }
             }
-            Node::Input { value, .. } => cut(value),
-            Node::Button { .. } | Node::Choice { .. } | Node::Toggle { .. } | Node::Divider => {}
+            Node::Input { value, placeholder, .. } => {
+                cut(value);
+                cut(placeholder);
+            }
+            Node::Button { label, icon, .. } => {
+                cut(label);
+                if let Some(icon) = icon.as_mut() {
+                    cut(icon);
+                }
+            }
+            Node::Choice { options, .. } => {
+                more(count, options.len())?;
+                for option in options {
+                    cut(&mut option.label);
+                    cut(&mut option.value);
+                }
+            }
+            Node::Toggle { label, .. } => cut(label),
+            Node::Divider => {}
         }
         Ok(())
     }
@@ -320,6 +353,45 @@ mod tests {
         let mut inputs = Vec::new();
         tall.inputs(&mut inputs);
         assert_eq!(inputs[0].rows, MAX_ROWS);
+    }
+
+    /// The cost of drawing a node is the number of things in it, not the number of nodes it is.
+    /// A `choice` of half a million options was one node, under every limit, and would have wedged
+    /// the window laying them out; so was a list item carrying a thousand buttons.
+    #[test]
+    fn what_a_node_holds_counts_towards_the_limit_too() {
+        let options: Vec<_> = (0..=MAX_NODES).map(|i| json!({ "value": i.to_string(), "label": "x" })).collect();
+        let err = Node::from_value(json!({ "type": "choice", "id": "c", "options": options })).unwrap_err();
+        assert!(err.contains("more than"), "{err}");
+
+        let actions: Vec<_> = (0..=MAX_NODES).map(|i| json!({ "id": i.to_string() })).collect();
+        let err =
+            Node::from_value(json!({ "type": "list", "id": "l", "items": [{ "id": "a", "title": "t", "actions": actions }] })).unwrap_err();
+        assert!(err.contains("more than"), "{err}");
+
+        // And a reasonable one still passes.
+        let ok = json!({ "type": "choice", "id": "c", "options": [{ "value": "a", "label": "A" }] });
+        assert!(Node::from_value(ok).is_ok());
+    }
+
+    /// Every string a plugin writes reaches the screen, so every one of them is cut.
+    #[test]
+    fn every_string_a_plugin_writes_is_cut() {
+        let long = "a".repeat(MAX_TEXT * 2);
+        let tree = json!({ "type": "column", "children": [
+            { "type": "button", "id": "b", "label": long, "icon": long },
+            { "type": "toggle", "id": "t", "label": long },
+            { "type": "input", "id": "i", "value": long, "placeholder": long },
+            { "type": "choice", "id": "c", "options": [{ "value": long, "label": long }] },
+            { "type": "list", "id": "l", "empty": long, "items": [
+                { "id": "x", "title": long, "subtitle": long, "detail": long, "icon": long,
+                  "actions": [{ "id": "a", "label": long, "icon": long, "tooltip": long }] },
+            ] },
+        ] });
+        let node = Node::from_value(tree).expect("it is a tree");
+        let drawn = serde_json::to_string(&node).expect("it serializes");
+        let longest = drawn.split('"').map(|part| part.chars().count()).max().unwrap_or(0);
+        assert!(longest <= MAX_TEXT + 1, "a string of {longest} characters reaches the panel");
     }
 
     #[test]
