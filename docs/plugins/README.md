@@ -283,6 +283,10 @@ await plugin.injectPrompt({
 - `active` types into the focused pane, `pane` into `paneId`, `workspace` into `workspaceId`,
   `newWorkspace` / `newTab` start a new session with the prompt.
 - Terminals (`shell`) only ever get the text typed in — Enter is never pressed for `injectPrompt`.
+  `sendToTerminal` is the other thing, and it does press Enter, in a shell as well.
+- Every target but `ask` goes straight through, so `prompt.inject` alone is enough to open a
+  session and set an agent to work on something the user has not read. That is what an
+  [AgentOS](agentos.md) is built on, and it is why the permission says so.
 - Prompts over 60 000 bytes are saved to `~/.agentty/prompts/` and the agent is asked to read the file.
 
 Prefer `ask` for anything a user starts from another app or a link.
@@ -361,8 +365,8 @@ be served from a release of a repository, or from the same host as the list itse
 
 | Permission | Allows |
 |---|---|
-| `prompt.inject` | `injectPrompt` |
-| `terminal.write` | `sendToTerminal` — typing into open panes without asking |
+| `prompt.inject` | `injectPrompt` — including opening an agent session of its own, without asking. Only `target: "ask"` puts the prompt in front of the user first, and only a plugin a link reached is forced to use it |
+| `terminal.write` | `sendToTerminal` — typing into any open pane and pressing Enter, a shell pane included, where that runs the command |
 | `session.read` | `getSession` — reading AI conversations |
 | `workspace.read` | `listWorkspaces` |
 | `net.request` | `net/fetch` — HTTP requests to addresses the plugin chooses |
@@ -371,7 +375,9 @@ be served from a release of a repository, or from the same host as the list itse
 folder (`<data dir>/plugin-data/<id>/storage.json`, `0600`), up to 64 keys and a megabyte. A
 WebAssembly plugin has no files of its own, so that is how it remembers anything.
 
-The store shows these before installing. A call without its permission fails with code `-32001`.
+The store shows these before installing, and an update that asks for more than the installed
+version had says so and takes a second press; "Update all" leaves those out rather than taking
+them quietly. A call without its permission fails with code `-32001`.
 
 A plugin with `runtime` `node`, `python` or `executable` runs as your user, with the same file and
 network access as any program you start, so only install those if you trust them. A `wasm` plugin
