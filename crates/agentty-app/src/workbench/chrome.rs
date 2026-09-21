@@ -816,6 +816,12 @@ impl Workbench {
             .and_then(|branch| Some((agentty_bridge::git::repo_root(&cwd)?, branch.clone())))
             .and_then(|(repo, branch)| self.pull_request_of(&repo, &branch).cloned());
         let working = panes.iter().any(|p| p.read(cx).status.in_turn());
+        // The logo is only worth the room when there is more than one kind of agent to tell apart:
+        // with a single CLI on the machine every card carried the same mark. Without it the name
+        // starts at the edge, and the lines under it follow — nothing is left indented under a
+        // logo that is not there. Whether a card is working still shows, since that differs.
+        let show_logo = self.installed.as_ref().map_or(2, crate::agents::Installed::agent_count) > 1;
+        let indent = px(if show_logo { 24. } else { 2. });
         let accent = super::accent_color(ws.color);
         let compact = settings(cx).compact_workspaces;
 
@@ -902,7 +908,15 @@ impl Workbench {
                     .gap_2()
                     // One logo: which agent it is, without a pile of icons down the sidebar. It
                     // breathes while a turn is running.
-                    .child(crate::brand::avatar_working(tools.first().map_or("shell", String::as_str), 16., working, id))
+                    .map(|d| {
+                        if show_logo {
+                            d.child(crate::brand::avatar_working(tools.first().map_or("shell", String::as_str), 16., working, id))
+                        } else if working {
+                            d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(Chrome::BRIGHT, 0.9)))
+                        } else {
+                            d
+                        }
+                    })
                     .when(attention_dot, |d| d.child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex_alpha(Chrome::BRIGHT, 0.95))))
                     .child({
                         let _ = renaming;
@@ -976,7 +990,7 @@ impl Workbench {
             .when(!compact, |d| {
                 d.children(branch.map(|name| {
                     div()
-                        .pl(px(24.))
+                        .pl(indent)
                         .pt_0p5()
                         .flex()
                         .items_center()
@@ -987,7 +1001,7 @@ impl Workbench {
                         .child(icon("git-branch", 10., sub_color))
                         .child(div().min_w_0().truncate().child(name))
                 }))
-                .child(div().pl(px(24.)).truncate().t_caption().text_color(sub_color).child(detail))
+                .child(div().pl(indent).truncate().t_caption().text_color(sub_color).child(detail))
             })
             .children(pull_request.filter(|_| !compact).map(|pr| {
                 let (label, state_color) = if pr.is_merged() {
@@ -1003,7 +1017,7 @@ impl Workbench {
                 let url = pr.url.clone();
                 div()
                     .id(("workspace-pr", id as usize))
-                    .pl(px(24.))
+                    .pl(indent)
                     .pt_0p5()
                     .flex()
                     .items_center()
@@ -1024,7 +1038,7 @@ impl Workbench {
                     .child(icon("git-pull-request", 10., color))
                     .child(div().truncate().child(label))
             }))
-            .children((!compact).then(|| self.render_port_chips(ws, active, cx)).flatten());
+            .children((!compact).then(|| self.render_port_chips(ws, active, indent, cx)).flatten());
 
         let menu_open = self.workspace_menu == Some(id);
         // A card near the bottom of the sidebar would have its menu cut off by the window edge, so
@@ -1043,12 +1057,13 @@ impl Workbench {
     }
 
     /// `:3000 :5173` chips for servers started in the workspace; a click opens them.
-    fn render_port_chips(&self, ws: &Workspace, active: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_port_chips(&self, ws: &Workspace, active: bool, indent: gpui::Pixels, cx: &mut Context<Self>) -> Option<AnyElement> {
         let ports = self.ports_of(ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id));
         if ports.is_empty() {
             return None;
         }
-        let mut row = div().pl(px(28.)).pt_0p5().flex().flex_wrap().gap_1();
+        // A chip has its own padding, so it lines up with the text above it a touch further in.
+        let mut row = div().pl(indent + px(4.)).pt_0p5().flex().flex_wrap().gap_1();
         for port in ports.into_iter().take(6) {
             row = row.child(
                 div()
