@@ -315,7 +315,10 @@ impl Workbench {
             return;
         }
         self.plugins_page.busy = true;
-        self.plugins_message(tf(cx, "plugins.cloning", &[("name", &url)]), false, cx);
+        // The address may carry a token; what is put on the page is what anyone looking over a
+        // shoulder, or at a screenshot, sees.
+        let shown = agentty_bridge::extensions::redact_url(&url);
+        self.plugins_message(tf(cx, "plugins.cloning", &[("name", &shown)]), false, cx);
         let task = cx.background_spawn(async move { store::install_from_git(&url) });
         let window = window.window_handle();
         cx.spawn(async move |this, cx| {
