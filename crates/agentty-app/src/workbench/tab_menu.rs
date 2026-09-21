@@ -57,7 +57,17 @@ impl Workbench {
                 let id = self.next_id();
                 let cwd = tab.active.read(cx).display_cwd();
                 let group = self.workspaces.iter().find(|w| w.id == source_id).and_then(|w| w.group);
-                self.workspaces.push(Workspace { id, name: None, group, cwd, tabs: Vec::new(), active_tab: 0, dormant: None });
+                self.workspaces.push(Workspace {
+                    id,
+                    name: None,
+                    group,
+                    cwd,
+                    tabs: Vec::new(),
+                    active_tab: 0,
+                    dormant: None,
+                    closed_tabs: Vec::new(),
+                    color: None,
+                });
                 self.workspaces.len() - 1
             }
         };
@@ -82,6 +92,7 @@ impl Workbench {
                 this.tab_menu = None;
                 cx.notify();
             }))
+            .children(self.render_reopen_tabs(cx))
             .child(menu_item(
                 "tab-menu-close",
                 t(cx, "tab.close"),

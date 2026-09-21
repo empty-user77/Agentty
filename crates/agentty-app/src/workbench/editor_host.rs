@@ -27,6 +27,23 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Opens the file a terminal ⌘-click asked for (the event carrying it has no window).
+    pub(super) fn open_pending_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.pending_editor_open.take() else { return };
+        if !path.is_file() {
+            return;
+        }
+        let project = self
+            .files_panel
+            .as_ref()
+            .map(|p| p.root().to_path_buf())
+            .filter(|root| path.starts_with(root))
+            .or_else(|| agentty_bridge::git::repo_root(path.parent().unwrap_or(&path)))
+            .or_else(|| path.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        self.open_in_editor(&path, &project, window, cx);
+    }
+
     fn editor_entity(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<CodeEditor> {
         if let Some(editor) = &self.editor {
             return editor.clone();
@@ -123,7 +140,7 @@ impl Workbench {
         self.session_viewer = None;
         self.editor_shown = true;
         self.updates.popup = false;
-        self.show_toast_for(t(cx, "editor.update_unsaved"), 4000, cx);
+        self.show_toast(t(cx, "editor.update_unsaved"), cx);
         cx.notify();
         true
     }

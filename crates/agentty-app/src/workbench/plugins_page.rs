@@ -12,7 +12,7 @@ use crate::ui::{action_button, hint, icon, icon_named, icon_only_sized, tilde, I
 use agentty_bridge::model::Agent;
 use agentty_bridge::plugins::manifest::{Manifest, PERMISSIONS};
 use agentty_bridge::plugins::store::{self, InstalledPlugin, Source};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWeight, PathPromptOptions, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, PathPromptOptions, SharedString, Window};
 
 /// First message to the agent that builds a new plugin. Prompts are English whatever the UI
 /// language is; `{language}` tells the agent which one to talk in.
@@ -188,7 +188,7 @@ impl Workbench {
             .flex()
             .items_center()
             .gap_3()
-            .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.plugins")))
+            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.plugins")))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.subtitle")))
             .child(div().flex_1())
             .child(action_button(
@@ -302,7 +302,7 @@ impl Workbench {
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::PANEL))
             .child(div().flex().items_center().gap_2().child(icon("wand-sparkles", IconSize::BUTTON, hex(Chrome::PURPLE))).child(
-                div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "plugins.create_title")),
+                div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "plugins.create_title")),
             ))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.create_body")))
             .child(div().flex().gap_2().child(field(inputs.map(|i| &i.name)).max_w(px(220.))).child(field(inputs.map(|i| &i.idea))))
@@ -338,7 +338,7 @@ impl Workbench {
             );
 
         let section = |title: &str| {
-            div().pt_3().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(title.to_uppercase())
+            div().pt_3().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title.to_uppercase())
         };
 
         div()
@@ -446,7 +446,7 @@ impl Workbench {
                             .min_w_0()
                             .truncate()
                             .t_body()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::BRIGHT))
                             .child(manifest.name.clone()),
                     )
@@ -616,7 +616,9 @@ impl Workbench {
             let id = plugin.id.clone();
             return self
                 .card(&plugin.id, focused)
-                .child(div().truncate().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(plugin.id.clone()))
+                .child(
+                    div().truncate().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(plugin.id.clone()),
+                )
                 .child(div().t_caption().text_color(hex(Chrome::ERROR)).child(plugin.error.clone().unwrap_or_default()))
                 .child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(tilde(&plugin.dir)))
                 .child(div().flex().gap_2().child(action_button(

@@ -22,6 +22,68 @@ use std::time::{Duration, Instant};
 const MAX_RECORDS: usize = 5000;
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_CONNECTIONS: usize = 512;
+/// Longest head kept per direction when headers are recorded.
+const MAX_RECORDED_HEAD: usize = 8 * 1024;
+
+/// Whether plain-HTTP heads are recorded (off unless the user turns it on).
+static RECORD_HEADS: AtomicBool = AtomicBool::new(false);
+
+/// While the machine's own proxy settings point here (Monitoring → Proxy → capture everything),
+/// connections without this run's token are served too and recorded as coming from the system.
+/// The listener is on the loopback interface either way, so this grants no process network access
+/// it does not already have — it only lets their traffic be listed.
+static ALLOW_SYSTEM: AtomicBool = AtomicBool::new(false);
+
+pub fn allows_system() -> bool {
+    ALLOW_SYSTEM.load(Ordering::Relaxed)
+}
+
+pub fn set_allow_system(on: bool) {
+    ALLOW_SYSTEM.store(on, Ordering::Relaxed);
+}
+
+pub fn records_heads() -> bool {
+    RECORD_HEADS.load(Ordering::Relaxed)
+}
+
+pub fn set_record_heads(on: bool) {
+    RECORD_HEADS.store(on, Ordering::Relaxed);
+}
+
+/// A head as it is safe to keep: the values of headers that carry credentials are replaced.
+/// Bodies are never read, so a recorded head stops at the blank line.
+pub fn redact_head(head: &str) -> String {
+    let secret = |name: &str| {
+        let name = name.trim().to_ascii_lowercase();
+        matches!(name.as_str(), "authorization" | "proxy-authorization" | "cookie" | "set-cookie")
+            || name.ends_with("-token")
+            || name.ends_with("-key")
+            || name.ends_with("-secret")
+            || name.contains("api-key")
+            || name.contains("auth")
+    };
+    let mut out = String::new();
+    for (index, line) in head.split("\r\n").take_while(|l| !l.is_empty()).enumerate() {
+        if index > 0 {
+            if let Some((name, _)) = line.split_once(':') {
+                out.push_str(name);
+                out.push_str(if secret(name) { ": ***\n" } else { ": " });
+                if !secret(name) {
+                    out.push_str(line.split_once(':').map(|(_, v)| v.trim()).unwrap_or_default());
+                    out.push('\n');
+                }
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+        if out.len() > MAX_RECORDED_HEAD {
+            out.push_str("…\n");
+            break;
+        }
+    }
+    out
+}
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -44,6 +106,11 @@ pub struct Record {
     /// `None` while the connection is open.
     pub duration_ms: Option<u64>,
     pub error: Option<String>,
+    /// Request head of a plain HTTP request, with credentials redacted. Only kept while "record
+    /// headers" is on, and never for `CONNECT`: an HTTPS tunnel is not read.
+    pub request_head: Option<String>,
+    /// Response head of that request, the same way.
+    pub response_head: Option<String>,
 }
 
 impl Record {
@@ -394,10 +461,15 @@ fn serve(mut client: TcpStream, shared: &Arc<Shared>) {
         let _ = client.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
         return;
     };
-    let Some(pane) = authorized_pane(&request.headers, &shared.token) else {
-        let _ = client
-            .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Agentty\"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-        return;
+    let pane = match authorized_pane(&request.headers, &shared.token) {
+        Some(pane) => pane,
+        // Anything else on the machine, while the user asked for the machine to be captured.
+        None if allows_system() => None,
+        None => {
+            let _ = client
+                .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Agentty\"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            return;
+        }
     };
     let _ = client.set_read_timeout(None);
     let started = Instant::now();
@@ -418,6 +490,8 @@ fn serve(mut client: TcpStream, shared: &Arc<Shared>) {
                 received: 0,
                 duration_ms: None,
                 error: None,
+                request_head: None,
+                response_head: None,
             },
         );
         id
@@ -466,6 +540,12 @@ fn serve(mut client: TcpStream, shared: &Arc<Shared>) {
             return finish(0, 0, None, Some("the server went away".into()));
         }
         sent += forwarded.len() as u64;
+        if records_heads() {
+            if let Some(id) = record {
+                let head = redact_head(&forwarded);
+                update(shared, id, |r| r.request_head = Some(head.clone()));
+            }
+        }
     }
     if !rest.is_empty() {
         if server.write_all(&rest).is_err() {
@@ -501,6 +581,14 @@ fn serve(mut client: TcpStream, shared: &Arc<Shared>) {
                 .and_then(|text| text.strip_prefix("HTTP/"))
                 .and_then(|text| text.split(' ').nth(1))
                 .and_then(|code| code.parse().ok());
+            // Only the head: the relay stops reading text at the blank line, the body is untouched.
+            if records_heads() {
+                if let Some((shared, id)) = &live {
+                    let text = String::from_utf8_lossy(&chunk[..chunk.len().min(MAX_RECORDED_HEAD)]).to_string();
+                    let head = redact_head(&text);
+                    update(shared, *id, |r| r.response_head = Some(head.clone()));
+                }
+            }
         }
         if let Some((shared, id)) = &live {
             let (n, status) = (chunk.len() as u64, status);
@@ -619,6 +707,29 @@ mod tests {
             no_proxy_list(Some(" .corp.example.com, LOCALHOST ,10.0.0.0/8,")),
             "localhost,127.0.0.1,::1,.corp.example.com,10.0.0.0/8"
         );
+    }
+
+    #[test]
+    fn heads_keep_the_shape_but_not_the_credentials() {
+        let head = "GET /v1/things HTTP/1.1\r\nHost: api.example.com\r\nAuthorization: Bearer abcdef\r\nCookie: session=xyz\r\nX-Api-Key: 12345\r\nAccept: application/json\r\n\r\n";
+        let redacted = redact_head(head);
+        assert!(redacted.contains("GET /v1/things HTTP/1.1"));
+        assert!(redacted.contains("Host: api.example.com"));
+        assert!(redacted.contains("Accept: application/json"));
+        assert!(redacted.contains("Authorization: ***"));
+        assert!(redacted.contains("Cookie: ***"));
+        assert!(redacted.contains("X-Api-Key: ***"));
+        assert!(!redacted.contains("abcdef"));
+        assert!(!redacted.contains("xyz"));
+        assert!(!redacted.contains("12345"));
+    }
+
+    #[test]
+    fn heads_are_only_recorded_when_asked_for() {
+        assert!(!records_heads(), "off unless the user turns it on");
+        set_record_heads(true);
+        assert!(records_heads());
+        set_record_heads(false);
     }
 
     #[test]

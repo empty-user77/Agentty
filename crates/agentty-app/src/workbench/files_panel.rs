@@ -775,7 +775,7 @@ impl Workbench {
                     .min_w_0()
                     .truncate()
                     .t_body()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(crate::theme::EMPHASIS)
                     .text_color(hex(Chrome::BRIGHT))
                     .tooltip(Tooltip::text(tilde(&project), None))
                     .child(project_name),
@@ -905,7 +905,7 @@ impl Workbench {
             .gap_1()
             .cursor_pointer()
             .t_caption()
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(crate::theme::EMPHASIS)
             .text_color(hex(Chrome::MUTED))
             .child(icon(if folded { "chevron-right" } else { "chevron-down" }, 12., hex(Chrome::MUTED)))
             .child(t(cx, "files.worktrees").to_uppercase())

@@ -12,7 +12,7 @@ use agentty_bridge::extensions::{
     discover, mcp_add_command, mcp_remove_command, Extension, ExtensionKind, McpScope, McpServerSpec, McpTransport, Scope, CATALOG,
 };
 use agentty_bridge::model::Agent;
-use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, EventEmitter, FontWeight, SharedString, Subscription, Window};
+use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, EventEmitter, SharedString, Subscription, Window};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -216,7 +216,7 @@ impl ExtensionsView {
                                         .min_w_0()
                                         .truncate()
                                         .t_large()
-                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .font_weight(crate::theme::EMPHASIS)
                                         .text_color(hex(Chrome::BRIGHT))
                                         .child(item.name.clone()),
                                 )
@@ -523,18 +523,19 @@ impl Render for ExtensionsView {
             ));
         }
 
-        let header =
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.extensions")))
-                .child(agents)
-                .children(self.project.as_ref().map(|p| {
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.extensions")))
+            .child(agents)
+            .children(
+                self.project.as_ref().map(|p| {
                     div().px_1p5().py_0p5().rounded_sm().bg(hex(0x2a2a2a)).t_small().text_color(hex(Chrome::MUTED)).child(tilde(p))
-                }))
-                .child(action_button("ext-reload", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx))))
-                .child(div().flex_1());
+                }),
+            )
+            .child(action_button("ext-reload", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx))))
+            .child(div().flex_1());
 
         let message = self.message.clone().map(|(text, error)| {
             div()
@@ -681,7 +682,7 @@ impl ExtensionsView {
                                 div()
                                     .font_family(crate::settings::BUNDLED_FONT)
                                     .t_body()
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(crate::theme::EMPHASIS)
                                     .text_color(hex(Chrome::BRIGHT))
                                     .child(item.name.clone()),
                             )
@@ -825,7 +826,9 @@ impl ExtensionsView {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(entry.title))
+                                .child(
+                                    div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(entry.title),
+                                )
                                 .child(
                                     div().px_1().rounded_sm().bg(hex(0x333333)).t_caption().text_color(hex(Chrome::MUTED)).child(transport),
                                 )
@@ -851,7 +854,11 @@ impl ExtensionsView {
                     .items_center()
                     .gap_3()
                     .child(
-                        div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.catalog_title")),
+                        div()
+                            .t_title()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(t(cx, "ext.catalog_title")),
                     )
                     .child(div().flex_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "ext.catalog_hint")))
                     .child(div().w(px(260.)).child(field(&self.catalog_token))),
@@ -894,7 +901,7 @@ impl ExtensionsView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.mcp_add")))
+            .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.mcp_add")))
             .child(
                 div()
                     .flex()
@@ -944,7 +951,7 @@ impl ExtensionsView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.conn_add")))
+            .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "ext.conn_add")))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "ext.conn_hint")))
             .child(div().flex().items_center().gap_2().child(label(t(cx, "ext.lbl_name"))).child(field(&c.name)))
             .child(div().flex().items_center().gap_2().child(label(t(cx, "ext.lbl_base"))).child(field(&c.base_url)))
@@ -1040,7 +1047,7 @@ impl ExtensionsView {
                                         div()
                                             .font_family(crate::settings::BUNDLED_FONT)
                                             .t_body()
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .font_weight(crate::theme::EMPHASIS)
                                             .text_color(hex(Chrome::BRIGHT))
                                             .child(connector.server_name()),
                                     )

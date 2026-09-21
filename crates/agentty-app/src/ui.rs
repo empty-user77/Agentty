@@ -435,6 +435,26 @@ pub fn spinner(size: f32, color: Hsla) -> impl IntoElement {
     )
 }
 
+/// "A turn is running": the braille dots an agent CLI spins in the terminal, so the tab and the
+/// card show the same thing the pane does.
+pub fn dot_spinner(id: impl Into<ElementId>, size: f32, color: Hsla) -> impl IntoElement {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    div()
+        .flex_shrink_0()
+        .size(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        // The terminal font has the braille block; the UI font may not.
+        .font_family("JetBrains Mono")
+        .text_size(px(size * 1.1))
+        .text_color(color)
+        .with_animation(id, gpui::Animation::new(std::time::Duration::from_millis(800)).repeat(), |frame, delta| {
+            let index = ((delta * FRAMES.len() as f32) as usize).min(FRAMES.len() - 1);
+            frame.child(FRAMES[index])
+        })
+}
+
 pub fn hint(text: impl Into<SharedString>) -> Div {
     div().px_3().py_2().t_small().text_color(hex(Chrome::MUTED)).child(text.into())
 }
@@ -578,6 +598,33 @@ pub fn scrollbar(handle: gpui::ScrollHandle) -> impl IntoElement {
     .right_0()
     .h_full()
     .w(px(10.))
+}
+
+/// The same bar along the bottom, for a table that is wider than its pane: without it a grid of
+/// many columns gives no sign that there is more to the right.
+pub fn scrollbar_h(handle: gpui::ScrollHandle) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let viewport = handle.bounds();
+            let max = handle.max_offset();
+            let (width, max_x) = (f32::from(viewport.size.width), f32::from(max.width));
+            if width <= 0. || max_x <= 0.5 {
+                return;
+            }
+            let content = width + max_x;
+            let thumb = (width * width / content).max(24.);
+            let progress = (-f32::from(handle.offset().x) / max_x).clamp(0., 1.);
+            let left = f32::from(viewport.origin.x) + (width - thumb) * progress;
+            let rect = gpui::Bounds::new(gpui::point(px(left + 2.), bounds.bottom() - px(8.)), gpui::size(px(thumb - 4.), px(5.)));
+            window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, 0.18)).corner_radii(px(3.)));
+        },
+    )
+    .absolute()
+    .left_0()
+    .bottom_0()
+    .w_full()
+    .h(px(10.))
 }
 
 #[cfg(test)]

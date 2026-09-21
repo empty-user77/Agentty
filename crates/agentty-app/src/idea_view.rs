@@ -240,7 +240,7 @@ impl IdeaView {
                             .child(
                                 div()
                                     .t_small()
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(crate::theme::EMPHASIS)
                                     .text_color(hex(Chrome::BRIGHT))
                                     .child(format!("{number}  {}", t(cx, title))),
                             )
@@ -562,7 +562,7 @@ impl Render for IdeaView {
                     .py_2p5()
                     .rounded_lg()
                     .t_title()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(crate::theme::EMPHASIS)
                     .text_color(hex(Chrome::BRIGHT))
                     .bg(if ready && !no_agent { hex(Chrome::ACCENT) } else { hex(Chrome::HOVER) })
                     .when(ready && !no_agent, |d| d.cursor_pointer().hover(|s| s.bg(hex(Chrome::BLUE))))

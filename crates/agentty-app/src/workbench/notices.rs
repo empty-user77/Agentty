@@ -123,6 +123,40 @@ impl Workbench {
         self.set_status(t(cx, "notice.none_unread"), cx);
     }
 
+    /// Notification bell at the far right of the status bar, with the unread count.
+    pub(super) fn render_notices_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let unread = self.unread_count();
+        // Gold when something is waiting: the blue sat too close to the chrome to notice, and a
+        // tinted plate behind it does what a heavier glyph would (Lucide strokes are fixed).
+        let color = if unread > 0 { Chrome::FAVORITE } else { Chrome::MUTED };
+        div()
+            .id("status-notices")
+            // The same box as the other header icons, so the row reads as one set.
+            .size(px(crate::ui::ICON_BUTTON))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_0p5()
+            .rounded_md()
+            .flex_shrink_0()
+            .cursor_pointer()
+            .text_color(hex(color))
+            .when(unread > 0, |d| d.bg(hex_alpha(Chrome::FAVORITE, 0.18)))
+            .when(self.notices_open, |d| d.bg(hex(Chrome::SELECTED)))
+            .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
+            .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.notices"), Some("⇧⌘U")))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if this.just_dismissed("notices") {
+                    return;
+                }
+                this.notices_open = !this.notices_open;
+                this.launcher_open = false;
+                cx.notify();
+            }))
+            .child(crate::ui::icon(if unread > 0 { "bell-dot" } else { "bell" }, crate::ui::IconSize::BUTTON, hex(color)))
+            .when(unread > 0, |d| d.child(div().t_caption().font_weight(crate::theme::EMPHASIS).child(unread.to_string())))
+    }
+
     pub(super) fn render_notices(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let now = now_ms();
         let panes = self.all_panes();
@@ -209,7 +243,7 @@ impl Workbench {
                     .py_2()
                     .border_b_1()
                     .border_color(hex(Chrome::OVERLAY_BORDER))
-                    .child(div().t_body().font_weight(FontWeight::SEMIBOLD).child(tf(
+                    .child(div().t_body().font_weight(crate::theme::EMPHASIS).child(tf(
                         cx,
                         "notice.title",
                         &[("n", &self.unread_count().to_string())],

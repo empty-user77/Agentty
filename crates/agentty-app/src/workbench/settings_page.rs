@@ -11,7 +11,7 @@ use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, themes_dir, Chrome, TerminalTheme};
 use crate::ui::TypeScale;
 use crate::ui::{action_button, chip};
-use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, FontWeight, PathPromptOptions, SharedString, Subscription, Window};
+use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, PathPromptOptions, SharedString, Subscription, Window};
 
 /// Input for adding a harness pattern.
 pub struct HarnessPatternForm {
@@ -217,7 +217,7 @@ pub(super) fn section(title: &str) -> Div {
     div().flex().flex_col().gap_3().pb_6().child(
         div()
             .t_title()
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(crate::theme::EMPHASIS)
             .text_color(hex(Chrome::BRIGHT))
             .pb_1()
             .border_b_1()
@@ -390,8 +390,9 @@ impl Workbench {
             .child(
                 section(t(cx, "settings.browser_general"))
                     .child(row(t(cx, "settings.browser_home"), div().w(px(320.)).child(self.browser_home_field(window, cx))))
-                    .child(row(
+                    .child(row_with_hint(
                         t(cx, "settings.link_opener"),
+                        t(cx, "settings.link_inapp_hint"),
                         div()
                             .flex()
                             .gap_1()
@@ -525,7 +526,7 @@ impl Workbench {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(div().t_display().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child("Agentty"))
+                        .child(div().t_display().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child("Agentty"))
                         .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "tagline")))
                         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(crate::i18n::tf(
                             cx,
@@ -1128,6 +1129,21 @@ impl Workbench {
                             t(cx, "settings.analytics_hint"),
                             toggle("analytics", prefs.analytics, |s| s.analytics = !s.analytics, cx),
                         ))
+                        .child(row_with_hint(
+                            t(cx, "settings.compact_workspaces"),
+                            t(cx, "settings.compact_workspaces_hint"),
+                            toggle("compact-workspaces", prefs.compact_workspaces, |s| s.compact_workspaces = !s.compact_workspaces, cx),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.prevent_sleep"),
+                            // On when asked but no lock held: the tool that holds it is missing.
+                            if prefs.prevent_sleep && !crate::platform::wakelock::active() {
+                                t(cx, "settings.prevent_sleep_failed")
+                            } else {
+                                t(cx, "settings.prevent_sleep_hint")
+                            },
+                            toggle("prevent-sleep", prefs.prevent_sleep, |s| s.prevent_sleep = !s.prevent_sleep, cx),
+                        ))
                         .when(crate::platform::HAS_STATUS_ITEM, |d| {
                             d.child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
                         }),
@@ -1295,7 +1311,7 @@ impl Workbench {
                         .child(
                             div()
                                 .t_heading()
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .font_weight(crate::theme::EMPHASIS)
                                 .text_color(hex(Chrome::BRIGHT))
                                 .pb_5()
                                 .child(t(cx, section_id.label())),

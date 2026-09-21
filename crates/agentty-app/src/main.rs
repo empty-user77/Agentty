@@ -562,6 +562,10 @@ fn main() {
         queue_launch_arguments(&args[1..]);
     }
 
+    // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
+    platform::raise_file_limit();
+    // Killed while the machine was captured: put its proxy settings back before anything else runs.
+    platform::system_proxy::restore_after_crash();
     let app = Application::new().with_assets(assets::Assets);
     // Clicking the Dock icon brings the window back (after closing to the menu bar or mini mode).
     app.on_open_urls(|urls| {
@@ -879,6 +883,12 @@ pub fn request_quit(cx: &mut App) {
         if asking {
             cx.activate(true);
             return;
+        }
+    }
+    // Never leave the machine pointing at a proxy that is about to stop answering.
+    if let Some(previous) = platform::system_proxy::saved_previous() {
+        if let Err(err) = platform::system_proxy::restore(&previous) {
+            eprintln!("agentty: could not put the system proxy settings back: {err}");
         }
     }
     cx.quit();

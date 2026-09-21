@@ -7,7 +7,7 @@ use crate::ui::{action_button, chip, compact_number, money, popover};
 use agentty_bridge::model::Agent;
 use agentty_bridge::usage::{root_dir, FileUsage, NamedUsage, UsageReport, UsageScanner};
 use chrono::Local;
-use gpui::{canvas, div, point, prelude::*, px, relative, ClickEvent, Context, Div, FontWeight, PathBuilder, Pixels, Point, Window};
+use gpui::{canvas, div, point, prelude::*, px, relative, ClickEvent, Context, Div, PathBuilder, Pixels, Point, Window};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -100,7 +100,7 @@ pub(crate) fn kpi(label: &str, value: String, sub: String, color: u32) -> Div {
         .flex_col()
         .gap_1()
         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(label.to_string()))
-        .child(div().t_display().font_weight(FontWeight::SEMIBOLD).text_color(hex(color)).child(value))
+        .child(div().t_display().font_weight(crate::theme::EMPHASIS).text_color(hex(color)).child(value))
         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(sub))
 }
 
@@ -184,7 +184,7 @@ impl Render for UsageView {
             .flex()
             .items_center()
             .gap_3()
-            .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.usage")))
+            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.usage")))
             .child(
                 div()
                     .relative()
@@ -329,7 +329,10 @@ impl UsageView {
                 .shadow_lg()
                 .t_small()
                 .child(
-                    div().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(day.date.format("%Y-%m-%d").to_string()),
+                    div()
+                        .font_weight(crate::theme::EMPHASIS)
+                        .text_color(hex(Chrome::BRIGHT))
+                        .child(day.date.format("%Y-%m-%d").to_string()),
                 )
                 .child(tooltip_row(t(cx, "usage.cost"), if priced { money(day.totals.cost) } else { "—".into() }, Chrome::PURPLE))
                 .child(tooltip_row(t(cx, "usage.calls"), compact_number(day.totals.calls), Chrome::BLUE))

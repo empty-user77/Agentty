@@ -452,6 +452,16 @@ impl GitView {
         cx: &mut Context<Self>,
         op: impl FnOnce(&std::path::Path) -> anyhow::Result<()> + Send + 'static,
     ) {
+        self.run_reporting(label, cx, |repo| op(repo).map(|()| None))
+    }
+
+    /// Like [`Self::run`], but the operation can report what it did ("3 commits · 12 files").
+    fn run_reporting(
+        &mut self,
+        label: &'static str,
+        cx: &mut Context<Self>,
+        op: impl FnOnce(&std::path::Path) -> anyhow::Result<Option<String>> + Send + 'static,
+    ) {
         let Some(repo) = self.repo.clone() else { return };
         if self.busy.is_some() {
             return;
@@ -463,8 +473,10 @@ impl GitView {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = None;
-                if let Err(err) = result {
-                    this.message = Some((err.to_string(), true));
+                match result {
+                    Ok(Some(report)) => this.message = Some((report, false)),
+                    Ok(None) => {}
+                    Err(err) => this.message = Some((agentty_bridge::git::failure_reason(&err.to_string()), true)),
                 }
                 this.selected_commit = None;
                 this.refresh(cx);
@@ -529,6 +541,28 @@ impl GitView {
         cx.notify();
     }
 
+    /// `git pull --ff-only`, reporting how many commits and files arrived.
+    fn pull(&mut self, cx: &mut Context<Self>) {
+        let language = crate::settings::settings(cx).language;
+        self.run_reporting("git.pulling", cx, move |repo| {
+            let pulled = git::pull(repo)?;
+            if pulled.files() == 0 {
+                return Ok(Some(crate::i18n::tr(language, "branch.pulled").to_string()));
+            }
+            let mut text = crate::i18n::tr(language, "branch.pulled_changes").to_string();
+            for (name, value) in [
+                ("commits", pulled.commits),
+                ("files", pulled.files()),
+                ("added", pulled.added),
+                ("modified", pulled.modified),
+                ("deleted", pulled.deleted),
+            ] {
+                text = text.replace(&format!("{{{name}}}"), &value.to_string());
+            }
+            Ok(Some(text))
+        });
+    }
+
     /// Primary remote action: publish, pull, push or fetch depending on the branch state.
     fn remote_action(&mut self, cx: &mut Context<Self>) {
         let status = &self.snapshot.status;
@@ -536,7 +570,7 @@ impl GitView {
         if status.upstream.is_none() {
             self.run("git.publishing", cx, move |repo| git::push(repo, &branch, false));
         } else if status.behind > 0 {
-            self.run("git.pulling", cx, git::pull);
+            self.pull(cx);
         } else if status.ahead > 0 {
             self.run("git.pushing", cx, move |repo| git::push(repo, &branch, true));
         } else {
@@ -706,7 +740,7 @@ impl GitView {
                         .flex()
                         .flex_col()
                         .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(title))
-                        .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).truncate().child(value)),
+                        .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).truncate().child(value)),
                 )
                 .when(chevron, |d| d.child(icon("chevron-down", IconSize::INLINE, hex(Chrome::MUTED))))
         };
@@ -1027,7 +1061,7 @@ impl GitView {
                     .flex()
                     .justify_center()
                     .t_body()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(crate::theme::EMPHASIS)
                     .bg(hex(Chrome::ACCENT))
                     .text_color(hex(Chrome::BRIGHT))
                     .when(!can_commit, |d| d.opacity(0.45))
@@ -1226,7 +1260,7 @@ impl GitView {
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::SIDE_BAR))
-            .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(commit.summary.clone()))
+            .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(commit.summary.clone()))
             .when(!commit.body.is_empty(), |d| d.child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(commit.body.clone())))
             .child(
                 div()

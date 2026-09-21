@@ -56,33 +56,51 @@ pub fn logo_paths() -> impl Iterator<Item = &'static str> {
 }
 
 /// Round avatar with the tool's logo (or first letter / terminal glyph), `size` px wide.
+///
+/// Drawn in one plain tone rather than each brand's colour: a window full of orange, green and
+/// blue badges pulls the eye away from the work. The brand colour is still what `brand().color`
+/// gives anything that really needs to tell tools apart.
 pub fn avatar(id: &str, size: f32) -> gpui::Div {
-    let brand = brand(id);
-    let inner = size * 0.64;
-    // Lighter than every panel background, with a brand-colored rim, so it reads on dark and
-    // selected (blue) rows alike.
-    let base = div()
-        .flex_shrink_0()
-        .size(px(size))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(hex(0x333438))
-        .border_1()
-        .border_color(hex_alpha(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, 0.85));
-    base.child(glyph(brand, inner, size))
+    plate(id, size, false)
 }
 
-/// The tool's logo, terminal glyph or first letter, in its brand color.
-fn glyph(brand: &Brand, inner: f32, size: f32) -> AnyElement {
+/// The same avatar in the tool's own colour. For the places that are about choosing a tool — the
+/// launcher menu — where the colour is the point rather than noise.
+pub fn avatar_brand(id: &str, size: f32) -> gpui::Div {
+    plate(id, size, true)
+}
+
+/// The tool's logo, or — while a turn is running — the braille dot spinner in its place, the same
+/// mark everywhere it appears. `key` keeps each row's animation apart.
+pub fn avatar_working(id: &str, size: f32, working: bool, key: u64) -> AnyElement {
+    if !working {
+        return avatar(id, size).into_any_element();
+    }
+    crate::ui::dot_spinner(("agent-working", key as usize), size, hex_alpha(Chrome::BRIGHT, 0.9)).into_any_element()
+}
+
+fn plate(id: &str, size: f32, colored: bool) -> gpui::Div {
+    let brand = brand(id);
+    // The plain one is the glyph and nothing else: a dark disc behind every logo, on a card that
+    // already has a colour of its own, reads as a hole punched in it.
+    let inner = if colored { size * 0.64 } else { size * 0.9 };
+    let base = div().flex_shrink_0().size(px(size)).rounded_full().flex().items_center().justify_center().when(colored, |d| {
+        d.bg(hex_alpha(0xffffff, 0.08)).border_1().border_color(hex_alpha(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, 0.85))
+    });
+    base.child(glyph(brand, inner, size, colored))
+}
+
+/// The tool's logo, terminal glyph or first letter, in one quiet tone or in its brand colour.
+fn glyph(brand: &Brand, inner: f32, size: f32, colored: bool) -> AnyElement {
+    let tone = if colored { hex(brand.color) } else { hex_alpha(Chrome::BRIGHT, 0.85) };
+    let tone = if colored && brand.id == "shell" { hex(Chrome::BRIGHT) } else { tone };
     match (brand.logo, brand.id) {
-        (Some(path), _) => svg().path(SharedString::from(path)).size(px(inner)).text_color(hex(brand.color)).into_any_element(),
-        (None, "shell") => crate::ui::icon("terminal", inner, hex(Chrome::BRIGHT)).into_any_element(),
+        (Some(path), _) => svg().path(SharedString::from(path)).size(px(inner)).text_color(tone).into_any_element(),
+        (None, "shell") => crate::ui::icon("terminal", inner, tone).into_any_element(),
         (None, _) => div()
             .text_size(px((size * 0.52).max(7.)))
             .font_weight(FontWeight::BOLD)
-            .text_color(hex(brand.color))
+            .text_color(tone)
             .child(brand.name.chars().next().unwrap_or('?').to_string())
             .into_any_element(),
     }
@@ -91,7 +109,8 @@ fn glyph(brand: &Brand, inner: f32, size: f32) -> AnyElement {
 /// Square tile tinted with the tool's color, like an app icon: the start page's cards.
 pub fn tile(id: &str, size: f32) -> gpui::Div {
     let brand = brand(id);
-    tinted_tile(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, size).child(glyph(brand, size * 0.56, size))
+    // The start page's cards are a wall of tools to choose from: colour tells them apart.
+    tinted_tile(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, size).child(glyph(brand, size * 0.56, size, true))
 }
 
 /// An empty [`tile`] in any color, for cards that show an icon instead of a brand.
@@ -106,51 +125,6 @@ pub fn tinted_tile(color: u32, size: f32) -> gpui::Div {
         .bg(hex_alpha(color, 0.16))
         .border_1()
         .border_color(hex_alpha(color, 0.35))
-}
-
-/// Overlapping avatars like profile stacks: at most `max` shown, then `+N`.
-pub fn avatar_stack(ids: &[&'static str], size: f32, max: usize, ring: u32) -> AnyElement {
-    // Absolutely placed: negative margins confuse the row's measured width.
-    let shown = ids.len().min(max);
-    let step = size * 0.65;
-    let more = ids.len() > max;
-    let width = size + step * shown.saturating_sub(1) as f32 + if more { size * 0.9 } else { 0. };
-    let mut row = div().relative().flex_shrink_0().w(px(width)).h(px(size));
-    for (index, id) in ids.iter().take(max).enumerate() {
-        // A ring in the row's color separates overlapping avatars without hiding their rim.
-        row = row.child(
-            div()
-                .absolute()
-                .top(px(-1.5))
-                .left(px(step * index as f32 - 1.5))
-                .p(px(1.5))
-                .rounded_full()
-                .bg(hex(ring))
-                .child(avatar(id, size)),
-        );
-    }
-    if ids.len() > max {
-        row = row.child(
-            div()
-                .absolute()
-                .top_0()
-                .left(px(step * shown as f32))
-                .h(px(size))
-                .min_w(px(size))
-                .px(px(3.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(hex(0x46474c))
-                .border_1()
-                .border_color(hex_alpha(0xffffff, 0.35))
-                .text_size(px((size * 0.45).max(8.)))
-                .text_color(hex(Chrome::BRIGHT))
-                .child(format!("+{}", ids.len() - max)),
-        );
-    }
-    row.into_any_element()
 }
 
 #[cfg(test)]

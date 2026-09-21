@@ -13,6 +13,7 @@ pub mod extensions;
 pub mod fsutil;
 pub mod gemini;
 pub mod git;
+pub mod github;
 pub mod handoff;
 pub mod harness;
 pub mod http;
@@ -32,7 +33,7 @@ pub mod update;
 pub mod usage;
 pub mod worktree;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use model::{Agent, SessionInfo, Turn};
 use std::path::PathBuf;
 
@@ -72,6 +73,28 @@ pub fn load(agent: Agent, id: &str) -> Result<(Option<String>, Vec<Turn>)> {
         Agent::Gemini => gemini::transcript(&gemini::find(id)?),
         Agent::Kimi => kimi::transcript(&kimi::find(id)?),
     }
+}
+
+/// Deletes a session's transcript. The file is what the agent resumes from, so removing it is
+/// what "delete this session" means; nothing else on disk refers to it.
+pub fn delete(session: &SessionInfo) -> Result<()> {
+    let path = &session.path;
+    anyhow::ensure!(path.is_file(), "session file is gone: {}", path.display());
+    // Only ever a transcript inside an agent's own session folder.
+    let roots = [
+        fsutil::home().join(".claude").join("projects"),
+        fsutil::home().join(".codex").join("sessions"),
+        fsutil::home().join(".agy"),
+        fsutil::home().join(".amp"),
+        fsutil::home().join(".gemini"),
+        fsutil::home().join(".kimi"),
+    ];
+    // `..` is refused rather than resolved: a transcript path never has one, and without this the
+    // check below would accept a path that climbs back out of the folder it starts in.
+    anyhow::ensure!(!path.components().any(|c| c == std::path::Component::ParentDir), "not an agent session file: {}", path.display());
+    anyhow::ensure!(roots.iter().any(|root| path.starts_with(root)), "not an agent session file: {}", path.display());
+    std::fs::remove_file(path).with_context(|| format!("could not delete {}", path.display()))?;
+    Ok(())
 }
 
 /// Live facts about a session, read from the end of its transcript.
@@ -367,5 +390,41 @@ mod model_name_tests {
         assert_eq!(pretty_model("claude-haiku-4-5-20251001"), "Haiku 4.5");
         assert_eq!(pretty_model("claude-fable-5-1"), "Fable 5.1");
         assert_eq!(pretty_model("gpt-6-astra"), "gpt-6-astra");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A path outside every agent's session folder is refused, whatever the SessionInfo claims.
+    #[test]
+    fn delete_only_touches_agent_transcripts() {
+        let path = std::env::temp_dir().join(format!("agentty-delete-guard-{}.jsonl", std::process::id()));
+        std::fs::write(&path, "{}").unwrap();
+        let session = SessionInfo {
+            agent: Agent::Claude,
+            id: "x".into(),
+            title: "x".into(),
+            cwd: None,
+            updated_at: 0,
+            path: path.clone(),
+            resume_args: Vec::new(),
+            last_prompt: None,
+            last_reply: None,
+        };
+        assert!(delete(&session).is_err());
+        assert!(path.is_file(), "the file must still be there");
+        std::fs::remove_file(&path).ok();
+
+        // A file that is gone is reported rather than silently accepted.
+        assert!(delete(&session).is_err());
+
+        // A path that climbs out of an agent's session folder is refused too.
+        let climbing = SessionInfo {
+            path: fsutil::home().join(".claude").join("projects").join("..").join("..").join(".ssh").join("id_ed25519"),
+            ..session
+        };
+        assert!(delete(&climbing).is_err());
     }
 }

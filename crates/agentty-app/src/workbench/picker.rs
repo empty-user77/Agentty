@@ -22,6 +22,8 @@ pub struct Picker {
     shortcuts: Vec<(PathBuf, &'static str)>,
     /// Folder being browsed; `None` shows the shortcut list.
     current: Option<PathBuf>,
+    /// Where each step came from, newest last: back returns there instead of walking up to `/`.
+    history: Vec<Option<PathBuf>>,
     children: Vec<PathBuf>,
     selected: usize,
     error: Option<&'static str>,
@@ -104,7 +106,16 @@ impl Picker {
         }
     }
 
+    /// Opens `dir`, remembering where it was opened from.
     fn navigate(&mut self, dir: PathBuf, cx: &mut Context<Workbench>) {
+        if self.current.as_deref() != Some(dir.as_path()) {
+            self.history.push(self.current.clone());
+        }
+        self.show(dir, cx);
+    }
+
+    /// Opens `dir` without touching the history (going back uses this).
+    fn show(&mut self, dir: PathBuf, cx: &mut Context<Workbench>) {
         self.children = list_children(&dir);
         self.current = Some(dir);
         self.selected = 0;
@@ -169,6 +180,7 @@ impl Workbench {
             input,
             shortcuts,
             current: None,
+            history: Vec::new(),
             children: Vec::new(),
             selected: 0,
             error: None,
@@ -216,14 +228,26 @@ impl Workbench {
         self.launch(picker.choice.clone(), picker.target, dir, window, cx);
     }
 
+    /// Back: the folder (or the shortcut list) this one was opened from. Walking up to `/` instead
+    /// is what made this confusing — entering the first shortcut and going back landed in `/Users`.
     fn picker_up(&mut self, cx: &mut Context<Self>) {
         let Some(picker) = self.picker.as_mut() else { return };
-        match picker.current.as_ref().and_then(|c| c.parent().map(Path::to_path_buf)) {
-            Some(parent) => picker.navigate(parent, cx),
-            None => {
+        match picker.history.pop() {
+            Some(Some(previous)) => picker.show(previous, cx),
+            Some(None) => {
                 picker.current = None;
                 picker.selected = 0;
+                picker.error = None;
+                picker.input.update(cx, |input, cx| input.set_text("", cx));
             }
+            // Nothing to go back to (a path typed in): the folder above, else the shortcuts.
+            None => match picker.current.as_ref().and_then(|c| c.parent().map(Path::to_path_buf)) {
+                Some(parent) => picker.show(parent, cx),
+                None => {
+                    picker.current = None;
+                    picker.selected = 0;
+                }
+            },
         }
         cx.notify();
     }
@@ -233,6 +257,7 @@ impl Workbench {
             picker.current = None;
             picker.selected = 0;
             picker.new_folder = None;
+            picker.history.clear();
         }
         cx.notify();
     }
@@ -334,7 +359,23 @@ impl Workbench {
         if rows.is_empty() {
             list = list.child(hint(t(cx, if picker.current.is_some() { "picker.no_subfolders" } else { "ext.empty" })));
         }
+        // Shortcuts come in groups (home, recent folders, folders sessions ran in). A heading per
+        // group beats a word at the end of every row, which is what made them blur together.
+        let mut group: Option<&'static str> = None;
         for (index, (path, label)) in rows.iter().enumerate() {
+            if picker.current.is_none() && group != Some(label) {
+                group = Some(label);
+                list = list.child(
+                    div()
+                        .px_3()
+                        .pt_2()
+                        .pb_1()
+                        .t_caption()
+                        .font_weight(crate::theme::EMPHASIS)
+                        .text_color(hex(Chrome::MUTED))
+                        .child(t(cx, label)),
+                );
+            }
             let selected = index == picker.selected;
             let dir = path.clone();
             let name = match &picker.current {
@@ -372,7 +413,7 @@ impl Workbench {
                                 d.child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(path.display().to_string()))
                             }),
                     )
-                    .when(!label.is_empty(), |d| {
+                    .when(picker.current.is_some() && !label.is_empty(), |d| {
                         d.child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, label)))
                     })
                     .child(icon("chevron-right", IconSize::INLINE, hex(Chrome::MUTED))),
@@ -455,7 +496,7 @@ impl Workbench {
                             .items_center()
                             .gap_2()
                             .child(crate::brand::avatar(crate::brand::kind_id(picker.choice.kind()), 16.))
-                            .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(title)),
+                            .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title)),
                     )
                     .child(
                         div()
@@ -518,7 +559,7 @@ impl Workbench {
                                             .bg(hex(Chrome::ACCENT))
                                             .hover(|s| s.bg(hex(0x1a8ae8)))
                                             .t_small()
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .font_weight(crate::theme::EMPHASIS)
                                             .text_color(hex(Chrome::BRIGHT))
                                             .max_w(px(260.))
                                             .truncate()

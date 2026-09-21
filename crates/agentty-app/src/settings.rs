@@ -147,6 +147,9 @@ pub struct Settings {
     pub plugin_panel_width: f32,
     /// Width of the Docker panel docked right of the terminals.
     pub docker_panel_width: f32,
+    /// Width of the database panel docked right of the terminals.
+    #[serde(default = "default_db_panel_width")]
+    pub db_panel_width: f32,
     /// Height of its working-tree list once the user dragged it (0: as tall as its rows, up to a few).
     pub files_panel_trees_height: f32,
     /// Ask for a starting folder whenever a new workspace is opened.
@@ -214,6 +217,13 @@ pub struct Settings {
     /// output). `DO_NOT_TRACK=1` turns it off regardless, and builds without analytics credentials
     /// send nothing either way.
     pub analytics: bool,
+    /// Thin workspace rows: title, colour and state only, for a sidebar with many workspaces.
+    #[serde(default)]
+    pub compact_workspaces: bool,
+    /// Keep the machine awake (display and system sleep) while Agentty runs. Off by default:
+    /// it costs energy, so the user turns it on for a long unattended run.
+    #[serde(default)]
+    pub prevent_sleep: bool,
     /// The first-launch system check ran (Windows / Linux).
     pub setup_check_shown: bool,
     /// The first-run onboarding was finished or skipped.
@@ -399,6 +409,10 @@ impl Default for BrowserSettings {
     }
 }
 
+fn default_db_panel_width() -> f32 {
+    crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -413,10 +427,11 @@ impl Default for Settings {
             padding: 8.0,
             option_as_meta: false,
             scrollback: 10_000,
-            sidebar_width: 280.0,
+            sidebar_width: 300.0,
             files_panel_width: 300.0,
             plugin_panel_width: crate::workbench::side_panels::DEFAULT_PLUGIN_WIDTH,
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
+            db_panel_width: crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH,
             files_panel_trees_height: 0.0,
             ask_directory: true,
             ask_directory_for_tabs: false,
@@ -448,6 +463,8 @@ impl Default for Settings {
             harness_submit: true,
             harness_agent: HarnessAgent::Auto,
             analytics: true,
+            compact_workspaces: false,
+            prevent_sleep: false,
             setup_check_shown: false,
             onboarding_done: false,
         }
@@ -504,6 +521,7 @@ impl SettingsStore {
         if let Err(err) = crate::agent_guide::write_files() {
             eprintln!("agentty: agent guide unavailable: {err:#}");
         }
+        crate::platform::wakelock::set(store.settings.prevent_sleep);
         cx.set_global(store);
     }
 
@@ -559,6 +577,7 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
         if store.settings.aliases != aliases_before {
             let _ = crate::shell_integration::write_files(&store.settings.aliases);
         }
+        crate::platform::wakelock::set(store.settings.prevent_sleep);
     });
     cx.refresh_windows();
 }
