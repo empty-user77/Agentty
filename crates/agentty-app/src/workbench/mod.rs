@@ -2707,6 +2707,19 @@ impl Workbench {
         view
     }
 
+    /// Opens the extensions page on one category (the Skills / Agents / MCP page tabs).
+    pub(super) fn open_extensions(&mut self, category: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = Some(Page::Extensions);
+        let view = self.extensions_view(window, cx);
+        view.update(cx, |view, cx| view.show_category(category, cx));
+        cx.notify();
+    }
+
+    /// The category the extensions page is on, for the tab that is drawn as active.
+    pub(super) fn extensions_category(&self, cx: &gpui::App) -> &'static str {
+        self.extensions.as_ref().map_or("all", |view| view.read(cx).category_id())
+    }
+
     fn extensions_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<crate::extensions_view::ExtensionsView> {
         let project = self.active_pane().map(|p| p.read(cx).display_cwd());
         if let Some(view) = &self.extensions {

@@ -285,16 +285,9 @@ impl ExtensionsView {
         view
     }
 
-    /// Development helper: switch agent/category by name (`claude:mcp`, `codex:connectors`, …).
-    pub fn debug_select(&mut self, spec: &str, cx: &mut Context<Self>) {
-        if let Some(index) = spec.strip_prefix("detail:").and_then(|i| i.parse::<usize>().ok()) {
-            if let Some(item) = self.items.get(&self.agent).and_then(|items| items.get(index)).cloned() {
-                self.open_detail(item, cx);
-            }
-            return;
-        }
-        let (agent, category) = spec.split_once(':').unwrap_or((spec, "all"));
-        self.agent = if agent == "codex" { Agent::Codex } else { Agent::Claude };
+    /// Shows one category by name, for the page tabs that open straight into it.
+    pub fn show_category(&mut self, category: &str, cx: &mut Context<Self>) {
+        self.detail = None;
         self.category = match category {
             "skills" => Category::Kind(ExtensionKind::Skill),
             "agents" => Category::Kind(ExtensionKind::Agent),
@@ -305,6 +298,32 @@ impl ExtensionsView {
             _ => Category::All,
         };
         cx.notify();
+    }
+
+    /// Which category is shown, by the same names [`show_category`](Self::show_category) takes.
+    pub fn category_id(&self) -> &'static str {
+        match self.category {
+            Category::All => "all",
+            Category::Connectors => "connectors",
+            Category::Kind(ExtensionKind::Skill) => "skills",
+            Category::Kind(ExtensionKind::Agent) => "agents",
+            Category::Kind(ExtensionKind::Command) => "commands",
+            Category::Kind(ExtensionKind::Plugin) => "plugins",
+            Category::Kind(ExtensionKind::Mcp) => "mcp",
+        }
+    }
+
+    /// Development helper: switch agent/category by name (`claude:mcp`, `codex:connectors`, …).
+    pub fn debug_select(&mut self, spec: &str, cx: &mut Context<Self>) {
+        if let Some(index) = spec.strip_prefix("detail:").and_then(|i| i.parse::<usize>().ok()) {
+            if let Some(item) = self.items.get(&self.agent).and_then(|items| items.get(index)).cloned() {
+                self.open_detail(item, cx);
+            }
+            return;
+        }
+        let (agent, category) = spec.split_once(':').unwrap_or((spec, "all"));
+        self.agent = if agent == "codex" { Agent::Codex } else { Agent::Claude };
+        self.show_category(category, cx);
     }
 
     pub fn set_project(&mut self, project: Option<PathBuf>, cx: &mut Context<Self>) {

@@ -1489,21 +1489,37 @@ impl Workbench {
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
                     .child(icon("house", IconSize::INLINE, hex(Chrome::MUTED))),
             );
-            // Monitoring: AI usage, AI processes and the capture proxy are tabs of one page.
-            let pages: Vec<(Page, &str)> = match page {
-                Page::Usage | Page::Processes | Page::Proxy => {
-                    vec![(Page::Usage, t(cx, "page.usage")), (Page::Processes, t(cx, "page.processes")), (Page::Proxy, t(cx, "page.proxy"))]
+            // Monitoring: AI usage, AI processes, the capture proxy and what the agents can use
+            // (skills, subagents, MCP servers) are tabs of one page. The extension tabs carry the
+            // category they open, since they are all the same page underneath.
+            let category = self.extensions_category(cx);
+            let monitoring = || {
+                let mut tabs = vec![
+                    (Page::Usage, None, t(cx, "page.usage")),
+                    (Page::Processes, None, t(cx, "page.processes")),
+                    (Page::Proxy, None, t(cx, "page.proxy")),
+                    (Page::Extensions, Some("skills"), t(cx, "ext.skills")),
+                    (Page::Extensions, Some("agents"), t(cx, "ext.agents")),
+                    (Page::Extensions, Some("mcp"), t(cx, "ext.mcp")),
+                ];
+                // Everything else the extensions page can show (all of them, commands, plugins,
+                // connectors) keeps one tab of its own, so no category is left unreachable.
+                if page == Page::Extensions && !matches!(category, "skills" | "agents" | "mcp") {
+                    tabs.push((Page::Extensions, Some(category), t(cx, "page.extensions")));
                 }
-                Page::Git => vec![(page, t(cx, "page.git"))],
-                Page::Flow => vec![(page, t(cx, "page.flow"))],
-                Page::Settings => vec![(page, t(cx, "page.settings"))],
-                Page::Extensions => vec![(page, t(cx, "page.extensions"))],
-                Page::Plugins => vec![(page, t(cx, "page.plugins"))],
-                Page::Idea => vec![(page, t(cx, "page.idea"))],
-                Page::Database => vec![(page, t(cx, "page.database"))],
+                tabs
             };
-            for (tab_page, label) in pages {
-                let active = tab_page == page;
+            let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
+                Page::Usage | Page::Processes | Page::Proxy | Page::Extensions => monitoring(),
+                Page::Git => vec![(page, None, t(cx, "page.git"))],
+                Page::Flow => vec![(page, None, t(cx, "page.flow"))],
+                Page::Settings => vec![(page, None, t(cx, "page.settings"))],
+                Page::Plugins => vec![(page, None, t(cx, "page.plugins"))],
+                Page::Idea => vec![(page, None, t(cx, "page.idea"))],
+                Page::Database => vec![(page, None, t(cx, "page.database"))],
+            };
+            for (tab_page, tab_category, label) in pages {
+                let active = tab_page == page && tab_category.is_none_or(|c| c == category);
                 tabs = tabs.child(
                     div()
                         .id(SharedString::from(format!("page-tab-{label}")))
@@ -1523,9 +1539,12 @@ impl Workbench {
                                 .text_color(hex(Chrome::MUTED))
                                 .cursor_pointer()
                                 .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.page = Some(tab_page);
-                                    cx.notify();
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| match tab_category {
+                                    Some(category) => this.open_extensions(category, window, cx),
+                                    None => {
+                                        this.page = Some(tab_page);
+                                        cx.notify();
+                                    }
                                 }))
                         })
                         .child(label.to_string())
