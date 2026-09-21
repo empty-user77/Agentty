@@ -2,7 +2,8 @@
 
 Plugins connect Agentty with other apps and add tools to your terminals. A plugin can put a panel
 next to your terminals, add buttons above agent panes and entries in the command palette, and hand
-text to an agent as a prompt — always after you pick where it goes.
+text to an agent as a prompt. Where that prompt goes is the plugin's choice unless it asks you,
+which is why the permissions on a plugin's card are worth reading before you install it.
 
 Writing one? See the [plugin developer guide](README.md).
 
@@ -33,9 +34,17 @@ Plugins start when you first use them, not when Agentty launches, so an idle plu
 
 You can also copy a plugin folder into `~/.agentty/plugins/` yourself and press **Refresh**.
 
-Before installing, the card lists what the plugin may do: send prompts, type into terminals, read AI
-conversations, see workspaces. A plugin runs as a normal program with your user's access, so only
-install plugins you trust.
+Before installing, the card lists what the plugin may do: open agent sessions and send them
+prompts, type into terminals and press Enter, read AI conversations, see workspaces, make HTTP
+requests. That list is asked again when it grows: an update wanting more than the version you have
+says what it is adding and takes a second press, and **Update all** leaves those for you to answer
+one at a time.
+
+How much that list is worth depends on how the plugin runs, which the card also says under
+**About → Runs as**. A **WebAssembly** plugin reaches nothing but what the list allows, whatever
+its code says. A **Node.js, Python or executable** plugin is a program running as you, with
+everything you can reach on this computer — for those the list is only what it can ask *Agentty*
+for, and you are trusting the author with the rest.
 
 ## Using a plugin
 
@@ -46,17 +55,28 @@ install plugins you trust.
   Code / Codex pane and in split-pane headers. They act on that pane.
 - **Command palette** — ⇧⌘P lists every plugin command under *Plugin*.
 
-### The "Send to…" dialog
+### Where a prompt goes, and who chose
 
-When a plugin (or a link from another app) sends a prompt, Agentty shows what will be sent and lets
-you choose:
+The "Send to…" dialog is not a boundary, and it is worth knowing that before you read the rest of
+this. A plugin with `prompt.inject` can open an agent session of its own and send it text without
+asking — and that is deliberate: an [AgentOS](agentos.md) walks a piece of work through several
+sessions, and it could not if a dialog stood in front of every one. A plugin may instead ask you
+where a prompt should go; a plugin that an `agentty://` link reached always has to, and cannot
+press Enter for you.
+
+When a plugin does ask — or when a link from another app sends a prompt — Agentty shows what will
+be sent and lets you choose:
 
 - **Claude Code / Codex / Terminal**
 - **New workspace** (with a folder you can change), **New tab** in the current workspace, or one of
   your **open workspaces** — an idle agent there receives it, otherwise a new agent tab opens
 - **Send right away**, or leave it unchecked to have the text typed in without pressing Enter
 
-Terminals only ever get the text typed in; Agentty never runs it for you.
+Terminals only ever get the text typed in here; Agentty never runs it for you.
+
+That last line is about this dialog. The `terminal.write` permission is the other thing: a plugin
+that has it can type into any open terminal and press Enter, a shell included, where that runs the
+command. The two are a page apart in the permission list and only one of them is quiet.
 
 Nothing is sent until you press **Send**. If the preview is cut off, a line tells you the whole text
 is still sent.
