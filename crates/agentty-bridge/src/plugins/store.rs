@@ -66,13 +66,40 @@ pub struct StateFile {
 }
 
 impl StateFile {
+    /// What the user has installed, and which of it they turned off.
+    ///
+    /// A file that is not there yet is an empty one — nothing is installed. A file that is there
+    /// but cannot be read is not: every plugin the user disabled would come back enabled, every
+    /// development link would disappear, and the next write would make that permanent. It is
+    /// moved aside instead, so what it said survives for anyone who wants to look.
     pub fn load() -> Self {
-        std::fs::read(state_path()).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+        let path = state_path();
+        let Ok(bytes) = std::fs::read(&path) else { return Self::default() };
+        match serde_json::from_slice::<StateFile>(&bytes) {
+            Ok(state) => state,
+            Err(_) => {
+                let aside = path.with_file_name("state.damaged.json");
+                if std::fs::rename(&path, &aside).is_ok() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&aside, std::fs::Permissions::from_mode(0o600));
+                    }
+                    eprintln!("agentty: {} could not be read and was moved to {}", path.display(), aside.display());
+                }
+                Self::default()
+            }
+        }
     }
 
     pub fn save(&self) -> Result<()> {
         std::fs::create_dir_all(plugins_dir())?;
-        let tmp = state_path().with_extension("json.tmp");
+        // A name of its own: an install runs on a background thread while the main thread can be
+        // turning a plugin off, and two writers sharing one temporary file publish a half-written
+        // state between them.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = state_path().with_extension(format!("{}.{unique}.json.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
         // It says what the user installed and where from — nobody else's business, and it is
         // written before it is narrowed nowhere: the mode travels with the rename.
@@ -508,7 +535,18 @@ pub(crate) mod tests {
 
     thread_local! {
         /// Data directory of the test running on this thread (instead of `~/.agentty`).
+        ///
+        /// Per thread, because tests run side by side and each needs its own. That also means a
+        /// thread a test *spawns* does not have it and would write into the real `~/.agentty`:
+        /// a thread that touches the store must call [`adopt`] first.
         pub static ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Puts this thread in the same data directory as the test that spawned it. Without it, a
+    /// spawned thread writes to the user's own `~/.agentty` — which is not a test failure, it is
+    /// a test reaching outside the machine's test data and changing what the user has installed.
+    pub(crate) fn adopt(root: &Path) {
+        ROOT.with(|r| *r.borrow_mut() = Some(root.to_path_buf()));
     }
 
     pub(crate) fn with_data_dir(test: impl FnOnce(&Path)) {
@@ -543,6 +581,55 @@ pub(crate) mod tests {
             install_builtin("cosmica").unwrap();
             let mode = std::fs::metadata(state_path()).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        });
+    }
+
+    #[test]
+    fn a_damaged_state_file_does_not_turn_every_plugin_back_on() {
+        with_data_dir(|_| {
+            install_builtin("cosmica").unwrap();
+            set_enabled("cosmica", false).unwrap();
+            assert!(!installed()[0].enabled);
+
+            // Truncated by a machine that lost power mid-write.
+            std::fs::write(state_path(), b"{\"plugins\": {\"cosm").unwrap();
+            // Read as empty, the plugin the user turned off would be running again.
+            let state = StateFile::load();
+            assert!(state.plugins.is_empty(), "it is not read as something it is not");
+            let aside = state_path().with_file_name("state.damaged.json");
+            assert!(aside.exists(), "what it said is kept");
+            assert!(!state_path().exists(), "and is out of the way");
+
+            // The plugin is still installed, and saving works again.
+            set_enabled("cosmica", false).unwrap();
+            assert!(!installed()[0].enabled);
+        });
+    }
+
+    #[test]
+    fn two_saves_at_once_do_not_share_a_temporary_file() {
+        with_data_dir(|root| {
+            let mut a = StateFile::load();
+            a.plugins.insert("one".into(), PluginState { enabled: true, source: Source::Folder, path: None, origin: None });
+            let mut b = StateFile::load();
+            b.plugins.insert("two".into(), PluginState { enabled: false, source: Source::Folder, path: None, origin: None });
+            // Whoever writes last wins, which is the old behaviour — what must not happen is the
+            // two of them writing into one file and publishing the mixture.
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    adopt(root);
+                    a.save().unwrap()
+                });
+                scope.spawn(|| {
+                    adopt(root);
+                    b.save().unwrap()
+                });
+            });
+            let state = StateFile::load();
+            assert!(state.plugins.len() == 1, "a whole file was published, not a mixture");
+            let leftovers =
+                std::fs::read_dir(plugins_dir()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains(".tmp")).count();
+            assert_eq!(leftovers, 0, "no temporary file was left behind");
         });
     }
 

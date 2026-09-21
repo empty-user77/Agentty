@@ -224,8 +224,8 @@ impl PanelMode {
 /// Capabilities a plugin must declare before the matching host methods work.
 pub const PERMISSIONS: &[(&str, &str)] = &[
     ("net.request", "Make HTTP requests to the addresses you give it"),
-    ("prompt.inject", "Start agent sessions or send prompts, after you pick where"),
-    ("terminal.write", "Type into and submit prompts to open terminal panes directly"),
+    ("prompt.inject", "Open agent sessions of its own and send them prompts"),
+    ("terminal.write", "Type into any open terminal and press Enter, a shell included"),
     ("session.read", "Read the conversation of AI sessions open in Agentty"),
     ("workspace.read", "See open workspaces, tabs, folders and agent status"),
 ];

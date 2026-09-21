@@ -46,9 +46,13 @@ const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 /// Work one message may cost before the plugin is stopped. Roughly a second of CPU: enough for
 /// any panel a plugin draws, and an end to a loop that never returns.
 const FUEL_PER_MESSAGE: u64 = 200_000_000;
-/// Messages a plugin may send while handling one. A plugin that goes past this is answering a
-/// single event with a flood, and is trapped here rather than queued onto the main thread.
+/// Messages a plugin may send while handling one — `send` and `log` together. A plugin that goes
+/// past this is answering a single event with a flood, and is trapped here rather than queued
+/// onto the main thread.
 const MAX_MESSAGES_PER_DISPATCH: u32 = 256;
+/// Characters of one log line kept. The log itself is cut again on the main thread; this is so a
+/// module cannot queue 16 MB a line while the main thread is busy.
+const MAX_LOG_CHARS: usize = 2_000;
 
 /// What the host functions can reach while the plugin runs.
 struct HostState {
@@ -213,8 +217,24 @@ impl Runner {
         wrap(linker.func_wrap("agentty", "log", |mut caller: Caller<'_, HostState>, ptr: i32, len: i32| {
             let Some(memory) = caller.data().memory else { return Err(fail("no memory")) };
             let text = HostState::read(&memory, &caller, ptr, len)?;
-            let events = caller.data_mut().events.clone();
-            events(ProcessEvent::Log(text.trim_end().to_string()));
+            let state = caller.data_mut();
+            // Counted with `send`, and against the same budget. A log line costs the host as much
+            // as a message does — it crosses the same channel to the same thread — and a loop
+            // that only logs would otherwise be free: the fuel a guest-side call costs is small
+            // enough that one dispatch can make millions of them.
+            state.sent += 1;
+            if state.sent > MAX_MESSAGES_PER_DISPATCH {
+                return Err(fail(format!("sent more than {MAX_MESSAGES_PER_DISPATCH} messages for one event")));
+            }
+            // Cut here rather than on the main thread: what is past this is never shown anyway,
+            // and 16 MB a line is 16 MB queued.
+            let mut line = text.trim_end().to_string();
+            if let Some((at, _)) = line.char_indices().nth(MAX_LOG_CHARS) {
+                line.truncate(at);
+                line.push('…');
+            }
+            let events = state.events.clone();
+            events(ProcessEvent::Log(line));
             Ok(())
         }))?;
         wrap(linker.func_wrap("agentty", "now_ms", || {
@@ -313,6 +333,12 @@ mod tests {
     /// `locals` is the count of extra `i32` locals the body uses (the two parameters are 0 and 1).
     /// Sections are sized as they are written, so a body of any length assembles.
     fn module_with(locals: u32, body: &[u8]) -> Vec<u8> {
+        module_importing("send", locals, body)
+    }
+
+    /// As [`module_with`], but asking for `import` instead of `send` — the host functions take
+    /// the same two arguments, so the same body drives either.
+    fn module_importing(import: &str, locals: u32, body: &[u8]) -> Vec<u8> {
         fn leb(mut value: u32, out: &mut Vec<u8>) {
             loop {
                 let byte = (value & 0x7f) as u8;
@@ -340,12 +366,12 @@ mod tests {
         // Types: 0 = (i32,i32)->(), 1 = (i32)->(i32)
         section(0x01, &vector(2, &[0x60, 0x02, 0x7f, 0x7f, 0x00, 0x60, 0x01, 0x7f, 0x01, 0x7f]), &mut wasm);
         // Import: "agentty" "send", type 0 — the only function the module is given.
-        let mut import = vec![0x07];
-        import.extend_from_slice(b"agentty");
-        import.push(0x04);
-        import.extend_from_slice(b"send");
-        import.extend_from_slice(&[0x00, 0x00]);
-        section(0x02, &vector(1, &import), &mut wasm);
+        let mut imported = vec![0x07];
+        imported.extend_from_slice(b"agentty");
+        imported.push(import.len() as u8);
+        imported.extend_from_slice(import.as_bytes());
+        imported.extend_from_slice(&[0x00, 0x00]);
+        section(0x02, &vector(1, &imported), &mut wasm);
         // Functions: agentty_alloc (type 1), agentty_on_message (type 0)
         section(0x03, &vector(2, &[0x01, 0x00]), &mut wasm);
         // Memory: one page, no declared maximum — the store's limits are what bound it.
@@ -382,10 +408,14 @@ mod tests {
     /// Runs one message through a module built from `body` and gives back what it sent and how
     /// the call ended.
     fn run_module(locals: u32, body: &[u8], message: &str) -> (Result<(), String>, Vec<ProcessEvent>) {
+        run_bytes(&module_with(locals, body), message)
+    }
+
+    fn run_bytes(wasm: &[u8], message: &str) -> (Result<(), String>, Vec<ProcessEvent>) {
         let dir = std::env::temp_dir().join(format!("agentty-wasm-limit-{}-{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("limit.wasm");
-        std::fs::write(&path, module_with(locals, body)).unwrap();
+        std::fs::write(&path, wasm).unwrap();
         let collected = Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = collected.clone();
         let mut runner = Runner::load(&path, Arc::new(move |event| sink.lock().unwrap().push(event))).expect("the module loads");
@@ -409,26 +439,58 @@ mod tests {
 
     #[test]
     fn a_module_that_answers_one_message_with_a_flood_is_trapped() {
-        // while (i += 1) < 1000 { send(ptr, len) } — far past what one message may send.
-        #[rustfmt::skip]
-        let body = [
-            0x02, 0x40,                         // block
-            0x03, 0x40,                         //   loop
-            0x20, 0x00, 0x20, 0x01, 0x10, 0x00, //     send(p0, p1)
-            0x20, 0x02, 0x41, 0x01, 0x6a,       //     local 2 + 1
-            0x22, 0x02,                         //     local.tee 2
-            0x41, 0xe8, 0x07, 0x4e,             //     >= 1000
-            0x0d, 0x01,                         //     br_if 1 (leave the block)
-            0x0c, 0x00,                         //     br 0   (round again)
-            0x0b,                               //   end loop
-            0x0b,                               // end block
-            0x0b,                               // end function
-        ];
-        let (result, events) = run_module(1, &body, MESSAGE);
+        let (result, events) = run_module(1, FLOOD, MESSAGE);
         let error = result.expect_err("a flood ends the call");
         assert!(error.contains("agentty_on_message failed"), "{error}");
         let sent = events.iter().filter(|event| matches!(event, ProcessEvent::Message(_))).count();
         assert!(sent <= MAX_MESSAGES_PER_DISPATCH as usize, "{sent} messages got through");
+    }
+
+    /// while ((i += 1) < 1000) { f(ptr, len) } — a flood in one dispatch, for whichever host
+    /// function the module imported.
+    #[rustfmt::skip]
+    const FLOOD: &[u8] = &[
+        0x02, 0x40,                         // block
+        0x03, 0x40,                         //   loop
+        0x20, 0x00, 0x20, 0x01, 0x10, 0x00, //     f(p0, p1)
+        0x20, 0x02, 0x41, 0x01, 0x6a,       //     local 2 + 1
+        0x22, 0x02,                         //     local.tee 2
+        0x41, 0xe8, 0x07, 0x4e,             //     >= 1000
+        0x0d, 0x01,                         //     br_if 1
+        0x0c, 0x00,                         //     br 0
+        0x0b, 0x0b, 0x0b,                   // end loop, end block, end function
+    ];
+
+    #[test]
+    fn a_module_that_only_logs_is_trapped_like_one_that_sends() {
+        // `log` crosses the same channel to the same thread as `send`, and one dispatch has fuel
+        // enough for millions of calls — so a loop that only logs could queue gigabytes onto the
+        // main thread before it looked at the first line.
+        let wasm = module_importing("log", 1, FLOOD);
+        let (result, events) = run_bytes(&wasm, MESSAGE);
+        let error = result.expect_err("a flood of log lines ends the call");
+        assert!(error.contains("agentty_on_message failed"), "{error}");
+        let logged = events.iter().filter(|event| matches!(event, ProcessEvent::Log(_))).count();
+        assert!(logged <= MAX_MESSAGES_PER_DISPATCH as usize, "{logged} log lines got through");
+    }
+
+    #[test]
+    fn a_log_line_is_cut_before_it_is_queued() {
+        // log(0, 60_000): most of the module's one page of memory in a single line. What is past
+        // the limit is never shown, and it must not be carried across the channel either.
+        #[rustfmt::skip]
+        let body = [
+            0x41, 0x00,                         // i32.const 0
+            0x41, 0xe0, 0xd4, 0x03,             // i32.const 60_000
+            0x10, 0x00,                         // log
+            0x0b,
+        ];
+        let (result, events) = run_bytes(&module_importing("log", 0, &body), MESSAGE);
+        assert!(result.is_ok(), "{result:?}");
+        let ProcessEvent::Log(line) = events.iter().find(|e| matches!(e, ProcessEvent::Log(_))).expect("a line was logged") else {
+            unreachable!()
+        };
+        assert!(line.chars().count() <= MAX_LOG_CHARS + 1, "{} characters were queued", line.chars().count());
     }
 
     #[test]

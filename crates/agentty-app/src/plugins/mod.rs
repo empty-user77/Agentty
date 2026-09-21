@@ -54,9 +54,6 @@ pub struct Runtime {
     /// Bumped on every start, so events from an old process are ignored.
     generation: u64,
     stopping: bool,
-    /// A link reached this plugin, so what it asks for next may be the link author's wish rather
-    /// than the user's. Set for the rest of the process's life — see [`Runtime::link_guarded`].
-    link_tainted: bool,
     /// Messages seen in the current second, for the flood limit.
     rate_window: Option<(Instant, u32)>,
     /// When this plugin last showed a notification.
@@ -81,7 +78,6 @@ impl Runtime {
             process: None,
             generation: 0,
             stopping: false,
-            link_tainted: false,
             rate_window: None,
             notified_at: None,
             opened_url_at: None,
@@ -102,17 +98,6 @@ impl Runtime {
         while self.logs.len() > LOG_LINES || (self.log_bytes > LOG_BYTES && self.logs.len() > 1) {
             self.log_bytes -= self.logs.pop_front().map_or(0, |line| line.len());
         }
-    }
-
-    /// A link reached this plugin, so it may be acting for whoever wrote the link — any website can
-    /// open one. While this holds, the plugin cannot type into a terminal and its prompts have to
-    /// go through the "Send to…" dialog.
-    ///
-    /// Nothing lifts it while the process runs: a click in the panel the link opened is not consent
-    /// to type into a terminal, and neither is waiting, which a plugin can simply do (`setTimeout`)
-    /// before acting on the text the link gave it. Restarting the plugin clears it.
-    fn link_guarded(&self) -> bool {
-        self.link_tainted
     }
 
     /// Counts a message and reports whether the plugin is flooding Agentty.
@@ -170,6 +155,11 @@ pub struct Envelope {
 pub struct PluginHost {
     pub installed: Vec<InstalledPlugin>,
     runtimes: HashMap<String, Runtime>,
+    /// Plugins a link has reached. Held here rather than on the runtime, so that a plugin cannot
+    /// shed the guard by letting its process end: it would come back untainted, read the link's
+    /// text out of its own storage — which needs no permission — and type it into a terminal.
+    /// Only the user restarting it from the Plugins page clears this.
+    link_tainted: std::collections::HashSet<String>,
     tx: UnboundedSender<Envelope>,
     next_request: u64,
     /// Bumped whenever something visible changes.
@@ -186,6 +176,7 @@ pub fn init(cx: &mut App) -> UnboundedReceiver<Envelope> {
     let (tx, rx) = unbounded();
     cx.set_global(PluginHost {
         installed: store::installed(),
+        link_tainted: std::collections::HashSet::new(),
         runtimes: HashMap::new(),
         tx,
         next_request: 1,
@@ -303,7 +294,6 @@ fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
     let runtime = host.runtimes.entry(id.to_string()).or_insert_with(Runtime::new);
     runtime.generation += 1;
     runtime.stopping = false;
-    runtime.link_tainted = false;
     runtime.state = RunState::Starting;
     runtime.log(format!("— starting {} {} —", plugin.name(), plugin.manifest.as_ref().map_or("", |m| m.version.as_str())));
     let generation = runtime.generation;
@@ -359,8 +349,9 @@ pub fn open_link(
     if !ensure_started(id, &context, cx) {
         return false;
     }
-    if let Some(runtime) = host_mut(cx).runtimes.get_mut(id) {
-        runtime.link_tainted = true;
+    let host = host_mut(cx);
+    host.link_tainted.insert(id.to_string());
+    if let Some(runtime) = host.runtimes.get_mut(id) {
         runtime.log(format!("link: {path}"));
     }
     notify_plugin(id, "url/open", json!({ "path": path, "query": query, "url": url, "context": context }), cx)
@@ -393,8 +384,23 @@ pub fn stop(id: &str, cx: &mut App) {
     touch(cx);
 }
 
+/// Whether a link has reached this plugin, so what it asks for next may be the link author's wish
+/// rather than the user's — any website can open one. While this holds, the plugin cannot type
+/// into a terminal and its prompts go through the "Send to…" dialog.
+///
+/// Nothing lifts it but the user restarting the plugin. Not a click in the panel the link opened,
+/// which is not consent to type into a terminal; not waiting, which a plugin can do as easily as
+/// a user can click; and not the plugin's own process ending, which it can arrange — it would
+/// otherwise come back untainted, read the link's text back out of its own storage (which needs
+/// no permission) and carry on.
+pub fn link_guarded(id: &str, cx: &App) -> bool {
+    host(cx).link_tainted.contains(id)
+}
+
+/// The user asking for the plugin to start again — the one thing that clears a link's guard.
 pub fn restart(id: &str, cx: &mut App) {
     stop(id, cx);
+    host_mut(cx).link_tainted.remove(id);
     ensure_started(id, &default_context(cx), cx);
 }
 
@@ -492,7 +498,7 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             cx,
         );
     }
-    let guarded = host(cx).runtimes.get(plugin_id).is_some_and(Runtime::link_guarded);
+    let guarded = link_guarded(plugin_id, cx);
     match method {
         "ui/setPanel" => {
             let tree = Node::from_value(params.get("tree").cloned().unwrap_or(Value::Null));
@@ -800,16 +806,27 @@ mod tests {
     }
 
     #[test]
-    fn the_link_guard_holds_through_clicks_and_waiting() {
+    fn the_link_guard_survives_the_plugin_that_earned_it() {
+        // The guard is a set on the host, not a flag on the process, and that is the whole point:
+        // a plugin can end its own process. It would come back with a clean flag, read the link's
+        // text out of its own storage — which needs no permission — and type it into a terminal.
+        let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
+        assert!(!tainted.contains("plugin"));
+        tainted.insert("plugin".into());
+
+        // What used to clear it: the process ending and starting again.
         let mut runtime = Runtime::new();
-        assert!(!runtime.link_guarded());
-        runtime.link_tainted = true;
-        // Neither a click in the panel the link opened nor simply waiting is consent to type into
-        // a terminal; a plugin can wait as easily as the user can click. So the guard carries no
-        // clock at all — it is the plugin's whole life, and only `ensure_started` clears it.
-        assert!(runtime.link_guarded(), "a link arrived and nothing since then lifts the guard");
+        runtime.abandon();
+        assert!(tainted.contains("plugin"), "a restart the plugin arranged is not consent");
+
+        // Neither a click in the panel the link opened nor simply waiting is consent either; a
+        // plugin can wait as easily as a user can click, so the guard carries no clock at all.
         runtime.notified_at = Some(Instant::now() - Duration::from_secs(3600));
         runtime.opened_url_at = Some(Instant::now() - Duration::from_secs(3600));
-        assert!(runtime.link_guarded(), "an hour of a plugin doing other things is not consent either");
+        assert!(tainted.contains("plugin"), "an hour of doing other things is not consent");
+
+        // Only the user pressing Restart, which is the one place that removes it.
+        tainted.remove("plugin");
+        assert!(!tainted.contains("plugin"));
     }
 }

@@ -70,6 +70,8 @@ pub struct PluginsPage {
     creating: bool,
     tab: Tab,
     confirm_uninstall: Option<String>,
+    /// A plugin whose update wants more than it had, shown once before it is taken.
+    confirm_update: Option<String>,
     busy: bool,
     inputs: Option<Inputs>,
     list_scroll: gpui::ScrollHandle,
@@ -167,6 +169,40 @@ impl Workbench {
         self.install_from_market(next, window, cx);
     }
 
+    /// "Update all": takes every update that asks for nothing new, one after another.
+    ///
+    /// A plugin that wants more than it had is left out — the user sees what it is asking for on
+    /// its own row and answers that. Pressing this again while a round is running would build a
+    /// second queue over the first and stop a plugin whose turn would never come.
+    pub(super) fn update_everything(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.plugins_page.installing.is_some() || !self.plugins_page.update_queue.is_empty() {
+            return;
+        }
+        let (mut waiting, asking) = self.updates_without_new_permissions(cx);
+        let first = waiting.pop();
+        self.plugins_page.update_queue = waiting;
+        if asking > 0 {
+            self.plugins_message(tf(cx, "plugins.update_all_asking", &[("n", &asking.to_string())]), false, cx);
+        }
+        let Some(first) = first else { return };
+        plugins::stop(&first, cx);
+        self.install_from_market(first, window, cx);
+    }
+
+    /// The updates that ask for nothing new, and how many were left out because they do.
+    fn updates_without_new_permissions(&self, cx: &Context<Self>) -> (Vec<String>, usize) {
+        let mut safe = Vec::new();
+        let mut asking = 0;
+        for plugin in plugins::host(cx).installed.iter().filter(|p| self.market_update(p).is_some()) {
+            if self.permissions_gained(plugin).is_empty() {
+                safe.push(plugin.id.clone());
+            } else {
+                asking += 1;
+            }
+        }
+        (safe, asking)
+    }
+
     /// Every installed plugin the marketplace has a newer version of.
     fn market_updates(&self, cx: &Context<Self>) -> Vec<String> {
         plugins::host(cx).installed.iter().filter(|plugin| self.market_update(plugin).is_some()).map(|plugin| plugin.id.clone()).collect()
@@ -253,20 +289,8 @@ impl Workbench {
                 plugins::stop(&id, cx);
                 self.install_from_market(id, window, cx);
             }
-            "update-all" => {
-                if self.plugins_page.installing.is_some() || !self.plugins_page.update_queue.is_empty() {
-                    eprintln!("plugin-market: an update is already running");
-                    return;
-                }
-                let mut waiting = self.market_updates(cx);
-                let Some(first) = waiting.pop() else {
-                    eprintln!("plugin-market: nothing to update");
-                    return;
-                };
-                self.plugins_page.update_queue = waiting;
-                plugins::stop(&first, cx);
-                self.install_from_market(first, window, cx);
-            }
+            // The button's own path, so what a test drives is what a user presses.
+            "update-all" => self.update_everything(window, cx),
             "uninstall" => self.uninstall_plugin(rest.trim(), cx),
             other => eprintln!("plugin-market: no such command {other:?}"),
         }
@@ -377,6 +401,17 @@ impl Workbench {
         cx.notify();
     }
 
+    /// What the marketplace's version of a plugin asks for that the installed one did not.
+    ///
+    /// An update is one click, and it writes the new entry's permissions over the old manifest
+    /// while keeping the plugin enabled. Without this, a plugin published with none could ask for
+    /// every one of them in its next version and be granted them by a user pressing "Update".
+    fn permissions_gained(&self, plugin: &InstalledPlugin) -> Vec<String> {
+        let Some(entry) = self.market_update(plugin) else { return Vec::new() };
+        let had = plugin.manifest.as_ref().map(|m| m.permissions.clone()).unwrap_or_default();
+        entry.permissions.iter().filter(|wanted| !had.contains(wanted)).cloned().collect()
+    }
+
     fn uninstall_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         self.plugins_page.confirm_uninstall = None;
         // Read before it goes: afterwards there is nothing left to ask what it was called.
@@ -400,6 +435,7 @@ impl Workbench {
         self.plugins_page.creating = false;
         self.plugins_page.tab = Tab::Details;
         self.plugins_page.confirm_uninstall = None;
+        self.plugins_page.confirm_update = None;
         cx.notify();
     }
 
@@ -527,18 +563,7 @@ impl Workbench {
             action_button(
                 "plugins-update-all",
                 tf(cx, "plugins.update_all", &[("n", &count)]),
-                cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    // Pressing it again while the first round is still going would build a second
-                    // queue over the first and stop a plugin whose turn would never come.
-                    if this.plugins_page.installing.is_some() || !this.plugins_page.update_queue.is_empty() {
-                        return;
-                    }
-                    let mut waiting = this.market_updates(cx);
-                    let Some(first) = waiting.pop() else { return };
-                    this.plugins_page.update_queue = waiting;
-                    plugins::stop(&first, cx);
-                    this.install_from_market(first, window, cx);
-                }),
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.update_everything(window, cx)),
             )
             .bg(hex_alpha(Chrome::ORANGE, 0.22))
             .text_color(hex(Chrome::ORANGE)),
@@ -1089,10 +1114,27 @@ impl Workbench {
         // A newer version in the marketplace than the one installed.
         if let Some(version) = self.market_update(plugin).map(|entry| entry.version.clone()) {
             let id = id.clone();
+            let gained = self.permissions_gained(plugin);
+            let asking = self.plugins_page.confirm_update.as_deref() == Some(plugin.id.as_str());
+            let label = match (gained.is_empty(), asking) {
+                // It wants more than it had: say what, and take a second press for it.
+                (false, false) => {
+                    let names: Vec<&str> = gained.iter().map(|p| t(cx, permission_strings(p).0)).collect();
+                    tf(cx, "plugins.update_wants", &[("perms", &names.join(", "))])
+                }
+                (false, true) => t(cx, "plugins.update_confirm").to_string(),
+                _ => tf(cx, "plugins.update_to", &[("version", &version)]),
+            };
+            let wants_more = !gained.is_empty();
             row = row.child(action_button(
                 button_id("market-update"),
-                tf(cx, "plugins.update_to", &[("version", &version)]),
+                label,
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    if wants_more && this.plugins_page.confirm_update.as_deref() != Some(id.as_str()) {
+                        this.plugins_page.confirm_update = Some(id.clone());
+                        return cx.notify();
+                    }
+                    this.plugins_page.confirm_update = None;
                     plugins::stop(&id, cx);
                     this.install_from_market(id.clone(), window, cx);
                 }),
@@ -1308,14 +1350,7 @@ impl Workbench {
         }
         for permission in &manifest.permissions {
             debug_assert!(PERMISSIONS.iter().any(|(name, _)| name == permission));
-            let (title, body) = match permission.as_str() {
-                "prompt.inject" => ("plugins.perm.prompt", "plugins.perm.prompt.body"),
-                "terminal.write" => ("plugins.perm.terminal", "plugins.perm.terminal.body"),
-                "session.read" => ("plugins.perm.session", "plugins.perm.session.body"),
-                "workspace.read" => ("plugins.perm.workspace", "plugins.perm.workspace.body"),
-                "net.request" => ("plugins.perm.net", "plugins.perm.net.body"),
-                _ => ("plugins.perm.unknown", "plugins.perm.unknown"),
-            };
+            let (title, body) = permission_strings(permission);
             list = list.child(
                 div().flex().gap_2().child(div().flex_shrink_0().pt_0p5().child(icon("shield-alert", 14., hex(Chrome::WARNING)))).child(
                     div()
@@ -1481,6 +1516,18 @@ fn ago(at: std::time::SystemTime, cx: &Context<Workbench>) -> String {
         return t(cx, "plugins.market_kept_now").to_string();
     }
     tf(cx, "plugins.market_kept", &[("when", &when)])
+}
+
+/// The two strings that name a permission to the user.
+fn permission_strings(permission: &str) -> (&'static str, &'static str) {
+    match permission {
+        "prompt.inject" => ("plugins.perm.prompt", "plugins.perm.prompt.body"),
+        "terminal.write" => ("plugins.perm.terminal", "plugins.perm.terminal.body"),
+        "session.read" => ("plugins.perm.session", "plugins.perm.session.body"),
+        "workspace.read" => ("plugins.perm.workspace", "plugins.perm.workspace.body"),
+        "net.request" => ("plugins.perm.net", "plugins.perm.net.body"),
+        _ => ("plugins.perm.unknown", "plugins.perm.unknown"),
+    }
 }
 
 fn detail_heading(title: String) -> impl IntoElement {
