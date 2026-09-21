@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- The plugin protocol is at version 2. A plugin says which one it was built against, and an
+  Agentty that speaks less than that lists it and says to update rather than installing a module
+  it cannot run.
 - A plugin can wait (`host/timer`) and can hear how the agents it started are getting on
   (`pane/status`, with `workspace.read`, whether or not the window is being drawn) — what a plugin needs to walk a piece of work through
   several agent sessions. `docs/plugins/agentos.md` describes that shape, and Blogger AgentOS in
