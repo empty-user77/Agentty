@@ -362,6 +362,11 @@ pub fn create_plugin(name: &str) -> Result<InstalledPlugin> {
 }
 
 /// Removes an installed plugin (a development link is only unlinked; its folder stays).
+///
+/// What the plugin kept goes with it. That folder holds what the user gave the plugin — an HTTP
+/// client's saved requests hold the tokens they were sent with — and a plugin that is no longer
+/// installed has no business leaving them on disk. An update does not come through here: it
+/// replaces the plugin's folder and leaves its data alone.
 pub fn uninstall(id: &str) -> Result<()> {
     if !valid_id(id) {
         bail!("invalid plugin id");
@@ -373,6 +378,12 @@ pub fn uninstall(id: &str) -> Result<()> {
         if dir.exists() {
             std::fs::remove_dir_all(&dir).with_context(|| format!("could not remove {}", dir.display()))?;
         }
+    }
+    // A development link keeps its own folder, but what it kept while it ran was Agentty's to
+    // hold and is removed either way.
+    let data = plugin_data_dir(id);
+    if data.exists() {
+        std::fs::remove_dir_all(&data).with_context(|| format!("could not remove {}", data.display()))?;
     }
     state.plugins.remove(id);
     state.save()
@@ -500,6 +511,37 @@ pub(crate) mod tests {
         test(&dir);
         ROOT.with(|r| *r.borrow_mut() = None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn what_a_plugin_kept_goes_when_the_plugin_does() {
+        with_data_dir(|_| {
+            let plugin = install_builtin("cosmica").unwrap();
+            // What the plugin kept while it ran: an HTTP client's saved requests hold the tokens
+            // they were sent with, and an uninstalled plugin should not leave them behind.
+            super::super::storage::set(&plugin.id, "token", serde_json::json!("example_not_a_real_value")).unwrap();
+            let data = plugin_data_dir(&plugin.id);
+            assert!(data.exists());
+
+            uninstall(&plugin.id).unwrap();
+            assert!(!plugins_dir().join(&plugin.id).exists());
+            assert!(!data.exists(), "what the plugin kept is still on disk");
+            assert!(installed().is_empty());
+
+            // And uninstalling something that kept nothing is not an error.
+            uninstall("never-installed").unwrap();
+        });
+    }
+
+    #[test]
+    fn an_update_leaves_what_the_plugin_kept_alone() {
+        with_data_dir(|_| {
+            let plugin = install_builtin("cosmica").unwrap();
+            super::super::storage::set(&plugin.id, "saved", serde_json::json!("a request")).unwrap();
+            // Installing over it is what an update does.
+            install_builtin("cosmica").unwrap();
+            assert_eq!(super::super::storage::get(&plugin.id, "saved").unwrap(), "a request");
+        });
     }
 
     #[cfg(unix)]
