@@ -5,7 +5,7 @@ use super::Workbench;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, FontWeight};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context};
 
 impl Workbench {
     pub(super) fn render_install_hint(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -53,7 +53,7 @@ impl Workbench {
                         // Clicks inside the dialog must not reach the overlay that closes it.
                         .on_click(|_, _, cx| cx.stop_propagation())
                         .child(div().flex().items_center().gap_2().child(crate::brand::avatar(brand, 22.)).child(
-                            div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(tf(
+                            div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(tf(
                                 cx,
                                 "install.title",
                                 &[("name", name)],

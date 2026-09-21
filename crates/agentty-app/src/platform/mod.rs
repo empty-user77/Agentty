@@ -7,8 +7,10 @@
 
 pub mod drops;
 pub mod frame;
+pub mod system_proxy;
 pub mod tray;
 pub mod url;
+pub mod wakelock;
 
 use std::path::Path;
 
@@ -18,6 +20,32 @@ pub const HAS_STATUS_ITEM: bool = cfg!(target_os = "macos");
 pub const HAS_WEBVIEW: bool = cfg!(target_os = "macos");
 /// Mini mode folds the window with AppKit frame animations.
 pub const HAS_MINI_MODE: bool = cfg!(target_os = "macos");
+
+/// Raises the open-file limit for this process as far as the system allows.
+///
+/// An app launched from the Dock or Finder inherits a soft limit of 256 descriptors on macOS.
+/// Every terminal pane holds a PTY and its event loop, and webviews, git commands and sockets take
+/// more, so opening and closing panes for a while runs the process out of descriptors and new
+/// terminals fail with "failed to open PTY".
+pub fn raise_file_limit() {
+    #[cfg(unix)]
+    unsafe {
+        let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+            return;
+        }
+        // macOS refuses anything above OPEN_MAX even when the hard limit says "unlimited".
+        let ceiling: libc::rlim_t = 24_576;
+        let wanted = if limit.rlim_max == libc::RLIM_INFINITY { ceiling } else { limit.rlim_max.min(ceiling) };
+        if wanted <= limit.rlim_cur {
+            return;
+        }
+        limit.rlim_cur = wanted;
+        if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+            eprintln!("agentty: could not raise the open-file limit past {}", limit.rlim_cur);
+        }
+    }
+}
 
 /// Opens a folder in the file manager (Finder, Explorer, the desktop's default).
 pub fn open_folder(path: &Path) {

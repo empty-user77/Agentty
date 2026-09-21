@@ -391,8 +391,59 @@ pub fn fetch(repo: &Path) -> Result<()> {
     git(repo, &["fetch", "--prune", "origin"]).map(|_| ())
 }
 
-pub fn pull(repo: &Path) -> Result<()> {
-    git(repo, &["pull", "--ff-only"]).map(|_| ())
+/// What a pull brought in, so "up to date" can be told apart from "12 files changed".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct PullOutcome {
+    pub commits: usize,
+    pub added: usize,
+    pub modified: usize,
+    pub deleted: usize,
+}
+
+impl PullOutcome {
+    pub fn files(&self) -> usize {
+        self.added + self.modified + self.deleted
+    }
+}
+
+pub fn pull(repo: &Path) -> Result<PullOutcome> {
+    let before = git(repo, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_default();
+    git(repo, &["pull", "--ff-only"])?;
+    let after = git(repo, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_default();
+    if before.is_empty() || after.is_empty() || before == after {
+        return Ok(PullOutcome::default());
+    }
+    let range = format!("{before}..{after}");
+    let commits = git(repo, &["rev-list", "--count", &range]).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    let mut outcome = PullOutcome { commits, ..Default::default() };
+    for line in git(repo, &["diff", "--name-status", &range]).unwrap_or_default().lines() {
+        // Renames and copies come as "R100\told\tnew": count them as a change to the new path.
+        match line.chars().next() {
+            Some('A') => outcome.added += 1,
+            Some('D') => outcome.deleted += 1,
+            Some(_) => outcome.modified += 1,
+            None => {}
+        }
+    }
+    Ok(outcome)
+}
+
+/// The part of a git failure that says what actually happened. git prints the reason first and
+/// trails off into hints and a bare "Aborting", which on its own tells the user nothing.
+pub fn failure_reason(message: &str) -> String {
+    let lines: Vec<&str> = message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("hint:") && !matches!(line.trim_end_matches('.'), "Aborting" | "aborting"))
+        .collect();
+    let Some(first) = lines.first() else { return message.trim().to_string() };
+    let head = first.trim_start_matches("error: ").trim_start_matches("fatal: ").trim();
+    // "… would be overwritten by merge:" — the files that block it are the useful part.
+    if head.ends_with(':') && lines.len() > 1 {
+        let rest: Vec<&str> = lines.iter().skip(1).take(3).copied().collect();
+        return format!("{head} {}", rest.join(", "));
+    }
+    head.to_string()
 }
 
 pub fn push(repo: &Path, branch: &str, has_upstream: bool) -> Result<()> {
@@ -567,6 +618,59 @@ mod tests {
         assert_eq!(remote_web_url(&repo).as_deref(), Some("https://github.com/empty-user77/agentty"));
         git(&repo, &["remote", "set-url", "origin", "https://user:token@github.com/a/b.git"]).unwrap();
         assert_eq!(remote_web_url(&repo).as_deref(), Some("https://github.com/a/b"));
+        std::fs::remove_dir_all(repo).ok();
+    }
+
+    #[test]
+    fn failure_reason_skips_git_noise() {
+        let pull = "error: Your local changes to the following files would be overwritten by merge:\n\tsrc/main.rs\n\tsrc/ui.rs\nPlease commit your changes or stash them before you merge.\nAborting";
+        assert_eq!(
+            failure_reason(pull),
+            "Your local changes to the following files would be overwritten by merge: src/main.rs, src/ui.rs, Please commit your changes or stash them before you merge."
+        );
+        assert_eq!(failure_reason("fatal: not a git repository"), "not a git repository");
+        assert_eq!(failure_reason("Aborting"), "Aborting");
+        assert_eq!(failure_reason("  "), "");
+    }
+
+    #[test]
+    fn pull_reports_what_arrived() {
+        let upstream = temp_repo("pull-outcome-upstream");
+        std::fs::write(upstream.join("kept.txt"), "one\n").unwrap();
+        std::fs::write(upstream.join("gone.txt"), "bye\n").unwrap();
+        git(&upstream, &["add", "-A"]).unwrap();
+        git(&upstream, &["commit", "-qm", "start"]).unwrap();
+
+        // A clone of it, so the pull is a real fast-forward over a real remote.
+        let clone = std::env::temp_dir().join(format!("agentty-git-pull-outcome-clone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&clone);
+        git(std::env::temp_dir().as_path(), &["clone", "-q", &upstream.display().to_string(), &clone.display().to_string()]).unwrap();
+        git(&clone, &["config", "user.email", "t@example.com"]).unwrap();
+        git(&clone, &["config", "user.name", "Tester"]).unwrap();
+
+        // Nothing new yet.
+        assert_eq!(pull(&clone).unwrap(), PullOutcome::default());
+
+        // One commit adding a file, changing another and deleting a third.
+        std::fs::write(upstream.join("added.txt"), "new\n").unwrap();
+        std::fs::write(upstream.join("kept.txt"), "two\n").unwrap();
+        std::fs::remove_file(upstream.join("gone.txt")).unwrap();
+        git(&upstream, &["add", "-A"]).unwrap();
+        git(&upstream, &["commit", "-qm", "work"]).unwrap();
+
+        let outcome = pull(&clone).unwrap();
+        assert_eq!(outcome, PullOutcome { commits: 1, added: 1, modified: 1, deleted: 1 });
+        assert_eq!(outcome.files(), 3);
+
+        std::fs::remove_dir_all(upstream).ok();
+        std::fs::remove_dir_all(clone).ok();
+    }
+
+    #[test]
+    fn pull_without_a_remote_fails() {
+        let repo = temp_repo("pull-no-remote");
+        // Nothing to pull without a remote: the call fails rather than claiming changes.
+        assert!(pull(&repo).is_err());
         std::fs::remove_dir_all(repo).ok();
     }
 

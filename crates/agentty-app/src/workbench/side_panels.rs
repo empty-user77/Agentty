@@ -13,11 +13,13 @@ pub const MIN_WIDTH: f32 = 240.;
 const MIN_TERMINALS: f32 = 420.;
 pub const DEFAULT_PLUGIN_WIDTH: f32 = 360.;
 pub const DEFAULT_DOCKER_WIDTH: f32 = 340.;
+pub const DEFAULT_DATABASE_WIDTH: f32 = 380.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SidePanel {
     Plugin,
     Docker,
+    Database,
 }
 
 impl Workbench {
@@ -35,10 +37,24 @@ impl Workbench {
         }
     }
 
+    /// Width of the database panel as shown (0 while it is closed).
+    pub(super) fn db_panel_width(&self, cx: &gpui::App) -> f32 {
+        if self.db.panel_open {
+            crate::settings::settings(cx).db_panel_width.max(MIN_WIDTH)
+        } else {
+            0.
+        }
+    }
+
     /// Everything the side panels take, their handles included.
     pub(super) fn side_panels_total(&self, cx: &gpui::App) -> f32 {
         let handle = |shown: bool| if shown { 5. } else { 0. };
-        self.plugin_panel_width(cx) + handle(self.plugin_panel.is_some()) + self.docker_panel_width(cx) + handle(self.docker.open)
+        self.plugin_panel_width(cx)
+            + handle(self.plugin_panel.is_some())
+            + self.docker_panel_width(cx)
+            + handle(self.docker.open)
+            + self.db_panel_width(cx)
+            + handle(self.db.panel_open)
     }
 
     /// The drag handle at the left edge of `panel` (a hairline at rest, lit while hovered or dragged).
@@ -78,15 +94,20 @@ impl Workbench {
     /// edge is left of whatever is docked further right: the Docker panel, the files panel).
     pub(super) fn drag_side_panel(&mut self, panel: SidePanel, pointer_x: f32, viewport: f32, cx: &mut Context<Self>) {
         let files = self.files_panel.as_ref().map_or(0., |_| self.docked_widths(cx).1 + 5.);
+        let docker = self.docker_panel_width(cx) + if self.docker.open { 5. } else { 0. };
+        let database = self.db_panel_width(cx) + if self.db.panel_open { 5. } else { 0. };
+        // Docked right to left: files, database, Docker, plugin.
         let right = match panel {
-            SidePanel::Docker => files,
-            SidePanel::Plugin => files + self.docker_panel_width(cx) + if self.docker.open { 5. } else { 0. },
+            SidePanel::Database => files,
+            SidePanel::Docker => files + database,
+            SidePanel::Plugin => files + database + docker,
         };
         let edge = viewport - right;
         let width = side_width(edge, pointer_x);
         gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| match panel {
             SidePanel::Plugin => store.settings.plugin_panel_width = width,
             SidePanel::Docker => store.settings.docker_panel_width = width,
+            SidePanel::Database => store.settings.db_panel_width = width,
         });
         cx.notify();
     }

@@ -1,7 +1,7 @@
 //! Workbench chrome colors (VS Code "Dark Modern"-inspired) and terminal color themes.
 //! Terminal themes are built in or imported from iTerm2 `.itermcolors` files in `~/.agentty/themes`.
 
-use gpui::{rgb, Hsla, Rgba};
+use gpui::{rgb, FontWeight, Hsla, Rgba};
 use std::path::{Path, PathBuf};
 
 pub fn hex(value: u32) -> Hsla {
@@ -14,25 +14,43 @@ pub fn hex_alpha(value: u32, alpha: f32) -> Hsla {
     color.into()
 }
 
+/// `value` mixed toward white by `amount` (0…1), kept fully opaque. Translucency over the dark
+/// chrome turns a colour into mud; a lighter solid tone is what "a shade brighter" should mean.
+pub fn lighten(value: u32, amount: f32) -> Hsla {
+    let channel = |shift: u32| {
+        let c = ((value >> shift) & 0xff) as f32;
+        (c + (255. - c) * amount.clamp(0., 1.)).round() as u32
+    };
+    hex((channel(16) << 16) | (channel(8) << 8) | channel(0))
+}
+
 pub struct Chrome;
 
+/// Weight for the names and headings the UI repeats everywhere (cards, rows, section headers).
+/// One step below bold: a screen full of semibold at 13px reads as noise rather than emphasis.
+/// Every such place goes through this constant, so the whole app is tuned in one line.
+pub const EMPHASIS: FontWeight = FontWeight::MEDIUM;
+
 impl Chrome {
-    pub const ACTIVITY_BAR: u32 = 0x181818;
-    pub const SIDE_BAR: u32 = 0x181818;
-    pub const EDITOR: u32 = 0x1f1f1f;
-    pub const PANEL: u32 = 0x202020;
-    pub const TAB_INACTIVE: u32 = 0x181818;
-    pub const STATUS_BAR: u32 = 0x181818;
-    pub const BORDER: u32 = 0x2b2b2b;
-    pub const FOREGROUND: u32 = 0xcccccc;
-    pub const BRIGHT: u32 = 0xffffff;
-    pub const MUTED: u32 = 0x9d9d9d;
+    // Slightly cooler and a touch further apart than VS Code's greys, so the sidebar, the
+    // terminals and the panels read as separate surfaces instead of one flat dark field.
+    pub const ACTIVITY_BAR: u32 = 0x151517;
+    pub const SIDE_BAR: u32 = 0x17171a;
+    pub const EDITOR: u32 = 0x1e1e21;
+    pub const PANEL: u32 = 0x212124;
+    pub const TAB_INACTIVE: u32 = 0x1a1a1d;
+    pub const STATUS_BAR: u32 = 0x17171a;
+    pub const BORDER: u32 = 0x2f2f34;
+    pub const FOREGROUND: u32 = 0xd2d2d8;
+    /// Not pure white: at this size it glares against the dark chrome.
+    pub const BRIGHT: u32 = 0xf2f2f5;
+    pub const MUTED: u32 = 0x8e8e96;
     pub const ACCENT: u32 = 0x0078d4;
     pub const ATTENTION: u32 = 0x3b9cff;
-    pub const HOVER: u32 = 0x2a2d2e;
-    pub const SELECTED: u32 = 0x37373d;
-    pub const OVERLAY: u32 = 0x252526;
-    pub const OVERLAY_BORDER: u32 = 0x454545;
+    pub const HOVER: u32 = 0x2a2a30;
+    pub const SELECTED: u32 = 0x35353c;
+    pub const OVERLAY: u32 = 0x232326;
+    pub const OVERLAY_BORDER: u32 = 0x41414a;
     pub const CLAUDE: u32 = 0xd97757;
     pub const CODEX: u32 = 0x10a37f;
     pub const SHELL: u32 = 0x8b8b8b;
@@ -313,5 +331,20 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), BUILTIN.len());
         assert!(themes.iter().any(|t| t.name == DEFAULT_THEME));
+    }
+}
+
+#[cfg(test)]
+mod tone_tests {
+    use super::lighten;
+
+    #[test]
+    fn lighten_stays_opaque_and_moves_toward_white() {
+        let base = lighten(0x2f6fed, 0.0);
+        let lighter = lighten(0x2f6fed, 0.2);
+        assert_eq!(base.a, 1.0);
+        assert_eq!(lighter.a, 1.0);
+        assert!(lighter.l > base.l, "lightening must raise the lightness");
+        assert_eq!(lighten(0x000000, 1.0).l, 1.0);
     }
 }

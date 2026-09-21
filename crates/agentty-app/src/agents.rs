@@ -83,6 +83,12 @@ impl Installed {
     pub fn other_agents(&self) -> impl Iterator<Item = &'static AgentCli> + '_ {
         OTHER_AGENTS.iter().filter(|a| self.has(a.binary))
     }
+
+    /// How many agent CLIs this machine has. With one there is nothing a logo can tell apart, so
+    /// the workspace cards leave it out. Claude Code and Codex are known apart from the list.
+    pub fn agent_count(&self) -> usize {
+        ["claude", "codex"].iter().filter(|binary| self.has(binary)).count() + self.other_agents().count()
+    }
 }
 
 /// Whether the installed Claude Code accepts `--permission-mode auto`; an older one exits on it.
@@ -264,6 +270,19 @@ pub fn detect() -> Installed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One agent on the machine means the logo on a workspace card tells nothing apart, so the
+    /// cards leave it out; two or more and it is worth the room again.
+    #[test]
+    fn one_agent_is_not_worth_a_logo() {
+        let with = |bins: &[&str]| Installed { binaries: bins.iter().map(|b| (*b).to_string()).collect(), ..Default::default() };
+        assert_eq!(with(&[]).agent_count(), 0);
+        assert_eq!(with(&["claude"]).agent_count(), 1);
+        assert_eq!(with(&["claude", "codex"]).agent_count(), 2);
+        // A CLI from the list counts, anything else on PATH does not.
+        assert_eq!(with(&["claude", "gemini"]).agent_count(), 2);
+        assert_eq!(with(&["claude", "git", "node"]).agent_count(), 1);
+    }
 
     #[test]
     fn parses_probe_output() {

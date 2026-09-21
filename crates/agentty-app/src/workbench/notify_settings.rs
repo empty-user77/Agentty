@@ -14,7 +14,7 @@ use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, Chrome};
 use crate::ui::{action_button, icon, TypeScale};
 use agentty_bridge::notify::{self, Channel, Limiter};
-use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, FontWeight, SharedString, Subscription, Window};
+use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, SharedString, Subscription, Window};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
@@ -324,7 +324,7 @@ impl Workbench {
                     .items_center()
                     .gap_2()
                     .child(icon(if channel == Channel::Telegram { "send" } else { "message-square" }, 14., hex(Chrome::FOREGROUND)))
-                    .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(channel.label()))
+                    .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(channel.label()))
                     .child(div().t_small().text_color(hex(state.1)).child(state.0.to_string()))
                     .child(div().flex_1())
                     .when(configured == Some(true), |d| d.child(enabled_toggle)),

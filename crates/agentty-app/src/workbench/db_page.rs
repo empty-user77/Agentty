@@ -18,7 +18,7 @@ use agentty_db::engine::{QueryResult, Session, TableInfo};
 use agentty_db::guard::{classify_mongo, classify_sql, MongoOp, Verdict};
 use agentty_db::model::{ConnectionConfig, Engine, Missing};
 use agentty_db::store::{self, Connection, Source};
-use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, Context, Entity, Focusable, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, Context, Entity, Focusable, SharedString, Window};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -26,7 +26,57 @@ use std::path::PathBuf;
 /// Rows shown on the page; agents may ask for up to [`AGENT_MAX_ROWS`].
 const PAGE_ROWS: usize = 200;
 const AGENT_MAX_ROWS: usize = 500;
-const COLUMN_WIDTH: f32 = 170.;
+/// Result grid: columns are as wide as what they hold, between these bounds.
+const COLUMN_MIN_WIDTH: f32 = 90.;
+const COLUMN_MAX_WIDTH: f32 = 420.;
+/// Dragging a column goes further than measuring one: a long text column is read by widening it.
+const COLUMN_DRAG_MAX_WIDTH: f32 = 900.;
+/// Width per character at the grid's text size, for sizing a column to its content.
+const COLUMN_CHAR_WIDTH: f32 = 7.1;
+/// The row-number gutter, like a spreadsheet's.
+const ROW_NUMBER_WIDTH: f32 = 44.;
+/// Height of the query editor: default, and what dragging its handle allows.
+const QUERY_HEIGHT: f32 = 230.;
+const QUERY_MIN_HEIGHT: f32 = 60.;
+const QUERY_MAX_HEIGHT: f32 = 520.;
+
+/// Dragging the bar under the query editor. It draws nothing: the bar itself is the feedback.
+#[derive(Clone)]
+pub struct DbQueryDrag;
+
+/// Dragging the edge of the connections column, or of the tables column beside it. Which one is
+/// in the handler's own closure; the payload only has to exist for GPUI to track the drag.
+#[derive(Clone, Copy)]
+pub struct DbColumnDrag;
+
+impl gpui::Render for DbColumnDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// Dragging the right edge of a result column. Which column is in the handler's own closure; the
+/// payload only has to exist for GPUI to track the drag.
+#[derive(Clone, Copy)]
+pub struct DbGridDrag;
+
+impl gpui::Render for DbGridDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// Widths of those two columns: a default, and what dragging allows.
+const CONNECTIONS_WIDTH: f32 = 270.;
+const TABLES_WIDTH: f32 = 230.;
+const COLUMN_MIN: f32 = 150.;
+const COLUMN_MAX: f32 = 560.;
+
+impl gpui::Render for DbQueryDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
 /// How long an agent waits for an approval (matches the socket's wait in `agent_signal.rs`).
 /// Approvals waiting at most; more are refused (an agent can't bury the user in dialogs).
 const MAX_APPROVALS: usize = 20;
@@ -161,6 +211,8 @@ pub(super) struct DbState {
     /// Active pane and its folder when last looked, to notice a tab switch or a `cd`.
     seen: Option<(gpui::EntityId, PathBuf)>,
     pub(super) root: Option<PathBuf>,
+    /// The panel docked beside the terminals is open (the full page is a separate view).
+    pub(super) panel_open: bool,
     pub(super) connections: Vec<Connection>,
     loading: bool,
     generation: u64,
@@ -172,6 +224,23 @@ pub(super) struct DbState {
     message: Option<(String, bool)>,
     busy: bool,
     query: Option<Entity<TextInput>>,
+    /// The SQL editor: multi-line, highlighted, and as tall as the user drags it.
+    editor: Option<Entity<crate::editor::CodeEditor>>,
+    editor_height: f32,
+    /// Widths of the connections and tables columns (0 until the user drags them).
+    connections_width: f32,
+    tables_width: f32,
+    /// Row the user clicked in the result grid, shown in full below it.
+    picked_row: Option<usize>,
+    /// Widths the user dragged a result column to, by position and name. A column not in here is
+    /// as wide as what it holds. The name keeps the width across a re-run of the same query; the
+    /// position keeps two same-named columns (a self-join's two `id`s) apart.
+    grid_widths: std::collections::HashMap<(usize, String), f32>,
+    /// What each column of the current result measures. Worked out once when the result arrives:
+    /// measuring every cell of 200 rows again on every frame is work the grid does not need.
+    grid_measured: Vec<f32>,
+    /// Scroll position of the result grid, so it can carry scrollbars both ways.
+    grid_scroll: gpui::ScrollHandle,
     password: Option<(String, Entity<TextInput>)>,
     form: Option<ManualForm>,
     pub(super) approvals: VecDeque<Approval>,
@@ -181,6 +250,19 @@ pub(super) struct DbState {
 }
 
 impl DbState {
+    /// Shows a query result, measuring its columns once here rather than on every frame.
+    fn show_result(&mut self, result: QueryResult) {
+        self.grid_measured = measure_columns(&result);
+        self.picked_row = None;
+        self.result = Some(result);
+    }
+
+    fn clear_result(&mut self) {
+        self.grid_measured.clear();
+        self.picked_row = None;
+        self.result = None;
+    }
+
     pub(super) fn debug_state(&self) -> Value {
         serde_json::json!({
             "root": self.root,
@@ -194,6 +276,32 @@ impl DbState {
             "message": self.message,
             "approvals": self.approvals.len(),
         })
+    }
+}
+
+/// How wide each column of a result wants to be, from what it holds. An id column should not take
+/// the room a message column needs, so this is measured rather than shared out evenly.
+fn measure_columns(result: &QueryResult) -> Vec<f32> {
+    result
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let longest = result.rows.iter().filter_map(|row| row.get(i)).map(cell_chars).max().unwrap_or(0);
+            let chars = longest.max(name.chars().count()) as f32;
+            (chars * COLUMN_CHAR_WIDTH + 20.).clamp(COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH)
+        })
+        .collect()
+}
+
+/// The length of a cell as text, without building that text: measuring a result allocated a string
+/// per cell, and a result has as many cells as it has rows times columns.
+fn cell_chars(value: &Value) -> usize {
+    const LONGEST_THAT_MATTERS: usize = 120;
+    match value {
+        Value::Null => 4,
+        Value::String(s) => s.chars().take(LONGEST_THAT_MATTERS).count(),
+        other => other.to_string().chars().take(LONGEST_THAT_MATTERS).count(),
     }
 }
 
@@ -222,6 +330,9 @@ impl Workbench {
         if self.db.query.is_none() && self.page == Some(super::Page::Database) {
             self.db.query = Some(cx.new(|cx| TextInput::localized("", "db.query_placeholder", window, cx)));
         }
+        if self.db.editor.is_none() && self.page == Some(super::Page::Database) {
+            self.db.editor = Some(self.new_query_editor(window, cx));
+        }
         let seen = self.active_pane().map(|pane| (pane.entity_id(), pane.read(cx).display_cwd()));
         if seen != self.db.seen {
             self.db.seen = seen;
@@ -232,7 +343,7 @@ impl Workbench {
                 self.db.selected = None;
                 self.db.tables.clear();
                 self.db.table = None;
-                self.db.result = None;
+                self.db.clear_result();
                 self.db.message = None;
                 self.db.stale = true;
             }
@@ -299,10 +410,12 @@ impl Workbench {
         self.db.selected = Some(id.clone());
         self.db.tables.clear();
         self.db.table = None;
-        self.db.result = None;
+        self.db.clear_result();
         self.db.message = None;
         let Some(connection) = self.selected_connection().cloned() else { return };
-        if !connection.missing.is_empty() {
+        // Only a password missing is not a reason to refuse: plenty of local databases have none,
+        // and the connection itself gives a far better answer than a guess does.
+        if connection.missing.iter().any(|m| *m != Missing::Password) {
             return cx.notify();
         }
         self.db.busy = true;
@@ -341,7 +454,7 @@ impl Workbench {
                 }
                 this.db.busy = false;
                 match result {
-                    Ok(result) => this.db.result = Some(result),
+                    Ok(result) => this.db.show_result(result),
                     Err(err) => this.db.message = Some((format!("{err:#}"), true)),
                 }
                 cx.notify();
@@ -351,9 +464,40 @@ impl Workbench {
     }
 
     /// The query box: a read runs at once; anything else goes to the approval dialog first.
+    /// A code editor on a scratch `.sql` file: multi-line editing, highlighting and undo, without
+    /// teaching the one-line input field about any of it.
+    fn new_query_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<crate::editor::CodeEditor> {
+        let dir = agentty_bridge::fsutil::data_dir().join("db");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("query.sql");
+        if !path.is_file() {
+            let _ = std::fs::write(&path, "");
+        }
+        // A query the user wrote is theirs alone: it can name their data, and a connection string
+        // pasted into it would carry a password.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        let editor = cx.new(crate::editor::CodeEditor::new);
+        editor.update(cx, |editor, cx| editor.open(&path, &dir, window, cx));
+        editor
+    }
+
+    /// What the query box holds: the editor when it is up, else the plain field.
+    fn db_query_text(&self, cx: &gpui::App) -> String {
+        if let Some(text) = self.db.editor.as_ref().and_then(|e| e.read(cx).active_text()) {
+            return text.trim().to_string();
+        }
+        self.db.query.as_ref().map(|q| q.read(cx).text().trim().to_string()).unwrap_or_default()
+    }
+
     fn run_db_query(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.selected_connection().cloned() else { return };
-        let Some(text) = self.db.query.as_ref().map(|q| q.read(cx).text().trim().to_string()).filter(|t| !t.is_empty()) else { return };
+        let text = self.db_query_text(cx);
+        let Some(text) = Some(text).filter(|t| !t.is_empty()) else { return };
         let text = match checked_statement(&text) {
             Ok(text) => text,
             Err(problem) => {
@@ -414,7 +558,7 @@ impl Workbench {
                     this.db.busy = false;
                 }
                 match result {
-                    Ok(result) if write && result.affected.is_none() && for_page => this.db.result = Some(result),
+                    Ok(result) if write && result.affected.is_none() && for_page => this.db.show_result(result),
                     Ok(result) if write => {
                         // Show the table again with the change (the page's own statements).
                         if let Some(table) = this.db.table.clone().filter(|_| for_page) {
@@ -422,7 +566,7 @@ impl Workbench {
                         }
                         this.db.message = Some((tf(cx, "db.affected", &[("n", &result.affected.unwrap_or(0).to_string())]), false));
                     }
-                    Ok(result) if for_page => this.db.result = Some(result),
+                    Ok(result) if for_page => this.db.show_result(result),
                     Ok(_) => {}
                     Err(err) if for_page || write => this.db.message = Some((format!("{err:#}"), true)),
                     Err(_) => {}
@@ -578,10 +722,13 @@ impl Workbench {
             }
             "table" => self.open_db_table(rest.to_string(), cx),
             "query" => {
+                if let Some(editor) = self.db.editor.clone() {
+                    editor.update(cx, |editor, cx| editor.set_active_text(rest, cx));
+                }
                 if let Some(query) = self.db.query.clone() {
                     query.update(cx, |input, cx| input.set_text(rest.to_string(), cx));
-                    self.run_db_query(cx);
                 }
+                self.run_db_query(cx);
             }
             // Never answers for an agent: the debug driver runs with the app's environment, which a
             // pane's agent inherits, so it must not be a way to approve one's own statement.
@@ -743,7 +890,150 @@ impl Workbench {
                 .hover(|s| s.bg(hex(Chrome::HOVER)))
                 .child(icon("database", 13., hex(if waiting { Chrome::WARNING } else { Chrome::BLUE })))
                 .child(div().text_color(hex(Chrome::FOREGROUND)).child(tf(cx, "db.chip", &[("n", &self.db.connections.len().to_string())])))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_db_page(cx)))
+                // Opens beside the terminals, like Docker; the panel's ⤢ button gives the full page.
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_db_panel(cx)))
+                .into_any_element(),
+        )
+    }
+
+    /// Opens or closes the database panel docked beside the terminals (the Docker panel's place).
+    pub(super) fn toggle_db_panel(&mut self, cx: &mut Context<Self>) {
+        self.db.panel_open = !self.db.panel_open;
+        if self.db.panel_open {
+            self.db.stale = true;
+            self.refresh_db(cx);
+        }
+        cx.notify();
+    }
+
+    /// The database beside the terminals: connections, their tables, and a way to the full page.
+    /// Everything that needs room — the query editor and the result grid — lives on that page.
+    pub(super) fn render_db_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.db.panel_open {
+            return None;
+        }
+        let width = self.db_panel_width(cx);
+        let db = &self.db;
+        let header = div()
+            .h(px(36.))
+            .flex_shrink_0()
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(hex(Chrome::BORDER))
+            .bg(hex(Chrome::SIDE_BAR))
+            .child(icon("database", crate::ui::IconSize::BUTTON, hex(Chrome::BLUE)))
+            .child(div().flex_1().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "db.title")))
+            .child(
+                crate::ui::icon_only("db-panel-expand", "maximize-2", cx.listener(|this, _: &ClickEvent, _, cx| this.open_db_page(cx)))
+                    .tooltip(Tooltip::text(t(cx, "db.expand"), None)),
+            )
+            .child(
+                crate::ui::icon_only("db-panel-refresh", "refresh-cw", cx.listener(|this, _: &ClickEvent, _, cx| this.refresh_db(cx)))
+                    .tooltip(Tooltip::text(t(cx, "usage.refresh"), None)),
+            )
+            .child(crate::ui::icon_only("db-panel-close", "x", cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_db_panel(cx))));
+
+        let mut body = div().id("db-panel-body").flex_1().min_h_0().overflow_y_scroll().flex().flex_col();
+        if db.connections.is_empty() {
+            body = body.child(div().px_3().py_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "db.no_connections")));
+        }
+        for connection in &db.connections {
+            let id = connection.id.clone();
+            let selected = db.selected.as_deref() == Some(connection.id.as_str());
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!("db-panel-conn-{}", connection.id)))
+                    .mx_1()
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .when(selected, |d| d.bg(hex(Chrome::SELECTED)))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_db_connection(id.clone(), cx)))
+                    .child(icon("database", 12., hex(if connection.missing.is_empty() { Chrome::BLUE } else { Chrome::WARNING })))
+                    .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(connection.name.clone())),
+            );
+            if !selected {
+                continue;
+            }
+            // Why a click seems to do nothing otherwise: the connection needs a password, is still
+            // being opened, or failed. The page said so; the panel has to say so too.
+            for missing in &connection.missing {
+                body = body.child(div().px_3().pb_1().t_caption().text_color(hex(Chrome::WARNING)).child(t(cx, missing_label(*missing))));
+            }
+            if connection.missing.contains(&Missing::Password) {
+                let id = connection.id.clone();
+                body = body.child(div().px_3().pb_2().child(action_button(
+                    SharedString::from(format!("db-panel-password-{}", connection.id)),
+                    t(cx, "db.enter_password"),
+                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.ask_db_password(id.clone(), window, cx)
+                    }),
+                )));
+            }
+            if db.busy {
+                body = body.child(crate::ui::loading_row(t(cx, "db.loading")));
+            }
+            if let Some((text, error)) = &db.message {
+                body = body.child(
+                    div()
+                        .px_3()
+                        .pb_2()
+                        .t_caption()
+                        .text_color(hex(if *error { Chrome::ERROR } else { Chrome::SUCCESS }))
+                        .child(text.clone()),
+                );
+            }
+            if !db.busy && db.tables.is_empty() && db.message.is_none() && connection.missing.is_empty() {
+                body = body.child(div().px_3().pb_2().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "db.no_tables")));
+            }
+            for table in &db.tables {
+                let name = table.name.clone();
+                let open = db.table.as_deref() == Some(table.name.as_str());
+                body = body.child(
+                    div()
+                        .id(SharedString::from(format!("db-panel-table-{}", table.name)))
+                        .mx_1()
+                        .pl_6()
+                        .pr_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .when(open, |d| d.bg(hex(Chrome::SELECTED)))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)))
+                        // Opening a table is what the full page is for: it shows the rows.
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.open_db_table(name.clone(), cx);
+                            this.open_db_page(cx);
+                        }))
+                        .child(icon(if table.kind == "view" { "eye" } else { "rows-2" }, 11., hex(Chrome::MUTED)))
+                        .child(div().min_w_0().truncate().t_small().text_color(hex(Chrome::FOREGROUND)).child(table.name.clone())),
+                );
+            }
+        }
+        Some(
+            div()
+                .w(px(width))
+                .flex_shrink_0()
+                .h_full()
+                .flex()
+                .flex_col()
+                .bg(hex(Chrome::PANEL))
+                .border_l_1()
+                .border_color(hex(Chrome::BORDER))
+                .child(header)
+                .child(body)
                 .into_any_element(),
         )
     }
@@ -758,15 +1048,17 @@ impl Workbench {
                 .pt_3()
                 .pb_1()
                 .t_caption()
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(crate::theme::EMPHASIS)
                 .text_color(hex(Chrome::MUTED))
                 .child(text.to_uppercase())
         };
 
         // Connections.
+        let connections_width = if db.connections_width > 0. { db.connections_width } else { CONNECTIONS_WIDTH };
+        let tables_width = if db.tables_width > 0. { db.tables_width } else { TABLES_WIDTH };
         let mut connections = div()
             .id("db-connections")
-            .w(px(270.))
+            .w(px(connections_width))
             .flex_shrink_0()
             .h_full()
             .overflow_y_scroll()
@@ -846,7 +1138,7 @@ impl Workbench {
         // Tables.
         let mut tables = div()
             .id("db-tables")
-            .w(px(230.))
+            .w(px(tables_width))
             .flex_shrink_0()
             .h_full()
             .overflow_y_scroll()
@@ -877,30 +1169,46 @@ impl Workbench {
             );
         }
 
-        // Query box and result.
-        let query = db.query.clone().map(|input| {
+        // Query editor: as tall as the user dragged it, with its own toolbar underneath.
+        let height = if db.editor_height > 0. { db.editor_height } else { QUERY_HEIGHT };
+        let query = db.editor.clone().map(|editor| {
             div()
                 .flex()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .py_2()
+                .flex_col()
+                .flex_shrink_0()
                 .border_b_1()
                 .border_color(hex(Chrome::BORDER))
+                .child(div().h(px(height)).w_full().bg(hex(Chrome::EDITOR)).child(editor))
+                // Drag the bar under the editor to make it taller.
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(hex(Chrome::BORDER))
-                        .bg(hex(0x1a1a1a))
-                        .t_body()
-                        .child(input),
+                        .id("db-query-resize")
+                        .h(px(5.))
+                        .w_full()
+                        .flex_shrink_0()
+                        .cursor(gpui::CursorStyle::ResizeUpDown)
+                        .bg(hex(Chrome::BORDER))
+                        .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                        .on_drag(DbQueryDrag, |_, _, _, cx| cx.new(|_| DbQueryDrag))
+                        // Moves by how far the pointer is from the bar drawn in the last frame, so
+                        // it follows the pointer however far it was dragged in one go.
+                        .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<DbQueryDrag>, _, cx| {
+                            let delta = f32::from(event.event.position.y) - f32::from(event.bounds.origin.y);
+                            let current = if this.db.editor_height > 0. { this.db.editor_height } else { QUERY_HEIGHT };
+                            this.db.editor_height = (current + delta).clamp(QUERY_MIN_HEIGHT, QUERY_MAX_HEIGHT);
+                            cx.notify();
+                        })),
                 )
-                .child(action_button("db-run", t(cx, "db.run"), cx.listener(|this, _: &ClickEvent, _, cx| this.run_db_query(cx))))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .py_1p5()
+                        .child(div().flex_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "db.query_hint")))
+                        .child(action_button("db-run", t(cx, "db.run"), cx.listener(|this, _: &ClickEvent, _, cx| this.run_db_query(cx)))),
+                )
         });
         let mut body = div().flex_1().min_w_0().h_full().flex().flex_col().children(query);
         if let Some((text, error)) = &db.message {
@@ -922,7 +1230,9 @@ impl Workbench {
             .flex()
             .bg(hex(Chrome::EDITOR))
             .child(connections)
+            .child(column_handle(false, cx))
             .child(tables)
+            .child(column_handle(true, cx))
             .child(body)
             .children(self.render_db_password(cx))
             .children(self.render_db_form(cx))
@@ -930,46 +1240,161 @@ impl Workbench {
     }
 
     fn render_db_grid(&self, result: &QueryResult, cx: &mut Context<Self>) -> AnyElement {
-        let width = px(COLUMN_WIDTH * result.columns.len().max(1) as f32);
-        let header = div().flex().w(width).border_b_1().border_color(hex(Chrome::BORDER)).bg(hex(Chrome::PANEL)).children(
-            result.columns.iter().map(|c| {
+        // Measured when the result arrived; what the user dragged a column to wins over it.
+        let widths: Vec<f32> = result
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let measured = self.db.grid_measured.get(i).copied().unwrap_or(COLUMN_MIN_WIDTH);
+                self.db.grid_widths.get(&(i, name.clone())).copied().unwrap_or(measured)
+            })
+            .collect();
+        let width = px(ROW_NUMBER_WIDTH + widths.iter().sum::<f32>());
+        let number_cell = |text: String, header: bool| {
+            div()
+                .w(px(ROW_NUMBER_WIDTH))
+                .flex_shrink_0()
+                .px_1p5()
+                .py_0p5()
+                .text_align(gpui::TextAlign::Right)
+                .t_caption()
+                .text_color(hex(Chrome::MUTED))
+                .when(header, |d| d.py_1())
+                .child(text)
+        };
+        let header = div()
+            .flex()
+            .w(width)
+            .border_b_1()
+            .border_color(hex(Chrome::BORDER))
+            .bg(hex(Chrome::PANEL))
+            .child(number_cell("#".into(), true))
+            .children(result.columns.iter().enumerate().map(|(i, c)| {
+                let name = c.clone();
+                let start = widths[i];
                 div()
-                    .w(px(COLUMN_WIDTH))
+                    .relative()
+                    .w(px(widths[i]))
                     .flex_shrink_0()
-                    .px_2()
-                    .py_1()
-                    .truncate()
-                    .t_small()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(hex(Chrome::BRIGHT))
-                    .child(c.clone())
-            }),
-        );
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .truncate()
+                            .t_small()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(c.clone()),
+                    )
+                    // The edge between this column and the next one, as in any table.
+                    .child(
+                        div()
+                            .id(("db-grid-resize", i))
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right(px(-2.))
+                            .w(px(5.))
+                            .cursor(gpui::CursorStyle::ResizeLeftRight)
+                            .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                            .on_drag(DbGridDrag, |_, _, _, cx| cx.new(|_| DbGridDrag))
+                            .on_drag_move(cx.listener(move |this, event: &gpui::DragMoveEvent<DbGridDrag>, _, cx| {
+                                let delta = f32::from(event.event.position.x) - f32::from(event.bounds.origin.x);
+                                let key = (i, name.clone());
+                                let current = this.db.grid_widths.get(&key).copied().unwrap_or(start);
+                                this.db.grid_widths.insert(key, (current + delta).clamp(COLUMN_MIN_WIDTH, COLUMN_DRAG_MAX_WIDTH));
+                                cx.notify();
+                            })),
+                    )
+            }));
+        let picked = self.db.picked_row;
         let rows = result.rows.iter().enumerate().map(|(i, row)| {
-            div().flex().w(width).when(i % 2 == 1, |d| d.bg(hex_alpha(0xffffff, 0.03))).children(row.iter().map(|value| {
-                let text = cell_text(value);
-                div()
-                    .w(px(COLUMN_WIDTH))
-                    .flex_shrink_0()
-                    .px_2()
-                    .py_0p5()
-                    .truncate()
-                    .t_small()
-                    .text_color(hex(if value.is_null() { Chrome::MUTED } else { Chrome::FOREGROUND }))
-                    .child(text.lines().next().unwrap_or("").to_string())
-            }))
+            div()
+                .id(("db-row", i))
+                .flex()
+                .w(width)
+                .cursor_pointer()
+                .when(i % 2 == 1, |d| d.bg(hex_alpha(0xffffff, 0.025)))
+                .when(picked == Some(i), |d| d.bg(hex_alpha(Chrome::ACCENT, 0.35)))
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.db.picked_row = if this.db.picked_row == Some(i) { None } else { Some(i) };
+                    cx.notify();
+                }))
+                .child(number_cell((i + 1).to_string(), false))
+                .children(row.iter().enumerate().map(|(c, value)| {
+                    let text = cell_text(value);
+                    div()
+                        .w(px(widths.get(c).copied().unwrap_or(COLUMN_MIN_WIDTH)))
+                        .flex_shrink_0()
+                        .px_2()
+                        .py_0p5()
+                        .truncate()
+                        .t_small()
+                        .font_family("monospace")
+                        .text_color(hex(if value.is_null() { Chrome::MUTED } else { Chrome::FOREGROUND }))
+                        .child(if value.is_null() { "NULL".to_string() } else { text.lines().next().unwrap_or("").to_string() })
+                }))
         });
         let footer = if result.truncated {
             tf(cx, "db.rows_first", &[("n", &result.rows.len().to_string())])
         } else {
             tf(cx, "db.rows", &[("n", &result.rows.len().to_string())])
         };
+        // The picked row in full: values a cell had to cut off are readable here.
+        let detail = picked.and_then(|i| result.rows.get(i)).map(|row| {
+            div()
+                .id("db-row-detail")
+                .max_h(px(200.))
+                .overflow_y_scroll()
+                .flex_shrink_0()
+                .border_t_1()
+                .border_color(hex(Chrome::BORDER))
+                .bg(hex(Chrome::PANEL))
+                .children(result.columns.iter().enumerate().map(|(i, name)| {
+                    let value = row.get(i);
+                    let null = value.is_some_and(|v| v.is_null());
+                    div()
+                        .flex()
+                        .gap_2()
+                        .px_3()
+                        .py_0p5()
+                        .t_small()
+                        .child(div().w(px(160.)).flex_shrink_0().truncate().text_color(hex(Chrome::MUTED)).child(name.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .font_family("monospace")
+                                .text_color(hex(if null { Chrome::MUTED } else { Chrome::BRIGHT }))
+                                .child(value.map(cell_text).unwrap_or_default()),
+                        )
+                }))
+        });
         div()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
-            .child(div().id("db-grid").flex_1().min_h_0().overflow_scroll().child(div().flex().flex_col().child(header).children(rows)))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("db-grid")
+                            .size_full()
+                            .overflow_scroll()
+                            .track_scroll(&self.db.grid_scroll)
+                            .child(div().flex().flex_col().child(header).children(rows)),
+                    )
+                    .group(crate::ui::SCROLL_GROUP)
+                    .child(crate::ui::scrollbar(self.db.grid_scroll.clone()))
+                    .child(crate::ui::scrollbar_h(self.db.grid_scroll.clone())),
+            )
+            .children(detail)
             .child(
                 div().px_3().py_1().border_t_1().border_color(hex(Chrome::BORDER)).t_caption().text_color(hex(Chrome::MUTED)).child(footer),
             )
@@ -987,7 +1412,11 @@ impl Workbench {
                     .flex_col()
                     .gap_3()
                     .child(
-                        div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "db.enter_password")),
+                        div()
+                            .t_title()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(t(cx, "db.enter_password")),
                     )
                     .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(name))
                     .child(
@@ -1076,7 +1505,7 @@ impl Workbench {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "db.add_title")))
+                    .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "db.add_title")))
                     .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "db.rds_hint")))
                     .child(engines)
                     .child(field("db.form.name", &form.name, cx))
@@ -1180,7 +1609,7 @@ impl Workbench {
                                 .child(
                                     div()
                                         .t_title()
-                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .font_weight(crate::theme::EMPHASIS)
                                         .text_color(hex(Chrome::BRIGHT))
                                         .child(t(cx, "db.approve_title")),
                                 )
@@ -1239,6 +1668,30 @@ impl Workbench {
 }
 
 /// One "label  value" line of the approval dialog.
+/// The draggable edge between two of the page's columns.
+fn column_handle(tables: bool, cx: &mut Context<Workbench>) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(if tables { "db-tables-resize" } else { "db-connections-resize" })
+        .w(px(5.))
+        .flex_shrink_0()
+        .h_full()
+        .cursor(gpui::CursorStyle::ResizeLeftRight)
+        .hover(|s| s.bg(hex(Chrome::ACCENT)))
+        .on_drag(DbColumnDrag, |_, _, _, cx| cx.new(|_| DbColumnDrag))
+        // Moves by how far the pointer is from the edge drawn in the last frame.
+        .on_drag_move(cx.listener(move |this, event: &gpui::DragMoveEvent<DbColumnDrag>, _, cx| {
+            let delta = f32::from(event.event.position.x) - f32::from(event.bounds.origin.x);
+            if tables {
+                let current = if this.db.tables_width > 0. { this.db.tables_width } else { TABLES_WIDTH };
+                this.db.tables_width = (current + delta).clamp(COLUMN_MIN, COLUMN_MAX);
+            } else {
+                let current = if this.db.connections_width > 0. { this.db.connections_width } else { CONNECTIONS_WIDTH };
+                this.db.connections_width = (current + delta).clamp(COLUMN_MIN, COLUMN_MAX);
+            }
+            cx.notify();
+        }))
+}
+
 fn detail(label: &str, value: String, color: u32) -> gpui::Div {
     div()
         .flex()
@@ -1278,6 +1731,29 @@ mod tests {
         assert_eq!(Job::Sql("select 1".into()).verdict(Engine::MySql), Verdict::Read);
         assert_eq!(cell_text(&Value::Null), "NULL");
         assert_eq!(cell_text(&serde_json::json!({"a": 1})), "{\"a\":1}");
+    }
+
+    /// Columns are measured once, off the values themselves: the old code built a string per cell
+    /// and did it again on every frame.
+    #[test]
+    fn columns_are_measured_from_what_they_hold() {
+        let result = QueryResult {
+            columns: vec!["id".into(), "note".into()],
+            rows: vec![
+                vec![serde_json::json!(1), serde_json::json!("a longer note than the id column")],
+                vec![serde_json::json!(2), Value::Null],
+            ],
+            truncated: false,
+            affected: None,
+        };
+        let widths = measure_columns(&result);
+        assert_eq!(widths.len(), 2);
+        assert!(widths[1] > widths[0], "the note column is wider than the id column");
+        assert!(widths.iter().all(|w| (COLUMN_MIN_WIDTH..=COLUMN_MAX_WIDTH).contains(w)));
+        // Measuring never builds the cell's text.
+        assert_eq!(cell_chars(&Value::Null), "NULL".len());
+        assert_eq!(cell_chars(&serde_json::json!("한글")), 2);
+        assert_eq!(cell_chars(&serde_json::json!("x".repeat(500))), 120);
     }
 
     /// The dialog shows what runs: a statement that would render differently is refused outright.

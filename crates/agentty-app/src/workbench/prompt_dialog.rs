@@ -7,7 +7,7 @@ use crate::launch::PaneKind;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{chip, icon, tilde, TypeScale};
 use agentty_bridge::plugins::{PromptRequest, PromptTarget};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, FontWeight, PathPromptOptions, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, PathPromptOptions, SharedString, Window};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -300,7 +300,7 @@ impl Workbench {
                                 .child(
                                     div()
                                         .t_title()
-                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .font_weight(crate::theme::EMPHASIS)
                                         .text_color(hex(Chrome::BRIGHT))
                                         .child(t(cx, "prompt.title")),
                                 )

@@ -63,17 +63,7 @@ extern "C" fn perform_drag_operation(this: &Object, _: Sel, info: Id) -> BOOL {
         }
 
         // 1. Plain files (Finder, most apps).
-        let url_class: Id = class!(NSURL) as *const Class as Id;
-        let classes: Id = msg_send![class!(NSArray), arrayWithObject: url_class];
-        let options: Id = msg_send![class!(NSDictionary), dictionaryWithObject: ns_string("1") forKey: ns_string("NSPasteboardURLReadingFileURLsOnlyKey")];
-        let urls: Id = msg_send![pasteboard, readObjectsForClasses: classes options: options];
-        let count: usize = if urls.is_null() { 0 } else { msg_send![urls, count] };
-        let paths: Vec<PathBuf> = (0..count)
-            .filter_map(|i| {
-                let url: Id = msg_send![urls, objectAtIndex: i];
-                rust_string(msg_send![url, path]).map(PathBuf::from)
-            })
-            .collect();
+        let paths = file_urls(pasteboard);
         if !paths.is_empty() {
             push(Dropped { window_number: number, position, paths });
             return YES;
@@ -107,33 +97,78 @@ extern "C" fn perform_drag_operation(this: &Object, _: Sel, info: Id) -> BOOL {
         }
 
         // 3. Image data (copied screenshots, images dragged from browsers).
-        for (kind, extension) in [("public.png", "png"), ("public.jpeg", "jpg"), ("public.tiff", "png")] {
-            let mut data: Id = msg_send![pasteboard, dataForType: ns_string(kind)];
+        match image_file(pasteboard, "dropped") {
+            Some(path) => {
+                push(Dropped { window_number: number, position, paths: vec![path] });
+                YES
+            }
+            None => NO,
+        }
+    }
+}
+
+/// File URLs on a pasteboard, as paths.
+///
+/// # Safety
+/// `pasteboard` must be a live `NSPasteboard`.
+unsafe fn file_urls(pasteboard: Id) -> Vec<PathBuf> {
+    let url_class: Id = class!(NSURL) as *const Class as Id;
+    let classes: Id = msg_send![class!(NSArray), arrayWithObject: url_class];
+    let options: Id =
+        msg_send![class!(NSDictionary), dictionaryWithObject: ns_string("1") forKey: ns_string("NSPasteboardURLReadingFileURLsOnlyKey")];
+    let urls: Id = msg_send![pasteboard, readObjectsForClasses: classes options: options];
+    let count: usize = if urls.is_null() { 0 } else { msg_send![urls, count] };
+    (0..count)
+        .filter_map(|i| {
+            let url: Id = msg_send![urls, objectAtIndex: i];
+            rust_string(msg_send![url, path]).map(PathBuf::from)
+        })
+        .collect()
+}
+
+/// Writes image data held on a pasteboard to a file in the drop folder, as PNG or JPEG.
+///
+/// # Safety
+/// `pasteboard` must be a live `NSPasteboard`.
+unsafe fn image_file(pasteboard: Id, prefix: &str) -> Option<PathBuf> {
+    for (kind, extension) in [("public.png", "png"), ("public.jpeg", "jpg"), ("public.tiff", "png")] {
+        let mut data: Id = msg_send![pasteboard, dataForType: ns_string(kind)];
+        if data.is_null() {
+            continue;
+        }
+        if kind == "public.tiff" {
+            // AI CLIs read PNG, not TIFF.
+            let rep: Id = msg_send![class!(NSBitmapImageRep), imageRepWithData: data];
+            let properties: Id = msg_send![class!(NSDictionary), dictionary];
+            data =
+                if rep.is_null() { std::ptr::null_mut() } else { msg_send![rep, representationUsingType: 4usize properties: properties] };
             if data.is_null() {
                 continue;
             }
-            if kind == "public.tiff" {
-                // AI CLIs read PNG, not TIFF.
-                let rep: Id = msg_send![class!(NSBitmapImageRep), imageRepWithData: data];
-                let properties: Id = msg_send![class!(NSDictionary), dictionary];
-                data = if rep.is_null() {
-                    std::ptr::null_mut()
-                } else {
-                    msg_send![rep, representationUsingType: 4usize properties: properties]
-                };
-                if data.is_null() {
-                    continue;
-                }
-            }
-            let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-            let path = drop_dir().join(format!("dropped-{millis}.{extension}"));
-            let written: BOOL = msg_send![data, writeToFile: ns_string(&path.display().to_string()) atomically: YES];
-            if written == YES {
-                push(Dropped { window_number: number, position, paths: vec![path] });
-                return YES;
-            }
         }
-        NO
+        let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let path = drop_dir().join(format!("{prefix}-{millis}.{extension}"));
+        let written: BOOL = msg_send![data, writeToFile: ns_string(&path.display().to_string()) atomically: YES];
+        if written == YES {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Files on the clipboard for ⌘V: copied files, and copied image data written out as a file.
+/// Empty when the clipboard only holds text, which pastes as text as before.
+pub fn clipboard_paths() -> Vec<PathBuf> {
+    unsafe {
+        let pasteboard: Id = msg_send![class!(NSPasteboard), generalPasteboard];
+        if pasteboard.is_null() {
+            return Vec::new();
+        }
+        let paths = file_urls(pasteboard);
+        if !paths.is_empty() {
+            return paths.iter().map(|p| crate::platform::drops::terminal_safe(p)).collect();
+        }
+        image_file(pasteboard, "pasted").into_iter().collect()
     }
 }
 
@@ -180,5 +215,21 @@ pub fn install(ns_window: Id) {
             }
         }
         let _: () = msg_send![ns_window, registerForDraggedTypes: types];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Reads whatever is on the clipboard right now, so it only runs when asked for:
+    /// `cargo test -p agentty-app clipboard_paths -- --ignored --nocapture` after copying a file
+    /// or an image (⌘C in Finder, or a screenshot to the clipboard).
+    #[test]
+    #[ignore = "reads the machine's clipboard"]
+    fn clipboard_paths_reports_files_and_images() {
+        let paths = super::clipboard_paths();
+        println!("clipboard_paths: {paths:?}");
+        for path in &paths {
+            assert!(path.exists(), "{} does not exist", path.display());
+        }
     }
 }

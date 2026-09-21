@@ -336,7 +336,7 @@ impl Workbench {
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::SIDE_BAR))
             .child(icon("container", IconSize::BUTTON, hex(Chrome::BLUE)))
-            .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "docker.title")))
+            .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "docker.title")))
             .child(
                 div()
                     .id("docker-project")
@@ -461,7 +461,7 @@ impl Workbench {
                             .items_center()
                             .gap_1()
                             .t_caption()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::MUTED))
                             .tooltip(Tooltip::text(tilde(&compose.dir), None))
                             .child(t(cx, "docker.compose").to_uppercase())
@@ -522,7 +522,7 @@ impl Workbench {
                     .pt_2()
                     .pb_1()
                     .t_caption()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(crate::theme::EMPHASIS)
                     .text_color(hex(Chrome::MUTED))
                     .child(t(cx, "docker.containers").to_uppercase()),
             );

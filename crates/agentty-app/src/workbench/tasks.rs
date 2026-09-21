@@ -14,7 +14,7 @@ use crate::launch::LaunchSpec;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, tilde, TypeScale};
 use agentty_bridge::model::Agent;
-use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, Context, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, Context, SharedString, Window};
 use std::path::PathBuf;
 
 /// Lines of each prompt shown in the dialog.
@@ -164,7 +164,11 @@ impl Workbench {
                             .items_center()
                             .gap_2()
                             .child(
-                                div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(task.title.clone()),
+                                div()
+                                    .t_body()
+                                    .font_weight(crate::theme::EMPHASIS)
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .child(task.title.clone()),
                             )
                             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(agent)),
                     )
@@ -214,7 +218,7 @@ impl Workbench {
                                 .items_center()
                                 .gap_2()
                                 .child(icon("columns-2", crate::ui::IconSize::BUTTON, hex(Chrome::BRIGHT)))
-                                .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(tf(
+                                .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(tf(
                                     cx,
                                     "tasks.title",
                                     &[("n", &request.tasks.len().to_string())],

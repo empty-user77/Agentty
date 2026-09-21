@@ -2,4 +2,6 @@ mod backend;
 mod keys;
 mod view;
 
-pub use view::{classify_screen, tool_label, AgentStatus, Clear, Copy, NoticeKind, Paste, SelectAll, TerminalEvent, TerminalView};
+pub use view::{
+    classify_screen, strip_agent_mark, tool_label, AgentStatus, Clear, Copy, NoticeKind, Paste, SelectAll, TerminalEvent, TerminalView,
+};

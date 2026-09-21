@@ -7,7 +7,7 @@ use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, IconSize, TypeScale};
 use crate::usage_view::{card, kpi};
-use gpui::{div, prelude::*, px, ClickEvent, Context, FontWeight};
+use gpui::{div, prelude::*, px, ClickEvent, Context};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -203,7 +203,7 @@ impl Workbench {
             .flex()
             .items_center()
             .gap_3()
-            .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.processes")))
+            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.processes")))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "processes.auto_refresh")))
             .when(monitor.loading, |d| d.child(crate::ui::spinner(IconSize::INLINE, hex(Chrome::MUTED))))
             .child(div().flex_1())
@@ -310,7 +310,7 @@ impl Workbench {
                 .pt_2p5()
                 .pb_1()
                 .t_caption()
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(crate::theme::EMPHASIS)
                 .text_color(hex(Chrome::MUTED))
                 .bg(hex(0x1f1f1f))
                 .child(label.to_string())
