@@ -751,7 +751,11 @@ mod tests {
         assert!(!runtime.link_guarded());
         runtime.link_tainted = true;
         // Neither a click in the panel the link opened nor simply waiting is consent to type into
-        // a terminal; a plugin can wait as easily as the user can click.
+        // a terminal; a plugin can wait as easily as the user can click. So the guard carries no
+        // clock at all — it is the plugin's whole life, and only `ensure_started` clears it.
         assert!(runtime.link_guarded(), "a link arrived and nothing since then lifts the guard");
+        runtime.notified_at = Some(Instant::now() - Duration::from_secs(3600));
+        runtime.opened_url_at = Some(Instant::now() - Duration::from_secs(3600));
+        assert!(runtime.link_guarded(), "an hour of a plugin doing other things is not consent either");
     }
 }
