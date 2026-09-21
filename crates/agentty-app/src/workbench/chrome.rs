@@ -1,10 +1,9 @@
 //! Title bar, activity bar, side bar (workspaces / local sessions), tab strip, launcher and status bar.
 
-use super::{other_agent, status_label, LaunchTarget, Page, RenameTarget, SessionFilter, SidePanel, Workbench, Workspace};
+use super::{other_agent, LaunchTarget, Page, RenameTarget, SessionFilter, SidePanel, Workbench, Workspace};
 use crate::i18n::{t, tf};
 use crate::launch::{LaunchChoice, PaneKind};
 use crate::settings::settings;
-use crate::terminal::AgentStatus;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
 use crate::ui::{action_button, chip, hint, icon, icon_only, icon_only_sized, menu_item, now_ms, popover, relative_time, tilde, IconSize};
@@ -27,12 +26,26 @@ const CODEX_INSTALL_URL: &str = "https://learn.chatgpt.com/docs/codex/cli#gettin
 const COPYRIGHT_YEAR: &str = "2026";
 pub const ACTIVITY_BAR_WIDTH: f32 = 48.;
 const TAB_HEIGHT: f32 = 35.;
-pub const STATUS_BAR_HEIGHT: f32 = 22.;
+pub const STATUS_BAR_HEIGHT: f32 = 26.;
+/// The pull request on a card opens on ⌘-click only; a plain click belongs to the card.
+const PR_LINK_HINT: &str = "⌘ click → open";
+/// How close to the sidebar's edge a dragged card has to come for the list to scroll, and how far
+/// it scrolls per tick at the very edge.
+const DRAG_EDGE: f32 = 44.;
+const DRAG_SCROLL_STEP: f32 = 12.;
+const DRAG_SCROLL_TICK: std::time::Duration = std::time::Duration::from_millis(30);
 const SESSION_ROW_HEIGHT: f32 = 96.;
 /// The start page: a column this wide, with as many launch cards to a row as fit (four at most).
 const WELCOME_WIDTH: f32 = 920.;
 const WELCOME_CARD_MIN_WIDTH: f32 = 190.;
 const WELCOME_RECENT: usize = 6;
+
+/// What a colour swatch row colours.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ColorTarget {
+    Workspace(u64),
+    Group(u64),
+}
 
 #[derive(Clone)]
 pub struct DraggedWorkspace {
@@ -105,10 +118,9 @@ const FOOTER_HEIGHT: f32 = 44.0;
 const GROUP_ICON_BUTTON: f32 = 20.0;
 const GROUP_ICON: f32 = 12.0;
 
-/// Aggregated AI state of a workspace for its sidebar row.
+/// Aggregated AI state of a workspace for its sidebar row. The card shows no status word any
+/// more, so only what it counts is left: panes waiting for the user, and panes in total.
 struct WorkspaceSummary {
-    label: String,
-    color: u32,
     attention: usize,
     panes: usize,
 }
@@ -117,29 +129,7 @@ impl Workbench {
     fn summarize(&self, ws: &Workspace, cx: &gpui::App) -> WorkspaceSummary {
         let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
         let attention = panes.iter().filter(|p| p.read(cx).attention).count();
-        // Most urgent agent state wins: needs input > still working > finished > idle. A workspace
-        // where one pane finished while another keeps going is still working, and the finished pane
-        // is not lost: it keeps its attention mark and its own row says so.
-        let rank = |status: &AgentStatus| match status {
-            AgentStatus::Permission(_) | AgentStatus::Question(_) => 3,
-            AgentStatus::Working | AgentStatus::Thinking => 2,
-            AgentStatus::Finished(_) => 1,
-            AgentStatus::Interrupted | AgentStatus::Idle => 0,
-        };
-        let agent = panes.iter().map(|p| p.read(cx)).filter(|v| v.is_agent()).max_by_key(|v| rank(&v.status) * 2 + v.attention as usize);
-        match (agent, panes.first()) {
-            (Some(view), _) => {
-                let (label, color) = status_label(view, cx);
-                WorkspaceSummary { label, color, attention, panes: panes.len() }
-            }
-            (None, Some(pane)) => {
-                // Plain shells only report problems; "Shell" on every row is noise.
-                let view = pane.read(cx);
-                let label = if view.is_running() { String::new() } else { status_label(view, cx).0 };
-                WorkspaceSummary { label, color: Chrome::MUTED, attention, panes: panes.len() }
-            }
-            (None, None) => WorkspaceSummary { label: String::new(), color: Chrome::MUTED, attention: 0, panes: 0 },
-        }
+        WorkspaceSummary { attention, panes: panes.len() }
     }
 
     /// Agentty's own title bar. macOS draws the traffic lights over it; Windows and Linux use the
@@ -172,6 +162,21 @@ impl Workbench {
                 }
             })
             .child(if title.is_empty() { "Agentty".to_string() } else { format!("{title} — Agentty") })
+            // Notifications live at the far right of the title bar, clear of everything else.
+            .when(!client_side, |bar| {
+                bar.child(
+                    div()
+                        .absolute()
+                        .right(px(8.))
+                        .top_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        // The bell must not start a window move.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(self.render_notices_button(cx)),
+                )
+            })
             .when(client_side, |bar| {
                 let slot = self.slot;
                 bar.child(
@@ -279,19 +284,19 @@ impl Workbench {
                         cx,
                     ))
                     .child(item(
-                        "activity-git",
-                        "git-branch",
-                        self.page == Some(Page::Git),
-                        "page.git",
-                        Box::new(|this, cx| this.open_page(Page::Git, cx)),
-                        cx,
-                    ))
-                    .child(item(
                         "activity-flow",
                         "workflow",
                         self.page == Some(Page::Flow),
                         "page.flow",
                         Box::new(|this, cx| this.open_page(Page::Flow, cx)),
+                        cx,
+                    ))
+                    .child(item(
+                        "activity-git",
+                        "git-branch",
+                        self.page == Some(Page::Git),
+                        "page.git",
+                        Box::new(|this, cx| this.open_page(Page::Git, cx)),
                         cx,
                     ))
                     .child(item(
@@ -302,14 +307,8 @@ impl Workbench {
                         Box::new(|this, cx| this.open_page(Page::Usage, cx)),
                         cx,
                     ))
-                    .child(item(
-                        "activity-extensions",
-                        "blocks",
-                        self.page == Some(Page::Extensions),
-                        "page.extensions",
-                        Box::new(|this, cx| this.open_page(Page::Extensions, cx)),
-                        cx,
-                    ))
+                    // Extensions has no icon here any more: it is reached from the command palette
+                    // (⇧⌘X) and from where an extension is actually needed.
                     .child(item(
                         "activity-plugins",
                         "puzzle",
@@ -350,10 +349,21 @@ impl Workbench {
             SidePanel::Workspaces => div()
                 .flex()
                 .gap_0p5()
-                .child(
-                    icon_only("sidebar-home", "house", cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
-                        .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None)),
-                )
+                // How the cards are drawn, where they are: the start page has its own tab now, so
+                // this is the one thing the list's own header should carry.
+                .child({
+                    let compact = settings(cx).compact_workspaces;
+                    icon_only(
+                        "sidebar-density",
+                        // `rows-2` reads as the roomy card list, `list` as the thin one: the icon
+                        // shows what a click would switch to.
+                        if compact { "rows-2" } else { "list" },
+                        cx.listener(|_, _: &ClickEvent, _, cx| {
+                            crate::settings::update_settings(cx, |s| s.compact_workspaces = !s.compact_workspaces);
+                        }),
+                    )
+                    .tooltip(crate::ui::Tooltip::text(t(cx, if compact { "workspaces.as_cards" } else { "workspaces.as_list" }), None))
+                })
                 .child(
                     icon_only(
                         "sidebar-new-group",
@@ -428,7 +438,27 @@ impl Workbench {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(div().id("sidebar-scroll").size_full().overflow_y_scroll().track_scroll(&self.sidebar_scroll).pb_4().child(body))
+                    .child(
+                        div()
+                            .id("sidebar-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.sidebar_scroll)
+                            .pb_4()
+                            // A held pointer can't scroll the list: nearing an edge scrolls it, so
+                            // a card can be dropped below what the sidebar happens to show.
+                            .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<DraggedWorkspace>, _, cx| {
+                                this.drag_autoscroll(event.event.position, cx)
+                            }))
+                            .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<DraggedGroup>, _, cx| {
+                                this.drag_autoscroll(event.event.position, cx)
+                            }))
+                            .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                                this.drag_autoscroll(event.event.position, cx)
+                            }))
+                            .child(body),
+                    )
+                    .group(crate::ui::SCROLL_GROUP)
                     .child(crate::ui::scrollbar(self.sidebar_scroll.clone()))
                     .into_any_element(),
             })
@@ -460,7 +490,11 @@ impl Workbench {
             return list.child(hint(t(cx, "hint.no_workspaces")));
         }
 
-        let ungrouped: Vec<usize> = (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group.is_none()).collect();
+        // Workspaces linked into one session sit together under the one the link started from,
+        // wherever they are in the list; unlinking puts them straight back.
+        let linked = self.linked_workspaces(cx);
+        let ungrouped: Vec<usize> =
+            (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group.is_none() && !linked.followers.contains(i)).collect();
         // The "ungrouped" header matters once groups exist and something is (or is being dragged) outside them.
         let dragging = cx.has_active_drag();
         let mut ungrouped_open = true;
@@ -471,18 +505,28 @@ impl Workbench {
         }
         if ungrouped_open {
             for index in ungrouped {
-                list = list.child(self.render_workspace_row(index, window, cx));
+                list = list.child(self.render_workspace_entry(index, &linked, window, cx));
             }
         }
         for group in &self.groups {
-            let members: Vec<usize> = (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group == Some(group.id)).collect();
-            list = list.child(self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, members.len(), window, cx));
+            let members: Vec<usize> = (0..self.workspaces.len())
+                .filter(|i| self.workspaces[*i].group == Some(group.id) && !linked.followers.contains(i))
+                .collect();
+            // A group with a colour is drawn inside a frame of it, header included, so it reads as
+            // one block; the header keeps its own rounded top.
+            let accent = super::accent_color(group.color);
+            let mut block = div().flex().flex_col().gap_px().map(|d| match accent {
+                Some(color) => d.rounded_md().border_1().border_color(hex_alpha(color, 0.55)).p_px(),
+                None => d,
+            });
+            block = block.child(self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, members.len(), window, cx));
             if group.collapsed {
+                list = list.child(block);
                 continue;
             }
             if members.is_empty() {
                 let gid = group.id;
-                list = list.child(
+                block = block.child(
                     div()
                         .id(SharedString::from(format!("group-empty-add-{gid}")))
                         .ml_3()
@@ -504,10 +548,50 @@ impl Workbench {
                 );
             }
             for index in members {
-                list = list.child(div().pl_3().child(self.render_workspace_row(index, window, cx)));
+                block = block.child(div().pl_3().child(self.render_workspace_entry(index, &linked, window, cx)));
             }
+            list = list.child(block);
         }
         list
+    }
+
+    /// A workspace row, with the workspaces linked to it gathered underneath when there are any.
+    fn render_workspace_entry(
+        &self,
+        index: usize,
+        linked: &super::flow::LinkedWorkspaces,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(followers) = linked.members.get(&index).filter(|f| !f.is_empty()) else {
+            return self.render_workspace_row(index, window, cx).into_any_element();
+        };
+        let mut block = div()
+            .flex()
+            .flex_col()
+            .gap_px()
+            .rounded_md()
+            .border_1()
+            .border_color(hex_alpha(Chrome::BLUE, 0.45))
+            .p_px()
+            // Why these cards are together, in one line above them.
+            .child(
+                div()
+                    .px_2()
+                    .pt_0p5()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .t_caption()
+                    .text_color(hex_alpha(Chrome::BLUE, 0.9))
+                    .child(icon("link", 10., hex_alpha(Chrome::BLUE, 0.9)))
+                    .child(tf(cx, "collab.linked_group", &[("n", &(followers.len() + 1).to_string())])),
+            )
+            .child(self.render_workspace_row(index, window, cx));
+        for member in followers {
+            block = block.child(div().pl_3().child(self.render_workspace_row(*member, window, cx)));
+        }
+        block.into_any_element()
     }
 
     fn render_group_header(
@@ -520,10 +604,10 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let id = SharedString::from(format!("group-header-{}", group.unwrap_or(0)));
-        let renaming = matches!((&self.rename, group), (Some(r), Some(g)) if r.target == RenameTarget::Group(g));
         let drag_title: SharedString = name.clone().into();
         div()
             .id(id)
+            .relative()
             .group("group-header")
             .mt_1p5()
             .px_2()
@@ -561,13 +645,18 @@ impl Workbench {
                 this.persist(cx);
                 cx.notify();
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                    let Some(gid) = group else { return };
+                    cx.stop_propagation();
+                    this.group_menu = if this.group_menu == Some(gid) { None } else { Some(gid) };
+                    cx.notify();
+                }),
+            )
             .child(if collapsed { "▸" } else { "▾" })
-            .child(match (&self.rename, renaming) {
-                (Some(rename), true) => {
-                    div().flex_1().t_body().text_color(hex(Chrome::BRIGHT)).child(rename.input.clone()).into_any_element()
-                }
-                _ => div().flex_1().truncate().t_body().font_weight(FontWeight::SEMIBOLD).child(name.to_uppercase()).into_any_element(),
-            })
+            // Shown as it was typed: lower case, emoji and punctuation are all a valid name.
+            .child(div().flex_1().truncate().t_body().font_weight(crate::theme::EMPHASIS).child(name.clone()))
             .when_some(group, |d, gid| {
                 d.child(
                     div()
@@ -612,6 +701,40 @@ impl Workbench {
             // Last, so the count sits at the right edge of every header: a group's buttons take
             // their space even while hidden, and would otherwise push the number off the edge.
             .child(div().child(count.to_string()))
+            .children(group.filter(|gid| self.group_menu == Some(*gid)).map(|gid| {
+                div().absolute().top(px(26.)).left(px(8.)).child(gpui::deferred(self.render_group_menu(gid, cx)).with_priority(3))
+            }))
+    }
+
+    /// Right-click menu of a group: rename it, colour it, remove it.
+    fn render_group_menu(&self, gid: u64, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.groups.iter().find(|g| g.id == gid).and_then(|g| g.color);
+        popover()
+            .id("group-menu")
+            .w(px(220.))
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.group_menu = None;
+                cx.notify();
+            }))
+            .child(menu_item(
+                "gm-rename",
+                t(cx, "rename"),
+                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.group_menu = None;
+                    this.start_rename(RenameTarget::Group(gid), window, cx);
+                }),
+            ))
+            .child(self.render_color_row("gm", ColorTarget::Group(gid), current, cx))
+            .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            .child(menu_item(
+                "gm-delete",
+                t(cx, "group.delete"),
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.group_menu = None;
+                    this.delete_group(gid, cx);
+                }),
+            ))
     }
 
     fn render_workspace_row(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -619,49 +742,134 @@ impl Workbench {
         let id = ws.id;
         let active = index == self.active_workspace && self.page.is_none_or(Workbench::page_keeps_sidebar) && self.session_viewer.is_none();
         let title = self.workspace_title(ws, cx);
+        // A workspace with no name of its own falls back to a path. The card shows the path on its
+        // own line below, so the name only needs the folder it ends in.
+        let title = match title.rsplit_once('/') {
+            Some((_, last)) if !last.is_empty() => last.to_string(),
+            _ => title,
+        };
         let summary = self.summarize(ws, cx);
         let renaming = matches!(&self.rename, Some(r) if r.target == RenameTarget::Workspace(id));
-        let sub_color = if active { hex(0xe0e0e0) } else { hex(Chrome::MUTED) };
+        let ws_colored = ws.color.is_some();
+        // A step behind the name: smaller, and dimmer than the title on both kinds of card.
+        let sub_color = if ws_colored { hex_alpha(Chrome::BRIGHT, 0.7) } else { hex(Chrome::MUTED) };
         let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
+        // A workspace with nothing running answers from its saved layout instead of from its
+        // panes, so the card says the same thing before and after it is opened.
+        let dormant = ws.tabs.is_empty().then(|| self.dormant_info(ws));
         // Tools in use, AI agents first: shown as overlapping logos.
-        let mut tools: Vec<&'static str> = Vec::new();
+        let mut tools: Vec<String> = Vec::new();
         for pane in &panes {
-            let tool = pane.read(cx).tool_id();
+            let tool = pane.read(cx).tool_id().to_string();
             if !tools.contains(&tool) {
                 tools.push(tool);
             }
         }
-        tools.sort_by_key(|t| *t == "shell");
-        if tools.is_empty() {
-            tools.push("shell");
+        tools.sort_by_key(|t| t.as_str() == "shell");
+        if let Some(dormant) = &dormant {
+            tools = dormant.tools.clone();
         }
-        let last_activity = panes.iter().map(|p| p.read(cx).last_activity_ms).max();
+        if tools.is_empty() {
+            tools.push("shell".to_string());
+        }
+        let last_activity = match &dormant {
+            Some(dormant) => dormant.last_activity_ms,
+            None => panes.iter().map(|p| p.read(cx).last_activity_ms).max(),
+        };
         let counts = {
-            let tabs = ws.tabs.len();
+            let (tabs, pane_count) = match &dormant {
+                Some(dormant) => (dormant.tabs, dormant.panes),
+                None => (ws.tabs.len(), summary.panes),
+            };
             let mut parts = Vec::new();
             if tabs > 1 {
                 parts.push(tf(cx, "count.tabs", &[("n", &tabs.to_string())]));
             }
-            if summary.panes > tabs.max(1) {
-                parts.push(tf(cx, "count.panes", &[("n", &summary.panes.to_string())]));
+            if pane_count > tabs.max(1) {
+                parts.push(tf(cx, "count.panes", &[("n", &pane_count.to_string())]));
             }
             parts.join(" · ")
         };
-        let path = tilde(&ws.tabs.get(ws.active_tab).map(|t| t.active.read(cx).display_cwd()).unwrap_or_else(|| ws.cwd.clone()));
-        let detail = if counts.is_empty() { path } else { format!("{path} · {counts}") };
+        // A workspace that has not been opened yet has no pane to ask: its saved layout says where
+        // it works, and its branch comes from that folder.
+        let cwd = match &dormant {
+            Some(dormant) => dormant.cwd.clone(),
+            None => ws.tabs.get(ws.active_tab).map(|t| t.active.read(cx).display_cwd()).unwrap_or_else(|| ws.cwd.clone()),
+        };
+        let path = tilde(&cwd);
+        // The path is shortened on its own; the counts are short and go after it whole, so a cut
+        // never lands in the middle of "탭 2개".
+        let detail = {
+            let path = crate::ui::middle_ellipsis(&path, 24);
+            if counts.is_empty() {
+                path
+            } else {
+                format!("{path} · {counts}")
+            }
+        };
+        // What the workspace is on, like cmux's cards: branch, pull request, and the last thing
+        // said in the pane the user worked in.
+        let last_pane = ws.tabs.get(ws.active_tab).map(|t| t.active.clone()).or_else(|| panes.first().cloned());
+        // Folded away, the folder is read again in the background; until that answer arrives the
+        // branch saved when the workspace closed stands in for it.
+        let branch = last_pane
+            .as_ref()
+            .and_then(|p| p.read(cx).git_branch.clone())
+            .or_else(|| self.folder_branch(&cwd).map(str::to_string))
+            .or_else(|| dormant.as_ref().and_then(|d| d.branch.clone()));
+        let pull_request = branch
+            .as_ref()
+            .and_then(|branch| Some((agentty_bridge::git::repo_root(&cwd)?, branch.clone())))
+            .and_then(|(repo, branch)| self.pull_request_of(&repo, &branch).cloned());
+        let working = panes.iter().any(|p| p.read(cx).status.in_turn());
+        // The logo is only worth the room when there is more than one kind of agent to tell apart:
+        // with a single CLI on the machine every card carried the same mark. Without it the name
+        // starts at the edge, and the lines under it follow — nothing is left indented under a
+        // logo that is not there. Whether a card is working still shows, since that differs.
+        let show_logo = self.installed.as_ref().map_or(2, crate::agents::Installed::agent_count) > 1;
+        let indent = px(if show_logo { 24. } else { 2. });
+        let accent = super::accent_color(ws.color);
+        let compact = settings(cx).compact_workspaces;
 
+        // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
+        // waiting for the user. A card that already carries a colour would only clash with it, so
+        // there the mark sits next to the name instead.
+        let attention_bar = (summary.attention > 0 && ws.color.is_none()).then_some(Chrome::ATTENTION);
+        let attention_dot = summary.attention > 0 && ws.color.is_some();
+        // Opaque, never a wash: a translucent fill over the dark chrome comes out muddy. The
+        // selected card is the same colour a shade lighter, with a rim.
+        let background = match (accent, active) {
+            (Some(color), true) => crate::theme::lighten(color, 0.14),
+            (Some(color), false) => hex(color),
+            (None, true) => hex_alpha(Chrome::ACCENT, 0.16),
+            (None, false) => hex_alpha(0, 0.),
+        };
         let row = div()
             .id(("workspace", id as usize))
             .group("workspace-row")
             .relative()
-            .px_2p5()
-            .py_1p5()
+            .pl(px(10.))
+            .pr_2p5()
+            .map(|d| if compact { d.py_0p5() } else { d.py_1p5() })
             .rounded_md()
             .cursor_pointer()
             .border_1()
-            .border_color(if summary.attention > 0 && !active { hex(Chrome::ATTENTION) } else { hex_alpha(0, 0.) })
-            .bg(if active { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
-            .when(!active, |d| d.hover(|s| s.bg(hex(Chrome::HOVER))))
+            // A colour the user gave a workspace fills its whole card, so the sidebar can be read
+            // as blocks of colour. Selected is the same fill, brighter, with a light rim; an
+            // uncoloured card keeps the quiet tint that does not wash its own text out.
+            .border_color(if active { hex_alpha(Chrome::BRIGHT, 0.55) } else { hex_alpha(0, 0.) })
+            .bg(background)
+            .children(
+                attention_bar.map(|color| div().absolute().left(px(2.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full().bg(hex(color))),
+            )
+            .when(!active, |d| {
+                d.hover(|s| {
+                    s.bg(match accent {
+                        Some(color) => hex_alpha(color, 0.58),
+                        None => hex(Chrome::HOVER),
+                    })
+                })
+            })
             .on_drag(DraggedWorkspace { id, title: title.clone().into() }, |dragged, _, _, cx| {
                 cx.new(|_| DragPreview { title: dragged.title.clone() })
             })
@@ -691,11 +899,12 @@ impl Workbench {
                     if this.page == Some(Page::Git) {
                         // AgentGit stays open and switches to this workspace's repositories.
                         this.select_workspace_for_page(i, cx);
+                        window.focus(&this.sidebar_focus);
                     } else {
+                        // The terminal takes the keyboard: switching workspace and then having to
+                        // click the pane before typing was the thing people kept tripping over.
                         this.activate_workspace(i, window, cx);
                     }
-                    // Stay in the list: ⌘N here makes a workspace, a click in a pane focuses it.
-                    window.focus(&this.sidebar_focus);
                 }
             }))
             .child(
@@ -703,22 +912,31 @@ impl Workbench {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(crate::brand::avatar_stack(&tools, 18., 2, if active { Chrome::ACCENT } else { Chrome::SIDE_BAR }))
-                    .child(if renaming {
-                        div()
-                            .flex_1()
-                            .t_body()
-                            .text_color(hex(Chrome::BRIGHT))
-                            .children(self.rename.as_ref().map(|r| r.input.clone()))
-                            .into_any_element()
-                    } else {
+                    // One logo: which agent it is, without a pile of icons down the sidebar. It
+                    // breathes while a turn is running.
+                    .map(|d| {
+                        if show_logo {
+                            d.child(crate::brand::avatar_working(tools.first().map_or("shell", String::as_str), 16., working, id))
+                        } else if working {
+                            d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(Chrome::BRIGHT, 0.9)))
+                        } else {
+                            d
+                        }
+                    })
+                    .when(attention_dot, |d| d.child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex_alpha(Chrome::BRIGHT, 0.95))))
+                    .child({
+                        let _ = renaming;
                         div()
                             .id(("workspace-title", id as usize))
                             .flex_1()
                             .min_w(px(60.))
                             .truncate()
-                            .t_body()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            // Heavier and a size up from the lines under it: the name is what a
+                            // card is found by, and at one size and weight they all read as one
+                            // block. The chrome's own emphasis weight, not full bold — the size
+                            // difference already does most of the separating.
+                            .t_title()
+                            .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::BRIGHT))
                             // Double-click the name to rename (handled on mouse down so the first
                             // click's focus change can't end the edit).
@@ -732,24 +950,6 @@ impl Workbench {
                                 }),
                             )
                             .child(title)
-                            .into_any_element()
-                    })
-                    .when(summary.attention > 0, |d| {
-                        d.child(
-                            div()
-                                .flex_shrink_0()
-                                .min_w(px(16.))
-                                .h(px(16.))
-                                .px_1()
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .bg(hex(if active { Chrome::BRIGHT } else { Chrome::ATTENTION }))
-                                .text_color(hex(if active { Chrome::ACCENT } else { Chrome::BRIGHT }))
-                                .t_caption()
-                                .child(summary.attention.to_string()),
-                        )
                     })
                     // Last activity, like the session history; the menu button takes its place on hover.
                     .child(
@@ -778,11 +978,12 @@ impl Workbench {
                                     .child(icon_only(
                                         ("workspace-menu", id as usize),
                                         "ellipsis",
-                                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        cx.listener(move |this, event: &ClickEvent, _, cx| {
                                             cx.stop_propagation();
                                             if this.just_dismissed("workspace-menu") {
                                                 return;
                                             }
+                                            this.workspace_menu_at = f32::from(event.position().y);
                                             this.workspace_menu = if this.workspace_menu == Some(id) { None } else { Some(id) };
                                             cx.notify();
                                         }),
@@ -790,40 +991,71 @@ impl Workbench {
                             ),
                     ),
             )
-            .when(!summary.label.is_empty(), |d| {
-                d.child(
+            // A line each: a branch name and a path never fit side by side in a sidebar, and both
+            // matter too much to be cut short so they can share one.
+            .when(!compact, |d| {
+                d.children(branch.map(|name| {
                     div()
-                        .pl(px(28.))
+                        .pl(indent)
+                        .pt_0p5()
                         .flex()
                         .items_center()
                         .gap_1()
-                        .t_small()
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .size(px(6.))
-                                .rounded_full()
-                                .bg(hex(summary.color))
-                                .when(active, |d| d.bg(hex(Chrome::BRIGHT))),
-                        )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_color(if active { hex(Chrome::BRIGHT) } else { hex(summary.color) })
-                                .child(summary.label.clone()),
-                        ),
-                )
+                        .t_caption()
+                        .text_color(sub_color)
+                        .overflow_hidden()
+                        .child(icon("git-branch", 10., sub_color))
+                        .child(div().min_w_0().truncate().child(name))
+                }))
+                .child(div().pl(indent).truncate().t_caption().text_color(sub_color).child(detail))
             })
-            .child(div().pl(px(28.)).truncate().t_small().text_color(sub_color).child(detail))
-            .children(self.render_port_chips(ws, active, cx));
+            .children(pull_request.filter(|_| !compact).map(|pr| {
+                let (label, state_color) = if pr.is_merged() {
+                    (tf(cx, "pr.merged", &[("n", &pr.number.to_string())]), Chrome::PURPLE)
+                } else if pr.is_open() {
+                    (tf(cx, "pr.open", &[("n", &pr.number.to_string())]), Chrome::GREEN)
+                } else {
+                    (tf(cx, "pr.closed", &[("n", &pr.number.to_string())]), Chrome::MUTED)
+                };
+                // A card the user coloured keeps to that colour: a green line inside an amber card
+                // is two colours fighting, and the state is in the words anyway.
+                let color = if ws_colored { hex_alpha(Chrome::BRIGHT, 0.9) } else { hex(state_color) };
+                let url = pr.url.clone();
+                div()
+                    .id(("workspace-pr", id as usize))
+                    .pl(indent)
+                    .pt_0p5()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .t_caption()
+                    .cursor_pointer()
+                    .text_color(color)
+                    .hover(|s| s.opacity(0.8))
+                    .tooltip(crate::ui::Tooltip::text(pr.title.clone(), Some(PR_LINK_HINT)))
+                    // Only on ⌘-click: a plain click anywhere on the card opens the workspace, and
+                    // a pull request page is not where that click should land.
+                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                        if crate::keymap::link_modifier(&event.modifiers()) {
+                            cx.stop_propagation();
+                            this.open_link(url.clone(), cx);
+                        }
+                    }))
+                    .child(icon("git-pull-request", 10., color))
+                    .child(div().truncate().child(label))
+            }))
+            .children((!compact).then(|| self.render_port_chips(ws, active, indent, cx)).flatten());
 
         let menu_open = self.workspace_menu == Some(id);
+        // A card near the bottom of the sidebar would have its menu cut off by the window edge, so
+        // there the menu grows upwards from the card instead of downwards.
+        let upwards = menu_open && self.workspace_menu_at + self.workspace_menu_height() > f32::from(window.viewport_size().height) - 8.;
         // Deferred so the menu paints above the rows below it (e.g. the selected workspace).
         div().relative().child(row).when(menu_open, |d| {
             d.child(
                 div()
                     .absolute()
-                    .top(px(28.))
+                    .map(|d| if upwards { d.bottom(px(28.)) } else { d.top(px(28.)) })
                     .right(px(4.))
                     .child(gpui::deferred(self.render_workspace_menu(id, window, cx)).with_priority(3)),
             )
@@ -831,12 +1063,13 @@ impl Workbench {
     }
 
     /// `:3000 :5173` chips for servers started in the workspace; a click opens them.
-    fn render_port_chips(&self, ws: &Workspace, active: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_port_chips(&self, ws: &Workspace, active: bool, indent: gpui::Pixels, cx: &mut Context<Self>) -> Option<AnyElement> {
         let ports = self.ports_of(ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id));
         if ports.is_empty() {
             return None;
         }
-        let mut row = div().pl(px(28.)).pt_0p5().flex().flex_wrap().gap_1();
+        // A chip has its own padding, so it lines up with the text above it a touch further in.
+        let mut row = div().pl(indent + px(4.)).pt_0p5().flex().flex_wrap().gap_1();
         for port in ports.into_iter().take(6) {
             row = row.child(
                 div()
@@ -858,6 +1091,127 @@ impl Workbench {
         Some(row.into_any_element())
     }
 
+    /// "Recently closed tabs" of the active workspace: reopening one brings its splits back.
+    pub(super) fn render_reopen_tabs(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let ws = self.workspaces.get(self.active_workspace)?;
+        if ws.closed_tabs.is_empty() {
+            return None;
+        }
+        let workspace = ws.id;
+        let mut list = div()
+            .flex()
+            .flex_col()
+            // The rule goes above the heading: this section is last in the menu.
+            .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            .child(div().px_3().pt_1().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "tabs.recently_closed")));
+        for (index, tab) in ws.closed_tabs.iter().take(6).enumerate() {
+            let (title, panes) = closed_tab_label(&tab.layout);
+            let label = if panes > 1 { format!("{title} ({panes})") } else { title };
+            list = list.child(
+                menu_item(
+                    SharedString::from(format!("reopen-tab-{index}")),
+                    label,
+                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.launcher_open = false;
+                        this.tab_menu = None;
+                        this.reopen_closed_tab(workspace, index, window, cx);
+                    }),
+                )
+                .into_any_element(),
+            );
+        }
+        Some(list)
+    }
+
+    /// Colour swatches for a workspace or a group: the eight quick ones, "none", and a palette of
+    /// every shade behind "more", so a long sidebar can still give each workspace its own colour.
+    fn render_color_row(&self, prefix: &'static str, target: ColorTarget, current: Option<u32>, cx: &mut Context<Self>) -> gpui::Div {
+        let swatch = |key: &str, color: Option<u32>, size: f32, cx: &mut Context<Self>| {
+            let selected = current == color;
+            div()
+                .id(SharedString::from(format!("{prefix}-color-{key}")))
+                .size(px(size + 6.))
+                .rounded_full()
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_2()
+                .border_color(if selected { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
+                .map(|d| match color {
+                    Some(color) => d.child(div().size(px(size)).rounded_full().bg(hex(color))),
+                    // "None": an empty ring, so clearing a colour is as easy as setting one.
+                    None => d.child(div().size(px(size)).rounded_full().border_1().border_color(hex(Chrome::MUTED))),
+                })
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_color(target, color, cx)))
+        };
+        let mut row = div().px_3().py_1().flex().flex_wrap().gap_1p5().child(swatch("none", None, 12., cx));
+        for color in super::ACCENTS {
+            row = row.child(swatch(&format!("{color:06x}"), Some(color), 12., cx));
+        }
+        let open = self.color_palette_open == Some(target);
+        row = row.child(
+            div()
+                .id(SharedString::from(format!("{prefix}-color-more")))
+                .size(px(18.))
+                .rounded_full()
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(hex(if open { Chrome::BRIGHT } else { Chrome::MUTED }))
+                .tooltip(crate::ui::Tooltip::text(t(cx, "color.more"), None))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.color_palette_open = (!open).then_some(target);
+                    cx.notify();
+                }))
+                .child(icon("ellipsis", 11., hex(Chrome::MUTED))),
+        );
+        // The system colour panel: the wheel, the sliders, the crayons and a hex field. What it
+        // shows is applied live, so the card is the preview.
+        row = row.child(
+            div()
+                .id(SharedString::from(format!("{prefix}-color-pick")))
+                .size(px(18.))
+                .rounded_full()
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(hex(Chrome::MUTED))
+                .tooltip(crate::ui::Tooltip::text(t(cx, "color.custom"), None))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.pick_custom_color(target, cx)))
+                .child(icon("pencil", 10., hex(Chrome::MUTED))),
+        );
+        let mut palette = div().px_3().pb_2().flex().flex_wrap().gap_1();
+        if open {
+            for color in super::PALETTE {
+                palette = palette.child(swatch(&format!("p{color:06x}"), Some(color), 14., cx));
+            }
+        }
+        div()
+            .flex()
+            .flex_col()
+            .child(div().px_3().pt_2().pb_0p5().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "color.label")))
+            .child(row)
+            .when(open, |d| d.child(palette))
+    }
+
+    /// Roughly how tall the workspace menu comes out, to decide which way it opens. Measured from
+    /// what it is built of below: rows, the colour block, and the palette when it is unfolded.
+    fn workspace_menu_height(&self) -> f32 {
+        const ROW: f32 = 28.;
+        const COLOUR_BLOCK: f32 = 52.;
+        const PALETTE: f32 = 116.;
+        let groups = self.groups.len() as f32;
+        let palette = if matches!(self.color_palette_open, Some(ColorTarget::Workspace(_))) { PALETTE } else { 0. };
+        let group_section = if groups > 0. { 24. + groups * ROW } else { 0. };
+        // rename + colour + groups + "new group" + ungroup + rule + close, inside the popover's padding.
+        12. + ROW + COLOUR_BLOCK + palette + group_section + ROW * 2. + 9. + ROW
+    }
+
     fn render_workspace_menu(&self, id: u64, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current_group = self.workspaces.iter().find(|w| w.id == id).and_then(|w| w.group);
         let mut menu = popover()
@@ -874,6 +1228,12 @@ impl Workbench {
                 "wm-rename",
                 t(cx, "rename"),
                 cx.listener(move |this, _: &ClickEvent, window, cx| this.start_rename(RenameTarget::Workspace(id), window, cx)),
+            ))
+            .child(self.render_color_row(
+                "wm",
+                ColorTarget::Workspace(id),
+                self.workspaces.iter().find(|w| w.id == id).and_then(|w| w.color),
+                cx,
             ));
         if !self.groups.is_empty() {
             menu = menu.child(div().px_3().pt_2().pb_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "move.to.group")));
@@ -1008,6 +1368,7 @@ impl Workbench {
                     .size_full()
                     .px_2(),
                 )
+                .group(crate::ui::SCROLL_GROUP)
                 .child(crate::ui::scrollbar(base))
                 .into_any_element()
         };
@@ -1018,10 +1379,13 @@ impl Workbench {
         let session = &self.sessions[index];
         let now = now_ms();
         let to = other_agent(session.agent);
+        let migrate_from = session.agent;
         let cwd = session.cwd.as_ref().map(|c| tilde(std::path::Path::new(c))).unwrap_or_default();
         let key = session_key(session);
         let favorite = settings(cx).favorite_sessions.contains(&key);
-        let (resume, migrate, view) = (session.clone(), session.clone(), session.clone());
+        let (resume, migrate, view, delete) = (session.clone(), session.clone(), session.clone(), session.clone());
+        // Already open in this window: continuing it again would only make a second copy.
+        let open_here = self.pane_for_session(&session.id, cx).is_some();
         let selected = self.session_viewer.as_ref().is_some_and(|v| v.session.path == session.path);
         let summary = super::resume_hint::session_summary(session);
         div()
@@ -1079,22 +1443,59 @@ impl Workbench {
                     .pt_1()
                     .flex()
                     .gap_1()
+                    .items_center()
                     .child(action_button(
                         ("session-resume", index),
-                        t(cx, "sessions.resume"),
+                        if open_here { t(cx, "sessions.go_to") } else { t(cx, "sessions.resume") },
                         cx.listener(move |this, _: &ClickEvent, window, cx| {
                             cx.stop_propagation();
                             this.resume_session(&resume, window, cx)
                         }),
                     ))
-                    .child(action_button(
-                        ("session-migrate", index),
-                        tf(cx, "sessions.migrate", &[("name", to.display_name())]),
-                        cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            cx.stop_propagation();
-                            this.migrate_session(migrate.clone(), window, cx)
-                        }),
-                    )),
+                    // Handing the conversation to the other agent: an icon pair, with a question
+                    // before anything runs — it starts a session and costs tokens.
+                    .child(
+                        div()
+                            .id(("session-migrate", index))
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px_1p5()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                            .tooltip(crate::ui::Tooltip::text(tf(cx, "sessions.migrate", &[("name", to.display_name())]), None))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.ask_migrate_session(migrate.clone(), cx);
+                            }))
+                            .child(crate::brand::avatar(migrate_from.id(), 14.))
+                            .child(icon("arrow-right", IconSize::INLINE, hex(Chrome::MUTED)))
+                            .child(crate::brand::avatar(to.id(), 14.)),
+                    )
+                    .child(div().flex_1())
+                    // A session running in a pane cannot be deleted: the agent is still writing to
+                    // the file, and the pane would be left pointing at nothing.
+                    .children((!open_here).then(|| {
+                        div()
+                            .id(("session-delete", index))
+                            .size(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .invisible()
+                            .group_hover("session-row", |s| s.visible())
+                            .hover(|s| s.bg(hex_alpha(Chrome::ERROR, 0.18)))
+                            .tooltip(crate::ui::Tooltip::text(t(cx, "sessions.delete"), None))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.ask_delete_session(delete.clone(), cx);
+                            }))
+                            .child(icon("trash-2", IconSize::INLINE, hex(Chrome::MUTED)))
+                    })),
             )
             .into_any_element()
     }
@@ -1102,41 +1503,59 @@ impl Workbench {
     pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // Tabs take the room they need (scrolling when crowded); the spacer gets the rest.
         let mut tabs = div().id("tabs").flex().flex_shrink().min_w_0().h_full().overflow_x_scroll();
+        // The start page is always the first tab, whatever else is open: it is how everything else
+        // is reached, and hunting for it depended on which screen you happened to be on.
+        let home_active = self.welcome && self.page.is_none();
+        tabs = tabs.child(
+            div()
+                .id("page-tab-home")
+                .h_full()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .px_3()
+                .border_t_1()
+                .border_r_1()
+                .border_color(hex(Chrome::BORDER))
+                .bg(hex(if home_active { Chrome::EDITOR } else { Chrome::TAB_INACTIVE }))
+                .cursor_pointer()
+                .hover(|s| s.bg(hex(Chrome::EDITOR)))
+                .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None))
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
+                .child(icon("house", IconSize::INLINE, hex(if home_active { Chrome::BRIGHT } else { Chrome::MUTED }))),
+        );
         if let Some(page) = self.page {
-            // First: back to the start page.
-            tabs = tabs.child(
-                div()
-                    .id("page-tab-home")
-                    .h_full()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .px_3()
-                    .border_t_1()
-                    .border_r_1()
-                    .border_color(hex(Chrome::BORDER))
-                    .bg(hex(Chrome::TAB_INACTIVE))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hex(Chrome::EDITOR)))
-                    .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None))
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
-                    .child(icon("house", IconSize::INLINE, hex(Chrome::MUTED))),
-            );
-            // Monitoring: AI usage, AI processes and the capture proxy are tabs of one page.
-            let pages: Vec<(Page, &str)> = match page {
-                Page::Usage | Page::Processes | Page::Proxy => {
-                    vec![(Page::Usage, t(cx, "page.usage")), (Page::Processes, t(cx, "page.processes")), (Page::Proxy, t(cx, "page.proxy"))]
+            // Monitoring: AI usage, AI processes, the capture proxy and what the agents can use
+            // (skills, subagents, MCP servers) are tabs of one page. The extension tabs carry the
+            // category they open, since they are all the same page underneath.
+            let category = self.extensions_category(cx);
+            let monitoring = || {
+                let mut tabs = vec![
+                    (Page::Usage, None, t(cx, "page.usage")),
+                    (Page::Processes, None, t(cx, "page.processes")),
+                    (Page::Proxy, None, t(cx, "page.proxy")),
+                    (Page::Extensions, Some("skills"), t(cx, "ext.skills")),
+                    (Page::Extensions, Some("agents"), t(cx, "ext.agents")),
+                    (Page::Extensions, Some("mcp"), t(cx, "ext.mcp")),
+                ];
+                // Everything else the extensions page can show (all of them, commands, plugins,
+                // connectors) keeps one tab of its own, so no category is left unreachable.
+                if page == Page::Extensions && !matches!(category, "skills" | "agents" | "mcp") {
+                    tabs.push((Page::Extensions, Some(category), t(cx, "page.extensions")));
                 }
-                Page::Git => vec![(page, t(cx, "page.git"))],
-                Page::Flow => vec![(page, t(cx, "page.flow"))],
-                Page::Settings => vec![(page, t(cx, "page.settings"))],
-                Page::Extensions => vec![(page, t(cx, "page.extensions"))],
-                Page::Plugins => vec![(page, t(cx, "page.plugins"))],
-                Page::Idea => vec![(page, t(cx, "page.idea"))],
-                Page::Database => vec![(page, t(cx, "page.database"))],
+                tabs
             };
-            for (tab_page, label) in pages {
-                let active = tab_page == page;
+            let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
+                Page::Usage | Page::Processes | Page::Proxy | Page::Extensions => monitoring(),
+                Page::Git => vec![(page, None, t(cx, "page.git"))],
+                Page::Flow => vec![(page, None, t(cx, "page.flow"))],
+                Page::Settings => vec![(page, None, t(cx, "page.settings"))],
+                Page::Plugins => vec![(page, None, t(cx, "page.plugins"))],
+                Page::Idea => vec![(page, None, t(cx, "page.idea"))],
+                Page::Database => vec![(page, None, t(cx, "page.database"))],
+            };
+            for (tab_page, tab_category, label) in pages {
+                let active = tab_page == page && tab_category.is_none_or(|c| c == category);
                 tabs = tabs.child(
                     div()
                         .id(SharedString::from(format!("page-tab-{label}")))
@@ -1156,9 +1575,12 @@ impl Workbench {
                                 .text_color(hex(Chrome::MUTED))
                                 .cursor_pointer()
                                 .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.page = Some(tab_page);
-                                    cx.notify();
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| match tab_category {
+                                    Some(category) => this.open_extensions(category, window, cx),
+                                    None => {
+                                        this.page = Some(tab_page);
+                                        cx.notify();
+                                    }
                                 }))
                         })
                         .child(label.to_string())
@@ -1247,7 +1669,12 @@ impl Workbench {
                                 this.move_tab_into_tab(dragged, index, window, cx)
                             }
                         }))
-                        .child(crate::brand::avatar(view.tool_id(), 16.))
+                        // No logo here: the tab strip sits right under the workspace card that
+                        // already says which agent this is, and a row of them only drew the eye.
+                        // What is left is the one thing a tab alone can say — it is working.
+                        .when(view.status.in_turn(), |d| {
+                            d.child(crate::ui::dot_spinner(("tab-working", view.pane_id as usize), 12., hex_alpha(Chrome::BRIGHT, 0.9)))
+                        })
                         .child(div().truncate().child(view.display_title()))
                         .when(leaves.len() > 1, |d| {
                             d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("⊞{}", leaves.len())))
@@ -1383,54 +1810,6 @@ impl Workbench {
                         }),
                     ),
             )
-            .child({
-                let unread = self.unread_count();
-                div()
-                    .id("header-notices")
-                    .my_auto()
-                    .h(px(crate::ui::ICON_BUTTON))
-                    .rounded_md()
-                    .px_1p5()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .flex_shrink_0()
-                    .cursor_pointer()
-                    .t_small()
-                    .text_color(hex(if unread > 0 { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
-                    .when(self.notices_open, |d| d.bg(hex(Chrome::SELECTED)))
-                    .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.notices"), Some("⇧⌘U")))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        if this.just_dismissed("notices") {
-                            return;
-                        }
-                        this.notices_open = !this.notices_open;
-                        this.launcher_open = false;
-                        cx.notify();
-                    }))
-                    .child(icon(
-                        if unread > 0 { "bell-dot" } else { "bell" },
-                        IconSize::BUTTON,
-                        hex(if unread > 0 { Chrome::BRIGHT } else { Chrome::FOREGROUND }),
-                    ))
-                    .when(unread > 0, |d| {
-                        d.child(
-                            div()
-                                .min_w(px(16.))
-                                .h(px(16.))
-                                .px_1()
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .bg(hex(Chrome::ATTENTION))
-                                .t_caption()
-                                .text_color(hex(Chrome::BRIGHT))
-                                .child(unread.to_string()),
-                        )
-                    })
-            })
             // Plugins with a panel, then cmux-style quick actions: icons only.
             .children(self.render_plugin_header_buttons(cx))
             .child(ringed(
@@ -1504,8 +1883,9 @@ impl Workbench {
                 .cursor_pointer()
                 .hover(|s| s.bg(hex(Chrome::ACCENT)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| action(this, window, cx)))
+                // The launcher is where a tool is chosen: its colour is the point here.
                 .child(match logo {
-                    Some(logo) => crate::brand::avatar(logo, 18.),
+                    Some(logo) => crate::brand::avatar_brand(logo, 18.),
                     None => div().flex_shrink_0().size(px(18.)).flex().items_center().justify_center().child(icon(
                         "square-plus",
                         IconSize::INLINE,
@@ -1515,57 +1895,6 @@ impl Workbench {
                 .child(div().flex_1().min_w_0().truncate().t_body().child(label))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(crate::keymap::display(shortcut).into_owned()))
         };
-        // Model shortcuts under an agent: "Opus · Sonnet · Haiku".
-        let models = |kind: PaneKind, models: Vec<(String, String)>, cx: &mut Context<Self>| {
-            let mut row = div().flex().flex_wrap().gap_1().pl(px(28.)).pr_2().pb_1();
-            for (index, (model, label)) in models.into_iter().enumerate() {
-                row = row.child(
-                    div()
-                        .id(SharedString::from(format!("launch-model-{kind:?}-{index}")))
-                        .px_1p5()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(hex(Chrome::OVERLAY_BORDER))
-                        .t_small()
-                        .text_color(hex(Chrome::MUTED))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)).border_color(hex(Chrome::ACCENT)))
-                        .child(label)
-                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.request_launch(LaunchChoice::Model(kind, model.clone()), this.launcher_target, window, cx)
-                        })),
-                );
-            }
-            row
-        };
-        // "Build my idea" and "Launch": the way from an idea to a live site, above the plain launchers.
-        let feature =
-            |id: &'static str, glyph: &'static str, color: u32, title: &'static str, body: &'static str, cx: &mut Context<Self>| {
-                div()
-                    .id(id)
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hex(Chrome::ACCENT)))
-                    .child(div().flex_shrink_0().size(px(18.)).flex().items_center().justify_center().child(icon(
-                        glyph,
-                        IconSize::INLINE,
-                        hex(color),
-                    )))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(div().truncate().t_body().child(t(cx, title)))
-                            .child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, body))),
-                    )
-            };
         let installed = self.installed.clone().unwrap_or_default();
         let detected = self.installed.is_some();
 
@@ -1581,17 +1910,6 @@ impl Workbench {
                 }
                 cx.notify();
             }))
-            .when(settings(cx).idea_mode, |d| {
-                d.child(
-                    feature("launch-idea", "lightbulb", Chrome::ORANGE, "idea.menu", "idea.menu_body", cx)
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx))),
-                )
-            })
-            .child(
-                feature("launch-publish", "rocket", Chrome::GREEN, "launch.menu", "launch.menu_body", cx)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_launch(cx))),
-            )
-            .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
             // Where what is picked below opens. A split starts in the tab's folder — and an agent
             // there gets its own working tree when another one already works in the project.
             .child({
@@ -1642,16 +1960,14 @@ impl Workbench {
                 cx,
             ));
         if self.is_installed("claude") {
-            menu = menu
-                .child(entry(
-                    "launch-claude".into(),
-                    Some("claude"),
-                    "Claude Code".into(),
-                    "⌥⌘C",
-                    Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, this.launcher_target, w, cx)),
-                    cx,
-                ))
-                .child(models(PaneKind::Claude, installed.claude_models.clone(), cx));
+            menu = menu.child(entry(
+                "launch-claude".into(),
+                Some("claude"),
+                "Claude Code".into(),
+                "⌥⌘C",
+                Box::new(|this, w, cx| this.request_launch(PaneKind::Claude, this.launcher_target, w, cx)),
+                cx,
+            ));
         }
         if self.is_installed("codex") {
             menu = menu.child(entry(
@@ -1662,9 +1978,6 @@ impl Workbench {
                 Box::new(|this, w, cx| this.request_launch(PaneKind::Codex, this.launcher_target, w, cx)),
                 cx,
             ));
-            if !installed.codex_models.is_empty() {
-                menu = menu.child(models(PaneKind::Codex, installed.codex_models.iter().map(|m| (m.clone(), m.clone())).collect(), cx));
-            }
         }
         let agent_entry = |agent: &'static crate::agents::AgentCli, cx: &mut Context<Self>| {
             let (title, command) = (agent.name.to_string(), agent.binary.to_string());
@@ -1743,14 +2056,18 @@ impl Workbench {
         if detected && !installed.has("claude") && !installed.has("codex") && installed.other_agents().next().is_none() {
             menu = menu.child(hint(t(cx, "launcher.no_agents")));
         }
-        let menu = menu.child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER))).child(entry(
-            "launch-workspace".into(),
-            None,
-            t(cx, "new.workspace").into(),
-            "⌘N",
-            Box::new(|this, w, cx| this.open_new_workspace_page(w, cx)),
-            cx,
-        ));
+        let menu = menu
+            .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            .child(entry(
+                "launch-workspace".into(),
+                None,
+                t(cx, "new.workspace").into(),
+                "⌘N",
+                Box::new(|this, w, cx| this.open_new_workspace_page(w, cx)),
+                cx,
+            ))
+            // Last: what opens something new comes first, putting something back comes after it.
+            .children(self.render_reopen_tabs(cx));
         // Right-clicked on the tab strip: open where the click was; else under the + button.
         match self.launcher_at {
             Some(position) => gpui::deferred(
@@ -1937,7 +2254,7 @@ impl Workbench {
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close_welcome(window, cx))),
                 )
             });
-        let heading = |label: String| div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::FOREGROUND)).child(label);
+        let heading = |label: String| div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::FOREGROUND)).child(label);
         // A short window scrolls rather than stacking the page on top of its own footer.
         let page = div()
             .w_full()
@@ -2024,6 +2341,7 @@ impl Workbench {
                     .pb(px(FOOTER_HEIGHT))
                     .child(page),
             )
+            .group(crate::ui::SCROLL_GROUP)
             .child(crate::ui::scrollbar(self.welcome_scroll.clone()))
             .child(self.render_welcome_footer(cx))
     }
@@ -2209,6 +2527,59 @@ impl Workbench {
             .child(link("welcome-author", "raylee.app".to_string(), AUTHOR_URL))
     }
 
+    /// Scrolls the workspace list while a card is dragged near its top or bottom edge, and keeps
+    /// scrolling while the pointer stays there (drag events stop arriving once it holds still).
+    pub(super) fn drag_autoscroll(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let bounds = self.sidebar_scroll.bounds();
+        let (top, height) = (f32::from(bounds.origin.y), f32::from(bounds.size.height));
+        if height <= 0. {
+            return;
+        }
+        let y = f32::from(position.y);
+        let delta = if y < top + DRAG_EDGE {
+            ((top + DRAG_EDGE - y) / DRAG_EDGE).clamp(0., 1.) * DRAG_SCROLL_STEP
+        } else if y > top + height - DRAG_EDGE {
+            -((y - (top + height - DRAG_EDGE)) / DRAG_EDGE).clamp(0., 1.) * DRAG_SCROLL_STEP
+        } else {
+            0.
+        };
+        self.drag_scroll_delta = delta;
+        if delta == 0. {
+            self.drag_scroll = None;
+            return;
+        }
+        if self.drag_scroll.is_some() {
+            return;
+        }
+        self.drag_scroll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(DRAG_SCROLL_TICK).await;
+                let running = this.update(cx, |this, cx| this.apply_drag_scroll(cx)).unwrap_or(false);
+                if !running {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, _| this.drag_scroll = None);
+        }));
+    }
+
+    /// One auto-scroll tick; `false` once there is nothing left to scroll or no drag is running.
+    fn apply_drag_scroll(&mut self, cx: &mut Context<Self>) -> bool {
+        let delta = self.drag_scroll_delta;
+        if delta == 0. {
+            return false;
+        }
+        let max = f32::from(self.sidebar_scroll.max_offset().height);
+        let offset = self.sidebar_scroll.offset();
+        let next = (f32::from(offset.y) + delta).clamp(-max, 0.);
+        if next == f32::from(offset.y) {
+            return false;
+        }
+        self.sidebar_scroll.set_offset(gpui::point(offset.x, gpui::px(next)));
+        cx.notify();
+        true
+    }
+
     pub(super) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active_pane().map(|p| p.read(cx));
         let kind = active.map(|v| match v.display_kind() {
@@ -2216,10 +2587,9 @@ impl Workbench {
             PaneKind::Claude => with_version("Claude Code", self.installed.as_ref().and_then(|i| i.version("claude"))),
             PaneKind::Codex => with_version("Codex", self.installed.as_ref().and_then(|i| i.version("codex"))),
         });
-        let cwd = active.map(|v| tilde(&v.display_cwd()));
-        // The branch the active terminal is on (with • when it has uncommitted changes), which is
-        // what the far end of a status bar is for — a terminal count told nobody anything.
-        let branch = active.and_then(|v| v.git_branch.clone().map(|branch| (branch, v.git_dirty, v.worktree.clone())));
+        // Where the active terminal is. It is the only place the path is shown now: the pane's own
+        // bar had it too, and one of them was always cut short.
+        let cwd = active.map(|v| v.display_cwd());
         div()
             .h(px(STATUS_BAR_HEIGHT))
             .flex_shrink_0()
@@ -2235,32 +2605,30 @@ impl Workbench {
             .child(div().text_color(hex(Chrome::SUCCESS)).child(format!("● Agentty v{}", super::update::CURRENT_VERSION)))
             .children(kind)
             .children(self.render_advisor_chip(cx))
-            .children(cwd)
+            .children(cwd.map(|cwd| {
+                let reveal = cwd.clone();
+                div()
+                    .id("status-folder")
+                    .flex_shrink()
+                    .min_w_0()
+                    .truncate()
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                    .tooltip(crate::ui::Tooltip::text(tilde(&cwd), Some(super::layout::REVEAL_HINT)))
+                    .on_click(move |event: &ClickEvent, _, _: &mut gpui::App| {
+                        if crate::keymap::link_modifier(&event.modifiers()) {
+                            crate::platform::reveal(&reveal);
+                        }
+                    })
+                    // Cut in the middle past 50 characters: a worktree path is mostly its ends, and
+                    // the whole thing pushed everything else off the bar.
+                    .child(crate::ui::middle_ellipsis(&tilde(&cwd), 50))
+            }))
             .child(div().flex_1().min_w_0().truncate().children(self.status.clone()))
             .children(self.render_plugin_status_items(cx))
             .children(self.render_docker_chip(cx))
             .children(self.render_db_chip(cx))
             .children(self.render_status_icons(cx))
-            .children(branch.map(|(branch, dirty, worktree)| {
-                div()
-                    .id("status-branch")
-                    .h_full()
-                    .px_1p5()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
-                    .tooltip(crate::ui::Tooltip::text(t(cx, "page.git"), Some("cmd-shift-g")))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_page(Page::Git, cx)))
-                    .child(icon("git-branch", 12., hex(Chrome::MUTED)))
-                    // Branch and worktree names come from the repository: keep them from pushing
-                    // the rest of the bar off screen.
-                    .child(div().max_w(px(220.)).truncate().child(if dirty { format!("{branch} •") } else { branch }))
-                    .children(
-                        worktree.map(|name| div().max_w(px(160.)).truncate().text_color(hex(Chrome::MUTED)).child(format!("({name})"))),
-                    )
-            }))
     }
 }
 
@@ -2272,4 +2640,16 @@ fn with_version(name: &str, version: Option<&str>) -> String {
 /// Stable identifier for favorites: `claude:<id>` / `codex:<id>`.
 fn session_key(session: &agentty_bridge::model::SessionInfo) -> String {
     format!("{}:{}", session.agent.id(), session.id)
+}
+
+/// Title of a closed tab (its first pane) and how many panes it had.
+fn closed_tab_label(node: &super::persist::NodeSnapshot) -> (String, usize) {
+    match node {
+        super::persist::NodeSnapshot::Pane(pane) => (pane.title.clone(), 1),
+        super::persist::NodeSnapshot::Split { children, .. } => {
+            let parts: Vec<(String, usize)> = children.iter().map(closed_tab_label).collect();
+            let title = parts.first().map(|(t, _)| t.clone()).unwrap_or_default();
+            (title, parts.iter().map(|(_, n)| n).sum())
+        }
+    }
 }

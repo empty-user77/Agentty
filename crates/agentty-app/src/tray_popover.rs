@@ -12,8 +12,8 @@ use crate::ui::TypeScale;
 use crate::workbench::mini::AgentSummary;
 use crate::workbench::AccountUsage;
 use gpui::{
-    div, prelude::*, px, size, App, Bounds, ClickEvent, Context, FocusHandle, FontWeight, Global, KeyDownEvent, SharedString, Subscription,
-    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    div, prelude::*, px, size, App, Bounds, ClickEvent, Context, FocusHandle, Global, KeyDownEvent, SharedString, Subscription, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use std::time::{Duration, Instant};
 
@@ -196,7 +196,7 @@ impl TrayPopover {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().t_body().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child("Agentty"))
+                    .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child("Agentty"))
                     .child(
                         div()
                             .flex()
@@ -238,8 +238,16 @@ impl TrayPopover {
                     .child(
                         div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(account.agent.display_name()),
                     )
-                    .child(div().t_small().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(account.cost_label())),
+                    .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(account.cost_label())),
             );
+            // Limits are only written while an agent works: say so instead of passing off old numbers.
+            if let Some(age) = account.stale_for(crate::ui::now_ms()) {
+                row = row.child(div().t_caption().text_color(hex(Chrome::MUTED)).child(tf(
+                    cx,
+                    "tray.limits_stale",
+                    &[("ago", &crate::ui::relative_time(age, 0))],
+                )));
+            }
             for limit in account.windows() {
                 let percent = limit.used_percent.clamp(0., 100.) as f32;
                 let bar_color = if percent >= 90. {
@@ -293,6 +301,21 @@ impl TrayPopover {
                 .cursor_pointer()
                 .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
                 .child(div().flex_1().child(t(cx, "tray.usage_title")))
+                .child(
+                    div()
+                        .id("tray-usage-refresh")
+                        .p_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hex_alpha(Chrome::BRIGHT, 0.08)))
+                        .tooltip(crate::ui::Tooltip::text(t(cx, "usage.refresh"), None))
+                        // Stays open: the numbers land in the panel the user is looking at.
+                        .on_click(|_, _, cx| {
+                            cx.stop_propagation();
+                            push_action(TrayAction::RefreshUsage);
+                        })
+                        .child(crate::ui::icon("refresh-cw", 11., hex(Chrome::MUTED))),
+                )
                 .child(crate::ui::icon("chevron-right", 12., hex(Chrome::MUTED)))
                 .on_click(Self::run(TrayAction::OpenUsage)),
             rows,
@@ -368,7 +391,7 @@ impl TrayPopover {
             .bg(hex(Chrome::OVERLAY))
             .border_1()
             .border_color(hex(Chrome::BORDER))
-            .child(div().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(title))
+            .child(div().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title))
             .child(body)
     }
 

@@ -15,6 +15,10 @@ pub struct PaneSnapshot {
     pub title: String,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// What was actually running in the pane ("claude", "codex", "shell", …), which is not always
+    /// what it was started as. Kept so a folded-away workspace shows the logo it had open.
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +48,22 @@ pub struct WorkspaceSnapshot {
     pub tabs: Vec<TabSnapshot>,
     #[serde(default)]
     pub active_tab: usize,
+    /// Tabs closed in this workspace, newest first ("recently closed tabs").
+    #[serde(default)]
+    pub closed_tabs: Vec<TabSnapshot>,
+    /// Legacy: an index into the old fixed accent list. Read, never written.
+    #[serde(default)]
+    pub color: Option<usize>,
+    /// The colour the card is filled with, as `0xRRGGBB`.
+    #[serde(default)]
+    pub color_value: Option<u32>,
+    /// The branch the workspace was last on. The folder is read again in the background, so this
+    /// is only what the card shows until that answer arrives.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// When one of its panes last said something, so a closed workspace keeps its "5분 전".
+    #[serde(default)]
+    pub last_activity_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +73,11 @@ pub struct GroupSnapshot {
     pub name: String,
     #[serde(default)]
     pub collapsed: bool,
+    /// Legacy accent index, read for layouts written before colours were free-form.
+    #[serde(default)]
+    pub color: Option<usize>,
+    #[serde(default)]
+    pub color_value: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -266,9 +291,40 @@ mod tests {
         assert!(closed.contains(5) && !closed.contains(1));
     }
 
+    /// A layout written before a workspace remembered its last state still loads, and what is
+    /// written now comes back whole.
+    #[test]
+    fn last_state_survives_the_round_trip() {
+        let old = r#"{"id":1,"cwd":"/tmp","tabs":[]}"#;
+        let loaded: WorkspaceSnapshot = serde_json::from_str(old).unwrap();
+        assert_eq!(loaded.branch, None);
+        assert_eq!(loaded.last_activity_ms, None);
+        let saved = WorkspaceSnapshot {
+            branch: Some("feat/cards".into()),
+            last_activity_ms: Some(1_700_000_000_000),
+            tabs: vec![TabSnapshot {
+                layout: NodeSnapshot::Pane(PaneSnapshot {
+                    kind: PaneKind::Shell,
+                    cwd: "/tmp".into(),
+                    title: "t".into(),
+                    session_id: None,
+                    tool: Some("claude".into()),
+                }),
+                active_pane: 0,
+            }],
+            ..loaded
+        };
+        let back: WorkspaceSnapshot = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(back.branch.as_deref(), Some("feat/cards"));
+        assert_eq!(back.last_activity_ms, Some(1_700_000_000_000));
+        let NodeSnapshot::Pane(pane) = &back.tabs[0].layout else { panic!("one pane") };
+        assert_eq!(pane.tool.as_deref(), Some("claude"));
+    }
+
     #[test]
     fn layout_roundtrip() {
-        let pane = |title: &str| PaneSnapshot { kind: PaneKind::Shell, cwd: "/tmp".into(), title: title.into(), session_id: None };
+        let pane =
+            |title: &str| PaneSnapshot { kind: PaneKind::Shell, cwd: "/tmp".into(), title: title.into(), session_id: None, tool: None };
         let mut tree = PaneNode::Leaf(pane("a"));
         tree.split(&pane("a"), pane("b"), Axis::Vertical);
         let json = serde_json::to_string(&NodeSnapshot::from_tree(&tree)).unwrap();

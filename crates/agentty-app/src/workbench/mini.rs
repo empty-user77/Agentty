@@ -1,6 +1,7 @@
 //! Mini background mode: the main window folds into a small always-on-top panel at the right
 //! edge of the screen that lists agent panes. Finished or waiting agents pop up as speech
-//! bubbles; clicking a bubble, a row or the expand button brings the full window back.
+//! bubbles; clicking a row opens that terminal in a small peek window beside the panel, and the
+//! peek's ⤢ button (or the expand button) brings the full window back.
 
 use super::{status_label, Workbench};
 use crate::i18n::{t, tf};
@@ -10,7 +11,7 @@ use crate::terminal::NoticeKind;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
 use gpui::{
-    div, prelude::*, px, size, AnyWindowHandle, App, Bounds, ClickEvent, Context, Entity, FontWeight, Subscription, WeakEntity, Window,
+    div, prelude::*, px, size, AnyWindowHandle, App, Bounds, ClickEvent, Context, Entity, Subscription, WeakEntity, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use std::time::{Duration, Instant};
@@ -25,6 +26,10 @@ const MAX_BUBBLES: usize = 3;
 const RECENT_ROWS: usize = 5;
 const MAX_ROWS: usize = 16;
 const MORE_ROW: f32 = 30.;
+/// The peek window that a row opens: big enough to read a turn, small enough to stay a peek.
+const PEEK_WIDTH: f32 = 560.;
+const PEEK_HEIGHT: f32 = 380.;
+const PEEK_HEADER: f32 = 30.;
 
 /// One agent pane as the mini panel and the menu bar show it.
 #[derive(Clone, Debug, PartialEq)]
@@ -69,11 +74,83 @@ pub struct MiniState {
     pub view: Entity<MiniView>,
     /// Main window frame to restore.
     pub saved_frame: Option<Frame>,
+    /// The terminal being peeked at beside the panel, if any.
+    pub peek: Option<(WindowHandle<MiniPeek>, u64)>,
+}
+
+/// One terminal shown beside the mini panel, without unfolding the whole app.
+pub struct MiniPeek {
+    workbench: WeakEntity<Workbench>,
+    main_window: AnyWindowHandle,
+    pane: super::Pane,
+    pane_id: u64,
+    _observe: Subscription,
+}
+
+impl MiniPeek {
+    fn new(workbench: &Entity<Workbench>, main_window: AnyWindowHandle, pane: super::Pane, cx: &mut Context<Self>) -> Self {
+        let pane_id = pane.read(cx).pane_id;
+        Self { workbench: workbench.downgrade(), main_window, _observe: cx.observe(&pane, |_, _, cx| cx.notify()), pane, pane_id }
+    }
+}
+
+impl gpui::Render for MiniPeek {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = self.pane.read(cx).display_title();
+        let tool = self.pane.read(cx).tool_id();
+        let pane_id = self.pane_id;
+        let main = self.main_window;
+        let workbench = self.workbench.clone();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .rounded_lg()
+            .overflow_hidden()
+            .bg(hex(Chrome::EDITOR))
+            .border_1()
+            .border_color(hex(Chrome::OVERLAY_BORDER))
+            .shadow_lg()
+            .child(
+                div()
+                    .h(px(PEEK_HEADER))
+                    .flex_shrink_0()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .bg(hex(Chrome::TAB_INACTIVE))
+                    .border_b_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .child(crate::brand::avatar(tool, 14.))
+                    .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(title))
+                    // The full app, with this pane in front: the old behaviour, now a button.
+                    .child(
+                        crate::ui::icon_only("mini-peek-expand", "maximize-2", move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                            cx.defer(move |cx| {
+                                let _ = main.update(cx, |root, window, cx| {
+                                    if let Ok(handle) = root.downcast::<Workbench>() {
+                                        handle.update(cx, |wb, cx| wb.exit_mini(Some(pane_id), window, cx));
+                                    }
+                                });
+                            });
+                        })
+                        .tooltip(crate::ui::Tooltip::text(t(cx, "mini.peek_expand"), None)),
+                    )
+                    .child(crate::ui::icon_only("mini-peek-close", "x", move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                        let workbench = workbench.clone();
+                        cx.defer(move |cx| {
+                            let _ = workbench.update(cx, |wb, cx| wb.close_mini_peek(cx));
+                        });
+                    })),
+            )
+            .child(div().flex_1().min_h_0().child(self.pane.clone()))
+    }
 }
 
 pub struct MiniView {
     workbench: WeakEntity<Workbench>,
-    main_window: AnyWindowHandle,
+    pub(super) main_window: AnyWindowHandle,
     bubbles: Vec<Bubble>,
     height: f32,
     /// "More" pressed: every agent is listed and the panel grows.
@@ -111,6 +188,14 @@ impl MiniView {
         self.bubbles.insert(0, Bubble { pane_id, title, text, color, at: Instant::now() });
         self.bubbles.truncate(MAX_BUBBLES);
         cx.notify();
+    }
+
+    /// Shows one terminal beside the panel, leaving the app folded away.
+    fn peek(&mut self, pane_id: u64, cx: &mut Context<Self>) {
+        let workbench = self.workbench.clone();
+        cx.defer(move |cx| {
+            let _ = workbench.update(cx, |wb, cx| wb.open_mini_peek(pane_id, cx));
+        });
     }
 
     fn restore(&mut self, focus: Option<u64>, cx: &mut Context<Self>) {
@@ -208,7 +293,7 @@ impl Render for MiniView {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(crate::theme::EMPHASIS)
                                     .text_color(hex(Chrome::BRIGHT))
                                     .child(bubble.title),
                             )
@@ -259,7 +344,8 @@ impl Render for MiniView {
                     .gap_2()
                     .cursor_pointer()
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(Some(pane_id), cx)))
+                    // A row peeks at that terminal; the peek's ⤢ opens the full window.
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.peek(pane_id, cx)))
                     .child(
                         div()
                             .relative()
@@ -355,7 +441,7 @@ impl Render for MiniView {
                                 .bg(hex(if working > 0 { Chrome::ORANGE } else { Chrome::SUCCESS })),
                         ),
                     )
-                    .child(div().t_small().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child("Agentty"))
+                    .child(div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child("Agentty"))
                     .child(div().flex_1().min_w_0().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(summary))
                     .child(crate::ui::icon_only(
                         "mini-expand",
@@ -441,6 +527,7 @@ impl Workbench {
                 self.page = Some(super::Page::Usage);
                 cx.notify();
             }
+            TrayAction::RefreshUsage => self.refresh_account_usage(cx),
             // Outside this window's update, so it can ask about unsaved files first.
             TrayAction::Quit => cx.defer(crate::request_quit),
             // Handled by the app loop (`tray_popover`).
@@ -460,6 +547,64 @@ impl Workbench {
             self.onboarding_event(super::onboarding::TourEvent::MiniEntered, cx);
             self.enter_mini(window, cx);
         }
+    }
+
+    /// Opens (or moves) the peek window beside the mini panel, showing `pane_id`'s terminal.
+    /// It goes on whichever side of the panel has room, so the panel stays readable.
+    pub(super) fn open_mini_peek(&mut self, pane_id: u64, cx: &mut Context<Self>) {
+        let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id) else { return };
+        if self.mini.as_ref().is_some_and(|m| m.peek.as_ref().is_some_and(|(_, id)| *id == pane_id)) {
+            return self.close_mini_peek(cx);
+        }
+        self.close_mini_peek(cx);
+        let Some(mini) = self.mini.as_ref() else { return };
+        let panel = mini.handle.update(cx, |_, window, _| native::ns_window(window).map(native::frame)).ok().flatten();
+        let Some(panel) = panel else { return };
+        let display = cx.displays().into_iter().next();
+        let bounds = display.as_ref().map(|d| d.bounds());
+        // Left of the panel by default; right of it when the panel sits at the left edge.
+        let (screen_left, screen_width) =
+            bounds.map(|b| (f32::from(b.origin.x) as f64, f32::from(b.size.width) as f64)).unwrap_or((0., PEEK_WIDTH as f64 * 3.));
+        let gap = 10.;
+        let left = if panel.x - gap - PEEK_WIDTH as f64 >= screen_left {
+            panel.x - gap - PEEK_WIDTH as f64
+        } else {
+            (panel.x + panel.width + gap).min(screen_left + screen_width - PEEK_WIDTH as f64)
+        };
+        let top = f32::from(bounds.map(|b| b.origin.y).unwrap_or(px(0.))) as f64;
+        let screen_height = bounds.map(|b| f32::from(b.size.height) as f64).unwrap_or(900.);
+        let top_inset = (screen_height - (panel.y + panel.height)).max(0.) + top;
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                gpui::point(px(left as f32), px(top_inset as f32)),
+                size(px(PEEK_WIDTH), px(PEEK_HEIGHT)),
+            ))),
+            titlebar: None,
+            focus: true,
+            show: true,
+            kind: WindowKind::PopUp,
+            is_movable: true,
+            is_resizable: true,
+            is_minimizable: false,
+            display_id: display.as_ref().map(|d| d.id()),
+            window_background: WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        };
+        let workbench = cx.entity();
+        let main_handle = mini.view.read(cx).main_window;
+        let Ok(handle) = cx.open_window(options, move |_, cx| cx.new(|cx| MiniPeek::new(&workbench, main_handle, pane, cx))) else {
+            return;
+        };
+        if let Some(mini) = self.mini.as_mut() {
+            mini.peek = Some((handle, pane_id));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn close_mini_peek(&mut self, cx: &mut Context<Self>) {
+        let Some((handle, _)) = self.mini.as_mut().and_then(|m| m.peek.take()) else { return };
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        cx.notify();
     }
 
     /// Folds the window into the top-right corner, then shows the mini panel there.
@@ -528,7 +673,7 @@ impl Workbench {
             native::set_frame(main, saved, false);
             let _ = this.update(cx, |this, cx| {
                 this.mini_opening = false;
-                this.mini = Some(MiniState { handle, view, saved_frame: Some(saved) });
+                this.mini = Some(MiniState { handle, view, saved_frame: Some(saved), peek: None });
                 cx.notify();
             });
         })
@@ -537,6 +682,7 @@ impl Workbench {
 
     /// Closes the mini panel and grows the main window back from it.
     pub fn exit_mini(&mut self, focus: Option<u64>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_mini_peek(cx);
         let Some(mini) = self.mini.take() else { return };
         self.onboarding_event(super::onboarding::TourEvent::MiniLeft, cx);
         let mini_frame = mini.handle.update(cx, |_, w, _| native::ns_window(w).map(native::frame)).ok().flatten();

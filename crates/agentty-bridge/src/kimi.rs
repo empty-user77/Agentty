@@ -9,6 +9,12 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Where this agent keeps its sessions, for the guard on deleting one. `KIMI_SHARE_DIR` moves
+/// it, so this is read rather than assumed.
+pub fn session_root() -> PathBuf {
+    share_dir()
+}
+
 fn share_dir() -> PathBuf {
     std::env::var_os("KIMI_SHARE_DIR").map(PathBuf::from).unwrap_or_else(|| fsutil::home().join(".kimi"))
 }

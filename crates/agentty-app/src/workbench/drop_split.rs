@@ -7,7 +7,7 @@ use super::{Pane, Tab, Workbench};
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, TypeScale};
-use gpui::{div, prelude::*, px, relative, AnyElement, ClickEvent, Context, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, px, relative, AnyElement, ClickEvent, Context, SharedString, Window};
 
 /// A split pane dragged by its header, for rearranging a tab's layout.
 #[derive(Clone)]
@@ -147,7 +147,17 @@ impl Workbench {
             None => {
                 let cwd = tab.active.read(cx).display_cwd();
                 let id = self.next_id();
-                self.workspaces.push(super::Workspace { id, name: None, group: None, cwd, tabs: vec![tab], active_tab: 0, dormant: None });
+                self.workspaces.push(super::Workspace {
+                    id,
+                    name: None,
+                    group: None,
+                    cwd,
+                    tabs: vec![tab],
+                    active_tab: 0,
+                    dormant: None,
+                    closed_tabs: Vec::new(),
+                    color: None,
+                });
                 self.active_workspace = self.workspaces.len() - 1;
             }
         }
@@ -387,7 +397,7 @@ impl Workbench {
                         .child(
                             div()
                                 .t_body()
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .font_weight(crate::theme::EMPHASIS)
                                 .text_color(hex(if connectable { Chrome::BRIGHT } else { Chrome::MUTED }))
                                 .child(if connectable {
                                     tf(cx, "collab.pick_this", &[("name", &title)])

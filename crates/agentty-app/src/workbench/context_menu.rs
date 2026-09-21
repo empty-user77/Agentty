@@ -150,7 +150,7 @@ impl Workbench {
                 .items_center()
                 .gap_1p5()
                 .t_caption()
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(crate::theme::EMPHASIS)
                 .text_color(hex(Chrome::MUTED))
                 .child(title)
                 .children(count.map(|n| div().font_weight(FontWeight::NORMAL).child(n.to_string())))
@@ -211,7 +211,9 @@ impl Workbench {
                     .flex()
                     .items_baseline()
                     .gap_1p5()
-                    .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(compact_number(s.used)))
+                    .child(
+                        div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(compact_number(s.used)),
+                    )
                     .when(s.window > 0, |d| {
                         d.child(
                             div().t_small().text_color(hex(Chrome::MUTED)).child(format!("/ {} · {percent:.0}%", compact_number(s.window))),

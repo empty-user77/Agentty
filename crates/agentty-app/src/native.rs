@@ -74,6 +74,71 @@ pub fn order_front_regardless(window: Id) {
     }
 }
 
+/// Opens macOS's own Emoji & Symbols palette. What it picks is typed into whatever has the
+/// keyboard, which is the text field the user right-clicked in.
+pub fn show_character_palette() {
+    unsafe {
+        let app: Id = msg_send![objc::class!(NSApplication), sharedApplication];
+        let nil: Id = std::ptr::null_mut();
+        let _: () = msg_send![app, orderFrontCharacterPalette: nil];
+    }
+}
+
+/// Opens macOS's own colour panel (wheel, sliders, crayons, hex) starting at `color`.
+pub fn open_color_panel(color: u32) {
+    unsafe {
+        let panel: Id = msg_send![objc::class!(NSColorPanel), sharedColorPanel];
+        if panel.is_null() {
+            return;
+        }
+        let component = |shift: u32| ((color >> shift) & 0xff) as f64 / 255.0;
+        let ns_color: Id = msg_send![
+            objc::class!(NSColor),
+            colorWithSRGBRed: component(16) green: component(8) blue: component(0) alpha: 1.0f64
+        ];
+        let _: () = msg_send![panel, setColor: ns_color];
+        let _: () = msg_send![panel, setShowsAlpha: NO];
+        let nil: Id = std::ptr::null_mut();
+        let _: () = msg_send![panel, orderFront: nil];
+    }
+}
+
+/// The colour the panel shows right now, as `0xRRGGBB`.
+pub fn color_panel_color() -> Option<u32> {
+    unsafe {
+        let panel: Id = msg_send![objc::class!(NSColorPanel), sharedColorPanel];
+        if panel.is_null() {
+            return None;
+        }
+        let color: Id = msg_send![panel, color];
+        if color.is_null() {
+            return None;
+        }
+        let space: Id = msg_send![objc::class!(NSColorSpace), sRGBColorSpace];
+        let color: Id = msg_send![color, colorUsingColorSpace: space];
+        if color.is_null() {
+            return None;
+        }
+        let channel = |selector_value: f64| ((selector_value.clamp(0., 1.) * 255.0).round() as u32) & 0xff;
+        let red: f64 = msg_send![color, redComponent];
+        let green: f64 = msg_send![color, greenComponent];
+        let blue: f64 = msg_send![color, blueComponent];
+        Some((channel(red) << 16) | (channel(green) << 8) | channel(blue))
+    }
+}
+
+/// Whether the colour panel is still on screen (the live preview stops when it closes).
+pub fn color_panel_visible() -> bool {
+    unsafe {
+        let panel: Id = msg_send![objc::class!(NSColorPanel), sharedColorPanel];
+        if panel.is_null() {
+            return false;
+        }
+        let visible: objc::runtime::BOOL = msg_send![panel, isVisible];
+        visible == YES
+    }
+}
+
 /// Sends the window behind every other one (the debug driver paints a hidden window and steps back).
 pub fn order_back(window: Id) {
     unsafe {

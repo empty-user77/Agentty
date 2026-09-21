@@ -8,7 +8,12 @@ use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, now_ms, relative_time, IconSize, TypeScale};
 use agentty_bridge::claude::Subagent;
 use agentty_bridge::model::{Role, Turn};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, EntityId, FontWeight, SharedString};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, EntityId, SharedString};
+
+/// The link chip picks a terminal; the panel behind it is one modifier away.
+/// What ⌘-click does on the link chip, which is the other of the two things it can do.
+const LINKS_PANEL_HINT: &str = "⌘ click → links";
+const LINKS_PICK_HINT: &str = "⌘ click → connect another";
 use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -20,6 +25,8 @@ pub enum PanelTab {
 pub struct AgentPanel {
     pub pane: EntityId,
     pub tab: PanelTab,
+    /// Sessions ticked in the "connect" list, to link them all at once.
+    pub selected_peers: Vec<u64>,
     pub subagents: Option<Vec<Subagent>>,
     pub selected: Option<String>,
     pub log: Option<Vec<Turn>>,
@@ -36,8 +43,15 @@ impl Workbench {
             self.agent_panel = None;
             return cx.notify();
         }
-        self.agent_panel =
-            Some(AgentPanel { pane: id, tab, subagents: None, selected: None, log: None, scroll: gpui::ScrollHandle::new() });
+        self.agent_panel = Some(AgentPanel {
+            pane: id,
+            tab,
+            selected_peers: Vec::new(),
+            subagents: None,
+            selected: None,
+            log: None,
+            scroll: gpui::ScrollHandle::new(),
+        });
         if tab == PanelTab::Agents {
             // Refresh while open: subagents come and go during a turn.
             cx.spawn(async move |this, cx| loop {
@@ -108,8 +122,8 @@ impl Workbench {
                 .rounded_sm()
                 .cursor_pointer()
                 .text_color(hex(color))
-                .bg(if active { hex_alpha(color, 0.25) } else { hex_alpha(color, 0.12) })
-                .hover(|s| s.bg(hex_alpha(color, 0.3)))
+                .when(active, |d| d.bg(hex_alpha(color, 0.22)))
+                .hover(|s| s.bg(hex_alpha(color, 0.22)))
                 .child(icon(glyph, 12., hex(color)))
                 .child(label)
         };
@@ -130,10 +144,21 @@ impl Workbench {
                     },
                     open == Some(PanelTab::Links),
                 )
-                .tooltip(crate::ui::Tooltip::text(t(cx, if links > 0 { "collab.links" } else { "collab.connect" }), None))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                .tooltip(if links > 0 {
+                    crate::ui::Tooltip::text(t(cx, "collab.links"), Some(LINKS_PICK_HINT))
+                } else {
+                    crate::ui::Tooltip::text(t(cx, "collab.pick"), Some(LINKS_PANEL_HINT))
+                })
+                // With nothing linked yet the chip has one job — make the first link — so it goes
+                // straight to picking a terminal. Once there are links it opens the panel that
+                // manages them, which carries "connect another" itself. ⌘-click is the other one.
+                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    this.toggle_agent_panel(&target, PanelTab::Links, cx);
+                    if (links > 0) != crate::keymap::link_modifier(&event.modifiers()) {
+                        this.toggle_agent_panel(&target, PanelTab::Links, cx);
+                    } else {
+                        this.start_connect_pick(pane_id, cx);
+                    }
                 })),
             );
         }
@@ -216,7 +241,7 @@ impl Workbench {
                                 } else {
                                     crate::ui::spinner(IconSize::INLINE, hex(Chrome::ORANGE)).into_any_element()
                                 })
-                                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(run.kind.clone()))
+                                .child(div().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(run.kind.clone()))
                                 .child(div().flex_1())
                                 .child(div().text_color(hex(Chrome::MUTED)).child(super::layout::format_elapsed(seconds))),
                         )
@@ -291,7 +316,9 @@ impl Workbench {
                             } else {
                                 crate::ui::spinner(IconSize::INLINE, hex(status_color)).into_any_element()
                             })
-                            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(agent.agent_type.clone()))
+                            .child(
+                                div().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(agent.agent_type.clone()),
+                            )
                             .children(agent.model.clone().map(|m| div().text_color(hex(Chrome::MUTED)).child(m)))
                             .child(div().flex_1())
                             .child(div().text_color(hex(Chrome::MUTED)).child(relative_time(now, agent.updated_ms))),
@@ -349,7 +376,7 @@ impl Workbench {
                     .border_b_1()
                     .border_color(hex(Chrome::OVERLAY_BORDER))
                     .child(icon("bot", IconSize::INLINE, hex(Chrome::FOREGROUND)))
-                    .child(div().t_body().font_weight(FontWeight::SEMIBOLD).child(t(cx, "collab.agents")))
+                    .child(div().t_body().font_weight(crate::theme::EMPHASIS).child(t(cx, "collab.agents")))
                     .child(div().t_small().text_color(hex(Chrome::MUTED)).child(tf(
                         cx,
                         "collab.agents_count",
@@ -432,7 +459,7 @@ impl Workbench {
                             .child(crate::brand::avatar(view.tool_id(), 16.))
                             .child(
                                 div()
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(crate::theme::EMPHASIS)
                                     .text_color(hex(Chrome::BRIGHT))
                                     .truncate()
                                     .child(view.display_title()),
@@ -521,11 +548,13 @@ impl Workbench {
                     .items_center()
                     .gap_2()
                     .child(
-                        div().flex_1().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(
+                        div().flex_1().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(
                             if edges.is_empty() { t(cx, "collab.connect_first") } else { t(cx, "collab.connect_more") }.to_uppercase(),
                         ),
                     )
                     // Tab names say little when there are many of them: let the user click the pane.
+                    // A button, not a line of text: with links already made this is the way back
+                    // into picking another terminal, and it has to be found at a glance.
                     .when(!candidates.is_empty(), |d| {
                         d.child(
                             div()
@@ -533,10 +562,15 @@ impl Workbench {
                                 .flex()
                                 .items_center()
                                 .gap_1()
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
                                 .t_small()
-                                .text_color(hex(Chrome::BLUE))
                                 .cursor_pointer()
-                                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                                .border_1()
+                                .border_color(hex_alpha(Chrome::BLUE, 0.6))
+                                .text_color(hex(Chrome::BLUE))
+                                .hover(|s| s.bg(hex_alpha(Chrome::BLUE, 0.18)).text_color(hex(Chrome::BRIGHT)))
                                 .child(icon("square-terminal", IconSize::INLINE, hex(Chrome::BLUE)))
                                 .child(t(cx, "collab.pick"))
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.start_connect_pick(pane_id, cx))),
@@ -544,7 +578,15 @@ impl Workbench {
                     }),
             );
         if candidates.is_empty() {
-            connect = connect.child(crate::ui::hint(t(cx, "collab.no_targets")));
+            // Links live in one window: say so rather than leave an empty list with no reason.
+            let elsewhere = crate::workbenches(cx)
+                .into_iter()
+                .filter_map(|handle| handle.read(cx).ok())
+                .filter(|other| other.slot != self.slot)
+                .map(|other| other.agent_pane_count(cx))
+                .sum::<usize>();
+            let text = if elsewhere > 0 { t(cx, "collab.other_window") } else { t(cx, "collab.no_targets") };
+            connect = connect.child(crate::ui::hint(text));
         }
         for (index, peer) in candidates.iter().enumerate() {
             let view = peer.read(cx);
@@ -575,6 +617,7 @@ impl Workbench {
                     .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
                     .child(label)
             };
+            let ticked = self.agent_panel.as_ref().is_some_and(|p| p.selected_peers.contains(&peer_id));
             connect = connect.child(
                 div()
                     .px_2()
@@ -585,6 +628,35 @@ impl Workbench {
                     .gap_2()
                     .t_small()
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    // Tick several, connect them in one go: one session working with three others
+                    // should not be four trips through this list.
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("connect-tick-{index}")))
+                            .size(px(14.))
+                            .flex_shrink_0()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hex(if ticked { Chrome::ACCENT } else { Chrome::OVERLAY_BORDER }))
+                            .bg(if ticked { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(ticked, |d| d.child(icon("check", 10., hex(Chrome::BRIGHT))))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                if let Some(panel) = this.agent_panel.as_mut() {
+                                    match panel.selected_peers.iter().position(|id| *id == peer_id) {
+                                        Some(at) => panel.selected_peers.remove(at),
+                                        None => {
+                                            panel.selected_peers.push(peer_id);
+                                            peer_id
+                                        }
+                                    };
+                                }
+                                cx.notify();
+                            })),
+                    )
                     .child(crate::brand::avatar(view.tool_id(), 16.))
                     .child(div().min_w_0().truncate().text_color(hex(Chrome::BRIGHT)).child(view.display_title()))
                     .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(location))
@@ -610,6 +682,53 @@ impl Workbench {
             );
         }
 
+        let ticked: Vec<u64> = self.agent_panel.as_ref().map(|p| p.selected_peers.clone()).unwrap_or_default();
+        let ticked: Vec<u64> = ticked.into_iter().filter(|id| candidates.iter().any(|p| p.read(cx).pane_id == *id)).collect();
+        if !ticked.is_empty() {
+            let (share, live) = (ticked.clone(), ticked.clone());
+            connect = connect.child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().t_caption().text_color(hex(Chrome::MUTED)).child(tf(
+                        cx,
+                        "collab.selected",
+                        &[("n", &ticked.len().to_string())],
+                    )))
+                    .child(
+                        div()
+                            .id("connect-selected-share")
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .t_small()
+                            .cursor_pointer()
+                            .bg(hex(0x2d2d30))
+                            .text_color(hex(Chrome::FOREGROUND))
+                            .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+                            .child(t(cx, "collab.share_context"))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.connect_many(pane_id, &share, false, cx))),
+                    )
+                    .child(
+                        div()
+                            .id("connect-selected-live")
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .t_small()
+                            .cursor_pointer()
+                            .bg(hex_alpha(Chrome::ACCENT, 0.9))
+                            .text_color(hex(Chrome::BRIGHT))
+                            .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                            .child(t(cx, "collab.make_live"))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.connect_many(pane_id, &live, true, cx))),
+                    ),
+            );
+        }
+
         div()
             .flex()
             .flex_col()
@@ -623,7 +742,7 @@ impl Workbench {
                     .border_b_1()
                     .border_color(hex(Chrome::OVERLAY_BORDER))
                     .child(icon("link", IconSize::INLINE, hex(Chrome::FOREGROUND)))
-                    .child(div().flex_1().t_body().font_weight(FontWeight::SEMIBOLD).child(t(cx, "collab.links")))
+                    .child(div().flex_1().t_body().font_weight(crate::theme::EMPHASIS).child(t(cx, "collab.links")))
                     .when(!edges.is_empty(), |d| {
                         d.child(
                             div()

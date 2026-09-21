@@ -10,8 +10,8 @@ use crate::ui::{hint, kind_color, tilde};
 use agentty_bridge::claude::PeerSession;
 use agentty_bridge::model::Agent;
 use gpui::{
-    canvas, div, point, prelude::*, px, size, Bounds, ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, PathBuilder, Pixels,
-    Point, SharedString, Window,
+    canvas, div, point, prelude::*, px, size, Bounds, ClickEvent, Context, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point,
+    SharedString, Window,
 };
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -159,7 +159,78 @@ impl FlowState {
     }
 }
 
+/// Workspaces a session link holds together, for the sidebar list. A link made from one
+/// workspace to another gathers the second under the first; links inside one workspace change
+/// nothing, since those panes already share a card.
+#[derive(Default)]
+pub(super) struct LinkedWorkspaces {
+    /// Workspace the link started from → the workspaces that joined it, in the order they did.
+    pub members: HashMap<usize, Vec<usize>>,
+    /// Every workspace listed under another one, so the list never shows it twice.
+    pub followers: HashSet<usize>,
+}
+
+/// Gathers linked workspaces, given the links as pairs of workspace indices in the order they
+/// were made. A pair of the same workspace (two panes of one card) is left alone.
+fn cluster_links(pairs: impl Iterator<Item = (usize, usize)>) -> LinkedWorkspaces {
+    let mut root_of: HashMap<usize, usize> = HashMap::new();
+    let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (from, to) in pairs {
+        if from == to {
+            continue;
+        }
+        // The cluster hangs off the workspace the first of its links started from.
+        let root = root_of.get(&from).copied().unwrap_or(from);
+        // A link back to the root — the "two way" button on an edge, or any ring of links — has
+        // nothing to move: taking the root's own list apart here would leave its members listed
+        // under no root at all, and the sidebar would stop showing them.
+        if to == root {
+            continue;
+        }
+        // Whatever already hangs off the joining workspace comes along with it.
+        let moving: Vec<usize> = std::iter::once(to).chain(members.remove(&to).unwrap_or_default()).collect();
+        for index in moving {
+            if index == root {
+                continue;
+            }
+            match root_of.insert(index, root) {
+                Some(previous) if previous == root => continue,
+                // It hung off another workspace before; it cannot be in two places at once.
+                Some(previous) => {
+                    if let Some(list) = members.get_mut(&previous) {
+                        list.retain(|i| *i != index);
+                    }
+                }
+                None => {}
+            }
+            members.entry(root).or_default().push(index);
+        }
+    }
+    LinkedWorkspaces { followers: root_of.keys().copied().collect(), members }
+}
+
 impl Workbench {
+    /// Reads the links as clusters of workspaces. Nothing is stored: unlinking makes the clusters
+    /// disappear on the next frame and the list goes back to its plain order.
+    pub(super) fn linked_workspaces(&self, cx: &gpui::App) -> LinkedWorkspaces {
+        if self.flow.edges().is_empty() {
+            return LinkedWorkspaces::default();
+        }
+        let mut of_pane: HashMap<u64, usize> = HashMap::new();
+        for (index, ws) in self.workspaces.iter().enumerate() {
+            for pane in ws.tabs.iter().flat_map(|t| t.root.leaves()) {
+                of_pane.insert(pane.read(cx).pane_id, index);
+            }
+        }
+        let pairs = self.flow.edges().iter().filter_map(|edge| Some((*of_pane.get(&edge.from)?, *of_pane.get(&edge.to)?)));
+        cluster_links(pairs)
+    }
+
+    /// How many agent sessions run in this window (the link panel says when the others are elsewhere).
+    pub fn agent_pane_count(&self, cx: &gpui::App) -> usize {
+        self.agent_panes(cx).len()
+    }
+
     fn agent_panes(&self, cx: &gpui::App) -> Vec<Pane> {
         self.all_panes().into_iter().filter(|p| p.read(cx).is_agent() && p.read(cx).is_running()).collect()
     }
@@ -228,6 +299,18 @@ impl Workbench {
                     self.set_live(from, to, true, cx);
                 }
             }
+        }
+        cx.notify();
+    }
+
+    /// Links one session to several at once (the ticked sessions in the panel): one agent working
+    /// with a front end, an admin front end and a mobile app is one action, not three.
+    pub(super) fn connect_many(&mut self, from: u64, targets: &[u64], live: bool, cx: &mut Context<Self>) {
+        for to in targets {
+            self.connect_panes(from, *to, live, cx);
+        }
+        if let Some(panel) = self.agent_panel.as_mut() {
+            panel.selected_peers.clear();
         }
         cx.notify();
     }
@@ -656,7 +739,7 @@ impl Workbench {
                     .gap_3()
                     .border_b_1()
                     .border_color(hex(Chrome::BORDER))
-                    .child(div().t_large().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.flow")))
+                    .child(div().t_large().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.flow")))
                     .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "flow.hint"))),
             )
             .child(area)
@@ -738,7 +821,7 @@ impl Workbench {
                             .min_w_0()
                             .truncate()
                             .t_body()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::BRIGHT))
                             .child(view.display_title()),
                     )
@@ -870,7 +953,7 @@ impl Workbench {
                             .min_w_0()
                             .truncate()
                             .t_body()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::BRIGHT))
                             .child(title),
                     )
@@ -1004,5 +1087,55 @@ impl Workbench {
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.flow_disconnect(from, to, cx)),
                 )),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cluster_links;
+
+    /// Links between workspaces gather them under the one the first link started from; two panes
+    /// of the same workspace are not a cluster.
+    #[test]
+    fn links_gather_workspaces_under_their_source() {
+        let clusters = cluster_links([(0, 2), (0, 3), (5, 5)].into_iter());
+        assert_eq!(clusters.members.get(&0), Some(&vec![2, 3]));
+        assert!(clusters.followers.contains(&2) && clusters.followers.contains(&3));
+        assert!(!clusters.followers.contains(&0) && !clusters.followers.contains(&5));
+    }
+
+    /// A workspace that already carries followers brings them along, and never ends up listed
+    /// under two workspaces at once.
+    #[test]
+    fn a_joining_cluster_moves_whole() {
+        let clusters = cluster_links([(1, 2), (2, 3), (0, 1)].into_iter());
+        assert_eq!(clusters.members.get(&0), Some(&vec![1, 2, 3]));
+        assert_eq!(clusters.members.get(&1), None);
+        assert_eq!(clusters.followers.len(), 3);
+    }
+
+    /// A link back to the workspace a cluster already hangs off — the "two way" button on an edge
+    /// — must not take the cluster apart: its members would be listed nowhere at all.
+    #[test]
+    fn a_link_back_to_the_root_keeps_the_cluster() {
+        let both_ways = cluster_links([(0, 1), (1, 0)].into_iter());
+        assert_eq!(both_ways.members.get(&0), Some(&vec![1]));
+        assert_eq!(both_ways.followers.len(), 1);
+        // The same closing a longer ring.
+        let ring = cluster_links([(0, 1), (1, 2), (2, 0)].into_iter());
+        assert_eq!(ring.members.get(&0), Some(&vec![1, 2]));
+        assert_eq!(ring.followers.len(), 2);
+        // Whatever the shape, every follower is listed under exactly one root.
+        for clusters in [both_ways, ring] {
+            let listed: Vec<usize> = clusters.members.values().flatten().copied().collect();
+            assert_eq!(listed.len(), clusters.followers.len());
+            assert!(listed.iter().all(|i| clusters.followers.contains(i)));
+        }
+    }
+
+    #[test]
+    fn nothing_is_gathered_without_links() {
+        let clusters = cluster_links(std::iter::empty());
+        assert!(clusters.members.is_empty() && clusters.followers.is_empty());
     }
 }

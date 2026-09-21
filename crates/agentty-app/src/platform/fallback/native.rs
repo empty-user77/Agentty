@@ -38,3 +38,18 @@ pub fn window_number(_window: Id) -> isize {
 pub fn register_windows_menu(_index: usize) {}
 
 pub fn note_recent_folder(_path: &std::path::Path) {}
+
+/// Windows and Linux have no system-wide character palette to open from here.
+pub fn show_character_palette() {}
+
+/// Windows and Linux have no system colour panel to open from here; the palette in the menu is
+/// the way to pick a colour there.
+pub fn open_color_panel(_color: u32) {}
+
+pub fn color_panel_color() -> Option<u32> {
+    None
+}
+
+pub fn color_panel_visible() -> bool {
+    false
+}

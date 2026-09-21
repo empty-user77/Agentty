@@ -10,7 +10,7 @@ use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
 use agentty_bridge::plugins::manifest::{PanelMode, Surface, When};
 use agentty_bridge::plugins::ui::{Gap, Node, TextStyle, Tone, UiEvent, Variant};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, FontWeight, SharedString, Subscription, Window};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, SharedString, Subscription, Window};
 use std::time::Duration;
 
 /// A text field of a plugin panel, kept across renders.
@@ -165,7 +165,7 @@ impl Workbench {
                     .min_w_0()
                     .truncate()
                     .t_body()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(crate::theme::EMPHASIS)
                     .text_color(hex(Chrome::BRIGHT))
                     .child(panel_title),
             )
@@ -249,6 +249,7 @@ impl Workbench {
                         .track_scroll(&self.plugin_scroll)
                         .relative()
                         .child(body)
+                        .group(crate::ui::SCROLL_GROUP)
                         .child(crate::ui::scrollbar(self.plugin_scroll.clone())),
                 )
                 .into_any_element(),
@@ -364,7 +365,7 @@ impl Workbench {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(div().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(title.to_uppercase()))
+                    .child(div().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title.to_uppercase()))
                     .child(column)
                     .into_any_element()
             }
@@ -387,7 +388,7 @@ impl Workbench {
             Node::Text { text, style } => {
                 let base = div().min_w_0().whitespace_normal();
                 match style {
-                    TextStyle::Title => base.t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)),
+                    TextStyle::Title => base.t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)),
                     TextStyle::Muted => base.t_small().text_color(hex(Chrome::MUTED)),
                     TextStyle::Small => base.t_caption().text_color(hex(Chrome::MUTED)),
                     TextStyle::Code => base

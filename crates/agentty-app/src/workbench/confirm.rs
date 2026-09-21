@@ -5,7 +5,7 @@ use crate::i18n::{t, tf};
 use crate::settings::{settings, update_settings};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
-use gpui::{div, prelude::*, px, ClickEvent, Context, FontWeight, Window};
+use gpui::{div, prelude::*, px, ClickEvent, Context, Window};
 
 #[derive(Clone)]
 pub enum CloseTarget {
@@ -18,7 +18,7 @@ pub enum CloseTarget {
 pub struct CloseConfirm {
     pub target: CloseTarget,
     pub dont_ask: bool,
-    /// Closing it leaves the workspace empty, so the workspace goes away too.
+    /// Closing it leaves the workspace without tabs (it stays in the list, folded back to this tab).
     pub removes_workspace: bool,
     /// Linked working trees only the closing panes work in: they can go with them.
     pub trees: Vec<std::path::PathBuf>,
@@ -123,7 +123,11 @@ impl Workbench {
         match target {
             CloseTarget::Workspace(id) => self.close_workspace(id, window, cx),
             other => {
-                for pane in self.target_panes(&other) {
+                let panes = self.target_panes(&other);
+                // A tab closing as a whole is remembered with its splits, so "recently closed tabs"
+                // can put it back the way it was. Closing one split of a tab is not a tab closing.
+                self.remember_closed_tabs(&panes, cx);
+                for pane in panes {
                     self.remove_pane(&pane, cx);
                 }
                 self.focus_active(window, cx);
@@ -183,7 +187,7 @@ impl Workbench {
                         .border_1()
                         .border_color(hex(Chrome::OVERLAY_BORDER))
                         .shadow_lg()
-                        .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(title))
+                        .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title))
                         .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(body))
                         .when(!confirm.trees.is_empty(), |d| {
                             let remove = confirm.remove_trees;

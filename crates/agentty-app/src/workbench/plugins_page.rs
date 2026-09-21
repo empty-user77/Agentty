@@ -418,7 +418,7 @@ impl Workbench {
             .flex()
             .items_center()
             .gap_3()
-            .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.plugins")))
+            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.plugins")))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.subtitle")))
             .child(div().flex_1())
             .children(self.render_update_all(cx))
@@ -528,7 +528,7 @@ impl Workbench {
             .collect();
 
         let section = |title: String| {
-            div().px_3().pt_3().pb_1().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(title)
+            div().px_3().pt_3().pb_1().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title)
         };
         let mut list = div().w_full().flex().flex_col();
         list = list.child(section(tf(cx, "plugins.installed", &[("n", &installed_rows.len().to_string())])));
@@ -589,6 +589,7 @@ impl Workbench {
                     .overflow_y_scroll()
                     .track_scroll(&page.list_scroll)
                     .relative()
+                    .group(crate::ui::SCROLL_GROUP)
                     .child(list)
                     .child(crate::ui::scrollbar(page.list_scroll.clone())),
             )
@@ -692,7 +693,7 @@ impl Workbench {
                                     .min_w_0()
                                     .truncate()
                                     .t_body()
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(crate::theme::EMPHASIS)
                                     .text_color(hex(Chrome::BRIGHT))
                                     .child(row.name.clone()),
                             )
@@ -770,6 +771,7 @@ impl Workbench {
             .overflow_y_scroll()
             .track_scroll(&page.detail_scroll)
             .relative()
+            .group(crate::ui::SCROLL_GROUP)
             .child(body)
             .child(crate::ui::scrollbar(page.detail_scroll.clone()))
     }
@@ -792,7 +794,9 @@ impl Workbench {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().t_heading().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(manifest.name.clone()))
+                    .child(
+                        div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(manifest.name.clone()),
+                    )
                     .child(
                         div()
                             .flex()
@@ -832,7 +836,7 @@ impl Workbench {
                 .border_b_2()
                 .border_color(if active { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
                 .t_caption()
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(crate::theme::EMPHASIS)
                 .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::MUTED }))
                 .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
                 .child(t(cx, key).to_uppercase())
@@ -958,7 +962,7 @@ impl Workbench {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(div().t_title().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::BRIGHT)).child(plugin.id.clone()))
+                .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(plugin.id.clone()))
                 .child(div().t_small().text_color(hex(Chrome::ERROR)).child(plugin.error.clone().unwrap_or_default()))
                 .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(tilde(&plugin.dir)))
                 .child(div().flex().gap_2().child(action_button(
@@ -1321,7 +1325,7 @@ impl Workbench {
                         div().flex().items_center().gap_2().child(icon("wand-sparkles", IconSize::BUTTON, hex(Chrome::PURPLE))).child(
                             div()
                                 .t_title()
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .font_weight(crate::theme::EMPHASIS)
                                 .text_color(hex(Chrome::BRIGHT))
                                 .child(t(cx, "plugins.create_title")),
                         ),
@@ -1415,7 +1419,7 @@ fn ago(at: std::time::SystemTime, cx: &Context<Workbench>) -> String {
 }
 
 fn detail_heading(title: String) -> impl IntoElement {
-    div().t_caption().font_weight(FontWeight::SEMIBOLD).text_color(hex(Chrome::MUTED)).child(title.to_uppercase())
+    div().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title.to_uppercase())
 }
 
 /// The little coloured dot in front of a plugin's state.
