@@ -317,10 +317,15 @@ with `encodeURIComponent`. If the plugin is a built-in one that isn't installed,
 install it and then continues with the link.
 
 Links can come from anywhere, including web pages. Validate every parameter (the Cosmica plugin only
-opens `.md` files inside the Cosmica notes folder). For a minute after a link reaches a plugin,
-Agentty routes that plugin's `injectPrompt` calls through **Send to…** and refuses `sendToTerminal` —
-clicks in the panel the link opened don't lift this, so a link can't turn one click into typing
-inside a terminal.
+opens `.md` files inside the Cosmica notes folder). Once a link has reached a plugin, and for as
+long as that plugin keeps running, Agentty routes its `injectPrompt` calls through **Send to…**
+without pressing Enter and refuses `sendToTerminal` outright. Neither a click in the panel the link
+opened nor simply waiting lifts it — a plugin can wait as easily as a user can click — so a link
+cannot turn one click into typing inside a terminal. Restarting the plugin is what clears it.
+
+The one thing a plugin the link reached can still do outside Agentty is `openUrl`, one address at
+a time. So treat what a link carries as text from a stranger: never open an address it hands you
+without knowing what it is.
 
 ## The marketplace
 

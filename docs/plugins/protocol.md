@@ -131,7 +131,7 @@ Errors use these codes:
 |---|---|
 | `-32601` | unknown method |
 | `-32602` | invalid parameters (bad UI tree, no such pane, …) |
-| `-32001` | permission missing, or blocked for a minute after a link reached the plugin |
+| `-32001` | permission missing, or refused because a link reached the plugin (until it restarts) |
 | `-32002` | unavailable (no window open, no session yet) |
 
 ## Example session
