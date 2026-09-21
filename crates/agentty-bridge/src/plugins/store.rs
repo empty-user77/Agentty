@@ -101,8 +101,28 @@ impl InstalledPlugin {
     }
 }
 
+/// Folders an install left behind when it did not finish — Agentty closed, or the machine did,
+/// between staging a plugin and swapping it into place. They are named so that nothing reads them
+/// as a plugin, but they are a copy of one and they would sit there for good.
+fn sweep_unfinished() {
+    let Ok(entries) = std::fs::read_dir(plugins_dir()) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(".staging-") && !name.starts_with(".clone-") {
+            continue;
+        }
+        // Not one this Agentty is using right now: an install in flight has this process's id.
+        if name.ends_with(&format!("-{}", std::process::id())) {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(entry.path());
+    }
+}
+
 /// Every installed plugin, sorted by name. Folders without a manifest are skipped.
 pub fn installed() -> Vec<InstalledPlugin> {
+    sweep_unfinished();
     let state = StateFile::load();
     let mut found: BTreeMap<String, InstalledPlugin> = BTreeMap::new();
     if let Ok(entries) = std::fs::read_dir(plugins_dir()) {
@@ -480,6 +500,47 @@ pub(crate) mod tests {
         test(&dir);
         ROOT.with(|r| *r.borrow_mut() = None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_a_plugin_folder_does_not_pull_in_what_it_points_at() {
+        with_data_dir(|_| {
+            let source = std::env::temp_dir().join(format!("agentty-link-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&source);
+            std::fs::create_dir_all(source.join("secrets")).unwrap();
+            std::fs::write(source.join("secrets/key"), b"not_a_real_key").unwrap();
+            let folder = source.join("plugin");
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join(MANIFEST_FILE), r#"{"id":"linky","name":"Linky","version":"0.1.0","main":"main.mjs"}"#).unwrap();
+            std::fs::write(folder.join("main.mjs"), "// nothing").unwrap();
+            // A plugin folder that reaches outside itself: a link to a file, and one to a folder.
+            std::os::unix::fs::symlink(source.join("secrets/key"), folder.join("stolen")).unwrap();
+            std::os::unix::fs::symlink(source.join("secrets"), folder.join("stolen-dir")).unwrap();
+
+            let plugin = install_from_folder(&folder).unwrap();
+            assert!(plugin.active(), "{:?}", plugin.error);
+            assert!(plugin.dir.join("main.mjs").exists());
+            assert!(!plugin.dir.join("stolen").exists(), "a link to a file was copied");
+            assert!(!plugin.dir.join("stolen-dir").exists(), "a link to a folder was copied");
+            let _ = std::fs::remove_dir_all(&source);
+        });
+    }
+
+    #[test]
+    fn a_folder_left_by_an_install_that_did_not_finish_is_swept_up() {
+        with_data_dir(|_| {
+            let stale = plugins_dir().join(".staging-hello-999999");
+            let clone = plugins_dir().join(".clone-999999");
+            let mine = plugins_dir().join(format!(".staging-hello-{}", std::process::id()));
+            for dir in [&stale, &clone, &mine] {
+                std::fs::create_dir_all(dir).unwrap();
+            }
+            let _ = installed();
+            assert!(!stale.exists(), "a staging folder from a run that is gone stays");
+            assert!(!clone.exists(), "a clone folder from a run that is gone stays");
+            assert!(mine.exists(), "an install this Agentty is in the middle of was swept away");
+        });
     }
 
     /// The installed app has no `AGENTTY_DATA_DIR`: everything lives under `~/.agentty`.

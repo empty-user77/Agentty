@@ -24,7 +24,8 @@ All notable changes to this project are documented here. The format follows
 - `net.request`: a plugin may make HTTP requests to addresses it chooses. Agentty bounds the
   method, the headers, the body and response sizes, the redirects and the time, sends nothing of
   yours with the request, and writes each call to the plugin's log with the URL redacted. A request
-  can go through an HTTP proxy the plugin names.
+  can go through an HTTP proxy the plugin names. Every address a redirect names is checked like the
+  first one, and what was given for one host is not carried to another.
 - Agentty bundles no plugin modules: the ones it used to carry are published like everyone else's,
   with their source and their checksum where anyone can read them.
 - The marketplace list is kept between runs, so the Plugins page has something to show before the

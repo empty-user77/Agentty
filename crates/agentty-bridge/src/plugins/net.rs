@@ -173,29 +173,81 @@ fn is_metadata_host(url: &url::Url) -> bool {
     }
 }
 
+/// Whether a status is one that names another address to go to.
+fn is_redirect(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+/// Sends the request, following redirects here rather than leaving them to the client.
+///
+/// It matters which: the checks above refuse a link-local or metadata address, and a server that
+/// answers `302 Location: http://169.254.169.254/…` would walk straight through them if the
+/// client followed on its own. Every hop goes through the same check as the address the plugin
+/// asked for, and what was meant for one host — the authorization it was given, its cookies — is
+/// not carried to another.
+fn send(agent: &ureq::Agent, checked: &Checked) -> Result<ureq::Response> {
+    let mut url = checked.url.clone();
+    let mut method = checked.method.clone();
+    let mut body = checked.body.clone();
+    let mut headers = checked.headers.clone();
+    let mut hops = 0;
+    loop {
+        let mut call = agent.request_url(&method, &url);
+        for (name, value) in &headers {
+            call = call.set(name, value);
+        }
+        let result = match &body {
+            Some(body) => call.send_string(body),
+            None => call.call(),
+        };
+        let response = match result {
+            Ok(response) => response,
+            // A 4xx / 5xx is an answer, not a failure: a REST client shows it like any other.
+            Err(ureq::Error::Status(_, response)) => response,
+            Err(err) => bail!("{err}"),
+        };
+        let status = response.status();
+        let Some(location) = response.header("location").map(str::to_string).filter(|_| is_redirect(status)) else {
+            return Ok(response);
+        };
+        hops += 1;
+        if hops > MAX_REDIRECTS {
+            bail!("the address redirected more than {MAX_REDIRECTS} times");
+        }
+        let next = url.join(location.trim()).map_err(|e| anyhow::anyhow!("the redirect names an address that cannot be read: {e}"))?;
+        if !matches!(next.scheme(), "http" | "https") {
+            bail!("a redirect to {} is not followed", next.scheme());
+        }
+        if next.host().is_none() {
+            bail!("the redirect has no host");
+        }
+        if is_metadata_host(&next) {
+            bail!("that address is not reachable from a plugin");
+        }
+        if next.host_str() != url.host_str() || next.port_or_known_default() != url.port_or_known_default() {
+            headers.retain(|(name, _)| !matches!(name.to_ascii_lowercase().as_str(), "authorization" | "cookie" | "proxy-authorization"));
+        }
+        // 303 is always read as "go and GET this"; 301 and 302 are, in practice, for anything that
+        // was not already a GET. 307 and 308 keep the method and the body, which is their point.
+        if status == 303 || (matches!(status, 301 | 302) && !matches!(method.as_str(), "GET" | "HEAD")) {
+            method = "GET".to_string();
+            body = None;
+        }
+        url = next;
+    }
+}
+
 /// Sends the request. Blocking: callers run it off the main thread.
 pub fn fetch(request: &FetchRequest) -> Result<FetchResponse> {
     let checked = check(request)?;
-    let mut builder = crate::http::agent_builder().timeout(checked.timeout).redirects(MAX_REDIRECTS);
+    // Redirects are `send`'s to follow, not the client's — see there.
+    let mut builder = crate::http::agent_builder().timeout(checked.timeout).redirects(0);
     if let Some(proxy) = &checked.proxy {
         builder = builder.proxy(ureq::Proxy::new(proxy).map_err(|_| anyhow::anyhow!("that proxy address cannot be used"))?);
     }
     let agent = builder.build();
     let started = Instant::now();
-    let mut call = agent.request_url(&checked.method, &checked.url);
-    for (name, value) in &checked.headers {
-        call = call.set(name, value);
-    }
-    let result = match &checked.body {
-        Some(body) => call.send_string(body),
-        None => call.call(),
-    };
-    let response = match result {
-        Ok(response) => response,
-        // A 4xx / 5xx is an answer, not a failure: a REST client shows it like any other.
-        Err(ureq::Error::Status(_, response)) => response,
-        Err(err) => bail!("{err}"),
-    };
+    let response = send(&agent, &checked)?;
     let status = response.status();
     let status_text = response.status_text().to_string();
     let url = response.get_url().to_string();
@@ -296,5 +348,136 @@ mod tests {
         .unwrap();
         assert_eq!(ok.method, "POST");
         assert_eq!(ok.headers.len(), 2);
+    }
+
+    /// A server of one connection at a time that answers from a script of
+    /// `(status line, headers, body)`, so the redirect rules can be tested against real sockets.
+    struct Server {
+        port: u16,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Server {
+        fn answering(script: Vec<String>) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let recorded = seen.clone();
+            std::thread::spawn(move || {
+                for (index, stream) in listener.incoming().enumerate() {
+                    let Ok(mut stream) = stream else { return };
+                    // Read the whole request — headers, then a body if it said it had one.
+                    // Answering before the client has finished sending breaks the connection it
+                    // is still writing into.
+                    let mut request = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        match std::io::Read::read(&mut stream, &mut byte) {
+                            Ok(1) => request.push(byte[0]),
+                            _ => break,
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                    let length = head
+                        .split("\r\n")
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let mut body = vec![0u8; length];
+                    if length > 0 && std::io::Read::read_exact(&mut stream, &mut body).is_ok() {
+                        request.extend_from_slice(&body);
+                    }
+                    recorded.lock().unwrap().push(String::from_utf8_lossy(&request).into_owned());
+                    let Some(answer) = script.get(index) else { return };
+                    let _ = std::io::Write::write_all(&mut stream, answer.as_bytes());
+                    let _ = std::io::Write::flush(&mut stream);
+                }
+            });
+            Self { port, seen }
+        }
+
+        fn url(&self, path: &str) -> String {
+            format!("http://127.0.0.1:{}{path}", self.port)
+        }
+
+        fn requests(&self) -> Vec<String> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    fn redirect_to(target: &str) -> String {
+        format!("HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    }
+
+    fn ok(body: &str) -> String {
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    }
+
+    #[test]
+    fn a_redirect_to_an_address_a_plugin_may_not_ask_for_is_not_followed() {
+        // The check on the first address is worth nothing if a server can name the second.
+        let server = Server::answering(vec![redirect_to("http://169.254.169.254/latest/meta-data/")]);
+        let err = fetch(&request(serde_json::json!({ "url": server.url("/go") }))).unwrap_err();
+        assert!(format!("{err:#}").contains("not reachable from a plugin"), "{err:#}");
+        assert_eq!(server.requests().len(), 1, "nothing beyond the first request was sent");
+    }
+
+    #[test]
+    fn a_redirect_to_another_scheme_is_not_followed() {
+        for target in ["file:///etc/passwd", "ftp://example.com/x"] {
+            let server = Server::answering(vec![redirect_to(target)]);
+            let err = fetch(&request(serde_json::json!({ "url": server.url("/go") }))).unwrap_err();
+            assert!(format!("{err:#}").contains("is not followed"), "{target}: {err:#}");
+        }
+    }
+
+    #[test]
+    fn a_redirect_is_followed_and_the_answer_is_the_one_it_led_to() {
+        let server = Server::answering(vec![redirect_to("/there"), ok("arrived")]);
+        let response = fetch(&request(serde_json::json!({ "url": server.url("/here") }))).unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, "arrived");
+        assert!(server.requests()[1].starts_with("GET /there "), "{:?}", server.requests()[1]);
+    }
+
+    #[test]
+    fn authorization_is_not_carried_to_another_host() {
+        // Two servers: the first hands the second a redirect, and what the plugin was given for
+        // the first must not arrive at the second.
+        let second = Server::answering(vec![ok("ok")]);
+        let first = Server::answering(vec![redirect_to(&second.url("/x"))]);
+        let response = fetch(&request(serde_json::json!({
+            "url": first.url("/go"),
+            "headers": { "Authorization": "Bearer example_not_a_real_token", "X-Trace": "kept" },
+        })))
+        .unwrap();
+        assert_eq!(response.status, 200);
+        let arrived = &second.requests()[0];
+        assert!(!arrived.to_ascii_lowercase().contains("authorization"), "{arrived}");
+        // Everything else still travels: only what is a credential is dropped.
+        assert!(arrived.contains("X-Trace: kept"), "{arrived}");
+    }
+
+    #[test]
+    fn a_post_that_is_redirected_becomes_a_get_without_its_body() {
+        let server = Server::answering(vec![redirect_to("/there"), ok("done")]);
+        let response = fetch(&request(serde_json::json!({
+            "url": server.url("/here"),
+            "method": "POST",
+            "body": "a=1",
+        })))
+        .unwrap();
+        assert_eq!(response.status, 200);
+        let second = &server.requests()[1];
+        assert!(second.starts_with("GET /there "), "{second}");
+        assert!(!second.contains("a=1"), "{second}");
+    }
+
+    #[test]
+    fn a_loop_of_redirects_ends() {
+        let script: Vec<String> = (0..MAX_REDIRECTS as usize + 2).map(|_| redirect_to("/round")).collect();
+        let server = Server::answering(script);
+        let err = fetch(&request(serde_json::json!({ "url": server.url("/round") }))).unwrap_err();
+        assert!(format!("{err:#}").contains("redirected more than"), "{err:#}");
     }
 }
