@@ -1316,6 +1316,7 @@ strings! {
     "plugins.market_loading" => ["Reading the marketplace…", "마켓플레이스를 읽는 중…", "マーケットプレイスを読み込み中…", "正在读取插件市场…"],
     "plugins.market_failed" => ["The marketplace could not be reached.", "마켓플레이스에 연결하지 못했습니다.", "マーケットプレイスに接続できませんでした。", "无法连接插件市场。"],
     "plugins.market_empty" => ["Nothing is offered yet.", "아직 등록된 플러그인이 없습니다.", "まだ登録されたプラグインはありません。", "市场中还没有插件。"],
+    "plugins.needs_newer" => ["This plugin needs a newer Agentty. Update Agentty to install it.", "이 플러그인은 더 최신 Agentty가 필요합니다. Agentty를 업데이트한 뒤 설치하세요.", "このプラグインには新しい Agentty が必要です。Agentty を更新してからインストールしてください。", "该插件需要更新版本的 Agentty。请先更新 Agentty 再安装。"],
     "plugins.market_note" => ["Agentty downloads the module, checks it against the checksum above and refuses it if they differ. Only WebAssembly plugins are offered here: they reach nothing but what the permissions allow.", "Agentty가 모듈을 내려받아 위 체크섬과 대조하고, 다르면 설치하지 않습니다. 여기에는 WebAssembly 플러그인만 올라옵니다 — 권한으로 허용된 것 외에는 아무것도 접근하지 못합니다.", "Agentty はモジュールをダウンロードし、上のチェックサムと照合して、違えば拒否します。ここに並ぶのは WebAssembly プラグインだけで、権限で許した以外には何も触れません。", "Agentty 会下载模块并与上面的校验和比对，不一致则拒绝安装。这里只提供 WebAssembly 插件：除权限允许之外，它们什么都碰不到。"],
     "plugins.downloading" => ["Downloading {name}…", "{name} 내려받는 중…", "{name} をダウンロード中…", "正在下载 {name}…"],
     "plugins.info.license" => ["Licence", "라이선스", "ライセンス", "许可证"],

@@ -182,6 +182,11 @@ impl Workbench {
             // It is no longer offered: the rest of a queue still gets its turn.
             return self.next_queued_update(window, cx);
         };
+        if !entry.supported() {
+            // The page does not offer it, but a queue built before the list was read again might.
+            self.plugins_message(t(cx, "plugins.needs_newer").to_string(), true, cx);
+            return self.next_queued_update(window, cx);
+        }
         if self.plugins_page.installing.is_some() {
             return;
         }
@@ -229,6 +234,11 @@ impl Workbench {
     /// The debug driver's `plugin-folder`: finishing an install the same way the button does.
     pub(super) fn after_install_debug(&mut self, result: anyhow::Result<InstalledPlugin>, window: &mut Window, cx: &mut Context<Self>) {
         self.after_install(result, window, cx);
+    }
+
+    /// The debug driver's `plugin-enable`: the switch on the Plugins page, without the mouse.
+    pub(super) fn set_plugin_enabled_debug(&mut self, id: &str, enabled: bool, cx: &mut Context<Self>) {
+        self.set_plugin_enabled(id, enabled, cx);
     }
 
     pub(super) fn install_builtin_plugin(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -305,8 +315,8 @@ impl Workbench {
     fn set_plugin_enabled(&mut self, id: &str, enabled: bool, cx: &mut Context<Self>) {
         match store::set_enabled(id, enabled) {
             Ok(()) => {
-                if !enabled && self.plugin_panel.as_deref() == Some(id) {
-                    self.plugin_panel = None;
+                if !enabled {
+                    self.drop_plugin_panel(id, cx);
                 }
                 plugins::reload(cx);
             }
@@ -318,9 +328,7 @@ impl Workbench {
     fn uninstall_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         self.plugins_page.confirm_uninstall = None;
         plugins::stop(id, cx);
-        if self.plugin_panel.as_deref() == Some(id) {
-            self.plugin_panel = None;
-        }
+        self.drop_plugin_panel(id, cx);
         match store::uninstall(id) {
             Ok(()) => {
                 plugins::reload(cx);
@@ -897,11 +905,27 @@ impl Workbench {
             .flex_col()
             .gap_4()
             .child(self.render_detail_head(&manifest, badges, cx))
-            .child(div().flex().gap_2().child(action_button(
-                SharedString::from(format!("plugin-market-install-{}", entry.id)),
-                t(cx, if installing { "plugins.installing" } else { "plugins.install" }),
-                cx.listener(move |this, _: &ClickEvent, window, cx| this.install_from_market(id.clone(), window, cx)),
-            )))
+            .child(if entry.supported() {
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(action_button(
+                        SharedString::from(format!("plugin-market-install-{}", entry.id)),
+                        t(cx, if installing { "plugins.installing" } else { "plugins.install" }),
+                        cx.listener(move |this, _: &ClickEvent, window, cx| this.install_from_market(id.clone(), window, cx)),
+                    ))
+                    .into_any_element()
+            } else {
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(hex_alpha(Chrome::ORANGE, 0.14))
+                    .text_color(hex(Chrome::ORANGE))
+                    .t_caption()
+                    .child(t(cx, "plugins.needs_newer"))
+                    .into_any_element()
+            })
             .child(self.render_tabs(cx))
             .child(match self.plugins_page.tab {
                 Tab::Permissions => self.render_permissions(&manifest, cx).into_any_element(),

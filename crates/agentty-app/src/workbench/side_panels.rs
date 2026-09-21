@@ -71,15 +71,14 @@ impl Workbench {
         crate::plugins::plugin(cx, plugin).and_then(|p| p.manifest.as_ref()).map(|m| m.panel_mode()).unwrap_or_default()
     }
 
-    pub(super) fn set_plugin_panel_mode(&mut self, plugin: &str, mode: PanelMode, window: &mut gpui::Window, cx: &mut Context<Self>) {
-        let plugin = plugin.to_string();
+    pub(super) fn set_plugin_panel_mode(&mut self, plugin: &str, mode: PanelMode, _window: &mut gpui::Window, cx: &mut Context<Self>) {
         let id = mode.id().to_string();
-        let chosen = plugin.clone();
+        let chosen = plugin.to_string();
         crate::settings::update_settings(cx, |settings| {
             settings.plugin_panel_modes.insert(chosen, id);
         });
-        // A panel that moved into a window of its own, or out of one, is opened or closed there.
-        self.sync_plugin_window(&plugin, mode, window, cx);
+        // A panel that moved into a window of its own, or out of one, is opened or closed by
+        // `reconcile_plugin_windows` on the next render — the one place that does it.
         cx.notify();
     }
 

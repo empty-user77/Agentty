@@ -366,6 +366,12 @@ pub struct Workbench {
     plugin_mode_menu: bool,
     /// Plugin panels that have a window of their own, by plugin id.
     plugin_windows: HashMap<String, gpui::WindowHandle<plugin_window::PluginWindow>>,
+    /// Plugins whose own window has been asked for but not yet opened — opening is deferred, and
+    /// without this the next frame would ask for a second one.
+    plugin_windows_opening: std::collections::HashSet<String>,
+    /// Plugins whose own window Agentty is closing itself, so the release observer does not read
+    /// it as the user closing the panel.
+    plugin_windows_closing: std::collections::HashSet<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
@@ -518,6 +524,8 @@ impl Workbench {
             plugin_panel: None,
             plugin_mode_menu: false,
             plugin_windows: HashMap::new(),
+            plugin_windows_opening: std::collections::HashSet::new(),
+            plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
@@ -2223,6 +2231,19 @@ impl Workbench {
                         "chatNotify": self.chat_notify.debug_state(),
                         "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
+                        "plugins": {
+                            "panel": self.plugin_panel,
+                            // A panel in `window` mode has one; nothing else should.
+                            "windows": self.plugin_windows.keys().cloned().collect::<Vec<String>>(),
+                            "opening": self.plugin_windows_opening.iter().cloned().collect::<Vec<String>>(),
+                            "closing": self.plugin_windows_closing.iter().cloned().collect::<Vec<String>>(),
+                            "mode": self.plugin_panel.as_ref().map(|p| self.plugin_panel_mode(p, cx).id()),
+                            "installed": crate::plugins::host(cx)
+                                .installed
+                                .iter()
+                                .map(|p| serde_json::json!({ "id": p.id, "enabled": p.enabled, "active": p.active() }))
+                                .collect::<Vec<_>>(),
+                        },
                     })
                 );
             }
@@ -2457,6 +2478,13 @@ impl Workbench {
                 }
             }
             "plugin-install" => self.install_builtin_plugin(argument.to_string(), window, cx),
+            // `plugin-enable <plugin> on|off`: the switch on the Plugins page, which is also how a
+            // panel (and a panel's own window) is meant to go away when its plugin does.
+            "plugin-enable" => {
+                if let Some((plugin, state)) = argument.split_once(' ') {
+                    self.set_plugin_enabled_debug(plugin, state.trim() == "on", cx);
+                }
+            }
             // `plugin-mode <plugin> push|overlay|window|full`: how its panel opens.
             "plugin-mode" => {
                 if let Some((plugin, mode)) = argument.split_once(' ') {

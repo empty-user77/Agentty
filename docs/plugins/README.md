@@ -340,6 +340,12 @@ Installing one:
 3. On Install, Agentty downloads the module, weighs it against that checksum, and refuses it if
    they differ. Nothing reaches the plugins folder before the checksum matches.
 
+An entry says which plugin protocol its module is built against (`apiVersion`, `1` when left out).
+An Agentty that speaks an older one still lists the plugin, but says it needs a newer Agentty
+instead of offering to install it, and does not count a version it cannot run as an update to one
+already installed. Without that, a plugin written against a later protocol would install anywhere
+and fail at the first call the older app does not have.
+
 Submitting one is `CONTRIBUTING.md` in that repository: build the module, publish it as a release
 asset, and open a pull request with an entry naming its URL, checksum and size.
 

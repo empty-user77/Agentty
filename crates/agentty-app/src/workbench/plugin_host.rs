@@ -163,6 +163,9 @@ impl Workbench {
         self.plugin_mode_menu = false;
         self.plugin_panel = Some(plugin.to_string());
         plugins::notify_plugin(plugin, "panel/open", json!({ "context": self.plugin_context(plugin, None, cx) }), cx);
+        // Already in a window of its own, behind something: bring it forward rather than do
+        // nothing visible. A window it does not have yet is opened by the render that follows.
+        self.activate_plugin_window(plugin, cx);
         cx.notify();
     }
 
@@ -172,6 +175,18 @@ impl Workbench {
         } else {
             self.open_plugin_panel(plugin, cx);
         }
+    }
+
+    /// Drops a panel whose plugin is being disabled, removed, or is already gone — so without
+    /// telling the plugin, which is no longer there to hear it. The window a panel in `window`
+    /// mode opened goes with it: left behind it stays on screen with nothing to draw, and its
+    /// handle would be reused the next time that plugin's panel opened.
+    pub(super) fn drop_plugin_panel(&mut self, plugin: &str, cx: &mut Context<Self>) {
+        if self.plugin_panel.as_deref() == Some(plugin) {
+            self.plugin_panel = None;
+            self.plugin_mode_menu = false;
+        }
+        self.close_plugin_window(plugin, cx);
     }
 
     pub(super) fn close_plugin_panel(&mut self, cx: &mut Context<Self>) {
