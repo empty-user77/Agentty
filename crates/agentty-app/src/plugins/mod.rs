@@ -25,6 +25,8 @@ const MAX_MESSAGES_PER_SECOND: u32 = 240;
 const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
 /// Characters a plugin may put on the clipboard at once.
 const MAX_COPY_CHARS: usize = 100_000;
+/// Characters of `ui/setBadge` kept — what fits beside a plugin's icon.
+const MAX_BADGE_CHARS: usize = 8;
 /// One notification per plugin per this long; the rest are dropped.
 const NOTIFY_INTERVAL: Duration = Duration::from_millis(700);
 /// The shortest gap between two URLs one plugin may open in the browser.
@@ -519,7 +521,7 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             reply(Ok(Value::Null), cx)
         }
         "ui/setBadge" => {
-            let text: String = params.get("text").and_then(Value::as_str).unwrap_or_default().chars().take(8).collect();
+            let text: String = params.get("text").and_then(Value::as_str).unwrap_or_default().chars().take(MAX_BADGE_CHARS).collect();
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
                 runtime.badge = text;
             }

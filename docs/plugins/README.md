@@ -329,9 +329,10 @@ without pressing Enter and refuses `sendToTerminal` outright. Neither a click in
 opened nor simply waiting lifts it — a plugin can wait as easily as a user can click — so a link
 cannot turn one click into typing inside a terminal. Restarting the plugin is what clears it.
 
-The one thing a plugin the link reached can still do outside Agentty is `openUrl`, one address at
-a time. So treat what a link carries as text from a stranger: never open an address it hands you
-without knowing what it is.
+The one thing a plugin the link reached can still do outside Agentty is `openUrl`, and Agentty
+meters it at one address every 700 ms — it needs no permission, and without that a plugin could
+open a browser tab for every message it is allowed to send. So treat what a link carries as text
+from a stranger: never open an address it hands you without knowing what it is.
 
 ## The marketplace
 

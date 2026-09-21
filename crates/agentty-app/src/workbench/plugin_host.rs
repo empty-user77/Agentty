@@ -16,6 +16,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// Longest single turn returned by `session/get`.
+/// Characters of a `ui/notify` message shown — a toast, not a page.
+const MAX_NOTIFY_CHARS: usize = 300;
+
 const TURN_TEXT_LIMIT: usize = 20_000;
 /// Panes plugins may be told about at once.
 const MAX_WATCHED_PANES: usize = 32;
@@ -322,7 +325,7 @@ impl Workbench {
         let params = call.params.clone();
         match call.method.as_str() {
             "ui/notify" => {
-                let message: String = params["message"].as_str().unwrap_or_default().chars().take(300).collect();
+                let message: String = params["message"].as_str().unwrap_or_default().chars().take(MAX_NOTIFY_CHARS).collect();
                 let text = format!("{}: {message}", call.plugin_name);
                 if params["kind"].as_str() == Some("error") {
                     self.set_status(text.clone(), cx);

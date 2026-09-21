@@ -75,7 +75,11 @@ when you don't care.
 | `storage/keys` | | `{}` | `[key]` |
 
 Agentty drops `ui/notify` calls that arrive faster than one per 700 ms (answering them normally), and
-stops a plugin that sends more than 240 messages a second. Context fields are limited by the
+stops a plugin that sends more than 240 messages a second. `host/openUrl` is metered the same way —
+one address every 700 ms, the rest refused with `-32002` — because it needs no permission and 240
+messages a second would otherwise be 240 browser tabs. It is also the one thing a plugin an
+`agentty://` link reached can still do outside Agentty, so treat what a link hands you as text from
+a stranger and do not open an address from it unexamined. Context fields are limited by the
 plugin's permissions (see the guide).
 
 `net/fetch` is the only way a plugin reaches the network, and Agentty bounds it: `GET`, `HEAD`,
