@@ -230,9 +230,11 @@ something changes; text fields keep what the user typed unless you send a differ
 | `ui.badge(text, tone)` | `neutral` `info` `success` `warning` `error` | |
 | `ui.spinner(text)` · `ui.divider()` | | |
 
-Limits: 2 000 elements, 12 levels, 20 000 characters per text. Null/false children are skipped, so
-`cond && ui.text(…)` works. Panel updates are drawn at most every 50 ms, notifications at most one
-per 700 ms, and a plugin that sends more than 240 messages a second is stopped as a runaway.
+Limits: 2 000 elements, 12 levels, 20 000 characters per string. An element is anything drawn, so
+a choice's options and a list item's buttons count as well as the nodes around them; every string
+is cut, not only the text ones. Null/false children are skipped, so `cond && ui.text(…)` works.
+Panel updates are drawn at most every 50 ms, notifications at most one per 700 ms, and a plugin
+that sends more than 240 messages a second is stopped as a runaway.
 
 ### Icons
 

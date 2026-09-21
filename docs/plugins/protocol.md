@@ -147,7 +147,9 @@ Messages are the same JSON-RPC objects as over stdio, one per call, without the 
 that imports anything else does not load. Agentty also refuses a module larger than 64 MB, caps its
 memory at 64 MB and gives each message a budget of work: a plugin that does not return is stopped
 with "did not finish in time", and one that sends more than 256 messages while handling a single
-one is stopped as well.
+one is stopped as well. A line written to the plugin's log counts as one of those 256 — it crosses
+the same channel to the same thread — and is cut at 2 000 characters where it is read, not where
+it is shown.
 
 The Rust SDK hides all of this: it is in the [marketplace repository](https://github.com/empty-user77/Agentty-Marketplace/tree/main/sdk/rust),
 with [`hello-rust`](https://github.com/empty-user77/Agentty-Marketplace/tree/main/src/hello-rust) as a working example.
