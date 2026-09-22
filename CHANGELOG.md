@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-09-22
+
+### Changed
+- The terminal cursor is a bar. A settings file carries every field, so a block in an old one is
+  the previous default rather than a choice: anyone who picked a shape picked one of the other two
+  and keeps it.
+- A workspace card answers a right click with the menu its `…` opens.
+
+### Fixed
+- What is being composed with an input method is back on the line, where the text will land.
+  v0.1.15 moved it into a chip below the cursor so it could never cover the program's own text; it
+  cannot, but it also flashes a box under every syllable, which is most of what typing Korean,
+  Japanese or Chinese looks like. Where it goes is decided by whether the terminal cursor means
+  anything: a shell leaves it where the text will land, and a program that draws its own input box
+  hides it, so there the composition follows the last thing written on that line instead.
+- The context memory panel belongs to the pane whose meter opened it. In a split it opened in every
+  pane at once, and then — once that was fixed — in the right pane with another pane's reading.
+
 ## [0.1.15] - 2026-09-22
 
 ### Added
