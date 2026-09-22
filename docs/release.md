@@ -65,8 +65,7 @@ Set these in the environment or in `.env.agentty-prod` in the repository root (g
 | `AGENTTY_APPLE_ID` | Apple ID email |
 | `AGENTTY_APPLE_PASSWORD` | app-specific password (appleid.apple.com → App-Specific Passwords) |
 
-On the maintainer's machine `.env.agentty-prod` reuses the Developer ID credentials of `cosmica-desktop`,
-so no secret is duplicated. The certificate must be in the login keychain:
+`.env.agentty-prod` may reuse a Developer ID the maintainer already has, so no secret is duplicated. The certificate must be in the login keychain:
 
 ```sh
 security find-identity -v -p codesigning | grep "Developer ID Application"

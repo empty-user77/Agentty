@@ -4,6 +4,10 @@
 *.profraw
 # Left behind by the Python scanners and hooks
 __pycache__/
+*.log
+# Local tool state: machine-specific paths and permissions, never anyone else's business
+.claude/settings.local.json
+.claude/settings.local.*
 .env.*
 !.env.example
 # Credentials — never commit

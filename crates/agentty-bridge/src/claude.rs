@@ -366,7 +366,7 @@ pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
 /// tell two of its own sessions how to reach one another.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeerSession {
-    /// The address other sessions use (`agentty-be`, `cosmica-desktop-f5`, …).
+    /// The address other sessions use (`agentty-be`, `agentty-web-2f`, …).
     pub name: String,
     pub session_id: String,
     pub pid: u32,
