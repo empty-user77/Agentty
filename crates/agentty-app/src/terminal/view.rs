@@ -223,9 +223,6 @@ pub struct TerminalView {
     pub error: Option<String>,
     focus_handle: FocusHandle,
     marked_text: Option<String>,
-    /// Text committed by the input method but not echoed yet: (cursor cell when committed, its width
-    /// in cells). The next composition is drawn after it instead of on top of it.
-    commit_anchor: Option<((usize, usize), usize)>,
     layout: Option<Layout>,
     scroll_remainder: f32,
     selecting: bool,
@@ -357,7 +354,6 @@ impl TerminalView {
             error: None,
             focus_handle: cx.focus_handle(),
             marked_text: None,
-            commit_anchor: None,
             layout: None,
             scroll_remainder: 0.,
             selecting: false,
@@ -564,13 +560,6 @@ impl TerminalView {
     }
 
     /// The cursor's cell as the painter sees it: (column, row from the top of the viewport).
-    fn cursor_cell(&self) -> Option<(usize, usize)> {
-        let term = self.backend.as_ref()?.term.lock();
-        let cursor = term.grid().cursor.point;
-        let row = (cursor.line.0 + term.grid().display_offset() as i32).max(0) as usize;
-        Some((cursor.column.0, row))
-    }
-
     /// The last `rows` lines of the live screen (ignores scrollback position).
     pub fn screen_lines(&self, rows: usize) -> Vec<String> {
         let Some(backend) = &self.backend else { return Vec::new() };
@@ -1668,14 +1657,6 @@ impl EntityInputHandler for TerminalView {
 
     fn replace_text_in_range(&mut self, _: Option<Range<usize>>, text: &str, _: &mut Window, cx: &mut Context<Self>) {
         self.marked_text = None;
-        // Where the cursor is *now*, not where the last frame drew it: typing faster than the
-        // program echoes would otherwise anchor the next composition to a stale cell, and it would
-        // be drawn on top of the text that was committed a moment ago.
-        if let Some(cell) = self.cursor_cell().or_else(|| self.layout.map(|l| l.cursor)) {
-            let width: usize = text.chars().map(cell_width).sum();
-            let previous = self.commit_anchor.filter(|(at, _)| *at == cell).map_or(0, |(_, w)| w);
-            self.commit_anchor = Some((cell, previous + width));
-        }
         self.write_user_input(text.as_bytes().to_vec());
         cx.notify();
     }
@@ -1847,9 +1828,9 @@ impl Element for TerminalElement {
             Frame { hitbox, backgrounds: Vec::new(), lines: Vec::new(), cursor: None, cursor_text: None, marked: None, line_height };
 
         let view = self.view.clone();
-        let (marked_text, cursor_visible, search, hover_link, commit_anchor) = {
+        let (marked_text, cursor_visible, search, hover_link) = {
             let v = view.read(cx);
-            (v.marked_text.clone(), v.cursor_visible || !focused, v.search.clone(), v.hover_link, v.commit_anchor)
+            (v.marked_text.clone(), v.cursor_visible || !focused, v.search.clone(), v.hover_link)
         };
         let Some(term_handle) = view.update(cx, |view, cx| {
             if !view.spawned {
@@ -2072,41 +2053,39 @@ impl Element for TerminalElement {
 
         let cursor_row = (cursor_point.line.0 + display_offset as i32).max(0) as usize;
         let cursor_col = cursor_point.column.0;
-        // Until the program echoes committed text, the cursor hasn't moved: skip past it.
-        let pending = commit_anchor.filter(|(at, _)| *at == (cursor_col, cursor_row)).map(|(_, w)| w);
+        // What is being composed is drawn beside the grid, never on it.
+        //
+        // Where the text it is handed will land is the program's business. A shell puts it at the
+        // cursor; a program that draws its own input box — an agent's prompt — leaves the terminal
+        // cursor wherever it last wrote, which is nowhere near the line the user is typing on. A
+        // composition placed in that cell lands on top of what the program already echoed, and the
+        // grid has no way to ask where the caret really is. A chip below the cursor's line cannot
+        // cover anything, whatever the program does with its cursor.
         if let Some(text) = marked_text {
             let fg = hex(theme.foreground);
-            // `cell_width` is the grid's pixel width here; the character-width helper is the
-            // module-level function of the same name.
-            let cell_width_px = cell_width;
-            let start = cursor_col + pending.unwrap_or(0);
-            let top = origin.y + line_height * cursor_row as f32;
-            // A composition is terminal text: it has to sit on the same grid, or a Hangul syllable
-            // (two cells wide, but narrower than that in the font) drifts left and lands on top of
-            // the text the program already echoed.
-            let mut glyphs = Vec::new();
-            let mut cells = 0usize;
-            for ch in text.chars() {
-                let width = self::cell_width(ch);
-                let run = TextRun {
-                    len: ch.len_utf8(),
-                    font: base_font.clone(),
-                    color: fg,
-                    background_color: None,
-                    underline: Some(UnderlineStyle { color: Some(fg), thickness: px(1.), wavy: false }),
-                    strikethrough: None,
-                };
-                let force = (width == 1).then_some(cell_width_px);
-                let shaped = text_system.shape_line(SharedString::from(ch.to_string()), font_size, &[run], force);
-                // Wide glyphs are centered in their two cells, the way the grid draws them.
-                let slack = if width > 1 { ((cell_width_px * width as f32) - shaped.width).max(px(0.)) / 2. } else { px(0.) };
-                glyphs.push((point(origin.x + cell_width_px * (start + cells) as f32 + slack, top), shaped));
-                cells += width;
-            }
-            // Plain background (hides the cells underneath) with just an underline, like other terminals.
-            let pos = point(origin.x + cell_width_px * start as f32, top);
-            let backdrop = fill(Bounds::new(pos, size(cell_width_px * cells as f32, line_height)), hex(theme.background));
-            frame.marked = Some((backdrop, glyphs));
+            let run = TextRun {
+                len: text.len(),
+                font: base_font.clone(),
+                color: fg,
+                background_color: None,
+                underline: Some(UnderlineStyle { color: Some(fg), thickness: px(1.), wavy: false }),
+                strikethrough: None,
+            };
+            let shaped = text_system.shape_line(SharedString::from(text), font_size, &[run], None);
+            let pad = px(6.);
+            let chip = size(shaped.width + pad * 2., line_height + px(4.));
+            // Under the cursor when there is room, above it when there is not, and always inside
+            // the pane: a cursor in the last column must not push the chip off the edge.
+            let right = (bounds.origin.x + bounds.size.width - chip.width).max(bounds.origin.x);
+            let x = (origin.x + cell_width * cursor_col as f32 - pad).clamp(bounds.origin.x, right);
+            let below = origin.y + line_height * (cursor_row + 1) as f32 + px(2.);
+            let above = origin.y + line_height * cursor_row as f32 - chip.height - px(2.);
+            let y = if below + chip.height <= bounds.origin.y + bounds.size.height { below } else { above.max(bounds.origin.y) };
+            let quad = fill(Bounds::new(point(x, y), chip), hex(theme.background))
+                .corner_radii(px(4.))
+                .border_widths(px(1.))
+                .border_color(crate::theme::hex_alpha(theme.foreground, 0.35));
+            frame.marked = Some((quad, vec![(point(x + pad, y + px(2.)), shaped)]));
         }
         drop(term);
 
@@ -2125,12 +2104,8 @@ impl Element for TerminalElement {
             // program's own text for as long as the pane stays open.
             if view.focused && !focused {
                 view.marked_text = None;
-                view.commit_anchor = None;
             }
             view.focused = focused;
-            if pending.is_none() {
-                view.commit_anchor = None;
-            }
         });
         frame
     }
@@ -2169,26 +2144,6 @@ impl Element for TerminalElement {
                 }
             }
         });
-    }
-}
-
-/// Cells a character takes: 2 for East Asian wide characters (Hangul, CJK, full-width forms).
-fn cell_width(c: char) -> usize {
-    match c as u32 {
-        0x1100..=0x115F
-        | 0x2E80..=0x303E
-        | 0x3041..=0x33FF
-        | 0x3400..=0x4DBF
-        | 0x4E00..=0x9FFF
-        | 0xA000..=0xA4CF
-        | 0xAC00..=0xD7A3
-        | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE4F
-        | 0xFF00..=0xFF60
-        | 0xFFE0..=0xFFE6
-        | 0x1F300..=0x1FAFF
-        | 0x20000..=0x3FFFD => 2,
-        _ => 1,
     }
 }
 
@@ -2266,13 +2221,6 @@ mod tests {
         assert_eq!(shorten("ray@mac:~/code"), "~/code");
         assert_eq!(shorten("✳ Claude Code"), "✳ Claude Code");
         assert_eq!(shorten("vim: file.rs"), "vim: file.rs");
-    }
-
-    #[test]
-    fn wide_characters_take_two_cells() {
-        assert_eq!(super::cell_width('한'), 2);
-        assert_eq!(super::cell_width('a'), 1);
-        assert_eq!(super::cell_width('中'), 2);
     }
 
     #[test]
