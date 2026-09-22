@@ -85,6 +85,7 @@ pub const ICONS: &[&str] = &[
     "arrow-right",
     "rotate-cw",
     "package",
+    "fold-vertical",
     "loader-circle",
     "maximize-2",
     "minimize-2",

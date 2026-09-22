@@ -124,7 +124,7 @@ impl Workbench {
             .child(refresh);
 
         let body = match snapshot {
-            Some(snapshot) => self.render_context_body(snapshot, cx).into_any_element(),
+            Some(snapshot) => self.render_context_body(pane, snapshot, cx).into_any_element(),
             None if loading => crate::ui::loading_row(t(cx, "context.loading")).into_any_element(),
             None => crate::ui::hint(t(cx, "context.unavailable")).into_any_element(),
         };
@@ -144,7 +144,51 @@ impl Workbench {
         .into_any_element()
     }
 
-    fn render_context_body(&self, s: &ContextSnapshot, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Compacts the context, beside the figure it is about. Every agent with a compaction command
+    /// of its own (Claude Code and Codex: `/compact`) has it here whatever the number says — the
+    /// bar outside only offers one once the window is nearly full, and by then the user is looking
+    /// for it, not discovering it. Clicking runs the command in the pane; the panel closes behind
+    /// it so the answer is what is left on screen.
+    fn render_compact_button(&self, pane: &super::Pane, percent: f64, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let command = pane.read(cx).agent_kind().and_then(|kind| kind.compact_command())?;
+        let nearly_full = percent >= super::COMPACT_OFFER_AT;
+        let color = if nearly_full { Chrome::ORANGE } else { Chrome::MUTED };
+        let target = pane.clone();
+        Some(
+            div()
+                .id("context-compact-now")
+                .ml_auto()
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_1p5()
+                .py_0p5()
+                .rounded_md()
+                .cursor_pointer()
+                .t_small()
+                .text_color(hex(color))
+                .bg(hex_alpha(color, 0.12))
+                .hover(|s| s.bg(hex_alpha(color, 0.24)))
+                .tooltip(crate::ui::Tooltip::text(
+                    t(cx, if nearly_full { "context.compact_full" } else { "context.compact" }),
+                    Some(command),
+                ))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    if this.status_menu.take().is_some() {
+                        this.note_dismissed("status-context");
+                    }
+                    this.focus_pane(&target, window, cx);
+                    target.update(cx, |view, cx| view.submit_prompt(command.to_string(), cx));
+                    cx.notify();
+                }))
+                .child(icon("fold-vertical", IconSize::INLINE, hex(color)))
+                .child(t(cx, "context.compact"))
+                .into_any_element(),
+        )
+    }
+
+    fn render_context_body(&self, pane: &super::Pane, s: &ContextSnapshot, cx: &mut Context<Self>) -> impl IntoElement {
         let section = |title: String, count: Option<usize>| {
             div()
                 .px_2()
@@ -222,7 +266,8 @@ impl Workbench {
                         d.child(
                             div().t_small().text_color(hex(Chrome::MUTED)).child(format!("/ {} · {percent:.0}%", compact_number(s.window))),
                         )
-                    }),
+                    })
+                    .children(self.render_compact_button(pane, percent, cx)),
             )
             .child(bar)
             .child(legend);
