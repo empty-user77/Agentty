@@ -434,6 +434,10 @@ pub struct Workbench {
     harness_cache: harness::HarnessCache,
     harness_dialog: Option<harness::HarnessDialog>,
     status_menu: Option<status_menus::StatusMenu>,
+    /// The pane whose bar opened `status_menu`. A menu belongs to the chip it was opened from —
+    /// every split pane draws the same bar, and what the menu reads comes from this pane, not from
+    /// whichever one happens to have the keyboard.
+    status_menu_pane: Option<Pane>,
     processes: processes::ProcessMonitor,
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
@@ -643,6 +647,7 @@ impl Workbench {
             harness_cache: Default::default(),
             harness_dialog: None,
             status_menu: None,
+            status_menu_pane: None,
             processes: Default::default(),
             inventory: Default::default(),
             browser: None,

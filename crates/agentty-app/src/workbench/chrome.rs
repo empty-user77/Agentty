@@ -1120,15 +1120,29 @@ impl Workbench {
         // there the menu grows upwards from the card instead of downwards.
         let upwards = menu_open && self.workspace_menu_at + self.workspace_menu_height() > f32::from(window.viewport_size().height) - 8.;
         // Deferred so the menu paints above the rows below it (e.g. the selected workspace).
-        div().relative().child(row).when(menu_open, |d| {
-            d.child(
-                div()
-                    .absolute()
-                    .map(|d| if upwards { d.bottom(px(28.)) } else { d.top(px(28.)) })
-                    .right(px(4.))
-                    .child(gpui::deferred(self.render_workspace_menu(id, window, cx)).with_priority(3)),
+        div()
+            .relative()
+            // The same menu the ellipsis opens: a card is a thing, and a right click on a thing is
+            // where people look for what can be done to it.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.workspace_menu_at = f32::from(event.position.y);
+                    this.workspace_menu = Some(id);
+                    cx.notify();
+                }),
             )
-        })
+            .child(row)
+            .when(menu_open, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .map(|d| if upwards { d.bottom(px(28.)) } else { d.top(px(28.)) })
+                        .right(px(4.))
+                        .child(gpui::deferred(self.render_workspace_menu(id, window, cx)).with_priority(3)),
+                )
+            })
     }
 
     /// `:3000 :5173` chips for servers started in the workspace; a click opens them. On a card the

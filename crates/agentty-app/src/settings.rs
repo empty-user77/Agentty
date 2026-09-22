@@ -117,7 +117,7 @@ pub struct CommandAlias {
     pub command: String,
 }
 
-pub const SETTINGS_VERSION: u32 = 2;
+pub const SETTINGS_VERSION: u32 = 3;
 
 pub const BUNDLED_FONT: &str = "JetBrains Mono";
 /// Nerd Font-patched JetBrains Mono, used for Powerline / Nerd Font glyphs. (The symbols-only font
@@ -516,7 +516,7 @@ impl Default for Settings {
             font_family: BUNDLED_FONT.into(),
             font_size: 13.0,
             line_height: 1.0,
-            cursor_shape: CursorShapeSetting::Block,
+            cursor_shape: CursorShapeSetting::Beam,
             cursor_blink: true,
             letter_spacing: 0.0,
             bold_text: false,
@@ -593,6 +593,14 @@ impl Settings {
                 self.theme = DEFAULT_THEME.into();
             }
             self.line_height = 1.0;
+        }
+        if self.settings_version < 3 {
+            // v3: the cursor is a bar. A settings file always carries every field, so a block here
+            // is the old default rather than a choice — anyone who picked a shape picked one of the
+            // other two, and keeps it.
+            if self.cursor_shape == CursorShapeSetting::Block {
+                self.cursor_shape = CursorShapeSetting::Beam;
+            }
         }
         self.settings_version = SETTINGS_VERSION;
         self
