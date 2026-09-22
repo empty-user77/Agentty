@@ -145,6 +145,10 @@ impl Workbench {
             let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
             shown.then(|| self.context_meter(pane, percent, cx))
         };
+        let mut model_chip = {
+            let label = pane.read(cx).stats.as_ref().and_then(model_label);
+            label.map(|label| self.render_model_chip(pane, label, cx))
+        };
         let view = pane.read(cx);
         let prefs_bar = crate::settings::settings(cx).agent_bar;
         let bars_below = bars_below(cx);
@@ -205,9 +209,7 @@ impl Workbench {
                 .map(|mut d| {
                     for entry in hud.iter().filter(|e| e.visible) {
                         d = match entry.item {
-                            HudItem::Model => d.when_some(view.stats.as_ref().filter(|_| agent_info).and_then(model_label), |d, model| {
-                                d.child(div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(model))
-                            }),
+                            HudItem::Model => d.children(agent_info.then(|| model_chip.take()).flatten()),
                             HudItem::Context => d.children(context_meter.take()),
                             HudItem::Usage => d.when_some(
                                 view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && agent_info && width >= 700.),
@@ -823,10 +825,16 @@ impl Workbench {
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
         let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
         let mut context_meter = Some(self.context_meter(pane, percent, cx));
+        let mut model_chip = {
+            // The agent's name stands in until the first answer says which model it is on.
+            let fallback = pane.read(cx).agent_kind().map(|kind| crate::brand::brand(crate::brand::kind_id(kind)).name.to_string());
+            let label = pane.read(cx).stats.as_ref().and_then(model_label).or(fallback).unwrap_or_default();
+            Some(self.render_model_chip(pane, label, cx))
+        };
         let view = pane.read(cx);
-        let kind = view.agent_kind()?;
+        // Only an agent gets this bar.
+        view.agent_kind()?;
         let (status, status_color) = status_label(view, cx);
-        let name = crate::brand::brand(crate::brand::kind_id(kind)).name;
         let working = view.working_since.is_some();
         Some(
             div()
@@ -847,12 +855,7 @@ impl Workbench {
                         d = match entry.item {
                             // The model, without the logo: the tab strip and the card already say
                             // which agent this is, and the bar needs the room.
-                            HudItem::Model => d.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_color(hex(Chrome::BRIGHT))
-                                    .child(view.stats.as_ref().and_then(model_label).unwrap_or_else(|| name.to_string())),
-                            ),
+                            HudItem::Model => d.children(model_chip.take()),
                             HudItem::Context => d.children(context_meter.take()),
                             HudItem::Usage => d
                                 .when_some(view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && width >= 700.), |d, percent| {

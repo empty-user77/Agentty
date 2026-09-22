@@ -21,6 +21,7 @@ pub enum StatusMenu {
     Agents,
     Mcp,
     Advisor,
+    Model,
 }
 
 type Key = (Agent, PathBuf);
@@ -32,6 +33,7 @@ fn status_menu_key(menu: StatusMenu) -> &'static str {
         StatusMenu::Agents => "status-agents",
         StatusMenu::Mcp => "status-mcp",
         StatusMenu::Advisor => "status-advisor",
+        StatusMenu::Model => "status-model",
     }
 }
 /// Result of `mcp list`: `None` while it runs.
@@ -131,6 +133,7 @@ impl Workbench {
                 StatusMenu::Agents => t(cx, "status.agents"),
                 StatusMenu::Mcp => t(cx, "status.mcp"),
                 StatusMenu::Advisor => t(cx, "advisor.title"),
+                StatusMenu::Model => t(cx, "model.title"),
             };
             div()
                 .id(id)
@@ -171,7 +174,7 @@ impl Workbench {
     fn render_status_menu(&self, menu: StatusMenu, key: &Key, cx: &mut Context<Self>) -> AnyElement {
         let agent = key.0;
         let title = match menu {
-            StatusMenu::Context | StatusMenu::Advisor => t(cx, "context.title"),
+            StatusMenu::Context | StatusMenu::Advisor | StatusMenu::Model => t(cx, "context.title"),
             StatusMenu::Skills => t(cx, "status.skills"),
             StatusMenu::Agents => t(cx, "status.agents"),
             StatusMenu::Mcp => t(cx, "status.mcp"),
@@ -195,7 +198,7 @@ impl Workbench {
                 .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(meta))
         };
         match menu {
-            StatusMenu::Context | StatusMenu::Advisor => {}
+            StatusMenu::Context | StatusMenu::Advisor | StatusMenu::Model => {}
             StatusMenu::Skills | StatusMenu::Agents => {
                 let kind = if menu == StatusMenu::Skills { ExtensionKind::Skill } else { ExtensionKind::Agent };
                 match items {
@@ -385,5 +388,119 @@ impl Workbench {
             div().absolute().bottom(px(24.)).left_0().child(gpui::deferred(crate::ui::fade_in("advisor-menu-fade", panel)).with_priority(3))
         });
         Some(div().relative().h_full().flex().items_center().child(chip).children(menu).into_any_element())
+    }
+}
+
+impl Workbench {
+    /// Restarts the active Claude pane on `model`, resuming its conversation. `None` hands the
+    /// choice back to the agent's own default.
+    pub(super) fn set_pane_model(&mut self, pane: super::Pane, model: Option<String>, label: String, cx: &mut Context<Self>) {
+        self.status_menu = None;
+        let view = pane.read(cx);
+        if view.agent_kind() != Some(PaneKind::Claude) {
+            self.set_status(t(cx, "model.not_claude"), cx);
+        } else if view.is_busy() {
+            self.set_status(t(cx, "model.busy"), cx);
+        } else if pane.update(cx, |view, cx| view.restart_with_model(model, cx)) {
+            self.set_status(tf(cx, "model.restarted", &[("model", &label)]), cx);
+        }
+        cx.notify();
+    }
+
+    /// The models this machine knows about for a Claude pane: the one configured in Claude Code's
+    /// own settings, then the ones recently used, then the aliases it always accepts. Nothing here
+    /// is a list Agentty keeps — a model released tomorrow shows up as soon as it is used once.
+    fn model_choices(&self, running: Option<&str>) -> Vec<(Option<String>, String)> {
+        let mut choices: Vec<(Option<String>, String)> = vec![(None, String::new())];
+        for (value, label) in self.installed.as_ref().map(|i| i.claude_models.clone()).unwrap_or_default() {
+            choices.push((Some(value), label));
+        }
+        // What the pane is actually on, when it is something this machine has not offered before.
+        if let Some(model) = running {
+            if !choices.iter().any(|(value, _)| value.as_deref() == Some(model)) {
+                choices.push((Some(model.to_string()), agentty_bridge::pretty_model(model)));
+            }
+        }
+        choices
+    }
+
+    /// The model in the pane bar, as a button that opens the list.
+    pub(super) fn render_model_chip(&self, pane: &super::Pane, label: String, cx: &mut Context<Self>) -> AnyElement {
+        let view = pane.read(cx);
+        if view.agent_kind() != Some(PaneKind::Claude) {
+            return div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(label).into_any_element();
+        }
+        let busy = view.is_busy();
+        let running = view.stats.as_ref().and_then(|s| s.model.clone());
+        let open = self.status_menu == Some(StatusMenu::Model);
+        let chip = div()
+            .id("status-model")
+            .tooltip(crate::ui::Tooltip::text(t(cx, if busy { "model.tooltip_busy" } else { "model.tooltip" }), None))
+            .h_full()
+            .px_1p5()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .flex_shrink()
+            .min_w(px(40.))
+            .truncate()
+            .cursor_pointer()
+            .when(open, |d| d.bg(hex(Chrome::SELECTED)))
+            .hover(|s| s.bg(hex(Chrome::HOVER)))
+            .text_color(hex(Chrome::BRIGHT))
+            .child(label)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_status_menu(StatusMenu::Model, cx)));
+        let menu = open.then(|| self.render_model_menu(pane, running.as_deref(), busy, cx));
+        div().relative().h_full().flex().items_center().child(chip).children(menu).into_any_element()
+    }
+
+    fn render_model_menu(&self, pane: &super::Pane, running: Option<&str>, busy: bool, cx: &mut Context<Self>) -> AnyElement {
+        let mut list = div().flex().flex_col();
+        for (value, label) in self.model_choices(running) {
+            let selected = value.as_deref() == running;
+            let shown = if value.is_none() { t(cx, "model.default").to_string() } else { label.clone() };
+            let chosen = value.clone();
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("model-choice-{}", value.as_deref().unwrap_or("default"))))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .t_small()
+                    .when(!busy, |d| d.cursor_pointer().hover(|s| s.bg(hex(Chrome::HOVER))))
+                    .when(busy, |d| d.opacity(0.5))
+                    .child(div().w(px(14.)).flex_shrink_0().when(selected, |d| d.child(icon("check", 12., hex(Chrome::BLUE)))))
+                    .child(div().flex_1().text_color(hex(Chrome::BRIGHT)).child(shown.clone()))
+                    .when(!busy, |d| {
+                        let pane = pane.clone();
+                        d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.set_pane_model(pane.clone(), chosen.clone(), shown.clone(), cx)
+                        }))
+                    }),
+            );
+        }
+        let hint = t(cx, if busy { "model.menu_busy" } else { "model.menu_hint" });
+        let panel = popover()
+            .w(px(320.))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if this.status_menu == Some(StatusMenu::Model) {
+                    this.status_menu = None;
+                    this.note_dismissed(status_menu_key(StatusMenu::Model));
+                }
+                cx.notify();
+            }))
+            .child(div().px_2().pt_1().pb_1p5().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "model.menu_title")))
+            .child(list)
+            .child(div().h(px(1.)).my_1().bg(hex(Chrome::OVERLAY_BORDER)))
+            .child(div().px_2().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(hint));
+        div()
+            .absolute()
+            .bottom(px(24.))
+            .left_0()
+            .child(gpui::deferred(crate::ui::fade_in("model-menu-fade", panel)).with_priority(3))
+            .into_any_element()
     }
 }

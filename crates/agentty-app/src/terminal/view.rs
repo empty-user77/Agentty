@@ -764,6 +764,26 @@ impl TerminalView {
     /// Restarts a Claude tab with another advisor, resuming the same conversation (a session with
     /// no transcript yet starts fresh under the same id). Returns false when it can't right now.
     pub fn restart_with_advisor(&mut self, advisor: AdvisorChoice, cx: &mut Context<Self>) -> bool {
+        self.restart_with(cx, |spec, previous| {
+            spec.model = previous.model.clone();
+            spec.advisor = Some(advisor);
+        })
+    }
+
+    /// Restarts this pane on `model`, keeping the conversation. `None` is the agent's own default.
+    pub fn restart_with_model(&mut self, model: Option<String>, cx: &mut Context<Self>) -> bool {
+        self.restart_with(cx, |spec, previous| {
+            spec.model = model;
+            spec.advisor = previous.advisor;
+        })
+    }
+
+    /// Starts the agent again with a changed command line, resuming the same conversation.
+    ///
+    /// The process has to be restarted: which model an agent talks to is decided when it starts.
+    /// Resuming by session id is what keeps that from costing anything — the conversation, and
+    /// what the agent has already read, come back with it.
+    fn restart_with(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut LaunchSpec, &LaunchSpec)) -> bool {
         if self.spec.kind != PaneKind::Claude || self.agent_exited || self.is_busy() {
             return false;
         }
@@ -779,8 +799,7 @@ impl TerminalView {
                 spec
             }
         };
-        spec.model = self.spec.model.clone();
-        spec.advisor = Some(advisor);
+        change(&mut spec, &self.spec);
         self.spec = spec;
         // Dropping the backend ends the running agent; the next paint spawns the new one.
         self.backend = None;
