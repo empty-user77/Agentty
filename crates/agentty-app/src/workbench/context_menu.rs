@@ -56,9 +56,9 @@ fn summary_excerpt(text: &str) -> String {
 }
 
 impl Workbench {
-    /// Reads the active pane's session context in the background.
-    pub(super) fn load_context(&mut self, cx: &mut Context<Self>) {
-        let Some(pane) = self.active_pane() else { return };
+    /// Reads `pane`'s session context in the background — the pane whose chip was clicked, which
+    /// in a split is not always the one with the keyboard.
+    pub(super) fn load_context(&mut self, pane: &super::Pane, cx: &mut Context<Self>) {
         let view = pane.read(cx);
         let agent = view.agent_kind().and_then(crate::launch::PaneKind::agent);
         let id = view.session_id_live.clone().or_else(|| view.spec.session_id.clone());
@@ -86,7 +86,7 @@ impl Workbench {
     /// The context-memory panel itself, with no placement of its own: the caller decides where it
     /// goes and defers it. (Deferring here as well as at the call site is what GPUI refuses with
     /// "cannot call defer_draw during deferred drawing".)
-    pub(super) fn render_context_menu(&self, agent: Agent, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_context_menu(&self, pane: &super::Pane, agent: Agent, cx: &mut Context<Self>) -> AnyElement {
         let (loading, snapshot) = match &self.inventory.context {
             Some((_, loading, snapshot)) => (*loading, snapshot.as_ref()),
             None => (false, None),
@@ -103,10 +103,13 @@ impl Workbench {
             } else {
                 icon("refresh-cw", IconSize::INLINE, hex(Chrome::MUTED)).into_any_element()
             })
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.load_context(cx);
-                cx.notify();
-            }));
+            .on_click({
+                let pane = pane.clone();
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.load_context(&pane, cx);
+                    cx.notify();
+                })
+            });
         let header = div()
             .px_2()
             .pt_1()

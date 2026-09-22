@@ -69,15 +69,24 @@ impl Workbench {
         Some((agent, view.display_cwd()))
     }
 
-    /// Opens a menu from a pane's own bar, so only that pane draws it.
-    pub(super) fn toggle_pane_menu(&mut self, menu: StatusMenu, pane: u64, cx: &mut Context<Self>) {
-        let same = self.status_menu == Some(menu) && self.status_menu_pane == Some(pane);
-        self.status_menu_pane = (!same).then_some(pane);
+    /// Opens a menu from a pane's own bar: only that pane draws it, and it reads that pane.
+    pub(super) fn toggle_pane_menu(&mut self, menu: StatusMenu, pane: super::Pane, cx: &mut Context<Self>) {
+        let same = self.status_menu == Some(menu) && self.menu_pane_is(&pane);
+        let opening = !(same && self.status_menu == Some(menu));
+        self.status_menu_pane = opening.then(|| pane.clone());
         if self.status_menu == Some(menu) && !same {
-            // Another pane had it open: move it rather than close it.
+            // Another pane had it open: move it here, with this pane's own reading.
+            if menu == StatusMenu::Context {
+                self.load_context(&pane, cx);
+            }
             return cx.notify();
         }
         self.toggle_status_menu(menu, cx);
+    }
+
+    /// Whether `pane` is the one that opened the menu now showing.
+    pub(super) fn menu_pane_is(&self, pane: &super::Pane) -> bool {
+        self.status_menu_pane.as_ref().is_some_and(|open| open.entity_id() == pane.entity_id())
     }
 
     pub(super) fn toggle_status_menu(&mut self, menu: StatusMenu, cx: &mut Context<Self>) {
@@ -94,7 +103,10 @@ impl Workbench {
             return cx.notify();
         }
         if menu == StatusMenu::Context {
-            self.load_context(cx);
+            // The pane the chip belongs to when it came from a pane's bar, else where the user is.
+            if let Some(pane) = self.status_menu_pane.clone().or_else(|| self.active_pane()) {
+                self.load_context(&pane, cx);
+            }
             return cx.notify();
         }
         let Some(key) = self.active_agent(cx) else { return cx.notify() };
