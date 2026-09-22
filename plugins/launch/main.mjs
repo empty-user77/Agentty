@@ -178,6 +178,8 @@ const STRINGS = {
     sbErrLogin: "The Supabase login didn't finish. Try again and enter the code shown in the browser.",
     sbPrompt:
       'This project is now connected to a hosted Supabase project by Agentty Launch. The project URL and public (anon) key are in {file} as {url} and {key}.\n\nPlease:\n1. Add @supabase/supabase-js and one small client module that reads those two variables.\n2. Move the sample / in-memory data to Supabase tables: write SQL migrations in supabase/migrations/<timestamp>_<name>.sql that create the tables, enable row level security on every table and add policies that fit the app.\n3. Never use or ask for the service_role key, and never put keys in code — only in the env file. Keep .env.example listing the names without values.\n4. Keep `npm run build` passing.\n\nWhen the migrations are ready, tell me in plain words to open Launch and press "Apply database changes".',
+    checkingProject: 'Checking how this project stands on GitHub and Vercel…',
+    stepsAllDone: 'All {count} steps done',
     tabDashboard: 'Dashboard',
     tabDeploy: 'Deploy',
     connections: 'Connections',
@@ -328,6 +330,8 @@ const STRINGS = {
     sbErrStarting: 'Supabase가 아직 프로젝트를 시작하는 중입니다. 1분쯤 뒤에 "다시 시도"를 눌러 주세요.',
     sbErrDbPassword: '데이터베이스 비밀번호가 맞지 않습니다. supabase.com → Project Settings → Database 에서 확인하거나 재설정할 수 있어요.',
     sbErrLogin: 'Supabase 로그인이 끝나지 않았습니다. 다시 시도해서 브라우저에 표시된 코드를 입력해 주세요.',
+    checkingProject: 'GitHub과 Vercel에서 이 프로젝트 상태를 확인하는 중…',
+    stepsAllDone: '{count}단계 모두 완료',
     tabDashboard: '대시보드',
     tabDeploy: '배포',
     connections: '연결 상태',
@@ -420,6 +424,8 @@ const STRINGS = {
     sbDbPasswordPlaceholder: 'データベースのパスワード',
     sbDbPasswordSave: '保存して適用',
     sbAddDatabase: 'データベースを接続 (Supabase)',
+    checkingProject: 'GitHub と Vercel でこのプロジェクトの状態を確認中…',
+    stepsAllDone: '{count} ステップすべて完了',
     tabDashboard: 'ダッシュボード',
     tabDeploy: 'デプロイ',
     connections: '接続状態',
@@ -512,6 +518,8 @@ const STRINGS = {
     sbDbPasswordPlaceholder: '数据库密码',
     sbDbPasswordSave: '保存并应用',
     sbAddDatabase: '连接数据库 (Supabase)',
+    checkingProject: '正在 GitHub 和 Vercel 上检查此项目的状态…',
+    stepsAllDone: '全部 {count} 个步骤已完成',
     tabDashboard: '仪表板',
     tabDeploy: '部署',
     connections: '连接状态',
@@ -609,6 +617,7 @@ const state = {
   dash: freshDashboardState(),
   ghIdentity: { connected: false, username: null, via: null, api: false, push: false },
   originSlug: null,
+  openGeneration: 0,
   // `{ paneCwd }` while a link or a command chose the folder instead of the focused terminal.
   pinned: null,
   // A context change came in while a step was running; looked at when it is over.
@@ -813,6 +822,8 @@ async function pickTab() {
 }
 
 async function openProject(cwd) {
+  // Folders can change faster than their checks finish: only the latest look may write its answer.
+  const generation = ++state.openGeneration;
   state.error = null;
   state.step = null;
   await render();
@@ -824,13 +835,19 @@ async function openProject(cwd) {
     return pickTab();
   }
   const root = await findProjectRoot(cwd);
+  if (generation !== state.openGeneration) return;
   state.root = root;
   state.inspect = await inspectProject(root);
   state.originSlug = await readOriginSlug();
+  if (generation !== state.openGeneration) return;
   if (!state.inspect.hasPackageJson && !state.inspect.hasIndexHtml) {
     state.step = 'no-project';
     return pickTab();
   }
+  // Whether this is a web project is known from its files, in a moment. Its tab comes up now — the
+  // folder, its framework and a spinner — rather than the last folder's screen staying up for the
+  // few seconds GitHub and Vercel take to answer the checks below.
+  await pickTab();
   state.saved = await loadProject(dataDir(), root);
   state.sb = freshSupabaseState();
   state.needsRedeploy = false;
@@ -839,20 +856,26 @@ async function openProject(cwd) {
   state.hosting = null;
   state.hostedNotice = null;
   await resume();
-  await pickTab();
 }
 
 /** Re-checks from wherever things stand and advances `state.step` to the next actionable one. */
 async function resume() {
+  const root = state.root;
+  // The user moved on to another folder while this one was being checked: its answer is dropped.
+  const moved = () => state.root !== root;
   state.ghBin = await findGh(dataDir());
+  if (moved()) return;
   state.vercelBin = await findVercel(dataDir());
+  if (moved()) return;
   if (!state.ghBin || !state.vercelBin) {
     state.step = 'tools';
     return render();
   }
   state.ghIdentity = await githubIdentity(state.ghBin, state.root);
+  if (moved()) return;
   state.gh = { loggedIn: state.ghIdentity.connected, username: state.ghIdentity.username };
   const origin = await hasOrigin(state.root);
+  if (moved()) return;
   state.originSlug = origin ? (describeRemote(origin)?.path ?? null) : null;
   // Pushing to a repository that already exists needs nothing more than the SSH key this computer
   // already has. Creating one needs the GitHub CLI signed in — the only case that still asks.
@@ -864,8 +887,10 @@ async function resume() {
   // instead of walking through a first launch — no remote to confirm, no env vars or Vercel CLI
   // login needed to look at it.
   state.hosting = origin && state.ghIdentity.api ? await vercelHosting(state.ghBin, state.root, { vercelBin: state.vercelBin }) : null;
+  if (moved()) return;
   if (state.hosting) {
     state.repoUrl = await repoUrl(state.ghBin, state.root);
+    if (moved()) return;
     state.launched = { url: state.hosting.url ?? state.launched?.url ?? null, time: state.hosting.latest?.time ?? null, hosted: true };
     state.step = 'launched';
     return render();
@@ -876,12 +901,15 @@ async function resume() {
     return render();
   }
   state.repoUrl = await repoUrl(state.ghBin, state.root);
+  if (moved()) return;
   state.vercel = await vercelWhoami(state.vercelBin, state.root);
+  if (moved()) return;
   if (!state.vercel.loggedIn) {
     state.step = 'vercel-login';
     return render();
   }
   state.sb.info = await inspectSupabase(state.root, state.inspect);
+  if (moved()) return;
   if ((state.sb.info.used || state.sb.wanted) && !state.sb.info.configured && !state.saved?.supabaseSkipped) {
     if (!['pick', 'connected'].includes(state.sb.phase)) state.sb.phase = 'connect';
     state.step = 'supabase';
@@ -893,6 +921,7 @@ async function resume() {
     return render();
   }
   state.envDiscovery = await discoverEnvVars(state.root);
+  if (moved()) return;
   if (state.envDiscovery.files.length > 0 && !state.saved?.envVarsDone) {
     // Values that only make sense on this computer start unselected.
     state.envSelection = Object.fromEntries(Object.entries(state.envDiscovery.vars).map(([k, entry]) => [k, !entry.isLocal]));
@@ -1332,6 +1361,9 @@ function stepsChecklist() {
     { id: 'deploy', label: tr('stepDeploy') },
   ].filter(Boolean);
   const items = rows.map((r) => ({ id: r.id, title: r.label, icon: STEP_ICON[statusOf(r.id)], tone: STEP_TONE[statusOf(r.id)] }));
+  // Every step behind it: the list says nothing a single line can't. One step still open, running
+  // or failed, and the whole list is back so it is clear which one.
+  if (items.every((item) => statusOf(item.id) === 'done')) return ui.badge(tr('stepsAllDone', { count: items.length }), 'success');
   return ui.list('steps', items);
 }
 
@@ -1459,7 +1491,7 @@ function body() {
   const failed = state.error?.step === state.step;
   switch (state.step) {
     case null:
-      return ui.spinner();
+      return ui.spinner(tr('checkingProject'));
     case 'no-pane':
       return ui.column([ui.text(tr('noPane'), 'muted'), openDashboardButton()]);
     case 'no-project':

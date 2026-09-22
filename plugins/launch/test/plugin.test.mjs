@@ -381,7 +381,7 @@ set -e
 case "$1" in
   auth)
     case "$2" in
-      status) if [ -n "$FAKE_GH_LOGGED_OUT" ]; then echo "You are not logged into any GitHub hosts." >&2; exit 1; fi; exit 0 ;;
+      status) if [ -n "$FAKE_GH_DELAY" ]; then sleep "$FAKE_GH_DELAY"; fi; if [ -n "$FAKE_GH_LOGGED_OUT" ]; then echo "You are not logged into any GitHub hosts." >&2; exit 1; fi; exit 0 ;;
       setup-git) exit 0 ;;
       login) exit 1 ;;
     esac
@@ -512,8 +512,14 @@ function start(box, results = {}) {
       const index = seen.findIndex((m) => m.method === method);
       if (index !== -1) return Promise.resolve(seen.splice(index, 1)[0]);
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`no ${method} within ${timeout} ms; stderr: ${stderr}`)), timeout);
-        waiting.push({ method, resolve: (m) => (clearTimeout(timer), resolve(m)) });
+        const waiter = { method, resolve: (m) => (clearTimeout(timer), resolve(m)) };
+        // A wait that gave up leaves the queue, or the next message would go to nobody.
+        const timer = setTimeout(() => {
+          const index = waiting.indexOf(waiter);
+          if (index !== -1) waiting.splice(index, 1);
+          reject(new Error(`no ${method} within ${timeout} ms; stderr: ${stderr}`));
+        }, timeout);
+        waiting.push(waiter);
       });
     },
     stop() {
@@ -853,6 +859,9 @@ test('Launch: a repository Vercel already deploys shows the live site, and publi
     assert.match(text, /fake-user\/my-cool-app/, 'the repository pushes go to is named before publishing');
     assert.ok(!buttonIds(panel).includes('deploy-start'), 'no first-launch "Publish" for a site that is already live');
     assert.ok(!buttonIds(panel).includes('gh-save'), 'no remote confirmation needed to look at it');
+    // Every step is behind it, so the checklist is one line instead of six rows.
+    assert.match(text, /All 6 steps done/);
+    assert.ok(!text.includes('"id":"steps"'), 'no step list when nothing is left to do');
 
     // "Publish my changes" pushes to GitHub; Vercel builds it. No `vercel deploy` (it could create a second project).
     fs.writeFileSync(path.join(box.project, 'index.html'), '<h1>new</h1>');
@@ -1165,6 +1174,47 @@ test('Launch follows the terminal the user is looking at, not the folder it was 
     host.send('panel/open', { context: at(box.project) });
     const panel = await waitForButton(host, 'gh-save');
     assert.match(JSON.stringify(panel), /"value":"project"/, 'on the Deploy tab');
+  } finally {
+    host.stop();
+  }
+});
+
+test('moving into a web project shows its tab and a spinner at once, and a folder left behind never answers late', async () => {
+  const box = sandbox();
+  // GitHub answers slowly, as it does for real: a folder's checks are still running when the user moves on.
+  box.env = { FAKE_GH_DELAY: '1' };
+  const host = start(box);
+  const at = (cwd) => ({ ...host.context, pane: { ...host.context.pane, cwd } });
+  try {
+    host.send('panel/open', { context: at(box.root) });
+    await waitForText(host, /Projects on Vercel/);
+
+    // The folder's own tab, with the folder and a spinner, before GitHub and Vercel have answered.
+    host.send('context/changed', { context: at(box.project) });
+    const loading = await waitForText(host, /Checking how this project stands/);
+    assert.match(JSON.stringify(loading), /"value":"project"/);
+    assert.ok(JSON.stringify(loading).includes(box.project), 'already naming the new folder');
+    await waitForButton(host, 'gh-save');
+
+    // Out, back in, and out again while the web project is still being checked (GitHub takes a
+    // second here): its checks finish after the user has left, and must not win.
+    host.send('context/changed', { context: at(box.root) });
+    await waitForText(host, /Projects on Vercel/);
+    host.send('context/changed', { context: at(box.project) });
+    await waitForText(host, /Checking how this project stands/);
+    host.send('context/changed', { context: at(box.root) });
+    let last = await waitForText(host, /Projects on Vercel/);
+    // Give the web project's checks every chance to finish late, and keep whatever comes after.
+    const until = Date.now() + 3000;
+    while (Date.now() < until) {
+      const next = await host.next('ui/setPanel', Math.max(until - Date.now(), 1)).catch(() => null);
+      if (next) last = next.params.tree;
+    }
+    assert.match(JSON.stringify(last), /"value":"dashboard"/, 'still on the folder the terminal is in');
+    // The Deploy tab still describes the folder the terminal is in, not the one left behind.
+    host.send('ui/event', { element: 'tab', event: 'change', value: 'project', context: at(box.root) });
+    const deploy = await waitForText(host, /package\.json|index\.html/);
+    assert.ok(!buttonIds(deploy).includes('gh-save'), 'the web project did not take over');
   } finally {
     host.stop();
   }
