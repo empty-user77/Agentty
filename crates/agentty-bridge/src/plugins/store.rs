@@ -1,7 +1,7 @@
 //! Installed plugins (`~/.agentty/plugins/<id>`), their enabled state, the built-in catalog and
 //! installing from the catalog, a folder or a Git repository.
 
-use super::manifest::{relative_path, valid_id, version_newer, Manifest, MANIFEST_FILE};
+use super::manifest::{parse_logo, relative_path, valid_id, version_newer, Manifest, MANIFEST_FILE};
 use crate::fsutil;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -300,6 +300,11 @@ pub fn install_module(manifest: &Manifest, module: &[u8], source: Source, origin
     let staging = staging_dir(&manifest.id)?;
     write_file(&staging.join(MANIFEST_FILE), &serde_json::to_string_pretty(manifest)?)?;
     write_bytes(&staging.join(relative_path(&manifest.main)?), module)?;
+    // A module has no folder of files to ship a logo in, so it carries the picture itself. Written
+    // out once here rather than read out of the module every time a row is drawn.
+    if let Some(logo) = logo_in_module(module) {
+        write_bytes(&staging.join(LOGO_FILE), logo)?;
+    }
     finish_install(manifest, &staging, source, origin)
 }
 
@@ -505,9 +510,195 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> Result<()> {
     Ok(())
 }
 
+/// Largest logo kept. A logo is a small square; anything bigger is a download, not an icon.
+const MAX_LOGO_BYTES: usize = 512 * 1024;
+
+/// Whether bytes carried in a module may be drawn as its logo: a picture of a kind Agentty draws,
+/// really of that kind, and small enough to be one.
+///
+/// SVG is refused on purpose. An SVG is a document, not a picture: the renderer resolves the
+/// addresses inside it, and a local path there is opened and drawn — a plugin must not be able to
+/// put one of the user's own files on screen by calling it a logo. The formats below hold pixels
+/// and nothing else, and a real logo is already one of them.
+fn logo_bytes_ok(bytes: &[u8]) -> bool {
+    (1..=MAX_LOGO_BYTES).contains(&bytes.len()) && is_raster_image(bytes)
+}
+
+/// Whether the bytes begin the way one of the formats above does.
+fn is_raster_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(&[0xff, 0xd8, 0xff])
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.len() > 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP")
+}
+
+/// The name a module keeps its logo under. A plugin that is one module has no folder to ship a
+/// file in, so it carries the picture inside the module — a WebAssembly custom section, which the
+/// engine ignores and which the checksum in the entry already covers. In Rust that is two
+/// attributes on a static — `#[used]` so a release build does not drop what nothing refers to:
+/// `#[used] #[link_section = "agentty.logo"] static LOGO: [u8; N] = *include_bytes!("logo.png");`
+pub const LOGO_SECTION: &str = "agentty.logo";
+
+/// The file a module's logo is written to when it is installed.
+const LOGO_FILE: &str = "logo.img";
+
+/// The picture a module carries, if it carries one worth drawing.
+///
+/// Only the sections are walked; nothing else of the module is read or run. A section that is not
+/// a small raster image is no logo — an SVG is a document whose addresses the renderer opens, and
+/// a plugin must not be able to put one of the user's own files on screen that way.
+pub fn logo_in_module(module: &[u8]) -> Option<&[u8]> {
+    let bytes = custom_section(module, LOGO_SECTION)?;
+    logo_bytes_ok(bytes).then_some(bytes)
+}
+
+/// The contents of `module`'s first custom section called `name`.
+///
+/// The module is a file from outside, so every length is read as an offset that may be a lie: each
+/// step is checked against what is left rather than trusted, and a section that does not fit ends
+/// the walk instead of reaching past the end.
+fn custom_section<'a>(module: &'a [u8], name: &str) -> Option<&'a [u8]> {
+    // Magic and version: `\0asm` and 1.
+    let mut rest = module.strip_prefix(b"\0asm\x01\0\0\0")?;
+    while !rest.is_empty() {
+        let id = rest[0];
+        let (size, after_size) = leb128(&rest[1..])?;
+        let size = usize::try_from(size).ok()?;
+        if size > after_size.len() {
+            return None;
+        }
+        let (payload, next) = after_size.split_at(size);
+        // 0 is a custom section: its payload begins with its own name.
+        if id == 0 {
+            if let Some((len, after_len)) = leb128(payload) {
+                let len = usize::try_from(len).ok()?;
+                if len <= after_len.len() && after_len[..len] == *name.as_bytes() {
+                    return Some(&after_len[len..]);
+                }
+            }
+        }
+        rest = next;
+    }
+    None
+}
+
+/// An unsigned LEB128 number, and what follows it. Refused past five bytes, which is more than a
+/// 32-bit length can need — a run of continuation bits must not be read as an enormous number.
+fn leb128(bytes: &[u8]) -> Option<(u64, &[u8])> {
+    let mut value: u64 = 0;
+    for (index, byte) in bytes.iter().take(5).enumerate() {
+        value |= u64::from(byte & 0x7f) << (index * 7);
+        if byte & 0x80 == 0 {
+            return Some((value, &bytes[index + 1..]));
+        }
+    }
+    None
+}
+
+/// The file to draw as `plugin`'s logo, if it has one. A folder plugin names a file of its own in
+/// the manifest; a module's logo was written out when it was installed.
+pub fn logo_file(plugin: &InstalledPlugin) -> Option<PathBuf> {
+    if let Some(relative) = plugin.manifest.as_ref()?.logo.as_deref().and_then(parse_logo) {
+        let path = plugin.dir.join(relative);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let carried = plugin.dir.join(LOGO_FILE);
+    carried.is_file().then_some(carried)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A logo is only drawn when it is actually a small picture: the bytes go to an image decoder,
+    /// and the cap is what stops a "logo" from being a download.
+    #[test]
+    fn only_a_small_image_is_kept_as_a_logo() {
+        let png = |len: usize| {
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            bytes.resize(len, 0);
+            bytes
+        };
+        assert!(logo_bytes_ok(&png(1024)));
+        assert!(logo_bytes_ok(&[&[0xff, 0xd8, 0xff][..], &[0u8; 64][..]].concat()), "JPEG");
+        assert!(logo_bytes_ok(&[&b"GIF89a"[..], &[0u8; 64][..]].concat()), "GIF");
+        assert!(logo_bytes_ok(&[&b"RIFF\0\0\0\0WEBP"[..], &[0u8; 64][..]].concat()), "WebP");
+        assert!(!logo_bytes_ok(b""), "nothing to draw");
+        assert!(!logo_bytes_ok(b"<html>"), "not a picture");
+        assert!(!logo_bytes_ok(&png(MAX_LOGO_BYTES + 1)), "over the cap");
+        assert!(logo_bytes_ok(&png(MAX_LOGO_BYTES)), "exactly the cap is fine");
+    }
+
+    /// An SVG is a document: the renderer would resolve the addresses inside it, and a local path
+    /// there is opened and drawn. A plugin must not be able to put one of the user's own files on
+    /// screen by calling it a logo.
+    #[test]
+    fn an_svg_is_never_kept_as_a_logo() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><image href="/etc/hosts"/></svg>"#;
+        assert!(!logo_bytes_ok(svg));
+        assert!(!logo_bytes_ok(b"<?xml version=\"1.0\"?><svg/>"), "nor with a prologue in front");
+        assert!(!is_raster_image(svg));
+        assert_eq!(logo_in_module(&module_with_section(LOGO_SECTION, svg)), None, "not even carried in a module");
+    }
+
+    /// A module carrying `agentty.logo` hands over exactly those bytes, and a module carrying
+    /// something else hands over nothing.
+    #[test]
+    fn a_module_carries_its_own_logo() {
+        let png = [&b"\x89PNG\r\n\x1a\n"[..], &[7u8; 32][..]].concat();
+        assert_eq!(logo_in_module(&module_with_section(LOGO_SECTION, &png)), Some(&png[..]));
+        assert_eq!(logo_in_module(&module_with_section("something.else", &png)), None, "another section is not a logo");
+        assert_eq!(logo_in_module(b"\0asm\x01\0\0\0"), None, "a module with no sections at all");
+        assert_eq!(logo_in_module(b"not a module"), None);
+        assert_eq!(logo_in_module(b""), None);
+    }
+
+    /// Lengths in a module are numbers from outside: one that reaches past the end must stop the
+    /// walk, not be read as an offset.
+    #[test]
+    fn a_module_with_lengths_that_do_not_fit_is_refused() {
+        let png = [&b"\x89PNG\r\n\x1a\n"[..], &[7u8; 32][..]].concat();
+        let mut cut = module_with_section(LOGO_SECTION, &png);
+        cut.truncate(cut.len() - 8);
+        assert_eq!(logo_in_module(&cut), None, "the section says it is longer than what is left");
+
+        // A section whose own name is longer than the section holding it.
+        let mut lying = b"\0asm\x01\0\0\0".to_vec();
+        lying.extend_from_slice(&[0, 4, 200, b'a', b'b', b'c']);
+        assert_eq!(logo_in_module(&lying), None);
+
+        // Continuation bits that never end.
+        let mut endless = b"\0asm\x01\0\0\0".to_vec();
+        endless.extend_from_slice(&[0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80]);
+        assert_eq!(logo_in_module(&endless), None);
+    }
+
+    /// A module with one custom section, the way a WebAssembly file holds one.
+    fn module_with_section(name: &str, contents: &[u8]) -> Vec<u8> {
+        let mut payload = leb(name.len() as u64);
+        payload.extend_from_slice(name.as_bytes());
+        payload.extend_from_slice(contents);
+        let mut module = b"\0asm\x01\0\0\0".to_vec();
+        module.push(0);
+        module.extend_from_slice(&leb(payload.len() as u64));
+        module.extend_from_slice(&payload);
+        module
+    }
+
+    fn leb(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            out.push(if value == 0 { byte } else { byte | 0x80 });
+            if value == 0 {
+                return out;
+            }
+        }
+    }
 
     /// Every script of a built-in plugin's folder is embedded: one left out would make the
     /// installed plugin fail on its first `import`.

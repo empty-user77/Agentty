@@ -1,7 +1,7 @@
 {
   "id": "cosmica",
   "name": "Cosmica",
-  "version": "1.0.2",
+  "version": "1.1.1",
   "publisher": "Agentty",
   "description": "Use Cosmica notes as prompts, continue a note in Agentty straight from Cosmica, and save session summaries back into Cosmica.",
   "icon": "notebook-pen",
@@ -27,9 +27,7 @@
       {
         "id": "cosmica.saveSummary",
         "title": "Cosmica: Save AI summary of this session",
-        "icon": "notebook-pen",
-        "paneBar": true,
-        "when": "agent"
+        "icon": "bookmark"
       },
       {
         "id": "cosmica.saveTranscript",

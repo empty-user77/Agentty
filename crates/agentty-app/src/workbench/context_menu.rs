@@ -83,6 +83,9 @@ impl Workbench {
         .detach();
     }
 
+    /// The context-memory panel itself, with no placement of its own: the caller decides where it
+    /// goes and defers it. (Deferring here as well as at the call site is what GPUI refuses with
+    /// "cannot call defer_draw during deferred drawing".)
     pub(super) fn render_context_menu(&self, agent: Agent, cx: &mut Context<Self>) -> AnyElement {
         let (loading, snapshot) = match &self.inventory.context {
             Some((_, loading, snapshot)) => (*loading, snapshot.as_ref()),
@@ -122,22 +125,20 @@ impl Workbench {
             None if loading => crate::ui::loading_row(t(cx, "context.loading")).into_any_element(),
             None => crate::ui::hint(t(cx, "context.unavailable")).into_any_element(),
         };
-        let panel = popover()
-            .w(px(440.))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                if this.status_menu.take().is_some() {
-                    this.note_dismissed("status-context");
-                }
-                cx.notify();
-            }))
-            .child(header)
-            .child(body);
-        div()
-            .absolute()
-            .bottom(px(24.))
-            .right_0()
-            .child(gpui::deferred(crate::ui::fade_in("status-menu-fade", panel)).with_priority(3))
-            .into_any_element()
+        crate::ui::fade_in(
+            "status-menu-fade",
+            popover()
+                .w(px(440.))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    if this.status_menu.take().is_some() {
+                        this.note_dismissed("status-context");
+                    }
+                    cx.notify();
+                }))
+                .child(header)
+                .child(body),
+        )
+        .into_any_element()
     }
 
     fn render_context_body(&self, s: &ContextSnapshot, cx: &mut Context<Self>) -> impl IntoElement {

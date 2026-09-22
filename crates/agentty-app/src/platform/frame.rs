@@ -21,11 +21,6 @@ impl Frame {
         Self { x: rect.origin.x, y: rect.origin.y, width: rect.size.width, height: rect.size.height }
     }
 
-    /// A `width`×`height` frame in the top-right corner of `area`, `margin` points from both edges.
-    pub fn top_right(area: Frame, width: f64, height: f64, margin: f64) -> Frame {
-        Frame { x: area.x + area.width - width - margin, y: area.y + area.height - height - margin, width, height }
-    }
-
     /// Same frame with a new height, keeping the top edge fixed.
     pub fn with_height_from_top(self, height: f64) -> Frame {
         Frame { y: self.y + self.height - height, height, ..self }
@@ -37,11 +32,10 @@ mod tests {
     use super::Frame;
 
     #[test]
-    fn anchors_to_top_right() {
-        let area = Frame { x: 0., y: 80., width: 1440., height: 820. };
-        let mini = Frame::top_right(area, 300., 200., 16.);
-        assert_eq!((mini.x, mini.y), (1124., 684.));
-        let taller = mini.with_height_from_top(260.);
-        assert_eq!(taller.y + taller.height, mini.y + mini.height);
+    fn height_change_keeps_the_top_edge_fixed() {
+        let frame = Frame { x: 1124., y: 684., width: 300., height: 200. };
+        let taller = frame.with_height_from_top(260.);
+        assert_eq!(taller.y + taller.height, frame.y + frame.height);
+        assert_eq!(taller.x, frame.x);
     }
 }

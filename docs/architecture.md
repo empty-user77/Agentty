@@ -122,7 +122,8 @@ next finished turn is its reply to that context and is not forwarded back, so tw
   refused, so a web page can't drive an agent through a plugin.
 - Plugins never draw: `ui/setPanel` sends a tree (columns, rows, text, buttons, inputs, lists, …) that
   `workbench/plugin_panel.rs` renders natively in a column right of the terminals; text inputs are GPUI entities kept
-  per plugin and element id. Pane-bar commands render in the agent status bar and split-pane headers.
+  per plugin and element id. A plugin's panel opens from the window header, the sidebar or the command palette,
+  depending on the surface its manifest asks for.
 - `workbench/prompt_dialog.rs` is the "Send to…" dialog; `deliver_prompt` starts new agent sessions with the prompt as
   their first message, types into idle agents with bracketed paste + Enter, and only ever types (never presses Enter)
   into plain shells.

@@ -138,17 +138,12 @@ impl Workbench {
         let mut chip = pane.read(cx).git_branch.clone().filter(|_| split).map(|b| self.branch_chip(pane, b, cx));
         let mut tree_chip = split.then(|| self.worktree_chip(pane, cx)).flatten();
         let mut collab = split.then(|| self.render_collab_chips(pane, cx)).flatten();
-        let mut plugin_buttons = split.then(|| self.render_plugin_pane_buttons(pane, cx)).flatten();
         let mut port_chips = split.then(|| self.port_chips(pane, cx)).flatten();
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
         let mut context_meter = {
             let shown = split && pane.read(cx).is_agent() && crate::settings::settings(cx).agent_bar;
-            pane.read(cx)
-                .stats
-                .as_ref()
-                .filter(|_| shown)
-                .and_then(|s| s.context_percent())
-                .map(|percent| self.context_meter(pane, percent, cx))
+            let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
+            shown.then(|| self.context_meter(pane, percent, cx))
         };
         let view = pane.read(cx);
         let prefs_bar = crate::settings::settings(cx).agent_bar;
@@ -236,7 +231,6 @@ impl Workbench {
                             HudItem::Links => d.children(collab.take()),
                             HudItem::Spacer => d.child(div().flex_1()),
                             HudItem::Ports => d.children(port_chips.take()),
-                            HudItem::Plugins => d.children(plugin_buttons.take()),
                             HudItem::Worktree => d.children(tree_chip.take()),
                             HudItem::Branch => d.children(chip.take()),
                             // Where this pane is: project folder, with the path (cut in the middle) when
@@ -825,11 +819,10 @@ impl Workbench {
         let mut chip = pane.read(cx).git_branch.clone().map(|b| self.branch_chip(pane, b, cx));
         let mut tree_chip = self.worktree_chip(pane, cx);
         let mut collab = self.render_collab_chips(pane, cx);
-        let mut plugin_buttons = self.render_plugin_pane_buttons(pane, cx);
         let mut port_chips = self.port_chips(pane, cx);
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
-        let mut context_meter =
-            pane.read(cx).stats.as_ref().and_then(|s| s.context_percent()).map(|percent| self.context_meter(pane, percent, cx));
+        let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
+        let mut context_meter = Some(self.context_meter(pane, percent, cx));
         let view = pane.read(cx);
         let kind = view.agent_kind()?;
         let (status, status_color) = status_label(view, cx);
@@ -885,7 +878,6 @@ impl Workbench {
                             HudItem::Links => d.children(collab.take()),
                             HudItem::Spacer => d.child(div().flex_1()),
                             HudItem::Ports => d.children(port_chips.take()),
-                            HudItem::Plugins => d.children(plugin_buttons.take()),
                             HudItem::Worktree => d.children(tree_chip.take()),
                             HudItem::Branch => d.children(chip.take()),
                             // The folder is in the app's status bar (bottom left); this bar has
@@ -952,27 +944,48 @@ fn small_icon_button(
 impl Workbench {
     /// Context meter for an agent pane's bar. Past [`super::COMPACT_OFFER_AT`] it also offers the
     /// agent's own compaction command, typed in rather than sent: compacting is the user's call.
-    fn context_meter(&self, pane: &Pane, percent: f64, cx: &mut Context<Self>) -> gpui::Div {
-        let command = pane.read(cx).agent_kind().and_then(|kind| kind.compact_command());
-        let Some(command) = command.filter(|_| percent >= super::COMPACT_OFFER_AT) else { return meter("Context", percent) };
-        let target = pane.clone();
-        meter("Context", percent).child(
-            div()
-                .id(("context-compact", pane.entity_id().as_u64() as usize))
-                .flex_shrink_0()
-                .p_0p5()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_color(hex(Chrome::ORANGE))
-                .hover(|s| s.bg(hex_alpha(Chrome::ORANGE, 0.16)))
-                .tooltip(crate::ui::Tooltip::text(crate::i18n::tf(cx, "context.compact_hint", &[("command", command)]), None))
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.focus_pane(&target, window, cx);
-                    target.update(cx, |view, _| view.insert_text(command));
-                }))
-                .child(icon("minimize-2", 11., hex(Chrome::ORANGE))),
-        )
+    /// The Context meter. Clicking it opens what makes up that number — memory files, skills, the
+    /// files in context — anchored right under the figure it explains, rather than from an icon
+    /// somewhere else in the window. A nearly full context also offers to compact it.
+    fn context_meter(&self, pane: &Pane, percent: Option<f64>, cx: &mut Context<Self>) -> AnyElement {
+        let view = pane.read(cx);
+        let agent = view.agent_kind().and_then(crate::launch::PaneKind::agent);
+        let command =
+            view.agent_kind().and_then(|kind| kind.compact_command()).filter(|_| percent.is_some_and(|p| p >= super::COMPACT_OFFER_AT));
+        let open = self.status_menu == Some(super::status_menus::StatusMenu::Context);
+        let mut chip = optional_meter("Context", percent).id(("context-meter", pane.entity_id().as_u64() as usize)).relative();
+        if let Some(command) = command {
+            let target = pane.clone();
+            chip = chip.child(
+                div()
+                    .id(("context-compact", pane.entity_id().as_u64() as usize))
+                    .flex_shrink_0()
+                    .p_0p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(hex(Chrome::ORANGE))
+                    .hover(|s| s.bg(hex_alpha(Chrome::ORANGE, 0.16)))
+                    .tooltip(crate::ui::Tooltip::text(crate::i18n::tf(cx, "context.compact_hint", &[("command", command)]), None))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.focus_pane(&target, window, cx);
+                        target.update(cx, |view, _| view.insert_text(command));
+                    }))
+                    .child(icon("package", 11., hex(Chrome::ORANGE))),
+            );
+        }
+        let Some(agent) = agent else { return chip.into_any_element() };
+        // Room around the figure, so the hover and open states read as a chip rather than a box
+        // squeezed against the text — the same padding the status bar's own chips use.
+        chip.px_1p5()
+            .py_0p5()
+            .rounded_md()
+            .cursor_pointer()
+            .when(open, |d| d.bg(hex(Chrome::SELECTED)))
+            .hover(|s| s.bg(hex(Chrome::HOVER)))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_status_menu(super::status_menus::StatusMenu::Context, cx)))
+            .when(open, |d| d.child(bar_popover(self.render_context_menu(agent, cx), 6, cx)))
+            .into_any_element()
     }
 }
 
@@ -981,12 +994,19 @@ impl Workbench {
 const USAGE_SHOWN_AT: f64 = 50.0;
 
 fn meter(label: &'static str, percent: f64) -> gpui::Div {
+    optional_meter(label, Some(percent))
+}
+
+/// The same meter for a figure that is not in yet: it keeps its place and stays clickable, so what
+/// it opens does not come and go with the first reading.
+fn optional_meter(label: &'static str, percent: Option<f64>) -> gpui::Div {
     let color = match percent {
-        p if p >= 90.0 => Chrome::ERROR,
-        p if p >= 70.0 => Chrome::ORANGE,
-        _ => Chrome::SUCCESS,
+        Some(p) if p >= 90.0 => Chrome::ERROR,
+        Some(p) if p >= 70.0 => Chrome::ORANGE,
+        Some(_) => Chrome::SUCCESS,
+        None => Chrome::MUTED,
     };
-    let fraction = (percent / 100.0).clamp(0.0, 1.0) as f32;
+    let fraction = (percent.unwrap_or(0.) / 100.0).clamp(0.0, 1.0) as f32;
     div()
         .flex()
         .items_center()
@@ -999,9 +1019,12 @@ fn meter(label: &'static str, percent: f64) -> gpui::Div {
                 .h(px(5.))
                 .rounded_full()
                 .bg(hex(0x3a3a3a))
-                .child(div().h_full().rounded_full().bg(hex(color)).w(gpui::relative(fraction.max(0.02)))),
+                .when_some(percent, |d, _| d.child(div().h_full().rounded_full().bg(hex(color)).w(gpui::relative(fraction.max(0.02))))),
         )
-        .child(div().text_color(hex(color)).child(format!("{percent:.0}%")))
+        .child(div().text_color(hex(color)).child(match percent {
+            Some(p) => format!("{p:.0}%"),
+            None => "—".to_string(),
+        }))
 }
 
 #[cfg(test)]

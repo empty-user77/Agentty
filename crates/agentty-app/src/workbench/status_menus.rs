@@ -145,14 +145,19 @@ impl Workbench {
                 .child(icon(glyph, 13., hex(if open { Chrome::BRIGHT } else { Chrome::MUTED })))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_status_menu(menu, cx)))
         };
-        let menu = self.status_menu.filter(|m| *m != StatusMenu::Advisor).map(|menu| self.render_status_menu(menu, &key, cx));
+        // Advisor has its own place, and Context now opens from the pane's Context meter.
+        let menu = self
+            .status_menu
+            .filter(|m| !matches!(m, StatusMenu::Advisor | StatusMenu::Context))
+            .map(|menu| self.render_status_menu(menu, &key, cx));
         Some(
             div()
                 .relative()
                 .h_full()
                 .flex()
                 .items_center()
-                .child(button("status-context", "brain", StatusMenu::Context, cx))
+                // No brain icon here: the context memory opens from the Context meter in the
+                // pane's own bar, which is where the number it explains is shown.
                 .child(button("status-skills", "sparkles", StatusMenu::Skills, cx))
                 .child(button("status-agents", "bot", StatusMenu::Agents, cx))
                 .child(button("status-mcp", "blocks", StatusMenu::Mcp, cx))
@@ -161,11 +166,10 @@ impl Workbench {
         )
     }
 
+    /// The popover for one of the status bar's own menus. Context is not one of them any more — it
+    /// opens from the pane's Context meter, which places and defers it itself.
     fn render_status_menu(&self, menu: StatusMenu, key: &Key, cx: &mut Context<Self>) -> AnyElement {
         let agent = key.0;
-        if menu == StatusMenu::Context {
-            return self.render_context_menu(agent, cx);
-        }
         let title = match menu {
             StatusMenu::Context | StatusMenu::Advisor => t(cx, "context.title"),
             StatusMenu::Skills => t(cx, "status.skills"),

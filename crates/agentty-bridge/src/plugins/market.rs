@@ -188,6 +188,9 @@ impl Entry {
             publisher: self.publisher.clone(),
             description: self.description.clone(),
             icon: self.icon.clone(),
+            // A listing has no logo of its own: the module carries it, and it is written out when
+            // the plugin is installed (`store::logo_in_module`).
+            logo: None,
             homepage: self.homepage.clone(),
             links: vec![super::manifest::LinkEntry { label: "Source".into(), url: self.source.clone() }],
             requires: None,

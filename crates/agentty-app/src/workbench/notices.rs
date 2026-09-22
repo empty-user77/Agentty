@@ -49,6 +49,7 @@ impl Workbench {
         self.notices.truncate(MAX_NOTICES);
 
         let prefs = settings(cx);
+        let sort_finished_to_top = prefs.sort_finished_to_top;
         let background = !self.window_active || self.is_mini();
         // The user is looking at this very pane: no need to tell them elsewhere.
         let in_view = self.pane_in_view(pane_id, cx);
@@ -64,9 +65,12 @@ impl Workbench {
                 mini.update(cx, |m, cx| m.push_bubble(pane_id, title, text.clone(), kind, cx));
             }
         }
-        // The workspace with the latest result moves to the top of the list.
+        // The workspace with the latest result moves to the top of its group — opt-in: a fixed
+        // order is what most people expect from a sidebar they arranged themselves.
         if let (NoticeKind::Finished, Some(id)) = (kind, workspace_id) {
-            self.move_workspace_to_top(id, cx);
+            if sort_finished_to_top {
+                self.move_workspace_to_top(id, cx);
+            }
         }
         cx.notify();
     }

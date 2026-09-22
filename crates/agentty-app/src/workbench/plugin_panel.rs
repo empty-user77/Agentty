@@ -1,17 +1,26 @@
 //! Plugin UI inside the window: the panel docked right of the terminals (the area a plugin fills
-//! with its own UI tree), plugin buttons in the tab strip, and pane-bar buttons above terminals.
+//! with its own UI tree) and plugin buttons in the tab strip.
 
-use super::{Pane, Workbench};
+use super::Workbench;
 use crate::i18n::{t, tf};
-use crate::launch::PaneKind;
 use crate::plugins::{self, RunState};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
-use agentty_bridge::plugins::manifest::{PanelMode, Surface, When};
+use agentty_bridge::plugins::manifest::{PanelMode, Surface};
 use agentty_bridge::plugins::ui::{Gap, Node, TextStyle, Tone, UiEvent, Variant};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, SharedString, Subscription, Window};
 use std::time::Duration;
+
+/// One plugin's entry on a surface: which plugin, what to call it, and what to draw for it.
+struct SurfaceEntry {
+    id: String,
+    title: String,
+    glyph: &'static str,
+    /// The plugin's own logo on disk, preferred over `glyph`.
+    logo: Option<std::path::PathBuf>,
+    badge: String,
+}
 
 /// A text field of a plugin panel, kept across renders.
 pub struct PluginInput {
@@ -146,6 +155,7 @@ impl Workbench {
         let log_tail: Vec<String> = runtime.map(|r| r.logs.iter().rev().take(12).rev().cloned().collect()).unwrap_or_default();
         let panel_title = manifest.contributes.panel.as_ref().map_or(manifest.name.clone(), |p| p.title.clone());
         let panel_icon = icon_named(manifest.contributes.panel.as_ref().and_then(|p| p.icon.as_deref()).or(manifest.icon.as_deref()));
+        let panel_logo = agentty_bridge::plugins::store::logo_file(&plugin);
 
         let restart_id = plugin_id.clone();
         let header = div()
@@ -158,7 +168,7 @@ impl Workbench {
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::SIDE_BAR))
-            .child(icon(panel_icon, IconSize::BUTTON, hex(Chrome::BRIGHT)))
+            .child(crate::ui::plugin_mark(panel_logo, panel_icon, IconSize::BUTTON, hex(Chrome::BRIGHT)))
             .child(
                 div()
                     .flex_1()
@@ -610,13 +620,20 @@ impl Workbench {
     }
 
     /// Enabled plugins whose panel sits on `surface`: (id, title, icon, badge).
-    fn plugin_surface_entries(&self, surface: Surface, cx: &Context<Self>) -> Vec<(String, String, &'static str, String)> {
+    fn plugin_surface_entries(&self, surface: Surface, cx: &Context<Self>) -> Vec<SurfaceEntry> {
         plugins::active(cx)
             .filter_map(|(plugin, manifest)| {
                 let panel = manifest.contributes.panel.as_ref().filter(|_| manifest.surface() == surface)?;
                 let glyph = icon_named(panel.icon.as_deref().or(manifest.icon.as_deref()));
                 let badge = plugins::runtime(cx, &plugin.id).map(|r| r.badge.clone()).unwrap_or_default();
-                Some((plugin.id.clone(), panel.title.clone(), glyph, badge))
+                Some(SurfaceEntry {
+                    id: plugin.id.clone(),
+                    title: panel.title.clone(),
+                    glyph,
+                    // The plugin's own artwork wins over the icon name when it is there.
+                    logo: agentty_bridge::plugins::store::logo_file(plugin),
+                    badge,
+                })
             })
             .collect()
     }
@@ -637,7 +654,7 @@ impl Workbench {
     pub(super) fn render_plugin_header_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.plugin_surface_entries(Surface::Pane, cx)
             .into_iter()
-            .map(|(id, title, glyph, badge)| {
+            .map(|SurfaceEntry { id, title, glyph, logo, badge }| {
                 let open = self.plugin_panel_open(&id);
                 let target = id.clone();
                 div()
@@ -657,7 +674,12 @@ impl Workbench {
                     .when(open, |d| d.bg(hex(Chrome::SELECTED)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_plugin_surface(&target, window, cx)))
-                    .child(icon(glyph, IconSize::BUTTON, hex(if open { Chrome::BRIGHT } else { Chrome::FOREGROUND })))
+                    .child(crate::ui::plugin_mark(
+                        logo,
+                        glyph,
+                        IconSize::BUTTON,
+                        hex(if open { Chrome::BRIGHT } else { Chrome::FOREGROUND }),
+                    ))
                     .when(!badge.is_empty(), |d| d.child(div().t_caption().text_color(hex(Chrome::BRIGHT)).child(badge)))
                     .into_any_element()
             })
@@ -669,7 +691,7 @@ impl Workbench {
     pub(super) fn render_plugin_activity_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.plugin_surface_entries(Surface::Sidebar, cx)
             .into_iter()
-            .map(|(id, title, glyph, badge)| {
+            .map(|SurfaceEntry { id, title, glyph, logo, badge }| {
                 let open = self.plugin_panel_open(&id);
                 let target = id.clone();
                 let element_id = SharedString::from(format!("activity-plugin-{id}"));
@@ -688,10 +710,7 @@ impl Workbench {
                     .border_l_2()
                     .border_color(if open { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_plugin_surface(&target, window, cx)))
-                    .child(
-                        icon(glyph, IconSize::ACTIVITY, if open { hex(Chrome::BRIGHT) } else { hex(0x858585) })
-                            .group_hover(element_id, |s| s.text_color(hex(Chrome::BRIGHT))),
-                    )
+                    .child(crate::ui::plugin_mark(logo, glyph, IconSize::ACTIVITY, if open { hex(Chrome::BRIGHT) } else { hex(0x858585) }))
                     .when(!badge.is_empty(), |d| {
                         // The bar is only so wide: enough of the badge to read at a glance.
                         let badge: String = badge.chars().take(3).collect();
@@ -717,7 +736,7 @@ impl Workbench {
     pub(super) fn render_plugin_status_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.plugin_surface_entries(Surface::Status, cx)
             .into_iter()
-            .map(|(id, title, glyph, badge)| {
+            .map(|SurfaceEntry { id, title, glyph, logo, badge }| {
                 let open = self.plugin_panel_open(&id);
                 let target = id.clone();
                 div()
@@ -733,59 +752,11 @@ impl Workbench {
                     .when(open, |d| d.bg(hex(Chrome::SELECTED)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_plugin_surface(&target, window, cx)))
-                    .child(icon(glyph, 13., hex(if open { Chrome::BRIGHT } else { Chrome::MUTED })))
+                    .child(crate::ui::plugin_mark(logo, glyph, 13., hex(if open { Chrome::BRIGHT } else { Chrome::MUTED })))
                     .when(!badge.is_empty(), |d| d.child(div().t_caption().text_color(hex(Chrome::BRIGHT)).child(badge)))
                     .into_any_element()
             })
             .collect()
-    }
-
-    /// Pane-bar buttons (plugin commands with `paneBar`) for `pane`.
-    pub(super) fn render_plugin_pane_buttons(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let view = pane.read(cx);
-        let agent = view.agent_kind().is_some_and(|k| k != PaneKind::Shell);
-        let pane_id = view.pane_id;
-        let commands: Vec<(String, String, String, &'static str)> = plugins::active(cx)
-            .flat_map(|(plugin, manifest)| {
-                manifest
-                    .contributes
-                    .commands
-                    .iter()
-                    .filter(|c| c.pane_bar)
-                    .filter(|c| match c.when {
-                        When::Always => true,
-                        When::Agent => agent,
-                        When::Shell => !agent,
-                    })
-                    .map(|c| (plugin.id.clone(), c.id.clone(), c.title.clone(), icon_named(c.icon.as_deref().or(manifest.icon.as_deref()))))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        if commands.is_empty() {
-            return None;
-        }
-        let mut row = div().flex().items_center().gap_0p5().flex_shrink_0();
-        for (index, (plugin, command, title, glyph)) in commands.into_iter().enumerate() {
-            let target = pane.clone();
-            row = row.child(
-                div()
-                    .id(SharedString::from(format!("pane-plugin-{pane_id}-{index}")))
-                    .size(px(22.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .tooltip(Tooltip::text(title, None))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        this.run_plugin_command(&plugin, &command, Some(target.clone()), cx);
-                    }))
-                    .child(icon(glyph, IconSize::INLINE, hex(Chrome::FOREGROUND))),
-            );
-        }
-        Some(row.into_any_element())
     }
 }
 

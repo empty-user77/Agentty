@@ -19,8 +19,7 @@ plugin can:
 
 - fill a **panel** next to the terminals with a UI tree (`plugin.setPanel(ui.column([...]))`) and
   react to clicks, typing and list selections (`plugin.onEvent(id, …)`);
-- add **commands** to the palette and as **buttons above terminal panes** (`contributes.commands`
-  with `paneBar`, handled by `plugin.command(id, …)`);
+- add **commands** to the palette (`contributes.commands`, handled by `plugin.command(id, …)`);
 - see where the user is (`context.pane.cwd`, `kind`, `status`, `sessionId`);
 - **send prompts** to agents (`plugin.injectPrompt`, default `target: 'ask'` lets the user choose a
   new workspace, a tab or an open workspace);

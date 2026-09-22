@@ -53,6 +53,29 @@ pub fn set_frame(window: Id, frame: Frame, animate: bool) {
     }
 }
 
+/// Sets the window's opacity outright (no animation).
+pub fn set_alpha(window: Id, alpha: f64) {
+    unsafe {
+        let _: () = msg_send![window, setAlphaValue: alpha];
+    }
+}
+
+/// Fades the window to `alpha` over `duration` seconds, driven by Core Animation on the
+/// compositor rather than by GPUI redrawing this window's real content at each intermediate step.
+/// Used for the mini-mode fold instead of animating the real window's frame down to a sliver: that
+/// forces a full relayout of everything in it (every terminal, every pane) at each frame of the
+/// animation, which is the actual cost behind the stutter animating the frame directly has.
+pub fn fade(window: Id, alpha: f64, duration: f64) {
+    unsafe {
+        let _: () = msg_send![objc::class!(NSAnimationContext), beginGrouping];
+        let context: Id = msg_send![objc::class!(NSAnimationContext), currentContext];
+        let _: () = msg_send![context, setDuration: duration];
+        let animator: Id = msg_send![window, animator];
+        let _: () = msg_send![animator, setAlphaValue: alpha];
+        let _: () = msg_send![objc::class!(NSAnimationContext), endGrouping];
+    }
+}
+
 /// Hides the window without closing it (no Dock minimize animation).
 pub fn order_out(window: Id) {
     unsafe {

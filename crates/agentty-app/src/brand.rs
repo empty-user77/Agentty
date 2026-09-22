@@ -61,25 +61,32 @@ pub fn logo_paths() -> impl Iterator<Item = &'static str> {
 /// blue badges pulls the eye away from the work. The brand colour is still what `brand().color`
 /// gives anything that really needs to tell tools apart.
 pub fn avatar(id: &str, size: f32) -> gpui::Div {
-    plate(id, size, false)
+    plate(id, size, false, Chrome::BRIGHT)
+}
+
+/// The same avatar drawn in an ink of its own, for a row on a fill the user chose: on a pale card
+/// the usual near-white glyph is not there at all.
+pub fn avatar_in(id: &str, size: f32, ink: u32) -> gpui::Div {
+    plate(id, size, false, ink)
 }
 
 /// The same avatar in the tool's own colour. For the places that are about choosing a tool — the
 /// launcher menu — where the colour is the point rather than noise.
 pub fn avatar_brand(id: &str, size: f32) -> gpui::Div {
-    plate(id, size, true)
+    plate(id, size, true, Chrome::BRIGHT)
 }
 
 /// The tool's logo, or — while a turn is running — the braille dot spinner in its place, the same
-/// mark everywhere it appears. `key` keeps each row's animation apart.
-pub fn avatar_working(id: &str, size: f32, working: bool, key: u64) -> AnyElement {
+/// mark everywhere it appears. `key` keeps each row's animation apart; `ink` is the colour the row
+/// it sits in writes its text in, so the mark follows the card's own fill.
+pub fn avatar_working(id: &str, size: f32, working: bool, key: u64, ink: u32) -> AnyElement {
     if !working {
-        return avatar(id, size).into_any_element();
+        return avatar_in(id, size, ink).into_any_element();
     }
-    crate::ui::dot_spinner(("agent-working", key as usize), size, hex_alpha(Chrome::BRIGHT, 0.9)).into_any_element()
+    crate::ui::dot_spinner(("agent-working", key as usize), size, hex_alpha(ink, 0.9)).into_any_element()
 }
 
-fn plate(id: &str, size: f32, colored: bool) -> gpui::Div {
+fn plate(id: &str, size: f32, colored: bool, ink: u32) -> gpui::Div {
     let brand = brand(id);
     // The plain one is the glyph and nothing else: a dark disc behind every logo, on a card that
     // already has a colour of its own, reads as a hole punched in it.
@@ -87,12 +94,12 @@ fn plate(id: &str, size: f32, colored: bool) -> gpui::Div {
     let base = div().flex_shrink_0().size(px(size)).rounded_full().flex().items_center().justify_center().when(colored, |d| {
         d.bg(hex_alpha(0xffffff, 0.08)).border_1().border_color(hex_alpha(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, 0.85))
     });
-    base.child(glyph(brand, inner, size, colored))
+    base.child(glyph(brand, inner, size, colored, ink))
 }
 
 /// The tool's logo, terminal glyph or first letter, in one quiet tone or in its brand colour.
-fn glyph(brand: &Brand, inner: f32, size: f32, colored: bool) -> AnyElement {
-    let tone = if colored { hex(brand.color) } else { hex_alpha(Chrome::BRIGHT, 0.85) };
+fn glyph(brand: &Brand, inner: f32, size: f32, colored: bool, ink: u32) -> AnyElement {
+    let tone = if colored { hex(brand.color) } else { hex_alpha(ink, 0.85) };
     let tone = if colored && brand.id == "shell" { hex(Chrome::BRIGHT) } else { tone };
     match (brand.logo, brand.id) {
         (Some(path), _) => svg().path(SharedString::from(path)).size(px(inner)).text_color(tone).into_any_element(),
@@ -110,7 +117,7 @@ fn glyph(brand: &Brand, inner: f32, size: f32, colored: bool) -> AnyElement {
 pub fn tile(id: &str, size: f32) -> gpui::Div {
     let brand = brand(id);
     // The start page's cards are a wall of tools to choose from: colour tells them apart.
-    tinted_tile(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, size).child(glyph(brand, size * 0.56, size, true))
+    tinted_tile(if brand.id == "shell" { 0x9a9a9a } else { brand.color }, size).child(glyph(brand, size * 0.56, size, true, Chrome::BRIGHT))
 }
 
 /// An empty [`tile`] in any color, for cards that show an icon instead of a brand.

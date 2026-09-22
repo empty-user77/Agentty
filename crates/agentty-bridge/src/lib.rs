@@ -311,10 +311,15 @@ pub fn pretty_model(model: &str) -> String {
 
 /// Whether a transcript file mentions `needle` (case-insensitive), for full-text session search.
 pub fn transcript_contains(path: &std::path::Path, needle: &str) -> bool {
-    use std::io::BufRead;
+    use std::io::{BufRead, Read};
+    /// How much of a transcript a search reads. A transcript is one line per message, and a search
+    /// runs over every session while someone is still typing — without a limit here, one file left
+    /// without a line break (a corrupted transcript, or one huge tool result) would be read into
+    /// memory whole. Anything real is far below this.
+    const MAX_SCAN: u64 = 16 * 1024 * 1024;
     let needle = needle.to_lowercase();
     let Ok(file) = std::fs::File::open(path) else { return false };
-    std::io::BufReader::new(file).lines().map_while(Result::ok).any(|line| line.to_lowercase().contains(&needle))
+    std::io::BufReader::new(file.take(MAX_SCAN)).lines().map_while(Result::ok).any(|line| line.to_lowercase().contains(&needle))
 }
 
 #[cfg(test)]

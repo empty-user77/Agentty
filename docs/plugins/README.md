@@ -51,7 +51,7 @@ any agent.
   "permissions": ["prompt.inject"],
   "contributes": {
     "panel": { "title": "Hello", "icon": "sparkles" },
-    "commands": [{ "id": "hello.explain", "title": "Hello: Explain this folder", "icon": "bot", "paneBar": true }]
+    "commands": [{ "id": "hello.explain", "title": "Hello: Explain this folder", "icon": "bot" }]
   }
 }
 ```
@@ -81,7 +81,7 @@ function explain(context) {
 ```
 
 Open **Plugins → Refresh** (or reopen the page): the plugin shows up as installed. Its panel button
-appears in the tab strip, the command in the palette (⇧⌘P) and as a button above terminal panes.
+appears in the tab strip and the command in the palette (⇧⌘P).
 
 ## Manifest (`agentty-plugin.json`)
 
@@ -96,15 +96,16 @@ appears in the tab strip, the command in the palette (⇧⌘P) and as a button a
 | `links` | `[]` | up to 6 `{ "label", "url" }` (https) shown as buttons on the store card — project site, docs, source |
 | `requires` | | `{ "name", "url", "note" }`: the app or service the plugin is for. The card says whether it was found (see `detect`) and offers the link when it wasn't |
 | `icon` | | icon name (see [Icons](#icons)) |
+| `logo` | | the plugin's own artwork, preferred over `icon`: a file in the plugin folder (`logo.png`). A plugin that is one module has no folder to ship a file in, so it carries the picture inside the module instead — a WebAssembly custom section called `agentty.logo`, which the engine ignores and the entry's checksum already covers. In Rust that is a static with two attributes (`#[used]` so a release build keeps what nothing refers to): `#[used] #[link_section = "agentty.logo"] static LOGO: [u8; N] = *include_bytes!("logo.png");`. A carried logo is written out when the plugin is installed, and kept only when it is a PNG, JPEG, GIF or WebP, really is one, and stays under 512 KB — an SVG is never kept, because an SVG is a document whose addresses the renderer opens and could draw a file of the user's. A logo is never fetched from an address: nothing about installing a plugin reaches its author |
 | `permissions` | `[]` | see [Permissions](#permissions-and-safety) |
 | `activationEvents` | `[]` | `["onStartup"]` starts the plugin with Agentty; otherwise on first use |
 | `detect` | `[]` | paths (`~` allowed) of an app the plugin integrates with; found → "Recommended" in the store |
 | `contributes.panel` | | `{ "title", "icon", "surface", "mode" }` — the panel the plugin fills with UI. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom). `mode` picks how it opens: `push` (default, docked beside the terminals), `overlay` (floating over them), `window` (a window of its own) or `full` (the whole area). The user can change the mode and their choice is kept |
-| `contributes.commands[]` | | `{ "id", "title", "description", "icon", "paneBar", "when", "palette" }` |
+| `contributes.commands[]` | | `{ "id", "title", "description", "icon", "palette" }` |
 
-Commands appear in the command palette (unless `"palette": false`). With `"paneBar": true` they also
-get an icon button in the status bar above Claude Code / Codex panes and in the header of split panes;
-`when` limits that to `agent` panes, `shell` panes, or `always`.
+Commands appear in the command palette (unless `"palette": false`) and run through
+`plugin.command(id, …)`. There is no icon button above the terminals any more — that bar had no
+room to spare — so a command's only surface is the palette, or however the panel itself calls it.
 
 ## Node.js SDK
 
@@ -120,7 +121,7 @@ plugin.start(); // after registering handlers
 | | called when |
 |---|---|
 | `onActivate(info => …)` | the plugin started; `info` has `plugin.dataDir`, `language`, `context` |
-| `command(id, ({ context, args }) => …)` | a command runs (palette, pane bar) |
+| `command(id, ({ context, args }) => …)` | a command runs (from the palette) |
 | `onPanelOpen(context => …)` / `onPanelClose` | the panel is shown / hidden — render in `onPanelOpen` |
 | `onEvent(elementId, (event, context) => …)` | a UI element with that id was used |
 | `onAnyEvent((event, context) => …)` | any UI event not handled by `onEvent` |

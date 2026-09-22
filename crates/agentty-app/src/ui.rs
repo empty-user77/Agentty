@@ -222,6 +222,38 @@ pub fn icon_only_sized(
         .child(icon(name, glyph, hex(Chrome::FOREGROUND)))
 }
 
+/// The same button in an ink of its own, for rows drawn on a fill the user chose: the chrome's
+/// grey disappears on a pale card, and a dark hover square would swallow a dark glyph. Both the
+/// glyph and the wash behind it come from `ink`, so one call covers a light card and a dark one.
+pub fn icon_only_in(
+    id: impl Into<ElementId>,
+    name: &'static str,
+    ink: u32,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .size(px(ICON_BUTTON))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .cursor_pointer()
+        .hover(|s| s.bg(hex_alpha(ink, 0.16)))
+        .on_click(on_click)
+        .child(icon(name, IconSize::BUTTON, hex_alpha(ink, 0.85)))
+}
+
+/// A plugin's mark at `size` points: its own logo when it has one on disk, else the named icon in
+/// `color`. A logo is drawn as it is — no tint — since it is the plugin's artwork, not a glyph.
+pub fn plugin_mark(logo: Option<std::path::PathBuf>, name: &'static str, size: f32, color: Hsla) -> gpui::AnyElement {
+    match logo {
+        Some(path) => gpui::img(path).size(px(size)).rounded_sm().flex_shrink_0().into_any_element(),
+        None => icon(name, size, color).into_any_element(),
+    }
+}
+
 /// Hover tooltip for icon-only buttons: a short name and its shortcut, shown after ~1.2 s.
 pub struct Tooltip {
     text: SharedString,

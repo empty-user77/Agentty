@@ -248,8 +248,10 @@ impl Workbench {
         if !window.is_window_active() || running.is_empty() {
             return;
         }
-        // Compared on everything, sent per plugin with only what it may see.
-        let key = self.scoped_context(ContextScope::full(), None, cx).to_string();
+        // Compared on everything, sent per plugin with only what it may see. Compared as it is
+        // rather than written out to a string: this runs on every frame, and almost every one of
+        // them finds nothing changed.
+        let key = self.scoped_context(ContextScope::full(), None, cx);
         if key != self.plugin_context_key {
             self.plugin_context_key = key;
             for id in running {

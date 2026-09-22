@@ -31,6 +31,10 @@ pub struct Manifest {
     /// Icon name from Agentty's icon set (unknown names fall back to a generic icon).
     #[serde(default)]
     pub icon: Option<String>,
+    /// The plugin's own logo, preferred over `icon` when it is there: a file inside the plugin
+    /// folder (`logo.png`). A plugin that is one module carries its logo in the module instead.
+    #[serde(default)]
+    pub logo: Option<String>,
     #[serde(default)]
     pub homepage: Option<String>,
     /// Pages worth opening from the store card (project site, docs, source).
@@ -122,12 +126,6 @@ pub struct CommandContribution {
     pub description: String,
     #[serde(default)]
     pub icon: Option<String>,
-    /// Also shown as a button in the bar above matching terminal panes.
-    #[serde(default)]
-    pub pane_bar: bool,
-    /// Which panes the pane-bar button appears on.
-    #[serde(default)]
-    pub when: When,
     /// Listed in the command palette (default true).
     #[serde(default = "yes")]
     pub palette: bool,
@@ -135,17 +133,6 @@ pub struct CommandContribution {
 
 fn yes() -> bool {
     true
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum When {
-    #[default]
-    Always,
-    /// Claude Code / Codex panes.
-    Agent,
-    /// Plain terminals.
-    Shell,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -320,6 +307,28 @@ impl Manifest {
     }
 }
 
+/// Reads a manifest's `logo`: a file inside the plugin folder. Anything else — a path that
+/// climbs out, an address, a `data:` blob, something enormous — is no logo at all, and the plugin
+/// falls back to its icon name.
+///
+/// A logo is never fetched from anywhere. It travels with the plugin: in its folder, or in the
+/// module itself (`LOGO_SECTION`). That way the bytes drawn are the bytes the user installed and
+/// nothing about installing a plugin reaches its author.
+pub fn parse_logo(logo: &str) -> Option<PathBuf> {
+    let logo = logo.trim();
+    if logo.is_empty() || logo.len() > 400 || logo.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    // Anything carrying a scheme is an address, not a file name — `https://host/x.png` is a
+    // relative path as far as the filesystem is concerned, and taking it as one would quietly look
+    // for a folder called `https:`.
+    if logo.contains(':') || logo.contains("//") {
+        return None;
+    }
+    // The same rule the entry point is held to, so it cannot point outside the plugin folder.
+    relative_path(logo).ok()
+}
+
 pub fn valid_id(id: &str) -> bool {
     (2..=40).contains(&id.len())
         && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
@@ -362,7 +371,9 @@ mod tests {
             "main": "main.mjs",
             "permissions": ["prompt.inject"],
             "contributes": {
-                "commands": [{ "id": "hello.say", "title": "Say hello", "paneBar": true, "when": "agent" }],
+                // `when` is not a field any more (it only ever gated `paneBar`, which is gone
+                // too); a manifest that still has it from before must keep loading.
+                "commands": [{ "id": "hello.say", "title": "Say hello", "when": "agent" }],
                 "panel": { "title": "Hello", "icon": "sparkles" }
             }
         })
@@ -382,6 +393,31 @@ mod tests {
         }
     }
 
+    /// A logo is a file of the plugin's own or an `https://` address, and nothing else: a path that
+    /// climbs out of the folder, plain http, a `data:` blob or a credential in the host would each
+    /// be a way to make the app fetch or read something it should not.
+    #[test]
+    fn a_logo_is_a_file_of_the_plugins_own() {
+        assert_eq!(parse_logo("logo.png"), Some("logo.png".into()));
+        assert_eq!(parse_logo("assets/logo.svg"), Some("assets/logo.svg".into()));
+        assert_eq!(parse_logo("  logo.png  "), Some("logo.png".into()));
+
+        assert_eq!(parse_logo("../../secrets.png"), None);
+        assert_eq!(parse_logo("/etc/passwd"), None);
+
+        // No logo is ever fetched: an address is not a file of the plugin's, and must not be read
+        // as the relative path it looks like to the filesystem either.
+        assert_eq!(parse_logo("https://example.com/logo.png"), None);
+        assert_eq!(parse_logo("http://example.com/logo.png"), None);
+        assert_eq!(parse_logo("data:image/png;base64,AAAA"), None);
+        assert_eq!(parse_logo("//example.com/logo.png"), None);
+
+        assert_eq!(parse_logo(""), None);
+        assert_eq!(parse_logo("   "), None);
+        assert_eq!(parse_logo(&format!("{}.png", "x".repeat(400))), None);
+        assert_eq!(parse_logo("a b.png"), None);
+    }
+
     #[test]
     fn parses_a_manifest_with_defaults() {
         let manifest = Manifest::parse(sample().to_string().as_bytes()).unwrap();
@@ -389,8 +425,7 @@ mod tests {
         // A manifest that says nothing is from before the field: the first protocol, not this one.
         assert_eq!(manifest.api_version, 1);
         let command = &manifest.contributes.commands[0];
-        assert!(command.pane_bar && command.palette);
-        assert_eq!(command.when, When::Agent);
+        assert!(command.palette);
         assert!(manifest.has_permission("prompt.inject"));
         assert!(!manifest.has_permission("session.read"));
         // Plugins written before surfaces existed keep the icon they had, in the tab strip.

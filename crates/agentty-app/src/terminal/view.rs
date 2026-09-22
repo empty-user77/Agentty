@@ -69,6 +69,8 @@ pub enum TerminalEvent {
     OpenLink(String),
     /// Clicked a file or folder path printed in the terminal: show it in Finder.
     RevealPath(PathBuf),
+    /// The pane moved to another folder (a `cd`), and no longer works where it was started.
+    DirectoryChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -482,10 +484,17 @@ impl TerminalView {
         self.live_agent = live_agent;
         self.live_tool = live_tool;
         if cwd.is_some() && cwd != self.live_cwd {
+            // Where the pane works is part of the layout, so a `cd` is worth saving — but only
+            // when it really moved away from the folder the pane was started in. The first probe
+            // of a restored pane finds the folder that is already written down.
+            let moved = cwd.as_deref() != Some(self.spec.cwd.as_path());
             self.git_branch = cwd.as_deref().and_then(crate::procinfo::git_branch);
             self.worktree = cwd.as_deref().and_then(crate::workbench::worktrees::linked_tree_name);
             self.live_cwd = cwd;
             changed = true;
+            if moved {
+                cx.emit(TerminalEvent::DirectoryChanged);
+            }
         }
         if self.probe_ticks.is_multiple_of(3) {
             self.probe_git(cx);
@@ -1252,6 +1261,10 @@ impl TerminalView {
             cx.emit(TerminalEvent::StatusChanged);
         }
         if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta) {
+            // This key went to the program rather than to the input method, so whatever was being
+            // composed is not what the program has. Drawing it on would put it over the text the
+            // program echoes back.
+            self.marked_text = None;
             self.write_user_input(bytes);
             cx.stop_propagation();
             cx.notify();
@@ -1697,6 +1710,17 @@ impl EntityInputHandler for TerminalView {
 // Painting
 // ---------------------------------------------------------------------------------------------
 
+/// What drawing a grid needs from the settings, so a repaint does not copy the rest of them.
+struct GridPrefs {
+    font_size: f32,
+    font_family: String,
+    letter_spacing: f32,
+    line_height: f32,
+    padding: f32,
+    bold_text: bool,
+    cursor_shape: crate::settings::CursorShapeSetting,
+}
+
 struct TerminalElement {
     view: Entity<TerminalView>,
     focus: FocusHandle,
@@ -1775,7 +1799,22 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) -> Frame {
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        let prefs = settings(cx).clone();
+        // Only the handful of values a grid of text needs, taken out one at a time. This runs for
+        // every visible terminal on every repaint — every keystroke echoed, every burst an agent
+        // prints — and the settings also hold the recent folders, the aliases, the saved layout and
+        // more, so copying the lot of it here was work done sixty times a second for nothing.
+        let prefs = {
+            let settings = settings(cx);
+            GridPrefs {
+                font_size: settings.font_size,
+                font_family: settings.font_family.clone(),
+                letter_spacing: settings.letter_spacing,
+                line_height: settings.line_height,
+                padding: settings.padding,
+                bold_text: settings.bold_text,
+                cursor_shape: settings.cursor_shape,
+            }
+        };
         let theme = terminal_theme(cx).clone();
         let font_size = px(prefs.font_size);
         let base_font = font(prefs.font_family.clone());
@@ -1786,7 +1825,10 @@ impl Element for TerminalElement {
         // snapped to device pixels so the grid stays crisp and Powerline glyphs meet exactly.
         let scale = window.scale_factor();
         let snap = |value: Pixels| px((f32::from(value) * scale).round() / scale);
-        let cell_width = snap(text_system.advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(px(8.)));
+        // The grid's cell carries the tracking: widening it spaces the text without moving glyphs
+        // off their columns, which is what a terminal needs (per-glyph tracking would break them).
+        let advance = text_system.advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(px(8.));
+        let cell_width = snap(advance + px(prefs.letter_spacing.clamp(0., 8.)));
         let natural = text_system.ascent(font_id, font_size) + text_system.descent(font_id, font_size).abs();
         let line_height = snap(natural * prefs.line_height).max(px(1.));
         let padding = px(prefs.padding);
@@ -1824,16 +1866,34 @@ impl Element for TerminalElement {
         let term = term_handle.lock();
         // URLs on screen are drawn blue (and underlined), like links.
         let link_color = hex(Chrome::BLUE);
+        // Which cells are part of an address, so they can be underlined. Every row is looked at on
+        // every repaint, so a row is only copied out once it is known to hold one: almost none do,
+        // and reading the cells for `://` in place costs nothing to allocate.
         let url_cells: std::collections::HashSet<(i32, usize)> = {
             let grid = term.grid();
             let offset = grid.display_offset() as i32;
+            let columns = grid.columns();
             let mut cells = std::collections::HashSet::new();
+            let mut text: Vec<char> = Vec::new();
             for row in 0..grid.screen_lines() as i32 {
                 let line = Line(row - offset);
-                let text: Vec<char> = (0..grid.columns()).map(|c| grid[line][Column(c)].c).collect();
-                if !text.windows(3).any(|w| w == [':', '/', '/']) {
+                let mut previous = ['\0'; 2];
+                let mut has_scheme = false;
+                for column in 0..columns {
+                    let c = grid[line][Column(column)].c;
+                    if previous == [':', '/'] && c == '/' {
+                        has_scheme = true;
+                        break;
+                    }
+                    previous = [previous[1], c];
+                }
+                if !has_scheme {
                     continue;
                 }
+                // The same buffer every time: a screen full of addresses would otherwise be a
+                // fresh allocation per row.
+                text.clear();
+                text.extend((0..columns).map(|c| grid[line][Column(c)].c));
                 for (start, end) in url_ranges(&text) {
                     cells.extend((start..end).map(|c| (line.0, c)));
                 }
@@ -1852,7 +1912,13 @@ impl Element for TerminalElement {
                 symbol_font.clone()
             } else {
                 gpui::Font {
-                    weight: if style.bold { FontWeight::BOLD } else { FontWeight::NORMAL },
+                    // With "bold text" on, ordinary text is already bold, so what the terminal
+                    // itself marks bold has to go a step heavier to stay tellable apart.
+                    weight: match (prefs.bold_text, style.bold) {
+                        (false, false) => FontWeight::NORMAL,
+                        (false, true) | (true, false) => FontWeight::BOLD,
+                        (true, true) => FontWeight::BLACK,
+                    },
                     style: if style.italic { FontStyle::Italic } else { FontStyle::Normal },
                     ..base_font.clone()
                 }
@@ -2054,6 +2120,13 @@ impl Element for TerminalElement {
                 display_offset,
                 cursor: (cursor_col, cursor_row),
             });
+            // A composition belongs to the pane the keyboard is in. When focus goes elsewhere the
+            // input method drops it without telling us, and what is left would be drawn over the
+            // program's own text for as long as the pane stays open.
+            if view.focused && !focused {
+                view.marked_text = None;
+                view.commit_anchor = None;
+            }
             view.focused = focused;
             if pending.is_none() {
                 view.commit_anchor = None;

@@ -17,11 +17,52 @@ pub fn hex_alpha(value: u32, alpha: f32) -> Hsla {
 /// `value` mixed toward white by `amount` (0…1), kept fully opaque. Translucency over the dark
 /// chrome turns a colour into mud; a lighter solid tone is what "a shade brighter" should mean.
 pub fn lighten(value: u32, amount: f32) -> Hsla {
+    hex(lighten_rgb(value, amount))
+}
+
+/// [`lighten`] as a plain `0xRRGGBB`, for when the fill also has to be measured (see [`ink_on`]).
+pub fn lighten_rgb(value: u32, amount: f32) -> u32 {
     let channel = |shift: u32| {
         let c = ((value >> shift) & 0xff) as f32;
         (c + (255. - c) * amount.clamp(0., 1.)).round() as u32
     };
-    hex((channel(16) << 16) | (channel(8) << 8) | channel(0))
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
+/// Ink on a light fill. Not pure black, for the same reason [`Chrome::BRIGHT`] is not pure white.
+pub const INK: u32 = 0x14141a;
+
+/// Relative luminance of an sRGB colour (WCAG 2.1): 0 for black, 1 for white. The channels are
+/// weighted by how bright the eye finds them, so a saturated yellow counts as light and a
+/// saturated blue as dark — which is the whole point of asking.
+pub fn luminance(value: u32) -> f32 {
+    let channel = |shift: u32| {
+        let c = ((value >> shift) & 0xff) as f32 / 255.;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+}
+
+/// WCAG contrast ratio between two colours, 1 (identical) to 21 (black on white).
+pub fn contrast(a: u32, b: u32) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Text that stays readable on `background`: [`INK`] on a light fill, [`Chrome::BRIGHT`] on a dark
+/// one. A colour the user picked for a card can be anything — a pale yellow leaves white letters
+/// invisible — so the choice is measured against the fill rather than assumed.
+pub fn ink_on(background: u32) -> u32 {
+    if contrast(INK, background) >= contrast(Chrome::BRIGHT, background) {
+        INK
+    } else {
+        Chrome::BRIGHT
+    }
 }
 
 pub struct Chrome;
@@ -336,7 +377,7 @@ mod tests {
 
 #[cfg(test)]
 mod tone_tests {
-    use super::lighten;
+    use super::{contrast, ink_on, lighten, luminance, Chrome, INK};
 
     #[test]
     fn lighten_stays_opaque_and_moves_toward_white() {
@@ -346,5 +387,55 @@ mod tone_tests {
         assert_eq!(lighter.a, 1.0);
         assert!(lighter.l > base.l, "lightening must raise the lightness");
         assert_eq!(lighten(0x000000, 1.0).l, 1.0);
+    }
+
+    #[test]
+    fn luminance_runs_from_black_to_white_and_weighs_green_most() {
+        assert!(luminance(0x000000).abs() < 0.001);
+        assert!((luminance(0xffffff) - 1.0).abs() < 0.001);
+        assert!(luminance(0x00ff00) > luminance(0xff0000), "green looks brighter than red");
+        assert!(luminance(0xff0000) > luminance(0x0000ff), "red looks brighter than blue");
+    }
+
+    #[test]
+    fn contrast_is_symmetric_and_peaks_between_black_and_white() {
+        assert!((contrast(0x000000, 0xffffff) - 21.0).abs() < 0.01);
+        assert!((contrast(0xffffff, 0x000000) - 21.0).abs() < 0.01);
+        assert!((contrast(0x2f6fed, 0x2f6fed) - 1.0).abs() < 0.001);
+    }
+
+    /// The whole point: whichever ink is picked has to be the readable one.
+    #[test]
+    fn ink_follows_the_fill_and_always_takes_the_higher_contrast() {
+        assert_eq!(ink_on(0xffffff), INK, "white card, dark letters");
+        assert_eq!(ink_on(0x000000), Chrome::BRIGHT, "black card, light letters");
+        // The pale end of the built-in palette, where white letters used to wash out.
+        for light in [0xf0b357, 0x7aa2f7, 0x5fd1a0, 0xe887b6, 0x94a3b8, 0xb69cfb, 0x4fc7d3, 0xe97b7b] {
+            assert_eq!(ink_on(light), INK, "{light:#08x} is a light fill");
+        }
+        // The deep end, where dark letters would.
+        for dark in [0x1b46a8, 0x136b3a, 0x8f2c2c, 0x5b34c2, 0x076a75, 0x9a2c63, 0x3a4553, 0x2f6fed] {
+            assert_eq!(ink_on(dark), Chrome::BRIGHT, "{dark:#08x} is a dark fill");
+        }
+    }
+
+    #[test]
+    fn every_colour_a_user_can_pick_gets_readable_ink() {
+        // Every 5th step of the whole 24-bit space — the colour panel hands out any of them. No
+        // fill may take the worse of the two inks. 4:1 is the floor rather than the 4.5:1 the
+        // guideline asks of body text: on a mid-grey fill neither black nor white can reach it,
+        // and the card's name is a size up and a weight heavier than body text.
+        for r in (0u32..=255).step_by(5) {
+            for g in (0u32..=255).step_by(5) {
+                for b in (0u32..=255).step_by(5) {
+                    let fill = (r << 16) | (g << 8) | b;
+                    let ink = ink_on(fill);
+                    let other = if ink == INK { Chrome::BRIGHT } else { INK };
+                    let (chosen, rejected) = (contrast(ink, fill), contrast(other, fill));
+                    assert!(chosen >= rejected, "{fill:#08x} took the worse ink ({chosen:.2} < {rejected:.2})");
+                    assert!(chosen >= 4.0, "{fill:#08x} left its title at {chosen:.2}:1");
+                }
+            }
+        }
     }
 }

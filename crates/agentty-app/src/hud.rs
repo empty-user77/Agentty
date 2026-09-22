@@ -17,8 +17,6 @@ pub enum HudItem {
     Links,
     /// Everything after it is pushed to the right edge.
     Spacer,
-    /// Buttons plugins add to agent panes.
-    Plugins,
     Worktree,
     Branch,
     Folder,
@@ -28,7 +26,7 @@ pub enum HudItem {
 
 impl HudItem {
     /// The order a fresh install shows.
-    pub const DEFAULT: [HudItem; 12] = [
+    pub const DEFAULT: [HudItem; 11] = [
         Self::Model,
         Self::Context,
         Self::Usage,
@@ -37,7 +35,6 @@ impl HudItem {
         Self::Links,
         Self::Spacer,
         Self::Ports,
-        Self::Plugins,
         Self::Worktree,
         Self::Branch,
         Self::Folder,
@@ -62,7 +59,6 @@ impl HudItem {
             Self::Elapsed => "hud.elapsed",
             Self::Links => "hud.links",
             Self::Spacer => "hud.spacer",
-            Self::Plugins => "hud.plugins",
             Self::Worktree => "hud.worktree",
             Self::Branch => "hud.branch",
             Self::Folder => "hud.folder",
