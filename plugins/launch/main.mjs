@@ -1794,9 +1794,32 @@ function accountError() {
   return ['tools', 'gh-login', 'vercel-login'].includes(state.error.step) ? state.error.message : null;
 }
 
+/** Whether there is nothing left to install or to sign in to. */
+function everythingConnected() {
+  return Boolean(state.ghBin && state.vercelBin) && state.ghIdentity.connected && state.vercel.loggedIn;
+}
+
+/**
+ * Connections take the room they need and no more: one line of two badges once both accounts are
+ * there, the full list with its buttons while something is still missing or being looked at.
+ */
+function connectionsBlock() {
+  if (state.dash.loading && !state.dash.loaded) return ui.section(tr('connections'), [ui.list('connections', connectionItems())]);
+  if (!everythingConnected()) return ui.section(tr('connections'), [ui.list('connections', connectionItems()), connectionActions()]);
+  const github = [state.ghIdentity.username, state.ghIdentity.via === 'ssh' ? 'SSH' : null].filter(Boolean).join(' · ');
+  return ui.row(
+    [
+      ui.badge(`GitHub · ${github}`, 'success'),
+      ui.badge(`Vercel · ${state.vercel.username ?? ''}`, 'success'),
+      ui.button('dash-open-vercel-home', tr('dashOpenVercel'), { icon: 'arrow-up-right', variant: 'ghost' }),
+    ],
+    { gap: 'small', wrap: true },
+  );
+}
+
 function dashboardBody() {
   return ui.column([
-    ui.section(tr('connections'), [ui.list('connections', connectionItems()), connectionActions()]),
+    connectionsBlock(),
     state.running ? ui.column([ui.spinner(state.busyLabel), ...state.progressLines.map((line) => ui.text(line, 'small'))]) : null,
     state.loginCode ? loginCodeBlock(state.loginCode.tool) : null,
     state.vercelFallback && !state.vercel.loggedIn ? ui.text(tr('vercelFallbackBody'), 'small') : null,
@@ -1804,7 +1827,7 @@ function dashboardBody() {
     // publishing walk-through is on, which is not the tab the user is looking at.
     state.dash.error ? ui.text(state.dash.error, 'error') : null,
     accountError() ? ui.column([ui.text(accountError(), 'error'), ui.button('retry', tr('tryAgain'), { icon: 'refresh-cw', variant: 'primary' })]) : null,
-    ui.divider(),
+    everythingConnected() ? null : ui.divider(),
     dashboardProjects(),
   ]);
 }

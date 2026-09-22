@@ -1040,7 +1040,9 @@ test('an SSH key that can push is enough: Launch does not ask for a GitHub login
 
     host.send('ui/event', { element: 'tab', event: 'change', value: 'dashboard', context: host.context });
     const dashboard = await waitForText(host, /Projects on Vercel/);
-    assert.match(JSON.stringify(dashboard), /using the SSH key on this computer/);
+    // Everything is connected, so the connections shrink to one line that still says how.
+    assert.match(JSON.stringify(dashboard), /GitHub · fake-user · SSH/);
+    assert.ok(!JSON.stringify(dashboard).includes('"title":"Connections"'), 'no full list while nothing is missing');
   } finally {
     host.stop();
   }
@@ -1054,6 +1056,8 @@ test('the dashboard offers the logins that are missing, and only those', async (
   try {
     host.send('panel/open', { context: host.context });
     const panel = await waitForText(host, /Sign in to Vercel/);
+    // Something is missing, so the full list is there with the buttons that fix it.
+    assert.match(JSON.stringify(panel), /"title":"Connections"/);
     const buttons = buttonIds(panel);
     assert.ok(buttons.includes('gh-login-start'), 'GitHub is offered: neither gh nor an SSH key is signed in');
     assert.ok(buttons.includes('vercel-login-start'));
