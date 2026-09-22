@@ -118,7 +118,7 @@ fn support_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         let _ = home;
-        return std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     return home;
@@ -188,7 +188,10 @@ pub fn browsers() -> Vec<BrowserStatus> {
         .collect()
 }
 
-/// What each browser is called to the operating system, for opening it.
+/// What each browser is called to the operating system, for opening it. Only macOS opens a
+/// browser by its application name — the other platforms have an executable name instead — but the
+/// mapping is tested everywhere, so it is kept everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn launch_name(id: &str) -> &'static str {
     match id {
         "edge" => "Microsoft Edge",
@@ -207,10 +210,9 @@ fn launch_name(id: &str) -> &'static str {
 /// the address here also means the user sees something immediately, before the agent has read
 /// anything.
 pub fn open_in(browser: &str, url: &str) {
-    let name = launch_name(browser);
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("/usr/bin/open").args(["-a", name, url]).spawn();
+        let _ = std::process::Command::new("/usr/bin/open").args(["-a", launch_name(browser), url]).spawn();
     }
     #[cfg(target_os = "windows")]
     {
@@ -237,7 +239,7 @@ pub fn open_in(browser: &str, url: &str) {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
-        let _ = (name, url);
+        let _ = (browser, url);
     }
 }
 
