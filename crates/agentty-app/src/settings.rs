@@ -138,6 +138,22 @@ pub struct Settings {
     pub cursor_shape: CursorShapeSetting,
     pub cursor_blink: bool,
     pub padding: f32,
+    /// Extra width added to every cell, in points. A terminal is a grid, so tracking is the cell,
+    /// not the glyph: widening it spaces the text out without breaking the columns.
+    #[serde(default)]
+    pub letter_spacing: f32,
+    /// Draws ordinary text at bold weight (what the terminal marks bold then goes heavier still).
+    #[serde(default)]
+    pub bold_text: bool,
+    /// Colours of the chosen theme the user replaced, as `0xRRGGBB`. Unset means the theme's own.
+    #[serde(default)]
+    pub color_background: Option<u32>,
+    #[serde(default)]
+    pub color_foreground: Option<u32>,
+    #[serde(default)]
+    pub color_cursor: Option<u32>,
+    #[serde(default)]
+    pub color_selection: Option<u32>,
     pub option_as_meta: bool,
     pub scrollback: usize,
     pub sidebar_width: f32,
@@ -224,6 +240,15 @@ pub struct Settings {
     /// Thin workspace rows: title, colour and state only, for a sidebar with many workspaces.
     #[serde(default)]
     pub compact_workspaces: bool,
+    /// A workspace whose agent just finished jumps to the top of its group (or the ungrouped
+    /// list). Off by default: a fixed order is what most people expect from a sidebar they
+    /// arranged themselves, and the card already shows the result without moving.
+    #[serde(default)]
+    pub sort_finished_to_top: bool,
+    /// The search box above the workspace list. On by default; off gives the list the row back
+    /// (and stops filtering, whatever was typed before).
+    #[serde(default = "yes")]
+    pub workspace_search_bar: bool,
     /// Keep the machine awake (display and system sleep) while Agentty runs. Off by default:
     /// it costs energy, so the user turns it on for a long unattended run.
     #[serde(default)]
@@ -339,6 +364,18 @@ pub struct ChatNotify {
     pub telegram: bool,
     /// Telegram chat the bot writes to (a number, or `@channel`).
     pub telegram_chat: String,
+    /// Slack with a bot token and a channel instead of a webhook URL.
+    #[serde(default)]
+    pub slack_bot: bool,
+    /// Slack channel the bot writes to (`#general`, `general`, or a channel id).
+    #[serde(default)]
+    pub slack_channel: String,
+    /// Discord with a bot token and a channel id instead of a webhook URL.
+    #[serde(default)]
+    pub discord_bot: bool,
+    /// Discord channel id the bot writes to (the API posts to an id, not a name).
+    #[serde(default)]
+    pub discord_channel: String,
     /// Also when an agent finishes (by default only when one needs an answer).
     pub on_finish: bool,
     /// Include what the agent asks (the command, the question). Off: only who and where.
@@ -346,6 +383,54 @@ pub struct ChatNotify {
 }
 
 impl ChatNotify {
+    /// How this channel sends: what the user picked for Slack and Discord, and always a bot for
+    /// Telegram, which has no webhook form.
+    pub fn transport(&self, channel: agentty_bridge::notify::Channel) -> agentty_bridge::notify::Transport {
+        use agentty_bridge::notify::{Channel, Transport};
+        let bot = match channel {
+            Channel::Slack => self.slack_bot,
+            Channel::Discord => self.discord_bot,
+            Channel::Telegram => true,
+        };
+        if bot {
+            Transport::Bot
+        } else {
+            Transport::Webhook
+        }
+    }
+
+    pub fn set_transport(&mut self, channel: agentty_bridge::notify::Channel, transport: agentty_bridge::notify::Transport) {
+        use agentty_bridge::notify::{Channel, Transport};
+        let bot = transport == Transport::Bot;
+        match channel {
+            Channel::Slack => self.slack_bot = bot,
+            Channel::Discord => self.discord_bot = bot,
+            Channel::Telegram => {}
+        }
+    }
+
+    /// The channel or chat this one writes to, for the transport in use. Empty when none is needed.
+    pub fn target(&self, channel: agentty_bridge::notify::Channel) -> String {
+        use agentty_bridge::notify::{Channel, Transport};
+        if self.transport(channel) == Transport::Webhook {
+            return String::new();
+        }
+        match channel {
+            Channel::Slack => self.slack_channel.clone(),
+            Channel::Discord => self.discord_channel.clone(),
+            Channel::Telegram => self.telegram_chat.clone(),
+        }
+    }
+
+    pub fn set_target(&mut self, channel: agentty_bridge::notify::Channel, value: String) {
+        use agentty_bridge::notify::Channel;
+        match channel {
+            Channel::Slack => self.slack_channel = value,
+            Channel::Discord => self.discord_channel = value,
+            Channel::Telegram => self.telegram_chat = value,
+        }
+    }
+
     pub fn enabled(&self, channel: agentty_bridge::notify::Channel) -> bool {
         use agentty_bridge::notify::Channel;
         match channel {
@@ -413,6 +498,11 @@ impl Default for BrowserSettings {
     }
 }
 
+/// `#[serde(default = "yes")]`: a flag that is on unless the file says otherwise.
+fn yes() -> bool {
+    true
+}
+
 fn default_db_panel_width() -> f32 {
     crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH
 }
@@ -428,6 +518,12 @@ impl Default for Settings {
             line_height: 1.0,
             cursor_shape: CursorShapeSetting::Block,
             cursor_blink: true,
+            letter_spacing: 0.0,
+            bold_text: false,
+            color_background: None,
+            color_foreground: None,
+            color_cursor: None,
+            color_selection: None,
             padding: 8.0,
             option_as_meta: false,
             scrollback: 10_000,
@@ -469,6 +565,8 @@ impl Default for Settings {
             harness_agent: HarnessAgent::Auto,
             analytics: true,
             compact_workspaces: false,
+            sort_finished_to_top: false,
+            workspace_search_bar: true,
             prevent_sleep: false,
             setup_check_shown: false,
             onboarding_done: false,
@@ -512,13 +610,19 @@ pub struct SettingsStore {
     /// Bumped on every change, so views can react to "settings were updated".
     pub revision: u64,
     pub themes: Vec<TerminalTheme>,
+    /// The chosen theme with the user's own colour replacements applied. Everything draws from
+    /// this, so a replaced colour reaches the terminals, the preview and the panels alike.
+    composed: TerminalTheme,
 }
 
 impl Global for SettingsStore {}
 
 impl SettingsStore {
     pub fn init(cx: &mut App) {
-        let store = SettingsStore { settings: Settings::load(), revision: 0, themes: load_themes() };
+        let settings = Settings::load();
+        let themes = load_themes();
+        let composed = SettingsStore::compose(&settings, &themes);
+        let store = SettingsStore { settings, revision: 0, themes, composed };
         let _ = store.save();
         if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases) {
             eprintln!("agentty: shell integration unavailable: {err:#}");
@@ -541,8 +645,24 @@ impl SettingsStore {
         Ok(())
     }
 
+    /// The chosen theme, with every colour the user replaced put in.
+    fn compose(settings: &Settings, themes: &[TerminalTheme]) -> TerminalTheme {
+        let mut theme = themes.iter().find(|t| t.name == settings.theme).unwrap_or(&themes[0]).clone();
+        for (slot, replacement) in [
+            (&mut theme.background, settings.color_background),
+            (&mut theme.foreground, settings.color_foreground),
+            (&mut theme.cursor, settings.color_cursor),
+            (&mut theme.selection, settings.color_selection),
+        ] {
+            if let Some(color) = replacement {
+                *slot = color;
+            }
+        }
+        theme
+    }
+
     pub fn theme(&self) -> &TerminalTheme {
-        self.themes.iter().find(|t| t.name == self.settings.theme).unwrap_or(&self.themes[0])
+        &self.composed
     }
 }
 
@@ -577,6 +697,7 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     cx.update_global::<SettingsStore, _>(|store, _| {
         let aliases_before = store.settings.aliases.clone();
         change(&mut store.settings);
+        store.composed = SettingsStore::compose(&store.settings, &store.themes);
         store.revision += 1;
         let _ = store.save();
         if store.settings.aliases != aliases_before {
@@ -588,7 +709,10 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
 }
 
 pub fn reload_themes(cx: &mut App) {
-    cx.update_global::<SettingsStore, _>(|store, _| store.themes = load_themes());
+    cx.update_global::<SettingsStore, _>(|store, _| {
+        store.themes = load_themes();
+        store.composed = SettingsStore::compose(&store.settings, &store.themes);
+    });
     cx.refresh_windows();
 }
 

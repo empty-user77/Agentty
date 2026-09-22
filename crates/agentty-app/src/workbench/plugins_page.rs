@@ -110,6 +110,9 @@ struct Row {
     /// What else this plugin is called: searched, never shown.
     keywords: String,
     icon: &'static str,
+    /// The plugin's own logo on disk, preferred over `icon` — the same mark the detail card draws,
+    /// so a row and its card never show two different things for one plugin.
+    logo: Option<std::path::PathBuf>,
     origin: Origin,
 }
 
@@ -754,11 +757,17 @@ impl Workbench {
             .when(selected, |d| d.bg(hex(Chrome::SELECTED)))
             .hover(|s| s.bg(hex(Chrome::HOVER)))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_plugin(id.clone(), cx)))
-            .child(div().size(px(32.)).flex_shrink_0().rounded_md().bg(hex(0x2a2a2a)).flex().items_center().justify_center().child(icon(
-                row.icon,
-                IconSize::BUTTON,
-                hex(Chrome::BRIGHT),
-            )))
+            .child(
+                div()
+                    .size(px(32.))
+                    .flex_shrink_0()
+                    .rounded_md()
+                    .bg(hex(0x2a2a2a))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(crate::ui::plugin_mark(row.logo.clone(), row.icon, IconSize::BUTTON, hex(Chrome::BRIGHT))),
+            )
             .child(
                 div()
                     .flex_1()
@@ -860,17 +869,30 @@ impl Workbench {
             .child(crate::ui::scrollbar(page.detail_scroll.clone()))
     }
 
-    /// Icon, name, publisher and version above everything else.
-    fn render_detail_head(&self, manifest: &Manifest, badges: Vec<(String, u32)>, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Icon, name, publisher and version above everything else. `logo` is the plugin's own artwork
+    /// when it is on disk, which the mark prefers over the icon name.
+    fn render_detail_head(
+        &self,
+        manifest: &Manifest,
+        logo: Option<std::path::PathBuf>,
+        badges: Vec<(String, u32)>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let _ = cx;
         div()
             .flex()
             .gap_4()
-            .child(div().size(px(56.)).flex_shrink_0().rounded_lg().bg(hex(0x2a2a2a)).flex().items_center().justify_center().child(icon(
-                icon_named(manifest.icon.as_deref()),
-                26.,
-                hex(Chrome::BRIGHT),
-            )))
+            .child(
+                div()
+                    .size(px(56.))
+                    .flex_shrink_0()
+                    .rounded_lg()
+                    .bg(hex(0x2a2a2a))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(crate::ui::plugin_mark(logo, icon_named(manifest.icon.as_deref()), 26., hex(Chrome::BRIGHT))),
+            )
             .child(
                 div()
                     .flex_1()
@@ -952,7 +974,7 @@ impl Workbench {
             .flex()
             .flex_col()
             .gap_4()
-            .child(self.render_detail_head(manifest, badges, cx))
+            .child(self.render_detail_head(manifest, None, badges, cx))
             .child(div().flex().gap_2().child(action_button(
                 SharedString::from(format!("plugin-install-{}", manifest.id)),
                 t(cx, "plugins.install"),
@@ -992,7 +1014,7 @@ impl Workbench {
             .flex()
             .flex_col()
             .gap_4()
-            .child(self.render_detail_head(&manifest, badges, cx))
+            .child(self.render_detail_head(&manifest, None, badges, cx))
             .child(if entry.supported() {
                 div()
                     .flex()
@@ -1070,7 +1092,7 @@ impl Workbench {
             .flex()
             .flex_col()
             .gap_4()
-            .child(self.render_detail_head(&manifest, badges, cx))
+            .child(self.render_detail_head(&manifest, agentty_bridge::plugins::store::logo_file(plugin), badges, cx))
             .children(failure)
             .child(self.render_plugin_actions(plugin, &manifest, cx))
             .child(self.render_tabs(cx))
@@ -1463,6 +1485,8 @@ impl Row {
             description: entry.description.clone(),
             keywords: entry.keywords.join(" ").to_lowercase(),
             icon: icon_named(entry.icon.as_deref()),
+            // Nothing is installed yet, so there is no file to draw: a listing fetches nothing.
+            logo: None,
             origin: Origin::Market,
         }
     }
@@ -1477,6 +1501,7 @@ impl Row {
             description: manifest.map(|m| m.description.clone()).unwrap_or_else(|| plugin.error.clone().unwrap_or_default()),
             keywords: manifest.map(|m| m.keywords.join(" ").to_lowercase()).unwrap_or_default(),
             icon: icon_named(manifest.and_then(|m| m.icon.as_deref())),
+            logo: agentty_bridge::plugins::store::logo_file(plugin),
             origin: Origin::Installed,
         }
     }
@@ -1490,6 +1515,7 @@ impl Row {
             description: manifest.description.clone(),
             keywords: manifest.keywords.join(" ").to_lowercase(),
             icon: icon_named(manifest.icon.as_deref()),
+            logo: None,
             origin: Origin::Builtin,
         }
     }

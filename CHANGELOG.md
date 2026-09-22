@@ -61,6 +61,52 @@ All notable changes to this project are documented here. The format follows
   longer than a line.
 - The Plugins page is a list beside details: search, then the plugin's description, what it adds
   and where, its permissions in full sentences, where it came from, how it runs and its log.
+- A plugin can ship its own logo (`logo` in the manifest): a file in its folder, or an `https://`
+  address fetched once and kept. It is preferred over the icon name everywhere the plugin is shown
+  — the tab strip, the activity bar, the status bar, the panel header, and both the list and the
+  card on the Plugins page.
+- Terminal style in detail: letter spacing, bold text, and the background, text, cursor and
+  selection colours of the chosen theme, each replaceable and each undoable back to the theme's
+  own. A real terminal sits under the controls and shows every change at once — the actual
+  terminal, with real colours, bold, underline, CJK and Powerline glyphs, not a mock-up.
+- The workspace list has a search box: it matches a workspace's name and the conversations held in
+  it, so a workspace can be found by something an agent said in it. It can be turned off
+  (Settings → General → Workspaces).
+- Slack and Discord notifications take a bot token and a channel, as well as a webhook URL. The two
+  ways have separate credentials, so switching one does not send with the other's, and each is only
+  accepted in its own shape. Slack takes `#general`, a name or an id; Discord takes a channel id.
+- Reserved words have a settings page of their own, above Shortcuts.
+- Settings → General is grouped — Basics, AI sessions, Workspaces, System — and every explanation
+  is one line.
+
+### Changed
+
+- A workspace card's title, path and marks are drawn in whichever of black or white can be read on
+  the colour the card carries, measured against the fill rather than assumed. A pale yellow card no
+  longer has white letters on it.
+- The list view of the workspace list shows the branch beside the name.
+- Context memory opens from the Context meter in the pane's own bar, where the figure it explains
+  is, instead of from an icon in the status bar along the bottom.
+- Switching into and out of mini mode is a fade rather than a resize. Animating the real window's
+  frame down to a sliver made everything in it — every terminal, every pane — lay out again at each
+  step of the animation, which is what made the switch feel slow.
+- A workspace whose agent finishes stays where it is. It jumping to the top of its group is now a
+  setting, off by default.
+- Plugin commands are reached from the command palette. `paneBar` and `when` are gone from the
+  manifest: the bar above a pane had no room to spare. A manifest that still has them loads and
+  installs as before, and simply gets no button there.
+- Cosmica and Launch are both reached from the tab strip.
+
+### Fixed
+
+- A terminal moved with `cd` comes back in that folder. Where a pane works is saved when it changes,
+  so it survives a window closed, a force quit or a crash — not only a clean quit.
+- Session Flow no longer draws two sessions on top of each other. A pane that drops out of the chart
+  for a moment (a session reconnecting) and comes straight back took the cell a neighbour was
+  already in.
+- The search box in the sidebar takes the caret when clicked. The click reached the field and then
+  carried on to the sidebar, which handed focus to the list, so nothing typed went anywhere. The
+  sessions search box had the same fault.
 
 ## [0.1.14] - 2026-09-22
 

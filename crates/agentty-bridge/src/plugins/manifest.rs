@@ -31,6 +31,10 @@ pub struct Manifest {
     /// Icon name from Agentty's icon set (unknown names fall back to a generic icon).
     #[serde(default)]
     pub icon: Option<String>,
+    /// The plugin's own logo, preferred over `icon` when it is there: either a file inside the
+    /// plugin folder (`logo.png`) or an `https://` URL, which is fetched once and kept.
+    #[serde(default)]
+    pub logo: Option<String>,
     #[serde(default)]
     pub homepage: Option<String>,
     /// Pages worth opening from the store card (project site, docs, source).
@@ -122,12 +126,6 @@ pub struct CommandContribution {
     pub description: String,
     #[serde(default)]
     pub icon: Option<String>,
-    /// Also shown as a button in the bar above matching terminal panes.
-    #[serde(default)]
-    pub pane_bar: bool,
-    /// Which panes the pane-bar button appears on.
-    #[serde(default)]
-    pub when: When,
     /// Listed in the command palette (default true).
     #[serde(default = "yes")]
     pub palette: bool,
@@ -135,17 +133,6 @@ pub struct CommandContribution {
 
 fn yes() -> bool {
     true
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum When {
-    #[default]
-    Always,
-    /// Claude Code / Codex panes.
-    Agent,
-    /// Plain terminals.
-    Shell,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -320,6 +307,39 @@ impl Manifest {
     }
 }
 
+/// How a manifest's `logo` is reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Logo {
+    /// A file shipped in the plugin folder.
+    File(PathBuf),
+    /// An address to fetch once and keep.
+    Url(String),
+}
+
+/// Reads a manifest's `logo`: a file inside the plugin folder, or an `https://` address. Anything
+/// else (a path that climbs out, `http://`, a `data:` blob, something enormous) is no logo at all,
+/// and the plugin falls back to its icon name.
+pub fn parse_logo(logo: &str) -> Option<Logo> {
+    let logo = logo.trim();
+    if logo.is_empty() || logo.len() > 400 || logo.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    if let Some(rest) = logo.strip_prefix("https://") {
+        // A host, and nothing that could make this a credential or a local address.
+        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+        let plain_host = !host.is_empty() && !host.contains('@') && host.contains('.');
+        return plain_host.then(|| Logo::Url(logo.to_string()));
+    }
+    // Otherwise a file of the plugin's own: the same rule the entry point is held to, so it cannot
+    // point outside the plugin folder. Anything carrying a scheme is a failed address, not a file
+    // name — `http://host/x.png` is a relative path as far as the filesystem is concerned, and
+    // taking it as one would quietly look for a folder called `http:`.
+    if logo.contains(':') || logo.contains("//") {
+        return None;
+    }
+    relative_path(logo).ok().map(Logo::File)
+}
+
 pub fn valid_id(id: &str) -> bool {
     (2..=40).contains(&id.len())
         && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
@@ -362,7 +382,9 @@ mod tests {
             "main": "main.mjs",
             "permissions": ["prompt.inject"],
             "contributes": {
-                "commands": [{ "id": "hello.say", "title": "Say hello", "paneBar": true, "when": "agent" }],
+                // `when` is not a field any more (it only ever gated `paneBar`, which is gone
+                // too); a manifest that still has it from before must keep loading.
+                "commands": [{ "id": "hello.say", "title": "Say hello", "when": "agent" }],
                 "panel": { "title": "Hello", "icon": "sparkles" }
             }
         })
@@ -382,6 +404,33 @@ mod tests {
         }
     }
 
+    /// A logo is a file of the plugin's own or an `https://` address, and nothing else: a path that
+    /// climbs out of the folder, plain http, a `data:` blob or a credential in the host would each
+    /// be a way to make the app fetch or read something it should not.
+    #[test]
+    fn a_logo_is_a_plugin_file_or_an_https_address() {
+        assert_eq!(parse_logo("logo.png"), Some(Logo::File("logo.png".into())));
+        assert_eq!(parse_logo("assets/logo.svg"), Some(Logo::File("assets/logo.svg".into())));
+        assert_eq!(parse_logo("  logo.png  "), Some(Logo::File("logo.png".into())));
+        let url = "https://example.com/logo.png";
+        assert_eq!(parse_logo(url), Some(Logo::Url(url.to_string())));
+        assert!(parse_logo("https://cdn.example.com/a/b/logo.svg?v=2").is_some());
+        // Out of the folder, or absolute.
+        assert_eq!(parse_logo("../../secrets.png"), None);
+        assert_eq!(parse_logo("/etc/passwd"), None);
+        // Not https, or not really a host.
+        assert_eq!(parse_logo("http://example.com/logo.png"), None);
+        assert_eq!(parse_logo("data:image/png;base64,AAAA"), None);
+        assert_eq!(parse_logo("https://user:pw@example.com/l.png"), None, "no credential in the host");
+        assert_eq!(parse_logo("https://localhost/l.png"), None, "a host with no dot is not a site");
+        assert_eq!(parse_logo("https:///l.png"), None);
+        // Nothing, or absurd.
+        assert_eq!(parse_logo(""), None);
+        assert_eq!(parse_logo("   "), None);
+        assert_eq!(parse_logo(&format!("https://example.com/{}.png", "x".repeat(400))), None);
+        assert_eq!(parse_logo("https://example.com/a b.png"), None);
+    }
+
     #[test]
     fn parses_a_manifest_with_defaults() {
         let manifest = Manifest::parse(sample().to_string().as_bytes()).unwrap();
@@ -389,8 +438,7 @@ mod tests {
         // A manifest that says nothing is from before the field: the first protocol, not this one.
         assert_eq!(manifest.api_version, 1);
         let command = &manifest.contributes.commands[0];
-        assert!(command.pane_bar && command.palette);
-        assert_eq!(command.when, When::Agent);
+        assert!(command.palette);
         assert!(manifest.has_permission("prompt.inject"));
         assert!(!manifest.has_permission("session.read"));
         // Plugins written before surfaces existed keep the icon they had, in the tab strip.

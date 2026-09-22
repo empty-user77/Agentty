@@ -69,7 +69,7 @@ use panes::{Axis, PaneNode};
 use persist::{GroupSnapshot, LayoutState, NodeSnapshot, PaneSnapshot, TabSnapshot, WorkspaceSnapshot};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 actions!(
@@ -379,7 +379,12 @@ pub struct Workbench {
     pub installed: Option<crate::agents::Installed>,
     installed_at: Option<std::time::Instant>,
     mini: Option<mini::MiniState>,
+    /// A folder change is waiting to be saved; see `persist_soon`.
+    persist_pending: bool,
     mini_opening: bool,
+    /// Counts folds into the mini panel. A fold waits out its fade in a task, and the press that
+    /// cancels it counts a new one, so that task can tell it is no longer the fold being asked for.
+    mini_generation: u64,
     pub updates: update::Updates,
     tab_menu: Option<tab_menu::TabMenu>,
     about_open: bool,
@@ -442,11 +447,21 @@ pub struct Workbench {
     sidebar_scroll: gpui::ScrollHandle,
     settings_scroll: gpui::ScrollHandle,
     settings_section: settings_page::SettingsSection,
+    /// A real terminal shown in Settings → Appearance, so the font, spacing, weight and colours
+    /// are judged on the thing itself rather than on a mock-up. Started when that page is opened
+    /// and dropped when it is left, so it costs nothing the rest of the time.
+    preview_terminal: Option<Pane>,
     session_search: Entity<TextInput>,
     /// Sessions whose transcript mentions the current query (filled in the background).
     session_content_hits: Option<(String, std::collections::HashSet<PathBuf>)>,
     session_search_generation: u64,
     _session_search_subscription: Subscription,
+    workspace_search: Entity<TextInput>,
+    /// Workspaces whose session transcripts mention the current query (filled in the background).
+    /// Title matches show immediately from `self.workspaces`, without waiting on this.
+    workspace_content_hits: Option<(String, std::collections::HashSet<u64>)>,
+    workspace_search_generation: u64,
+    _workspace_search_subscription: Subscription,
     notices: Vec<notices::Notice>,
     notices_open: bool,
     window_active: bool,
@@ -518,6 +533,13 @@ impl Workbench {
                 this.search_session_contents(cx);
             }
         });
+        let workspace_search = cx.new(|cx| TextInput::localized("", "workspaces.search", window, cx));
+        let workspace_search_subscription = cx.subscribe(&workspace_search, |this, _, event: &crate::text_input::TextInputEvent, cx| {
+            if matches!(event, crate::text_input::TextInputEvent::Changed) {
+                this.search_workspace_contents(cx);
+                cx.notify();
+            }
+        });
         let proxy_filter = cx.new(|cx| TextInput::localized("", "proxy.filter", window, cx));
         let proxy_subscription = cx.subscribe(&proxy_filter, |_, _, event: &crate::text_input::TextInputEvent, cx| {
             if matches!(event, crate::text_input::TextInputEvent::Changed) {
@@ -582,7 +604,9 @@ impl Workbench {
             installed: None,
             installed_at: None,
             mini: None,
+            persist_pending: false,
             mini_opening: false,
+            mini_generation: 0,
             updates: update::Updates::default(),
             tab_menu: None,
             about_open: false,
@@ -627,10 +651,15 @@ impl Workbench {
             sidebar_scroll: gpui::ScrollHandle::new(),
             settings_scroll: gpui::ScrollHandle::new(),
             settings_section: settings_page::SettingsSection::General,
+            preview_terminal: None,
             session_search,
             session_content_hits: None,
             session_search_generation: 0,
             _session_search_subscription: session_search_subscription,
+            workspace_search,
+            workspace_content_hits: None,
+            workspace_search_generation: 0,
+            _workspace_search_subscription: workspace_search_subscription,
             notices: Vec::new(),
             notices_open: false,
             window_active: true,
@@ -704,6 +733,10 @@ impl Workbench {
                 return true;
             }
             if closes {
+                // The last window closing ends Agentty, and the quit hook holds only a weak
+                // handle to this workbench: by the time it runs the window is gone and nothing
+                // would be written. Save while there is still something to save.
+                let _ = entity.update(cx, |this, cx| this.persist(cx));
                 return true;
             }
             if let Some(ns) = crate::native::ns_window(window) {
@@ -799,6 +832,10 @@ impl Workbench {
                     this.flow_agent_finished(pane_id, cx);
                 }
             }
+            // A `cd` moves where the pane works, and that is part of the saved layout. Saving it
+            // here rather than at quit is what makes it survive every way Agentty can go down —
+            // a closed window, a force quit or a crash never reach the quit hook.
+            TerminalEvent::DirectoryChanged => this.persist_soon(cx),
             TerminalEvent::TitleChanged | TerminalEvent::StatusChanged => {
                 // A shell that changed folder may have entered a project with an agent harness.
                 this.watch_harness(&pane, cx);
@@ -1287,6 +1324,137 @@ impl Workbench {
             self.refresh_sessions(cx);
         }
         window.focus(&self.session_search.focus_handle(cx));
+        cx.notify();
+    }
+
+    // -- workspace search ------------------------------------------------------------------
+
+    /// What the workspace list is filtered by. A hidden search box filters nothing, whatever was
+    /// left in it — turning the box off must not leave workspaces missing with no way to see why.
+    pub(super) fn workspace_query(&self, cx: &gpui::App) -> String {
+        if !crate::settings::settings(cx).workspace_search_bar {
+            return String::new();
+        }
+        self.workspace_search.read(cx).text().trim().to_lowercase()
+    }
+
+    /// Every folder this workspace works in: its own root, and any open pane that has wandered
+    /// elsewhere (a split into a sibling project, a `cd`). Session content search matches
+    /// against these — the same folders `resume_hint` uses to offer a session back.
+    fn workspace_dirs(&self, ws: &Workspace, cx: &gpui::App) -> Vec<PathBuf> {
+        let mut dirs = vec![ws.cwd.clone()];
+        for pane in ws.tabs.iter().flat_map(|t| t.root.leaves()) {
+            let cwd = pane.read(cx).display_cwd();
+            if !dirs.contains(&cwd) {
+                dirs.push(cwd);
+            }
+        }
+        dirs
+    }
+
+    /// Whether a workspace's title or session content matches the search box; a blank box
+    /// matches everything. Title matches are instant; content matches wait on the background
+    /// search below, so a stale query never wrongly hides a workspace.
+    pub(super) fn workspace_matches(&self, index: usize, cx: &gpui::App) -> bool {
+        let query = self.workspace_query(cx);
+        if query.is_empty() {
+            return true;
+        }
+        let ws = &self.workspaces[index];
+        if self.workspace_title(ws, cx).to_lowercase().contains(&query) {
+            return true;
+        }
+        self.workspace_content_hits.as_ref().is_some_and(|(q, hits)| *q == query && hits.contains(&ws.id))
+    }
+
+    /// Full-text search over the transcripts of each workspace's sessions, debounced; title
+    /// matches show immediately and do not wait on this.
+    fn search_workspace_contents(&mut self, cx: &mut Context<Self>) {
+        self.workspace_search_generation += 1;
+        let generation = self.workspace_search_generation;
+        let query = self.workspace_query(cx);
+        if query.chars().count() < 2 {
+            self.workspace_content_hits = None;
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+            if this.read_with(cx, |this, _| this.workspace_search_generation != generation).unwrap_or(true) {
+                return;
+            }
+            // Which transcripts to read is worked out after the wait, not on every keystroke:
+            // pairing every workspace's folders with every session grows with both.
+            // (workspace id, transcript path) for every session run in one of that workspace's folders.
+            let Ok(candidates) = this.update(cx, |this, cx| {
+                let mut candidates: Vec<(u64, PathBuf)> = Vec::new();
+                for index in 0..this.workspaces.len() {
+                    let dirs = this.workspace_dirs(&this.workspaces[index], cx);
+                    let id = this.workspaces[index].id;
+                    for session in &this.sessions {
+                        if session.cwd.as_deref().is_some_and(|c| dirs.iter().any(|d| Path::new(c) == d.as_path())) {
+                            candidates.push((id, session.path.clone()));
+                        }
+                    }
+                }
+                candidates
+            }) else {
+                return;
+            };
+            let needle = query.clone();
+            let hits: std::collections::HashSet<u64> = cx
+                .background_spawn(async move {
+                    candidates
+                        .into_iter()
+                        .filter(|(_, path)| agentty_bridge::transcript_contains(path, &needle))
+                        .map(|(id, _)| id)
+                        .collect()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.workspace_search_generation == generation {
+                    this.workspace_content_hits = Some((query, hits));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Starts the terminal shown in Settings → Appearance while that page is open, and drops it
+    /// when it is not. It runs one command that prints a sample — colours, bold, CJK, a Powerline
+    /// glyph — and then sits idle, so nothing of the user's is running in it.
+    fn prepare_style_preview(&mut self, cx: &mut Context<Self>) {
+        let wanted = self.page == Some(Page::Settings) && self.settings_section == settings_page::SettingsSection::Appearance;
+        match (wanted, self.preview_terminal.is_some()) {
+            (true, false) => {
+                let script = concat!(
+                    "printf '\x1b[34m~/agentty\x1b[0m  \x1b[35mmain\x1b[0m\n';",
+                    "printf '$ cargo test --workspace\n';",
+                    "printf '\x1b[32m   Compiling\x1b[0m agentty-app v0.1.14\n';",
+                    "printf '\x1b[36mtest result\x1b[0m: \x1b[32mok\x1b[0m. 464 passed; 0 failed\n';",
+                    "printf '\x1b[33mwarning\x1b[0m: unused variable \x1b[1mx\x1b[0m\n';",
+                    "printf '\x1b[31merror\x1b[0m: could not compile\n';",
+                    "printf '\x1b[1mbold\x1b[0m normal \x1b[4munderline\x1b[0m 한글 日本語 中文 -> => !=\n';",
+                    "exec cat",
+                );
+                let spec = crate::launch::LaunchSpec::shell_command(script.to_string(), "preview".to_string(), crate::launch::home_dir());
+                self.preview_terminal = Some(cx.new(|cx| crate::terminal::TerminalView::new(spec, cx)));
+            }
+            (false, true) => self.preview_terminal = None,
+            _ => {}
+        }
+    }
+
+    /// The preview terminal, for the settings page to draw.
+    pub(super) fn style_preview(&self) -> Option<Pane> {
+        self.preview_terminal.clone()
+    }
+
+    pub(super) fn focus_workspace_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = None;
+        self.panel = SidePanel::Workspaces;
+        self.sidebar_open = true;
+        window.focus(&self.workspace_search.focus_handle(cx));
         cx.notify();
     }
 
@@ -2054,6 +2222,26 @@ impl Workbench {
         }
     }
 
+    /// Saves the layout in a moment, not now. A save reads every pane's folder and writes the
+    /// whole layout, and the folder a pane works in changes on its own: a build script or an agent
+    /// hopping directories would otherwise write the file over and over while it runs. Presses of
+    /// a button still save straight away — this is only for what the terminal does by itself. What
+    /// is waiting is never lost on a clean exit: closing the window and quitting both save then.
+    fn persist_soon(&mut self, cx: &mut Context<Self>) {
+        if self.persist_pending {
+            return;
+        }
+        self.persist_pending = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.persist_pending = false;
+                this.persist(cx);
+            });
+        })
+        .detach();
+    }
+
     fn persist(&self, cx: &gpui::App) {
         let workspaces = self
             .workspaces
@@ -2266,6 +2454,7 @@ impl Render for Workbench {
         self.prepare_db(window, cx);
         self.advance_tour(cx);
         self.prepare_plugins_page(window, cx);
+        self.prepare_style_preview(cx);
         self.broadcast_plugin_context(window, cx);
         self.broadcast_pane_status(cx);
         self.check_settings_toast(cx);
@@ -3102,6 +3291,10 @@ impl Workbench {
             "session-search" => {
                 self.focus_session_search(window, cx);
                 self.session_search.update(cx, |i, cx| i.set_text(argument.to_string(), cx));
+            }
+            "workspace-search" => {
+                self.focus_workspace_search(window, cx);
+                self.workspace_search.update(cx, |i, cx| i.set_text(argument.to_string(), cx));
             }
             "sessions" => {
                 let rows: Vec<String> = self.visible_sessions(cx).iter().take(8).map(|&i| self.sessions[i].title.clone()).collect();

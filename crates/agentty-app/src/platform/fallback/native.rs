@@ -21,6 +21,10 @@ pub fn visible_frame(_window: Id) -> Option<Frame> {
 
 pub fn set_frame(_window: Id, _frame: Frame, _animate: bool) {}
 
+pub fn set_alpha(_window: Id, _alpha: f64) {}
+
+pub fn fade(_window: Id, _alpha: f64, _duration: f64) {}
+
 pub fn order_out(_window: Id) {}
 
 pub fn is_visible(_window: Id) -> bool {

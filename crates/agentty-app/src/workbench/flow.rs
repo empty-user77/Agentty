@@ -29,6 +29,23 @@ const NODE_HEIGHT: f32 = 128.;
 /// Node width plus the gap that holds edge labels.
 const COLUMN_STEP: f32 = 470.;
 
+/// The cell `preferred_index` would land on, in the row-major grid the chart lays nodes out on —
+/// skipping every cell `existing` already occupies, so two nodes never draw on top of each other
+/// no matter what order they were placed in.
+fn grid_slot(existing: &[Point<Pixels>], preferred_index: usize, columns: usize) -> Point<Pixels> {
+    let columns = columns.max(1);
+    let cell = |index: usize| {
+        let column = (index % columns) as f32;
+        let row = (index / columns) as f32;
+        point(px(40. + column * COLUMN_STEP), px(60. + row * 220.))
+    };
+    let mut index = preferred_index;
+    while existing.contains(&cell(index)) {
+        index += 1;
+    }
+    cell(index)
+}
+
 /// Example cards of the onboarding tour: no session behind them, ids no pane ever gets. They exist
 /// only while the tour teaches Session Flow, so there is always something to drag there.
 pub(super) const DEMO_SOURCE: u64 = u64::MAX - 1;
@@ -139,15 +156,23 @@ impl FlowState {
     }
 
     fn position(&mut self, pane_id: u64, index: usize) -> Point<Pixels> {
+        if let Some(position) = self.positions.get(&pane_id) {
+            return *position;
+        }
         // As many columns as fit the canvas, with room for edge labels between nodes.
         let width = f32::from(self.canvas.get().size.width);
         // Before the first paint the canvas has no size yet; two columns fit any window.
         let columns = if width < 1. { 2 } else { (((width - 40.) / COLUMN_STEP).floor() as usize).clamp(1, 4) };
-        *self.positions.entry(pane_id).or_insert_with(|| {
-            let column = (index % columns) as f32;
-            let row = (index / columns) as f32;
-            point(px(40. + column * COLUMN_STEP), px(60. + row * 220.))
-        })
+        // A pane that drops out of the chart for one frame — a session reconnecting flips
+        // `is_running` false and back — loses its slot here and is treated as new when it
+        // returns. Its old neighbour never moved, so placing the returning node by list order
+        // alone can pick the exact cell that neighbour already sits in: two cards stacked with
+        // nothing to tell them apart. Skipping cells already taken is what keeps every node
+        // visible no matter how the list churns around it.
+        let existing: Vec<Point<Pixels>> = self.positions.values().copied().collect();
+        let position = grid_slot(&existing, index, columns);
+        self.positions.insert(pane_id, position);
+        position
     }
 
     fn node_at(&self, position: Point<Pixels>) -> Option<u64> {
@@ -1092,7 +1117,8 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::cluster_links;
+    use super::{cluster_links, grid_slot};
+    use gpui::{point, px};
 
     /// Links between workspaces gather them under the one the first link started from; two panes
     /// of the same workspace are not a cluster.
@@ -1137,5 +1163,49 @@ mod tests {
     fn nothing_is_gathered_without_links() {
         let clusters = cluster_links(std::iter::empty());
         assert!(clusters.members.is_empty() && clusters.followers.is_empty());
+    }
+
+    /// A fresh chart: the preferred cell is free, so a node lands exactly where its place in the
+    /// list says.
+    #[test]
+    fn an_empty_chart_uses_the_preferred_cell() {
+        assert_eq!(grid_slot(&[], 0, 2), point(px(40.), px(60.)));
+        assert_eq!(grid_slot(&[], 1, 2), point(px(510.), px(60.)));
+        assert_eq!(grid_slot(&[], 2, 2), point(px(40.), px(280.)));
+    }
+
+    /// The exact bug reported live: a pane drops out of the chart for one frame (a session
+    /// reconnecting) and loses its slot; when it comes back it is placed by list order alone,
+    /// which can be the cell its still-live neighbour never left. Two cards land on top of each
+    /// other with nothing to tell them apart. `grid_slot` must never hand out a cell `existing`
+    /// already holds, however it got there.
+    #[test]
+    fn a_returning_node_never_lands_on_a_cell_already_taken() {
+        let neighbour = grid_slot(&[], 0, 2);
+        // The returning node's own list position also says cell 0 — the same cell a naive
+        // `index % columns` would have reused.
+        let returning = grid_slot(&[neighbour], 0, 2);
+        assert_ne!(returning, neighbour, "two nodes must never share a cell");
+        // And it takes the very next free one rather than jumping further than it has to.
+        assert_eq!(returning, grid_slot(&[], 1, 2));
+    }
+
+    /// Every cell already in use is skipped, not just the first one: three panes already seated
+    /// leaves the fourth no choice but the fourth cell.
+    #[test]
+    fn every_taken_cell_is_skipped_in_order() {
+        let taken: Vec<_> = (0..3).map(|i| grid_slot(&[], i, 2)).collect();
+        assert_eq!(grid_slot(&taken, 0, 2), grid_slot(&[], 3, 2));
+    }
+
+    /// A wide canvas (more columns) and a narrow one (as few as one) both still avoid every
+    /// occupied cell — the collision check does not assume any particular column count.
+    #[test]
+    fn works_at_every_column_count() {
+        for columns in 1..=4 {
+            let taken: Vec<_> = (0..columns).map(|i| grid_slot(&[], i, columns)).collect();
+            let next = grid_slot(&taken, 0, columns);
+            assert!(!taken.contains(&next), "columns={columns} let a node land on a taken cell");
+        }
     }
 }

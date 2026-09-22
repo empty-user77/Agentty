@@ -39,6 +39,8 @@ pub enum SettingsSection {
     Accounts,
     Appearance,
     Browser,
+    /// Reserved words: its own page, so the General list is not one long column.
+    Aliases,
     Shortcuts,
     /// Desktop notifications and messages to chat services.
     Notifications,
@@ -48,13 +50,14 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 9] = [
+    pub const ALL: [SettingsSection; 10] = [
         Self::General,
         Self::Project,
         Self::Accounts,
         Self::Notifications,
         Self::Appearance,
         Self::Browser,
+        Self::Aliases,
         Self::Shortcuts,
         Self::System,
         Self::About,
@@ -75,6 +78,7 @@ impl SettingsSection {
             Self::Accounts => "settings.accounts",
             Self::Appearance => "settings.appearance",
             Self::Browser => "settings.browser",
+            Self::Aliases => "settings.aliases",
             Self::Shortcuts => "settings.shortcuts",
             Self::Notifications => "settings.notifications",
             Self::System => "settings.system",
@@ -89,6 +93,7 @@ impl SettingsSection {
             Self::Accounts => "key-round",
             Self::Appearance => "terminal",
             Self::Browser => "globe",
+            Self::Aliases => "tag",
             Self::Shortcuts => "command",
             Self::Notifications => "bell",
             Self::System => "wrench",
@@ -212,6 +217,60 @@ const FONT_CHOICES: &[&str] =
 #[cfg(not(any(target_os = "macos", windows)))]
 const FONT_CHOICES: &[&str] =
     &[BUNDLED_FONT, "DejaVu Sans Mono", "Ubuntu Mono", "Noto Sans Mono", "Fira Code", "Hack", "Source Code Pro", "D2Coding"];
+
+/// A swatch row for one terminal colour: the palette, plus "back to the theme's own".
+fn color_row(
+    label: &str,
+    id: &'static str,
+    current: u32,
+    overridden: bool,
+    set: fn(&mut Settings, Option<u32>),
+    cx: &mut Context<Workbench>,
+) -> Div {
+    let mut swatches = div().flex().flex_wrap().gap_1().items_center();
+    for color in super::PALETTE.iter().copied().chain([0x000000, 0x1e1e1e, 0x2b2b2b, 0xd2d2d8, 0xffffff]) {
+        let chosen = overridden && color == current;
+        swatches = swatches.child(
+            div()
+                .id(SharedString::from(format!("{id}-{color:06x}")))
+                .size(px(16.))
+                .rounded_sm()
+                .bg(hex(color))
+                .border_1()
+                .border_color(if chosen { hex(Chrome::BRIGHT) } else { hex_alpha(Chrome::BRIGHT, 0.25) })
+                .cursor_pointer()
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| set(s, Some(color))))),
+        );
+    }
+    row(
+        label,
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(div().size(px(20.)).rounded_sm().bg(hex(current)).border_1().border_color(hex(Chrome::BORDER)))
+            .child(swatches)
+            .child(action_button(
+                id,
+                t(cx, "settings.color_reset"),
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| set(s, None))),
+            )),
+    )
+}
+
+/// The real thing, small: a terminal of its own running one command that prints a sample, so the
+/// font, its size, the line height, the tracking, the weight and the colours are all judged on
+/// actual terminal output instead of on a mock-up that only looks like it.
+fn terminal_preview(preview: Option<super::Pane>, cx: &mut Context<Workbench>) -> Div {
+    let theme = crate::settings::terminal_theme(cx).clone();
+    let body = match preview {
+        Some(pane) => div().h(px(170.)).child(pane),
+        // Before its first paint there is nothing to show yet; the box keeps its place.
+        None => div().h(px(170.)),
+    };
+    section(t(cx, "settings.preview_live"))
+        .child(div().rounded_md().overflow_hidden().border_1().border_color(hex(Chrome::BORDER)).bg(hex(theme.background)).child(body))
+}
 
 pub(super) fn section(title: &str) -> Div {
     div().flex().flex_col().gap_3().pb_6().child(
@@ -1074,22 +1133,26 @@ impl Workbench {
 
         let section_id = self.settings_section;
         let content: gpui::AnyElement = match section_id {
+            // Grouped, not one long column: the sections say what each switch is about, and every
+            // hint is one line so a row stays scannable.
             SettingsSection::General => div()
                 .flex()
                 .flex_col()
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .pb_6()
+                    section(t(cx, "settings.group.basics"))
                         .child(row(t(cx, "settings.language"), languages))
-                        .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
                         .child(row_with_hint(
                             t(cx, "settings.idea_mode"),
                             t(cx, "settings.idea_mode_hint"),
                             toggle("idea-mode", prefs.idea_mode, |s| s.idea_mode = !s.idea_mode, cx),
                         ))
+                        .when(crate::platform::HAS_STATUS_ITEM, |d| {
+                            d.child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
+                        }),
+                )
+                .child(
+                    section(t(cx, "settings.group.agents"))
+                        .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
                         .child(row_with_hint(
                             t(cx, "settings.agent_bar"),
                             t(cx, "settings.agent_bar_hint"),
@@ -1100,35 +1163,56 @@ impl Workbench {
                             t(cx, "settings.agent_bar_position_hint"),
                             bar_positions,
                         ))
-                        .child(row(
-                            t(cx, "settings.confirm_close"),
-                            toggle("confirm-close", prefs.confirm_close, |s| s.confirm_close = !s.confirm_close, cx),
-                        ))
-                        .child(row_with_hint(
-                            t(cx, "settings.auto_worktree"),
-                            t(cx, "settings.auto_worktree_hint"),
-                            toggle("auto-worktree", prefs.auto_worktree, |s| s.auto_worktree = !s.auto_worktree, cx),
-                        ))
-                        .child(row_with_hint(
-                            t(cx, "settings.agent_tasks"),
-                            t(cx, "settings.agent_tasks_hint"),
-                            toggle("agent-tasks", prefs.agent_tasks, |s| s.agent_tasks = !s.agent_tasks, cx),
-                        ))
                         .child(row_with_hint(
                             t(cx, "settings.agent_guide"),
                             t(cx, "settings.agent_guide_hint"),
                             toggle("agent-guide", prefs.agent_guide, |s| s.agent_guide = !s.agent_guide, cx),
                         ))
                         .child(row_with_hint(
+                            t(cx, "settings.agent_tasks"),
+                            t(cx, "settings.agent_tasks_hint"),
+                            toggle("agent-tasks", prefs.agent_tasks, |s| s.agent_tasks = !s.agent_tasks, cx),
+                        )),
+                )
+                .child(
+                    section(t(cx, "settings.group.workspaces"))
+                        .child(row_with_hint(
+                            t(cx, "settings.workspace_search_bar"),
+                            t(cx, "settings.workspace_search_bar_hint"),
+                            toggle(
+                                "workspace-search-bar",
+                                prefs.workspace_search_bar,
+                                |s| s.workspace_search_bar = !s.workspace_search_bar,
+                                cx,
+                            ),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.sort_finished_to_top"),
+                            t(cx, "settings.sort_finished_to_top_hint"),
+                            toggle(
+                                "sort-finished-to-top",
+                                prefs.sort_finished_to_top,
+                                |s| s.sort_finished_to_top = !s.sort_finished_to_top,
+                                cx,
+                            ),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.auto_worktree"),
+                            t(cx, "settings.auto_worktree_hint"),
+                            toggle("auto-worktree", prefs.auto_worktree, |s| s.auto_worktree = !s.auto_worktree, cx),
+                        ))
+                        .child(row(
+                            t(cx, "settings.confirm_close"),
+                            toggle("confirm-close", prefs.confirm_close, |s| s.confirm_close = !s.confirm_close, cx),
+                        ))
+                        .child(row_with_hint(
                             t(cx, "settings.stop_servers"),
                             t(cx, "settings.stop_servers_hint"),
                             toggle("stop-servers", prefs.stop_servers_on_close, |s| s.stop_servers_on_close = !s.stop_servers_on_close, cx),
-                        ))
-                        .child(row_with_hint(
-                            t(cx, "settings.analytics"),
-                            t(cx, "settings.analytics_hint"),
-                            toggle("analytics", prefs.analytics, |s| s.analytics = !s.analytics, cx),
-                        ))
+                        )),
+                )
+                .child(
+                    section(t(cx, "settings.group.system"))
                         .child(row_with_hint(
                             t(cx, "settings.prevent_sleep"),
                             // On when asked but no lock held: the tool that holds it is missing.
@@ -1139,11 +1223,12 @@ impl Workbench {
                             },
                             toggle("prevent-sleep", prefs.prevent_sleep, |s| s.prevent_sleep = !s.prevent_sleep, cx),
                         ))
-                        .when(crate::platform::HAS_STATUS_ITEM, |d| {
-                            d.child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
-                        }),
+                        .child(row_with_hint(
+                            t(cx, "settings.analytics"),
+                            t(cx, "settings.analytics_hint"),
+                            toggle("analytics", prefs.analytics, |s| s.analytics = !s.analytics, cx),
+                        )),
                 )
-                .child(aliases)
                 .into_any_element(),
             SettingsSection::Project => self.render_project_settings(window, cx).into_any_element(),
             SettingsSection::Accounts => self.render_accounts(window, cx).into_any_element(),
@@ -1195,17 +1280,59 @@ impl Workbench {
                                 cx,
                             ),
                         ))
-                        .child(
-                            div()
-                                .p_3()
-                                .rounded_md()
-                                .bg(hex(crate::settings::terminal_theme(cx).background))
-                                .font_family(prefs.font_family.clone())
-                                .text_size(px(prefs.font_size))
-                                .text_color(hex(crate::settings::terminal_theme(cx).foreground))
-                                .child(format!("{} — ~/Agentty \u{e0a0} main  한글 日本語 中文  -> => != ", t(cx, "settings.preview"))),
-                        ),
+                        .child(row(
+                            t(cx, "settings.letter_spacing"),
+                            stepper(
+                                "letter-spacing",
+                                format!("{:.1}", prefs.letter_spacing),
+                                |s, d| s.letter_spacing = (((s.letter_spacing + d) * 10.0).round() / 10.0).clamp(0.0, 8.0),
+                                0.5,
+                                cx,
+                            ),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.bold_text"),
+                            t(cx, "settings.bold_text_hint"),
+                            toggle("bold-text", prefs.bold_text, |s| s.bold_text = !s.bold_text, cx),
+                        )),
                 )
+                .child(terminal_preview(self.style_preview(), cx))
+                .child({
+                    let theme = crate::settings::terminal_theme(cx).clone();
+                    section(t(cx, "settings.colors"))
+                        .child(color_row(
+                            t(cx, "settings.color_background"),
+                            "reset-background",
+                            theme.background,
+                            prefs.color_background.is_some(),
+                            |s, c| s.color_background = c,
+                            cx,
+                        ))
+                        .child(color_row(
+                            t(cx, "settings.color_foreground"),
+                            "reset-foreground",
+                            theme.foreground,
+                            prefs.color_foreground.is_some(),
+                            |s, c| s.color_foreground = c,
+                            cx,
+                        ))
+                        .child(color_row(
+                            t(cx, "settings.color_cursor"),
+                            "reset-cursor",
+                            theme.cursor,
+                            prefs.color_cursor.is_some(),
+                            |s, c| s.color_cursor = c,
+                            cx,
+                        ))
+                        .child(color_row(
+                            t(cx, "settings.color_selection"),
+                            "reset-selection",
+                            theme.selection,
+                            prefs.color_selection.is_some(),
+                            |s, c| s.color_selection = c,
+                            cx,
+                        ))
+                })
                 .child(self.render_hud_settings(cx))
                 .child(section(t(cx, "settings.cursor")).child(row(t(cx, "settings.cursor"), cursors)).child(row(
                     t(cx, "settings.cursor_blink"),
@@ -1246,6 +1373,7 @@ impl Workbench {
                         ))),
                 )
                 .into_any_element(),
+            SettingsSection::Aliases => aliases.into_any_element(),
             SettingsSection::Shortcuts => render_shortcuts(cx).into_any_element(),
             SettingsSection::Notifications => self.render_notification_settings(window, cx).into_any_element(),
             SettingsSection::System => self.render_system_check(cx).into_any_element(),

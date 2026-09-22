@@ -69,6 +69,8 @@ pub enum TerminalEvent {
     OpenLink(String),
     /// Clicked a file or folder path printed in the terminal: show it in Finder.
     RevealPath(PathBuf),
+    /// The pane moved to another folder (a `cd`), and no longer works where it was started.
+    DirectoryChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -482,10 +484,17 @@ impl TerminalView {
         self.live_agent = live_agent;
         self.live_tool = live_tool;
         if cwd.is_some() && cwd != self.live_cwd {
+            // Where the pane works is part of the layout, so a `cd` is worth saving — but only
+            // when it really moved away from the folder the pane was started in. The first probe
+            // of a restored pane finds the folder that is already written down.
+            let moved = cwd.as_deref() != Some(self.spec.cwd.as_path());
             self.git_branch = cwd.as_deref().and_then(crate::procinfo::git_branch);
             self.worktree = cwd.as_deref().and_then(crate::workbench::worktrees::linked_tree_name);
             self.live_cwd = cwd;
             changed = true;
+            if moved {
+                cx.emit(TerminalEvent::DirectoryChanged);
+            }
         }
         if self.probe_ticks.is_multiple_of(3) {
             self.probe_git(cx);
@@ -1786,7 +1795,10 @@ impl Element for TerminalElement {
         // snapped to device pixels so the grid stays crisp and Powerline glyphs meet exactly.
         let scale = window.scale_factor();
         let snap = |value: Pixels| px((f32::from(value) * scale).round() / scale);
-        let cell_width = snap(text_system.advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(px(8.)));
+        // The grid's cell carries the tracking: widening it spaces the text without moving glyphs
+        // off their columns, which is what a terminal needs (per-glyph tracking would break them).
+        let advance = text_system.advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(px(8.));
+        let cell_width = snap(advance + px(prefs.letter_spacing.clamp(0., 8.)));
         let natural = text_system.ascent(font_id, font_size) + text_system.descent(font_id, font_size).abs();
         let line_height = snap(natural * prefs.line_height).max(px(1.));
         let padding = px(prefs.padding);
@@ -1852,7 +1864,13 @@ impl Element for TerminalElement {
                 symbol_font.clone()
             } else {
                 gpui::Font {
-                    weight: if style.bold { FontWeight::BOLD } else { FontWeight::NORMAL },
+                    // With "bold text" on, ordinary text is already bold, so what the terminal
+                    // itself marks bold has to go a step heavier to stay tellable apart.
+                    weight: match (prefs.bold_text, style.bold) {
+                        (false, false) => FontWeight::NORMAL,
+                        (false, true) | (true, false) => FontWeight::BOLD,
+                        (true, true) => FontWeight::BLACK,
+                    },
                     style: if style.italic { FontStyle::Italic } else { FontStyle::Normal },
                     ..base_font.clone()
                 }

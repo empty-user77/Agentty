@@ -48,12 +48,12 @@ for, and you are trusting the author with the rest.
 
 ## Using a plugin
 
-- **Panel** — plugins with a panel get a button in the tab strip (right of the tab bar). Click it to
-  open their panel next to your terminals; click again to close it. The ↻ in the panel header
+- **Panel** — plugins with a panel get a button in the tab strip (right of the tab bar), marked with
+  the plugin's own logo when it ships one. Click it to open their panel next to your terminals;
+  click again to close it. The ↻ in the panel header
   restarts the plugin, the gear opens this page.
-- **Buttons above terminals** — plugin commands can appear as icons in the status bar above a Claude
-  Code / Codex pane and in split-pane headers. They act on that pane.
-- **Command palette** — ⇧⌘P lists every plugin command under *Plugin*.
+- **Command palette** — ⇧⌘P lists every plugin command under *Plugin*. That is where commands are:
+  the bar above a pane no longer takes plugin buttons, since it had no room to spare.
 
 ### Where a prompt goes, and who chose
 
@@ -102,7 +102,7 @@ Cosmica's settings.
 3. **From Cosmica** — right-click a note (or use the note's ⋯ menu) → **Continue in Agentty**. The
    note is saved first, then the "Send to…" dialog opens in Agentty.
 4. **Session → Cosmica** — with a Claude Code or Codex pane focused:
-   - **Save AI summary** (also the notebook icon above the pane) asks the agent to write a
+   - **Save AI summary** (⇧⌘P → *Cosmica: Save AI summary of this session*) asks the agent to write a
      structured summary — goal, what was done, files changed, decisions, next steps — into
      `Agentty/` in your Cosmica notes. A notification appears once the note exists. Busy agents are
      left alone; try again when the turn finishes.

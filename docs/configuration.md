@@ -13,6 +13,8 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
   "lineHeight": 1.25,
   "cursorShape": "block",
   "cursorBlink": true,
+  "letterSpacing": 0.0,
+  "boldText": false,
   "padding": 8.0,
   "optionAsMeta": false,
   "scrollback": 10000,
@@ -41,10 +43,15 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `language` | `en`, `ko`, `ja`, `zh` |
 | `theme` | A built-in theme name or the file name (without extension) of an imported `.itermcolors` |
 | `cursorShape` | `block`, `beam`, `underline` |
+| `letterSpacing` | Extra width added to every terminal cell, in points (0–8). A terminal is a grid, so tracking widens the cell rather than the glyph |
+| `boldText` | Draw ordinary terminal text bold; what the agent marks bold goes heavier still |
+| `colorBackground`, `colorForeground`, `colorCursor`, `colorSelection` | Colours of the chosen theme replaced, as `0xRRGGBB` numbers. Unset (absent) keeps the theme's own. Settings → Appearance → Colours, with "theme's own" to undo |
+| `workspaceSearchBar` | The search box above the workspace list (default on). Off hides it, and stops it filtering whatever was typed before |
+| `sortFinishedToTop` | A workspace whose agent just finished jumps to the top of its group (default off, so the order you arranged stays) |
 | `askDirectory` | Show the folder picker for new tabs and workspaces |
 | `resumeBar` | Offer earlier Claude Code / Codex sessions when a terminal enters their folder |
 | `notifyAnswerRequests` | An agent asking for permission or an answer notifies even while Agentty is in front, unless you are looking at that pane (default on) |
-| `chatNotify` | `slack`, `discord`, `telegram` (on / off), `telegramChat` (chat id), `onFinish` (also when an agent finishes), `details` (include what the agent asks). Webhook URLs and the bot token are set in Settings → Notifications and kept in the Keychain, never in this file |
+| `chatNotify` | `slack`, `discord`, `telegram` (on / off), `onFinish` (also when an agent finishes), `details` (include what the agent asks). Slack and Discord take either a webhook URL or a bot token: `slackBot` / `discordBot` pick which, and `slackChannel` (`#general`, a name, or a channel id) / `discordChannel` (a channel id — the API posts to an id, not a name) / `telegramChat` say where the bot writes. Webhook URLs and bot tokens are set in Settings → Notifications and kept in the Keychain, never in this file; the two ways have separate entries, so switching does not send with the other's credential |
 | `agentTasks` | Agents may ask (`agentty tasks`) to start parallel tasks in split panes, each in its own worktree; you confirm each request |
 | `agentGuide` | Claude Code and Codex started by Agentty get a short guide to Agentty's commands (and Claude Code Agentty's skills), passed on the command line |
 | `autoWorktree` | A new AI session in a project where another one is at work (opened from the + menu, or `claude` / `codex` typed into a terminal) starts in its own git worktree (`~/.agentty/worktrees/<project>-<hash>/<name>`, branch `agentty/<name>` from the project's default branch) |
@@ -52,7 +59,7 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `stopServersOnClose` | Closing a tab, pane or workspace stops the local servers started in it (`SIGTERM`, then `SIGKILL`) |
 | `browser.autoOpenServers` | A local server started in a tab opens in the in-app browser once it answers with a page (only while links open in-app) |
 | `agentBarPosition` | `top` (default) or `bottom`: the AI CLI status bar, and the header of a split pane, above the terminal or under it |
-| `hud` | Items of the AI CLI status bar in order: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `plugins`, `worktree`, `branch`, `folder`. `model`, `context`, `status`, `branch` and `spacer` cannot be hidden. Easier in Settings → Appearance → Status bar |
+| `hud` | Items of the AI CLI status bar in order: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `worktree`, `branch`, `folder`. `model`, `context`, `status`, `branch` and `spacer` cannot be hidden. Easier in Settings → Appearance → Status bar |
 | `harnessDetect` | Offer to start work through a project's agent harness (see below) |
 | `harnessPatterns` | Extra harness patterns, relative to the project (`*` within a name, `**` any folders) |
 | `harnessSubmit` | Send the harness prompt right away (`false`: only type it in) |

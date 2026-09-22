@@ -15,9 +15,7 @@
       {
         "id": "{{id}}.explain",
         "title": "Ask the agent to explain this folder",
-        "icon": "sparkles",
-        "paneBar": true,
-        "when": "always"
+        "icon": "sparkles"
       }
     ]
   }

@@ -9,7 +9,7 @@ use agentty_bridge::plugins::store::{self, InstalledPlugin};
 use agentty_bridge::plugins::ui::Node;
 use agentty_bridge::plugins::{codes, notification, request, required_permission, response, Incoming, PromptTarget};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use gpui::{App, Global};
+use gpui::{App, AppContext, Global};
 use process::{PluginProcess, ProcessEvent};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -194,6 +194,7 @@ pub fn init(cx: &mut App) -> UnboundedReceiver<Envelope> {
         }
     }
     reload(cx);
+    fetch_logos(cx);
     cx.on_app_quit(|cx| {
         for runtime in host_mut(cx).runtimes.values_mut() {
             if let Some(process) = runtime.process.take() {
@@ -204,6 +205,28 @@ pub fn init(cx: &mut App) -> UnboundedReceiver<Envelope> {
     })
     .detach();
     rx
+}
+
+/// Fetches the logo of every installed plugin that gives one as an address and has not been
+/// fetched yet, off the main thread and once per run. Until one lands the plugin keeps its icon
+/// name, so nothing waits on the network to draw a row — and a plugin that gives a file, or none,
+/// causes no request at all.
+fn fetch_logos(cx: &mut App) {
+    let pending: Vec<store::InstalledPlugin> = host(cx).installed.iter().filter(|p| store::logo_file(p).is_none()).cloned().collect();
+    if pending.is_empty() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        let fetched = cx.background_spawn(async move { pending.iter().any(store::fetch_logo) }).await;
+        if fetched {
+            // A logo landed: the rows that drew an icon name should draw the artwork now.
+            let _ = cx.update(|cx| {
+                host_mut(cx).revision += 1;
+                cx.refresh_windows();
+            });
+        }
+    })
+    .detach();
 }
 
 pub fn host(cx: &App) -> &PluginHost {

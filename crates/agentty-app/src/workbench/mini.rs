@@ -6,7 +6,7 @@
 use super::{status_label, Workbench};
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
-use crate::native::{self, Frame};
+use crate::native;
 use crate::terminal::NoticeKind;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 
 pub const MINI_WIDTH: f32 = 300.;
 const MARGIN: f64 = 16.;
+/// How long the fold in and out takes. A plain opacity fade, not a resize: animating the real
+/// window's frame down to a sliver forced a full relayout of everything in it — every terminal,
+/// every pane — at each step, which is what made switching feel slow. A fade is one property
+/// change the compositor animates on its own; nothing in the window is asked to redraw for it.
+const FOLD_SECONDS: f64 = 0.18;
 const HEADER: f32 = 40.;
 const ROW: f32 = 46.;
 const BUBBLE: f32 = 64.;
@@ -72,8 +77,6 @@ struct Bubble {
 pub struct MiniState {
     pub handle: WindowHandle<MiniView>,
     pub view: Entity<MiniView>,
-    /// Main window frame to restore.
-    pub saved_frame: Option<Frame>,
     /// The terminal being peeked at beside the panel, if any.
     pub peek: Option<(WindowHandle<MiniPeek>, u64)>,
 }
@@ -543,6 +546,20 @@ impl Workbench {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "mini" }));
         if self.mini.is_some() {
             self.exit_mini(None, window, cx);
+        } else if self.mini_opening {
+            // A fold that started but never finished: the panel is opened from a task that waits
+            // out the fade, and if that task is dropped first (the app going down mid-fade) the
+            // window is left faded out with no panel to bring it back. `enter_mini` refuses while
+            // the flag is set and `exit_mini` has no panel to close, so without this a press does
+            // nothing at all. Undoing the fade means the window is always one press away.
+            if let Some(main) = native::ns_window(window) {
+                native::set_alpha(main, 1.);
+            }
+            // Counting a new fold tells the waiting task this one was called off: pressing twice
+            // inside the fade is a cancel, and the panel must not open over the window afterwards.
+            self.mini_generation += 1;
+            self.mini_opening = false;
+            cx.notify();
         } else {
             self.onboarding_event(super::onboarding::TourEvent::MiniEntered, cx);
             self.enter_mini(window, cx);
@@ -620,8 +637,6 @@ impl Workbench {
         let height = MiniView::desired_height(rows, 0, false) as f64;
         // Each Agentty window gets its own mini panel, side by side from the right edge.
         let shift = self.slot as f64 * (MINI_WIDTH as f64 + 12.);
-        let mut target = Frame::top_right(area, MINI_WIDTH as f64, height, MARGIN);
-        target.x -= shift;
         // GPUI window bounds are top-left based on the window's display.
         let display = window.display(cx);
         let display_bounds =
@@ -647,11 +662,23 @@ impl Workbench {
         let workbench = cx.entity();
         let main_handle = window.window_handle();
         self.mini_opening = true;
+        self.mini_generation += 1;
+        let generation = self.mini_generation;
         // Outside this update: the fold animation re-enters the window, and the mini panel's
         // first frame reads the workbench.
         cx.spawn(async move |this, cx| {
             if visible {
-                native::set_frame(main, target, true);
+                // A fade, not a shrink to the corner: see `FOLD_SECONDS`. The real frame never
+                // moves, so there is nothing left to restore later either.
+                native::fade(main, 0., FOLD_SECONDS);
+                cx.background_executor().timer(Duration::from_secs_f64(FOLD_SECONDS)).await;
+            }
+            // The toggle can be pressed again while the fade runs: that press undoes the fade and
+            // counts a new fold, so this one is no longer wanted. Opening the panel anyway would
+            // hide the window the user just brought back.
+            if this.read_with(cx, |this, _| this.mini_generation != generation).unwrap_or(true) {
+                native::set_alpha(main, 1.);
+                return;
             }
             let opened = cx.update(|cx| {
                 let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<MiniView>>>> = Default::default();
@@ -665,37 +692,40 @@ impl Workbench {
                 (handle, view)
             });
             let Ok((Ok(handle), Some(view))) = opened else {
-                native::set_frame(main, saved, false);
-                let _ = this.update(cx, |this, _| this.mini_opening = false);
+                native::set_alpha(main, 1.);
+                let _ = this.update(cx, |this, _| {
+                    if this.mini_generation == generation {
+                        this.mini_opening = false;
+                    }
+                });
                 return;
             };
             native::order_out(main);
-            native::set_frame(main, saved, false);
+            native::set_alpha(main, 1.);
             let _ = this.update(cx, |this, cx| {
                 this.mini_opening = false;
-                this.mini = Some(MiniState { handle, view, saved_frame: Some(saved), peek: None });
+                this.mini = Some(MiniState { handle, view, peek: None });
                 cx.notify();
             });
         })
         .detach();
     }
 
-    /// Closes the mini panel and grows the main window back from it.
+    /// Closes the mini panel and fades the main window back in.
     pub fn exit_mini(&mut self, focus: Option<u64>, window: &mut Window, cx: &mut Context<Self>) {
         self.close_mini_peek(cx);
         let Some(mini) = self.mini.take() else { return };
         self.onboarding_event(super::onboarding::TourEvent::MiniLeft, cx);
-        let mini_frame = mini.handle.update(cx, |_, w, _| native::ns_window(w).map(native::frame)).ok().flatten();
         let _ = mini.handle.update(cx, |_, w, _| w.remove_window());
         if let Some(main) = native::ns_window(window) {
-            let saved = mini.saved_frame.unwrap_or_else(|| native::frame(main));
-            if let Some(from) = mini_frame {
-                native::set_frame(main, from, false);
-            }
+            // The frame was never touched while folded (see `enter_mini`), so coming back needs no
+            // resize. It does not fade in either: the window is ordered out at this point, and
+            // AppKit's `animator` proxy does not reliably animate a window that is not on screen
+            // yet — asking it to would leave the window ordered front at zero opacity, i.e. the
+            // app open and completely invisible. Opacity goes back to full outright instead.
+            native::set_alpha(main, 1.);
             window.activate_window();
             cx.activate(true);
-            // Grow back after this update (the animation re-enters the window).
-            cx.spawn(async move |_, _| native::set_frame(main, saved, true)).detach();
         } else {
             window.activate_window();
             cx.activate(true);

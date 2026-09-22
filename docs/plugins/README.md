@@ -51,7 +51,7 @@ any agent.
   "permissions": ["prompt.inject"],
   "contributes": {
     "panel": { "title": "Hello", "icon": "sparkles" },
-    "commands": [{ "id": "hello.explain", "title": "Hello: Explain this folder", "icon": "bot", "paneBar": true }]
+    "commands": [{ "id": "hello.explain", "title": "Hello: Explain this folder", "icon": "bot" }]
   }
 }
 ```
@@ -81,7 +81,7 @@ function explain(context) {
 ```
 
 Open **Plugins → Refresh** (or reopen the page): the plugin shows up as installed. Its panel button
-appears in the tab strip, the command in the palette (⇧⌘P) and as a button above terminal panes.
+appears in the tab strip and the command in the palette (⇧⌘P).
 
 ## Manifest (`agentty-plugin.json`)
 
@@ -96,15 +96,16 @@ appears in the tab strip, the command in the palette (⇧⌘P) and as a button a
 | `links` | `[]` | up to 6 `{ "label", "url" }` (https) shown as buttons on the store card — project site, docs, source |
 | `requires` | | `{ "name", "url", "note" }`: the app or service the plugin is for. The card says whether it was found (see `detect`) and offers the link when it wasn't |
 | `icon` | | icon name (see [Icons](#icons)) |
+| `logo` | | the plugin's own artwork, preferred over `icon`: a file in the plugin folder (`logo.png`) or an `https://` address. An address is fetched once, kept in the plugin's data folder, and only kept when it answers as PNG, JPEG, GIF or WebP, really is one, and stays under 512 KB — until it arrives the plugin shows its `icon`. A fetched SVG is never kept, whatever it says it is: an SVG is a document whose addresses the renderer opens, so one from someone else's server could draw a file of yours. A logo shipped in the plugin folder may be any format Agentty draws. Anything else (plain `http://`, a `data:` blob, a path outside the folder) is ignored |
 | `permissions` | `[]` | see [Permissions](#permissions-and-safety) |
 | `activationEvents` | `[]` | `["onStartup"]` starts the plugin with Agentty; otherwise on first use |
 | `detect` | `[]` | paths (`~` allowed) of an app the plugin integrates with; found → "Recommended" in the store |
 | `contributes.panel` | | `{ "title", "icon", "surface", "mode" }` — the panel the plugin fills with UI. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom). `mode` picks how it opens: `push` (default, docked beside the terminals), `overlay` (floating over them), `window` (a window of its own) or `full` (the whole area). The user can change the mode and their choice is kept |
-| `contributes.commands[]` | | `{ "id", "title", "description", "icon", "paneBar", "when", "palette" }` |
+| `contributes.commands[]` | | `{ "id", "title", "description", "icon", "palette" }` |
 
-Commands appear in the command palette (unless `"palette": false`). With `"paneBar": true` they also
-get an icon button in the status bar above Claude Code / Codex panes and in the header of split panes;
-`when` limits that to `agent` panes, `shell` panes, or `always`.
+Commands appear in the command palette (unless `"palette": false`) and run through
+`plugin.command(id, …)`. There is no icon button above the terminals any more — that bar had no
+room to spare — so a command's only surface is the palette, or however the panel itself calls it.
 
 ## Node.js SDK
 
@@ -120,7 +121,7 @@ plugin.start(); // after registering handlers
 | | called when |
 |---|---|
 | `onActivate(info => …)` | the plugin started; `info` has `plugin.dataDir`, `language`, `context` |
-| `command(id, ({ context, args }) => …)` | a command runs (palette, pane bar) |
+| `command(id, ({ context, args }) => …)` | a command runs (from the palette) |
 | `onPanelOpen(context => …)` / `onPanelClose` | the panel is shown / hidden — render in `onPanelOpen` |
 | `onEvent(elementId, (event, context) => …)` | a UI element with that id was used |
 | `onAnyEvent((event, context) => …)` | any UI event not handled by `onEvent` |

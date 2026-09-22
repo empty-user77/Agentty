@@ -401,6 +401,36 @@ impl Workbench {
                 })
                 .child(collapse),
         };
+        // Title and session content, debounced the same way the sessions panel searches: title
+        // matches show at once, content matches trail in from the background.
+        let workspace_search = (self.panel == SidePanel::Workspaces && settings(cx).workspace_search_bar).then(|| {
+            let query = self.workspace_query(cx);
+            let searching = self.workspace_content_hits.as_ref().is_none_or(|(q, _)| *q != query) && query.chars().count() >= 2;
+            div()
+                .flex_shrink_0()
+                .px_2()
+                .pb_2()
+                // Without this, a click here still focuses the text field first (it is the
+                // deeper element) but then bubbles up to the sidebar's own mouse-down handler,
+                // which immediately hands focus to the workspace list instead — the box takes
+                // the click but never keeps the caret, so nothing typed goes anywhere.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(hex(Chrome::BORDER))
+                        .bg(hex(0x1a1a1a))
+                        .child(icon("search", IconSize::INLINE, hex(Chrome::MUTED)))
+                        .child(div().flex_1().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(self.workspace_search.clone()))
+                        .when(searching, |d| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).child("…"))),
+                )
+        });
 
         div()
             .id("side-bar")
@@ -431,6 +461,7 @@ impl Workbench {
                     .child(title)
                     .child(actions),
             )
+            .children(workspace_search)
             .child(match self.panel {
                 // Sessions manage their own virtualized scrolling.
                 SidePanel::Sessions => div().flex_1().min_h_0().child(body).into_any_element(),
@@ -490,15 +521,26 @@ impl Workbench {
             return list.child(hint(t(cx, "hint.no_workspaces")));
         }
 
+        // A blank box matches everything, so filtering costs nothing when the user isn't searching.
+        // Computed once, up front: the render calls below need `cx` mutably, so nothing here can
+        // hold a borrow of it.
+        let query = self.workspace_query(cx);
+        let searching = !query.is_empty();
+        let is_match: Vec<bool> = (0..self.workspaces.len()).map(|i| !searching || self.workspace_matches(i, cx)).collect();
+        let mut any_match = false;
+
         // Workspaces linked into one session sit together under the one the link started from,
         // wherever they are in the list; unlinking puts them straight back.
         let linked = self.linked_workspaces(cx);
-        let ungrouped: Vec<usize> =
-            (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group.is_none() && !linked.followers.contains(i)).collect();
-        // The "ungrouped" header matters once groups exist and something is (or is being dragged) outside them.
+        let ungrouped: Vec<usize> = (0..self.workspaces.len())
+            .filter(|i| self.workspaces[*i].group.is_none() && !linked.followers.contains(i) && is_match[*i])
+            .collect();
+        any_match = any_match || !ungrouped.is_empty();
+        // The "ungrouped" header matters once groups exist and something is (or is being dragged)
+        // outside them; while searching, an empty ungrouped section is left out entirely.
         let dragging = cx.has_active_drag();
         let mut ungrouped_open = true;
-        if !self.groups.is_empty() && (!ungrouped.is_empty() || dragging) {
+        if !self.groups.is_empty() && (!ungrouped.is_empty() || (!searching && dragging)) {
             ungrouped_open = !self.ungrouped_collapsed;
             let label = t(cx, "ungrouped").into();
             list = list.child(self.render_group_header(None, label, self.ungrouped_collapsed, ungrouped.len(), window, cx));
@@ -509,9 +551,15 @@ impl Workbench {
             }
         }
         for group in &self.groups {
-            let members: Vec<usize> = (0..self.workspaces.len())
+            let all_members: Vec<usize> = (0..self.workspaces.len())
                 .filter(|i| self.workspaces[*i].group == Some(group.id) && !linked.followers.contains(i))
                 .collect();
+            let members: Vec<usize> = all_members.iter().copied().filter(|i| is_match[*i]).collect();
+            if searching && members.is_empty() {
+                // Nothing in this group matches: skip it rather than show an empty frame.
+                continue;
+            }
+            any_match = true;
             // A group with a colour is drawn inside a frame of it, header included, so it reads as
             // one block; the header keeps its own rounded top.
             let accent = super::accent_color(group.color);
@@ -519,12 +567,13 @@ impl Workbench {
                 Some(color) => d.rounded_md().border_1().border_color(hex_alpha(color, 0.55)).p_px(),
                 None => d,
             });
-            block = block.child(self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, members.len(), window, cx));
+            let count = if searching { members.len() } else { all_members.len() };
+            block = block.child(self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, count, window, cx));
             if group.collapsed {
                 list = list.child(block);
                 continue;
             }
-            if members.is_empty() {
+            if members.is_empty() && !searching {
                 let gid = group.id;
                 block = block.child(
                     div()
@@ -551,6 +600,9 @@ impl Workbench {
                 block = block.child(div().pl_3().child(self.render_workspace_entry(index, &linked, window, cx)));
             }
             list = list.child(block);
+        }
+        if searching && !any_match {
+            list = list.child(hint(t(cx, "workspaces.no_matches")));
         }
         list
     }
@@ -751,8 +803,13 @@ impl Workbench {
         let summary = self.summarize(ws, cx);
         let renaming = matches!(&self.rename, Some(r) if r.target == RenameTarget::Workspace(id));
         let ws_colored = ws.color.is_some();
+        // The fill this card is actually drawn in, and the ink that stays readable on it. A colour
+        // the user picked can be anything the colour panel offers: pale amber wants dark letters,
+        // deep blue light ones. Measured, not assumed — see `theme::ink_on`.
+        let fill = super::accent_color(ws.color).map(|color| if active { crate::theme::lighten_rgb(color, 0.14) } else { color });
+        let ink = fill.map_or(Chrome::BRIGHT, crate::theme::ink_on);
         // A step behind the name: smaller, and dimmer than the title on both kinds of card.
-        let sub_color = if ws_colored { hex_alpha(Chrome::BRIGHT, 0.7) } else { hex(Chrome::MUTED) };
+        let sub_color = if ws_colored { hex_alpha(ink, 0.7) } else { hex(Chrome::MUTED) };
         let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
         // A workspace with nothing running answers from its saved layout instead of from its
         // panes, so the card says the same thing before and after it is opened.
@@ -828,7 +885,6 @@ impl Workbench {
         // logo that is not there. Whether a card is working still shows, since that differs.
         let show_logo = self.installed.as_ref().map_or(2, crate::agents::Installed::agent_count) > 1;
         let indent = px(if show_logo { 24. } else { 2. });
-        let accent = super::accent_color(ws.color);
         let compact = settings(cx).compact_workspaces;
 
         // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
@@ -837,10 +893,10 @@ impl Workbench {
         let attention_bar = (summary.attention > 0 && ws.color.is_none()).then_some(Chrome::ATTENTION);
         let attention_dot = summary.attention > 0 && ws.color.is_some();
         // Opaque, never a wash: a translucent fill over the dark chrome comes out muddy. The
-        // selected card is the same colour a shade lighter, with a rim.
-        let background = match (accent, active) {
-            (Some(color), true) => crate::theme::lighten(color, 0.14),
-            (Some(color), false) => hex(color),
+        // selected card is the same colour a shade lighter, with a rim. (`fill` is already the
+        // lightened tone when the card is selected.)
+        let background = match (fill, active) {
+            (Some(color), _) => hex(color),
             (None, true) => hex_alpha(Chrome::ACCENT, 0.16),
             (None, false) => hex_alpha(0, 0.),
         };
@@ -862,10 +918,12 @@ impl Workbench {
             .children(
                 attention_bar.map(|color| div().absolute().left(px(2.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full().bg(hex(color))),
             )
+            // Hover lightens rather than washes out: a translucent fill would darken a pale
+            // colour back towards the chrome, and the ink was chosen for the opaque tone.
             .when(!active, |d| {
                 d.hover(|s| {
-                    s.bg(match accent {
-                        Some(color) => hex_alpha(color, 0.58),
+                    s.bg(match fill {
+                        Some(color) => crate::theme::lighten(color, 0.10),
                         None => hex(Chrome::HOVER),
                     })
                 })
@@ -916,14 +974,14 @@ impl Workbench {
                     // breathes while a turn is running.
                     .map(|d| {
                         if show_logo {
-                            d.child(crate::brand::avatar_working(tools.first().map_or("shell", String::as_str), 16., working, id))
+                            d.child(crate::brand::avatar_working(tools.first().map_or("shell", String::as_str), 16., working, id, ink))
                         } else if working {
-                            d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(Chrome::BRIGHT, 0.9)))
+                            d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(ink, 0.9)))
                         } else {
                             d
                         }
                     })
-                    .when(attention_dot, |d| d.child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex_alpha(Chrome::BRIGHT, 0.95))))
+                    .when(attention_dot, |d| d.child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex_alpha(ink, 0.95))))
                     .child({
                         let _ = renaming;
                         div()
@@ -937,7 +995,7 @@ impl Workbench {
                             // difference already does most of the separating.
                             .t_title()
                             .font_weight(crate::theme::EMPHASIS)
-                            .text_color(hex(Chrome::BRIGHT))
+                            .text_color(hex(ink))
                             // Double-click the name to rename (handled on mouse down so the first
                             // click's focus change can't end the edit).
                             .on_mouse_down(
@@ -950,6 +1008,16 @@ impl Workbench {
                                 }),
                             )
                             .child(title)
+                    })
+                    // The list view drops the branch/path line below the title to fit more
+                    // workspaces on screen; the branch is still worth a glance without opening
+                    // the card, so a short form of it rides along the title row instead.
+                    .when(compact, |d| {
+                        d.children(
+                            branch
+                                .clone()
+                                .map(|name| div().flex_shrink_0().max_w(px(96.)).truncate().t_caption().text_color(sub_color).child(name)),
+                        )
                     })
                     // Last activity, like the session history; the menu button takes its place on hover.
                     .child(
@@ -975,9 +1043,10 @@ impl Workbench {
                                     .right(px(-4.))
                                     .invisible()
                                     .group_hover("workspace-row", |s| s.visible())
-                                    .child(icon_only(
+                                    .child(crate::ui::icon_only_in(
                                         ("workspace-menu", id as usize),
                                         "ellipsis",
+                                        ink,
                                         cx.listener(move |this, event: &ClickEvent, _, cx| {
                                             cx.stop_propagation();
                                             if this.just_dismissed("workspace-menu") {
@@ -1019,7 +1088,7 @@ impl Workbench {
                 };
                 // A card the user coloured keeps to that colour: a green line inside an amber card
                 // is two colours fighting, and the state is in the words anyway.
-                let color = if ws_colored { hex_alpha(Chrome::BRIGHT, 0.9) } else { hex(state_color) };
+                let color = if ws_colored { hex_alpha(ink, 0.9) } else { hex(state_color) };
                 let url = pr.url.clone();
                 div()
                     .id(("workspace-pr", id as usize))
@@ -1044,7 +1113,7 @@ impl Workbench {
                     .child(icon("git-pull-request", 10., color))
                     .child(div().truncate().child(label))
             }))
-            .children((!compact).then(|| self.render_port_chips(ws, active, indent, cx)).flatten());
+            .children((!compact).then(|| self.render_port_chips(ws, fill, active, indent, cx)).flatten());
 
         let menu_open = self.workspace_menu == Some(id);
         // A card near the bottom of the sidebar would have its menu cut off by the window edge, so
@@ -1062,8 +1131,16 @@ impl Workbench {
         })
     }
 
-    /// `:3000 :5173` chips for servers started in the workspace; a click opens them.
-    fn render_port_chips(&self, ws: &Workspace, active: bool, indent: gpui::Pixels, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `:3000 :5173` chips for servers started in the workspace; a click opens them. On a card the
+    /// user coloured the chips are cut from its own ink, so they read on a pale fill as on a dark one.
+    fn render_port_chips(
+        &self,
+        ws: &Workspace,
+        fill: Option<u32>,
+        active: bool,
+        indent: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let ports = self.ports_of(ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id));
         if ports.is_empty() {
             return None;
@@ -1078,9 +1155,13 @@ impl Workbench {
                     .rounded_sm()
                     .t_caption()
                     .cursor_pointer()
-                    .bg(if active { hex_alpha(0xffffff, 0.18) } else { hex(0x2d2d30) })
-                    .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
-                    .hover(|s| s.bg(hex(Chrome::SELECTED)))
+                    .map(|d| match fill.map(crate::theme::ink_on) {
+                        Some(ink) => d.bg(hex_alpha(ink, 0.16)).text_color(hex(ink)).hover(|s| s.bg(hex_alpha(ink, 0.3))),
+                        None => d
+                            .bg(if active { hex_alpha(0xffffff, 0.18) } else { hex(0x2d2d30) })
+                            .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
+                            .hover(|s| s.bg(hex(Chrome::SELECTED))),
+                    })
                     .child(format!(":{port}"))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
@@ -1326,21 +1407,29 @@ impl Workbench {
             );
         let searching = self.session_content_hits.as_ref().is_none_or(|(q, _)| *q != self.session_query(cx))
             && self.session_query(cx).chars().count() >= 2;
-        let search = div().flex_shrink_0().px_3().pb_2().child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(hex(Chrome::BORDER))
-                .bg(hex(0x1a1a1a))
-                .child(icon("search", IconSize::INLINE, hex(Chrome::MUTED)))
-                .child(div().flex_1().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(self.session_search.clone()))
-                .when(searching, |d| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).child("…"))),
-        );
+        let search = div()
+            .flex_shrink_0()
+            .px_3()
+            .pb_2()
+            // Same fix as the workspace search box: without this, a click focuses the field (it
+            // is the deeper element) and then bubbles up to the sidebar's own mouse-down handler,
+            // which immediately hands focus back to the list.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .bg(hex(0x1a1a1a))
+                    .child(icon("search", IconSize::INLINE, hex(Chrome::MUTED)))
+                    .child(div().flex_1().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(self.session_search.clone()))
+                    .when(searching, |d| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).child("…"))),
+            );
 
         let visible = self.visible_sessions(cx);
         let body: AnyElement = if self.sessions_loading && self.sessions.is_empty() {

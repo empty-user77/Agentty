@@ -1,11 +1,12 @@
 //! Installed plugins (`~/.agentty/plugins/<id>`), their enabled state, the built-in catalog and
 //! installing from the catalog, a folder or a Git repository.
 
-use super::manifest::{relative_path, valid_id, version_newer, Manifest, MANIFEST_FILE};
+use super::manifest::{parse_logo, relative_path, valid_id, version_newer, Logo, Manifest, MANIFEST_FILE};
 use crate::fsutil;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Where plugins are installed: `<data dir>/plugins`.
@@ -505,9 +506,130 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> Result<()> {
     Ok(())
 }
 
+/// Largest logo kept. A logo is a small square; anything bigger is a download, not an icon.
+const MAX_LOGO_BYTES: usize = 512 * 1024;
+
+/// Whether a fetched body may be kept as a logo: a picture of a kind Agentty draws, within the
+/// cap, and really of that kind — the type in the header alone is whatever the server chose to say.
+///
+/// SVG is refused on purpose, however it is labelled. An SVG is a document, not a picture: the
+/// renderer resolves the addresses inside it, and a local path there is opened and drawn. A logo
+/// that arrives from an address someone else controls must not be able to draw one of the user's
+/// own files into Agentty's window, so only the formats below — which hold pixels and nothing
+/// else — are kept. A logo is a small square; none of this costs a real logo anything.
+fn logo_body_ok(content_type: &str, bytes: &[u8]) -> bool {
+    let kind = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let named = matches!(kind.as_str(), "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/webp");
+    named && (1..=MAX_LOGO_BYTES).contains(&bytes.len()) && is_raster_image(bytes)
+}
+
+/// Whether the bytes begin the way one of the formats above does.
+fn is_raster_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(&[0xff, 0xd8, 0xff])
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.len() > 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP")
+}
+
+/// Where a fetched logo is kept: in the plugin's own data folder, so uninstalling takes it too.
+fn logo_cache(id: &str) -> PathBuf {
+    plugin_data_dir(id).join("logo.img")
+}
+
+/// The file to draw as `plugin`'s logo, if there is one ready. A logo shipped in the plugin folder
+/// is used straight away; one given as an address is only used once it has been fetched, so the
+/// icon name stands in until then and nothing blocks on the network to draw a row.
+pub fn logo_file(plugin: &InstalledPlugin) -> Option<PathBuf> {
+    let logo = plugin.manifest.as_ref()?.logo.as_deref()?;
+    match parse_logo(logo)? {
+        Logo::File(relative) => {
+            let path = plugin.dir.join(relative);
+            path.is_file().then_some(path)
+        }
+        Logo::Url(_) => {
+            let cached = logo_cache(&plugin.id);
+            cached.is_file().then_some(cached)
+        }
+    }
+}
+
+/// Fetches `plugin`'s logo if it is an address and is not kept yet. Returns whether a new file
+/// landed, so the caller knows to draw again. Failure is not an error worth showing: the plugin
+/// keeps the icon it had.
+pub fn fetch_logo(plugin: &InstalledPlugin) -> bool {
+    let Some(logo) = plugin.manifest.as_ref().and_then(|m| m.logo.as_deref()) else { return false };
+    let Some(Logo::Url(url)) = parse_logo(logo) else { return false };
+    let cached = logo_cache(&plugin.id);
+    if cached.is_file() {
+        return false;
+    }
+    // `parse_logo` held the address in the manifest to https with a plain host, and a redirect is
+    // a second address nothing checked: `https_only` keeps it off plain http, and two hops is all
+    // an image host needs. Nothing is sent but the request itself.
+    let agent = crate::http::agent_builder().timeout(std::time::Duration::from_secs(15)).https_only(true).redirects(2).build();
+    let Ok(response) = agent.get(&url).set("User-Agent", "Agentty").call() else { return false };
+    let kind = response.header("content-type").unwrap_or_default().to_string();
+    let mut bytes = Vec::new();
+    // Read one byte past the cap, so a body that is too long is seen as too long rather than cut
+    // down to the limit and kept.
+    if response.into_reader().take(MAX_LOGO_BYTES as u64 + 1).read_to_end(&mut bytes).is_err() {
+        return false;
+    }
+    if !logo_body_ok(&kind, &bytes) {
+        return false;
+    }
+    let Some(dir) = cached.parent() else { return false };
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    // Written beside the target and renamed, so a half-written file is never drawn.
+    let tmp = cached.with_extension("part");
+    if std::fs::write(&tmp, &bytes).is_err() {
+        return false;
+    }
+    std::fs::rename(&tmp, &cached).is_ok()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A fetched logo is only kept when it is actually a small image: the bytes are handed to an
+    /// image decoder, and the cap is what stops a "logo" from being a download.
+    #[test]
+    fn only_a_small_image_is_kept_as_a_logo() {
+        let png = |len: usize| {
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            bytes.resize(len, 0);
+            bytes
+        };
+        let small = png(1024);
+        assert!(logo_body_ok("image/png", &small));
+        assert!(logo_body_ok("image/png; charset=binary", &small), "parameters after the type are fine");
+        assert!(logo_body_ok("IMAGE/PNG", &small), "the header's case does not matter");
+        assert!(logo_body_ok("image/jpeg", &[&[0xff, 0xd8, 0xff][..], &[0u8; 64][..]].concat()));
+        assert!(logo_body_ok("image/gif", &[&b"GIF89a"[..], &[0u8; 64][..]].concat()));
+        assert!(logo_body_ok("image/webp", &[&b"RIFF\0\0\0\0WEBP"[..], &[0u8; 64][..]].concat()));
+        assert!(!logo_body_ok("text/html", &small), "not an image");
+        assert!(!logo_body_ok("application/octet-stream", &small), "not an image");
+        assert!(!logo_body_ok("", &small), "no type at all");
+        assert!(!logo_body_ok("image/png", &[]), "nothing to draw");
+        assert!(!logo_body_ok("image/png", &png(MAX_LOGO_BYTES + 1)), "over the cap");
+        assert!(logo_body_ok("image/png", &png(MAX_LOGO_BYTES)), "exactly the cap is fine");
+    }
+
+    /// An SVG is a document: whatever it says it is, the renderer would resolve the addresses
+    /// inside it, and a local path there is opened and drawn. A logo arriving from someone else's
+    /// address must not be able to put one of the user's own files on screen.
+    #[test]
+    fn an_svg_is_never_kept_as_a_logo() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><image href="/etc/hosts"/></svg>"#;
+        assert!(!logo_body_ok("image/svg+xml", svg), "not kept under its own type");
+        assert!(!logo_body_ok("image/png", svg), "and not kept by calling itself a PNG either");
+        assert!(!logo_body_ok("image/png", b"<?xml version=\"1.0\"?><svg/>"), "nor with a prologue in front");
+        assert!(!is_raster_image(svg));
+    }
 
     /// Every script of a built-in plugin's folder is embedded: one left out would make the
     /// installed plugin fail on its first `import`.
