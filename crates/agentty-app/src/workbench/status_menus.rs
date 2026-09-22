@@ -69,6 +69,17 @@ impl Workbench {
         Some((agent, view.display_cwd()))
     }
 
+    /// Opens a menu from a pane's own bar, so only that pane draws it.
+    pub(super) fn toggle_pane_menu(&mut self, menu: StatusMenu, pane: u64, cx: &mut Context<Self>) {
+        let same = self.status_menu == Some(menu) && self.status_menu_pane == Some(pane);
+        self.status_menu_pane = (!same).then_some(pane);
+        if self.status_menu == Some(menu) && !same {
+            // Another pane had it open: move it rather than close it.
+            return cx.notify();
+        }
+        self.toggle_status_menu(menu, cx);
+    }
+
     pub(super) fn toggle_status_menu(&mut self, menu: StatusMenu, cx: &mut Context<Self>) {
         // The click that closed the menu from outside must not reopen it.
         if self.just_dismissed(status_menu_key(menu)) {

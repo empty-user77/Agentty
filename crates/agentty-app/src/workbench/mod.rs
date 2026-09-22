@@ -434,6 +434,9 @@ pub struct Workbench {
     harness_cache: harness::HarnessCache,
     harness_dialog: Option<harness::HarnessDialog>,
     status_menu: Option<status_menus::StatusMenu>,
+    /// The pane whose bar opened `status_menu`. A menu belongs to the chip it was opened from, and
+    /// every split pane draws the same bar — without this, one click opened it in all of them.
+    status_menu_pane: Option<u64>,
     processes: processes::ProcessMonitor,
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
@@ -643,6 +646,7 @@ impl Workbench {
             harness_cache: Default::default(),
             harness_dialog: None,
             status_menu: None,
+            status_menu_pane: None,
             processes: Default::default(),
             inventory: Default::default(),
             browser: None,

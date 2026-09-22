@@ -988,7 +988,8 @@ impl Workbench {
         let percent = percent.or_else(|| agent.is_some().then_some(0.));
         let command =
             view.agent_kind().and_then(|kind| kind.compact_command()).filter(|_| percent.is_some_and(|p| p >= super::COMPACT_OFFER_AT));
-        let open = self.status_menu == Some(super::status_menus::StatusMenu::Context);
+        let pane_id = pane.entity_id().as_u64();
+        let open = self.status_menu == Some(super::status_menus::StatusMenu::Context) && self.status_menu_pane == Some(pane_id);
         let mut chip = optional_meter("Context", percent).id(("context-meter", pane.entity_id().as_u64() as usize)).relative();
         if let Some(command) = command {
             let target = pane.clone();
@@ -1019,7 +1020,11 @@ impl Workbench {
             .cursor_pointer()
             .when(open, |d| d.bg(hex(Chrome::SELECTED)))
             .hover(|s| s.bg(hex(Chrome::HOVER)))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_status_menu(super::status_menus::StatusMenu::Context, cx)))
+            .on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.toggle_pane_menu(super::status_menus::StatusMenu::Context, pane_id, cx)
+                }),
+            )
             .when(open, |d| d.child(bar_popover(self.render_context_menu(agent, cx), 6, cx)))
             .into_any_element()
     }

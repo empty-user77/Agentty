@@ -11,7 +11,7 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
   "fontFamily": "JetBrains Mono",
   "fontSize": 13.0,
   "lineHeight": 1.25,
-  "cursorShape": "block",
+  "cursorShape": "beam",
   "cursorBlink": true,
   "letterSpacing": 0.0,
   "boldText": false,

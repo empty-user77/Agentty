@@ -2053,16 +2053,43 @@ impl Element for TerminalElement {
 
         let cursor_row = (cursor_point.line.0 + display_offset as i32).max(0) as usize;
         let cursor_col = cursor_point.column.0;
-        // What is being composed is drawn beside the grid, never on it.
+        // What is being composed is drawn on the grid, where the program will put it.
         //
-        // Where the text it is handed will land is the program's business. A shell puts it at the
-        // cursor; a program that draws its own input box — an agent's prompt — leaves the terminal
-        // cursor wherever it last wrote, which is nowhere near the line the user is typing on. A
-        // composition placed in that cell lands on top of what the program already echoed, and the
-        // grid has no way to ask where the caret really is. A chip below the cursor's line cannot
-        // cover anything, whatever the program does with its cursor.
+        // A shell puts what it is handed at the cursor, so the cursor is the right place — even
+        // mid-line, where a composition covering the text after it is what every terminal does.
+        //
+        // A program that draws its own input box is different: it leaves the terminal cursor
+        // wherever it last wrote, far from the line being typed on, and a composition placed there
+        // lands on top of what it already echoed. Such a program hides the terminal cursor and
+        // draws its own, and that is the signal — a hidden cursor is not a caret, so the
+        // composition goes after the last thing written on that line instead of in a cell that is
+        // already spoken for.
         if let Some(text) = marked_text {
+            let grid = term.grid();
+            let start = if cursor_shape == CursorShape::Hidden {
+                let line = Line(cursor_row as i32 - display_offset as i32);
+                let mut last = None;
+                for column in 0..grid.columns() {
+                    let c = grid[line][Column(column)].c;
+                    if c != ' ' && c != '\0' {
+                        last = Some(column);
+                    }
+                }
+                // The right-hand edge of a box is not text: a composition belongs inside it.
+                let border = |c: char| matches!(c as u32, 0x2500..=0x259F);
+                let mut end = last.map_or(cursor_col, |column| column + 1);
+                while end > 0 && border(grid[line][Column(end - 1)].c) {
+                    end -= 1;
+                }
+                end
+            } else {
+                cursor_col
+            };
             let fg = hex(theme.foreground);
+            // Shaped whole, never a glyph at a time. An input method hands over a syllable still
+            // being built as its separate jamo (한 arrives as ᄒ ᅡ ᆫ); shaping the string is what
+            // puts them back together. Shaping each character on its own draws three letters side
+            // by side instead of one.
             let run = TextRun {
                 len: text.len(),
                 font: base_font.clone(),
@@ -2072,20 +2099,11 @@ impl Element for TerminalElement {
                 strikethrough: None,
             };
             let shaped = text_system.shape_line(SharedString::from(text), font_size, &[run], None);
-            let pad = px(6.);
-            let chip = size(shaped.width + pad * 2., line_height + px(4.));
-            // Under the cursor when there is room, above it when there is not, and always inside
-            // the pane: a cursor in the last column must not push the chip off the edge.
-            let right = (bounds.origin.x + bounds.size.width - chip.width).max(bounds.origin.x);
-            let x = (origin.x + cell_width * cursor_col as f32 - pad).clamp(bounds.origin.x, right);
-            let below = origin.y + line_height * (cursor_row + 1) as f32 + px(2.);
-            let above = origin.y + line_height * cursor_row as f32 - chip.height - px(2.);
-            let y = if below + chip.height <= bounds.origin.y + bounds.size.height { below } else { above.max(bounds.origin.y) };
-            let quad = fill(Bounds::new(point(x, y), chip), hex(theme.background))
-                .corner_radii(px(4.))
-                .border_widths(px(1.))
-                .border_color(crate::theme::hex_alpha(theme.foreground, 0.35));
-            frame.marked = Some((quad, vec![(point(x + pad, y + px(2.)), shaped)]));
+            let pos = point(origin.x + cell_width * start as f32, origin.y + line_height * cursor_row as f32);
+            // The cells underneath are hidden, so nothing shows through from behind.
+            let backdrop = fill(Bounds::new(pos, size(shaped.width, line_height)), hex(theme.background));
+            let glyphs = vec![(pos, shaped)];
+            frame.marked = Some((backdrop, glyphs));
         }
         drop(term);
 
