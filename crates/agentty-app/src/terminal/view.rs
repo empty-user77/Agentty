@@ -1261,6 +1261,10 @@ impl TerminalView {
             cx.emit(TerminalEvent::StatusChanged);
         }
         if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta) {
+            // This key went to the program rather than to the input method, so whatever was being
+            // composed is not what the program has. Drawing it on would put it over the text the
+            // program echoes back.
+            self.marked_text = None;
             self.write_user_input(bytes);
             cx.stop_propagation();
             cx.notify();
@@ -2116,6 +2120,13 @@ impl Element for TerminalElement {
                 display_offset,
                 cursor: (cursor_col, cursor_row),
             });
+            // A composition belongs to the pane the keyboard is in. When focus goes elsewhere the
+            // input method drops it without telling us, and what is left would be drawn over the
+            // program's own text for as long as the pane stays open.
+            if view.focused && !focused {
+                view.marked_text = None;
+                view.commit_anchor = None;
+            }
             view.focused = focused;
             if pending.is_none() {
                 view.commit_anchor = None;
