@@ -23,6 +23,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("ui/setBadge", None),
     ("host/info", None),
     ("host/openUrl", None),
+    // A module has no clock and no loop of its own: this is how it waits.
+    ("host/timer", None),
     // Puts text on the clipboard: what a plugin's "copy this" button does.
     ("host/copy", None),
     // Reveals a file in Finder, and tells the plugin whether a path exists: that is the user's
@@ -147,6 +149,11 @@ pub struct PromptRequest {
     /// Who asked, shown in the dialog (a plugin name or an app).
     #[serde(default)]
     pub source: Option<String>,
+    /// The plugin that asked, by id. Set by the host beside `source`, never read from the wire:
+    /// a plugin must not be able to name another one. It is what tells Agentty whose pane the
+    /// dialog's answer became, so a plugin hears about a session the user placed by hand.
+    #[serde(skip)]
+    pub plugin: Option<String>,
 }
 
 fn default_submit() -> bool {
@@ -165,6 +172,7 @@ impl Default for PromptRequest {
             cwd: None,
             submit: true,
             source: None,
+            plugin: None,
         }
     }
 }

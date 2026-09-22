@@ -1,7 +1,17 @@
-# Agentty plugin protocol (API version 1)
+# Agentty plugin protocol (API version 2)
 
 For writing plugins without the Node.js SDK. Read the [plugin guide](README.md) first; this page
 only describes the wire format.
+
+| Version | What it added |
+|---|---|
+| 1 | the panel, commands, links, `storage/*`, `net/fetch`, `prompt/inject`, `session/get` |
+| 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
+
+A plugin that uses something a version added says so, with `apiVersion` in its manifest and in its
+marketplace entry. An Agentty that speaks less than that says to update rather than installing a
+module it cannot run; a manifest that leaves the field out is read as version 1, which is what it
+was before the field existed.
 
 ## Transport
 
@@ -32,6 +42,7 @@ with the same 16 MB line limit as stdout.
 | `ui/event` | notification | `{ element, event, value?, item?, action?, context }` |
 | `context/changed` | notification | `{ context }` |
 | `url/open` | notification | `{ path, query, url, context }` |
+| `pane/status` | notification | `{ paneId, status, running, agent, title, cwd }` — a pane this plugin started changed what it is doing (`workspace.read`) |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin (a command, the panel
@@ -51,6 +62,7 @@ when you don't care.
 | `context/get` | | `{}` | context |
 | `host/info` | | `{}` | `{ version, apiVersion, language }` |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
+| `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
 | `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` or `{ status: "sent", paneId }` |
@@ -87,6 +99,33 @@ or `Cookie` header is not carried to another host, and a redirected `POST`, `PUT
 becomes a `GET` without its body unless the answer was `307` or `308`. `url` in the response is the
 address the answer came from.
 
+`host/timer` is how a plugin waits: a request answered once the time has passed. 100 ms at the
+shortest, an hour at the longest, eight at a time. A module runs only while it is handling a
+message, so this is the whole of how it comes back to something later — answering it is all the
+plugin gets, which is why it is not a way to run in the background.
+
+`pane/status` is how a plugin hears that an agent it started has finished. A plugin learns a pane
+id from `prompt/inject` (`{ status: "sent", paneId }`); Agentty remembers which plugin started
+which pane and tells only that plugin, when that pane's status changes — `working`, `idle`,
+`finished`, `permission`, `question`, `interrupted`, `exited`, or `closed` once. It needs
+`workspace.read`, the permission that already means "see agent status". At most 32 panes are
+followed at a time. [AgentOS plugins](agentos.md) are built on this and `host/timer`.
+
+A prompt the user placed themselves is followed too: `target: "ask"` answers `{ status: "asked" }`
+with no pane id, because there is none yet, and the session the user picks is watched all the same
+— its first `pane/status` is where the plugin learns which pane it became. A plugin that has more
+than one question outstanding tells them apart by `title`, which is the one it gave the prompt.
+
+Status arrives whether or not anything is being drawn: a window behind another, or one on a locked
+screen, is not drawn, and a plugin waiting for an agent must not be waiting for the user to come
+back. While any pane is watched, Agentty looks every 400 ms of its own accord, and stops looking
+when the last one is done.
+
+A pane is `idle` from the moment it opens, before the agent has picked the prompt up, so `idle`
+alone does not mean finished — wait until that pane has been `working` at least once. And an agent
+between two tool calls is idle for a moment, so a stop is worth giving a second or two before its
+session is read as the answer.
+
 `storage/*` is what a plugin remembers between runs: one JSON document in its own folder
 (`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. It goes
 when the plugin is uninstalled — what a plugin kept is what it was given — and an update leaves it
@@ -108,7 +147,7 @@ Errors use these codes:
 ## Example session
 
 ```
-→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"apiVersion":1,"plugin":{"id":"hello",…},"language":"en","context":{…}}}
+→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"apiVersion":2,"plugin":{"id":"hello",…},"language":"en","context":{…}}}
 → {"jsonrpc":"2.0","method":"panel/open","params":{"context":{…}}}
 ← {"jsonrpc":"2.0","id":1,"result":{}}
 ← {"jsonrpc":"2.0","id":1,"method":"ui/setPanel","params":{"tree":{"type":"column","children":[{"type":"button","id":"go","label":"Go"}]}}}

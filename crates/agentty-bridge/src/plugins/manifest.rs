@@ -7,7 +7,15 @@ use std::path::{Component, Path, PathBuf};
 pub const MANIFEST_FILE: &str = "agentty-plugin.json";
 
 /// Protocol version this Agentty speaks (`apiVersion` in the manifest must not be newer).
-pub const API_VERSION: u32 = 1;
+///
+/// | Version | What it added |
+/// |---|---|
+/// | 1 | the panel, commands, links, storage, `net/fetch`, `prompt/inject`, `session/get` |
+/// | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
+///
+/// A plugin that uses something a version added says so, and an Agentty that speaks less than
+/// that tells the user to update instead of installing a module it cannot run.
+pub const API_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +59,10 @@ pub struct Manifest {
     pub keywords: Vec<String>,
 }
 
+/// A manifest that leaves `apiVersion` out is from before the field existed, which can only mean
+/// the first protocol — not whatever this Agentty happens to speak.
 fn default_api_version() -> u32 {
-    API_VERSION
+    1
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,10 +369,25 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_built_against_a_protocol_this_agentty_does_not_speak_is_refused() {
+        let mut manifest = sample();
+        manifest["apiVersion"] = serde_json::json!(API_VERSION + 1);
+        let err = Manifest::parse(manifest.to_string().as_bytes()).expect_err("it needs a newer Agentty");
+        assert!(format!("{err:#}").contains("needs a newer Agentty"), "{err:#}");
+        // The one this Agentty speaks, and every one before it, load.
+        for version in 1..=API_VERSION {
+            let mut manifest = sample();
+            manifest["apiVersion"] = serde_json::json!(version);
+            assert!(Manifest::parse(manifest.to_string().as_bytes()).is_ok(), "apiVersion {version}");
+        }
+    }
+
+    #[test]
     fn parses_a_manifest_with_defaults() {
         let manifest = Manifest::parse(sample().to_string().as_bytes()).unwrap();
         assert_eq!(manifest.runtime, Runtime::Node);
-        assert_eq!(manifest.api_version, API_VERSION);
+        // A manifest that says nothing is from before the field: the first protocol, not this one.
+        assert_eq!(manifest.api_version, 1);
         let command = &manifest.contributes.commands[0];
         assert!(command.pane_bar && command.palette);
         assert_eq!(command.when, When::Agent);

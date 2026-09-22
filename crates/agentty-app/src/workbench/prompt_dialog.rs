@@ -81,8 +81,16 @@ impl Workbench {
                 request.workspace_id = Some(id);
             }
         }
+        let asked_by = request.plugin.clone();
         match self.deliver_prompt(request, window, cx) {
-            Ok(_) => self.close_prompt_dialog(window, cx),
+            Ok(pane) => {
+                // The plugin asked, the user placed it: the plugin still hears how that session
+                // gets on, and the first `pane/status` is where it learns which pane it became.
+                if let Some(plugin) = asked_by {
+                    self.watch_pane_for_plugin(pane, &plugin, cx);
+                }
+                self.close_prompt_dialog(window, cx)
+            }
             Err(error) => {
                 if let Some(dialog) = self.prompt_dialog.as_mut() {
                     dialog.error = Some(error);
