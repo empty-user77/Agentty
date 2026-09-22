@@ -33,6 +33,7 @@ mod persist;
 mod picker;
 mod plugin_host;
 mod plugin_panel;
+mod plugin_window;
 mod plugins_page;
 mod processes;
 mod prompt_dialog;
@@ -462,6 +463,16 @@ pub struct Workbench {
     harness_pattern_form: Option<settings_page::HarnessPatternForm>,
     /// Plugin whose panel is docked right of the terminals.
     plugin_panel: Option<String>,
+    /// The panel's layout menu is open.
+    plugin_mode_menu: bool,
+    /// Plugin panels that have a window of their own, by plugin id.
+    plugin_windows: HashMap<String, gpui::WindowHandle<plugin_window::PluginWindow>>,
+    /// Plugins whose own window has been asked for but not yet opened — opening is deferred, and
+    /// without this the next frame would ask for a second one.
+    plugin_windows_opening: std::collections::HashSet<String>,
+    /// Plugins whose own window Agentty is closing itself, so the release observer does not read
+    /// it as the user closing the panel.
+    plugin_windows_closing: std::collections::HashSet<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
@@ -625,6 +636,10 @@ impl Workbench {
             system_installs: Vec::new(),
             harness_pattern_form: None,
             plugin_panel: None,
+            plugin_mode_menu: false,
+            plugin_windows: HashMap::new(),
+            plugin_windows_opening: std::collections::HashSet::new(),
+            plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
@@ -2181,7 +2196,7 @@ impl Workbench {
             cx.notify();
         } else if let Some(panel) = self.side_resizing {
             let viewport = f32::from(window.viewport_size().width);
-            self.drag_side_panel(panel, f32::from(event.position.x), viewport, cx);
+            self.drag_side_panel(panel, f32::from(event.position.x), viewport, window, cx);
         } else if self.browser_resizing {
             // The splitter sits just left of the panel; the plugin and files panels may sit right of it.
             let shown = self.docked_widths(cx).1;
@@ -2509,25 +2524,34 @@ impl Render for Workbench {
                             .flex_col()
                             .child(self.render_tab_strip(cx))
                             .children(self.render_service_banner(cx))
-                            .child(div().flex_1().min_h_0().flex().child(div().flex_1().min_w_0().h_full().child(main)).when(
-                                self.page.is_none(),
-                                |d| {
-                                    d.children(self.render_browser_splitter(cx))
-                                        .children(self.render_browser(cx))
-                                        .when(self.plugin_panel.is_some(), |d| {
-                                            d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx))
-                                        })
-                                        .children(self.render_plugin_panel(cx))
-                                        .when(self.docker.open, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx)))
-                                        .children(self.render_docker_panel(cx))
-                                        .when(self.db.panel_open, |d| {
-                                            d.child(self.render_side_splitter(side_panels::SidePanel::Database, cx))
-                                        })
-                                        .children(self.render_db_panel(cx))
-                                        .children(self.render_files_splitter(cx))
-                                        .children(self.render_files_panel(cx))
-                                },
-                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    // A floating or full-area panel is drawn over this row.
+                                    .relative()
+                                    .child(div().flex_1().min_w_0().h_full().child(main))
+                                    .when(self.page.is_none(), |d| {
+                                        let docked = self.plugin_panel_width(cx) > 0.;
+                                        d.children(self.render_browser_splitter(cx))
+                                            .children(self.render_browser(cx))
+                                            .when(docked, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx)))
+                                            .children(self.render_plugin_panel(cx))
+                                            .when(self.docker.open, |d| {
+                                                d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx))
+                                            })
+                                            .children(self.render_docker_panel(cx))
+                                            .when(self.db.panel_open, |d| {
+                                                d.child(self.render_side_splitter(side_panels::SidePanel::Database, cx))
+                                            })
+                                            .children(self.render_db_panel(cx))
+                                            .children(self.render_files_splitter(cx))
+                                            .children(self.render_files_panel(cx))
+                                            // Over everything on this row, whatever else is docked.
+                                            .children(self.render_plugin_overlay(cx))
+                                    }),
+                            )
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
                             // Opens under the bell, at the right end of the title bar.
                             .when(self.notices_open, |d| {
@@ -2940,6 +2964,19 @@ impl Workbench {
                         "chatNotify": self.chat_notify.debug_state(),
                         "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
+                        "plugins": {
+                            "panel": self.plugin_panel,
+                            // A panel in `window` mode has one; nothing else should.
+                            "windows": self.plugin_windows.keys().cloned().collect::<Vec<String>>(),
+                            "opening": self.plugin_windows_opening.iter().cloned().collect::<Vec<String>>(),
+                            "closing": self.plugin_windows_closing.iter().cloned().collect::<Vec<String>>(),
+                            "mode": self.plugin_panel.as_ref().map(|p| self.plugin_panel_mode(p, cx).id()),
+                            "installed": crate::plugins::host(cx)
+                                .installed
+                                .iter()
+                                .map(|p| serde_json::json!({ "id": p.id, "enabled": p.enabled, "active": p.active() }))
+                                .collect::<Vec<_>>(),
+                        },
                     })
                 );
             }
@@ -3184,6 +3221,46 @@ impl Workbench {
                 }
             }
             "plugin-install" => self.install_builtin_plugin(argument.to_string(), window, cx),
+            // `plugin-market refresh|install <id>|update-all|uninstall <id>`: the marketplace's
+            // own buttons, so its paths can be driven without the mouse.
+            "plugin-market" => self.debug_market(argument, window, cx),
+            // `plugin-enable <plugin> on|off`: the switch on the Plugins page, which is also how a
+            // panel (and a panel's own window) is meant to go away when its plugin does.
+            "plugin-enable" => {
+                if let Some((plugin, state)) = argument.split_once(' ') {
+                    self.set_plugin_enabled_debug(plugin, state.trim() == "on", cx);
+                }
+            }
+            // `plugin-mode <plugin> push|overlay|window|full`: how its panel opens.
+            "plugin-mode" => {
+                if let Some((plugin, mode)) = argument.split_once(' ') {
+                    if let Some(mode) = agentty_bridge::plugins::manifest::PanelMode::from_id(mode.trim()) {
+                        self.set_plugin_panel_mode(plugin, mode, window, cx);
+                    }
+                }
+            }
+            // `plugin-event <plugin> <element> <event> [value]`: what a click or a keystroke in a
+            // plugin's panel sends, without the mouse.
+            "plugin-event" => {
+                let mut parts = argument.splitn(4, ' ');
+                if let (Some(plugin), Some(element), Some(event)) = (parts.next(), parts.next(), parts.next()) {
+                    let value = parts.next().map(|value| serde_json::Value::String(value.to_string()));
+                    let event = agentty_bridge::plugins::ui::UiEvent {
+                        element: element.to_string(),
+                        event: event.to_string(),
+                        value,
+                        item: None,
+                        action: None,
+                    };
+                    self.send_plugin_event(plugin, event, cx);
+                }
+            }
+            // `plugin-folder <path>`: the "Install from folder" button without its file picker.
+            "plugin-folder" => {
+                let result = agentty_bridge::plugins::store::install_from_folder(std::path::Path::new(argument));
+                eprintln!("plugin-folder: {:?}", result.as_ref().map(|p| p.id.clone()).map_err(|e| format!("{e:#}")));
+                self.after_install_debug(result, window, cx);
+            }
             // `prompt-agent claude|codex|shell` picks the agent in the open "Send to…" dialog.
             "prompt-agent" => {
                 if let Some(dialog) = self.prompt_dialog.as_mut() {
@@ -3219,7 +3296,7 @@ impl Workbench {
                         plugin.id,
                         plugin.enabled,
                         runtime.map(|r| r.state.clone()),
-                        panel.chars().take(600).collect::<String>(),
+                        panel.chars().take(8000).collect::<String>(),
                         runtime.map(|r| r.logs.iter().rev().take(6).cloned().collect::<Vec<_>>())
                     );
                 }

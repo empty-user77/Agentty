@@ -1345,7 +1345,10 @@ strings! {
     "plugins.install_continue" => ["Install and Continue", "설치 후 계속", "インストールして続行", "安装并继续"],
     "plugins.installed_ok" => ["{name} is installed", "{name} 설치 완료", "{name} をインストールしました", "已安装 {name}"],
     "plugins.uninstall" => ["Uninstall", "제거", "アンインストール", "卸载"],
-    "plugins.confirm_uninstall" => ["Click again to uninstall", "한 번 더 누르면 제거", "もう一度押すと削除", "再次点击以卸载"],
+    "plugins.update_wants" => ["Update — it now wants: {perms}", "업데이트 — 추가 요구: {perms}", "アップデート — 追加で要求: {perms}", "更新 — 新增请求：{perms}"],
+    "plugins.update_confirm" => ["Click again to update and allow it", "한 번 더 누르면 업데이트하고 허용", "もう一度押すと更新して許可", "再次点击以更新并允许"],
+    "plugins.update_all_asking" => ["{n} ask for more than they had — update those one at a time.", "{n}개는 이전보다 많은 권한을 요구합니다 — 하나씩 업데이트하세요.", "{n} 件は以前より多くを要求しています — 個別に更新してください。", "{n} 个请求的权限比原来多 — 请逐个更新。"],
+    "plugins.confirm_uninstall" => ["Click again to remove it and its data", "한 번 더 누르면 데이터까지 제거", "もう一度押すとデータごと削除", "再次点击，连同数据一起卸载"],
     "plugins.uninstalled" => ["{name} was uninstalled", "{name}을(를) 제거했습니다", "{name} を削除しました", "已卸载 {name}"],
     "plugins.enable" => ["Enable", "사용", "有効にする", "启用"],
     "plugins.disable" => ["Disable", "사용 안 함", "無効にする", "停用"],
@@ -1376,10 +1379,63 @@ strings! {
     "plugins.requires_found" => ["{name} app found on this Mac", "{name} 앱이 이 맥에 있음", "{name} アプリを検出", "已在本机找到 {name} 应用"],
     "plugins.requires_missing" => ["Works with {name}", "{name}와 함께 사용", "{name} と連携します", "配合 {name} 使用"],
     "plugins.get_app" => ["Get {name}", "{name} 설치하기", "{name} を入手", "获取 {name}"],
-    "plugins.perm.prompt" => ["Send prompts (you choose where)", "프롬프트 보내기 (위치는 직접 선택)", "プロンプト送信 (送信先は選択)", "发送提示词（由你选择位置）"],
-    "plugins.perm.terminal" => ["Type into terminals", "터미널에 입력", "ターミナルへ入力", "向终端输入"],
+    "plugins.perm.prompt" => ["Start agent sessions and send them prompts", "에이전트 세션 시작·프롬프트 전송", "エージェントのセッション開始・プロンプト送信", "启动智能体会话并发送提示词"],
+    "plugins.perm.terminal" => ["Type into terminals and press Enter", "터미널에 입력하고 Enter까지", "ターミナルへ入力し Enter まで", "向终端输入并回车"],
     "plugins.perm.session" => ["Read AI conversations", "AI 대화 읽기", "AI の会話を読む", "读取 AI 对话"],
     "plugins.perm.workspace" => ["See workspaces and folders", "작업공간·폴더 보기", "ワークスペースとフォルダを参照", "查看工作区和文件夹"],
+    "plugins.market" => ["Marketplace", "마켓플레이스", "マーケットプレイス", "插件市场"],
+    "plugins.market_kept" => ["The list read {when} ago, while a new one is read.", "{when} 전에 읽은 목록입니다. 새로 읽는 중.", "{when} 前に読み込んだ一覧です。新しく読み込み中。", "这是 {when} 前读取的列表，正在重新读取。"],
+    "plugins.market_kept_now" => ["The list read a moment ago, while a new one is read.", "방금 읽은 목록입니다. 새로 읽는 중.", "先ほど読み込んだ一覧です。新しく読み込み中。", "这是刚刚读取的列表，正在重新读取。"],
+    "plugins.update_all" => ["Update all ({n})", "모두 업데이트 ({n})", "すべて更新 ({n})", "全部更新 ({n})"],
+    "plugins.update_to" => ["Update to {version}", "{version}로 업데이트", "{version} に更新", "更新到 {version}"],
+    "plugins.market_loading" => ["Reading the marketplace…", "마켓플레이스를 읽는 중…", "マーケットプレイスを読み込み中…", "正在读取插件市场…"],
+    "plugins.market_failed" => ["The marketplace could not be reached.", "마켓플레이스에 연결하지 못했습니다.", "マーケットプレイスに接続できませんでした。", "无法连接插件市场。"],
+    "plugins.market_empty" => ["Nothing is offered yet.", "아직 등록된 플러그인이 없습니다.", "まだ登録されたプラグインはありません。", "市场中还没有插件。"],
+    "plugins.needs_newer" => ["This plugin needs a newer Agentty. Update Agentty to install it.", "이 플러그인은 더 최신 Agentty가 필요합니다. Agentty를 업데이트한 뒤 설치하세요.", "このプラグインには新しい Agentty が必要です。Agentty を更新してからインストールしてください。", "该插件需要更新版本的 Agentty。请先更新 Agentty 再安装。"],
+    "plugins.market_note" => ["Agentty downloads the module, checks it against the checksum above and refuses it if they differ. Only WebAssembly plugins are offered here: they reach nothing but what the permissions allow.", "Agentty가 모듈을 내려받아 위 체크섬과 대조하고, 다르면 설치하지 않습니다. 여기에는 WebAssembly 플러그인만 올라옵니다 — 권한으로 허용된 것 외에는 아무것도 접근하지 못합니다.", "Agentty はモジュールをダウンロードし、上のチェックサムと照合して、違えば拒否します。ここに並ぶのは WebAssembly プラグインだけで、権限で許した以外には何も触れません。", "Agentty 会下载模块并与上面的校验和比对，不一致则拒绝安装。这里只提供 WebAssembly 插件：除权限允许之外，它们什么都碰不到。"],
+    "plugins.downloading" => ["Downloading {name}…", "{name} 내려받는 중…", "{name} をダウンロード中…", "正在下载 {name}…"],
+    "plugins.info.license" => ["Licence", "라이선스", "ライセンス", "许可证"],
+    "plugins.info.size" => ["Size", "크기", "サイズ", "大小"],
+    "plugins.info.checksum" => ["Checksum", "체크섬", "チェックサム", "校验和"],
+    "plugins.mode" => ["How it opens", "열리는 방식", "開き方", "打开方式"],
+    "plugins.mode.push" => ["Beside the terminals", "터미널 옆에 (밀어서)", "ターミナルの横に", "在终端旁边"],
+    "plugins.mode.overlay" => ["Floating over the window", "창 위에 띄워서", "ウィンドウの上に重ねて", "浮在窗口上方"],
+    "plugins.mode.window" => ["In a window of its own", "별도 창으로", "独立したウィンドウで", "独立窗口"],
+    "plugins.mode.full" => ["Filling the whole area", "전체 화면으로", "全体に広げて", "占满整个区域"],
+    "plugins.perm.net" => ["Make HTTP requests", "HTTP 요청 보내기", "HTTP リクエストを送る", "发送 HTTP 请求"],
+    "plugins.perm.prompt.body" => ["It can open an agent session of its own and send it text, without asking. A plugin may instead let you pick where a prompt goes; one that a link reached always has to.", "묻지 않고 자체 에이전트 세션을 열어 텍스트를 보낼 수 있습니다. 플러그인이 보낼 위치를 물어볼 수도 있고, 링크로 실행된 경우에는 반드시 물어봅니다.", "確認なしに自分のエージェントセッションを開いてテキストを送れます。送信先をあなたに選ばせることもでき、リンクから実行された場合は必ずそうなります。", "可以不征求同意地开启自己的智能体会话并发送文本。插件也可以让你选择发往哪里；由链接触发时则必须如此。"],
+    "plugins.perm.terminal.body" => ["It can type into any open terminal and press Enter — including a shell, where that runs the command.", "열려 있는 어느 터미널에든 입력하고 Enter를 누를 수 있습니다. 셸이라면 그 명령이 실행됩니다.", "開いているどのターミナルにも入力し、Enter を押せます。シェルならそのコマンドが実行されます。", "可以在任何已打开的终端中输入并回车；如果是 shell，那就是执行命令。"],
+    "plugins.perm.session.body" => ["It can read what you and the agents wrote in open sessions.", "열려 있는 세션에서 사용자와 에이전트가 주고받은 내용을 읽을 수 있습니다.", "開いているセッションでのやり取りを読めます。", "可以读取已打开会话中你与智能体的对话。"],
+    "plugins.perm.workspace.body" => ["It can see your workspaces, tabs, folder paths and agent status.", "작업공간·탭·폴더 경로·에이전트 상태를 볼 수 있습니다.", "ワークスペース、タブ、フォルダのパス、エージェントの状態を参照できます。", "可以查看工作区、标签页、文件夹路径和智能体状态。"],
+    "plugins.perm.net.body" => ["It can send HTTP requests to addresses it chooses. Agentty adds no cookie or credential of yours.", "플러그인이 정한 주소로 HTTP 요청을 보낼 수 있습니다. Agentty의 쿠키나 자격 증명은 함께 보내지 않습니다.", "プラグインが指定したアドレスへ HTTP リクエストを送れます。Agentty のクッキーや資格情報は付きません。", "可以向它指定的地址发送 HTTP 请求。Agentty 不会附带你的 Cookie 或凭据。"],
+    "plugins.perm.combo" => ["This plugin can both read your work and send requests out. Install it only if you trust it.", "이 플러그인은 작업 내용을 읽으면서 외부로 요청도 보낼 수 있습니다. 신뢰할 때만 설치하세요.", "このプラグインは作業内容を読み、外部へリクエストも送れます。信頼できる場合のみ導入してください。", "该插件既能读取你的工作内容，也能向外发送请求。请仅在信任时安装。"],
+    "plugins.perm.none" => ["This plugin asks for nothing: it can draw its panel and no more.", "요청하는 권한이 없습니다. 패널을 그리는 것 외에는 아무것도 못 합니다.", "要求する権限はありません。パネルを描く以外は何もできません。", "该插件不请求任何权限，只能绘制自己的面板。"],
+    "plugins.search" => ["Search plugins", "플러그인 검색", "プラグインを検索", "搜索插件"],
+    "plugins.no_matches" => ["Nothing matches that.", "검색 결과가 없습니다.", "一致するものがありません。", "没有匹配项。"],
+    "plugins.tab.details" => ["Details", "정보", "詳細", "详情"],
+    "plugins.tab.permissions" => ["Permissions", "권한", "権限", "权限"],
+    "plugins.tab.logs" => ["Log", "로그", "ログ", "日志"],
+    "plugins.pick_one" => ["Pick a plugin on the left to see what it does, what it may reach and how it is running.", "왼쪽에서 플러그인을 고르면 기능·권한·실행 상태를 볼 수 있습니다.", "左でプラグインを選ぶと、機能・権限・実行状態が見られます。", "在左侧选择插件，查看它的功能、权限和运行状态。"],
+    "plugins.contributes" => ["What it adds", "추가하는 기능", "追加される機能", "它添加的功能"],
+    "plugins.info" => ["About", "정보", "情報", "信息"],
+    "plugins.info.identifier" => ["Identifier", "식별자", "識別子", "标识符"],
+    "plugins.info.version" => ["Version", "버전", "バージョン", "版本"],
+    "plugins.info.publisher" => ["Publisher", "만든 곳", "提供元", "发布者"],
+    "plugins.info.runtime" => ["Runs as", "실행 방식", "実行形式", "运行方式"],
+    "plugins.info.source" => ["Installed from", "설치 경로", "インストール元", "安装来源"],
+    "plugins.info.folder" => ["Folder", "폴더", "フォルダ", "文件夹"],
+    "plugins.runtime.node" => ["Node.js program", "Node.js 프로그램", "Node.js プログラム", "Node.js 程序"],
+    "plugins.runtime.python" => ["Python program", "Python 프로그램", "Python プログラム", "Python 程序"],
+    "plugins.runtime.executable" => ["Program on your computer", "내 컴퓨터의 실행 파일", "このパソコンの実行ファイル", "本机可执行程序"],
+    "plugins.runtime.wasm" => ["WebAssembly, inside Agentty", "WebAssembly (Agentty 안에서 실행)", "WebAssembly (Agentty 内で実行)", "WebAssembly（在 Agentty 内运行）"],
+    "plugins.runtime.wasm_note" => ["It runs in Agentty with no way out: no files, no processes, no network of its own. Everything it does goes through the permissions above.", "Agentty 안에서만 돌아가며 빠져나갈 길이 없습니다. 파일·프로세스·자체 네트워크가 없고, 모든 동작은 위 권한을 거칩니다.", "Agentty 内だけで動き、外へ出る手段はありません。ファイルもプロセスも独自の通信もなく、すべて上の権限を通ります。", "只在 Agentty 内运行且无法逃逸：没有文件、进程或自有网络，一切都要经过上述权限。"],
+    "plugins.runtime.process_note" => ["It runs as a program of yours, with everything you can reach on this computer.", "사용자 권한으로 실행되는 프로그램이라, 이 컴퓨터에서 사용자가 할 수 있는 모든 것에 접근할 수 있습니다.", "あなたの権限で動くプログラムなので、このパソコンであなたができることはすべてできます。", "它以你的权限作为程序运行，能访问你在这台电脑上能访问的一切。"],
+    "plugins.surface" => ["Panel", "패널", "パネル", "面板"],
+    "plugins.surface.sidebar" => ["{name} — icon in the activity bar", "{name} — 왼쪽 사이드 메뉴 아이콘", "{name} — アクティビティバーのアイコン", "{name} — 活动栏图标"],
+    "plugins.surface.pane" => ["{name} — icon above the terminals", "{name} — 터미널 위쪽 아이콘", "{name} — ターミナル上部のアイコン", "{name} — 终端上方图标"],
+    "plugins.surface.status" => ["{name} — icon in the status bar", "{name} — 하단 상태바 아이콘", "{name} — ステータスバーのアイコン", "{name} — 状态栏图标"],
+    "plugins.commands" => ["Commands", "명령", "コマンド", "命令"],
+    "plugins.new" => ["New plugin", "새 플러그인", "新しいプラグイン", "新建插件"],
     "plugins.perm.unknown" => ["Unknown permission", "알 수 없는 권한", "不明な権限", "未知权限"],
     "plugins.create_title" => ["Create a plugin with AI", "AI로 플러그인 만들기", "AI でプラグインを作成", "用 AI 创建插件"],
     "plugins.create_body" => ["Name it and describe what it should do. Agentty sets up the plugin with the SDK and guide, then Claude Code builds it in a new workspace.", "이름과 원하는 기능을 적으면, Agentty가 SDK와 가이드가 포함된 플러그인을 만들고 새 작업공간에서 Claude Code가 구현합니다.", "名前と機能を入力すると、Agentty が SDK とガイド付きのプラグインを用意し、新しいワークスペースで Claude Code が実装します。", "填写名称和功能，Agentty 会创建含 SDK 和指南的插件，并在新工作区中由 Claude Code 实现。"],
@@ -1575,6 +1631,52 @@ mod tests {
         for key in ["ext.open_folder", "terminal.reveal_file", "ext.mcp_secret_warning", "ext.conn_secret", "ext.conn_security"] {
             if let Some(row) = platform_row(key) {
                 assert!(row.iter().all(|s| !s.is_empty()) && lookup(key).is_some(), "{key}");
+            }
+        }
+    }
+
+    /// Every language of a string fills in the same values.
+    ///
+    /// `tf` replaces `{name}` with what the caller passed. A language that lost one during an
+    /// edit does not fail, and does not look wrong in the source — it silently drops the number,
+    /// the filename or the plugin name for everyone reading in that language, and nobody reading
+    /// the English would ever see it. This is the shape of mistake that translating one language
+    /// at a time makes.
+    #[test]
+    fn every_language_of_a_string_fills_in_the_same_values() {
+        fn placeholders(text: &str) -> std::collections::BTreeSet<String> {
+            let mut found = std::collections::BTreeSet::new();
+            let mut rest = text;
+            while let Some(open) = rest.find('{') {
+                rest = &rest[open + 1..];
+                // `{{` is a literal brace, not a placeholder.
+                if rest.starts_with('{') {
+                    rest = &rest[1..];
+                    continue;
+                }
+                let Some(close) = rest.find('}') else { break };
+                let name = &rest[..close];
+                // A placeholder is a name; anything else is prose that happens to have braces
+                // around it, like a JSON example.
+                if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+                    found.insert(name.to_string());
+                }
+                rest = &rest[close + 1..];
+            }
+            found
+        }
+
+        let languages = ["English", "Korean", "Japanese", "Chinese"];
+        for key in KEYS {
+            let row = lookup(key).unwrap();
+            let expected = placeholders(row[0]);
+            for (index, text) in row.iter().enumerate().skip(1) {
+                let found = placeholders(text);
+                assert_eq!(
+                    found, expected,
+                    "{key}: the {} text fills in {found:?} where the English fills in {expected:?}",
+                    languages[index]
+                );
             }
         }
     }

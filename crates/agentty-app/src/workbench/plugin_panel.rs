@@ -8,7 +8,7 @@ use crate::plugins::{self, RunState};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
-use agentty_bridge::plugins::manifest::When;
+use agentty_bridge::plugins::manifest::{PanelMode, Surface, When};
 use agentty_bridge::plugins::ui::{Gap, Node, TextStyle, Tone, UiEvent, Variant};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, SharedString, Subscription, Window};
 use std::time::Duration;
@@ -45,21 +45,24 @@ impl Workbench {
     /// Creates and syncs the panel's text fields; called from render before drawing.
     pub(super) fn prepare_plugin_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(plugin) = self.plugin_panel.clone() else {
+            self.reconcile_plugin_windows(window, cx);
             self.plugin_inputs.clear();
             return;
         };
-        // A plugin that was disabled or removed closes its panel.
+        // A plugin that was disabled or removed closes its panel, and its own window with it.
         if plugins::plugin(cx, &plugin).is_none_or(|p| !p.active()) {
-            self.plugin_panel = None;
+            self.drop_plugin_panel(&plugin, cx);
+            self.reconcile_plugin_windows(window, cx);
             self.plugin_inputs.clear();
             return;
         }
+        self.reconcile_plugin_windows(window, cx);
         let mut fields = Vec::new();
         if let Some(tree) = plugins::runtime(cx, &plugin).and_then(|r| r.panel.as_ref()) {
             tree.inputs(&mut fields);
         }
-        self.plugin_inputs.retain(|(owner, id), _| *owner == plugin && fields.iter().any(|(field, _, _)| field == id));
-        for (id, placeholder, value) in fields {
+        self.plugin_inputs.retain(|(owner, id), _| *owner == plugin && fields.iter().any(|field| field.id == *id));
+        for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows } in fields {
             let key = (plugin.clone(), id.clone());
             if let Some(existing) = self.plugin_inputs.get_mut(&key) {
                 if existing.applied != value {
@@ -76,7 +79,8 @@ impl Workbench {
             }
             // Built empty and filled, so the caret sits at the end instead of selecting everything.
             let input = cx.new(|cx| {
-                let mut input = TextInput::new("", placeholder, window, cx);
+                // More than one row is a text area: Enter adds a line and a paste keeps its own.
+                let mut input = TextInput::new("", placeholder, window, cx).multiline(rows);
                 input.set_text(value.clone(), cx);
                 input
             });
@@ -130,9 +134,9 @@ impl Workbench {
         }
     }
 
-    pub(super) fn render_plugin_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let plugin_id = self.plugin_panel.clone()?;
-        let width = self.plugin_panel_width(cx);
+    /// The panel itself — its header and what the plugin drew — without saying where it sits.
+    pub(super) fn render_plugin_panel_contents(&self, plugin_id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let plugin_id = plugin_id.to_string();
         let plugin = plugins::plugin(cx, &plugin_id)?.clone();
         let manifest = plugin.manifest.clone()?;
         let close = icon_only_close(cx);
@@ -177,6 +181,17 @@ impl Workbench {
             )
             .child(
                 crate::ui::icon_only(
+                    "plugin-panel-layout",
+                    "layout-panel-left",
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.plugin_mode_menu = !this.plugin_mode_menu;
+                        cx.notify();
+                    }),
+                )
+                .tooltip(Tooltip::text(t(cx, "plugins.mode"), None)),
+            )
+            .child(
+                crate::ui::icon_only(
                     "plugin-panel-manage",
                     "settings",
                     cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -187,6 +202,8 @@ impl Workbench {
                 .tooltip(Tooltip::text(t(cx, "plugins.manage"), None)),
             )
             .child(close);
+
+        let mode_menu = self.plugin_mode_menu.then(|| self.render_panel_mode_menu(&plugin_id, cx));
 
         let body: AnyElement = match (tree, state) {
             (_, RunState::Failed(error)) => div()
@@ -216,13 +233,13 @@ impl Workbench {
 
         Some(
             div()
-                .w(px(width))
-                .flex_shrink_0()
-                .h_full()
+                .size_full()
                 .flex()
                 .flex_col()
                 .bg(hex(Chrome::PANEL))
+                .relative()
                 .child(header)
+                .children(mode_menu)
                 .child(
                     div()
                         .id("plugin-panel-scroll")
@@ -237,6 +254,91 @@ impl Workbench {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// The panel docked beside the terminals, which move over to make room. `None` unless that is
+    /// how this panel opens.
+    pub(super) fn render_plugin_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let plugin_id = self.plugin_panel.clone()?;
+        if self.plugin_panel_mode(&plugin_id, cx) != PanelMode::Push {
+            return None;
+        }
+        let width = self.plugin_panel_width(cx);
+        let contents = self.render_plugin_panel_contents(&plugin_id, cx)?;
+        Some(div().w(px(width)).flex_shrink_0().h_full().child(contents).into_any_element())
+    }
+
+    /// The panel drawn over the terminals: floating at the right edge, or filling the area. A
+    /// panel in a window of its own is drawn there, not here.
+    pub(super) fn render_plugin_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let plugin_id = self.plugin_panel.clone()?;
+        let mode = self.plugin_panel_mode(&plugin_id, cx);
+        if matches!(mode, PanelMode::Push | PanelMode::Window) {
+            return None;
+        }
+        let contents = self.render_plugin_panel_contents(&plugin_id, cx)?;
+        let panel = match mode {
+            // Floating: above the row at its right edge, with its own edge to drag.
+            PanelMode::Overlay => div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(px(self.plugin_panel_shown_width(cx)))
+                .flex()
+                .shadow_lg()
+                .child(self.render_side_splitter(super::side_panels::SidePanel::Plugin, cx))
+                .child(div().flex_1().min_w_0().h_full().border_l_1().border_color(hex(Chrome::BORDER)).child(contents)),
+            // The whole area the terminals and pages use.
+            _ => div().absolute().inset_0().flex().child(div().size_full().child(contents)),
+        };
+        Some(panel.into_any_element())
+    }
+
+    /// The menu behind the panel's layout button: where this panel opens.
+    fn render_panel_mode_menu(&self, plugin_id: &str, cx: &mut Context<Self>) -> AnyElement {
+        let current = self.plugin_panel_mode(plugin_id, cx);
+        let mut menu = div()
+            .absolute()
+            .top(px(30.))
+            .right(px(4.))
+            .w(px(220.))
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(hex(Chrome::OVERLAY_BORDER))
+            .bg(hex(Chrome::OVERLAY))
+            .shadow_lg()
+            .flex()
+            .flex_col();
+        for mode in PanelMode::ALL.iter().copied() {
+            let (key, glyph) = match mode {
+                PanelMode::Push => ("plugins.mode.push", "columns-2"),
+                PanelMode::Overlay => ("plugins.mode.overlay", "layout-panel-left"),
+                PanelMode::Window => ("plugins.mode.window", "app-window"),
+                PanelMode::Full => ("plugins.mode.full", "maximize-2"),
+            };
+            let plugin = plugin_id.to_string();
+            menu = menu.child(
+                div()
+                    .id(SharedString::from(format!("plugin-panel-mode-{}", mode.id())))
+                    .px_2()
+                    .py_1p5()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .when(mode == current, |d| d.bg(hex(Chrome::SELECTED)))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.plugin_mode_menu = false;
+                        this.set_plugin_panel_mode(&plugin, mode, window, cx);
+                    }))
+                    .child(icon(glyph, IconSize::INLINE, hex(if mode == current { Chrome::BRIGHT } else { Chrome::MUTED })))
+                    .child(div().flex_1().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, key))),
+            );
+        }
+        menu.into_any_element()
     }
 
     fn render_plugin_node(&self, plugin: &str, node: &Node, path: &mut Vec<usize>, cx: &mut Context<Self>) -> AnyElement {
@@ -507,20 +609,36 @@ impl Workbench {
         }
     }
 
-    /// Tab-strip buttons of enabled plugins that have a panel.
-    pub(super) fn render_plugin_header_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let entries: Vec<(String, String, &'static str, String)> = plugins::active(cx)
+    /// Enabled plugins whose panel sits on `surface`: (id, title, icon, badge).
+    fn plugin_surface_entries(&self, surface: Surface, cx: &Context<Self>) -> Vec<(String, String, &'static str, String)> {
+        plugins::active(cx)
             .filter_map(|(plugin, manifest)| {
-                let panel = manifest.contributes.panel.as_ref()?;
+                let panel = manifest.contributes.panel.as_ref().filter(|_| manifest.surface() == surface)?;
                 let glyph = icon_named(panel.icon.as_deref().or(manifest.icon.as_deref()));
                 let badge = plugins::runtime(cx, &plugin.id).map(|r| r.badge.clone()).unwrap_or_default();
                 Some((plugin.id.clone(), panel.title.clone(), glyph, badge))
             })
-            .collect();
-        entries
+            .collect()
+    }
+
+    /// Whether this plugin's panel is the one on screen.
+    fn plugin_panel_open(&self, id: &str) -> bool {
+        self.plugin_panel.as_deref() == Some(id) && self.page.is_none()
+    }
+
+    /// An icon on any of the three surfaces: opens or closes the panel, wherever that panel goes.
+    pub(super) fn toggle_plugin_surface(&mut self, plugin: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        // The window the panel may need is opened by `reconcile_plugin_windows` on the next
+        // render, the same as for every other way a panel opens.
+        self.toggle_plugin_panel(plugin, cx);
+    }
+
+    /// Tab-strip buttons of plugins that put their panel there (the default surface).
+    pub(super) fn render_plugin_header_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.plugin_surface_entries(Surface::Pane, cx)
             .into_iter()
             .map(|(id, title, glyph, badge)| {
-                let open = self.plugin_panel.as_deref() == Some(id.as_str()) && self.page.is_none();
+                let open = self.plugin_panel_open(&id);
                 let target = id.clone();
                 div()
                     .id(SharedString::from(format!("header-plugin-{id}")))
@@ -538,8 +656,84 @@ impl Workbench {
                     .cursor_pointer()
                     .when(open, |d| d.bg(hex(Chrome::SELECTED)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_plugin_panel(&target, cx)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_plugin_surface(&target, window, cx)))
                     .child(icon(glyph, IconSize::BUTTON, hex(if open { Chrome::BRIGHT } else { Chrome::FOREGROUND })))
+                    .when(!badge.is_empty(), |d| d.child(div().t_caption().text_color(hex(Chrome::BRIGHT)).child(badge)))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Activity-bar items of plugins that ask for the sidebar. They look and behave like
+    /// Agentty's own items, and the bar scrolls once there are more than fit.
+    pub(super) fn render_plugin_activity_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.plugin_surface_entries(Surface::Sidebar, cx)
+            .into_iter()
+            .map(|(id, title, glyph, badge)| {
+                let open = self.plugin_panel_open(&id);
+                let target = id.clone();
+                let element_id = SharedString::from(format!("activity-plugin-{id}"));
+                div()
+                    .id(element_id.clone())
+                    .group(element_id.clone())
+                    .tooltip(Tooltip::text(title, None))
+                    .w_full()
+                    .h(px(48.))
+                    .flex_shrink_0()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .border_l_2()
+                    .border_color(if open { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_plugin_surface(&target, window, cx)))
+                    .child(
+                        icon(glyph, IconSize::ACTIVITY, if open { hex(Chrome::BRIGHT) } else { hex(0x858585) })
+                            .group_hover(element_id, |s| s.text_color(hex(Chrome::BRIGHT))),
+                    )
+                    .when(!badge.is_empty(), |d| {
+                        // The bar is only so wide: enough of the badge to read at a glance.
+                        let badge: String = badge.chars().take(3).collect();
+                        d.child(
+                            div()
+                                .absolute()
+                                .bottom(px(6.))
+                                .right(px(4.))
+                                .px_1()
+                                .rounded_sm()
+                                .bg(hex(Chrome::ACCENT))
+                                .t_caption()
+                                .text_color(hex(Chrome::BRIGHT))
+                                .child(badge),
+                        )
+                    })
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Status-bar items of plugins that ask for the bottom bar, at the left end of it.
+    pub(super) fn render_plugin_status_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.plugin_surface_entries(Surface::Status, cx)
+            .into_iter()
+            .map(|(id, title, glyph, badge)| {
+                let open = self.plugin_panel_open(&id);
+                let target = id.clone();
+                div()
+                    .id(SharedString::from(format!("status-plugin-{id}")))
+                    .tooltip(Tooltip::text(title, None))
+                    .h_full()
+                    .px_1p5()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_1()
+                    .cursor_pointer()
+                    .when(open, |d| d.bg(hex(Chrome::SELECTED)))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_plugin_surface(&target, window, cx)))
+                    .child(icon(glyph, 13., hex(if open { Chrome::BRIGHT } else { Chrome::MUTED })))
                     .when(!badge.is_empty(), |d| d.child(div().t_caption().text_color(hex(Chrome::BRIGHT)).child(badge)))
                     .into_any_element()
             })

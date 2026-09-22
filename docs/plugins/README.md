@@ -12,11 +12,13 @@ written in any language; the Node.js SDK makes it a few lines.
 - [Quick start](#quick-start)
 - [Manifest](#manifest-agentty-pluginjson)
 - [Node.js SDK](#nodejs-sdk)
+- [Rust and WebAssembly](#rust-and-webassembly)
 - [Panel UI](#panel-ui)
 - [Context](#context)
 - [Sending prompts](#sending-prompts)
 - [Sessions and terminals](#sessions-and-terminals)
 - [Links from other apps](#links-from-other-apps)
+- [The marketplace](#the-marketplace)
 - [Permissions and safety](#permissions-and-safety)
 - [Developing, debugging and sharing](#developing-debugging-and-sharing)
 - [Protocol for other languages](protocol.md)
@@ -87,7 +89,7 @@ appears in the tab strip, the command in the palette (⇧⌘P) and as a button a
 | `id` | required | 2–40 characters `a-z 0-9 -`; must equal the folder name |
 | `name`, `version` | required | shown in the store; `version` is `major.minor.patch` |
 | `main` | required | entry point, relative to the plugin folder |
-| `runtime` | `node` | `node` (Node.js 18+ from the login shell PATH), `python` (`python3 main`), or `executable` |
+| `runtime` | `node` | `node` (Node.js 18+ from the login shell PATH), `python` (`python3 main`), `executable`, or `wasm` (see [Rust and WebAssembly](#rust-and-webassembly)) |
 | `apiVersion` | `1` | plugin API version the plugin was written for |
 | `description`, `publisher`, `homepage`, `keywords` | | store listing; `homepage` must be `https://` |
 | `links` | `[]` | up to 6 `{ "label", "url" }` (https) shown as buttons on the store card — project site, docs, source |
@@ -96,7 +98,7 @@ appears in the tab strip, the command in the palette (⇧⌘P) and as a button a
 | `permissions` | `[]` | see [Permissions](#permissions-and-safety) |
 | `activationEvents` | `[]` | `["onStartup"]` starts the plugin with Agentty; otherwise on first use |
 | `detect` | `[]` | paths (`~` allowed) of an app the plugin integrates with; found → "Recommended" in the store |
-| `contributes.panel` | | `{ "title", "icon" }` — a panel docked right of the terminals |
+| `contributes.panel` | | `{ "title", "icon", "surface", "mode" }` — the panel the plugin fills with UI. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom). `mode` picks how it opens: `push` (default, docked beside the terminals), `overlay` (floating over them), `window` (a window of its own) or `full` (the whole area). The user can change the mode and their choice is kept |
 | `contributes.commands[]` | | `{ "id", "title", "description", "icon", "paneBar", "when", "palette" }` |
 
 Commands appear in the command palette (unless `"palette": false`). With `"paneBar": true` they also
@@ -149,6 +151,66 @@ settings and caches), `AGENTTY_VERSION`, `AGENTTY_LANGUAGE`, `AGENTTY_BIN`.
 > Never write to stdout yourself (`console.log`): stdout carries the protocol. Use `plugin.log()` or
 > `console.error()`.
 
+## Rust and WebAssembly
+
+A plugin can also be a compiled program. `"runtime": "wasm"` makes `main` a `.wasm` module that
+Agentty runs inside itself, so one file works on macOS, Windows and Linux and the plugin reaches
+nothing of yours: no files, no processes, no network of its own. Everything goes through the
+protocol, where the permissions above are checked.
+
+The Rust SDK is `sdk/rust` in the
+[marketplace repository](https://github.com/empty-user77/Agentty-Marketplace/tree/main/sdk/rust), beside the plugins written with it:
+
+```toml
+# Cargo.toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+agentty-plugin = { path = "…/sdk/rust" }   # or a git dependency on that repository
+```
+
+```rust
+use agentty_plugin::{export_plugin, ui, Host, Plugin, UiEvent};
+
+#[derive(Default)]
+struct Hello {
+    clicks: u32,
+}
+
+impl Plugin for Hello {
+    fn panel_open(&mut self, host: &Host) {
+        host.set_panel(ui::column(vec![
+            ui::text(format!("Clicked {} times", self.clicks)),
+            ui::button("go", "Click me"),
+        ]));
+    }
+
+    fn ui_event(&mut self, host: &Host, event: UiEvent) {
+        if event.element == "go" {
+            self.clicks += 1;
+            self.panel_open(host);
+        }
+    }
+}
+
+export_plugin!(Hello);
+```
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown
+cp target/wasm32-unknown-unknown/release/hello.wasm hello.wasm   # next to agentty-plugin.json
+```
+
+Then **Plugins → Install from Folder…** and pick the folder, or publish it and add it to the
+[marketplace](https://github.com/empty-user77/Agentty-Marketplace). Two worked examples are there, source and all:
+[`hello-rust`](https://github.com/empty-user77/Agentty-Marketplace/tree/main/src/hello-rust) (a panel and a counter, no permissions at all)
+and [`agent-rest-client`](https://github.com/empty-user77/Agentty-Marketplace/tree/main/src/agent-rest-client) (an HTTP client with
+environments, a collection and a proxy, `net.request`). Both install from **Plugins →
+Marketplace**. The wire format and the module's ABI are in
+[the protocol](protocol.md#webassembly-plugins).
+
 ## Panel UI
 
 The panel is the area a plugin owns (360 px wide, scrolls vertically). Plugins describe it as a tree
@@ -168,9 +230,11 @@ something changes; text fields keep what the user typed unless you send a differ
 | `ui.badge(text, tone)` | `neutral` `info` `success` `warning` `error` | |
 | `ui.spinner(text)` · `ui.divider()` | | |
 
-Limits: 2 000 elements, 12 levels, 20 000 characters per text. Null/false children are skipped, so
-`cond && ui.text(…)` works. Panel updates are drawn at most every 50 ms, notifications at most one
-per 700 ms, and a plugin that sends more than 240 messages a second is stopped as a runaway.
+Limits: 2 000 elements, 12 levels, 20 000 characters per string. An element is anything drawn, so
+a choice's options and a list item's buttons count as well as the nodes around them; every string
+is cut, not only the text ones. Null/false children are skipped, so `cond && ui.text(…)` works.
+Panel updates are drawn at most every 50 ms, notifications at most one per 700 ms, and a plugin
+that sends more than 240 messages a second is stopped as a runaway.
 
 ### Icons
 
@@ -221,6 +285,10 @@ await plugin.injectPrompt({
 - `active` types into the focused pane, `pane` into `paneId`, `workspace` into `workspaceId`,
   `newWorkspace` / `newTab` start a new session with the prompt.
 - Terminals (`shell`) only ever get the text typed in — Enter is never pressed for `injectPrompt`.
+  `sendToTerminal` is the other thing, and it does press Enter, in a shell as well.
+- Every target but `ask` goes straight through, so `prompt.inject` alone is enough to open a
+  session and set an agent to work on something the user has not read. That is what an
+  [AgentOS](agentos.md) is built on, and it is why the permission says so.
 - Prompts over 60 000 bytes are saved to `~/.agentty/prompts/` and the agent is asked to read the file.
 
 Prefer `ask` for anything a user starts from another app or a link.
@@ -254,24 +322,80 @@ with `encodeURIComponent`. If the plugin is a built-in one that isn't installed,
 install it and then continues with the link.
 
 Links can come from anywhere, including web pages. Validate every parameter (the Cosmica plugin only
-opens `.md` files inside the Cosmica notes folder). For a minute after a link reaches a plugin,
-Agentty routes that plugin's `injectPrompt` calls through **Send to…** and refuses `sendToTerminal` —
-clicks in the panel the link opened don't lift this, so a link can't turn one click into typing
-inside a terminal.
+opens `.md` files inside the Cosmica notes folder). Once a link has reached a plugin, and for as
+long as that plugin keeps running, Agentty routes its `injectPrompt` calls through **Send to…**
+without pressing Enter and refuses `sendToTerminal` outright. Neither a click in the panel the link
+opened nor simply waiting lifts it — a plugin can wait as easily as a user can click — so a link
+cannot turn one click into typing inside a terminal. Restarting the plugin is what clears it.
+
+The one thing a plugin the link reached can still do outside Agentty is `openUrl`, and Agentty
+meters it at one address every 700 ms — it needs no permission, and without that a plugin could
+open a browser tab for every message it is allowed to send. So treat what a link carries as text
+from a stranger: never open an address it hands you without knowing what it is.
+
+## The marketplace
+
+**Plugins → Marketplace** lists what
+[Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers. Plugins are added there by pull request, and what is
+offered is **a WebAssembly module whose source is public** — on GitHub, GitLab, Codeberg or
+SourceHut — and nothing else. Agentty's own plugins
+are there too, on the same footing: nothing is bundled into the application. A plugin that runs as a program of yours (`node`, `python`, an executable) has
+everything you have; Agentty installs those from a folder or a Git repository, where you chose the
+source yourself.
+
+Installing one:
+
+1. Agentty reads `index.json` over HTTPS. Every entry is checked again here — its id, its text, its
+   permissions, the host its module comes from — and an entry that does not check out is left out
+   of the list rather than shown.
+2. The Plugins page shows what the plugin is, where its source is, its licence, the size of the
+   module and its checksum, and **what it may do** as full sentences under Permissions.
+3. On Install, Agentty downloads the module and refuses it unless it is exactly the length the
+   entry claims, hashes to the checksum the entry claims, and begins with the bytes that make a
+   file a WebAssembly module. Nothing reaches the plugins folder before all three hold — the
+   length and the magic matter as much as the hash, because a hash only proves the bytes are the
+   ones the entry meant, not that they are a module.
+
+A module is served from `github.com`, `raw.githubusercontent.com` or `objects.githubusercontent.com`
+and nowhere else, whatever the entry says. Its `size` is the module's exact length rather than a
+ceiling, so it changes with every build.
+
+An entry says which plugin protocol its module is built against (`apiVersion`, `1` when left out).
+An Agentty that speaks an older one still lists the plugin, but says it needs a newer Agentty
+instead of offering to install it, and does not count a version it cannot run as an update to one
+already installed. Without that, a plugin written against a later protocol would install anywhere
+and fail at the first call the older app does not have.
+
+Submitting one is `CONTRIBUTING.md` in that repository: build the module, publish it as a release
+asset, and open a pull request with an entry naming its URL, checksum and size.
+
+`AGENTTY_MARKETPLACE_INDEX` points Agentty at another list while you are writing one. A module may
+be served from a release of a repository, or from the same host as the list itself.
 
 ## Permissions and safety
 
 | Permission | Allows |
 |---|---|
-| `prompt.inject` | `injectPrompt` |
-| `terminal.write` | `sendToTerminal` — typing into open panes without asking |
+| `prompt.inject` | `injectPrompt` — including opening an agent session of its own, without asking. Only `target: "ask"` puts the prompt in front of the user first, and only a plugin a link reached is forced to use it |
+| `terminal.write` | `sendToTerminal` — typing into any open pane and pressing Enter, a shell pane included, where that runs the command |
 | `session.read` | `getSession` — reading AI conversations |
 | `workspace.read` | `listWorkspaces` |
+| `net.request` | `net/fetch` — HTTP requests to addresses the plugin chooses |
 
-The store shows these before installing. A call without its permission fails with code `-32001`.
+`storage/get`, `storage/set` and `storage/keys` need no permission: they are the plugin's own
+folder (`<data dir>/plugin-data/<id>/storage.json`, `0600`), up to 64 keys and a megabyte. A
+WebAssembly plugin has no files of its own, so that is how it remembers anything.
 
-Plugins run as your user with the same file and network access as any program you start, so only
-install plugins you trust. When writing one:
+The store shows these before installing, and an update that asks for more than the installed
+version had says so and takes a second press; "Update all" leaves those out rather than taking
+them quietly. A call without its permission fails with code `-32001`.
+
+A plugin with `runtime` `node`, `python` or `executable` runs as your user, with the same file and
+network access as any program you start, so only install those if you trust them. A `wasm` plugin
+does not: it reaches only what this protocol gives it, whatever its code says. The Plugins page
+names which of the two a plugin is, under **About → Runs as**.
+
+When writing one:
 
 - Ask only for the permissions you use.
 - Never read or send credentials. If you read another app's config, pick just the fields you need

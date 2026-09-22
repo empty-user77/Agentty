@@ -5,6 +5,55 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Plugins can be written as compiled programs: a Rust crate built for WebAssembly, shipped as one
+  `.wasm` file that works on macOS, Windows and Linux. Agentty runs the module itself and hands it
+  three functions — send a message, write a log line, read the clock — so such a plugin has no
+  files, no processes and no network of its own, whatever its code says, and everything it asks for
+  goes through the permissions in its manifest. The Rust SDK and two worked examples live in the
+  [marketplace repository](https://github.com/empty-user77/Agentty-Marketplace), which is where
+  plugins are published.
+- A plugin panel opens the way it suits: docked beside the terminals (as before), floating over the
+  window, in a window of its own that can be moved and resized, or filling the whole area. The
+  plugin says which it prefers; the layout button in the panel's header changes it and remembers.
+  A docked panel can no longer be dragged so wide that the rest of the window is squeezed — past
+  what fits, it becomes an overlay.
+- Plugins choose where their panel is reached from: the activity bar on the left (`sidebar`), the
+  tab strip above the terminals (`pane`, where they have always been) or the status bar at the
+  bottom (`status`). The activity bar scrolls once there are more items than fit.
+- `net.request`: a plugin may make HTTP requests to addresses it chooses. Agentty bounds the
+  method, the headers, the body and response sizes, the redirects and the time, sends nothing of
+  yours with the request, and writes each call to the plugin's log with the URL redacted. A request
+  can go through an HTTP proxy the plugin names. Every address a redirect names is checked like the
+  first one, and what was given for one host is not carried to another.
+- Agentty bundles no plugin modules: the ones it used to carry are published like everyone else's,
+  with their source and their checksum where anyone can read them.
+- The marketplace list is kept between runs, so the Plugins page has something to show before the
+  network answers — and still does when it cannot reach it, saying how old what it shows is.
+  Plugins with a newer version in the marketplace say so in the list, and **Update all** takes
+  them one after another.
+- A plugin can put text on the clipboard (`host/copy`) — what a panel's "copy this" button needs.
+  Agent Rest Client uses it for **Copy as cURL**: the request as it would actually be sent, with
+  the environment's values filled in and every value quoted so a shell reads it back as one.
+- A marketplace: **Plugins → Marketplace** lists what
+  [Agentty-Marketplace](https://github.com/empty-user77/Agentty-Marketplace) offers, and installing
+  one downloads its module and checks it against the checksum in the listing — a module that does
+  not match is refused before anything is written. Only WebAssembly plugins are offered there, so
+  what you install from a list reaches nothing but the permissions you saw before installing it.
+  Plugins you keep to yourself are still installed from a folder or a Git repository.
+- Agent Rest Client, installed from the marketplace in one click. An HTTP client as a plugin: requests with headers, a body and authorization;
+  environments whose values fill in `{{placeholders}}` everywhere in a request; a collection of
+  saved requests; a proxy and a timeout; and the response with its status, time, size, headers and
+  pretty-printed JSON.
+- Plugins can keep things between runs (`storage/get`, `storage/set`, `storage/keys`): one
+  document in the plugin's own folder, up to 64 keys and a megabyte, in a file only you can read.
+  A plugin needs no permission for its own folder, and what it kept goes when it is uninstalled.
+- A panel's text field can be a text area (`"rows": 10`): Enter adds a line, a paste keeps its line
+  breaks, and Up and Down walk through the lines. For request bodies and anything else that is
+  longer than a line.
+- The Plugins page is a list beside details: search, then the plugin's description, what it adds
+  and where, its permissions in full sentences, where it came from, how it runs and its log.
+
 ## [0.1.14] - 2026-09-22
 
 ### Added

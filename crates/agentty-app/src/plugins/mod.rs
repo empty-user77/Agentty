@@ -2,6 +2,7 @@
 //! their calls to the window they concern. Plugins are shared by every Agentty window.
 
 pub mod process;
+pub mod wasm;
 
 use agentty_bridge::plugins::manifest::Manifest;
 use agentty_bridge::plugins::store::{self, InstalledPlugin};
@@ -22,8 +23,17 @@ const LOG_BYTES: usize = 256 * 1024;
 const MAX_MESSAGES_PER_SECOND: u32 = 240;
 /// Windows are refreshed at most this often, however many messages arrive.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
+/// Characters a plugin may put on the clipboard at once.
+const MAX_COPY_CHARS: usize = 100_000;
+/// Characters of `ui/setBadge` kept — what fits beside a plugin's icon.
+const MAX_BADGE_CHARS: usize = 8;
 /// One notification per plugin per this long; the rest are dropped.
 const NOTIFY_INTERVAL: Duration = Duration::from_millis(700);
+/// The shortest gap between two URLs one plugin may open in the browser.
+const OPEN_URL_INTERVAL: Duration = Duration::from_millis(700);
+/// `net/fetch` calls one plugin may have in flight. A request holds a background thread until it
+/// answers or times out, so a plugin cannot open as many as it likes.
+const MAX_CONCURRENT_FETCHES: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunState {
@@ -42,15 +52,16 @@ pub struct Runtime {
     /// Bumped on every start, so events from an old process are ignored.
     generation: u64,
     stopping: bool,
-    /// A link reached this plugin, so what it asks for next may be the link author's wish rather
-    /// than the user's. Set for the rest of the process's life — see [`Runtime::link_guarded`].
-    link_tainted: bool,
     /// Messages seen in the current second, for the flood limit.
     rate_window: Option<(Instant, u32)>,
     /// When this plugin last showed a notification.
     notified_at: Option<Instant>,
+    /// When this plugin last had a URL opened in the browser.
+    opened_url_at: Option<Instant>,
     /// Bytes currently kept in `logs`.
     log_bytes: usize,
+    /// `net/fetch` calls this plugin has in flight.
+    fetches: u32,
 }
 
 impl Runtime {
@@ -63,10 +74,11 @@ impl Runtime {
             process: None,
             generation: 0,
             stopping: false,
-            link_tainted: false,
             rate_window: None,
             notified_at: None,
+            opened_url_at: None,
             log_bytes: 0,
+            fetches: 0,
         }
     }
 
@@ -83,17 +95,6 @@ impl Runtime {
         }
     }
 
-    /// A link reached this plugin, so it may be acting for whoever wrote the link — any website can
-    /// open one. While this holds, the plugin cannot type into a terminal and its prompts have to
-    /// go through the "Send to…" dialog.
-    ///
-    /// Nothing lifts it while the process runs: a click in the panel the link opened is not consent
-    /// to type into a terminal, and neither is waiting, which a plugin can simply do (`setTimeout`)
-    /// before acting on the text the link gave it. Restarting the plugin clears it.
-    fn link_guarded(&self) -> bool {
-        self.link_tainted
-    }
-
     /// Counts a message and reports whether the plugin is flooding Agentty.
     fn over_rate_limit(&mut self) -> bool {
         let now = Instant::now();
@@ -107,6 +108,26 @@ impl Runtime {
                 false
             }
         }
+    }
+
+    /// The process this runtime had is going, and whatever it still sends belongs to a plugin
+    /// that no longer runs. The requests it left in the air go with it: they run to their
+    /// timeout, but they are not part of what the next one is allowed to have outstanding —
+    /// otherwise a plugin restarted mid-request could make none of its own for a minute.
+    fn abandon(&mut self) {
+        self.generation += 1;
+        self.fetches = 0;
+    }
+
+    /// Whether a URL may be opened now. `host/openUrl` needs no permission — a plugin's "read
+    /// this in your browser" button — and the flood limit only ends a plugin after 240 messages,
+    /// which is 240 browser tabs. One at a time is all a button ever needs.
+    fn may_open_url(&mut self) -> bool {
+        let allowed = self.opened_url_at.is_none_or(|at| at.elapsed() >= OPEN_URL_INTERVAL);
+        if allowed {
+            self.opened_url_at = Some(Instant::now());
+        }
+        allowed
     }
 
     /// Whether a notification may be shown now (the rest are dropped).
@@ -128,6 +149,11 @@ pub struct Envelope {
 pub struct PluginHost {
     pub installed: Vec<InstalledPlugin>,
     runtimes: HashMap<String, Runtime>,
+    /// Plugins a link has reached. Held here rather than on the runtime, so that a plugin cannot
+    /// shed the guard by letting its process end: it would come back untainted, read the link's
+    /// text out of its own storage — which needs no permission — and type it into a terminal.
+    /// Only the user restarting it from the Plugins page clears this.
+    link_tainted: std::collections::HashSet<String>,
     tx: UnboundedSender<Envelope>,
     next_request: u64,
     /// Bumped whenever something visible changes.
@@ -144,6 +170,7 @@ pub fn init(cx: &mut App) -> UnboundedReceiver<Envelope> {
     let (tx, rx) = unbounded();
     cx.set_global(PluginHost {
         installed: store::installed(),
+        link_tainted: std::collections::HashSet::new(),
         runtimes: HashMap::new(),
         tx,
         next_request: 1,
@@ -261,7 +288,6 @@ fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
     let runtime = host.runtimes.entry(id.to_string()).or_insert_with(Runtime::new);
     runtime.generation += 1;
     runtime.stopping = false;
-    runtime.link_tainted = false;
     runtime.state = RunState::Starting;
     runtime.log(format!("— starting {} {} —", plugin.name(), plugin.manifest.as_ref().map_or("", |m| m.version.as_str())));
     let generation = runtime.generation;
@@ -317,8 +343,9 @@ pub fn open_link(
     if !ensure_started(id, &context, cx) {
         return false;
     }
-    if let Some(runtime) = host_mut(cx).runtimes.get_mut(id) {
-        runtime.link_tainted = true;
+    let host = host_mut(cx);
+    host.link_tainted.insert(id.to_string());
+    if let Some(runtime) = host.runtimes.get_mut(id) {
         runtime.log(format!("link: {path}"));
     }
     notify_plugin(id, "url/open", json!({ "path": path, "query": query, "url": url, "context": context }), cx)
@@ -343,7 +370,7 @@ pub fn stop(id: &str, cx: &mut App) {
             process.stop();
         }
         // Whatever the old process still sends while it shuts down is ignored.
-        runtime.generation += 1;
+        runtime.abandon();
         runtime.state = RunState::Stopped;
         runtime.panel = None;
         runtime.badge.clear();
@@ -351,8 +378,23 @@ pub fn stop(id: &str, cx: &mut App) {
     touch(cx);
 }
 
+/// Whether a link has reached this plugin, so what it asks for next may be the link author's wish
+/// rather than the user's — any website can open one. While this holds, the plugin cannot type
+/// into a terminal and its prompts go through the "Send to…" dialog.
+///
+/// Nothing lifts it but the user restarting the plugin. Not a click in the panel the link opened,
+/// which is not consent to type into a terminal; not waiting, which a plugin can do as easily as
+/// a user can click; and not the plugin's own process ending, which it can arrange — it would
+/// otherwise come back untainted, read the link's text back out of its own storage (which needs
+/// no permission) and carry on.
+pub fn link_guarded(id: &str, cx: &App) -> bool {
+    host(cx).link_tainted.contains(id)
+}
+
+/// The user asking for the plugin to start again — the one thing that clears a link's guard.
 pub fn restart(id: &str, cx: &mut App) {
     stop(id, cx);
+    host_mut(cx).link_tainted.remove(id);
     ensure_started(id, &default_context(cx), cx);
 }
 
@@ -400,7 +442,7 @@ pub fn handle(envelope: Envelope, cx: &mut App) {
                 // let it go through `stop`, which asks, then signals, rather than dropping it.
                 if let Some(process) = runtime.process.take() {
                     runtime.stopping = true;
-                    runtime.generation += 1;
+                    runtime.abandon();
                     process.stop();
                 }
             }
@@ -450,7 +492,7 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             cx,
         );
     }
-    let guarded = host(cx).runtimes.get(plugin_id).is_some_and(Runtime::link_guarded);
+    let guarded = link_guarded(plugin_id, cx);
     match method {
         "ui/setPanel" => {
             let tree = Node::from_value(params.get("tree").cloned().unwrap_or(Value::Null));
@@ -471,7 +513,7 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             reply(Ok(Value::Null), cx)
         }
         "ui/setBadge" => {
-            let text: String = params.get("text").and_then(Value::as_str).unwrap_or_default().chars().take(8).collect();
+            let text: String = params.get("text").and_then(Value::as_str).unwrap_or_default().chars().take(MAX_BADGE_CHARS).collect();
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
                 runtime.badge = text;
             }
@@ -486,14 +528,56 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             })),
             cx,
         ),
+        "net/fetch" => fetch(plugin_id, request_id, params, cx),
+        // The plugin's own folder: what it keeps between runs. A wasm plugin has no files of its
+        // own, so without this it forgets everything each time it starts.
+        "storage/get" | "storage/set" | "storage/keys" => {
+            use agentty_bridge::plugins::storage;
+            let key = params.get("key").and_then(Value::as_str).unwrap_or_default().to_string();
+            let result = match method {
+                "storage/get" => storage::get(plugin_id, &key).map(|value| json!({ "key": key, "value": value })),
+                "storage/set" => storage::set(plugin_id, &key, params.get("value").cloned().unwrap_or(Value::Null)).map(|()| Value::Null),
+                _ => storage::keys(plugin_id).map(|keys| Value::Array(keys.into_iter().map(Value::String).collect())),
+            };
+            // A key that is not a key is the plugin's mistake; a folder that cannot be read is
+            // the machine's, and a plugin that cannot tell them apart retries the wrong one.
+            let code = match method {
+                "storage/keys" => codes::INTERNAL,
+                _ if storage::valid_key(&key) => codes::INTERNAL,
+                _ => codes::INVALID_PARAMS,
+            };
+            reply(result.map_err(|err| (code, format!("{err:#}"))), cx)
+        }
+        "host/copy" => {
+            let text = params.get("text").and_then(Value::as_str).unwrap_or_default();
+            if text.is_empty() {
+                return reply(Err((codes::INVALID_PARAMS, "nothing to copy".into())), cx);
+            }
+            // Bounded: the clipboard is the user's, and a plugin should not be able to fill it.
+            let text: String = text.chars().take(MAX_COPY_CHARS).collect();
+            // Writing to the clipboard is quiet by nature — what replaced what the user had
+            // copied is at least in the plugin's log.
+            if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
+                runtime.log(format!("copied {} characters to the clipboard", text.chars().count()));
+            }
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+            reply(Ok(Value::Null), cx)
+        }
         "host/openUrl" => {
             let url = params.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
-            if url.starts_with("https://") || url.starts_with("http://") {
-                cx.open_url(&url);
-                reply(Ok(Value::Null), cx)
-            } else {
-                reply(Err((codes::INVALID_PARAMS, "only http(s) URLs can be opened".into())), cx)
+            if !(url.starts_with("https://") || url.starts_with("http://")) {
+                return reply(Err((codes::INVALID_PARAMS, "only http(s) URLs can be opened".into())), cx);
             }
+            if !host_mut(cx).runtimes.get_mut(plugin_id).is_some_and(Runtime::may_open_url) {
+                // Refused rather than dropped: a plugin that opens a URL on a click has one click
+                // to answer for, and a plugin looping sees that it is being held back.
+                if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
+                    runtime.log(format!("openUrl held back: {}", agentty_bridge::extensions::redact_url(&url)));
+                }
+                return reply(Err((codes::UNAVAILABLE, "one URL at a time".into())), cx);
+            }
+            cx.open_url(&url);
+            reply(Ok(Value::Null), cx)
         }
         "host/revealPath" => {
             let path = std::path::PathBuf::from(params.get("path").and_then(Value::as_str).unwrap_or_default());
@@ -529,6 +613,72 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             }
         }
     }
+}
+
+/// `net/fetch`: the plugin's own HTTP request, made on a background thread and answered when it
+/// comes back. Agentty adds nothing to it — no cookie, no stored credential, no header of its own
+/// beyond what the HTTP client must set — so a plugin reaches exactly what it was given.
+fn fetch(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else {
+        // Nothing to answer: a request nobody waits for is not worth a network call.
+        if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
+            runtime.log("net/fetch needs a request id to be answered");
+        }
+        return;
+    };
+    let request: agentty_bridge::plugins::net::FetchRequest = match serde_json::from_value(params) {
+        Ok(request) => request,
+        Err(err) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("invalid request: {err}"))), cx),
+    };
+    let generation = host(cx).runtimes.get(&id).map_or(0, |runtime| runtime.generation);
+    // The log is the user's view of what a plugin reached; a token in the URL stays out of it.
+    let line = format!("{} {}", request.method.to_uppercase(), agentty_bridge::extensions::redact_url(&request.url));
+    let accepted = match host_mut(cx).runtimes.get_mut(&id) {
+        Some(runtime) if runtime.fetches < MAX_CONCURRENT_FETCHES => {
+            runtime.fetches += 1;
+            runtime.log(line);
+            true
+        }
+        Some(_) => false,
+        None => return,
+    };
+    if !accepted {
+        let message = format!("more than {MAX_CONCURRENT_FETCHES} requests at once");
+        return respond(&id, &request_id, Err((codes::UNAVAILABLE, message)), cx);
+    }
+    let task = cx.background_executor().spawn(async move { agentty_bridge::plugins::net::fetch(&request) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = cx.update(|cx| {
+            let answer = {
+                let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
+                // The plugin was restarted while this was in the air: the answer belongs to a
+                // plugin that is gone, and its request id means nothing to the one running now.
+                // Its place in the count went with it — `stop` cleared the count, and taking one
+                // off now would be taking it off the requests the new one has in the air.
+                if runtime.generation != generation {
+                    return;
+                }
+                runtime.fetches = runtime.fetches.saturating_sub(1);
+                match result {
+                    Ok(response) => {
+                        runtime.log(format!("  → {} ({} bytes, {} ms)", response.status, response.bytes, response.duration_ms));
+                        serde_json::to_value(response).map_err(|err| (codes::INTERNAL, err.to_string()))
+                    }
+                    Err(err) => {
+                        let message = format!("{err:#}");
+                        // The message may quote the URL, and a URL may carry a token.
+                        runtime.log(format!("  → failed: {}", agentty_bridge::extensions::mask_words(&message)));
+                        Err((codes::INVALID_PARAMS, message))
+                    }
+                }
+            };
+            touch(cx);
+            respond(&id, &request_id, answer, cx);
+        });
+    })
+    .detach();
 }
 
 /// A plugin call that needs a window (prompts, terminals, sessions, notifications).
@@ -585,12 +735,46 @@ mod tests {
     }
 
     #[test]
-    fn the_link_guard_holds_through_clicks_and_waiting() {
+    fn one_url_at_a_time() {
         let mut runtime = Runtime::new();
-        assert!(!runtime.link_guarded());
-        runtime.link_tainted = true;
-        // Neither a click in the panel the link opened nor simply waiting is consent to type into
-        // a terminal; a plugin can wait as easily as the user can click.
-        assert!(runtime.link_guarded(), "a link arrived and nothing since then lifts the guard");
+        assert!(runtime.may_open_url());
+        assert!(!runtime.may_open_url(), "a plugin cannot open a second URL straight away");
+        runtime.opened_url_at = Some(Instant::now() - OPEN_URL_INTERVAL);
+        assert!(runtime.may_open_url());
+    }
+
+    #[test]
+    fn a_restart_does_not_inherit_the_requests_of_the_plugin_before_it() {
+        let mut runtime = Runtime::new();
+        runtime.fetches = MAX_CONCURRENT_FETCHES;
+        let before = runtime.generation;
+        runtime.abandon();
+        assert!(runtime.generation > before, "answers meant for the old plugin are told apart");
+        assert_eq!(runtime.fetches, 0, "the new plugin starts with nothing in the air");
+    }
+
+    #[test]
+    fn the_link_guard_survives_the_plugin_that_earned_it() {
+        // The guard is a set on the host, not a flag on the process, and that is the whole point:
+        // a plugin can end its own process. It would come back with a clean flag, read the link's
+        // text out of its own storage — which needs no permission — and type it into a terminal.
+        let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
+        assert!(!tainted.contains("plugin"));
+        tainted.insert("plugin".into());
+
+        // What used to clear it: the process ending and starting again.
+        let mut runtime = Runtime::new();
+        runtime.abandon();
+        assert!(tainted.contains("plugin"), "a restart the plugin arranged is not consent");
+
+        // Neither a click in the panel the link opened nor simply waiting is consent either; a
+        // plugin can wait as easily as a user can click, so the guard carries no clock at all.
+        runtime.notified_at = Some(Instant::now() - Duration::from_secs(3600));
+        runtime.opened_url_at = Some(Instant::now() - Duration::from_secs(3600));
+        assert!(tainted.contains("plugin"), "an hour of doing other things is not consent");
+
+        // Only the user pressing Restart, which is the one place that removes it.
+        tainted.remove("plugin");
+        assert!(!tainted.contains("plugin"));
     }
 }

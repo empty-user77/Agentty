@@ -68,6 +68,12 @@ pub struct TextInput {
     masked: bool,
     /// Multi-line pastes are handed to the owner (`PastedLines`) instead of being joined.
     keep_pasted_lines: bool,
+    /// Rows shown when the field holds many lines; 0 is the usual one-line field.
+    rows: usize,
+    /// First line drawn, when the text is taller than `rows`.
+    scroll_line: usize,
+    /// Each visible line of the last paint: where it starts in the content, and its layout.
+    last_lines: Vec<(usize, ShapedLine)>,
     /// Right-click menu, at the position it was opened.
     menu_at: Option<Point<Pixels>>,
     _blur: Option<gpui::Subscription>,
@@ -105,6 +111,9 @@ impl TextInput {
             is_selecting: false,
             masked: false,
             keep_pasted_lines: false,
+            rows: 0,
+            scroll_line: 0,
+            last_lines: Vec::new(),
             menu_at: None,
             _blur: Some(blur),
         }
@@ -125,6 +134,62 @@ impl TextInput {
     pub fn keep_pasted_lines(mut self) -> Self {
         self.keep_pasted_lines = true;
         self
+    }
+
+    /// A field of `rows` lines: Enter adds a line, Up and Down move through them, and a paste
+    /// keeps its line breaks. One row or none is the usual single-line field.
+    pub fn multiline(mut self, rows: usize) -> Self {
+        self.rows = rows;
+        self
+    }
+
+    /// Whether this field holds more than one line.
+    pub fn is_multiline(&self) -> bool {
+        self.rows > 1
+    }
+
+    fn line_starts(&self) -> Vec<usize> {
+        line_starts(&self.content)
+    }
+
+    /// The line an offset is on, and where that line starts.
+    fn line_at(&self, offset: usize) -> (usize, usize) {
+        line_at(&self.content, offset)
+    }
+
+    /// The end of a line (before its newline).
+    fn line_end(&self, line: usize) -> usize {
+        line_end(&self.content, line)
+    }
+
+    /// The offset a line above or below the cursor, keeping the same place across the line.
+    fn offset_line_away(&self, offset: usize, down: bool) -> usize {
+        let starts = self.line_starts();
+        let (line, start) = self.line_at(offset);
+        let target = match down {
+            true if line + 1 < starts.len() => line + 1,
+            false if line > 0 => line - 1,
+            // Already at the top or the bottom: to the start or the end of the text, as a
+            // one-line field would.
+            _ => return if down { self.content.len() } else { 0 },
+        };
+        let target_start = starts[target];
+        let target_end = self.line_end(target);
+        // The same x on the other line when it has been laid out; the same column otherwise.
+        let x = self.last_lines.iter().find(|(from, _)| *from == start).map(|(_, layout)| layout.x_for_index(offset - start));
+        match (x, self.last_lines.iter().find(|(from, _)| *from == target_start)) {
+            (Some(x), Some((_, layout))) => target_start + layout.closest_index_for_x(x).min(target_end - target_start),
+            _ => (target_start + (offset - start)).min(target_end),
+        }
+    }
+
+    fn move_line(&mut self, down: bool, select: bool, cx: &mut Context<Self>) {
+        let offset = self.offset_line_away(self.cursor_offset(), down);
+        if select {
+            self.select_to(offset, cx);
+        } else {
+            self.move_to(offset, cx);
+        }
     }
 
     pub fn text(&self) -> &str {
@@ -176,11 +241,14 @@ impl TextInput {
     }
 
     fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
+        // In a field of many lines, Home is the start of the line, as everywhere else.
+        let offset = if self.is_multiline() { self.line_at(self.cursor_offset()).1 } else { 0 };
+        self.move_to(offset, cx);
     }
 
     fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.content.len(), cx);
+        let offset = if self.is_multiline() { self.line_end(self.line_at(self.cursor_offset()).0) } else { self.content.len() };
+        self.move_to(offset, cx);
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -199,6 +267,12 @@ impl TextInput {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            // A field of many lines takes the lines; a one-line field joins them, unless its
+            // owner asked for them (`keep_pasted_lines`).
+            if self.is_multiline() {
+                self.replace_text_in_range(None, &text, window, cx);
+                return;
+            }
             if self.keep_pasted_lines && text.trim().contains('\n') {
                 cx.emit(TextInputEvent::PastedLines(text.to_string()));
                 return;
@@ -254,6 +328,9 @@ impl TextInput {
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        if self.is_multiline() {
+            return self.index_for_mouse_in_lines(position);
+        }
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) else { return 0 };
         if self.content.is_empty() || position.y < bounds.top() {
             return 0;
@@ -268,6 +345,18 @@ impl TextInput {
             return self.content.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(self.content.len());
         }
         index
+    }
+
+    /// The offset under the mouse in a field of many lines: the row it is over, then the place
+    /// across that row.
+    fn index_for_mouse_in_lines(&self, position: Point<Pixels>) -> usize {
+        let (Some(bounds), false) = (self.last_bounds.as_ref(), self.last_lines.is_empty()) else { return self.cursor_offset() };
+        let height = (bounds.bottom() - bounds.top()) / self.last_lines.len() as f32;
+        let row = ((position.y - bounds.top()) / height).floor().max(0.) as usize;
+        let row = row.min(self.last_lines.len() - 1);
+        let (start, layout) = &self.last_lines[row];
+        let end = self.line_end(self.line_at(*start).0);
+        (start + layout.closest_index_for_x(position.x - bounds.left())).min(end)
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -391,6 +480,17 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        // A field of many lines: the range is on one of the drawn lines, and the candidate
+        // window belongs under that line rather than under the whole field.
+        if self.is_multiline() {
+            let range = self.range_from_utf16(&range_utf16);
+            let height = (bounds.bottom() - bounds.top()) / self.last_lines.len().max(1) as f32;
+            let (row, (start, layout)) = self.last_lines.iter().enumerate().rev().find(|(_, (start, _))| *start <= range.start)?;
+            let top = bounds.top() + height * row as f32;
+            let from = layout.x_for_index(range.start.saturating_sub(*start));
+            let to = layout.x_for_index(range.end.saturating_sub(*start));
+            return Some(Bounds::from_corners(point(bounds.left() + from, top), point(bounds.left() + to, top + height)));
+        }
         let last_layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
         Some(Bounds::from_corners(
@@ -407,14 +507,40 @@ impl EntityInputHandler for TextInput {
     }
 }
 
+/// Where each line of `content` starts.
+fn line_starts(content: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    starts.extend(content.match_indices('\n').map(|(index, _)| index + 1));
+    starts
+}
+
+/// The line an offset is on, and where that line starts.
+fn line_at(content: &str, offset: usize) -> (usize, usize) {
+    let starts = line_starts(content);
+    let line = starts.iter().rposition(|start| *start <= offset).unwrap_or(0);
+    (line, starts[line])
+}
+
+/// The end of a line, before its newline.
+fn line_end(content: &str, line: usize) -> usize {
+    let starts = line_starts(content);
+    match starts.get(line + 1) {
+        Some(next) => next - 1,
+        None => content.len(),
+    }
+}
+
 struct TextElement {
     input: Entity<TextInput>,
 }
 
 struct PrepaintState {
     line: Option<ShapedLine>,
+    /// A field of many lines: each visible line with the offset it starts at.
+    lines: Vec<(usize, ShapedLine)>,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
+    /// One quad per line a selection covers.
+    selections: Vec<PaintQuad>,
 }
 
 impl IntoElement for TextElement {
@@ -445,7 +571,8 @@ impl Element for TextElement {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        let rows = self.input.read(cx).rows.max(1);
+        style.size.height = (window.line_height() * rows as f32).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -458,6 +585,9 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> PrepaintState {
+        if self.input.read(cx).is_multiline() {
+            return self.prepaint_lines(bounds, window, cx);
+        }
         let input = self.input.read(cx);
         let content = input.content.clone();
         let selected_range = input.selected_range.clone();
@@ -522,7 +652,7 @@ impl Element for TextElement {
                 None,
             )
         };
-        PrepaintState { line: Some(line), cursor, selection }
+        PrepaintState { line: Some(line), lines: Vec::new(), cursor, selections: selection.into_iter().collect() }
     }
 
     fn paint(
@@ -537,12 +667,31 @@ impl Element for TextElement {
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
         window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.input.clone()), cx);
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection)
+        for selection in prepaint.selections.drain(..) {
+            window.paint_quad(selection);
+        }
+        let line_height = window.line_height();
+        let focused = focus_handle.is_focused(window);
+        if !prepaint.lines.is_empty() {
+            let lines = std::mem::take(&mut prepaint.lines);
+            for (index, (_, line)) in lines.iter().enumerate() {
+                let origin = point(bounds.origin.x, bounds.origin.y + line_height * index as f32);
+                let _ = line.paint(origin, line_height, window, cx);
+            }
+            if focused {
+                if let Some(cursor) = prepaint.cursor.take() {
+                    window.paint_quad(cursor);
+                }
+            }
+            self.input.update(cx, |input, _| {
+                input.last_lines = lines;
+                input.last_bounds = Some(bounds);
+            });
+            return;
         }
         let Some(line) = prepaint.line.take() else { return };
-        let _ = line.paint(bounds.origin, window.line_height(), window, cx);
-        if focus_handle.is_focused(window) {
+        let _ = line.paint(bounds.origin, line_height, window, cx);
+        if focused {
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);
             }
@@ -551,6 +700,78 @@ impl Element for TextElement {
             input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
         });
+    }
+}
+
+impl TextElement {
+    /// The same for a field of many lines: every visible line is shaped, the cursor is placed on
+    /// its own line, and a selection becomes one quad per line it covers.
+    fn prepaint_lines(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) -> PrepaintState {
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let line_height = window.line_height();
+        let (content, selected_range, cursor, rows, placeholder) = {
+            let input = self.input.read(cx);
+            let placeholder = input
+                .content
+                .is_empty()
+                .then(|| input.placeholder_key.map_or_else(|| input.placeholder.clone(), |key| crate::i18n::t(cx, key).into()));
+            (input.content.clone(), input.selected_range.clone(), input.cursor_offset(), input.rows.max(1), placeholder)
+        };
+        // Keep the cursor's line in view, and never scroll past text that has since shrunk.
+        let cursor_line = content[..cursor].matches('\n').count();
+        let total = content.split('\n').count();
+        let scroll = self.input.update(cx, |input, _| {
+            input.scroll_line = input.scroll_line.min(total.saturating_sub(1));
+            if cursor_line < input.scroll_line {
+                input.scroll_line = cursor_line;
+            } else if cursor_line >= input.scroll_line + rows {
+                input.scroll_line = cursor_line + 1 - rows;
+            }
+            input.scroll_line
+        });
+
+        let text = placeholder.clone().unwrap_or_else(|| content.clone());
+        let color = if placeholder.is_some() { hex_alpha(Chrome::FOREGROUND, 0.4) } else { style.color };
+        let mut lines = Vec::new();
+        let mut selections = Vec::new();
+        let mut cursor_quad = None;
+        let mut offset = 0;
+        for (index, line_text) in text.split('\n').enumerate() {
+            let start = offset;
+            offset += line_text.len() + 1;
+            if index < scroll || index >= scroll + rows {
+                continue;
+            }
+            let run =
+                TextRun { len: line_text.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
+            let runs = if run.len > 0 { vec![run] } else { Vec::new() };
+            let shaped = window.text_system().shape_line(SharedString::from(line_text.to_string()), font_size, &runs, None);
+            let top = bounds.top() + line_height * (index - scroll) as f32;
+            let end = start + line_text.len();
+            if placeholder.is_none() {
+                if selected_range.is_empty() {
+                    if (start..=end).contains(&cursor) {
+                        let x = bounds.left() + shaped.x_for_index(cursor - start);
+                        cursor_quad = Some(fill(Bounds::new(point(x, top), size(px(1.5), line_height)), hex(Chrome::BLUE)));
+                    }
+                } else if selected_range.start <= end && selected_range.end >= start {
+                    let from = shaped.x_for_index(selected_range.start.saturating_sub(start).min(line_text.len()));
+                    let to = match selected_range.end > end {
+                        // A line inside the selection is covered to its end, and a little past it
+                        // so the line break is visible.
+                        true => shaped.width + px(4.),
+                        false => shaped.x_for_index(selected_range.end - start),
+                    };
+                    selections.push(fill(
+                        Bounds::from_corners(point(bounds.left() + from, top), point(bounds.left() + to, top + line_height)),
+                        hex_alpha(Chrome::ACCENT, 0.45),
+                    ));
+                }
+            }
+            lines.push((start, shaped));
+        }
+        PrepaintState { line: None, lines, cursor: cursor_quad, selections }
     }
 }
 
@@ -646,10 +867,31 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(|_, _: &Confirm, _, cx| cx.emit(TextInputEvent::Confirmed)))
+            // In a field of many lines Enter adds one, and Up and Down walk through them; in a
+            // one-line field they mean what they always did to whoever owns it.
+            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+                if this.is_multiline() {
+                    this.replace_text_in_range(None, "\n", window, cx);
+                } else {
+                    cx.emit(TextInputEvent::Confirmed);
+                }
+            }))
             .on_action(cx.listener(|_, _: &Cancel, _, cx| cx.emit(TextInputEvent::Cancelled)))
-            .on_action(cx.listener(|_, _: &MoveUp, _, cx| cx.emit(TextInputEvent::Up)))
-            .on_action(cx.listener(|_, _: &MoveDown, _, cx| cx.emit(TextInputEvent::Down)))
+            .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
+                if this.is_multiline() {
+                    this.move_line(false, false, cx);
+                } else {
+                    cx.emit(TextInputEvent::Up);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &MoveDown, _, cx| {
+                if this.is_multiline() {
+                    this.move_line(true, false, cx);
+                } else {
+                    cx.emit(TextInputEvent::Down);
+                }
+            }))
+            // The right-click menu is placed against this element.
             .relative()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             // Right-click: emoji and symbols, and the edit commands, the way a text field should.
@@ -672,5 +914,42 @@ impl Render for TextInput {
             .line_height(px(20.))
             .child(TextElement { input: cx.entity() })
             .children(self.render_menu(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEXT: &str = "one\ntwo\n\nfour";
+
+    #[test]
+    fn lines_are_found_by_their_breaks() {
+        assert_eq!(line_starts(TEXT), [0, 4, 8, 9]);
+        assert_eq!(line_starts(""), [0]);
+        // A trailing newline leaves an empty last line, as an editor shows it.
+        assert_eq!(line_starts("a\n"), [0, 2]);
+    }
+
+    #[test]
+    fn an_offset_knows_its_line() {
+        assert_eq!(line_at(TEXT, 0), (0, 0));
+        assert_eq!(line_at(TEXT, 3), (0, 0));
+        // The offset after a newline is on the next line.
+        assert_eq!(line_at(TEXT, 4), (1, 4));
+        assert_eq!(line_at(TEXT, 8), (2, 8));
+        assert_eq!(line_at(TEXT, TEXT.len()), (3, 9));
+        assert_eq!(line_at("", 0), (0, 0));
+    }
+
+    #[test]
+    fn a_line_ends_before_its_newline() {
+        assert_eq!(line_end(TEXT, 0), 3);
+        assert_eq!(line_end(TEXT, 1), 7);
+        // An empty line ends where it starts.
+        assert_eq!(line_end(TEXT, 2), 8);
+        assert_eq!(line_end(TEXT, 3), TEXT.len());
+        // Past the last line: the end of the text, not a panic.
+        assert_eq!(line_end(TEXT, 9), TEXT.len());
     }
 }

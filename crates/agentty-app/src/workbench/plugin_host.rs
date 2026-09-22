@@ -16,6 +16,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// Longest single turn returned by `session/get`.
+/// Characters of a `ui/notify` message shown — a toast, not a page.
+const MAX_NOTIFY_CHARS: usize = 300;
+
 const TURN_TEXT_LIMIT: usize = 20_000;
 
 fn status_id(pane: &Pane, cx: &gpui::App) -> &'static str {
@@ -156,10 +159,16 @@ impl Workbench {
         }
         if let Some(previous) = self.plugin_panel.take() {
             plugins::notify_plugin(&previous, "panel/close", json!({ "context": self.plugin_context(&previous, None, cx) }), cx);
+            self.close_plugin_window(&previous, cx);
         }
+        // A panel that fills the area takes the place of a page, so an open page steps aside.
         self.page = None;
+        self.plugin_mode_menu = false;
         self.plugin_panel = Some(plugin.to_string());
         plugins::notify_plugin(plugin, "panel/open", json!({ "context": self.plugin_context(plugin, None, cx) }), cx);
+        // Already in a window of its own, behind something: bring it forward rather than do
+        // nothing visible. A window it does not have yet is opened by the render that follows.
+        self.activate_plugin_window(plugin, cx);
         cx.notify();
     }
 
@@ -171,9 +180,23 @@ impl Workbench {
         }
     }
 
+    /// Drops a panel whose plugin is being disabled, removed, or is already gone — so without
+    /// telling the plugin, which is no longer there to hear it. The window a panel in `window`
+    /// mode opened goes with it: left behind it stays on screen with nothing to draw, and its
+    /// handle would be reused the next time that plugin's panel opened.
+    pub(super) fn drop_plugin_panel(&mut self, plugin: &str, cx: &mut Context<Self>) {
+        if self.plugin_panel.as_deref() == Some(plugin) {
+            self.plugin_panel = None;
+            self.plugin_mode_menu = false;
+        }
+        self.close_plugin_window(plugin, cx);
+    }
+
     pub(super) fn close_plugin_panel(&mut self, cx: &mut Context<Self>) {
+        self.plugin_mode_menu = false;
         if let Some(previous) = self.plugin_panel.take() {
             plugins::notify_plugin(&previous, "panel/close", json!({ "context": self.plugin_context(&previous, None, cx) }), cx);
+            self.close_plugin_window(&previous, cx);
         }
         cx.notify();
     }
@@ -183,7 +206,7 @@ impl Workbench {
         let params = call.params.clone();
         match call.method.as_str() {
             "ui/notify" => {
-                let message: String = params["message"].as_str().unwrap_or_default().chars().take(300).collect();
+                let message: String = params["message"].as_str().unwrap_or_default().chars().take(MAX_NOTIFY_CHARS).collect();
                 let text = format!("{}: {message}", call.plugin_name);
                 if params["kind"].as_str() == Some("error") {
                     self.set_status(text.clone(), cx);
@@ -450,8 +473,10 @@ impl Workbench {
         if self.page != Some(Page::Plugins) {
             self.open_page(Page::Plugins, cx);
         }
-        // Arriving at a named plugin, its card opens so everything about it is in view.
-        self.plugins_page.expanded = focus.clone();
+        // Arriving at a named plugin, it is the one the page opens on.
+        if focus.is_some() {
+            self.plugins_page.selected = focus.clone();
+        }
         self.plugins_page.focus = focus;
         cx.notify();
     }

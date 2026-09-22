@@ -27,12 +27,52 @@ pub enum ProcessEvent {
     Exited(Option<i32>),
 }
 
-pub struct PluginProcess {
+/// A running plugin, whichever way it runs: as a program of the user's, or as a WebAssembly
+/// module inside Agentty that reaches nothing Agentty does not hand it (see [`super::wasm`]).
+pub enum PluginProcess {
+    Native(NativeProcess),
+    Wasm(super::wasm::WasmPlugin),
+}
+
+impl PluginProcess {
+    pub fn start(plugin: &InstalledPlugin, language: &str, events: impl Fn(ProcessEvent) + Send + Sync + 'static) -> Self {
+        match plugin.manifest.as_ref().map(|m| m.runtime) {
+            Some(Runtime::Wasm) => PluginProcess::Wasm(super::wasm::WasmPlugin::start(plugin, events)),
+            _ => PluginProcess::Native(NativeProcess::start(plugin, language, events)),
+        }
+    }
+
+    pub fn send(&self, line: String) {
+        match self {
+            PluginProcess::Native(process) => process.send(line),
+            PluginProcess::Wasm(plugin) => plugin.send(line),
+        }
+    }
+
+    /// Asks the plugin to exit, then makes sure it is gone.
+    pub fn stop(&self) {
+        match self {
+            PluginProcess::Native(process) => process.stop(),
+            PluginProcess::Wasm(plugin) => plugin.stop(),
+        }
+    }
+
+    /// Ends the plugin before Agentty exits, without waiting for it to agree.
+    pub fn kill(&self) {
+        match self {
+            PluginProcess::Native(process) => process.kill(),
+            // A module has nothing that could outlive Agentty: no process, no file, no socket.
+            PluginProcess::Wasm(plugin) => plugin.stop(),
+        }
+    }
+}
+
+pub struct NativeProcess {
     writer: mpsc::Sender<String>,
     pid: std::sync::Arc<Mutex<Option<u32>>>,
 }
 
-impl PluginProcess {
+impl NativeProcess {
     /// Starts the plugin in the background; `events` receives everything it does. Lines written
     /// before the process is up are delivered once it is.
     pub fn start(plugin: &InstalledPlugin, language: &str, events: impl Fn(ProcessEvent) + Send + Sync + 'static) -> Self {
@@ -237,6 +277,8 @@ fn command(plugin: &InstalledPlugin, language: &str) -> Result<Command, String> 
             command
         }
         Runtime::Executable => Command::new(&entry),
+        // Routed to the interpreter by `PluginProcess::start`; a module is never spawned.
+        Runtime::Wasm => return Err("a WebAssembly plugin does not run as a process".into()),
     };
     agentty_bridge::process::hide_window(&mut command);
     let data = plugin_data_dir(&plugin.id);

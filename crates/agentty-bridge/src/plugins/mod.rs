@@ -5,6 +5,9 @@
 
 pub mod link;
 pub mod manifest;
+pub mod market;
+pub mod net;
+pub mod storage;
 pub mod store;
 pub mod ui;
 
@@ -20,10 +23,19 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("ui/setBadge", None),
     ("host/info", None),
     ("host/openUrl", None),
+    // Puts text on the clipboard: what a plugin's "copy this" button does.
+    ("host/copy", None),
     // Reveals a file in Finder, and tells the plugin whether a path exists: that is the user's
     // folders, so it needs the same permission as reading them.
     ("host/revealPath", Some("workspace.read")),
     ("context/get", None),
+    // The plugin's own folder under `plugin-data`, and nothing else: no permission to ask for.
+    ("storage/get", None),
+    ("storage/set", None),
+    ("storage/keys", None),
+    // The plugin's own HTTP requests. Nothing of Agentty's travels with them: no cookies, no
+    // stored credentials, only what the plugin puts in the request.
+    ("net/fetch", Some("net.request")),
     ("prompt/inject", Some("prompt.inject")),
     ("terminal/send", Some("terminal.write")),
     ("session/get", Some("session.read")),
@@ -226,5 +238,183 @@ mod tests {
         assert_eq!(request.target, PromptTarget::NewWorkspace);
         assert!(!request.submit);
         assert_eq!(spill_long_prompt("short", None).unwrap(), "short");
+    }
+}
+
+#[cfg(test)]
+mod robustness {
+    //! Everything a plugin, a marketplace or a link can put in front of Agentty, in shapes nobody
+    //! meant. None of it may panic: a plugin that can crash the app it runs inside is worse than
+    //! one that does nothing.
+
+    use serde_json::{json, Value};
+
+    /// Values of every shape, nested, for any field that takes one.
+    fn awkward_values() -> Vec<Value> {
+        let mut values = vec![
+            Value::Null,
+            json!(true),
+            json!(0),
+            json!(-1),
+            json!(u64::MAX),
+            json!(i64::MIN),
+            json!(1.5e308),
+            json!(""),
+            json!("   "),
+            json!("\0\u{7f}\u{feff}"),
+            json!("../../etc/passwd"),
+            json!("\u{202e}gnp.exe"),
+            json!("😀".repeat(200)),
+            json!("a".repeat(100_000)),
+            json!([]),
+            json!({}),
+            json!([[[[[[[[[[1]]]]]]]]]]),
+            json!({ "a": { "b": { "c": { "d": {} } } } }),
+        ];
+        // A deep-ish array, well inside what serde_json will parse.
+        let mut nested = json!(1);
+        for _ in 0..64 {
+            nested = json!([nested]);
+        }
+        values.push(nested);
+        values
+    }
+
+    /// Each field of `shape` replaced, in turn, by each awkward value — plus the whole thing.
+    fn variants(shape: &Value) -> Vec<Value> {
+        let mut out = awkward_values();
+        if let Some(object) = shape.as_object() {
+            for key in object.keys() {
+                for value in awkward_values() {
+                    let mut copy = shape.clone();
+                    copy[key] = value;
+                    out.push(copy);
+                }
+                // The field missing altogether.
+                let mut copy = shape.clone();
+                copy.as_object_mut().expect("an object").remove(key);
+                out.push(copy);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_manifest_of_any_shape_is_read_or_refused_and_never_panics() {
+        let shape = json!({
+            "id": "plugin", "name": "Plugin", "version": "1.0.0", "main": "main.mjs",
+            "runtime": "node", "apiVersion": 1, "permissions": ["net.request"],
+            "contributes": { "commands": [{ "id": "plugin.go", "title": "Go" }] },
+        });
+        for value in variants(&shape) {
+            let _ = super::manifest::Manifest::parse(value.to_string().as_bytes());
+        }
+    }
+
+    #[test]
+    fn a_marketplace_entry_of_any_shape_is_read_or_refused_and_never_panics() {
+        let shape = json!({
+            "id": "plugin", "name": "Plugin", "version": "1.0.0", "description": "A plugin.",
+            "publisher": "Someone", "license": "MIT", "apiVersion": 1,
+            "source": "https://github.com/someone/plugin",
+            "module": {
+                "url": "https://raw.githubusercontent.com/someone/plugin/main/p.wasm",
+                "sha256": "0".repeat(64), "size": 1024,
+            },
+        });
+        for value in variants(&shape) {
+            let _ = super::market::Entry::checked(value);
+        }
+        // And a whole list of them, including one that is not a list at all.
+        for value in awkward_values() {
+            let _ = super::market::parse(json!({ "apiVersion": 1, "plugins": value }).to_string().as_bytes());
+            let _ = super::market::parse(value.to_string().as_bytes());
+        }
+    }
+
+    #[test]
+    fn a_ui_tree_of_any_shape_is_read_or_refused_and_never_panics() {
+        let shape = json!({
+            "type": "column",
+            "children": [
+                { "type": "text", "text": "hello", "style": "title" },
+                { "type": "button", "id": "go", "label": "Go" },
+                { "type": "input", "id": "url", "value": "", "rows": 4 },
+                { "type": "list", "id": "saved", "items": [{ "id": "a", "title": "A" }] },
+            ],
+        });
+        for value in variants(&shape) {
+            if let Ok(node) = super::ui::Node::from_value(value) {
+                let mut fields = Vec::new();
+                node.inputs(&mut fields);
+            }
+        }
+    }
+
+    #[test]
+    fn a_link_of_any_shape_is_read_or_refused_and_never_panics() {
+        let links = [
+            "agentty://plugin",
+            "agentty://plugin/",
+            "agentty://plugin//////",
+            "agentty://plugin/../../etc",
+            "agentty://plugin/a%2e%2e%2fb/c?x=%00",
+            "agentty://prompt",
+            "agentty://prompt?text=",
+            "agentty://prompt?file=/etc/passwd",
+            "agentty://prompt?file=relative.txt",
+            "agentty://prompt?text=hi&cwd=notabsolute",
+            "agentty://prompt?text=hi&agent=../../bin/sh",
+            "agentty://plugins/",
+            "agentty://plugins/NOT-AN-ID",
+            "agentty://",
+            "agentty:",
+            "agentty://unknown/thing",
+            "https://example.com",
+            "",
+            "not a url at all",
+            "agentty://prompt?text=%F0%9F%98%80",
+        ];
+        for raw in links {
+            let _ = super::link::parse(raw);
+        }
+        // A link as long as anything that could arrive.
+        let _ = super::link::parse(&format!("agentty://prompt?text={}", "a".repeat(200_000)));
+    }
+
+    #[test]
+    fn a_message_of_any_shape_from_a_plugin_is_read_or_refused_and_never_panics() {
+        let shape = json!({ "jsonrpc": "2.0", "id": 1, "method": "ui/setPanel", "params": { "tree": {} } });
+        for value in variants(&shape) {
+            let _ = super::Incoming::parse(&value.to_string());
+        }
+        for line in ["", "   ", "{", "null", "[]", "\"a string\"", &"{".repeat(200), "\u{0}", "\n\n"] {
+            let _ = super::Incoming::parse(line);
+        }
+    }
+
+    #[test]
+    fn a_prompt_request_of_any_shape_is_read_or_refused_and_never_panics() {
+        let shape = json!({
+            "text": "hello", "title": "T", "target": "newTab", "paneId": 1,
+            "workspaceId": 2, "agent": "claude", "cwd": "/tmp", "submit": true,
+        });
+        for value in variants(&shape) {
+            let _ = serde_json::from_value::<super::PromptRequest>(value);
+        }
+    }
+
+    #[test]
+    fn a_fetch_request_of_any_shape_is_read_or_refused_and_never_panics() {
+        let shape = json!({
+            "url": "https://example.com", "method": "GET", "headers": { "A": "b" },
+            "body": "x", "timeoutMs": 1000, "proxy": "http://127.0.0.1:1",
+        });
+        for value in variants(&shape) {
+            if let Ok(request) = serde_json::from_value::<super::net::FetchRequest>(value) {
+                // Checked, never sent: this must refuse or accept, not fall over.
+                let _ = super::net::check_for_test(&request);
+            }
+        }
     }
 }
