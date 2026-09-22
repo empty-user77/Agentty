@@ -39,8 +39,16 @@ FORBIDDEN_FILES = [
     (r"(^|/)(credentials|service[-_]?account[^/]*|client_secret[^/]*)\.json$", "cloud credentials file"),
     (r"(^|/)\.(aws|ssh|gnupg)/", "credentials folder"),
     (r"(^|/)(\.vercel|supabase/\.temp|\.agentty[^/]*)/", "local tool state"),
-    (r"(^|/)\.claude/settings\.local\.json$", "personal Claude Code settings"),
+    (r"(^|/)\.claude/settings\.local\.[^/]+$", "personal Claude Code settings"),
     (r"\.(sqlite3?|db)$", "local database"),
+    (r"\.p8$", "Apple private key (App Store Connect, push)"),
+    (r"\.(har|pcap|pcapng)$", "captured traffic (carries whole requests, headers included)"),
+    (r"\.tfstate(\.backup)?$", "Terraform state (holds the values it applied)"),
+    (r"(^|/)\.kube/", "cluster credentials"),
+    (r"(^|/)\.docker/config\.json$", "registry credentials"),
+    (r"(^|/)\.git-credentials$", "stored git passwords"),
+    (r"\.keychain(-db)?$", "keychain"),
+    (r"\.(crash|ips)$", "crash report (paths, and sometimes the environment)"),
     (r"(^|/)\.claude/projects/|\.jsonl$", "conversation transcript"),
     (r"\.(dmg|zip|tar\.gz|tgz)$", "build artifact or archive"),
 ]
@@ -67,6 +75,7 @@ CODE_RULES = [
     ("secrets are not logged", r"(?i)(eprintln!|println!|console\.(log|error)|plugin\.log)\([^)]*\b(token|secret|password|api_?key)\b", "warn", r"^(crates|plugins|sdk)/", "log the name, never the value"),
     ("network calls use TLS", r"http://(?=[A-Za-z0-9])(?!localhost|127\.0\.0\.1|0\.0\.0\.0|www\.w3\.org|[^/\s\"']*\.example\b)", "warn", r"^(crates|plugins|sdk)/.*\.(rs|mjs|js)$", "plain http leaks what it carries"),
     ("files with user data are private", r"0o(777|666|775|664)\b|chmod\s+(777|666)", "warn", r"^(crates|plugins|scripts)/", "conversation and credential files are 0600, folders 0700"),
+    ("no private project of the maintainer's is named", r"cosmica-desktop|CosmicaProject", "warn", r"^(crates|plugins|scripts|sdk)/", "a repository nobody else can see means nothing to a reader, and says what is not public"),
     ("prompts and rules are English", r"[\uac00-\ud7a3]", "block", r"^(\.claude/skills/|docs/plugins/|CLAUDE\.md$|crates/agentty-bridge/src/(idea|handoff|harness)\.rs$)", "prompts, rules and skills are written in English only (CLAUDE.md)"),
 ]
 # Where a forbidden thing may be mentioned: the rule tables themselves, docs, tests, comments.
@@ -83,6 +92,58 @@ WIRING = [
     (".github/workflows/ci.yml", ["check-secrets.py", "security-audit.py"]),
     (".gitignore", [".env"]),
 ]
+
+# -- SA05: what changes the day the repository is public ---------------------------------------------
+# A private repository hides a lot of ordinary carelessness. These are the things that only become
+# dangerous — or only become visible — once anyone can read the repository and open a pull request.
+
+WORKFLOW_PATH = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
+# `on:` entries are indented two spaces inside the block; an expression elsewhere is not a trigger.
+PR_TRIGGER = re.compile(r"^\s{0,4}pull_request(_target)?:\s*$", re.M)
+SELF_HOSTED = re.compile(r"runs-on:\s*(?:\[[^\]]*\bself-hosted\b[^\]]*\]|self-hosted\b)")
+# The guard that keeps a fork's pull request off a runner of the maintainer's own.
+FORK_GUARD = re.compile(r"pull_request\.head\.repo\.(full_name|fork)|github\.event\.pull_request\.head\.repo\.owner")
+USES_SECRETS = re.compile(r"\$\{\{\s*secrets\.")
+
+
+def workflow_findings(paths):
+    """A pull request from a stranger runs on whatever runner the workflow names.
+
+    On a self-hosted runner that is the maintainer's own machine, so the pull request's code —
+    `build.rs`, a proc macro, a test body, a packaging script — runs there. While the repository is
+    private only collaborators can open one; the day it is public, anyone can.
+
+    Only the workflows in `paths` are read, so a commit that does not touch one says nothing: `--all`
+    passes every tracked file, and CI is where this belongs until the decision is made.
+    """
+    findings = []
+    for path in paths:
+        if not WORKFLOW_PATH.match(path):
+            continue
+        try:
+            with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        if not (PR_TRIGGER.search(text) and SELF_HOSTED.search(text)):
+            continue
+        if USES_SECRETS.search(text):
+            findings.append((
+                "block",
+                path,
+                "SA05 a pull request can reach a self-hosted runner that holds secrets",
+                "a fork's code would run on the maintainer's machine with those secrets in reach",
+            ))
+        elif not FORK_GUARD.search(text):
+            findings.append((
+                "warn",
+                path,
+                "SA05 a pull request runs on a self-hosted runner",
+                "fine while the repository is private; before it is public, guard the job with "
+                "`if: github.event.pull_request.head.repo.full_name == github.repository`",
+            ))
+    return findings
+
 
 MARK_FILE = "agentty-security-audit.json"
 
@@ -165,6 +226,7 @@ def audit(paths, lines, whole_tree):
         for name, rx, severity, scope, why in compiled:
             if scope.search(path) and rx.search(text):
                 findings.append((severity, where, f"SA03 {name}", why))
+    findings.extend(workflow_findings(paths))
     if whole_tree:
         for path, needles in WIRING:
             try:

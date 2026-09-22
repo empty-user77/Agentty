@@ -26,7 +26,11 @@ PATTERNS = [
     ("Anthropic API key", r"sk-ant-[A-Za-z0-9_-]{20,}"),
     ("OpenAI API key", r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}"),
     ("Slack token", r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
+    ("Slack app-level token", r"\bxapp-\d-[A-Za-z0-9-]{10,}"),
     ("Slack webhook", r"hooks\.slack\.com/services/T[A-Za-z0-9]+/B[A-Za-z0-9]+/[A-Za-z0-9]+"),
+    # Agentty sends notifications through both of these, so both shapes can reach a commit.
+    ("Discord webhook", r"(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d{15,}/[A-Za-z0-9_-]{20,}"),
+    ("Discord bot token", r"\b[MNO][A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}"),
     ("AWS access key", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
     ("Google API key", r"\bAIza[0-9A-Za-z_-]{35}\b"),
     ("Stripe key", r"\b(?:sk|rk)_live_[A-Za-z0-9]{20,}"),
@@ -57,6 +61,8 @@ PATTERNS = [
     ("Database URL with a password", r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?)://[^\s:/@]+:[^\s@/]{4,}@"),
     ("URL with a password", r"\bhttps?://[^\s:/@]+:[^\s@/]{6,}@"),
     ("Private key", r"-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----"),
+    ("age secret key", r"\bAGE-SECRET-KEY-1[A-Z0-9]{50,}"),
+    ("Cloud service account key", r"\"type\"\s*:\s*\"service_account\""),
     ("Apple app-specific password", r"\b[a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4}\b(?=.*(?:PASSWORD|password|APPLE))"),
     # The same with the name first, as in `AGENTTY_APPLE_PASSWORD=abcd-…`.
     ("Apple app-specific password", r"""(?i)(?:apple|password)[a-z_]*["']?\s*[:=]\s*["']?[a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4}\b"""),

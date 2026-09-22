@@ -28,7 +28,7 @@ change and decide whether it is safe. The hook `.claude/hooks/require-security-a
    when a hunk touches one of the sensitive areas below.
 2. **Mechanical checks.** Run both and fix what they block:
    `python3 scripts/check-secrets.py --staged` and `python3 scripts/security-audit.py --staged`.
-3. **Review** the change against the six areas. Skip an area only when the diff cannot touch it
+3. **Review** the change against the seven areas. Skip an area only when the diff cannot touch it
    (a docs-only change still gets area 4).
 4. **Report** findings as: severity (critical / high / medium / low) · `file:line` · scenario
    (precondition → action → impact) · verified or inferred · minimal fix. Fix critical and high
@@ -37,7 +37,7 @@ change and decide whether it is safe. The hook `.claude/hooks/require-security-a
 5. **Record** the reviewed tree — only after steps 1–4 are really done:
    `python3 scripts/security-audit.py --mark`. Staging anything afterwards means reviewing again.
 
-## The six areas
+## The seven areas
 
 ### 1. Logic and flow
 - Every state machine reaches an end from every state: failure, retry, cancel, panel closed and
@@ -107,6 +107,24 @@ Dependencies added or upgraded (why, from where, pinned?), new network endpoints
 or entitlements, new files created in users' projects, error messages that reveal paths or
 internals to a web page, denial of service through unbounded reads (file sizes, line lengths, list
 lengths from a plugin or a transcript), and tests that would hide a regression in any of the above.
+
+### 7. The repository is going to be public
+This repository is private today and open source later, and **its whole history goes with it** — a
+credential committed and deleted is still there, and so is every commit message, branch name and
+pull request body. Judge each change as if it were already public:
+
+- Would this line be fine on a page anyone can read? A pasted log, a stack trace, a terminal dump
+  or a screenshot carries absolute paths, machine names and sometimes an environment.
+- Does it name something private — another project of the maintainer's, an internal service, a
+  repository nobody else can see?
+- Does it assume the repository is private? `.github/workflows/ci.yml` says so in a comment, and a
+  self-hosted runner reachable from `pull_request` is the thing that assumption protects: once the
+  repository is public, a fork's pull request runs its own code on the maintainer's machine.
+  `security-audit.py` warns about this (SA05) and blocks it outright if such a workflow also holds
+  secrets. The guard is
+  `if: github.event.pull_request.head.repo.full_name == github.repository` on the job.
+- A commit message and a pull request body are as public as the code. Nothing goes in one that
+  would not go in a file.
 
 ## Where the sensitive code lives
 
