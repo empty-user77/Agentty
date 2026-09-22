@@ -93,8 +93,20 @@ struct Snapshot {
 pub(super) struct TreeMenu {
     tree: Worktree,
     position: Point<Pixels>,
-    /// Removal waiting for a second click: `Some(true)` with its branch.
-    confirm: Option<bool>,
+}
+
+/// "Remove this working tree?" — what the dialog asks about, and how far it got.
+pub(super) struct RemoveConfirm {
+    tree: Worktree,
+    /// Its branch goes with it.
+    with_branch: bool,
+    /// The branch's counterpart on the remote, once looked up. `None` while looking, and for a
+    /// branch that was never pushed.
+    remote: Option<String>,
+    /// "Delete it on the remote too" (off unless ticked).
+    delete_remote: bool,
+    /// The removal is running: the dialog stays, with a spinner, until git is done.
+    busy: bool,
 }
 
 pub(super) struct FilesPanel {
@@ -105,8 +117,8 @@ pub(super) struct FilesPanel {
     tab: FilesTab,
     trees_folded: bool,
     selected: Option<PathBuf>,
-    /// Tree whose removal waits for a second click, and an error from the last removal.
-    confirm_remove: Option<PathBuf>,
+    /// The removal the dialog is asking about, and an error from the last one.
+    remove_confirm: Option<RemoveConfirm>,
     error: Option<String>,
     tree_menu: Option<TreeMenu>,
     scroll: gpui::UniformListScrollHandle,
@@ -274,7 +286,7 @@ impl Workbench {
                     tab: FilesTab::Files,
                     trees_folded: false,
                     selected: None,
-                    confirm_remove: None,
+                    remove_confirm: None,
                     error: None,
                     tree_menu: None,
                     scroll: gpui::UniformListScrollHandle::new(),
@@ -350,7 +362,6 @@ impl Workbench {
         let Some(root) = panel.pinned.clone().or(active) else { return };
         if root != panel.snapshot.root {
             panel.selected = None;
-            panel.confirm_remove = None;
         }
         panel.loading = true;
         panel.generation += 1;
@@ -475,37 +486,86 @@ impl Workbench {
         self.focus_pane(&pane, window, cx);
     }
 
-    fn remove_worktree(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let Some(panel) = self.files_panel.as_mut() else { return };
-        if panel.confirm_remove.as_ref() != Some(&path) {
-            panel.confirm_remove = Some(path);
-            panel.error = None;
-            return cx.notify();
-        }
-        panel.confirm_remove = None;
+    /// Asks before removing: one dialog, whatever it was started from (the row's bin or the menu).
+    /// A branch that was pushed gets a "delete it on the remote too" tick, looked up in the
+    /// background so the dialog opens at once.
+    fn ask_remove_tree(&mut self, tree: Worktree, with_branch: bool, cx: &mut Context<Self>) {
         // A session still working in it would lose its folder.
-        if self.panes_in_tree(&path, cx).into_iter().next().is_some() {
+        if self.panes_in_tree(&tree.path, cx).into_iter().next().is_some() {
             let text = t(cx, "files.tree_in_use").to_string();
             if let Some(panel) = self.files_panel.as_mut() {
+                panel.tree_menu = None;
                 panel.error = Some(text);
             }
             return cx.notify();
         }
+        let branch = tree.branch.clone().filter(|_| with_branch);
+        let path = tree.path.clone();
+        let Some(panel) = self.files_panel.as_mut() else { return };
+        panel.tree_menu = None;
+        panel.error = None;
+        panel.remove_confirm = Some(RemoveConfirm { tree, with_branch, remote: None, delete_remote: false, busy: false });
+        cx.notify();
+        let Some(branch) = branch else { return };
+        cx.spawn(async move |this, cx| {
+            let (lookup, name) = (path.clone(), branch.clone());
+            let remote = cx.background_spawn(async move { agentty_bridge::worktree::remote_branch(&lookup, &name) }).await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(confirm) = this.files_panel.as_mut().and_then(|p| p.remove_confirm.as_mut()) else { return };
+                // The dialog may already be about another tree by now.
+                if confirm.tree.path == path && !confirm.busy {
+                    confirm.remote = remote;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Runs the removal the dialog asked about. The dialog stays on screen with a spinner: git can
+    /// take a while over a big tree, and deleting a remote branch waits on the network.
+    fn remove_tree_confirmed(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.files_panel.as_mut() else { return };
+        let Some(confirm) = panel.remove_confirm.as_mut() else { return };
+        if confirm.busy {
+            return;
+        }
+        confirm.busy = true;
+        let (tree, with_branch) = (confirm.tree.clone(), confirm.with_branch);
+        let delete_remote = confirm.delete_remote && confirm.remote.is_some();
+        let path = tree.path.clone();
+        let repo = panel.snapshot.trees.iter().find(|t| t.tree.main).map(|t| t.tree.path.clone()).unwrap_or_else(|| path.clone());
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let target = path.clone();
-            let result = cx.background_spawn(async move { agentty_bridge::worktree::remove(&target, false) }).await;
+            let result = cx
+                .background_spawn(async move { agentty_bridge::worktree::remove_linked(&repo, &target, with_branch, delete_remote) })
+                .await;
             let _ = this.update(cx, |this, cx| {
-                // Git's own words for the common case are a path and a hint at `--force`: say what to do.
-                let message = result.as_ref().err().map(|err| {
-                    let text = format!("{err:#}");
-                    if text.contains("modified or untracked") {
-                        t(cx, "files.tree_dirty").to_string()
-                    } else {
-                        text
+                let message = match &result {
+                    Ok(removal) => [
+                        removal.branch_kept.as_ref().map(|branch| tf(cx, "files.branch_kept", &[("branch", branch)])),
+                        removal.remote_deleted.as_ref().map(|branch| tf(cx, "files.remote_deleted", &[("branch", branch)])),
+                        removal.remote_error.as_ref().map(|error| tf(cx, "files.remote_failed", &[("error", error)])),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                    Err(err) => {
+                        // Git's words for the common case are a path and a hint at `--force`: say
+                        // what to do instead.
+                        let text = format!("{err:#}");
+                        if text.contains("modified or untracked") {
+                            t(cx, "files.tree_dirty").to_string()
+                        } else {
+                            text
+                        }
                     }
-                });
+                };
                 if let Some(panel) = this.files_panel.as_mut() {
-                    panel.error = message;
+                    panel.remove_confirm = None;
+                    panel.error = (!message.is_empty()).then_some(message);
                     if result.is_ok() && panel.pinned.as_ref() == Some(&path) {
                         panel.pinned = None;
                     }
@@ -517,6 +577,138 @@ impl Workbench {
         .detach();
     }
 
+    /// The dialog that asks. Nothing is removed until its own button is pressed, and while git works
+    /// it stays put with a spinner instead of leaving the panel looking frozen.
+    pub(super) fn render_tree_remove_confirm(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let confirm = self.files_panel.as_ref()?.remove_confirm.as_ref()?;
+        let (busy, with_branch) = (confirm.busy, confirm.with_branch);
+        let name = confirm.tree.branch.clone().unwrap_or_else(|| confirm.tree.name());
+        let remote = confirm.remote.clone().filter(|_| with_branch);
+        let delete_remote = confirm.delete_remote;
+        let button = |id: &'static str, label: String, primary: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .t_body()
+                .cursor_pointer()
+                .bg(if primary { hex(Chrome::ERROR) } else { hex(0x2d2d30) })
+                .text_color(hex(Chrome::BRIGHT))
+                .hover(|s| s.opacity(0.85))
+                .child(label)
+        };
+        Some(
+            div()
+                .id("tree-remove-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hex_alpha(0x000000, 0.45))
+                .occlude()
+                .child(
+                    div()
+                        .w(px(380.))
+                        .p_5()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .rounded_xl()
+                        .bg(hex(Chrome::OVERLAY))
+                        .border_1()
+                        .border_color(hex(Chrome::OVERLAY_BORDER))
+                        .shadow_lg()
+                        .child(
+                            div()
+                                .t_title()
+                                .font_weight(crate::theme::EMPHASIS)
+                                .text_color(hex(Chrome::BRIGHT))
+                                .child(t(cx, "files.remove_title")),
+                        )
+                        .child(div().t_small().text_color(hex(Chrome::MUTED)).truncate().child(name))
+                        .child(
+                            div()
+                                .t_body()
+                                .text_color(hex(Chrome::FOREGROUND))
+                                .child(t(cx, if with_branch { "files.remove_body_branch" } else { "files.remove_body" })),
+                        )
+                        .children(remote.map(|remote| {
+                            div()
+                                .id("tree-remove-remote")
+                                .flex()
+                                .items_start()
+                                .gap_2()
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    let Some(confirm) = this.files_panel.as_mut().and_then(|p| p.remove_confirm.as_mut()) else {
+                                        return;
+                                    };
+                                    if !confirm.busy {
+                                        confirm.delete_remote = !confirm.delete_remote;
+                                        cx.notify();
+                                    }
+                                }))
+                                .child(
+                                    div()
+                                        .mt(px(2.))
+                                        .size(px(14.))
+                                        .flex_shrink_0()
+                                        .rounded_sm()
+                                        .border_1()
+                                        .border_color(hex(if delete_remote { Chrome::ACCENT } else { Chrome::OVERLAY_BORDER }))
+                                        .bg(if delete_remote { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .when(delete_remote, |d| d.child(crate::ui::icon("check", 11., hex(Chrome::BRIGHT)))),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(tf(
+                                            cx,
+                                            "files.remove_remote",
+                                            &[("branch", &remote)],
+                                        )))
+                                        .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "files.remove_remote_hint"))),
+                                )
+                        }))
+                        .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "files.remove_hint")))
+                        .child(
+                            div()
+                                .pt_1()
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap_2()
+                                .when(busy, |d| d.child(crate::ui::spinner(14., hex(Chrome::MUTED))))
+                                .when(!busy, |d| {
+                                    d.child(button("tree-remove-cancel", t(cx, "confirm.cancel").to_string(), false).on_click(cx.listener(
+                                        |this, _: &ClickEvent, window, cx| {
+                                            if let Some(panel) = this.files_panel.as_mut() {
+                                                panel.remove_confirm = None;
+                                            }
+                                            this.focus_active(window, cx);
+                                            cx.notify();
+                                        },
+                                    )))
+                                })
+                                .child(
+                                    button("tree-remove-ok", t(cx, "files.remove_ok").to_string(), true)
+                                        .when(busy, |d| d.opacity(0.5))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.remove_tree_confirmed(cx))),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// Debug driver: the menu of the `index`-th tree in the list, as a right click would open it.
     pub(super) fn debug_tree_menu(&mut self, index: usize, cx: &mut Context<Self>) {
         let tree = self.files_panel.as_ref().and_then(|p| p.snapshot.trees.get(index)).map(|t| t.tree.clone());
@@ -525,9 +717,22 @@ impl Workbench {
         }
     }
 
+    /// Debug driver: the removal dialog for the `index`-th tree (`<index>` or `<index> branch`).
+    pub(super) fn debug_tree_remove(&mut self, argument: &str, cx: &mut Context<Self>) {
+        let (index, rest) = argument.split_once(' ').unwrap_or((argument, ""));
+        let tree = self
+            .files_panel
+            .as_ref()
+            .and_then(|p| p.snapshot.trees.get(index.trim().parse::<usize>().unwrap_or(0)))
+            .map(|t| t.tree.clone());
+        if let Some(tree) = tree {
+            self.ask_remove_tree(tree, rest.trim() == "branch", cx);
+        }
+    }
+
     fn open_tree_menu(&mut self, tree: Worktree, position: Point<Pixels>, cx: &mut Context<Self>) {
         if let Some(panel) = self.files_panel.as_mut() {
-            panel.tree_menu = Some(TreeMenu { tree, position, confirm: None });
+            panel.tree_menu = Some(TreeMenu { tree, position });
             panel.error = None;
         }
         cx.notify();
@@ -540,7 +745,24 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Shows the files of working tree `path` in the panel (what a click on its row does).
+    /// A click on a row: shows the tree's files and, when a session already works in it, goes to
+    /// that terminal — the row is how the two are reached, and looking at a tree is almost always
+    /// wanting the session in it. Without a session the panel just follows the tree; a new terminal
+    /// there is one right click away.
+    fn open_tree(&mut self, tree: Worktree, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        self.view_tree(tree.path.clone(), tree.main, cx);
+        if let Some(pane) = self.panes_in_tree(&tree.path, cx).into_iter().next() {
+            self.go_to_pane(&pane, window, cx);
+        }
+    }
+
+    /// Opens a terminal in the working tree (the menu's "new terminal").
+    fn open_tree_terminal(&mut self, path: PathBuf, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        self.close_tree_menu(cx);
+        self.open_tab(crate::launch::LaunchSpec::new(crate::launch::PaneKind::Shell, path), window, cx);
+    }
+
+    /// Shows the files of working tree `path` in the panel.
     fn view_tree(&mut self, path: PathBuf, main: bool, cx: &mut Context<Self>) {
         // The onboarding tour waits for a session's tree to be picked (the project folder is not one).
         if !main {
@@ -553,46 +775,6 @@ impl Workbench {
         }
         self.refresh_files_panel(cx);
         cx.notify();
-    }
-
-    /// From the menu: removes a linked working tree (Agentty's or the user's own), and its branch when
-    /// asked. Git decides what is safe: a tree with changes and a branch with unmerged commits stay.
-    fn remove_tree_from_menu(&mut self, tree: Worktree, delete_branch: bool, cx: &mut Context<Self>) {
-        let Some(panel) = self.files_panel.as_mut() else { return };
-        panel.tree_menu = None;
-        let Some(repo) = panel.snapshot.trees.iter().find(|t| t.tree.main).map(|t| t.tree.path.clone()) else { return };
-        // A session still working in it would lose its folder.
-        if self.panes_in_tree(&tree.path, cx).into_iter().next().is_some() {
-            let text = t(cx, "files.tree_in_use").to_string();
-            if let Some(panel) = self.files_panel.as_mut() {
-                panel.error = Some(text);
-            }
-            return cx.notify();
-        }
-        let path = tree.path.clone();
-        cx.spawn(async move |this, cx| {
-            let target = path.clone();
-            let result = cx.background_spawn(async move { agentty_bridge::worktree::remove_linked(&repo, &target, delete_branch) }).await;
-            let _ = this.update(cx, |this, cx| {
-                let message = match &result {
-                    Ok(Some(branch)) => Some(tf(cx, "files.branch_kept", &[("branch", branch)])),
-                    Ok(None) => None,
-                    Err(err) => {
-                        let text = format!("{err:#}");
-                        Some(if text.contains("modified or untracked") { t(cx, "files.tree_dirty").to_string() } else { text })
-                    }
-                };
-                if let Some(panel) = this.files_panel.as_mut() {
-                    panel.error = message;
-                    if result.is_ok() && panel.pinned.as_ref() == Some(&path) {
-                        panel.pinned = None;
-                    }
-                }
-                this.refresh_files_panel(cx);
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     /// From the menu: forgets working trees whose folder was deleted by hand.
@@ -614,13 +796,14 @@ impl Workbench {
     }
 
     /// The working tree menu: view its files, open a terminal there, show it, copy its path, and for
-    /// a linked tree remove it (with its branch when asked; a second click confirms) or clean it up
+    /// a linked tree remove it (with its branch when asked — the dialog confirms) or clean it up
     /// when its folder is gone.
     pub(super) fn render_tree_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.files_panel.as_ref()?.tree_menu.as_ref()?;
         let tree = menu.tree.clone();
         let (path, main) = (tree.path.clone(), tree.main);
-        let in_use = self.panes_in_tree(&path, cx).into_iter().next().is_some();
+        let session = self.panes_in_tree(&path, cx).into_iter().next();
+        let in_use = session.is_some();
         let separator = || div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER));
         let mut list = popover().w(px(250.)).on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_tree_menu(cx))).child(
             div()
@@ -640,13 +823,21 @@ impl Workbench {
                     t(cx, "files.menu.view"),
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.view_tree(view.clone(), main, cx)),
                 ))
+                // A session already working here: go to its terminal instead of opening a second one.
+                .children(session.map(|pane| {
+                    menu_item(
+                        "files-tree-menu-focus",
+                        t(cx, "files.menu.focus"),
+                        cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.close_tree_menu(cx);
+                            this.go_to_pane(&pane, window, cx);
+                        }),
+                    )
+                }))
                 .child(menu_item(
                     "files-tree-menu-terminal",
                     t(cx, "files.menu.terminal"),
-                    cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.close_tree_menu(cx);
-                        this.open_tab(crate::launch::LaunchSpec::new(crate::launch::PaneKind::Shell, terminal.clone()), window, cx);
-                    }),
+                    cx.listener(move |this, _: &ClickEvent, window, cx| this.open_tree_terminal(terminal.clone(), window, cx)),
                 ))
                 .child(menu_item(
                     "files-tree-menu-reveal",
@@ -686,24 +877,14 @@ impl Workbench {
                 if with_branch && tree.branch.is_none() {
                     continue;
                 }
-                let confirm = menu.confirm == Some(with_branch);
                 let target = tree.clone();
                 list = list.child(
                     menu_item(
                         id,
-                        if confirm { t(cx, "files.remove_confirm") } else { t(cx, label) },
-                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            let Some(menu) = this.files_panel.as_mut().and_then(|p| p.tree_menu.as_mut()) else { return };
-                            if menu.confirm == Some(with_branch) {
-                                this.remove_tree_from_menu(target.clone(), with_branch, cx);
-                            } else {
-                                menu.confirm = Some(with_branch);
-                                cx.notify();
-                            }
-                        }),
+                        t(cx, label),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.ask_remove_tree(target.clone(), with_branch, cx)),
                     )
-                    .text_color(hex(Chrome::ERROR))
-                    .when(confirm, |d| d.bg(hex_alpha(Chrome::ERROR, 0.25))),
+                    .text_color(hex(Chrome::ERROR)),
                 );
             }
         }
@@ -722,6 +903,19 @@ impl Workbench {
             .into_iter()
             .filter(|pane| agentty_bridge::worktree::tree_root(&pane.read(cx).display_cwd()).as_deref() == Some(root))
             .collect()
+    }
+
+    /// The sessions of every working tree at once, for one pass of the list. `tree_root` walks a
+    /// folder up asking the file system at every level, so asking it per row and per pane — on every
+    /// frame — is what makes the panel stutter while git is busy deleting a tree.
+    fn sessions_by_tree(&self, cx: &gpui::App) -> HashMap<PathBuf, Vec<Pane>> {
+        let mut by_tree: HashMap<PathBuf, Vec<Pane>> = HashMap::new();
+        for pane in self.all_panes() {
+            if let Some(root) = agentty_bridge::worktree::tree_root(&pane.read(cx).display_cwd()) {
+                by_tree.entry(root).or_default().push(pane);
+            }
+        }
+        by_tree
     }
 
     pub(super) fn render_files_splitter(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -941,16 +1135,15 @@ impl Workbench {
         let mut list = div().id("files-trees-list").h(px(height)).overflow_y_scroll().flex().flex_col().pb_1();
         let count = trees.len();
         let ring = self.tour_target() == Some("files-trees");
+        let mut sessions_by_tree = if demo || folded { HashMap::new() } else { self.sessions_by_tree(cx) };
         for (index, info) in trees.iter().enumerate().filter(|_| !folded) {
             let tree = &info.tree;
             let viewing = if demo { panel.demo_pick == index } else { tree.path == snapshot.root };
             let here = if demo { index == 0 } else { active_tree == Some(tree.path.as_path()) };
             let last = index + 1 == count;
-            let sessions = if demo { Vec::new() } else { self.panes_in_tree(&tree.path, cx) };
-            let (path, is_main) = (tree.path.clone(), tree.main);
+            let sessions = sessions_by_tree.remove(&tree.path).unwrap_or_default();
             let color = if tree.main { Chrome::BLUE } else { Chrome::PURPLE };
             let branch = tree.branch.clone().unwrap_or_else(|| t(cx, "files.detached").to_string());
-            let confirm = panel.confirm_remove.as_ref() == Some(&tree.path);
             // Rail of the graph: the project's tree is the trunk, linked trees branch off it.
             let rail = div().w(px(18.)).h(px(TREE_ROW_HEIGHT)).flex_shrink_0().relative().when(!tree.main, |d| {
                 d.child(
@@ -983,7 +1176,7 @@ impl Workbench {
                         .child(div().absolute().right(px(-1.)).bottom(px(-1.)).size(px(5.)).rounded_full().bg(hex(*status_color))),
                 );
             }
-            let remove_path = tree.path.clone();
+            let (remove_tree, row_tree) = (tree.clone(), tree.clone());
             let menu_tree = tree.clone();
             let gone = tree.prunable;
             list = list.child(
@@ -1004,7 +1197,7 @@ impl Workbench {
                     .when(viewing, |d| d.bg(hex_alpha(color, 0.12)))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .tooltip(Tooltip::text(if demo { t(cx, "files.demo_note").to_string() } else { tilde(&tree.path) }, None))
-                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         // A right click opens the menu (below); it must not also pick the tree and close it.
                         if event.is_right_click() || gone {
                             return;
@@ -1012,7 +1205,7 @@ impl Workbench {
                         if demo {
                             return this.pick_demo_tree(index, cx);
                         }
-                        this.view_tree(path.clone(), is_main, cx);
+                        this.open_tree(row_tree.clone(), window, cx);
                     }))
                     // Right click: what can be done with this tree (not with the tour's examples).
                     .when(!demo, |d| {
@@ -1088,17 +1281,17 @@ impl Workbench {
                         d.child(
                             icon_only_sized(
                                 SharedString::from(format!("files-tree-remove-{index}")),
-                                if confirm { "check" } else { "trash-2" },
+                                "trash-2",
                                 20.,
                                 IconSize::INLINE,
                                 cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     cx.stop_propagation();
-                                    this.remove_worktree(remove_path.clone(), cx);
+                                    this.ask_remove_tree(remove_tree.clone(), false, cx);
                                 }),
                             )
-                            .when(confirm, |d| d.bg(hex_alpha(Chrome::ERROR, 0.35)))
-                            .when(!confirm, |d| d.invisible().group_hover("files-tree", |s| s.visible()))
-                            .tooltip(Tooltip::text(t(cx, if confirm { "files.remove_confirm" } else { "files.remove_tree" }), None)),
+                            .invisible()
+                            .group_hover("files-tree", |s| s.visible())
+                            .tooltip(Tooltip::text(t(cx, "files.remove_tree"), None)),
                         )
                     }),
             );

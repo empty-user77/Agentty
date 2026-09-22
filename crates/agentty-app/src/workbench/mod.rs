@@ -1117,6 +1117,14 @@ impl Workbench {
         Some(pane)
     }
 
+    /// Brings a pane to the front and leaves the keyboard in it: its workspace, its tab, and the
+    /// pane itself when the tab is split.
+    pub(super) fn go_to_pane(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
+        self.reveal_pane(pane, window, cx);
+        self.mark_active(pane, cx);
+        self.focus_pane(pane, window, cx);
+    }
+
     /// Brings the tab holding a pane to the front, leaving whatever page was on screen.
     pub(super) fn reveal_pane(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
         let Some((workspace, tab)) = self.locate(pane) else { return };
@@ -2840,6 +2848,7 @@ impl Render for Workbench {
             .children(self.render_connect_pick_bar(cx))
             .children(self.render_install_hint(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_tree_remove_confirm(cx))
             .children(self.render_ask(cx))
             .children(self.render_rename_dialog(cx))
             .children(self.render_prompt_dialog(cx))
@@ -3256,6 +3265,7 @@ impl Workbench {
                 self.debug_editor(command, argument, window, cx);
             }
             "tree-menu" => self.debug_tree_menu(argument.parse().unwrap_or(0), cx),
+            "tree-remove" => self.debug_tree_remove(argument, cx),
             "docker" => self.debug_docker(argument, window, cx),
             "db" => self.debug_db(argument, window, cx),
             "chat-notify" => self.debug_chat_notify(argument, cx),
