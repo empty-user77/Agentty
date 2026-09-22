@@ -26,7 +26,7 @@ redacted values (`redact_args`, `redact_url`), and files with conversation data 
 
 | Layer | What it does |
 |---|---|
-| `.githooks/pre-commit` | `scripts/check-secrets.py --staged` blocks commits that add credentials; `scripts/security-audit.py --staged` blocks files that must never be committed (env files, keys, transcripts, local tool state), real home folder paths, code that weakens a guarantee (agent permission bypass, broad allow rules in idea projects, `--reveal`, hook skipping, `set -x` in credential scripts, `pull_request_target`, non-English prompts) and unwired guards |
+| `.githooks/pre-commit` | `scripts/check-secrets.py --staged` blocks commits that add credentials; `scripts/security-audit.py --staged` blocks files that must never be committed (env files, keys, transcripts, local tool state), real home folder paths, code that weakens a guarantee (agent permission bypass, broad allow rules in idea projects, `--reveal`, hook skipping, `set -x` in credential scripts, `pull_request_target`, non-English prompts), workflows a stranger's pull request could start on a self-hosted runner (SA05 — blocking when that workflow also holds secrets) and unwired guards |
 | `.githooks/pre-push` | both scanners over every commit being pushed (catches `--no-verify` commits) |
 | `.claude/hooks/guard-secrets.py` | Claude Code PreToolUse hook: blocks writing credentials, credential literals in shell commands, and hook bypasses |
 | `.claude/hooks/require-security-audit.py` | Claude Code PreToolUse hook: refuses `git commit` / `git push` until the `security-audit` skill reviewed the staged tree (`security-audit.py --mark`); refuses `git commit -a` and stage-and-commit in one command |
