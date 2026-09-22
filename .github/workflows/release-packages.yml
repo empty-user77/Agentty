@@ -36,6 +36,10 @@ jobs:
   # Same self-hosted Windows PC as CI's check-windows (see ci.yml for the PATH and execution policy notes). It also
   # needs Inno Setup 6: winget install JRSoftware.InnoSetup (the package script fails with that hint when missing).
   windows:
+    # A pull request from a fork is somebody else's code, and these runners are the
+    # maintainer's own machines: it would build and test itself on them. Their own
+    # branches, and everything on main, still run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 120
     env:
@@ -92,6 +96,10 @@ jobs:
   # Runs on the Apple silicon Mac in an emulated x86_64 AlmaLinux 9 container (Docker Desktop must be running), so the
   # first build is slow; the toolchain, registry and target/ are kept in named volumes for the next one.
   linux:
+    # A pull request from a fork is somebody else's code, and these runners are the
+    # maintainer's own machines: it would build and test itself on them. Their own
+    # branches, and everything on main, still run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 300
     steps:
