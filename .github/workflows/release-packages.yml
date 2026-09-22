@@ -68,8 +68,16 @@ jobs:
           ./scripts/package-windows.ps1 -Installer
           $info = (Get-Item "$env:CARGO_TARGET_DIR\release\agentty.exe").VersionInfo
           if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
+          # Not `Get-FileHash`: that cmdlet arrived in PowerShell 4 and this runner's is older.
+          $sha = [System.Security.Cryptography.SHA256]::Create()
           Get-ChildItem dist | Where-Object { $_.Name -like '*-windows-*' } | ForEach-Object {
-            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+            $stream = [System.IO.File]::OpenRead($_.FullName)
+            try {
+              $hash = [System.BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLower()
+            } finally {
+              $stream.Dispose()
+            }
+            "{0}  {1}" -f $hash, $_.Name
           }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

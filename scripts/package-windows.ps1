@@ -9,6 +9,23 @@ param([switch]$Installer)
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 
+# SHA-256 of a file, without `Get-FileHash`: the cmdlet arrived in PowerShell 4 and the build
+# machine's PowerShell is older than the rest of this script needs it to be. .NET is always there.
+function Get-Sha256 {
+    param([string]$Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).Path)
+        try {
+            return [System.BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLower()
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha.Dispose()
+    }
+}
+
 # Inno Setup's compiler: on PATH, else where the installer (per machine or per user via winget) puts it.
 function Find-Iscc {
     $onPath = Get-Command ISCC.exe -ErrorAction SilentlyContinue
@@ -22,6 +39,7 @@ function Find-Iscc {
     return $null
 }
 
+Write-Host "PowerShell $($PSVersionTable.PSVersion)"
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x86_64' }
 $name = "agentty-$version-windows-$arch"
@@ -48,7 +66,7 @@ New-Item -ItemType Directory -Force dist | Out-Null
 $zip = "dist\$name.zip"
 Remove-Item $zip -ErrorAction SilentlyContinue
 Compress-Archive -Path "$stage\*" -DestinationPath $zip
-(Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File -Encoding ascii "$zip.sha256"
+(Get-Sha256 $zip) + "  $name.zip" | Out-File -Encoding ascii "$zip.sha256"
 Write-Host $zip
 
 if ($Installer) {
