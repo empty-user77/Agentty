@@ -595,7 +595,6 @@ function freshDashboardState() {
     error: null,
     // 'api' — the whole picture; 'cli' — names only, when the API could not be reached.
     source: null,
-    user: null,
     scopes: [],
     scopeId: undefined, // undefined until the CLI's current scope is read; null is the personal account
     projects: [],
@@ -692,7 +691,6 @@ async function loadDashboard({ force = false } = {}) {
       const session = await vercelSession();
       const user = session ? await vercelAccount(session) : null;
       if (user) {
-        state.dash.user = user;
         state.dash.scopes = await vercelScopes(session, user);
         if (state.dash.scopeId === undefined) state.dash.scopeId = await currentTeamId();
         if (!state.dash.scopes.some((scope) => scope.id === state.dash.scopeId)) state.dash.scopeId = null;
@@ -1683,7 +1681,7 @@ function isCurrentFolder(project) {
 function connectionItems() {
   // Until the first look has finished, nothing is "missing" — it is simply not known yet.
   if (state.dash.loading && !state.dash.loaded) {
-    return ['connTools', 'github', 'vercel'].map((id, index) => ({
+    return ['tools', 'github', 'vercel'].map((id, index) => ({
       id,
       title: index === 0 ? tr('connTools') : index === 1 ? 'GitHub' : 'Vercel',
       subtitle: tr('connChecking'),
@@ -1790,6 +1788,12 @@ function dashboardProjects() {
   ]);
 }
 
+/** A failed install or login — the steps the dashboard itself starts, so it answers for them. */
+function accountError() {
+  if (state.running || !state.error) return null;
+  return ['tools', 'gh-login', 'vercel-login'].includes(state.error.step) ? state.error.message : null;
+}
+
 function dashboardBody() {
   return ui.column([
     ui.section(tr('connections'), [ui.list('connections', connectionItems()), connectionActions()]),
@@ -1799,9 +1803,7 @@ function dashboardBody() {
     // A login started here fails here: `errorBlock` only shows a failure of the step the
     // publishing walk-through is on, which is not the tab the user is looking at.
     state.dash.error ? ui.text(state.dash.error, 'error') : null,
-    state.error && !state.running
-      ? ui.column([ui.text(state.error.message, 'error'), ui.button('retry', tr('tryAgain'), { icon: 'refresh-cw', variant: 'primary' })])
-      : null,
+    accountError() ? ui.column([ui.text(accountError(), 'error'), ui.button('retry', tr('tryAgain'), { icon: 'refresh-cw', variant: 'primary' })]) : null,
     ui.divider(),
     dashboardProjects(),
   ]);
