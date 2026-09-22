@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Launch opens on a dashboard of the Vercel account when the focused folder is not a web project:
+  which command-line tools are installed, which of GitHub and Vercel are signed in, and every
+  project on the account with the repository it deploys from drawn as a code → build → live
+  diagram. Both logins can be done from there, before there is anything to publish. A folder that
+  can be published still opens on the publishing steps, and the two are a tab apart.
+
+### Changed
+- Launch no longer asks for a GitHub login it does not need: a signed-in GitHub CLI is used as it
+  stands, and so is an SSH key this computer already has — enough to push to a repository that
+  exists. A login is asked for only when a repository has to be created.
+
 ## [0.1.17] - 2026-09-22
 
 ### Added
