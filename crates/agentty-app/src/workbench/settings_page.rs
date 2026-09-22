@@ -422,6 +422,81 @@ fn theme_card(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut Cont
 }
 
 impl Workbench {
+    /// Which browser an agent works in, and what each one is missing.
+    ///
+    /// Both halves of the connection — the extension and the agent's native messaging host — are
+    /// installed per browser, so Chrome can be ready while Edge beside it is not. The list says
+    /// what is on this machine rather than promising anything: a browser that is ready can be
+    /// chosen, and one that is not says which piece is absent and links to it.
+    fn render_agent_browsers(&self, cx: &mut Context<Self>) -> Div {
+        use agentty_bridge::browser_ext::{browsers, preferred, AgentBrowser};
+        let statuses = browsers();
+        // Nothing chosen yet means the one that can work — shown as chosen, so the list says what
+        // would happen rather than leaving every row blank.
+        let saved = crate::settings::settings(cx).browser.agent_browser.clone();
+        let chosen = if saved.is_empty() { preferred(&statuses).to_string() } else { saved };
+        let mut list = div().flex().flex_col().gap_1();
+        for status in statuses.iter().filter(|s| s.present) {
+            let id = status.id;
+            let ready: Vec<&str> = AgentBrowser::ALL.iter().filter(|a| status.ready_for(**a)).map(|a| a.id()).collect();
+            let mark = if ready.is_empty() { t(cx, "browser.agent_none").to_string() } else { ready.join(" · ") };
+            list = list.child(
+                div()
+                    .id(gpui::SharedString::from(format!("agent-browser-{id}")))
+                    .px_2()
+                    .py_1p5()
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .when(chosen == id, |d| d.bg(hex(Chrome::SELECTED)))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .child(
+                        div().w(px(14.)).flex_shrink_0().when(chosen == id, |d| d.child(crate::ui::icon("check", 12., hex(Chrome::BLUE)))),
+                    )
+                    .child(div().flex_1().t_small().text_color(hex(Chrome::BRIGHT)).child(status.name))
+                    .child(div().t_caption().text_color(hex(if status.ready() { Chrome::SUCCESS } else { Chrome::MUTED })).child(mark))
+                    .on_click(
+                        cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.browser.agent_browser = id.to_string())),
+                    ),
+            );
+        }
+        if statuses.iter().all(|s| !s.present) {
+            list = list.child(div().px_2().py_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "browser.agent_no_browser")));
+        }
+        // What to install, for the browser in hand. Named per agent, because they are separate
+        // extensions from separate people and having one says nothing about the other.
+        let installs = div().flex().gap_2().children(AgentBrowser::ALL.into_iter().map(|agent| {
+            let url = agent.store_url();
+            let label =
+                crate::i18n::tf(cx, "browser.agent_install", &[("name", if agent == AgentBrowser::Claude { "Claude" } else { "Codex" })]);
+            action_button(gpui::SharedString::from(format!("agent-browser-install-{}", agent.id())), label, move |_, _, cx| {
+                cx.open_url(url)
+            })
+        }));
+        // One press that proves the whole path: a tab opens, the agent takes the address, and the
+        // page comes up in the browser the user is signed into. Nothing to read and then try.
+        let ready = statuses.iter().any(|s| s.ready());
+        let test = if ready {
+            div().child(action_button(
+                "agent-browser-test",
+                t(cx, "browser.agent_test"),
+                cx.listener(|this, _: &ClickEvent, window, cx| {
+                    let home = crate::settings::settings(cx).browser.home.clone();
+                    this.page = None;
+                    this.ask_agent_browser(home, Some("tell me the page title".into()), window, cx);
+                }),
+            ))
+        } else {
+            div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "browser.agent_not_ready"))
+        };
+        section(t(cx, "browser.agent_section"))
+            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "browser.agent_hint")))
+            .child(list)
+            .child(div().flex().items_center().gap_2().child(installs).child(test))
+    }
+
     fn render_browser_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         use crate::settings::{LinkOpener, SearchEngine};
         let prefs = settings(cx).clone();
@@ -456,8 +531,10 @@ impl Workbench {
                             .flex()
                             .gap_1()
                             .child(opener("link-external", "settings.link_external", LinkOpener::External, cx))
-                            .child(opener("link-inapp", "settings.link_inapp", LinkOpener::InApp, cx)),
+                            .child(opener("link-inapp", "settings.link_inapp", LinkOpener::InApp, cx))
+                            .child(opener("link-ai", "settings.link_ai", LinkOpener::AiBrowser, cx)),
                     ))
+                    .children((prefs.link_opener == LinkOpener::AiBrowser).then(|| self.render_agent_browsers(cx)))
                     .child(row(t(cx, "settings.search_engine"), engines))
                     .child(row(
                         t(cx, "settings.browser_zoom"),

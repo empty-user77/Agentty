@@ -73,6 +73,9 @@ pub enum LinkOpener {
     External,
     #[default]
     InApp,
+    /// An agent opens the address in the browser it drives, and acts there. What the user asks for
+    /// goes with it, so "check this page" is one sentence rather than a tab and a prompt.
+    AiBrowser,
 }
 
 /// Where the file editor's "Open in editor" button sends a file.
@@ -477,6 +480,10 @@ pub struct BrowserSettings {
     pub agent_tools: bool,
     /// A local server started in a tab opens here by itself (only while links open in-app).
     pub auto_open_servers: bool,
+    /// The browser an agent drives, by `browser_ext::Browser::id`. Empty means the first one that
+    /// can: which browser is ready is a property of the browser, not of the machine.
+    #[serde(default)]
+    pub agent_browser: String,
 }
 
 impl Default for BrowserSettings {
@@ -494,6 +501,7 @@ impl Default for BrowserSettings {
             inspectable: false,
             agent_tools: true,
             auto_open_servers: true,
+            agent_browser: String::new(),
         }
     }
 }

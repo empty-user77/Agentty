@@ -249,12 +249,62 @@ impl Workbench {
     /// at — a dev server, a local page, a file — and its own address bar still loads anything the
     /// user types there on purpose.
     pub(super) fn open_link(&mut self, url: String, cx: &mut Context<Self>) {
-        let in_app = settings(cx).link_opener == LinkOpener::InApp && is_local_url(&url);
-        if in_app {
-            self.open_browser(Some(url), cx);
-        } else {
-            cx.open_url(&url);
+        match settings(cx).link_opener {
+            LinkOpener::InApp if is_local_url(&url) => self.open_browser(Some(url), cx),
+            // Handed to an agent on the next render, which is where a window to open a tab with is.
+            LinkOpener::AiBrowser => {
+                self.pending_agent_browser = Some(url);
+                cx.notify();
+            }
+            _ => cx.open_url(&url),
         }
+    }
+
+    /// Hands an address to an agent that drives the browser the user already uses.
+    ///
+    /// The agent opens it where the user is already signed in, so a page behind a login needs no
+    /// second login. An agent already able to do that and not in the middle of a turn takes the
+    /// address; otherwise a tab is opened for one, with the request as its first message.
+    pub(super) fn open_pending_agent_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(url) = self.pending_agent_browser.take() else { return };
+        self.ask_agent_browser(url, None, window, cx);
+    }
+
+    /// `ask` is what to do there; without one the agent just reports what it finds.
+    pub(super) fn ask_agent_browser(&mut self, url: String, ask: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        // Named, not implied: the browser meant here is the user's own, reached through the agent's
+        // Chrome extension, where they are already signed in.
+        //
+        // And left open. An agent that only had to read something tidies up after itself and
+        // closes the tab, which is right when it was working alone and wrong here: the point of
+        // sending a page to the user's browser is that the user ends up looking at it.
+        let keep = "The page is already open in the browser; work in that tab and leave it open.";
+        let prompt = match ask.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+            Some(ask) => format!("Using your Chrome browser tools, go to {url}, then: {ask}. {keep}"),
+            None => format!("Using your Chrome browser tools, go to {url} and tell me what is on the page. {keep}"),
+        };
+        // The browser first, and with the address: the extension the agent drives lives inside the
+        // browser, so one that is not running cannot be driven. This also puts the page in front of
+        // the user straight away, instead of after the agent has finished reading it.
+        let prefs = settings(cx).browser.agent_browser.clone();
+        let statuses = agentty_bridge::browser_ext::browsers();
+        let browser = if prefs.is_empty() { agentty_bridge::browser_ext::preferred(&statuses).to_string() } else { prefs };
+        agentty_bridge::browser_ext::open_in(&browser, &url);
+
+        let idle = self.all_panes().into_iter().find(|pane| {
+            let view = pane.read(cx);
+            view.agent_kind() == Some(crate::launch::PaneKind::Claude) && view.spec.browser && view.is_running() && !view.is_busy()
+        });
+        if let Some(pane) = idle {
+            pane.update(cx, |view, cx| view.submit_prompt(prompt, cx));
+            self.mark_active(&pane, cx);
+            return cx.notify();
+        }
+        let cwd = self.default_cwd(cx);
+        let mut spec = crate::launch::LaunchSpec::with_prompt(agentty_bridge::model::Agent::Claude, prompt, String::new(), cwd);
+        spec.title = crate::launch::LaunchSpec::new(crate::launch::PaneKind::Claude, std::path::PathBuf::new()).title;
+        spec.browser = true;
+        self.open_tab(spec, window, cx);
     }
 
     pub(super) fn toggle_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {

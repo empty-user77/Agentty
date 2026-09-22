@@ -3,6 +3,7 @@
 pub mod agent_auth;
 pub mod agy;
 pub mod amp;
+pub mod browser_ext;
 pub mod claude;
 pub mod claude_trust;
 pub mod codex;

@@ -79,6 +79,8 @@ pub struct LaunchSpec {
     pub model: Option<String>,
     /// Claude Code advisor; `None` takes the setting for new tabs.
     pub advisor: Option<AdvisorChoice>,
+    /// Start the agent able to drive the browser the user already uses (`claude --chrome`).
+    pub browser: bool,
 }
 
 /// What the user picked in the launcher.
@@ -144,11 +146,20 @@ impl LaunchSpec {
             PaneKind::Codex => "Codex".to_string(),
         };
         let session_id = (kind == PaneKind::Claude).then(|| uuid::Uuid::new_v4().to_string());
-        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None }
+        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None, browser: false }
     }
 
     pub fn shell_command(command: String, title: String, cwd: PathBuf) -> Self {
-        Self { kind: PaneKind::Shell, title, cwd, start: Start::Command(command), session_id: None, model: None, advisor: None }
+        Self {
+            kind: PaneKind::Shell,
+            title,
+            cwd,
+            start: Start::Command(command),
+            session_id: None,
+            model: None,
+            advisor: None,
+            browser: false,
+        }
     }
 
     pub fn resume(agent: Agent, id: String, title: String, cwd: PathBuf) -> Self {
@@ -156,7 +167,16 @@ impl LaunchSpec {
             let line = agent.resume_args(&id).iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
             return Self::shell_command(line, title, cwd);
         }
-        Self { kind: agent.into(), title, cwd, session_id: Some(id.clone()), start: Start::Resume(id), model: None, advisor: None }
+        Self {
+            kind: agent.into(),
+            title,
+            cwd,
+            session_id: Some(id.clone()),
+            start: Start::Resume(id),
+            model: None,
+            advisor: None,
+            browser: false,
+        }
     }
 
     pub fn with_prompt(agent: Agent, prompt: String, title: String, cwd: PathBuf) -> Self {
@@ -219,16 +239,27 @@ impl LaunchSpec {
                 if let Some(model) = advisor.model() {
                     args.extend(["--advisor".into(), model.into()]);
                 }
+                // The browser the user already uses, with the sites they are already signed into.
+                // Claude Code reaches it through its own extension, so nothing here starts a
+                // browser: this only says the session may use one.
+                if self.browser {
+                    args.push("--chrome".into());
+                }
                 if crate::agents::claude_auto_mode() && agentty_bridge::idea::is_idea_project(&self.cwd) {
                     // "Build my idea" projects belong to people who cannot judge a permission prompt:
                     // Claude Code's auto mode decides instead. Only the command line can turn it on —
                     // `"defaultMode": "auto"` in the project's own settings is ignored.
                     args.extend(["--permission-mode".into(), "auto".into()]);
                 }
-                if crate::settings::browser_tools_enabled() {
-                    // The in-app browser as MCP tools (added to the user's own servers). `--mcp-config`
-                    // takes any number of values, so it must not be the last option: a prompt right
-                    // after it is read as another config file ("Invalid MCP configuration").
+                // The in-app browser as MCP tools (added to the user's own servers). `--mcp-config`
+                // takes any number of values, so it must not be the last option: a prompt right
+                // after it is read as another config file ("Invalid MCP configuration").
+                //
+                // Left out when this session is for the user's own browser: an agent handed two
+                // browsers uses whichever it reaches first, and it reached this one — the page came
+                // up inside Agentty rather than where the user is signed in, which is the whole
+                // point of the other one.
+                if crate::settings::browser_tools_enabled() && !self.browser {
                     args.extend(["--mcp-config".into(), inline_or_file("browser-mcp.json", browser_mcp_config())]);
                 }
                 // What Agentty offers the agent (guide + skills), passed along, never written into its settings.
@@ -730,6 +761,33 @@ pub fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// The browser an agent drives is its own extension's business; all Agentty does is say the
+    /// session may use one. Nothing else on the command line changes.
+    #[test]
+    fn a_browser_session_asks_claude_for_its_browser() {
+        let plain = LaunchSpec::new(PaneKind::Claude, PathBuf::from("/tmp"));
+        assert!(!plain.command().unwrap_or_default().contains(&"--chrome".to_string()));
+
+        let mut browsing = LaunchSpec::new(PaneKind::Claude, PathBuf::from("/tmp"));
+        browsing.browser = true;
+        assert!(browsing.command().unwrap_or_default().contains(&"--chrome".to_string()));
+
+        // Not something a shell pane can be handed.
+        let mut shell = LaunchSpec::new(PaneKind::Shell, PathBuf::from("/tmp"));
+        shell.browser = true;
+        assert!(!shell.command().unwrap_or_default().contains(&"--chrome".to_string()));
+    }
+
+    /// Two browsers is one too many: handed both, the agent used Agentty's own and the page came
+    /// up inside the app instead of where the user is signed in.
+    #[test]
+    fn a_browser_session_is_not_also_given_the_in_app_browser() {
+        let mut browsing = LaunchSpec::new(PaneKind::Claude, PathBuf::from("/tmp"));
+        browsing.browser = true;
+        let args = browsing.command().unwrap_or_default().join(" ");
+        assert!(!args.contains("browser-mcp"), "a session for the user's own browser also carried Agentty's");
+    }
 
     #[test]
     fn quotes_only_when_needed() {

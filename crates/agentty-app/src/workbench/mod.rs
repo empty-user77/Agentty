@@ -384,6 +384,10 @@ pub struct Workbench {
     mini: Option<mini::MiniState>,
     /// A folder change is waiting to be saved; see `persist_soon`.
     persist_pending: bool,
+    /// An address waiting to be handed to an agent's browser. A link is clicked from places that
+    /// have no window to open a tab with, so it is picked up by the next render, the way an
+    /// editor open is.
+    pending_agent_browser: Option<String>,
     mini_opening: bool,
     /// Counts folds into the mini panel. A fold waits out its fade in a task, and the press that
     /// cancels it counts a new one, so that task can tell it is no longer the fold being asked for.
@@ -614,6 +618,7 @@ impl Workbench {
             installed_at: None,
             mini: None,
             persist_pending: false,
+            pending_agent_browser: None,
             mini_opening: false,
             mini_generation: 0,
             updates: update::Updates::default(),
@@ -2512,6 +2517,7 @@ impl Render for Workbench {
             git.update(cx, |v, _| v.set_visible(false));
         }
         self.open_pending_file(window, cx);
+        self.open_pending_agent_browser(window, cx);
         self.prepare_browser(window, cx);
         self.prepare_plugin_panel(window, cx);
         self.prepare_files_panel(cx);
