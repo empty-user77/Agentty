@@ -289,8 +289,10 @@ const PR_REFRESH: std::time::Duration = std::time::Duration::from_secs(180);
 /// process talking to GitHub, so a window full of branches asks for a few at a time.
 const PR_LOOKUPS_AT_ONCE: usize = 4;
 
-/// Continuing a session whose context is at least this full offers to compact it first.
-const COMPACT_OFFER_AT: f64 = 80.0;
+/// A context this full is what the meter already draws in orange, and where compacting starts
+/// being worth offering: the bar's own compact button appears, and continuing a session offers to
+/// compact it first.
+const COMPACT_OFFER_AT: f64 = 70.0;
 
 /// How long a status bar message stays.
 const STATUS_DURATION: std::time::Duration = std::time::Duration::from_secs(6);

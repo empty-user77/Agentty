@@ -191,7 +191,19 @@ impl Workbench {
                     div()
                         .id(("pane-grip", pane.entity_id().as_u64() as usize))
                         .cursor(gpui::CursorStyle::OpenHand)
-                        .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "pane.move_hint"), None))
+                        .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "pane.move_or_zoom_hint"), None))
+                        // Double-clicking the grip enlarges the pane and puts it back, like the
+                        // status further along the bar: the two things a bar is grabbed by.
+                        .on_click({
+                            let target = pane.clone();
+                            cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if event.click_count() < 2 {
+                                    return;
+                                }
+                                cx.stop_propagation();
+                                this.toggle_zoom_from_bar(&target, window, cx);
+                            })
+                        })
                         .on_drag(
                             super::drop_split::DraggedPane { pane_id: view.pane_id, title: view.display_title().into() },
                             |dragged, _, _, cx| {
@@ -220,14 +232,26 @@ impl Workbench {
                                 view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && agent_info && width >= 700.),
                                 |d, percent| d.child(meter("Usage", percent)),
                             ),
+                            // Double-clicking the status enlarges this pane and puts it back:
+                            // the header's focus-view button without aiming at a 22 pt icon.
                             HudItem::Status => d.when(agent_info, |d| {
+                                let target = pane.clone();
                                 d.child(
                                     div()
+                                        .id(("pane-status", pane.entity_id().as_u64() as usize))
                                         .flex_shrink()
                                         .min_w(px(40.))
                                         .max_w(px(220.))
                                         .truncate()
                                         .text_color(hex(status_color))
+                                        .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "pane.zoom_hint"), None))
+                                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                            if event.click_count() < 2 {
+                                                return;
+                                            }
+                                            cx.stop_propagation();
+                                            this.toggle_zoom_from_bar(&target, window, cx);
+                                        }))
                                         .child(status.clone()),
                                 )
                             }),
@@ -362,6 +386,20 @@ impl Workbench {
             .children(header)
             .children(agent_bar)
             .into_any_element()
+    }
+
+    /// Focus view from a pane's bar: double-clicking its status, or the icon it is dragged by.
+    /// A tab holding a single pane already fills the tab, so there the double click is left alone
+    /// rather than marking a pane zoomed that nothing would show as zoomed until the tab is split.
+    pub(super) fn toggle_zoom_from_bar(&mut self, pane: &Pane, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let split = self
+            .locate(pane)
+            .and_then(|(w, t)| self.workspaces[w].tabs.get(t))
+            .is_some_and(|tab| matches!(tab.root, PaneNode::Split { .. }));
+        if !split {
+            return;
+        }
+        self.toggle_zoom(pane, window, cx);
     }
 
     /// Focus view for a split pane: it takes most of the tab until toggled again.
@@ -891,8 +929,12 @@ impl Workbench {
                                 .when_some(view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && width >= 700.), |d, percent| {
                                     d.child(meter("Usage", percent))
                                 }),
+                            // Same double-click as the split header's status. This bar belongs to
+                            // a pane that already fills its tab, so it only has something to do
+                            // once the tab is split.
                             HudItem::Status => d.child(
                                 div()
+                                    .id(("agent-bar-status", pane.entity_id().as_u64() as usize))
                                     .flex()
                                     .flex_shrink()
                                     .min_w(px(24.))
@@ -901,6 +943,16 @@ impl Workbench {
                                     .px_1p5()
                                     .rounded_sm()
                                     .bg(hex_alpha(status_color, 0.15))
+                                    .on_click({
+                                        let target = pane.clone();
+                                        cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                            if event.click_count() < 2 {
+                                                return;
+                                            }
+                                            cx.stop_propagation();
+                                            this.toggle_zoom_from_bar(&target, window, cx);
+                                        })
+                                    })
                                     .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(status_color)))
                                     .child(div().min_w_0().max_w(px(320.)).truncate().text_color(hex(status_color)).child(status.clone())),
                             ),
@@ -979,7 +1031,8 @@ impl Workbench {
     /// agent's own compaction command, typed in rather than sent: compacting is the user's call.
     /// The Context meter. Clicking it opens what makes up that number — memory files, skills, the
     /// files in context — anchored right under the figure it explains, rather than from an icon
-    /// somewhere else in the window. A nearly full context also offers to compact it.
+    /// somewhere else in the window. A nearly full context also offers to compact it, and the
+    /// panel it opens carries that button whatever the number says.
     fn context_meter(&self, pane: &Pane, percent: Option<f64>, cx: &mut Context<Self>) -> AnyElement {
         let view = pane.read(cx);
         let agent = view.agent_kind().and_then(crate::launch::PaneKind::agent);

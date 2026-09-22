@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- The context panel carries a compact button beside the figure it is about: it runs the agent's
+  own compaction command (Claude Code and Codex), whatever the number says. The bar's own compact
+  button now appears from 70% — where the meter already turns orange — instead of 80%.
+- Double-clicking a split pane's bar — its status, or the icon it is dragged by — enlarges that
+  pane, and puts it back on the next double click.
+
 ## [0.1.16] - 2026-09-22
 
 ### Changed
