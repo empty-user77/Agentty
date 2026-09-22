@@ -561,7 +561,9 @@ test('Launch: already logged in to GitHub and Vercel, saves the project and depl
     // A double click on "Publish": the second event arrives while the first runs and is ignored.
     host.send('ui/event', { element: 'deploy-start', event: 'click', context: host.context });
     host.send('ui/event', { element: 'deploy-start', event: 'click', context: host.context });
-    panel = await waitForText(host, /my-cool-app\.vercel\.app/);
+    // The deploy's own log carries the URL while it is still running, so wait for the state that
+    // says it finished rather than for the address appearing anywhere on the panel.
+    panel = await waitForText(host, /Launched|출시 완료/);
     assert.equal(fs.readFileSync(path.join(box.root, 'deploys.log'), 'utf8').trim().split('\n').length, 1, 'one deploy for a double click');
     // The owner's idea notes, agent settings and env files never go up with a deploy.
     const vercelignore = fs.readFileSync(path.join(box.project, '.vercelignore'), 'utf8');
@@ -1113,6 +1115,30 @@ test('a login started from the dashboard reports its failure on the dashboard', 
     const panel = await waitForText(host, /GitHub login did not finish/);
     assert.ok(buttonIds(panel).includes('retry'), 'and can be tried again');
     assert.match(JSON.stringify(panel), /"id":"tab"/, 'still on the dashboard');
+  } finally {
+    host.stop();
+  }
+});
+
+test('the folder decides the tab every time Launch is opened, whatever was looked at last', async () => {
+  const box = sandbox();
+  const host = start(box);
+  try {
+    host.send('panel/open', { context: host.context });
+    // A folder that can be published opens on the publishing steps.
+    await waitForButton(host, 'gh-save');
+
+    // Looking at the dashboard does not change what the next open does.
+    host.send('ui/event', { element: 'tab', event: 'change', value: 'dashboard', context: host.context });
+    await waitForText(host, /Projects on Vercel/);
+    host.send('panel/close', { context: host.context });
+    host.send('panel/open', { context: host.context });
+    await waitForButton(host, 'gh-save');
+
+    // And a folder with nothing to publish brings the dashboard back on its own.
+    const elsewhere = { ...host.context, pane: { ...host.context.pane, cwd: box.root } };
+    host.send('context/changed', { context: elsewhere });
+    await waitForText(host, /Projects on Vercel/);
   } finally {
     host.stop();
   }

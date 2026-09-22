@@ -606,8 +606,6 @@ const state = {
   panelOpen: false,
   // 'dashboard' (the Vercel account) or 'project' (publishing the folder in the focused pane).
   tab: null,
-  // Set once the user picks a tab: from then on Agentty stops choosing one for them.
-  tabPinned: false,
   dash: freshDashboardState(),
   ghIdentity: { connected: false, username: null, via: null, api: false, push: false },
   originSlug: null,
@@ -794,9 +792,13 @@ async function copyToClipboard(text) {
 
 // -- project detection ------------------------------------------------------------------------
 
-/** The tab to show when the user hasn't picked one: the dashboard when this folder has nothing to publish. */
+/**
+ * The folder decides which tab Launch opens on — the dashboard when there is nothing here to
+ * publish, the publishing steps when there is. This runs when the panel is opened and when the
+ * focused folder changes; a tab the user picks in between stays until one of those happens.
+ */
 async function pickTab() {
-  if (!state.tabPinned) state.tab = state.step === 'no-project' || state.step === 'no-pane' ? 'dashboard' : 'project';
+  state.tab = state.step === 'no-project' || state.step === 'no-pane' ? 'dashboard' : 'project';
   syncDashboardSelection({ preferFolder: true });
   await render();
   if (state.tab === 'dashboard') await loadDashboard();
@@ -1947,9 +1949,10 @@ async function openValidAbsoluteDir(candidate, context) {
 plugin
   .onPanelOpen(async (context) => {
     state.panelOpen = true;
+    // Opening Launch asks the folder again which tab belongs in front, without re-checking
+    // everything about it: `state.step` already says what this folder can do.
     if (!state.root) await openProject(projectCwdFromContext(context));
-    else if (state.tab === 'dashboard') await showDashboard();
-    else await render();
+    else await pickTab();
   })
   .onPanelClose(() => {
     state.panelOpen = false;
@@ -1965,14 +1968,10 @@ plugin
   .onEvent('tab', (event) => {
     const picked = String(event.value ?? '');
     if (picked !== 'dashboard' && picked !== 'project') return null;
-    state.tabPinned = true;
     state.tab = picked;
     return picked === 'dashboard' ? showDashboard() : render();
   })
-  .onEvent('open-dashboard', () => {
-    state.tabPinned = true;
-    return showDashboard();
-  })
+  .onEvent('open-dashboard', () => showDashboard())
   .onEvent('dash-projects', (event) => {
     // Only a row that is actually on screen: an id from anywhere else changes nothing.
     if (event.event !== 'select' || !state.dash.projects.some((project) => project.id === event.item)) return null;
