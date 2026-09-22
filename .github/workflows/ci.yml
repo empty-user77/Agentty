@@ -15,9 +15,14 @@ env:
 
 jobs:
   # All jobs run on the self-hosted Apple silicon Mac (check-linux in Docker there) except
-  # check-windows, which runs on a self-hosted Windows PC. The repository is private, so only
-  # collaborators' pushes and pull requests reach them.
+  # check-windows, which runs on a self-hosted Windows PC. These are the maintainer's own machines,
+  # so every job below is guarded: a pull request from a fork never reaches them. That guard, not
+  # the repository being private, is what keeps somebody else's code off this hardware.
   secrets:
+    # A pull request from a fork is somebody else's code, and these runners are the
+    # maintainer's own machines: it would build and test itself on them. Their own
+    # branches, and everything on main, still run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -34,6 +39,10 @@ jobs:
           python3 scripts/check-secrets.py --range "$base..${{ github.sha }}"
 
   check:
+    # A pull request from a fork is somebody else's code, and these runners are the
+    # maintainer's own machines: it would build and test itself on them. Their own
+    # branches, and everything on main, still run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: secrets
     runs-on: [self-hosted, macOS, ARM64]
     env:
@@ -58,6 +67,10 @@ jobs:
   # The runner needs rustup, git and Visual Studio Build Tools (C++ workload + Windows SDK). The zip
   # is uploaded as a workflow artifact: download it from the run's Summary page.
   check-windows:
+    # A pull request from a fork is somebody else's code, and these runners are the
+    # maintainer's own machines: it would build and test itself on them. Their own
+    # branches, and everything on main, still run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: secrets
     runs-on: [self-hosted, Windows, X64]
     env:
@@ -102,6 +115,10 @@ jobs:
   # (Docker Desktop must be running). Apple silicon, so the build is linux-aarch64. Cargo's registry,
   # the toolchain and target/ live in named volumes, so later runs reuse them.
   check-linux:
+    # A pull request from a fork is somebody else's code, and these runners are the
+    # maintainer's own machines: it would build and test itself on them. Their own
+    # branches, and everything on main, still run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: secrets
     runs-on: [self-hosted, macOS, ARM64]
     steps:
