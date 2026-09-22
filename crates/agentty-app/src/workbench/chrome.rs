@@ -876,7 +876,7 @@ impl Workbench {
             .or_else(|| dormant.as_ref().and_then(|d| d.branch.clone()));
         let pull_request = branch
             .as_ref()
-            .and_then(|branch| Some((agentty_bridge::git::repo_root(&cwd)?, branch.clone())))
+            .and_then(|branch| Some((self.repo_root_of(&cwd)?.to_path_buf(), branch.clone())))
             .and_then(|(repo, branch)| self.pull_request_of(&repo, &branch).cloned());
         let working = panes.iter().any(|p| p.read(cx).status.in_turn());
         // The logo is only worth the room when there is more than one kind of agent to tell apart:

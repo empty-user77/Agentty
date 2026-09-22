@@ -328,6 +328,9 @@ pub struct Workbench {
     folder_branches: HashMap<PathBuf, (Option<String>, std::time::Instant)>,
     /// Pull request per (repository, branch), and when it was last looked up.
     pull_requests: HashMap<(PathBuf, String), (Option<agentty_bridge::github::PullRequest>, std::time::Instant)>,
+    /// Which repository a folder belongs to, and when that was worked out. Answering it means
+    /// running `git rev-parse`, so it is answered once in the background and read from here after.
+    repo_roots: HashMap<PathBuf, (Option<PathBuf>, std::time::Instant)>,
     /// The workspace being removed on purpose: closing its panes must not keep it around.
     removing_workspace: Option<u64>,
     picker: Option<picker::Picker>,
@@ -497,7 +500,8 @@ pub struct Workbench {
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
     /// Context last sent to plugins (serialized), to send only changes.
-    plugin_context_key: String,
+    /// The context last sent to plugins, kept to notice when it changed.
+    plugin_context_key: serde_json::Value,
     prompt_dialog: Option<prompt_dialog::PromptDialog>,
     /// Prompts (links, plugins) that arrived while the dialog showed another one.
     prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
@@ -566,6 +570,7 @@ impl Workbench {
             color_picking: None,
             folder_branches: HashMap::new(),
             pull_requests: HashMap::new(),
+            repo_roots: HashMap::new(),
             removing_workspace: None,
             picker: None,
             palette: None,
@@ -679,7 +684,7 @@ impl Workbench {
             plugin_inputs: HashMap::new(),
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
-            plugin_context_key: String::new(),
+            plugin_context_key: serde_json::Value::Null,
             prompt_dialog: None,
             prompt_queue: std::collections::VecDeque::new(),
             task_requests: std::collections::VecDeque::new(),
@@ -1534,17 +1539,66 @@ impl Workbench {
     }
 
     /// The pull request of a branch, as far as it is known; `None` while it has not been looked up.
+    /// The repository a folder is in, as far as has been worked out already.
+    ///
+    /// Nothing is asked of git here. Answering it means running `git rev-parse` — a whole process,
+    /// started and waited for — and this is read while a card is drawn, once per workspace, on
+    /// every frame. Typing repaints, so every keystroke forked a git per card and waited for it,
+    /// which is exactly what made typing feel slow. The answer barely ever changes, so it is
+    /// looked up in the background and read from the map afterwards.
+    pub(super) fn repo_root_of(&self, cwd: &std::path::Path) -> Option<&std::path::Path> {
+        self.repo_roots.get(cwd).and_then(|(root, _)| root.as_deref())
+    }
+
+    /// Works out which repository each of `folders` is in, off the main thread, once per folder.
+    /// A folder that becomes a repository later is picked up on the next refresh.
+    fn refresh_repo_roots(&mut self, folders: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let now = std::time::Instant::now();
+        for cwd in folders {
+            if self.repo_roots.get(&cwd).is_some_and(|(root, at)| root.is_some() || now.duration_since(*at) < PR_REFRESH) {
+                continue;
+            }
+            // Marked as asked right away, so a slow answer is not asked for again every frame.
+            self.repo_roots.entry(cwd.clone()).or_insert((None, now)).1 = now;
+            let folder = cwd.clone();
+            let task = cx.background_spawn(async move { agentty_bridge::git::repo_root(&folder) });
+            cx.spawn(async move |this, cx| {
+                let found = task.await;
+                let _ = this.update(cx, |this, cx| {
+                    let entry = this.repo_roots.entry(cwd).or_insert((None, std::time::Instant::now()));
+                    if entry.0 != found {
+                        entry.0 = found;
+                        // Now that the repository is known, what hangs off it can be looked up.
+                        this.refresh_pull_requests(cx);
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+    }
+
     pub(super) fn pull_request_of(&self, repo: &std::path::Path, branch: &str) -> Option<&agentty_bridge::github::PullRequest> {
         self.pull_requests.get(&(repo.to_path_buf(), branch.to_string())).and_then(|(pr, _)| pr.as_ref())
     }
 
     /// Looks up the pull request of every branch a pane is on, at most once per [`PR_REFRESH`].
     pub(super) fn refresh_pull_requests(&mut self, cx: &mut Context<Self>) {
+        // The folder each branch is in, and then the repository it belongs to — which is read from
+        // what was worked out in the background, never asked of git here: this runs on the main
+        // thread, and starting a process per pane on it is what the user feels as a stutter.
+        let mut folders: Vec<PathBuf> = Vec::new();
         let mut wanted: Vec<(PathBuf, String)> = Vec::new();
         for pane in self.all_panes() {
             let view = pane.read(cx);
             let Some(branch) = view.git_branch.clone() else { continue };
-            let Some(repo) = agentty_bridge::git::repo_root(&view.display_cwd()) else { continue };
+            let cwd = view.display_cwd();
+            let Some(repo) = self.repo_root_of(&cwd).map(std::path::Path::to_path_buf) else {
+                if !folders.contains(&cwd) {
+                    folders.push(cwd);
+                }
+                continue;
+            };
             let key = (repo, branch);
             if !wanted.contains(&key) {
                 wanted.push(key);
@@ -1560,12 +1614,18 @@ impl Workbench {
             let Some(branch) = self.folder_branch(&cwd).map(str::to_string).or_else(|| ws.dormant.as_ref()?.branch.clone()) else {
                 continue;
             };
-            let Some(repo) = agentty_bridge::git::repo_root(&cwd) else { continue };
+            let Some(repo) = self.repo_root_of(&cwd).map(std::path::Path::to_path_buf) else {
+                if !folders.contains(&cwd) {
+                    folders.push(cwd);
+                }
+                continue;
+            };
             let key = (repo, branch);
             if !wanted.contains(&key) {
                 wanted.push(key);
             }
         }
+        self.refresh_repo_roots(folders, cx);
         let now = std::time::Instant::now();
         let mut started = 0;
         for key in wanted {

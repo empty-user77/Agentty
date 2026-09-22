@@ -1706,6 +1706,17 @@ impl EntityInputHandler for TerminalView {
 // Painting
 // ---------------------------------------------------------------------------------------------
 
+/// What drawing a grid needs from the settings, so a repaint does not copy the rest of them.
+struct GridPrefs {
+    font_size: f32,
+    font_family: String,
+    letter_spacing: f32,
+    line_height: f32,
+    padding: f32,
+    bold_text: bool,
+    cursor_shape: crate::settings::CursorShapeSetting,
+}
+
 struct TerminalElement {
     view: Entity<TerminalView>,
     focus: FocusHandle,
@@ -1784,7 +1795,22 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) -> Frame {
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        let prefs = settings(cx).clone();
+        // Only the handful of values a grid of text needs, taken out one at a time. This runs for
+        // every visible terminal on every repaint — every keystroke echoed, every burst an agent
+        // prints — and the settings also hold the recent folders, the aliases, the saved layout and
+        // more, so copying the lot of it here was work done sixty times a second for nothing.
+        let prefs = {
+            let settings = settings(cx);
+            GridPrefs {
+                font_size: settings.font_size,
+                font_family: settings.font_family.clone(),
+                letter_spacing: settings.letter_spacing,
+                line_height: settings.line_height,
+                padding: settings.padding,
+                bold_text: settings.bold_text,
+                cursor_shape: settings.cursor_shape,
+            }
+        };
         let theme = terminal_theme(cx).clone();
         let font_size = px(prefs.font_size);
         let base_font = font(prefs.font_family.clone());
@@ -1836,16 +1862,34 @@ impl Element for TerminalElement {
         let term = term_handle.lock();
         // URLs on screen are drawn blue (and underlined), like links.
         let link_color = hex(Chrome::BLUE);
+        // Which cells are part of an address, so they can be underlined. Every row is looked at on
+        // every repaint, so a row is only copied out once it is known to hold one: almost none do,
+        // and reading the cells for `://` in place costs nothing to allocate.
         let url_cells: std::collections::HashSet<(i32, usize)> = {
             let grid = term.grid();
             let offset = grid.display_offset() as i32;
+            let columns = grid.columns();
             let mut cells = std::collections::HashSet::new();
+            let mut text: Vec<char> = Vec::new();
             for row in 0..grid.screen_lines() as i32 {
                 let line = Line(row - offset);
-                let text: Vec<char> = (0..grid.columns()).map(|c| grid[line][Column(c)].c).collect();
-                if !text.windows(3).any(|w| w == [':', '/', '/']) {
+                let mut previous = ['\0'; 2];
+                let mut has_scheme = false;
+                for column in 0..columns {
+                    let c = grid[line][Column(column)].c;
+                    if previous == [':', '/'] && c == '/' {
+                        has_scheme = true;
+                        break;
+                    }
+                    previous = [previous[1], c];
+                }
+                if !has_scheme {
                     continue;
                 }
+                // The same buffer every time: a screen full of addresses would otherwise be a
+                // fresh allocation per row.
+                text.clear();
+                text.extend((0..columns).map(|c| grid[line][Column(c)].c));
                 for (start, end) in url_ranges(&text) {
                     cells.extend((start..end).map(|c| (line.0, c)));
                 }
