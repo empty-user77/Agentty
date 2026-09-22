@@ -63,9 +63,6 @@ pub struct Entry {
     pub homepage: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
-    /// The plugin's own logo, preferred over `icon`: an `https://` address, fetched once and kept.
-    #[serde(default)]
-    pub logo: Option<String>,
     #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
@@ -177,9 +174,6 @@ impl Entry {
         // An icon name Agentty does not have falls back to a generic one; anything that is not a
         // name at all is dropped here rather than carried into the manifest.
         entry.icon = entry.icon.map(|icon| icon.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect());
-        // A listed logo can only ever be an address: a marketplace entry has no folder of its own
-        // to hold a file, so anything else is dropped rather than carried into the manifest.
-        entry.logo = entry.logo.filter(|logo| matches!(super::manifest::parse_logo(logo), Some(super::manifest::Logo::Url(_))));
         entry.keywords =
             entry.keywords.iter().filter_map(|word| plain(word, "keyword", 30, false).ok()).filter(|w| !w.is_empty()).take(10).collect();
         Ok(entry)
@@ -194,7 +188,9 @@ impl Entry {
             publisher: self.publisher.clone(),
             description: self.description.clone(),
             icon: self.icon.clone(),
-            logo: self.logo.clone(),
+            // A listing has no logo of its own: the module carries it, and it is written out when
+            // the plugin is installed (`store::logo_in_module`).
+            logo: None,
             homepage: self.homepage.clone(),
             links: vec![super::manifest::LinkEntry { label: "Source".into(), url: self.source.clone() }],
             requires: None,

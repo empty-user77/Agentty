@@ -31,8 +31,8 @@ pub struct Manifest {
     /// Icon name from Agentty's icon set (unknown names fall back to a generic icon).
     #[serde(default)]
     pub icon: Option<String>,
-    /// The plugin's own logo, preferred over `icon` when it is there: either a file inside the
-    /// plugin folder (`logo.png`) or an `https://` URL, which is fetched once and kept.
+    /// The plugin's own logo, preferred over `icon` when it is there: a file inside the plugin
+    /// folder (`logo.png`). A plugin that is one module carries its logo in the module instead.
     #[serde(default)]
     pub logo: Option<String>,
     #[serde(default)]
@@ -307,37 +307,26 @@ impl Manifest {
     }
 }
 
-/// How a manifest's `logo` is reached.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Logo {
-    /// A file shipped in the plugin folder.
-    File(PathBuf),
-    /// An address to fetch once and keep.
-    Url(String),
-}
-
-/// Reads a manifest's `logo`: a file inside the plugin folder, or an `https://` address. Anything
-/// else (a path that climbs out, `http://`, a `data:` blob, something enormous) is no logo at all,
-/// and the plugin falls back to its icon name.
-pub fn parse_logo(logo: &str) -> Option<Logo> {
+/// Reads a manifest's `logo`: a file inside the plugin folder. Anything else — a path that
+/// climbs out, an address, a `data:` blob, something enormous — is no logo at all, and the plugin
+/// falls back to its icon name.
+///
+/// A logo is never fetched from anywhere. It travels with the plugin: in its folder, or in the
+/// module itself (`LOGO_SECTION`). That way the bytes drawn are the bytes the user installed and
+/// nothing about installing a plugin reaches its author.
+pub fn parse_logo(logo: &str) -> Option<PathBuf> {
     let logo = logo.trim();
     if logo.is_empty() || logo.len() > 400 || logo.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return None;
     }
-    if let Some(rest) = logo.strip_prefix("https://") {
-        // A host, and nothing that could make this a credential or a local address.
-        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-        let plain_host = !host.is_empty() && !host.contains('@') && host.contains('.');
-        return plain_host.then(|| Logo::Url(logo.to_string()));
-    }
-    // Otherwise a file of the plugin's own: the same rule the entry point is held to, so it cannot
-    // point outside the plugin folder. Anything carrying a scheme is a failed address, not a file
-    // name — `http://host/x.png` is a relative path as far as the filesystem is concerned, and
-    // taking it as one would quietly look for a folder called `http:`.
+    // Anything carrying a scheme is an address, not a file name — `https://host/x.png` is a
+    // relative path as far as the filesystem is concerned, and taking it as one would quietly look
+    // for a folder called `https:`.
     if logo.contains(':') || logo.contains("//") {
         return None;
     }
-    relative_path(logo).ok().map(Logo::File)
+    // The same rule the entry point is held to, so it cannot point outside the plugin folder.
+    relative_path(logo).ok()
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -408,27 +397,25 @@ mod tests {
     /// climbs out of the folder, plain http, a `data:` blob or a credential in the host would each
     /// be a way to make the app fetch or read something it should not.
     #[test]
-    fn a_logo_is_a_plugin_file_or_an_https_address() {
-        assert_eq!(parse_logo("logo.png"), Some(Logo::File("logo.png".into())));
-        assert_eq!(parse_logo("assets/logo.svg"), Some(Logo::File("assets/logo.svg".into())));
-        assert_eq!(parse_logo("  logo.png  "), Some(Logo::File("logo.png".into())));
-        let url = "https://example.com/logo.png";
-        assert_eq!(parse_logo(url), Some(Logo::Url(url.to_string())));
-        assert!(parse_logo("https://cdn.example.com/a/b/logo.svg?v=2").is_some());
-        // Out of the folder, or absolute.
+    fn a_logo_is_a_file_of_the_plugins_own() {
+        assert_eq!(parse_logo("logo.png"), Some("logo.png".into()));
+        assert_eq!(parse_logo("assets/logo.svg"), Some("assets/logo.svg".into()));
+        assert_eq!(parse_logo("  logo.png  "), Some("logo.png".into()));
+
         assert_eq!(parse_logo("../../secrets.png"), None);
         assert_eq!(parse_logo("/etc/passwd"), None);
-        // Not https, or not really a host.
+
+        // No logo is ever fetched: an address is not a file of the plugin's, and must not be read
+        // as the relative path it looks like to the filesystem either.
+        assert_eq!(parse_logo("https://example.com/logo.png"), None);
         assert_eq!(parse_logo("http://example.com/logo.png"), None);
         assert_eq!(parse_logo("data:image/png;base64,AAAA"), None);
-        assert_eq!(parse_logo("https://user:pw@example.com/l.png"), None, "no credential in the host");
-        assert_eq!(parse_logo("https://localhost/l.png"), None, "a host with no dot is not a site");
-        assert_eq!(parse_logo("https:///l.png"), None);
-        // Nothing, or absurd.
+        assert_eq!(parse_logo("//example.com/logo.png"), None);
+
         assert_eq!(parse_logo(""), None);
         assert_eq!(parse_logo("   "), None);
-        assert_eq!(parse_logo(&format!("https://example.com/{}.png", "x".repeat(400))), None);
-        assert_eq!(parse_logo("https://example.com/a b.png"), None);
+        assert_eq!(parse_logo(&format!("{}.png", "x".repeat(400))), None);
+        assert_eq!(parse_logo("a b.png"), None);
     }
 
     #[test]

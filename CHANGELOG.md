@@ -61,10 +61,12 @@ All notable changes to this project are documented here. The format follows
   longer than a line.
 - The Plugins page is a list beside details: search, then the plugin's description, what it adds
   and where, its permissions in full sentences, where it came from, how it runs and its log.
-- A plugin can ship its own logo (`logo` in the manifest): a file in its folder, or an `https://`
-  address fetched once and kept. It is preferred over the icon name everywhere the plugin is shown
-  — the tab strip, the activity bar, the status bar, the panel header, and both the list and the
-  card on the Plugins page.
+- A plugin can ship its own logo: a file in its folder (`logo` in the manifest), or — for a plugin
+  that is one module and has no folder — the picture carried inside the module itself, in a
+  WebAssembly custom section called `agentty.logo`. It is preferred over the icon name everywhere
+  the plugin is shown: the tab strip, the activity bar, the status bar, the panel header, and both
+  the list and the card on the Plugins page. A logo is never fetched from an address, so installing
+  a plugin tells its author nothing, and the picture drawn is the one the checksum covered.
 - Terminal style in detail: letter spacing, bold text, and the background, text, cursor and
   selection colours of the chosen theme, each replaceable and each undoable back to the theme's
   own. A real terminal sits under the controls and shows every change at once — the actual

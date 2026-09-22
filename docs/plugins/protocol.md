@@ -199,8 +199,8 @@ with [`hello-rust`](https://github.com/empty-user77/Agentty-Marketplace/tree/mai
 
 ## Surfaces and how a panel opens
 
-`contributes.panel.surface` says where the plugin's mark goes — its `logo` when the manifest gives
-one, else its `icon` name. A plugin picks one place:
+`contributes.panel.surface` says where the plugin's mark goes — its logo when it ships one, else
+its `icon` name. A plugin picks one place:
 
 | `surface` | Where |
 |---|---|
