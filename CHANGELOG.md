@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-09-22
+
 ### Added
 - The plugin protocol is at version 2. A plugin says which one it was built against, and an
   Agentty that speaks less than that lists it and says to update rather than installing a module
@@ -109,6 +111,18 @@ All notable changes to this project are documented here. The format follows
 - The search box in the sidebar takes the caret when clicked. The click reached the field and then
   carried on to the sidebar, which handed focus to the list, so nothing typed went anywhere. The
   sessions search box had the same fault.
+- Typing and scrolling no longer wait on anything. Drawing a workspace card asked git which
+  repository its folder belonged to, and asking that means starting a process and waiting for it, on
+  the thread that draws. Every keystroke repaints, so every keystroke started one per card and
+  waited for all of them — worse in Korean, Japanese and Chinese, where an input method sends
+  several events per character. That answer is worked out once in the background now, and three
+  smaller things the repaint did for nothing went with it.
+- What is being composed with an input method is drawn beside the grid rather than on it. In an
+  agent's prompt a syllable being composed landed on top of the text already on screen until it was
+  finished: it was placed in the terminal's cursor cell, and a program that draws its own input box
+  leaves that cursor somewhere else entirely.
+- A tab that has just opened says which model it is on and that it has read nothing, instead of the
+  agent's name and a dash until the first answer arrives.
 
 ## [0.1.14] - 2026-09-22
 
