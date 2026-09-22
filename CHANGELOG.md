@@ -5,12 +5,32 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-09-22
+
 ### Added
 - The context panel carries a compact button beside the figure it is about: it runs the agent's
   own compaction command (Claude Code and Codex), whatever the number says. The bar's own compact
   button now appears from 70% — where the meter already turns orange — instead of 80%.
 - Double-clicking a split pane's bar — its status, or the icon it is dragged by — enlarges that
   pane, and puts it back on the next double click.
+- Clicking a working tree in the files panel goes to the terminal already working in it, on top of
+  showing its files. The right-click menu offers the same as its own item, beside "Open a new
+  terminal here".
+- Removing a working tree whose branch was pushed can delete that branch on the remote as well. The
+  tick is off by default, appears only for a branch the repository already knows a remote one for,
+  and the remote branch only goes once the local one really went — a branch git kept holds commits
+  the remote is the last copy of.
+
+### Changed
+- Removing a working tree asks in a dialog that names the branch and says what goes with it. Both
+  ways of removing one — the bin on the row and the two menu items — used to want a second click on
+  the same red item, which says nothing about what is about to happen and is easy to hit twice.
+- The dialog stays on screen with a spinner while git works, instead of closing and leaving the
+  panel looking frozen.
+
+### Fixed
+- The files panel no longer walks every terminal's folder up to its working tree on every frame and
+  every row of the list, which is what made it stutter while a working tree was being deleted.
 
 ## [0.1.16] - 2026-09-22
 
