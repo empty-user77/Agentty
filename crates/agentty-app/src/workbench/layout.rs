@@ -205,9 +205,16 @@ impl Workbench {
                 .map(|mut d| {
                     for entry in hud.iter().filter(|e| e.visible) {
                         d = match entry.item {
-                            HudItem::Model => d.when_some(view.stats.as_ref().filter(|_| agent_info).and_then(model_label), |d, model| {
-                                d.child(div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(model))
-                            }),
+                            HudItem::Model => d.when_some(
+                                view.stats
+                                    .as_ref()
+                                    .and_then(model_label)
+                                    .or_else(|| configured_model_label(self.installed.as_ref(), view.display_kind()))
+                                    .filter(|_| agent_info),
+                                |d, model| {
+                                    d.child(div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(model))
+                                },
+                            ),
                             HudItem::Context => d.children(context_meter.take()),
                             HudItem::Usage => d.when_some(
                                 view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && agent_info && width >= 700.),
@@ -370,6 +377,29 @@ impl Workbench {
 fn model_label(stats: &agentty_bridge::SessionStats) -> Option<String> {
     let model = agentty_bridge::pretty_model(stats.model.as_ref()?);
     Some(if stats.context_window > 0 { format!("{model} ({} context)", agentty_bridge::short_tokens(stats.context_window)) } else { model })
+}
+
+/// The same label for a model nothing has been said to yet.
+///
+/// A pane's model is read from what the agent has written, so a tab that has just opened has none:
+/// the bar used to fall back to the agent's name until the first answer arrived. The model the
+/// agent is configured to use is known before that, from its own settings, and that is what it will
+/// answer with.
+fn configured_model_label(installed: Option<&crate::agents::Installed>, kind: crate::launch::PaneKind) -> Option<String> {
+    let installed = installed?;
+    let model = match kind {
+        crate::launch::PaneKind::Claude => installed.claude_models.first().map(|(value, _)| value.clone())?,
+        crate::launch::PaneKind::Codex => installed.codex_models.first().cloned()?,
+        crate::launch::PaneKind::Shell => return None,
+    };
+    let bare = model.trim_end_matches("[1m]");
+    let pretty = agentty_bridge::pretty_model(bare);
+    // `[1m]` is Claude Code's own way of asking for the long window.
+    let window = if model.ends_with("[1m]") { 1_000_000 } else { agentty_bridge::claude_context_window(bare) };
+    Some(match kind {
+        crate::launch::PaneKind::Claude => format!("{pretty} ({} context)", agentty_bridge::short_tokens(window)),
+        _ => pretty,
+    })
 }
 
 pub(super) fn format_elapsed(seconds: u64) -> String {
@@ -848,10 +878,13 @@ impl Workbench {
                             // The model, without the logo: the tab strip and the card already say
                             // which agent this is, and the bar needs the room.
                             HudItem::Model => d.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_color(hex(Chrome::BRIGHT))
-                                    .child(view.stats.as_ref().and_then(model_label).unwrap_or_else(|| name.to_string())),
+                                div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).child(
+                                    view.stats
+                                        .as_ref()
+                                        .and_then(model_label)
+                                        .or_else(|| configured_model_label(self.installed.as_ref(), view.display_kind()))
+                                        .unwrap_or_else(|| name.to_string()),
+                                ),
                             ),
                             HudItem::Context => d.children(context_meter.take()),
                             HudItem::Usage => d
@@ -950,6 +983,9 @@ impl Workbench {
     fn context_meter(&self, pane: &Pane, percent: Option<f64>, cx: &mut Context<Self>) -> AnyElement {
         let view = pane.read(cx);
         let agent = view.agent_kind().and_then(crate::launch::PaneKind::agent);
+        // A tab that has just opened has read nothing yet, and nothing is exactly 0%. Showing a
+        // dash until the first answer made a new tab look like it was missing something.
+        let percent = percent.or_else(|| agent.is_some().then_some(0.));
         let command =
             view.agent_kind().and_then(|kind| kind.compact_command()).filter(|_| percent.is_some_and(|p| p >= super::COMPACT_OFFER_AT));
         let open = self.status_menu == Some(super::status_menus::StatusMenu::Context);
