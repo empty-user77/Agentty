@@ -243,13 +243,73 @@ fn remove_in(tree: &Path, force: bool, managed: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What a removal did, so the panel can say it in one line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Removal {
+    /// The branch that was asked to go but git kept: it has commits nothing else has.
+    pub branch_kept: Option<String>,
+    /// The branch was deleted on the remote too (`origin/…`, as the user asked).
+    pub remote_deleted: Option<String>,
+    /// Git's reason for not deleting the remote branch (offline, no permission, already gone).
+    pub remote_error: Option<String>,
+}
+
+/// The branch's counterpart on a remote (`origin/feature`), when the repository already knows one:
+/// what it tracks, else a remote branch of the same name. Nothing is fetched — this reads the refs
+/// git has, so it is safe to ask while a dialog is open.
+pub fn remote_branch(repo: &Path, branch: &str) -> Option<String> {
+    if !branch_ok(repo, branch) {
+        return None;
+    }
+    let upstream = git(repo, &["for-each-ref", "--format=%(upstream:short)", &format!("refs/heads/{branch}")])
+        .ok()
+        .map(|out| out.trim().to_string())
+        .filter(|name| !name.is_empty());
+    if upstream.is_some() {
+        return upstream;
+    }
+    let remote = format!("origin/{branch}");
+    git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{remote}")]).ok().map(|_| remote)
+}
+
+/// A name git itself accepts as a branch, never an option (`-D`).
+fn branch_ok(repo: &Path, name: &str) -> bool {
+    !name.starts_with('-') && git(repo, &["check-ref-format", "--branch", name]).is_ok()
+}
+
+/// Git's words for a failed push, with any credential a remote URL carries masked: an https remote
+/// can hold `user:token@host`, and this text is shown in the panel.
+fn mask_credentials(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("://") {
+        let (head, tail) = rest.split_at(start + 3);
+        out.push_str(head);
+        // The authority ends at the path, the query or the end of the word.
+        let end = tail.find(|c: char| c.is_whitespace() || c == '/' || c == '?').unwrap_or(tail.len());
+        match tail[..end].rfind('@') {
+            Some(at) => {
+                out.push_str("***@");
+                rest = &tail[at + 1..];
+            }
+            None => {
+                out.push_str(&tail[..end]);
+                rest = &tail[end..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Removes a linked working tree of the repository `repo` is in, when the user asks for it (the files
 /// panel's menu) — one Agentty made or one they made themselves. Never the project's own tree and
 /// never with `--force`: git refuses a tree with uncommitted or untracked files. With
 /// `delete_branch`, its branch goes too through `git branch -d`, which git refuses when the branch
 /// has commits nothing else has; a branch Agentty made (`agentty/…`) goes the same way when it is
-/// merged. Returns the branch that was asked to go but was kept.
-pub fn remove_linked(repo: &Path, tree: &Path, delete_branch: bool) -> Result<Option<String>> {
+/// merged. With `delete_remote` the branch goes on `origin` as well — but only once the local branch
+/// really went: a branch git kept holds commits that only the remote still has.
+pub fn remove_linked(repo: &Path, tree: &Path, delete_branch: bool, delete_remote: bool) -> Result<Removal> {
     let trees = list(repo)?;
     let main = trees.iter().find(|t| t.main).context("the repository has no working tree")?.path.clone();
     let same =
@@ -257,10 +317,23 @@ pub fn remove_linked(repo: &Path, tree: &Path, delete_branch: bool) -> Result<Op
     let entry = trees.iter().find(|t| same(&t.path)).context("not a working tree of this repository")?;
     ensure!(!entry.main, "the project's own working tree is never removed");
     let branch = entry.branch.clone();
+    // Asked while the tree is still there: the remote it tracks is unreachable once it is gone.
+    let remote = branch.as_deref().filter(|_| delete_branch && delete_remote).and_then(|b| remote_branch(&main, b));
     git(&main, &["worktree", "remove", &tree.to_string_lossy()])?;
-    let Some(branch) = branch.filter(|b| delete_branch || b.starts_with(BRANCH_PREFIX)) else { return Ok(None) };
-    let deleted = git(&main, &["branch", "-d", &branch]).is_ok();
-    Ok((!deleted && delete_branch).then_some(branch))
+    let Some(branch) = branch.filter(|b| delete_branch || b.starts_with(BRANCH_PREFIX)) else { return Ok(Removal::default()) };
+    if git(&main, &["branch", "-d", &branch]).is_err() {
+        return Ok(Removal { branch_kept: delete_branch.then_some(branch), ..Removal::default() });
+    }
+    let Some(remote) = remote else { return Ok(Removal::default()) };
+    let Some((remote_name, remote_branch)) = remote.split_once('/') else { return Ok(Removal::default()) };
+    // Both halves reach git as arguments of their own: neither may read as an option.
+    if remote_name.starts_with('-') || !branch_ok(&main, remote_branch) {
+        return Ok(Removal::default());
+    }
+    match git(&main, &["push", remote_name, "--delete", remote_branch]) {
+        Ok(_) => Ok(Removal { remote_deleted: Some(remote.clone()), ..Removal::default() }),
+        Err(err) => Ok(Removal { remote_error: Some(mask_credentials(&format!("{err:#}"))), ..Removal::default() }),
+    }
 }
 
 /// Forgets working trees whose folder is gone (`git worktree prune`).
@@ -336,28 +409,55 @@ mod tests {
         };
 
         // The project's own tree: never.
-        assert!(remove_linked(&repo, &repo, false).is_err());
+        assert!(remove_linked(&repo, &repo, false, false).is_err());
 
         // A tree with changes stays; a clean one goes, and its branch only when asked.
         let kept = add("kept-branch");
         std::fs::write(kept.join("new.txt"), "x\n").unwrap();
-        assert!(remove_linked(&repo, &kept, false).is_err(), "untracked files keep the tree");
+        assert!(remove_linked(&repo, &kept, false, false).is_err(), "untracked files keep the tree");
         std::fs::remove_file(kept.join("new.txt")).unwrap();
-        assert_eq!(remove_linked(&repo, &kept, false).unwrap(), None);
+        assert_eq!(remove_linked(&repo, &kept, false, false).unwrap(), Removal::default());
         assert!(!kept.exists());
         assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/kept-branch"]).is_ok());
 
         // Asked to delete a merged branch: gone. An unmerged one: kept, and said so.
         let merged = add("merged");
-        assert_eq!(remove_linked(&repo, &merged, true).unwrap(), None);
+        assert_eq!(remove_linked(&repo, &merged, true, false).unwrap(), Removal::default());
         assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/merged"]).is_err());
         let ahead = add("ahead");
         std::fs::write(ahead.join("b.txt"), "two\n").unwrap();
         git(&ahead, &["add", "b.txt"]).unwrap();
         git(&ahead, &["commit", "-q", "-m", "work"]).unwrap();
-        assert_eq!(remove_linked(&repo, &ahead, true).unwrap(), Some("ahead".to_string()));
+        assert_eq!(remove_linked(&repo, &ahead, true, false).unwrap().branch_kept, Some("ahead".to_string()));
         assert!(!ahead.exists());
         assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/ahead"]).is_ok());
+
+        // A branch that was pushed: asked for, the remote one goes too — and the local branch going
+        // is the condition, so an unmerged branch keeps both.
+        let origin = dir.join("origin.git");
+        git(&repo, &["init", "-q", "--bare", &origin.to_string_lossy()]).unwrap();
+        git(&repo, &["remote", "add", "origin", &origin.to_string_lossy()]).unwrap();
+        let pushed = add("pushed");
+        git(&pushed, &["push", "-q", "-u", "origin", "pushed"]).unwrap();
+        assert_eq!(remote_branch(&repo, "pushed").as_deref(), Some("origin/pushed"));
+        assert_eq!(remote_branch(&repo, "kept-branch"), None, "never pushed: no remote branch");
+        assert_eq!(remote_branch(&repo, "--delete"), None, "an option is not a branch name");
+        let removal = remove_linked(&repo, &pushed, true, true).unwrap();
+        assert_eq!(removal.remote_deleted.as_deref(), Some("origin/pushed"));
+        assert!(removal.remote_error.is_none());
+        assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/remotes/origin/pushed"]).is_err());
+
+        let unmerged = add("unmerged");
+        git(&unmerged, &["push", "-q", "-u", "origin", "unmerged"]).unwrap();
+        // A commit made after the push: neither the project's branch nor the remote has it, so git
+        // refuses `branch -d` and the remote branch stays with it.
+        std::fs::write(unmerged.join("c.txt"), "three\n").unwrap();
+        git(&unmerged, &["add", "c.txt"]).unwrap();
+        git(&unmerged, &["commit", "-q", "-m", "work"]).unwrap();
+        let removal = remove_linked(&repo, &unmerged, true, true).unwrap();
+        assert_eq!(removal.branch_kept, Some("unmerged".to_string()));
+        assert!(removal.remote_deleted.is_none(), "the remote keeps commits the local branch still has");
+        assert!(git(&origin, &["rev-parse", "--verify", "--quiet", "refs/heads/unmerged"]).is_ok());
 
         // A tree whose folder was deleted by hand: prune forgets it.
         let gone = add("gone");
@@ -366,6 +466,22 @@ mod tests {
         prune(&repo).unwrap();
         assert_eq!(list(&repo).unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_push_never_shows_the_credential_in_its_remote() {
+        assert_eq!(
+            mask_credentials("fatal: could not read from 'https://someone:not_a_real_token@example.com/x.git'"),
+            "fatal: could not read from 'https://***@example.com/x.git'"
+        );
+        // Nothing to mask, nothing changed.
+        assert_eq!(
+            mask_credentials("error: failed to push some refs to 'https://example.com/x.git'"),
+            "error: failed to push some refs to 'https://example.com/x.git'"
+        );
+        assert_eq!(mask_credentials("remote: permission denied"), "remote: permission denied");
+        // An `@` further along the line is not part of the authority.
+        assert_eq!(mask_credentials("https://example.com/a@b and mail@example.com"), "https://example.com/a@b and mail@example.com");
     }
 
     #[test]

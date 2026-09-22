@@ -85,7 +85,8 @@ impl Workbench {
                         .into_iter()
                         .map(|tree| {
                             let name = tree.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                            (name, agentty_bridge::worktree::remove_linked(&tree, &tree, true))
+                            // Closing a tab never touches a remote branch.
+                            (name, agentty_bridge::worktree::remove_linked(&tree, &tree, true, false))
                         })
                         .collect::<Vec<_>>()
                 })
@@ -94,8 +95,10 @@ impl Workbench {
                 let lines: Vec<String> = results
                     .iter()
                     .map(|(name, result)| match result {
-                        Ok(None) => tf(cx, "worktree.removed", &[("name", name)]),
-                        Ok(Some(branch)) => tf(cx, "worktree.removed_branch_kept", &[("name", name), ("branch", branch)]),
+                        Ok(removal) => match &removal.branch_kept {
+                            None => tf(cx, "worktree.removed", &[("name", name)]),
+                            Some(branch) => tf(cx, "worktree.removed_branch_kept", &[("name", name), ("branch", branch)]),
+                        },
                         Err(err) if format!("{err:#}").contains("modified or untracked") => {
                             tf(cx, "worktree.kept_dirty", &[("name", name)])
                         }
