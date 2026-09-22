@@ -609,6 +609,10 @@ const state = {
   dash: freshDashboardState(),
   ghIdentity: { connected: false, username: null, via: null, api: false, push: false },
   originSlug: null,
+  // `{ paneCwd }` while a link or a command chose the folder instead of the focused terminal.
+  pinned: null,
+  // A context change came in while a step was running; looked at when it is over.
+  followPending: false,
   root: null,
   forcedRoot: null,
   inspect: null,
@@ -757,6 +761,10 @@ async function runStep(step, label, command, fn, retry) {
     state.busyLabel = '';
     state.loginCode = null;
     await render();
+  }
+  if (state.followPending && state.panelOpen) {
+    state.followPending = false;
+    await followFocusedTerminal(plugin.context, { quiet: true });
   }
 }
 
@@ -1931,11 +1939,33 @@ function projectCwdFromContext(context) {
   return context?.pane?.cwd ?? null;
 }
 
+/** The folder of the terminal in front of the user, from this event or the last context Agentty sent. */
+function focusedCwd(context) {
+  return projectCwdFromContext(context) ?? projectCwdFromContext(plugin.context);
+}
+
+/**
+ * Launch is about the terminal the user is looking at: its folder is the project, and that folder
+ * picks the tab. A folder given by a link or a command (`state.pinned`) stays until that terminal
+ * moves somewhere else or the panel closes. `quiet`: a context change with the same folder — the
+ * pane's status, say — leaves the panel alone instead of re-picking the tab under the user.
+ */
+async function followFocusedTerminal(context, { quiet = false } = {}) {
+  const cwd = focusedCwd(context);
+  if (state.pinned && (cwd === null || cwd === state.pinned.paneCwd)) return quiet ? null : pickTab();
+  state.pinned = null;
+  if (!cwd) return state.root && quiet ? null : openProject(null);
+  const root = await findProjectRoot(cwd);
+  if (root !== state.root || state.step === 'no-pane') return openProject(cwd);
+  return quiet ? null : pickTab();
+}
+
 async function openForContext(context, overridePath) {
   await plugin.showPanel();
   state.panelOpen = true;
-  const cwd = overridePath ?? projectCwdFromContext(context) ?? plugin.context?.pane?.cwd ?? null;
-  await openProject(cwd);
+  const paneCwd = focusedCwd(context);
+  state.pinned = overridePath ? { paneCwd } : null;
+  await openProject(overridePath ?? paneCwd ?? null);
 }
 
 async function openValidAbsoluteDir(candidate, context) {
@@ -1949,22 +1979,30 @@ async function openValidAbsoluteDir(candidate, context) {
 plugin
   .onPanelOpen(async (context) => {
     state.panelOpen = true;
-    // Opening Launch asks the folder again which tab belongs in front, without re-checking
-    // everything about it: `state.step` already says what this folder can do.
-    if (!state.root) await openProject(projectCwdFromContext(context));
-    else await pickTab();
+    await followFocusedTerminal(context);
   })
   .onPanelClose(() => {
     state.panelOpen = false;
+    // A folder given by a link or a command is for this opening only.
+    state.pinned = null;
   })
   .onContextChange(async (context) => {
-    if (!state.panelOpen || state.running) return;
-    const cwd = projectCwdFromContext(context);
-    if (!cwd) return;
-    const root = await findProjectRoot(cwd);
-    if (root !== state.root) await openProject(cwd);
+    // Closed: the next opening looks for itself. Busy: a step must not have its folder changed
+    // under it, so the look waits until the step is over (see `runStep`).
+    if (!state.panelOpen) return;
+    if (state.running) {
+      state.followPending = true;
+      return;
+    }
+    await followFocusedTerminal(context, { quiet: true });
   })
-  .onEvent('refresh', () => (state.tab === 'dashboard' ? loadDashboard({ force: true }) : state.root ? resume() : openProject(projectCwdFromContext(plugin.context))))
+  .onEvent('refresh', async () => {
+    if (state.tab === 'dashboard') return loadDashboard({ force: true });
+    // Refresh is also "look at what I am looking at": a folder changed since is picked up here.
+    const cwd = focusedCwd(plugin.context);
+    if (cwd && !state.pinned && (await findProjectRoot(cwd)) !== state.root) return openProject(cwd);
+    return state.root ? resume() : openProject(cwd);
+  })
   .onEvent('tab', (event) => {
     const picked = String(event.value ?? '');
     if (picked !== 'dashboard' && picked !== 'project') return null;

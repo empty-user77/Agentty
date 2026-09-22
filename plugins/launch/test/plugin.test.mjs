@@ -1143,3 +1143,29 @@ test('the folder decides the tab every time Launch is opened, whatever was looke
     host.stop();
   }
 });
+
+test('Launch follows the terminal the user is looking at, not the folder it was last opened on', async () => {
+  const box = sandbox();
+  const host = start(box);
+  const at = (cwd) => ({ ...host.context, pane: { ...host.context.pane, cwd } });
+  try {
+    // Opened by a link on a folder that is not a web project: that folder, for now.
+    host.send('url/open', { path: 'open', query: { path: box.root }, url: 'agentty://plugin/launch/open', context: at(box.root) });
+    await waitForText(host, /Projects on Vercel/);
+
+    // The terminal moves into the web project while the panel is open: Launch moves with it.
+    host.send('context/changed', { context: at(box.project) });
+    await waitForButton(host, 'gh-save');
+
+    // The terminal moves away while the panel is closed: the next opening looks again.
+    host.send('panel/close', { context: at(box.project) });
+    host.send('panel/open', { context: at(box.root) });
+    await waitForText(host, /Projects on Vercel/);
+    host.send('panel/close', { context: at(box.root) });
+    host.send('panel/open', { context: at(box.project) });
+    const panel = await waitForButton(host, 'gh-save');
+    assert.match(JSON.stringify(panel), /"value":"project"/, 'on the Deploy tab');
+  } finally {
+    host.stop();
+  }
+});
