@@ -270,18 +270,37 @@ fn model_switch(line: &str) -> Option<(String, u64)> {
         Some(quoted) => quoted.split('`').next()?,
         None => rest.split(" and saved").next()?.split("</local-command-stdout>").next()?,
     };
-    let name = name.trim().trim_end_matches("(default)").trim();
+    parse_model_display(name.trim().trim_end_matches("(default)"))
+}
+
+/// A model as Claude Code writes it for people — "Opus 5.5 (1M context)", "Sonnet 5" — as a name
+/// and a context window: the one it states, else the one that model has by default.
+pub fn parse_model_display(text: &str) -> Option<(String, u64)> {
+    let text = text.trim();
     // "(1M context)" / "(200K context)" is Claude Code's own way of naming the window.
-    let (name, window) = match name.rsplit_once(" (").filter(|(_, tail)| tail.ends_with(" context)")) {
+    let (name, window) = match text.rsplit_once(" (").filter(|(_, tail)| tail.ends_with(" context)")) {
         Some((bare, tail)) => (bare.trim(), parse_token_count(tail.trim_end_matches(" context)"))),
-        None => (name, None),
+        None => (text, None),
     };
-    if name.is_empty() || name.len() > 60 {
+    // A model's name: a word and a version ("Opus 5.5", "Haiku 4.5"), nothing longer.
+    let plausible = name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && name.chars().any(|c| c.is_ascii_digit())
+        && name.len() <= 40
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '.' || c == '-');
+    if !plausible {
         return None;
     }
     // Without a stated window, the one the model has by default: "Haiku 4.5" → claude-haiku-4-5.
     let window = window.unwrap_or_else(|| claude_context_window(&format!("claude-{}", name.to_lowercase().replace([' ', '.'], "-"))));
     Some((name.to_string(), window))
+}
+
+/// The model in Claude Code's welcome banner, from the line under "Claude Code vX":
+/// "Opus 5.5 (1M context) · Claude Max" → ("Opus 5.5", 1M). A session that has not answered yet
+/// has written nothing else that says which model it runs.
+pub fn banner_model(line: &str) -> Option<(String, u64)> {
+    let (model, _plan) = line.split_once(" · ")?;
+    parse_model_display(model)
 }
 
 /// "1M" → 1 000 000, "200K" → 200 000.
@@ -395,6 +414,19 @@ mod model_name_tests {
         assert!(!turn_interrupted(Agent::Claude, finished.into_iter()));
         let codex = [r#"{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}"#];
         assert!(turn_interrupted(Agent::Codex, codex.into_iter()));
+    }
+
+    #[test]
+    fn the_banner_says_which_model_a_new_session_runs() {
+        use super::banner_model;
+        assert_eq!(banner_model("Opus 5.5 (1M context) · Claude Max"), Some(("Opus 5.5".into(), 1_000_000)));
+        assert_eq!(banner_model("  Sonnet 5 · Claude Max   "), Some(("Sonnet 5".into(), 1_000_000)));
+        assert_eq!(banner_model("Haiku 4.5 · API Usage Billing"), Some(("Haiku 4.5".into(), 200_000)));
+        assert_eq!(banner_model("Opus 5.5 (200K context) · Claude Pro"), Some(("Opus 5.5".into(), 200_000)));
+        // Not a banner line: no plan after a dot, or no model before it.
+        assert_eq!(banner_model("Opus 5.5 (1M context)"), None);
+        assert_eq!(banner_model("~/Agentty/Agentty · main"), None);
+        assert_eq!(banner_model("some prose, with a · in it"), None);
     }
 
     #[test]

@@ -272,6 +272,9 @@ pub struct TerminalView {
     pub working_since: Option<Instant>,
     /// Model, context and plan usage of the agent's session (from its transcript).
     pub stats: Option<agentty_bridge::SessionStats>,
+    /// The model Claude Code's welcome banner names (name, context window), for a session that has
+    /// not answered yet: its transcript says nothing about the model until then.
+    pub banner_model: Option<(String, u64)>,
     /// Rate-limit usage reported live by the Claude statusline wrapper.
     pub live_usage: Option<f64>,
     probe_ticks: u32,
@@ -388,6 +391,7 @@ impl TerminalView {
             agent_exited: false,
             agent_seen: false,
             model_probe: None,
+            banner_model: None,
             focused: false,
             _events: None,
             spawn_attempts: 0,
@@ -647,6 +651,26 @@ impl TerminalView {
         cx.emit(TerminalEvent::Notified { kind: notice, message });
     }
 
+    /// The model in the newest Claude Code welcome banner on this terminal: the row under
+    /// "Claude Code vX", from the same column (the logo sits to its left).
+    fn read_banner_model(&self) -> Option<(String, u64)> {
+        let backend = self.backend.as_ref()?;
+        let term = backend.term.lock();
+        let grid = term.grid();
+        let columns = grid.columns();
+        let row = |line: i32| (0..columns).map(|c| grid[Line(line)][Column(c)].c).collect::<String>();
+        let (top, bottom) = (grid.topmost_line().0, grid.bottommost_line().0);
+        // Newest first, and not the whole scrollback: a banner is near where the session began.
+        for line in (top.max(bottom - 600)..bottom).rev() {
+            let text = row(line);
+            let Some(at) = text.find("Claude Code v") else { continue };
+            let column = text[..at].chars().count();
+            let below: String = row(line + 1).chars().skip(column).collect();
+            return agentty_bridge::banner_model(&below);
+        }
+        None
+    }
+
     /// Reads the model from the session transcript in the background (every few seconds).
     fn probe_model(&mut self, cx: &mut Context<Self>) {
         let Some(agent) = self.agent_kind().and_then(PaneKind::agent) else {
@@ -655,6 +679,17 @@ impl TerminalView {
         };
         if self.model_probe.is_some() {
             return;
+        }
+        // Until the transcript names a model, the session's own banner does.
+        let banner = if agent == agentty_bridge::model::Agent::Claude && self.stats.as_ref().is_none_or(|s| s.model.is_none()) {
+            self.read_banner_model()
+        } else {
+            None
+        };
+        if banner != self.banner_model {
+            self.banner_model = banner;
+            cx.emit(TerminalEvent::StatusChanged);
+            cx.notify();
         }
         // The session the pane was launched with, for a resumed session of either agent.
         let known = self.spec.session_id.clone();
