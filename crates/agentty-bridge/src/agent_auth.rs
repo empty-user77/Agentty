@@ -483,25 +483,94 @@ fn link_dir(source: &Path, link: &Path) -> Result<()> {
     if std::os::windows::fs::symlink_dir(source, link).is_ok() {
         return Ok(());
     }
-    // Not `cmd /C mklink /J`: cmd.exe re-parses its command line and would act on `&`, `%`, `^`
-    // in a path (user names, `CODEX_HOME`). The paths travel as environment variables, so the
-    // script is a constant and no path is ever parsed as code.
-    let output = crate::process::windows_powershell()
-        .args(["-NoProfile", "-NonInteractive", "-Command", JUNCTION_SCRIPT])
-        .env("AGENTTY_JUNCTION_LINK", link)
-        .env("AGENTTY_JUNCTION_TARGET", source)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .output()?;
-    // PowerShell's own words, so a refusal says why (the first line is enough).
-    let why = String::from_utf8_lossy(&output.stderr).lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
-    ensure!(output.status.success() && link.is_dir(), "could not create a directory junction: {why}");
+    create_junction(source, link)
+}
+
+/// A directory junction made with the file system call itself: no `cmd /C mklink /J` (cmd.exe
+/// re-parses its command line and would act on `&`, `%`, `^` in a path) and no PowerShell, which
+/// failed without a word when started below a pseudo console (an Agentty pane, a CI runner
+/// launched from one).
+#[cfg(windows)]
+fn create_junction(target: &Path, link: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, OPEN_EXISTING};
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+
+    let target = std::fs::canonicalize(target).context("junction target")?;
+    let target = target.to_string_lossy();
+    // `canonicalize` answers `\\?\C:\…`; a junction wants the plain drive path.
+    let target = target.strip_prefix(r"\\?\").unwrap_or(&target);
+    ensure!(!target.starts_with(r"UNC\"), "a junction can't point to a network folder");
+    let buffer = mount_point_buffer(target);
+    std::fs::create_dir(link).context("junction folder")?;
+    let wide: Vec<u16> = link.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated path; the handle is closed below on every path.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_WRITE,
+            0,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        let err = std::io::Error::last_os_error();
+        let _ = std::fs::remove_dir(link);
+        bail!("could not open the junction folder: {err}");
+    }
+    let mut returned = 0u32;
+    // SAFETY: `buffer` is a complete REPARSE_DATA_BUFFER of `buffer.len()` bytes; no output.
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            buffer.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    let err = std::io::Error::last_os_error();
+    // SAFETY: `handle` came from CreateFileW above and is closed once.
+    unsafe { CloseHandle(handle) };
+    if ok == 0 {
+        let _ = std::fs::remove_dir(link);
+        bail!("could not create a directory junction: {err}");
+    }
     Ok(())
 }
 
+/// A mount-point REPARSE_DATA_BUFFER for `target` (a drive path such as `C:\Users\me\.codex\sessions`):
+/// tag, data length, reserved, then the substitute name (`\??\` + path) and the print name, each
+/// NUL-terminated UTF-16.
 #[cfg_attr(not(windows), allow(dead_code))]
-const JUNCTION_SCRIPT: &str =
-    "New-Item -ItemType Junction -Path $env:AGENTTY_JUNCTION_LINK -Target $env:AGENTTY_JUNCTION_TARGET -ErrorAction Stop | Out-Null";
+fn mount_point_buffer(target: &str) -> Vec<u8> {
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+    let substitute: Vec<u16> = format!(r"\??\{target}").encode_utf16().collect();
+    let print: Vec<u16> = target.encode_utf16().collect();
+    let (substitute_bytes, print_bytes) = (substitute.len() * 2, print.len() * 2);
+    // Four u16 offsets and lengths, then both names with their terminators.
+    let data_length = 8 + substitute_bytes + 2 + print_bytes + 2;
+    let mut buffer = Vec::with_capacity(8 + data_length);
+    buffer.extend(IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
+    buffer.extend((data_length as u16).to_le_bytes());
+    buffer.extend(0u16.to_le_bytes());
+    buffer.extend(0u16.to_le_bytes());
+    buffer.extend((substitute_bytes as u16).to_le_bytes());
+    buffer.extend(((substitute_bytes + 2) as u16).to_le_bytes());
+    buffer.extend((print_bytes as u16).to_le_bytes());
+    for unit in substitute.iter().chain(&[0]).chain(&print).chain(&[0]) {
+        buffer.extend(unit.to_le_bytes());
+    }
+    buffer
+}
 
 #[cfg(unix)]
 fn refresh_file_link(source: &Path, link: &Path) {
@@ -855,11 +924,18 @@ mod tests {
         assert!(format!("{err:#}").contains("https"), "{err:#}");
     }
 
-    /// The junction fallback's script is constant; paths only arrive through the environment.
+    /// The junction's reparse data: header, then `\??\C:\x` and `C:\x` as NUL-terminated UTF-16.
     #[test]
-    fn junction_script_contains_no_paths() {
-        assert!(JUNCTION_SCRIPT.contains("$env:AGENTTY_JUNCTION_LINK") && JUNCTION_SCRIPT.contains("$env:AGENTTY_JUNCTION_TARGET"));
-        assert!(!JUNCTION_SCRIPT.contains(['&', '%', '^', '\'', '"']));
+    fn mount_point_buffer_layout() {
+        let buffer = mount_point_buffer(r"C:\x");
+        let u16_at = |i: usize| u16::from_le_bytes([buffer[i], buffer[i + 1]]);
+        assert_eq!(u32::from_le_bytes(buffer[..4].try_into().unwrap()), 0xA000_0003);
+        // "\??\C:\x" is 8 units, "C:\x" 4: 8 header bytes + 16 + 2 + 8 + 2.
+        assert_eq!(u16_at(4), 36);
+        assert_eq!(buffer.len(), 8 + 36);
+        assert_eq!((u16_at(8), u16_at(10), u16_at(12), u16_at(14)), (0, 16, 18, 8));
+        let text: Vec<u16> = buffer[16..].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        assert_eq!(String::from_utf16(&text).unwrap(), "\\??\\C:\\x\0C:\\x\0");
     }
 
     #[test]
