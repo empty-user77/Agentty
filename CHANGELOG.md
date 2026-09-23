@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows
   inside a terminal pane: the link is now made directly instead of through PowerShell.
 - A Codex session link that an earlier attempt left broken or empty is made again, instead of
   staying broken for good.
+- On Windows, terminals use the regular PowerShell 7 install over the Microsoft Store copy when both
+  are installed: under the Store copy, what programs write to AppData is redirected into its
+  package, where other programs can't find it.
 
 ## [0.1.19] - 2026-09-23
 

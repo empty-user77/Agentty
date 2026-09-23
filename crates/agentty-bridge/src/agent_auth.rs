@@ -990,8 +990,13 @@ mod tests {
     #[test]
     fn codex_home_links_user_sessions() {
         // Unique per run: Windows reuses process ids, and a failed run leaves its folder behind.
+        // Under the build folder rather than the temp folder: in `AppData`, a process started below
+        // a Microsoft Store app (PowerShell from the Store) writes into the package instead, and a
+        // link to that folder leads nowhere for the file system.
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("agentty-codex-home-{}-{nanos}", std::process::id()));
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("agentty-codex-home-{}-{nanos}", std::process::id()));
         let user = dir.join("user");
         std::fs::create_dir_all(user.join("sessions/2026")).unwrap();
         std::fs::write(user.join("config.toml"), "model = \"x\"\n").unwrap();
