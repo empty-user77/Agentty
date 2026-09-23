@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-09-23
+
 ### Changed
 - On Windows and Linux, terminals keep the bundled JetBrains Mono when no font was picked, and
   D2Coding is no longer recommended there: PowerShell's glyphs break in it. macOS is unchanged.
