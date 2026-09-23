@@ -12,12 +12,13 @@ All notable changes to this project are documented here. The format follows
   rotated, or dragged from the right and bottom edges. Agents set it with
   `agentty browser viewport <WxH|device|off>` (MCP: `browser_viewport`) and are told to check
   their pages at phone and tablet sizes.
+- Settings → General → Prevent sleep can stay on for a set number of hours (1–72) instead of
+  always; it then turns itself off, also when the time ran out while Agentty was closed. The time
+  left is shown under the switch. "Always" stays the default.
 
 ### Changed
 - The AI CLI status bar shows the ports of local servers started in a pane by default (it was
   off until turned on in Settings → Appearance → Status bar).
-
-### Changed
 - "Later" in the update popup keeps it away for 24 hours, across restarts; a newer version is
   announced right away. Meanwhile the update shows in the status bar in place of the version
   ("Update available v0.1.20"), and a click there opens the popup again. The floating update

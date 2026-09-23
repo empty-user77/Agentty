@@ -333,6 +333,44 @@ pub(super) fn section(title: &str) -> Div {
     )
 }
 
+/// "Always" or a number of hours (1 to 72) for "Prevent sleep".
+fn prevent_sleep_duration(hours: u32, cx: &mut Context<Workbench>) -> Div {
+    let set = |hours: u32| {
+        move |_: &ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+            update_settings(cx, move |s| s.set_prevent_sleep_hours(hours, crate::settings::unix_now()))
+        }
+    };
+    let timed = hours > 0;
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(chip("prevent-sleep-always", t(cx, "settings.prevent_sleep_always"), !timed, set(0)))
+        .child(chip("prevent-sleep-timed", t(cx, "settings.prevent_sleep_timed"), timed, set(if timed { hours } else { 1 })))
+        .when(timed, |d| {
+            d.child(action_button("prevent-sleep-dec", "−", set(hours.saturating_sub(1).max(1))))
+                .child(div().w(px(64.)).flex().justify_center().t_body().text_color(hex(Chrome::BRIGHT)).child(tf(
+                    cx,
+                    "settings.prevent_sleep_hours",
+                    &[("n", &hours.to_string())],
+                )))
+                .child(action_button("prevent-sleep-inc", "+", set(hours + 1)))
+        })
+}
+
+/// `2시간 13분` / `2 h 13 min`; whole hours or, under an hour, minutes alone.
+fn hours_minutes(seconds: u64, cx: &gpui::App) -> String {
+    let minutes = seconds.div_ceil(60);
+    let (h, m) = (minutes / 60, minutes % 60);
+    if h == 0 {
+        tf(cx, "settings.prevent_sleep_minutes", &[("m", &m.to_string())])
+    } else if m == 0 {
+        tf(cx, "settings.prevent_sleep_hours", &[("n", &h.to_string())])
+    } else {
+        tf(cx, "settings.prevent_sleep_hm", &[("h", &h.to_string()), ("m", &m.to_string())])
+    }
+}
+
 fn row(label: &str, control: impl IntoElement) -> Div {
     div()
         .flex()
@@ -1271,13 +1309,24 @@ impl Workbench {
                         .child(row_with_hint(
                             t(cx, "settings.prevent_sleep"),
                             // On when asked but no lock held: the tool that holds it is missing.
-                            if prefs.prevent_sleep && !crate::platform::wakelock::active() {
-                                t(cx, "settings.prevent_sleep_failed")
+                            &if prefs.prevent_sleep && !crate::platform::wakelock::active() {
+                                t(cx, "settings.prevent_sleep_failed").to_string()
+                            } else if let Some(left) = prefs.prevent_sleep_left(crate::settings::unix_now()) {
+                                tf(cx, "settings.prevent_sleep_left", &[("time", &hours_minutes(left, cx))])
                             } else {
-                                t(cx, "settings.prevent_sleep_hint")
+                                t(cx, "settings.prevent_sleep_hint").to_string()
                             },
-                            toggle("prevent-sleep", prefs.prevent_sleep, |s| s.prevent_sleep = !s.prevent_sleep, cx),
+                            toggle(
+                                "prevent-sleep",
+                                prefs.prevent_sleep,
+                                |s| {
+                                    let on = !s.prevent_sleep;
+                                    s.set_prevent_sleep(on, crate::settings::unix_now())
+                                },
+                                cx,
+                            ),
                         ))
+                        .child(row(t(cx, "settings.prevent_sleep_for"), prevent_sleep_duration(prefs.prevent_sleep_hours, cx)))
                         .child(row_with_hint(
                             t(cx, "settings.analytics"),
                             t(cx, "settings.analytics_hint"),

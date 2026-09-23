@@ -83,8 +83,50 @@ pub fn event(name: &str, props: &Value, app_version: &str, os_version: &str) -> 
     Some(json!({ "name": name, "params": params }))
 }
 
+/// What GA shows as the device and the country. Measurement Protocol requests carry none of it on
+/// their own (GA takes it from its web tag, which Agentty doesn't run), so it is sent with each
+/// request: the platform, its version, the language Agentty is shown in and the country of the
+/// system's region setting — never an IP address or a location.
+#[derive(Debug, Clone, Default)]
+pub struct Device {
+    /// `macOS`, `Windows` or `Linux`.
+    pub operating_system: String,
+    pub operating_system_version: String,
+    /// ISO 639-1, e.g. `ko`.
+    pub language: String,
+    /// ISO 3166-1 alpha-2 from the region setting, e.g. `KR`.
+    pub country: Option<String>,
+}
+
+/// A short identifier GA may receive: letters, digits, `.`, `-`, `_` and spaces, at most 40.
+fn short(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty() && text.len() <= 40 && text.chars().all(|c| c.is_ascii_alphanumeric() || " -_.".contains(c))).then_some(text)
+}
+
+/// The request body for one batch.
+fn request(client_id: &str, events: &[Value], device: &Device) -> Value {
+    let mut body = json!({ "client_id": client_id, "events": events });
+    let mut info = serde_json::Map::new();
+    info.insert("category".into(), json!("desktop"));
+    for (key, value) in [
+        ("operating_system", &device.operating_system),
+        ("operating_system_version", &device.operating_system_version),
+        ("language", &device.language),
+    ] {
+        if let Some(value) = short(value) {
+            info.insert(key.into(), json!(value));
+        }
+    }
+    body["device"] = Value::Object(info);
+    if let Some(country) = device.country.as_deref().filter(|c| c.len() == 2 && c.chars().all(|c| c.is_ascii_uppercase())) {
+        body["user_location"] = json!({ "country_id": country });
+    }
+    body
+}
+
 /// Sends events (at most 25 per request, GA's limit). Failures are ignored.
-pub fn send(events: Vec<Value>) {
+pub fn send(events: Vec<Value>, device: &Device) {
     let Some((measurement_id, secret)) = credentials() else { return };
     if events.is_empty() || do_not_track() {
         return;
@@ -93,8 +135,19 @@ pub fn send(events: Vec<Value>) {
     let agent = crate::http::agent_builder().timeout(std::time::Duration::from_secs(10)).build();
     let client_id = install_id();
     for batch in events.chunks(25) {
-        let _ = agent.post(&url).send_json(json!({ "client_id": client_id, "events": batch }));
+        let _ = agent.post(&url).send_json(request(&client_id, batch, device));
     }
+}
+
+/// The country of a locale name: `ko-KR`, `ko_KR.UTF-8`, `zh-Hans-CN` → `KR`, `KR`, `CN`. A
+/// language alone (`en`) or a numeric region (`es-419`) has none.
+pub fn locale_country(locale: &str) -> Option<String> {
+    let locale = locale.split(['.', '@']).next().unwrap_or("");
+    locale
+        .split(['-', '_'])
+        .skip(1)
+        .find(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_alphabetic()))
+        .map(|part| part.to_ascii_uppercase())
 }
 
 #[cfg(test)]
@@ -109,6 +162,44 @@ mod tests {
         assert!(event("keystroke", &json!({}), "0.2.0", "15.1").is_none());
         let event_value = event("feature_used", &json!({ "feature": "rm -rf /" }), "0.2.0", "15.1").unwrap();
         assert!(event_value["params"].get("feature").is_none());
+    }
+
+    #[test]
+    fn requests_carry_the_device_and_country_only_as_short_identifiers() {
+        let device = Device {
+            operating_system: "macOS".into(),
+            operating_system_version: "15.1".into(),
+            language: "ko".into(),
+            country: Some("KR".into()),
+        };
+        let body = request("abc", &[json!({ "name": "app_launched" })], &device);
+        assert_eq!(body["client_id"], "abc");
+        assert_eq!(
+            body["device"],
+            json!({ "category": "desktop", "operating_system": "macOS", "operating_system_version": "15.1", "language": "ko" })
+        );
+        assert_eq!(body["user_location"], json!({ "country_id": "KR" }));
+        // Anything that isn't a short identifier stays out.
+        let odd = Device {
+            operating_system: "Windows".into(),
+            operating_system_version: "/home/me/secret\n".into(),
+            language: String::new(),
+            country: Some("Korea".into()),
+        };
+        let body = request("abc", &[], &odd);
+        assert_eq!(body["device"], json!({ "category": "desktop", "operating_system": "Windows" }));
+        assert!(body.get("user_location").is_none());
+    }
+
+    #[test]
+    fn countries_from_locale_names() {
+        assert_eq!(locale_country("ko-KR").as_deref(), Some("KR"));
+        assert_eq!(locale_country("ko_KR.UTF-8").as_deref(), Some("KR"));
+        assert_eq!(locale_country("zh-Hans-CN").as_deref(), Some("CN"));
+        assert_eq!(locale_country("en_US@calendar=gregorian").as_deref(), Some("US"));
+        assert_eq!(locale_country("en"), None);
+        assert_eq!(locale_country("es-419"), None);
+        assert_eq!(locale_country(""), None);
     }
 
     #[test]
