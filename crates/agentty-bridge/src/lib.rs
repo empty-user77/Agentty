@@ -214,7 +214,15 @@ pub fn session_stats(agent: Agent, id: &str) -> Option<SessionStats> {
 /// meter would keep showing the full window the compaction just emptied.
 fn claude_stats<'a>(lines: impl Iterator<Item = &'a str>) -> Option<SessionStats> {
     let mut compacted_to = None;
+    // A `/model` newer than the latest answer: the model the next answer will come from.
+    let mut switched: Option<(String, u64)> = None;
     for line in lines {
+        if switched.is_none() && line.contains("Set model to") {
+            switched = model_switch(line);
+            if switched.is_some() {
+                continue;
+            }
+        }
         if compacted_to.is_none() && line.contains("\"compact_boundary\"") {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                 if v["type"] == "system" && v["subtype"] == "compact_boundary" {
@@ -232,14 +240,57 @@ fn claude_stats<'a>(lines: impl Iterator<Item = &'a str>) -> Option<SessionStats
         let u = &v["message"]["usage"];
         let n = |k: &str| u[k].as_u64().unwrap_or(0);
         let prompt = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+        let (model, context_window) = switched.unwrap_or_else(|| (model.to_string(), claude_context_window(model)));
         return Some(SessionStats {
             context_used: compacted_to.unwrap_or(prompt),
-            context_window: claude_context_window(model),
-            model: Some(model.to_string()),
+            context_window,
+            model: Some(model),
             rate_limit_percent: None,
         });
     }
-    None
+    // Nothing answered yet, but a model was chosen: name it, with an empty meter.
+    switched.map(|(model, context_window)| SessionStats { context_used: 0, context_window, model: Some(model), rate_limit_percent: None })
+}
+
+/// The model `/model` switched to, as Claude Code wrote it the moment the command ran — long before
+/// an answer from that model names it: "Set model to `Opus 5.5 (1M context) (default)`" →
+/// `("Opus 5.5", 1_000_000)`. Only Claude Code's own command output counts, never a message that
+/// quotes it.
+fn model_switch(line: &str) -> Option<(String, u64)> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    if v["type"] != "user" {
+        return None;
+    }
+    let content = v["message"]["content"].as_str()?.strip_prefix("<local-command-stdout>")?;
+    let rest = content.strip_prefix("Set model to")?.trim_start();
+    let name = match rest.strip_prefix('`') {
+        Some(quoted) => quoted.split('`').next()?,
+        None => rest.split(" and saved").next()?.split("</local-command-stdout>").next()?,
+    };
+    let name = name.trim().trim_end_matches("(default)").trim();
+    // "(1M context)" / "(200K context)" is Claude Code's own way of naming the window.
+    let (name, window) = match name.rsplit_once(" (").filter(|(_, tail)| tail.ends_with(" context)")) {
+        Some((bare, tail)) => (bare.trim(), parse_token_count(tail.trim_end_matches(" context)"))),
+        None => (name, None),
+    };
+    if name.is_empty() || name.len() > 60 {
+        return None;
+    }
+    // Without a stated window, the one the model has by default: "Haiku 4.5" → claude-haiku-4-5.
+    let window = window.unwrap_or_else(|| claude_context_window(&format!("claude-{}", name.to_lowercase().replace([' ', '.'], "-"))));
+    Some((name.to_string(), window))
+}
+
+/// "1M" → 1 000 000, "200K" → 200 000.
+fn parse_token_count(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let (number, scale) = match text.chars().last()? {
+        'M' | 'm' => (&text[..text.len() - 1], 1_000_000.0),
+        'K' | 'k' => (&text[..text.len() - 1], 1_000.0),
+        _ => (text, 1.0),
+    };
+    let value: f64 = number.trim().parse().ok()?;
+    (value > 0.0).then(|| (value * scale).round() as u64)
 }
 
 /// Whether the session's latest turn was stopped by the user (Esc), from the end of its transcript.
@@ -341,6 +392,36 @@ mod model_name_tests {
         assert!(!turn_interrupted(Agent::Claude, finished.into_iter()));
         let codex = [r#"{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}"#];
         assert!(turn_interrupted(Agent::Codex, codex.into_iter()));
+    }
+
+    #[test]
+    fn the_model_changes_the_moment_model_switches_it() {
+        let answer = r#"{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":10,"cache_read_input_tokens":42000,"cache_creation_input_tokens":0}}}"#;
+        let switch = r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set model to `Opus 5.5 (1M context) (default)` and saved as your default for new sessions</local-command-stdout>"}}"#;
+        // Newest first: the switch came after the last answer, so the bar names the new model at once,
+        // and the conversation it carries over is still the size it was.
+        let stats = super::claude_stats([switch, answer].into_iter()).unwrap();
+        assert_eq!(stats.model.as_deref(), Some("Opus 5.5"));
+        assert_eq!((stats.context_used, stats.context_window), (42_010, 1_000_000));
+        assert_eq!(pretty_model(stats.model.as_deref().unwrap()), "Opus 5.5");
+
+        // Once the new model has answered, the answer is the truth again.
+        let later = r#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+        assert_eq!(super::claude_stats([later, switch, answer].into_iter()).unwrap().model.as_deref(), Some("claude-opus-5-5"));
+
+        // A model with a smaller window, named without one: its own default window.
+        let haiku = r#"{"type":"user","message":{"content":"<local-command-stdout>Set model to `Haiku 4.5`</local-command-stdout>"}}"#;
+        let stats = super::claude_stats([haiku, answer].into_iter()).unwrap();
+        assert_eq!((stats.model.as_deref(), stats.context_window), (Some("Haiku 4.5"), 200_000));
+
+        // Chosen before anything was said: named, with an empty meter.
+        let fresh = super::claude_stats([switch].into_iter()).unwrap();
+        assert_eq!((fresh.model.as_deref(), fresh.context_used), (Some("Opus 5.5"), 0));
+
+        // Someone quoting the command's output is not the command.
+        let quoted = r#"{"type":"user","message":{"content":"why does it say Set model to `Sonnet 5`?"}}"#;
+        let said = r#"{"type":"assistant","message":{"model":"claude-opus-5","content":"Set model to `Sonnet 5`"}}"#;
+        assert_eq!(super::claude_stats([quoted, said, answer].into_iter()).unwrap().model.as_deref(), Some("claude-opus-5"));
     }
 
     #[test]
