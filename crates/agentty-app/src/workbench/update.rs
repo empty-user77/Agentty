@@ -645,7 +645,7 @@ pub const WEBSITE: &str = "https://www.agentty.run";
 pub const PRIVACY_URL: &str = "https://www.agentty.run/privacy-policy";
 pub const TERMS_URL: &str = "https://www.agentty.run/terms-of-service";
 pub const EULA_URL: &str = "https://www.agentty.run/eula";
-pub const X_URL: &str = "https://x.com/raylee_world";
+pub const X_URL: &str = "https://x.com/agentty_run";
 
 impl Workbench {
     /// "About Agentty" from the app menu: icon, version, author and a GitHub link.
