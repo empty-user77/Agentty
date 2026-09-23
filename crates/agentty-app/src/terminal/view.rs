@@ -1714,6 +1714,8 @@ struct Frame {
     hitbox: Hitbox,
     backgrounds: Vec<PaintQuad>,
     lines: Vec<(Point<Pixels>, ShapedLine)>,
+    /// Underlines and strikethroughs, drawn over the text across the cells they belong to.
+    decorations: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
     cursor_text: Option<(Point<Pixels>, ShapedLine)>,
     /// IME composition: the backdrop that hides the cells under it, then one shaped glyph per
@@ -1824,8 +1826,16 @@ impl Element for TerminalElement {
 
         LAST_GRID.with(|g| g.set(grid));
         let focused = self.focus.is_focused(window);
-        let mut frame =
-            Frame { hitbox, backgrounds: Vec::new(), lines: Vec::new(), cursor: None, cursor_text: None, marked: None, line_height };
+        let mut frame = Frame {
+            hitbox,
+            backgrounds: Vec::new(),
+            lines: Vec::new(),
+            decorations: Vec::new(),
+            cursor: None,
+            cursor_text: None,
+            marked: None,
+            line_height,
+        };
 
         let view = self.view.clone();
         let (marked_text, cursor_visible, search, hover_link) = {
@@ -1910,20 +1920,40 @@ impl Element for TerminalElement {
             strikethrough: style.strike.then(|| StrikethroughStyle { color: Some(style.fg), thickness: px(1.) }),
         };
 
-        // Pending text segment: (row, start column, text, style).
-        let mut segment: Option<(usize, usize, String, CellStyle)> = None;
+        // Pending text segment: (row, start column, end column exclusive, text, style).
+        let mut segment: Option<(usize, usize, usize, String, CellStyle)> = None;
         let mut segment_end = 0;
-        let flush = |segment: &mut Option<(usize, usize, String, CellStyle)>, frame: &mut Frame, cells: usize| {
-            if let Some((row, col, text, style)) = segment.take() {
+        let flush = |segment: &mut Option<(usize, usize, usize, String, CellStyle)>, frame: &mut Frame, cells: usize| {
+            if let Some((row, col, end, text, style)) = segment.take() {
                 if text.trim().is_empty() && !style.underline && !style.strike {
                     return;
                 }
-                let run = make_run(text.len(), style);
+                // Underline and strikethrough are drawn below, not by the text run: see there.
+                let run = TextRun { underline: None, strikethrough: None, ..make_run(text.len(), style) };
                 // Wide glyphs (CJK) are drawn alone and centered in their two cells.
                 let force = (cells == 1).then_some(cell_width);
                 let shaped = text_system.shape_line(SharedString::from(text), font_size, &[run], force);
                 let slack = if cells > 1 { ((cell_width * cells as f32) - shaped.width).max(px(0.)) / 2. } else { px(0.) };
                 let pos = point(origin.x + cell_width * col as f32 + slack, origin.y + line_height * row as f32);
+                // A run's own underline ends where the font's advances add up to, but the glyphs sit
+                // on the grid, and a cell is a little wider than the advance (rounded to whole
+                // pixels, plus letter spacing). The gap adds up along the run: on a long link the
+                // underline stopped several pixels short of the last letter. These span the cells.
+                if style.underline || style.strike {
+                    let x = origin.x + cell_width * col as f32;
+                    let top = origin.y + line_height * row as f32;
+                    // Where GPUI itself would put them, measured from the same baseline.
+                    let baseline = (line_height - shaped.ascent - shaped.descent) / 2. + shaped.ascent;
+                    let width = cell_width * end.saturating_sub(col) as f32;
+                    if style.underline {
+                        let y = top + baseline + shaped.descent * 0.618;
+                        frame.decorations.push(fill(Bounds::new(point(x, y), size(width, px(1.))), style.fg));
+                    }
+                    if style.strike {
+                        let y = top + (shaped.ascent * 0.5 + baseline) * 0.5;
+                        frame.decorations.push(fill(Bounds::new(point(x, y), size(width, px(1.))), style.fg));
+                    }
+                }
                 frame.lines.push((pos, shaped));
             }
         };
@@ -2006,10 +2036,11 @@ impl Element for TerminalElement {
                 symbol,
             };
             let isolated = wide || symbol;
-            let continues = matches!(&segment, Some((r, _, _, s)) if !isolated && *r == row && *s == style && segment_end == col);
+            let continues = matches!(&segment, Some((r, _, _, _, s)) if !isolated && *r == row && *s == style && segment_end == col);
             segment_end = col + width;
             if continues {
-                if let Some((_, _, text, _)) = segment.as_mut() {
+                if let Some((_, _, end, text, _)) = segment.as_mut() {
+                    *end = col + width;
                     text.push(ch);
                     cell.zerowidth().into_iter().flatten().for_each(|z| text.push(*z));
                 }
@@ -2017,7 +2048,7 @@ impl Element for TerminalElement {
                 flush(&mut segment, &mut frame, 1);
                 let mut text = ch.to_string();
                 cell.zerowidth().into_iter().flatten().for_each(|z| text.push(*z));
-                segment = Some((row, col, text, style));
+                segment = Some((row, col, col + width, text, style));
                 if isolated {
                     flush(&mut segment, &mut frame, width);
                 }
@@ -2148,6 +2179,9 @@ impl Element for TerminalElement {
             }
             for (origin, line) in &frame.lines {
                 let _ = line.paint(*origin, frame.line_height, window, cx);
+            }
+            for quad in frame.decorations.drain(..) {
+                window.paint_quad(quad);
             }
             if let Some(cursor) = frame.cursor.take() {
                 window.paint_quad(cursor);
