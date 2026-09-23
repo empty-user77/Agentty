@@ -8,7 +8,7 @@
   <a href="https://www.agentty.run">agentty.run</a> ·
   <a href="https://www.agentty.run/docs">Guide</a> ·
   <a href="https://github.com/empty-user77/agentty-releases/releases">Download</a> ·
-  <a href="https://x.com/raylee_world">@raylee_world</a>
+  <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
 
 <p align="center">
