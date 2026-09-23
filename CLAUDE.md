@@ -76,3 +76,18 @@ Before every commit and push: stage the change in its own command, run the `secu
 - Say "built", "notarized" or "released" only after `scripts/verify-release.sh X.Y.Z [--published]` passes. Report
   release status as a ✅/❌/⏳ checklist that leads with what is not done.
 - If a release command is denied, don't retry variants or edit permission files: give the user the exact `!` line.
+- Once `scripts/verify-release.sh X.Y.Z --published` passes, clean up the build output (see below).
+
+## Build output
+
+Cargo's build output is the `target/` folder, several GB each, and every worktree builds its own: a few parallel
+tasks fill the disk, and a full disk stops builds, git and the agent's own shell alike.
+
+- **After a dev build has been tested and its work is finished** (its pull request merged or closed): remove that
+  worktree with `git worktree remove <path>`, which refuses one with uncommitted changes. While its pull request is
+  still open, delete only its `target/`.
+- **After a release is published and verified**: `cargo clean` in the main checkout, and delete that release's files
+  from `dist/`.
+- Dev app bundles and other test copies made in the scratchpad go when their test is done.
+- Before a build, check free space (`df -h /`). Under about 20 GB, clean up first instead of letting a build fail
+  halfway.
