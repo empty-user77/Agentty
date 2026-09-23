@@ -203,8 +203,9 @@ fn render_shortcuts(cx: &mut Context<Workbench>) -> Div {
 /// "D2Coding is recommended for Korean", with a way to get it — for someone reading Agentty in
 /// Korean who does not have it installed, and nobody else: someone who has it and picked another
 /// font made their choice. Once installed, it is what the terminals use unless a font was picked.
+/// macOS only: on Windows and Linux it is not the default (PowerShell's glyphs break in it).
 pub(super) fn korean_font_notice(id: &'static str, cx: &gpui::App) -> Option<Div> {
-    if settings(cx).language.resolved() != Language::Ko || korean_font_installed(cx) {
+    if !cfg!(target_os = "macos") || settings(cx).language.resolved() != Language::Ko || korean_font_installed(cx) {
         return None;
     }
     Some(
@@ -1053,7 +1054,7 @@ impl Workbench {
         let mut fonts = div().flex().gap_1().justify_end();
         // Enumerating system fonts is slow; do it once per app run.
         let installed = self.installed_fonts.get_or_insert_with(|| installed_font_families(cx.text_system().all_font_names())).clone();
-        // Nothing picked: the default, which follows the language (D2Coding in Korean, when installed).
+        // Nothing picked: the default (on macOS in Korean, D2Coding when installed).
         fonts = fonts.child(chip(
             "font-default",
             tf(cx, "settings.font_default", &[("font", default_terminal_font(cx))]),

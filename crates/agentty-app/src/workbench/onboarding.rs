@@ -633,7 +633,7 @@ impl Workbench {
             .child(opener("onboarding-link-external", "settings.link_external", LinkOpener::External, cx));
         let in_app = prefs.link_opener == LinkOpener::InApp && crate::platform::HAS_WEBVIEW;
         // The terminal font: the default (which follows the language), or the other of the two
-        // that matter here — the bundled one and, when it is installed, D2Coding. Every other font
+        // that matter here — the bundled one and, on macOS when it is installed, D2Coding. Every other font
         // is in Settings → Terminal Style.
         let default_font = crate::settings::default_terminal_font(cx);
         let font_chip = |id: &'static str, label: String, value: &'static str, cx: &mut Context<Self>| {
@@ -652,9 +652,12 @@ impl Workbench {
             .when(default_font != crate::settings::BUNDLED_FONT, |d| {
                 d.child(font_chip("onboarding-font-bundled", crate::settings::BUNDLED_FONT.to_string(), crate::settings::BUNDLED_FONT, cx))
             })
-            .when(default_font != crate::settings::KOREAN_FONT && crate::settings::korean_font_installed(cx), |d| {
-                d.child(font_chip("onboarding-font-korean", crate::settings::KOREAN_FONT.to_string(), crate::settings::KOREAN_FONT, cx))
-            });
+            .when(
+                cfg!(target_os = "macos") && default_font != crate::settings::KOREAN_FONT && crate::settings::korean_font_installed(cx),
+                |d| {
+                    d.child(font_chip("onboarding-font-korean", crate::settings::KOREAN_FONT.to_string(), crate::settings::KOREAN_FONT, cx))
+                },
+            );
         // Only on a fresh install: "show again" later is a tour, not a setup step. Settings →
         // Terminal Style keeps the same notice for as long as it applies.
         let font_notice =
