@@ -1,10 +1,10 @@
 //! Settings page: language, folder prompt, terminal theme, font, cursor and misc options.
 
 use super::Workbench;
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::settings::{
-    reload_themes, settings, update_settings, CommandAlias, CursorShapeSetting, HarnessAgent, Language, Settings, SettingsStore,
-    BUNDLED_FONT,
+    default_terminal_font, korean_font_installed, reload_themes, settings, update_settings, CommandAlias, CursorShapeSetting, HarnessAgent,
+    Language, Settings, SettingsStore, BUNDLED_FONT, KOREAN_FONT_URL,
 };
 use crate::shell_integration::{is_valid_command, is_valid_word};
 use crate::text_input::{TextInput, TextInputEvent};
@@ -200,6 +200,53 @@ fn render_shortcuts(cx: &mut Context<Workbench>) -> Div {
 }
 
 /// Installed font families for the full list: sorted, deduplicated, without hidden system faces.
+/// "D2Coding is recommended for Korean", with a way to get it — for someone reading Agentty in
+/// Korean who does not have it installed, and nobody else: someone who has it and picked another
+/// font made their choice. Once installed, it is what the terminals use unless a font was picked.
+pub(super) fn korean_font_notice(id: &'static str, cx: &gpui::App) -> Option<Div> {
+    if settings(cx).language.resolved() != Language::Ko || korean_font_installed(cx) {
+        return None;
+    }
+    Some(
+        div()
+            .px_3()
+            .py_2()
+            .flex()
+            .items_center()
+            .gap_3()
+            .rounded_md()
+            .bg(hex_alpha(Chrome::BLUE, 0.12))
+            .border_1()
+            .border_color(hex_alpha(Chrome::BLUE, 0.4))
+            .child(crate::ui::icon("info", crate::ui::IconSize::INLINE, hex(Chrome::BLUE)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(div().t_small().text_color(hex(Chrome::BRIGHT)).child(t(cx, "font.korean_recommended")))
+                    .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "font.korean_recommended_hint"))),
+            )
+            .child(
+                div()
+                    .id(id)
+                    .flex_shrink_0()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .t_small()
+                    .bg(hex(Chrome::ACCENT))
+                    .text_color(hex(Chrome::BRIGHT))
+                    .hover(|s| s.opacity(0.85))
+                    .child(t(cx, "font.korean_download"))
+                    .on_click(|_, _, cx| cx.open_url(KOREAN_FONT_URL)),
+            ),
+    )
+}
+
 fn installed_font_families(mut names: Vec<String>) -> Vec<String> {
     names.retain(|name| !name.is_empty() && !name.starts_with('.'));
     names.sort_by_key(|name| name.to_lowercase());
@@ -1006,6 +1053,13 @@ impl Workbench {
         let mut fonts = div().flex().gap_1().justify_end();
         // Enumerating system fonts is slow; do it once per app run.
         let installed = self.installed_fonts.get_or_insert_with(|| installed_font_families(cx.text_system().all_font_names())).clone();
+        // Nothing picked: the default, which follows the language (D2Coding in Korean, when installed).
+        fonts = fonts.child(chip(
+            "font-default",
+            tf(cx, "settings.font_default", &[("font", default_terminal_font(cx))]),
+            prefs.font_family.is_empty(),
+            cx.listener(|_, _: &ClickEvent, _, cx| update_settings(cx, |s| s.font_family.clear())),
+        ));
         for (index, family) in FONT_CHOICES.iter().enumerate() {
             if *family != BUNDLED_FONT && !installed.iter().any(|name| name == family) {
                 continue;
@@ -1023,7 +1077,7 @@ impl Workbench {
             ));
         }
         // A font picked from the full list shows as its own chip next to the suggestions.
-        let custom_font = !FONT_CHOICES.contains(&prefs.font_family.as_str());
+        let custom_font = !prefs.font_family.is_empty() && !FONT_CHOICES.contains(&prefs.font_family.as_str());
         if custom_font {
             fonts = fonts.child(chip("font-custom", prefs.font_family.clone(), true, |_, _, _| {}));
         }
@@ -1258,6 +1312,7 @@ impl Workbench {
                 )
                 .child(
                     section(t(cx, "settings.font"))
+                        .children(korean_font_notice("settings-korean-font", cx))
                         .child(row(t(cx, "settings.font"), fonts))
                         .children(font_list)
                         .child(row(

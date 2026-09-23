@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- For someone using Agentty in Korean, terminals use D2Coding — whose Hangul is exactly two columns
+  wide — when it is installed and no other font was picked. When it is not installed, the first-run
+  setup and Settings → Terminal Style recommend it, with a link to get it.
+- Settings → Terminal Style → Font has a "Default" choice, which follows the language.
 - Launch opens on a dashboard of the Vercel account when the focused folder is not a web project:
   which command-line tools are installed, which of GitHub and Vercel are signed in, and every
   project on the account with the repository it deploys from drawn as a code → build → live
@@ -13,6 +17,7 @@ All notable changes to this project are documented here. The format follows
   can be published still opens on the publishing steps, and the two are a tab apart.
 
 ### Changed
+- The first-run setup is shorter, and now includes the terminal font.
 - A new AI session opened where another is already at work asks where it goes — "Create a new
   worktree" or "Open the existing worktree" — instead of always getting a worktree of its own: two
   sessions on one branch, to look at it or work on it together, is often what is wanted. The same

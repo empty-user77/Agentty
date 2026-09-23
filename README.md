@@ -117,7 +117,7 @@ Agent transcripts are read **locally** to list sessions, compute usage and build
 repository data are never uploaded, and the agent status hooks talk to a socket private to your account.
 
 Official release builds send anonymous usage statistics (which features were used, the app and system version, a
-random install ID). The first run shows the setting, Settings → General turns it off, `DO_NOT_TRACK=1` does too, and
+random install ID). Settings → General turns it off, `DO_NOT_TRACK=1` does too, and
 builds from source send nothing. Every event is listed in [docs/metrics.md](docs/metrics.md).
 
 ## Contributing

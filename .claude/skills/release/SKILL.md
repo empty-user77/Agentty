@@ -189,6 +189,16 @@ published checksums.
 Then report (in Korean): version, release URL, asset names, and that installed apps pick it up within an hour (or at
 next launch).
 
+### 10. Clean up the build output
+Only after step 9 passed — until then the local files are the evidence.
+```sh
+cargo clean
+find dist -maxdepth 1 -name '*X.Y.Z*' -delete   # not a bare glob: zsh fails on one that matches nothing
+```
+`target/` is several GB and `dist/` holds this release's installers; both are on GitHub now. Also remove the worktrees
+of work that went into this release (`git worktree remove <path>`), as `CLAUDE.md` → Build output says. Report the
+space freed (`df -h /`) in the final message.
+
 ## Rollback
 If a published release is broken: mark it as a draft again (`gh release edit vX.Y.Z --draft=true`) so the updater
 stops offering it, fix, and ship `vX.Y.(Z+1)` — never reuse a version number that was already published.

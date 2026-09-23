@@ -432,8 +432,6 @@ strings! {
     "onboarding.opt_links_body" => ["Links and local servers from your terminals", "터미널의 링크와 로컬 서버를 여는 브라우저", "ターミナルのリンクとローカルサーバーを開くブラウザ", "用于打开终端链接和本地服务器的浏览器"],
     "onboarding.opt_auto_open" => ["Open local servers by themselves", "로컬 서버 자동으로 열기", "ローカルサーバーを自動で開く", "自动打开本地服务器"],
     "onboarding.opt_auto_open_body" => ["npm run dev → its page opens in the in-app browser", "npm run dev 를 실행하면 인앱 브라우저로 바로 열림", "npm run dev を実行するとアプリ内ブラウザで開く", "运行 npm run dev 后在内置浏览器中打开"],
-    "onboarding.opt_bar_position" => ["Where should AI status show?", "AI 상태를 어디에 보여줄까요?", "AI の状態をどこに表示しますか？", "AI 状态显示在哪里？"],
-    "onboarding.opt_bar_position_body" => ["Model, context and branch, above or under the terminal", "모델 · 컨텍스트 · 브랜치 상태바를 터미널 위 또는 아래에", "モデル・コンテキスト・ブランチのバーをターミナルの上か下に", "模型、上下文与分支栏，位于终端上方或下方"],
     "onboarding.opt_worktree" => ["A working tree per AI session", "AI 세션마다 별도 워크트리", "AI セッションごとにワークツリー", "每个 AI 会话独立工作树"],
     "onboarding.opt_worktree_body" => ["Offer a separate worktree when a session joins another", "이미 작업 중인 곳이면 별도 워크트리를 만들지 물어봄", "作業中の場所なら別のワークツリーを作るか尋ねる", "已有会话在工作时，询问是否新建工作树"],
     "onboarding.opt_stop_servers" => ["Stop servers with their tab", "탭을 닫으면 서버도 종료", "タブを閉じたらサーバーも停止", "关闭标签页时停止服务器"],
@@ -441,7 +439,6 @@ strings! {
     "onboarding.opt_notify" => ["Notifications", "알림", "通知", "通知"],
     "onboarding.opt_notify_body" => ["When an agent finishes or waits for you", "에이전트가 끝났거나 답을 기다릴 때 알려 줌", "エージェントの完了時や入力待ちのときに通知", "代理完成或等待回答时通知"],
     "onboarding.opt_idea" => ["Idea mode", "아이디어 모드", "アイデアモード", "创意模式"],
-    "onboarding.opt_analytics_body" => ["Which features were used, app and system version, a random install id — no personal data", "어떤 기능을 썼는지, 앱과 시스템 버전, 무작위 설치 ID만 — 개인정보는 수집하지 않습니다", "使った機能、アプリとシステムのバージョン、ランダムなインストール ID のみ — 個人情報は収集しません", "仅收集使用了哪些功能、应用与系统版本、随机安装 ID — 不收集个人信息"],
     "onboarding.opt_idea_body" => ["“Build my idea” on the start page", "시작 화면에 “아이디어 실현하기” 표시", "スタート画面に「アイデアを実現」を表示", "在起始页显示“实现我的想法”"],
     "onboarding.to_tour" => ["Next: try the features", "다음: 기능 따라 하기", "次へ: 機能を試す", "下一步：体验功能"],
     "onboarding.finish" => ["Finish", "완료", "完了", "完成"],
@@ -1135,6 +1132,27 @@ strings! {
     "advisor.not_claude" => ["The advisor can be switched only in Claude Code tabs opened by Agentty.", "Advisor는 Agentty에서 연 Claude Code 탭에서만 바꿀 수 있습니다.", "Advisor は Agentty で開いた Claude Code タブでのみ切り替えられます。", "只能在 Agentty 打开的 Claude Code 标签页中切换 Advisor。"],
     "advisor.restarted" => ["Restarting Claude Code with advisor: {advisor}", "Advisor {advisor}(으)로 Claude Code 재시작 중", "Advisor {advisor} で Claude Code を再起動中", "正在以 Advisor {advisor} 重启 Claude Code"],
     "settings.font_more" => ["More", "더보기", "その他", "更多"],
+    "onboarding.opt_font" => ["Terminal font", "터미널 글꼴", "ターミナルのフォント", "终端字体"],
+    "onboarding.opt_font_body" => [
+        "What terminals, diffs and the editor are drawn in",
+        "터미널·변경 내역·편집기에 쓰는 글꼴",
+        "ターミナル・差分・エディタで使うフォント",
+        "终端、差异和编辑器使用的字体"
+    ],
+    "settings.font_default" => ["Default ({font})", "기본 ({font})", "デフォルト ({font})", "默认 ({font})"],
+    "font.korean_recommended" => [
+        "For Korean, the D2Coding font is recommended.",
+        "한국어의 경우 D2Coding 폰트 사용이 권장됩니다.",
+        "韓国語には D2Coding フォントをおすすめします。",
+        "韩语推荐使用 D2Coding 字体。"
+    ],
+    "font.korean_recommended_hint" => [
+        "Hangul lines up exactly two columns wide. Install it and restart Agentty: it is used unless you picked another font.",
+        "한글이 정확히 두 칸 폭으로 맞춰집니다. 설치 후 Agentty를 다시 시작하면, 다른 글꼴을 고르지 않은 한 자동으로 적용됩니다.",
+        "ハングルがちょうど 2 文字幅に揃います。インストールして Agentty を再起動すると、別のフォントを選んでいない限り自動で使われます。",
+        "韩文正好占两列宽。安装后重启 Agentty，只要没有另选字体就会自动使用。"
+    ],
+    "font.korean_download" => ["Get D2Coding", "D2Coding 받기", "D2Coding を入手", "获取 D2Coding"],
     "settings.bundled" => ["bundled", "내장", "同梱", "内置"],
 
     "settings.aliases" => ["Reserved words", "예약어", "予約語", "保留词"],
