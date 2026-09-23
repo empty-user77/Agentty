@@ -199,7 +199,7 @@ impl Workbench {
                                 this.persist(cx);
                                 // Without a menu bar item, closing the main window ends Agentty.
                                 if slot == 0 {
-                                    cx.defer(crate::request_quit);
+                                    cx.defer(crate::request_quit_asking);
                                 } else if !this.ask_about_unsaved_files(crate::editor::AfterDiscard::CloseWindow, window, cx) {
                                     window.remove_window();
                                 }
@@ -1509,7 +1509,7 @@ impl Workbench {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(crate::brand::avatar(session.agent.id(), 16.))
+                    .child(crate::brand::avatar_colored(session.agent.id(), 16.))
                     .child(div().flex_1().min_w_0().truncate().t_body().text_color(hex(Chrome::FOREGROUND)).child(session.title.clone()))
                     .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(relative_time(now, session.updated_at)))
                     .child(
@@ -1573,9 +1573,9 @@ impl Workbench {
                                 cx.stop_propagation();
                                 this.ask_migrate_session(migrate.clone(), cx);
                             }))
-                            .child(crate::brand::avatar(migrate_from.id(), 14.))
+                            .child(crate::brand::avatar_colored(migrate_from.id(), 14.))
                             .child(icon("arrow-right", IconSize::INLINE, hex(Chrome::MUTED)))
-                            .child(crate::brand::avatar(to.id(), 14.)),
+                            .child(crate::brand::avatar_colored(to.id(), 14.)),
                     )
                     .child(div().flex_1())
                     // A session running in a pane cannot be deleted: the agent is still writing to
@@ -2470,7 +2470,7 @@ impl Workbench {
                     .cursor_pointer()
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.resume_session(&resume, window, cx)))
-                    .child(crate::brand::avatar(session.agent.id(), 18.))
+                    .child(crate::brand::avatar_colored(session.agent.id(), 18.))
                     .child(div().flex_1().min_w_0().truncate().t_body().text_color(hex(Chrome::FOREGROUND)).child(session.title.clone()))
                     .child(div().flex_shrink_0().max_w(px(170.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(folder))
                     .child(

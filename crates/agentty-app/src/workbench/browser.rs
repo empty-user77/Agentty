@@ -188,6 +188,11 @@ pub struct BrowserPanel {
 }
 
 impl BrowserPanel {
+    /// Every tab's address (the one it is loading, if any), for the saved layout.
+    pub(super) fn tab_urls(&self) -> Vec<String> {
+        self.tabs.iter().map(|tab| tab.pending.clone().unwrap_or_else(|| tab.url.clone())).collect()
+    }
+
     fn tab(&self) -> &BrowserTab {
         &self.tabs[self.active.min(self.tabs.len() - 1)]
     }
@@ -354,6 +359,14 @@ impl Workbench {
     /// Materializes a requested panel and keeps the native views in sync; called from render.
     pub(super) fn prepare_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(url) = self.browser_request.take() {
+            // After a restart: every tab that was open, not only the one in front.
+            let (tabs, active) = match self.browser_restore.take() {
+                Some((urls, active)) if !urls.is_empty() => {
+                    let active = active.min(urls.len() - 1);
+                    (urls.into_iter().take(MAX_TABS).map(BrowserTab::new).collect::<Vec<_>>(), active.min(MAX_TABS - 1))
+                }
+                _ => (vec![BrowserTab::new(url.clone())], 0),
+            };
             let address = cx.new(|cx| TextInput::localized(url.clone(), "browser.address", window, cx));
             let subscription = cx.subscribe(&address, |this, input, event: &TextInputEvent, cx| {
                 if matches!(event, TextInputEvent::Confirmed) {
@@ -366,8 +379,8 @@ impl Workbench {
                 }
             });
             self.browser = Some(BrowserPanel {
-                tabs: vec![BrowserTab::new(url.clone())],
-                active: 0,
+                tabs,
+                active,
                 address,
                 synced_url: url,
                 network_open: false,

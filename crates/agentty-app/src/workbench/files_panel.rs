@@ -111,7 +111,7 @@ pub(super) struct RemoveConfirm {
 
 pub(super) struct FilesPanel {
     /// Working tree picked in the panel; `None` follows the active pane.
-    pinned: Option<PathBuf>,
+    pub(super) pinned: Option<PathBuf>,
     snapshot: Snapshot,
     expanded: HashSet<PathBuf>,
     tab: FilesTab,
@@ -275,6 +275,11 @@ impl Workbench {
     /// Opens the panel, on the working tree `pinned` when given (else on the active pane's).
     pub(super) fn open_files_panel(&mut self, pinned: Option<PathBuf>, cx: &mut Context<Self>) {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "files_panel" }));
+        self.show_files_panel(pinned, cx);
+    }
+
+    /// Opens the panel without counting it as a use (a restart bringing it back).
+    pub(super) fn show_files_panel(&mut self, pinned: Option<PathBuf>, cx: &mut Context<Self>) {
         self.page = None;
         match self.files_panel.as_mut() {
             Some(panel) => panel.pinned = pinned,

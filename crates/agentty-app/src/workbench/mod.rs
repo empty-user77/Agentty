@@ -153,6 +153,11 @@ pub fn next_free_window_slot() -> usize {
 pub use account_usage::AccountUsage;
 pub use persist::ClosedWindows;
 
+/// The place and size window `slot` had at the last save.
+pub fn saved_window(slot: usize) -> Option<persist::WindowState> {
+    LayoutState::load(slot).window
+}
+
 pub struct Tab {
     pub root: PaneNode<Pane>,
     pub active: Pane,
@@ -167,6 +172,9 @@ pub struct Workspace {
     pub active_tab: usize,
     /// Saved layout not spawned yet; restored the first time the workspace is opened.
     pub dormant: Option<WorkspaceSnapshot>,
+    /// `dormant` is only the tab that was closed last (the workspace fell asleep when its last tab
+    /// closed), which is still in `closed_tabs`: a new tab there needs nothing brought back.
+    pub asleep_on_close: bool,
     /// Tabs closed here, newest first, with their splits: a workspace keeps its tab history until
     /// the workspace itself is removed.
     pub closed_tabs: Vec<TabSnapshot>,
@@ -393,6 +401,15 @@ pub struct Workbench {
     mini: Option<mini::MiniState>,
     /// A folder change is waiting to be saved; see `persist_soon`.
     persist_pending: bool,
+    /// The window's place and size, saved with the layout so a restart opens it the same.
+    window_state: Option<persist::WindowState>,
+    /// Panes whose process ended, waiting to close; see `pane_exited`.
+    exited_panes: Vec<Pane>,
+    exit_generation: u64,
+    /// The panels as last saved; a render that finds them changed saves again.
+    saved_panels: persist::PanelState,
+    /// Browser tabs to bring back (addresses, the one in front) when the panel is next built.
+    browser_restore: Option<(Vec<String>, usize)>,
     mini_opening: bool,
     /// Counts folds into the mini panel. A fold waits out its fade in a task, and the press that
     /// cancels it counts a new one, so that task can tell it is no longer the fold being asked for.
@@ -625,6 +642,11 @@ impl Workbench {
             installed_at: None,
             mini: None,
             persist_pending: false,
+            window_state: Some(persist::WindowState::from_bounds(window.window_bounds())),
+            saved_panels: persist::PanelState::default(),
+            exited_panes: Vec::new(),
+            exit_generation: 0,
+            browser_restore: None,
             mini_opening: false,
             mini_generation: 0,
             updates: update::Updates::default(),
@@ -716,6 +738,15 @@ impl Workbench {
             next_id: 1,
         };
         this.restore(window, cx);
+        // Moving or resizing the window is saved like a `cd`: in a moment, once it stops.
+        cx.observe_window_bounds(window, |this, window, cx| {
+            let state = persist::WindowState::from_bounds(window.window_bounds());
+            if this.window_state != Some(state) {
+                this.window_state = Some(state);
+                this.persist_soon(cx);
+            }
+        })
+        .detach();
         this.first_run_onboarding(cx);
         this.startup_system_check(cx);
         this.refresh_sessions(cx);
@@ -756,6 +787,14 @@ impl Workbench {
                 return true;
             }
             if closes {
+                // Closing the main window ends Agentty and every terminal in it: while one runs,
+                // ask first (the answer quits through the usual path).
+                let running =
+                    entity.read_with(cx, |this, cx| this.all_panes().iter().any(|pane| pane.read(cx).is_running())).unwrap_or(false);
+                if running {
+                    cx.defer(crate::request_quit_asking);
+                    return false;
+                }
                 // The last window closing ends Agentty, and the quit hook holds only a weak
                 // handle to this workbench: by the time it runs the window is gone and nothing
                 // would be written. Save while there is still something to save.
@@ -833,14 +872,7 @@ impl Workbench {
         crate::metrics::track(cx, "pane_opened", serde_json::json!({ "tool": tool }));
         let pane = cx.new(|cx| TerminalView::new(spec, cx));
         let subscription = cx.subscribe(&pane, |this, pane, event: &TerminalEvent, cx| match event {
-            TerminalEvent::Exited => {
-                // A process ending on its own closes its tab as surely as the ✕ does, so the tab
-                // is remembered here too. Without it the workspace would fall dormant on whatever
-                // tab happened to be first in its history, and the one that just ended was lost.
-                // A single split ending is not a tab closing, and records nothing.
-                this.remember_closed_tabs(std::slice::from_ref(&pane), cx);
-                this.remove_pane(&pane, cx);
-            }
+            TerminalEvent::Exited => this.pane_exited(pane.clone(), cx),
             TerminalEvent::Activated => {
                 let pane_id = pane.read(cx).pane_id;
                 if this.mark_pane_read(pane_id) {
@@ -902,6 +934,7 @@ impl Workbench {
             if ws.tabs[t].active != *pane || ws.active_tab != t {
                 ws.tabs[t].active = pane.clone();
                 ws.active_tab = t;
+                self.persist_soon(cx);
                 cx.notify();
             }
         }
@@ -964,6 +997,7 @@ impl Workbench {
             match closed.filter(|_| !removing) {
                 Some(tab) => {
                     let ws = &mut self.workspaces[w];
+                    ws.asleep_on_close = true;
                     ws.dormant = Some(WorkspaceSnapshot {
                         id: ws.id,
                         name: ws.name.clone(),
@@ -1067,6 +1101,7 @@ impl Workbench {
             tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane }],
             active_tab: 0,
             dormant: None,
+            asleep_on_close: false,
             closed_tabs: Vec::new(),
             color: None,
         });
@@ -1096,6 +1131,7 @@ impl Workbench {
         if self.workspaces.is_empty() {
             return self.create_workspace(spec, window, cx);
         }
+        self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
         ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane });
@@ -1119,6 +1155,7 @@ impl Workbench {
             self.create_workspace(spec, window, cx);
             return None;
         }
+        self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
         ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone() });
@@ -1165,6 +1202,53 @@ impl Workbench {
         cx.notify();
     }
 
+    /// A pane's process ended. It closes a moment later, with any others that end meanwhile.
+    ///
+    /// Several ending together is not the user closing them: a logout or shutdown ends the
+    /// shells before Agentty hears it is quitting, and `killall` ends every one. Closing them at
+    /// once would save the layout without them, and the quit that follows would keep it that way;
+    /// waiting lets the quit save them as they were. After the wait (no quit came) they close.
+    fn pane_exited(&mut self, pane: Pane, cx: &mut Context<Self>) {
+        self.exited_panes.push(pane);
+        self.exit_generation += 1;
+        let generation = self.exit_generation;
+        let wait = std::time::Duration::from_millis(if self.exited_panes.len() > 1 { 3000 } else { 300 });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.exit_generation != generation || this.closed {
+                    return;
+                }
+                for pane in std::mem::take(&mut this.exited_panes) {
+                    if this.locate(&pane).is_none() {
+                        continue;
+                    }
+                    // A process ending on its own closes its tab as surely as the ✕ does, so the
+                    // tab is remembered here too. Without it the workspace would fall dormant on
+                    // whatever tab happened to be first in its history, and the one that just
+                    // ended was lost. A single split ending is not a tab closing, and records
+                    // nothing.
+                    this.remember_closed_tabs(std::slice::from_ref(&pane), cx);
+                    this.remove_pane(&pane, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Makes workspace `index` live before a tab is added to it. A sleeping workspace is saved
+    /// from its snapshot, so a tab added beside the snapshot would never be written, and opening
+    /// the workspace later would replace it. Its saved tabs come back first; one that fell
+    /// asleep on its closed tab just wakes up empty (that tab stays in the closed-tab history).
+    pub(super) fn wake_for_new_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(ws) = self.workspaces.get_mut(index) else { return };
+        let Some(snapshot) = ws.dormant.take() else { return };
+        if std::mem::take(&mut ws.asleep_on_close) {
+            return;
+        }
+        self.revive(index, snapshot, cx);
+    }
+
     /// Makes a workspace current while a page (AgentGit) stays on screen.
     pub(super) fn select_workspace_for_page(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.workspaces.len() {
@@ -1186,6 +1270,7 @@ impl Workbench {
             self.session_viewer = None;
             self.hide_editor();
             self.focus_active(window, cx);
+            self.persist_soon(cx);
             cx.notify();
         }
     }
@@ -1889,6 +1974,7 @@ impl Workbench {
         if index >= self.workspaces[w].closed_tabs.len() {
             return;
         }
+        self.wake_for_new_tab(w, cx);
         let snapshot = self.workspaces[w].closed_tabs.remove(index);
         let Some(tree) = snapshot.layout.to_tree() else { return };
         let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(pane.launch_spec(), cx));
@@ -2296,7 +2382,11 @@ impl Workbench {
         PaneSnapshot {
             kind,
             // A session resumes only in the folder it was held in: the agent's own, not the shell's.
-            cwd: if running.is_some() { view.display_cwd() } else { view.current_dir() },
+            cwd: match (&view.spec.missing_cwd, if running.is_some() { view.display_cwd() } else { view.current_dir() }) {
+                // Still where it was put for want of its own folder: that folder is what to keep.
+                (Some(missing), here) if here == view.spec.cwd => missing.clone(),
+                (_, here) => here,
+            },
             title: view.display_title(),
             session_id,
             tool: Some(view.tool_id().to_string()),
@@ -2307,7 +2397,52 @@ impl Workbench {
         TabSnapshot {
             layout: NodeSnapshot::from_tree(&tab.root.map(&mut |pane| Self::snapshot_pane(pane, cx))),
             active_pane: tab.root.leaves().iter().position(|p| *p == tab.active).unwrap_or(0),
+            zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
         }
+    }
+
+    /// What is open around the terminals, as saved with the layout.
+    fn panel_state(&self) -> persist::PanelState {
+        let browser = self.browser.as_ref();
+        persist::PanelState {
+            sidebar_hidden: !self.sidebar_open,
+            files_open: self.files_panel.is_some(),
+            files_pinned: self.files_panel.as_ref().and_then(|panel| panel.pinned.clone()),
+            // Written to disk: an address carrying a credential keeps only its origin.
+            browser_tabs: browser
+                .map(|b| {
+                    b.tab_urls().iter().map(|url| agentty_bridge::extensions::url_to_keep(url)).filter(|url| !url.is_empty()).collect()
+                })
+                .unwrap_or_default(),
+            browser_active: browser.map_or(0, |b| b.active),
+            plugin: self.plugin_panel.clone(),
+            docker_open: self.docker.open,
+            database_open: self.db.panel_open,
+        }
+    }
+
+    /// Opens what was open around the terminals at the last save. Nothing here is counted as
+    /// a use of the feature: it is the same session coming back.
+    fn restore_panels(&mut self, panels: persist::PanelState, cx: &mut Context<Self>) {
+        self.sidebar_open = !panels.sidebar_hidden;
+        if panels.files_open {
+            self.show_files_panel(panels.files_pinned.filter(|p| p.is_dir()), cx);
+        }
+        if !panels.browser_tabs.is_empty() && crate::platform::HAS_WEBVIEW {
+            let active = panels.browser_active.min(panels.browser_tabs.len() - 1);
+            self.browser_request = Some(panels.browser_tabs[active].clone());
+            self.browser_restore = Some((panels.browser_tabs, active));
+        }
+        if let Some(plugin) = panels.plugin.filter(|id| crate::plugins::plugin(cx, id).is_some_and(|p| p.enabled)) {
+            self.open_plugin_panel(&plugin, cx);
+        }
+        if panels.docker_open && !self.docker.open {
+            self.toggle_docker_panel(cx);
+        }
+        if panels.database_open && !self.db.panel_open {
+            self.toggle_db_panel(cx);
+        }
+        self.saved_panels = self.panel_state();
     }
 
     /// Saves the layout in a moment, not now. A save reads every pane's folder and writes the
@@ -2336,12 +2471,16 @@ impl Workbench {
             .iter()
             .map(|ws| {
                 if let Some(dormant) = &ws.dormant {
+                    // Live tabs beside a snapshot are saved with it, never dropped.
+                    let mut tabs = if ws.asleep_on_close && !ws.tabs.is_empty() { Vec::new() } else { dormant.tabs.clone() };
+                    tabs.extend(ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)));
                     return WorkspaceSnapshot {
                         name: ws.name.clone(),
                         group: ws.group,
                         closed_tabs: ws.closed_tabs.clone(),
                         color: None,
                         color_value: ws.color,
+                        tabs,
                         ..dormant.clone()
                     };
                 }
@@ -2377,6 +2516,8 @@ impl Workbench {
             workspaces,
             active_workspace: self.active_workspace,
             ungrouped_collapsed: self.ungrouped_collapsed,
+            window: self.window_state,
+            panels: self.panel_state(),
         };
         if self.closed {
             return;
@@ -2406,6 +2547,7 @@ impl Workbench {
                 closed_tabs: snapshot.closed_tabs.clone(),
                 color: stored_color(snapshot.color_value, snapshot.color),
                 dormant: Some(snapshot),
+                asleep_on_close: false,
             });
         }
         for group in &self.groups {
@@ -2415,6 +2557,7 @@ impl Workbench {
             // Only the active workspace starts processes; the rest wake up when opened.
             self.activate_workspace(state.active_workspace.min(self.workspaces.len() - 1), window, cx);
         }
+        self.restore_panels(state.panels, cx);
     }
 
     fn revive(&mut self, index: usize, snapshot: WorkspaceSnapshot, cx: &mut Context<Self>) {
@@ -2424,10 +2567,16 @@ impl Workbench {
             let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(pane.launch_spec(), cx));
             let leaves = root.leaves();
             let active = leaves.get(tab.active_pane).unwrap_or(&leaves[0]).clone();
+            if self.zoomed.is_none() {
+                self.zoomed = tab.zoomed_pane.and_then(|index| leaves.get(index)).cloned();
+            }
             tabs.push(Tab { root, active });
         }
         let ws = &mut self.workspaces[index];
         ws.active_tab = snapshot.active_tab.min(tabs.len().saturating_sub(1));
+        ws.asleep_on_close = false;
+        // Tabs that are already live stay, after the ones brought back.
+        tabs.append(&mut ws.tabs);
         ws.tabs = tabs;
         if ws.tabs.is_empty() {
             let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, snapshot.cwd.clone()), cx);
@@ -2531,6 +2680,13 @@ impl Render for Workbench {
             self.docker_window_activated();
         }
         self.viewport_width = f32::from(window.viewport_size().width);
+        // Opening or closing a panel or the sidebar is part of the layout. The toggles are many
+        // (buttons, menus, shortcuts, agents); watching the outcome here catches them all.
+        let panels = self.panel_state();
+        if panels != self.saved_panels {
+            self.saved_panels = panels;
+            self.persist_soon(cx);
+        }
         if let Some(git) = self.git.clone().filter(|_| self.page != Some(Page::Git)) {
             git.update(cx, |v, _| v.set_visible(false));
         }
@@ -3926,6 +4082,7 @@ impl Workbench {
             "quit" => cx.quit(),
             // Like ⌘Q: asks about unsaved files in the editor first.
             "request-quit" => cx.defer(crate::request_quit),
+            "quit-ask" => cx.defer(crate::request_quit_asking),
             _ => eprintln!("agentty: unknown debug command {command}"),
         }
         cx.notify();

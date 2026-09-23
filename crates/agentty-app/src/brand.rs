@@ -76,6 +76,13 @@ pub fn avatar_brand(id: &str, size: f32) -> gpui::Div {
     plate(id, size, true, Chrome::BRIGHT)
 }
 
+/// The tool's logo alone, in its own colours: the recent-sessions list, where which agent a
+/// conversation was held with is what tells the rows apart.
+pub fn avatar_colored(id: &str, size: f32) -> gpui::Div {
+    let brand = brand(id);
+    div().flex_shrink_0().size(px(size)).flex().items_center().justify_center().child(glyph(brand, size * 0.9, size, true, Chrome::BRIGHT))
+}
+
 /// The tool's logo, or — while a turn is running — the braille dot spinner in its place, the same
 /// mark everywhere it appears. `key` keeps each row's animation apart; `ink` is the colour the row
 /// it sits in writes its text in, so the mark follows the card's own fill.

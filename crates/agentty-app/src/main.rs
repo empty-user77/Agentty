@@ -368,7 +368,9 @@ pub fn set_app_menus(cx: &mut App) {
 }
 
 fn register_app_actions(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| request_quit(cx));
+    // Deferred: a menu or key action arrives while the window that dispatched it is still busy,
+    // and the question needs to read (and then use) that window.
+    cx.on_action(|_: &Quit, cx| cx.defer(request_quit_asking));
     cx.on_action(|action: &OpenGuide, cx| {
         let url = action.url(cx);
         cx.open_url(&url);
@@ -898,6 +900,40 @@ pub fn request_quit(cx: &mut App) {
     cx.quit();
 }
 
+/// Quitting by hand (⌘Q, the menu, the menu bar popover): it ends every terminal, so while any is
+/// running it asks first. An update's restart quits through `request_quit` directly.
+pub fn request_quit_asking(cx: &mut App) {
+    let windows = workbenches(cx);
+    let running = windows.iter().any(|handle| handle.read(cx).is_ok_and(|wb| wb.all_panes().iter().any(|pane| pane.read(cx).is_running())));
+    let Some(main) = windows.into_iter().next().filter(|_| running) else { return request_quit(cx) };
+    let (title, body, quit, cancel) = (
+        i18n::t(cx, "quit_confirm.title"),
+        i18n::t(cx, "quit_confirm.body"),
+        i18n::t(cx, "quit_confirm.quit"),
+        i18n::t(cx, "confirm.cancel"),
+    );
+    // The window may be hidden behind the menu bar item: bring it up, the question is asked on it.
+    let answer = main.update(cx, |_, window, cx| {
+        window.activate_window();
+        window.prompt(
+            gpui::PromptLevel::Warning,
+            title,
+            Some(body),
+            &[gpui::PromptButton::ok(quit), gpui::PromptButton::cancel(cancel)],
+            cx,
+        )
+    });
+    cx.activate(true);
+    if let Ok(answer) = answer {
+        cx.spawn(async move |cx| {
+            if answer.await == Ok(0) {
+                let _ = cx.update(request_quit);
+            }
+        })
+        .detach();
+    }
+}
+
 /// A quit was called off: every window asks about its unsaved files again next time.
 pub fn forget_discard_answers(cx: &mut App) {
     for handle in workbenches(cx) {
@@ -914,12 +950,20 @@ fn workbenches(cx: &App) -> Vec<gpui::WindowHandle<Workbench>> {
 
 /// Opens Agentty window `slot` (its workspaces come from that slot's layout file).
 fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench>> {
-    let offset = slot as f32 * 28.;
-    let mut bounds = Bounds::centered(None, size(px(1400.), px(880.)), cx);
-    bounds.origin.x += px(offset);
-    bounds.origin.y += px(offset);
+    let min_size = size(px(720.), px(440.));
+    // Where the window was at the last save, while that is still on a screen; else centred (a
+    // little down and right of the one before it, for further windows).
+    let screens: Vec<_> = cx.displays().iter().map(|display| display.bounds()).collect();
+    let saved = workbench::saved_window(slot).and_then(|state| state.to_bounds(&screens, min_size));
+    let window_bounds = saved.unwrap_or_else(|| {
+        let offset = slot as f32 * 28.;
+        let mut bounds = Bounds::centered(None, size(px(1400.), px(880.)), cx);
+        bounds.origin.x += px(offset);
+        bounds.origin.y += px(offset);
+        WindowBounds::Windowed(bounds)
+    });
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(window_bounds),
         // macOS draws the traffic lights over Agentty's own title bar; Windows and Linux keep the
         // system title bar (Linux asks for server-side decorations; see `render_title_bar`).
         titlebar: Some(TitlebarOptions {
@@ -928,7 +972,7 @@ fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench
             traffic_light_position: Some(point(px(12.), px(11.))),
         }),
         window_decorations: (!cfg!(target_os = "macos")).then_some(gpui::WindowDecorations::Server),
-        window_min_size: Some(size(px(720.), px(440.))),
+        window_min_size: Some(min_size),
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {

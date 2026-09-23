@@ -132,7 +132,9 @@ impl<T: Clone + PartialEq> PaneNode<T> {
                 return;
             }
             let pair = start_sizes[index] + start_sizes[index + 1];
-            let first = (start_sizes[index] + delta).clamp(MIN_SIZE, pair - MIN_SIZE);
+            // Two panes that together have less room than two minimums (after many splits, or
+            // focus view) share it evenly; `clamp` with its bounds crossed would panic.
+            let first = if pair < 2. * MIN_SIZE { pair / 2. } else { (start_sizes[index] + delta).clamp(MIN_SIZE, pair - MIN_SIZE) };
             sizes[index] = first;
             sizes[index + 1] = pair - first;
         }

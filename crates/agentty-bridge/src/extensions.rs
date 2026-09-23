@@ -468,6 +468,18 @@ fn mask_word(word: &str) -> String {
 
 /// A URL with everything that can carry a credential masked: user and password, token-like path
 /// segments, query values (by name or by looks) and the fragment.
+/// A URL fit to be written to disk: as it is, unless it carries something that looks like a
+/// credential (a token in the path or query, a password), when only its origin is kept.
+pub fn url_to_keep(url: &str) -> String {
+    if redact_url(url) == url {
+        return url.to_string();
+    }
+    match url::Url::parse(url) {
+        Ok(parsed) if parsed.host_str().is_some() => parsed.origin().ascii_serialization() + "/",
+        _ => String::new(),
+    }
+}
+
 pub fn redact_url(url: &str) -> String {
     let Ok(parsed) = url::Url::parse(url) else { return if looks_like_token(url) { MASK.into() } else { url.to_string() } };
     let Some(host) = parsed.host_str() else { return url.to_string() };
@@ -871,6 +883,13 @@ pub fn mcp_remove_command(agent: Agent, name: &str, scope: &Scope) -> anyhow::Re
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn urls_with_credentials_keep_only_their_origin() {
+        assert_eq!(super::url_to_keep("http://localhost:3000/dashboard?tab=2"), "http://localhost:3000/dashboard?tab=2");
+        assert_eq!(super::url_to_keep("https://example.com/cb?code=x&access_token=example_not_a_real_token"), "https://example.com/");
+        assert_eq!(super::url_to_keep("https://user:pw@example.com/"), "https://example.com/");
+    }
+
     use super::*;
 
     #[test]
