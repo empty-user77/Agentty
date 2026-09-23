@@ -30,7 +30,20 @@ use GA's **Realtime** report or **DebugView**.
 | `feature_used` | `feature`: `agentgit`, `flow`, `usage`, `settings`, `extensions`, `mini`, `browser_api` |
 
 Every event also carries `app_version`, `os_version` and a random install ID (`client_id`, stored
-in `~/.agentty/install_id`). Parameters are checked against an allow-list and must be short
+in `~/.agentty/install_id`). Each request also describes the device, since Measurement Protocol
+requests have no device or location of their own:
+
+| Field | Value |
+|---|---|
+| `device.category` | `desktop` |
+| `device.operating_system` | `macOS`, `Windows` or `Linux` |
+| `device.operating_system_version` | e.g. `15.1`, `10.0.26100`, `Ubuntu 24.04` |
+| `device.language` | the language Agentty is shown in: `en`, `ko`, `ja` or `zh` |
+| `user_location.country_id` | the country of the system's region setting (`ko_KR` → `KR`); left out when the setting names none |
+
+No IP address or location is looked up or sent: the country is the region the user set in the
+system, not where the computer is. To see `app_version` and `os_version` in GA reports, register
+them as event-scoped custom dimensions (Admin → Custom definitions). Parameters are checked against an allow-list and must be short
 identifiers — paths, commands, prompts, output, repository and branch names are never sent.
 Events are queued and sent once a minute.
 
