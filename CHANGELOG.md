@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-09-23
+
 ### Added
 - For someone using Agentty in Korean, terminals use D2Coding — whose Hangul is exactly two columns
   wide — when it is installed and no other font was picked. When it is not installed, the first-run
@@ -43,6 +45,13 @@ All notable changes to this project are documented here. The format follows
   pane's own zoom and close buttons stay put.
 - A new Claude Code session is named by its own welcome banner until it answers, instead of a guess
   from other sessions: one started with `--model sonnet` shows Sonnet straight away.
+- A model picked with `/model` shows on the pane's bar right away, not a few prompts later, and a
+  new Claude pane names the model it really runs on.
+- Underlined text in the terminal (links, for one) is underlined to its last letter.
+- Launch follows the terminal you are looking at: it shows that terminal's folder, opens on the
+  publishing steps for a web project and on the dashboard otherwise, and shows a spinner at once
+  while a new folder loads. Connections that are all set, and a checklist that is all done, take a
+  single line.
 
 ## [0.1.17] - 2026-09-22
 
