@@ -1286,9 +1286,23 @@ impl TerminalView {
         cx.emit(TerminalEvent::Activated);
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.activate(cx);
         let keystroke = &event.keystroke;
+        // Windows Terminal's convention: Ctrl+V pastes, and Ctrl+C copies while text is selected
+        // (clearing the selection); without one it stays the interrupt.
+        let m = keystroke.modifiers;
+        if cfg!(windows) && m.control && !m.alt && !m.shift && !m.platform {
+            if keystroke.key == "v" {
+                self.paste(&Paste, window, cx);
+                cx.stop_propagation();
+                return;
+            }
+            if keystroke.key == "c" && self.copy_and_deselect(cx) {
+                cx.stop_propagation();
+                return;
+            }
+        }
         if keystroke.key == "escape" && matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_))
         {
             self.esc_at = Some(Instant::now());
@@ -1301,7 +1315,7 @@ impl TerminalView {
             self.quiet_ticks = 0;
             cx.emit(TerminalEvent::StatusChanged);
         }
-        if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta) {
+        if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta, self.live_agent.is_some()) {
             // This key went to the program rather than to the input method, so whatever was being
             // composed is not what the program has. Drawing it on would put it over the text the
             // program echoes back.
@@ -1322,6 +1336,18 @@ impl TerminalView {
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+    }
+
+    /// Copies the selected text and clears the selection; false when nothing is selected.
+    fn copy_and_deselect(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(backend) = &self.backend else { return false };
+        let mut term = backend.term.lock();
+        let Some(text) = term.selection_to_string().filter(|t| !t.is_empty()) else { return false };
+        term.selection = None;
+        drop(term);
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        cx.notify();
+        true
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {

@@ -300,7 +300,11 @@ impl Workbench {
                             (s.update_later_version.clone(), s.update_later_until)
                         };
                         let waiting = put_off(&later.0, later.1, &release.version, unix_now());
-                        if !waiting && this.updates.announced.as_deref() != Some(release.version.as_str()) {
+                        // Installing restarts Agentty and ends every terminal in it: while one runs,
+                        // the update only waits in the status bar. The popup comes on its own once
+                        // none is left, at a later check.
+                        let working = this.all_panes().iter().any(|pane| pane.read(cx).is_running());
+                        if !waiting && !working && this.updates.announced.as_deref() != Some(release.version.as_str()) {
                             this.updates.announced = Some(release.version.clone());
                             this.updates.popup = true;
                         }

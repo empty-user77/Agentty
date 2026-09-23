@@ -1455,10 +1455,13 @@ impl Workbench {
                                 cx,
                             ),
                         ))
-                        .child(row(
-                            t(cx, "settings.option_meta"),
-                            toggle("option-meta", prefs.option_as_meta, |s| s.option_as_meta = !s.option_as_meta, cx),
-                        ))
+                        // Alt is always Meta on Windows and Linux; only the Mac's Option types characters.
+                        .when(cfg!(target_os = "macos"), |d| {
+                            d.child(row(
+                                t(cx, "settings.option_meta"),
+                                toggle("option-meta", prefs.option_as_meta, |s| s.option_as_meta = !s.option_as_meta, cx),
+                            ))
+                        })
                         .child(row(
                             &format!("{} ({})", t(cx, "settings.scrollback"), t(cx, "settings.new_only")),
                             stepper(

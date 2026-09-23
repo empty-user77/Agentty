@@ -117,7 +117,7 @@ pub struct CommandAlias {
     pub command: String,
 }
 
-pub const SETTINGS_VERSION: u32 = 5;
+pub const SETTINGS_VERSION: u32 = 6;
 
 pub const BUNDLED_FONT: &str = "JetBrains Mono";
 /// The coding font Korean developers reach for: its Hangul is exactly two cells wide. Not bundled
@@ -582,7 +582,7 @@ impl Default for Settings {
             color_cursor: None,
             color_selection: None,
             padding: 8.0,
-            option_as_meta: false,
+            option_as_meta: true,
             scrollback: 10_000,
             sidebar_width: 300.0,
             files_panel_width: 300.0,
@@ -698,6 +698,12 @@ impl Settings {
             for entry in self.hud.iter_mut().filter(|e| e.item == crate::hud::HudItem::Ports) {
                 entry.visible = true;
             }
+        }
+        if self.settings_version < 6 {
+            // v6: Option is Meta by default on the Mac, so the terminal's and the agents' Option
+            // shortcuts (word moves, Claude Code's model and thinking keys) work. It was off
+            // unless turned on, so "off" was the old default rather than a choice.
+            self.option_as_meta = true;
         }
         self.settings_version = SETTINGS_VERSION;
         self
@@ -885,6 +891,16 @@ mod browser_settings_tests {
         let mut current = Settings::default().migrate();
         current.hud.iter_mut().filter(|e| e.item == crate::hud::HudItem::Ports).for_each(|e| e.visible = false);
         assert_eq!(ports(&current.migrate()), Some(false));
+    }
+
+    #[test]
+    fn option_is_meta_by_default() {
+        assert!(Settings::default().option_as_meta);
+        let old = Settings { settings_version: 5, option_as_meta: false, ..Settings::default() };
+        assert!(old.migrate().option_as_meta);
+        // Turned off once this version is in use: a choice, kept.
+        let current = Settings { option_as_meta: false, ..Settings::default().migrate() };
+        assert!(!current.migrate().option_as_meta);
     }
 
     #[test]
