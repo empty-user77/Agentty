@@ -57,6 +57,9 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `autoWorktree` | A new AI session in a working tree where another one is at work (opened from the + menu, or `claude` / `codex` typed into a terminal) asks: **Create a new worktree** (`~/.agentty/worktrees/<project>-<hash>/<name>`, branch `agentty/<name>` from the project's default branch) or **Open the existing worktree** (the new session works on the same files). A prompt from a link or a plugin gets a new worktree without asking. `false`: never a new worktree |
 | `askRemoveTrees` | Closing the last pane working in a linked working tree asks whether to remove that tree and its branch (default on). Off means the tree simply stays; "Don't ask again" in that dialog turns it off |
 | `stopServersOnClose` | Closing a tab, pane or workspace stops the local servers started in it (`SIGTERM`, then `SIGKILL`) |
+| `preventSleep` | Keep the machine awake while Agentty runs (Settings → General → Prevent sleep; off by default) |
+| `preventSleepHours` | How long Prevent sleep stays on once turned on: `0` = always (default), else 1–72 hours, after which it turns itself off |
+| `preventSleepUntil` | When a timed Prevent sleep ends (Unix seconds; `0` while always on or off). Set by the app |
 | `browser.autoOpenServers` | A local server started in a tab opens in the in-app browser once it answers with a page (only while links open in-app) |
 | `fontFamily` | The font terminals, diffs and the editor use. Empty (the default) until one is picked: then, on macOS, D2Coding for someone using Agentty in Korean who has it installed, otherwise the bundled JetBrains Mono (always on Windows and Linux). Settings → Terminal Style → Font, where "Default" goes back to empty |
 | `agentBarPosition` | `top` (default) or `bottom`: the AI CLI status bar, and the header of a split pane, above the terminal or under it |

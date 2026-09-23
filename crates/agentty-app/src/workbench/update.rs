@@ -260,9 +260,7 @@ fn spawn_relauncher(current: &Path, staged: &Path) -> anyhow::Result<()> {
 /// How long "Later" keeps the update popup away.
 const LATER: Duration = Duration::from_secs(24 * 60 * 60);
 
-fn unix_now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
-}
+use crate::settings::unix_now;
 
 /// Whether "Later" still holds for `version`: it was pressed for that version and the day is not
 /// over. A newer version is announced right away.
