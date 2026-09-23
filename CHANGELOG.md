@@ -26,6 +26,14 @@ All notable changes to this project are documented here. The format follows
   stands, and so is an SSH key this computer already has — enough to push to a repository that
   exists. A login is asked for only when a repository has to be created.
 
+### Fixed
+- A split pane's bar no longer cuts the model's name: "Opus 5.5 (1M context)" came out as "Opus 5"
+  once the pane was narrow. The full name and version always show; short of room the window reads
+  "(1M)" and the context meter keeps only its figure, while the folder and branch give way — and the
+  pane's own zoom and close buttons stay put.
+- A new Claude Code session is named by its own welcome banner until it answers, instead of a guess
+  from other sessions: one started with `--model sonnet` shows Sonnet straight away.
+
 ## [0.1.17] - 2026-09-22
 
 ### Added

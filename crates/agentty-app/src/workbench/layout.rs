@@ -140,15 +140,17 @@ impl Workbench {
         let mut collab = split.then(|| self.render_collab_chips(pane, cx)).flatten();
         let mut port_chips = split.then(|| self.port_chips(pane, cx)).flatten();
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
+        let width = self.pane_bounds.borrow().get(&pane.entity_id()).map(|b| f32::from(b.size.width)).unwrap_or(f32::MAX);
         let mut context_meter = {
             let shown = split && pane.read(cx).is_agent() && crate::settings::settings(cx).agent_bar;
             let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
-            shown.then(|| self.context_meter(pane, percent, cx))
+            // A narrow pane keeps the figure and gives up the word and the bar, so the model's full
+            // name and the pane's own buttons still fit.
+            shown.then(|| self.context_meter(pane, percent, width < COMPACT_METER_WIDTH, cx))
         };
         let view = pane.read(cx);
         let prefs_bar = crate::settings::settings(cx).agent_bar;
         let bars_below = bars_below(cx);
-        let width = self.pane_bounds.borrow().get(&pane.entity_id()).map(|b| f32::from(b.size.width)).unwrap_or(f32::MAX);
         let attention = view.attention;
         let border = if attention {
             hex(Chrome::ATTENTION)
@@ -213,20 +215,25 @@ impl Workbench {
                         )
                         .child(crate::brand::avatar(view.tool_id(), 16.)),
                 )
-                // The items of the status bar, in the user's order (Settings → Appearance).
-                .map(|mut d| {
+                // The items of the status bar, in the user's order (Settings → Appearance), in a row of
+                // their own: where the pane is too narrow for all of them, they give way at its end,
+                // never the pane's own buttons after it.
+                .child({
+                    let mut d = div().flex().items_center().gap_2().flex_1().min_w_0().overflow_hidden();
                     for entry in hud.iter().filter(|e| e.visible) {
                         d = match entry.item {
-                            HudItem::Model => d.when_some(
-                                view.stats
-                                    .as_ref()
-                                    .and_then(model_label)
-                                    .or_else(|| configured_model_label(self.installed.as_ref(), view.display_kind()))
-                                    .filter(|_| agent_info),
-                                |d, model| {
-                                    d.child(div().flex_shrink().min_w(px(40.)).truncate().text_color(hex(Chrome::BRIGHT)).child(model))
-                                },
-                            ),
+                            // The model's full name comes first on the bar: never cut, whatever else
+                            // has to give. Short of room, the window shrinks to "(1M)" instead.
+                            HudItem::Model => {
+                                d.when_some(pane_model_label(view, self.installed.as_ref()).filter(|_| agent_info), |d, model| {
+                                    d.child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_color(hex(Chrome::BRIGHT))
+                                            .child(model.text(width < FULL_MODEL_LABEL_WIDTH)),
+                                    )
+                                })
+                            }
                             HudItem::Context => d.children(context_meter.take()),
                             HudItem::Usage => d.when_some(
                                 view.usage_percent().filter(|p| *p >= USAGE_SHOWN_AT && agent_info && width >= 700.),
@@ -411,10 +418,41 @@ impl Workbench {
     }
 }
 
-/// "Opus 5 (1M context)".
-fn model_label(stats: &agentty_bridge::SessionStats) -> Option<String> {
-    let model = agentty_bridge::pretty_model(stats.model.as_ref()?);
-    Some(if stats.context_window > 0 { format!("{model} ({} context)", agentty_bridge::short_tokens(stats.context_window)) } else { model })
+/// Below this pane width the window is written "(1M)" rather than "(1M context)".
+const FULL_MODEL_LABEL_WIDTH: f32 = 700.;
+/// Below this pane width the context meter is its figure alone.
+const COMPACT_METER_WIDTH: f32 = 520.;
+
+/// A model as the bar shows it: the full name, and the context window when it is known.
+struct ModelLabel {
+    name: String,
+    window: Option<u64>,
+}
+
+impl ModelLabel {
+    /// "Opus 5.5 (1M context)", or "Opus 5.5 (1M)" where the bar is short of room.
+    fn text(&self, compact: bool) -> String {
+        match self.window {
+            Some(window) if compact => format!("{} ({})", self.name, agentty_bridge::short_tokens(window)),
+            Some(window) => format!("{} ({} context)", self.name, agentty_bridge::short_tokens(window)),
+            None => self.name.clone(),
+        }
+    }
+}
+
+/// The model a pane runs, from the most direct source there is: what the session wrote down (its
+/// answers, a `/model`), else what its welcome banner says, else what the agent is set up to use.
+fn pane_model_label(view: &crate::terminal::TerminalView, installed: Option<&crate::agents::Installed>) -> Option<ModelLabel> {
+    view.stats
+        .as_ref()
+        .and_then(model_label)
+        .or_else(|| view.banner_model.as_ref().map(|(name, window)| ModelLabel { name: name.clone(), window: Some(*window) }))
+        .or_else(|| configured_model_label(installed, view.display_kind()))
+}
+
+fn model_label(stats: &agentty_bridge::SessionStats) -> Option<ModelLabel> {
+    let name = agentty_bridge::pretty_model(stats.model.as_ref()?);
+    Some(ModelLabel { name, window: (stats.context_window > 0).then_some(stats.context_window) })
 }
 
 /// The same label for a model nothing has been said to yet.
@@ -423,7 +461,7 @@ fn model_label(stats: &agentty_bridge::SessionStats) -> Option<String> {
 /// the bar used to fall back to the agent's name until the first answer arrived. The model the
 /// agent is configured to use is known before that, from its own settings, and that is what it will
 /// answer with.
-fn configured_model_label(installed: Option<&crate::agents::Installed>, kind: crate::launch::PaneKind) -> Option<String> {
+fn configured_model_label(installed: Option<&crate::agents::Installed>, kind: crate::launch::PaneKind) -> Option<ModelLabel> {
     let installed = installed?;
     let model = match kind {
         crate::launch::PaneKind::Claude => installed.claude_models.first().map(|(value, _)| value.clone())?,
@@ -431,13 +469,10 @@ fn configured_model_label(installed: Option<&crate::agents::Installed>, kind: cr
         crate::launch::PaneKind::Shell => return None,
     };
     let bare = model.trim_end_matches("[1m]");
-    let pretty = agentty_bridge::pretty_model(bare);
+    let name = agentty_bridge::pretty_model(bare);
     // `[1m]` is Claude Code's own way of asking for the long window.
     let window = if model.ends_with("[1m]") { 1_000_000 } else { agentty_bridge::claude_context_window(bare) };
-    Some(match kind {
-        crate::launch::PaneKind::Claude => format!("{pretty} ({} context)", agentty_bridge::short_tokens(window)),
-        _ => pretty,
-    })
+    Some(ModelLabel { name, window: (kind == crate::launch::PaneKind::Claude).then_some(window) })
 }
 
 pub(super) fn format_elapsed(seconds: u64) -> String {
@@ -890,7 +925,7 @@ impl Workbench {
         let mut port_chips = self.port_chips(pane, cx);
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
         let percent = pane.read(cx).stats.as_ref().and_then(|s| s.context_percent());
-        let mut context_meter = Some(self.context_meter(pane, percent, cx));
+        let mut context_meter = Some(self.context_meter(pane, percent, false, cx));
         let view = pane.read(cx);
         let kind = view.agent_kind()?;
         let (status, status_color) = status_label(view, cx);
@@ -917,10 +952,8 @@ impl Workbench {
                             // which agent this is, and the bar needs the room.
                             HudItem::Model => d.child(
                                 div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).child(
-                                    view.stats
-                                        .as_ref()
-                                        .and_then(model_label)
-                                        .or_else(|| configured_model_label(self.installed.as_ref(), view.display_kind()))
+                                    pane_model_label(view, self.installed.as_ref())
+                                        .map(|model| model.text(false))
                                         .unwrap_or_else(|| name.to_string()),
                                 ),
                             ),
@@ -1033,7 +1066,7 @@ impl Workbench {
     /// files in context — anchored right under the figure it explains, rather than from an icon
     /// somewhere else in the window. A nearly full context also offers to compact it, and the
     /// panel it opens carries that button whatever the number says.
-    fn context_meter(&self, pane: &Pane, percent: Option<f64>, cx: &mut Context<Self>) -> AnyElement {
+    fn context_meter(&self, pane: &Pane, percent: Option<f64>, compact: bool, cx: &mut Context<Self>) -> AnyElement {
         let view = pane.read(cx);
         let agent = view.agent_kind().and_then(crate::launch::PaneKind::agent);
         // A tab that has just opened has read nothing yet, and nothing is exactly 0%. Showing a
@@ -1042,7 +1075,7 @@ impl Workbench {
         let command =
             view.agent_kind().and_then(|kind| kind.compact_command()).filter(|_| percent.is_some_and(|p| p >= super::COMPACT_OFFER_AT));
         let open = self.status_menu == Some(super::status_menus::StatusMenu::Context) && self.menu_pane_is(pane);
-        let mut chip = optional_meter("Context", percent).id(("context-meter", pane.entity_id().as_u64() as usize)).relative();
+        let mut chip = optional_meter("Context", percent, compact).id(("context-meter", pane.entity_id().as_u64() as usize)).relative();
         if let Some(command) = command {
             let target = pane.clone();
             chip = chip.child(
@@ -1088,12 +1121,13 @@ impl Workbench {
 const USAGE_SHOWN_AT: f64 = 50.0;
 
 fn meter(label: &'static str, percent: f64) -> gpui::Div {
-    optional_meter(label, Some(percent))
+    optional_meter(label, Some(percent), false)
 }
 
 /// The same meter for a figure that is not in yet: it keeps its place and stays clickable, so what
 /// it opens does not come and go with the first reading.
-fn optional_meter(label: &'static str, percent: Option<f64>) -> gpui::Div {
+/// `compact`: the figure alone, without the word and the bar.
+fn optional_meter(label: &'static str, percent: Option<f64>, compact: bool) -> gpui::Div {
     let color = match percent {
         Some(p) if p >= 90.0 => Chrome::ERROR,
         Some(p) if p >= 70.0 => Chrome::ORANGE,
@@ -1106,15 +1140,17 @@ fn optional_meter(label: &'static str, percent: Option<f64>) -> gpui::Div {
         .items_center()
         .gap_1p5()
         .flex_shrink_0()
-        .child(div().text_color(hex(Chrome::MUTED)).child(label))
-        .child(
-            div()
-                .w(px(56.))
-                .h(px(5.))
-                .rounded_full()
-                .bg(hex(0x3a3a3a))
-                .when_some(percent, |d, _| d.child(div().h_full().rounded_full().bg(hex(color)).w(gpui::relative(fraction.max(0.02))))),
-        )
+        .when(!compact, |d| d.child(div().text_color(hex(Chrome::MUTED)).child(label)))
+        .when(!compact, |d| {
+            d.child(
+                div()
+                    .w(px(56.))
+                    .h(px(5.))
+                    .rounded_full()
+                    .bg(hex(0x3a3a3a))
+                    .when_some(percent, |d, _| d.child(div().h_full().rounded_full().bg(hex(color)).w(gpui::relative(fraction.max(0.02))))),
+            )
+        })
         .child(div().text_color(hex(color)).child(match percent {
             Some(p) => format!("{p:.0}%"),
             None => "—".to_string(),
