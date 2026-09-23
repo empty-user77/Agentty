@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-09-23
+
 ### Added
 - The in-app browser has a responsive mode, like Chrome's device toolbar: the phone button next to
   the address bar lays the page out at a device's size (iPhone, Pixel, Galaxy, iPad, laptop,
