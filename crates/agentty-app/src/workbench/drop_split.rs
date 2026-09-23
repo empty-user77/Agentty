@@ -139,6 +139,7 @@ impl Workbench {
 
     /// Puts a tab back when the move could not be finished.
     fn restore_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.wake_for_new_tab(self.active_workspace, cx);
         match self.workspaces.get_mut(self.active_workspace) {
             Some(ws) => {
                 ws.tabs.push(tab);
@@ -155,6 +156,7 @@ impl Workbench {
                     tabs: vec![tab],
                     active_tab: 0,
                     dormant: None,
+                    asleep_on_close: false,
                     closed_tabs: Vec::new(),
                     color: None,
                 });

@@ -914,12 +914,20 @@ fn workbenches(cx: &App) -> Vec<gpui::WindowHandle<Workbench>> {
 
 /// Opens Agentty window `slot` (its workspaces come from that slot's layout file).
 fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench>> {
-    let offset = slot as f32 * 28.;
-    let mut bounds = Bounds::centered(None, size(px(1400.), px(880.)), cx);
-    bounds.origin.x += px(offset);
-    bounds.origin.y += px(offset);
+    let min_size = size(px(720.), px(440.));
+    // Where the window was at the last save, while that is still on a screen; else centred (a
+    // little down and right of the one before it, for further windows).
+    let screens: Vec<_> = cx.displays().iter().map(|display| display.bounds()).collect();
+    let saved = workbench::saved_window(slot).and_then(|state| state.to_bounds(&screens, min_size));
+    let window_bounds = saved.unwrap_or_else(|| {
+        let offset = slot as f32 * 28.;
+        let mut bounds = Bounds::centered(None, size(px(1400.), px(880.)), cx);
+        bounds.origin.x += px(offset);
+        bounds.origin.y += px(offset);
+        WindowBounds::Windowed(bounds)
+    });
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(window_bounds),
         // macOS draws the traffic lights over Agentty's own title bar; Windows and Linux keep the
         // system title bar (Linux asks for server-side decorations; see `render_title_bar`).
         titlebar: Some(TitlebarOptions {
@@ -928,7 +936,7 @@ fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench
             traffic_light_position: Some(point(px(12.), px(11.))),
         }),
         window_decorations: (!cfg!(target_os = "macos")).then_some(gpui::WindowDecorations::Server),
-        window_min_size: Some(size(px(720.), px(440.))),
+        window_min_size: Some(min_size),
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {

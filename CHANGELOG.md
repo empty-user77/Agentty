@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Agentty opens as you left it: the window's size and place (on a screen that is still connected),
+  the sidebar hidden or shown, the files panel, the in-app browser with its tabs, a plugin panel,
+  the Docker and database panels, and a pane in focus view.
+- The recent sessions list shows each agent's logo in its own colours.
+
+### Fixed
+- A tab opened in a workspace right after its last tab closed was not saved, and opening that
+  workspace again from the list closed it.
+- A layout file that could not be read in full (written by a newer version, or damaged) no longer
+  empties every workspace: what can be read is kept, and the file is copied aside first. The layout
+  is flushed to disk before it replaces the old file.
+- Panes that end together (a logout or shutdown ending their shells) no longer vanish from the
+  saved layout before Agentty quits.
+- A pane whose folder is missing at startup (an unplugged drive) keeps that folder in the layout
+  instead of switching to the home folder for good.
+- Dragging a divider between two very narrow panes no longer crashes Agentty.
+
 ## [0.1.21] - 2026-09-23
 
 ### Changed

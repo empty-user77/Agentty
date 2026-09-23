@@ -79,6 +79,10 @@ pub struct LaunchSpec {
     pub model: Option<String>,
     /// Claude Code advisor; `None` takes the setting for new tabs.
     pub advisor: Option<AdvisorChoice>,
+    /// The folder a restored pane was saved in, when it was missing (an unplugged drive, a
+    /// worktree not made again yet) and the pane started in `cwd` instead. Saved in its place
+    /// until the pane moves, so it isn't lost for good.
+    pub missing_cwd: Option<PathBuf>,
 }
 
 /// What the user picked in the launcher.
@@ -144,11 +148,20 @@ impl LaunchSpec {
             PaneKind::Codex => "Codex".to_string(),
         };
         let session_id = (kind == PaneKind::Claude).then(|| uuid::Uuid::new_v4().to_string());
-        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None }
+        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None, missing_cwd: None }
     }
 
     pub fn shell_command(command: String, title: String, cwd: PathBuf) -> Self {
-        Self { kind: PaneKind::Shell, title, cwd, start: Start::Command(command), session_id: None, model: None, advisor: None }
+        Self {
+            kind: PaneKind::Shell,
+            title,
+            cwd,
+            start: Start::Command(command),
+            session_id: None,
+            model: None,
+            advisor: None,
+            missing_cwd: None,
+        }
     }
 
     pub fn resume(agent: Agent, id: String, title: String, cwd: PathBuf) -> Self {
@@ -156,7 +169,16 @@ impl LaunchSpec {
             let line = agent.resume_args(&id).iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
             return Self::shell_command(line, title, cwd);
         }
-        Self { kind: agent.into(), title, cwd, session_id: Some(id.clone()), start: Start::Resume(id), model: None, advisor: None }
+        Self {
+            kind: agent.into(),
+            title,
+            cwd,
+            session_id: Some(id.clone()),
+            start: Start::Resume(id),
+            model: None,
+            advisor: None,
+            missing_cwd: None,
+        }
     }
 
     pub fn with_prompt(agent: Agent, prompt: String, title: String, cwd: PathBuf) -> Self {

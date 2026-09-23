@@ -65,6 +65,7 @@ impl Workbench {
                     tabs: Vec::new(),
                     active_tab: 0,
                     dormant: None,
+                    asleep_on_close: false,
                     closed_tabs: Vec::new(),
                     color: None,
                 });

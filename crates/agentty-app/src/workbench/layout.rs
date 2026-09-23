@@ -115,6 +115,7 @@ impl Workbench {
                 tab.root.apply_zoom(&zoomed);
             }
         }
+        self.persist(cx);
         cx.notify();
     }
 
@@ -414,6 +415,8 @@ impl Workbench {
         self.zoomed = if self.zoomed.as_ref() == Some(pane) { None } else { Some(pane.clone()) };
         self.mark_active(pane, cx);
         self.focus_pane(pane, window, cx);
+        // Focus view comes back after a restart, like the split sizes it overrides.
+        self.persist(cx);
         cx.notify();
     }
 }
