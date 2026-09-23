@@ -447,7 +447,7 @@ pub fn prepare_codex_home(home: &Path) -> Result<()> {
     std::fs::create_dir_all(user.join("sessions")).ok();
     for name in SHARED_DIRS {
         let (source, link) = (user.join(name), home.join(name));
-        if source.is_dir() && std::fs::symlink_metadata(&link).is_err() {
+        if source.is_dir() && (std::fs::symlink_metadata(&link).is_err() || clear_dead_link(&link)) {
             if let Err(err) = link_dir(&source, &link) {
                 eprintln!("agentty: could not link {name} into the Codex home: {err:#}");
             }
@@ -460,6 +460,20 @@ pub fn prepare_codex_home(home: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Removes what an earlier, failed link left where a link belongs: a link that leads nowhere, or an
+/// empty folder. Anything holding files stays. Returns whether the place is free now.
+fn clear_dead_link(link: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(link) else { return true };
+    let dangling = !link.exists();
+    let empty = meta.is_dir() && std::fs::read_dir(link).is_ok_and(|mut entries| entries.next().is_none());
+    if !dangling && !empty {
+        return false;
+    }
+    // A junction or directory link goes with `remove_dir`, a Unix symlink with `remove_file`;
+    // `remove_dir` never removes a folder with anything in it.
+    std::fs::remove_dir(link).or_else(|_| std::fs::remove_file(link)).is_ok()
 }
 
 /// Sessions written into a private Codex home itself (only when linking was impossible).
@@ -945,8 +959,39 @@ mod tests {
     }
 
     #[test]
+    fn what_a_failed_link_left_is_cleared_and_real_folders_stay() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("agentty-dead-link-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Nothing there: free.
+        assert!(clear_dead_link(&dir.join("none")));
+        // An empty folder: removed.
+        let empty = dir.join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(clear_dead_link(&empty) && !empty.exists());
+        // A folder with something in it: kept.
+        let full = dir.join("full");
+        std::fs::create_dir(&full).unwrap();
+        std::fs::write(full.join("a.jsonl"), "{}").unwrap();
+        assert!(!clear_dead_link(&full) && full.join("a.jsonl").exists());
+        // A link to a folder that is gone: removed (Unix; Windows needs rights for symlinks).
+        #[cfg(unix)]
+        {
+            let gone = dir.join("gone");
+            std::fs::create_dir(&gone).unwrap();
+            let link = dir.join("link");
+            std::os::unix::fs::symlink(&gone, &link).unwrap();
+            std::fs::remove_dir(&gone).unwrap();
+            assert!(clear_dead_link(&link) && std::fs::symlink_metadata(&link).is_err());
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn codex_home_links_user_sessions() {
-        let dir = std::env::temp_dir().join(format!("agentty-codex-home-{}", std::process::id()));
+        // Unique per run: Windows reuses process ids, and a failed run leaves its folder behind.
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("agentty-codex-home-{}-{nanos}", std::process::id()));
         let user = dir.join("user");
         std::fs::create_dir_all(user.join("sessions/2026")).unwrap();
         std::fs::write(user.join("config.toml"), "model = \"x\"\n").unwrap();
@@ -954,7 +999,13 @@ mod tests {
         let home = dir.join("private");
         prepare_codex_home(&home).unwrap();
         std::env::remove_var("CODEX_HOME");
-        assert!(home.join("sessions/2026").is_dir());
+        let sessions = home.join("sessions");
+        assert!(
+            sessions.join("2026").is_dir(),
+            "sessions: {:?} → {:?}",
+            std::fs::symlink_metadata(&sessions).map(|m| m.file_type()),
+            std::fs::read_link(&sessions)
+        );
         assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), "model = \"x\"\n");
         assert!(!home.join("auth.json").exists());
         std::fs::remove_dir_all(dir).ok();
