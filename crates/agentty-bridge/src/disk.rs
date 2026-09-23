@@ -47,6 +47,7 @@ pub fn volume(path: &Path) -> Option<Volume> {
 }
 
 /// `df -kP` output: a header, then `name 1024-blocks used available capacity mount`.
+#[cfg(any(unix, test))]
 fn parse_df(raw: &str) -> Option<Volume> {
     let line = raw.lines().nth(1)?;
     let fields: Vec<&str> = line.split_whitespace().collect();
@@ -73,9 +74,9 @@ fn allocated(meta: &fs::Metadata) -> u64 {
     }
 }
 
-/// A file with several names is counted once.
+/// A file with several names is counted once (only Unix reports them).
 #[derive(Default)]
-struct Seen(HashSet<(u64, u64)>);
+struct Seen(#[cfg_attr(not(unix), allow(dead_code))] HashSet<(u64, u64)>);
 
 impl Seen {
     fn first(&mut self, meta: &fs::Metadata) -> bool {
