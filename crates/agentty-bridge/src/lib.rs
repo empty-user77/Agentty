@@ -217,7 +217,7 @@ fn claude_stats<'a>(lines: impl Iterator<Item = &'a str>) -> Option<SessionStats
     // A `/model` newer than the latest answer: the model the next answer will come from.
     let mut switched: Option<(String, u64)> = None;
     for line in lines {
-        if switched.is_none() && line.contains("Set model to") {
+        if switched.is_none() && (line.contains("Set model to") || line.contains("Kept model as")) {
             switched = model_switch(line);
             if switched.is_some() {
                 continue;
@@ -262,7 +262,8 @@ fn model_switch(line: &str) -> Option<(String, u64)> {
         return None;
     }
     let content = v["message"]["content"].as_str()?.strip_prefix("<local-command-stdout>")?;
-    let rest = content.strip_prefix("Set model to")?.trim_start();
+    // "Kept model as" is `/model` confirming the one in use: just as telling as a switch.
+    let rest = content.strip_prefix("Set model to").or_else(|| content.strip_prefix("Kept model as"))?.trim_start();
     let name = match rest.strip_prefix('`') {
         Some(quoted) => quoted.split('`').next()?,
         None => rest.split(" and saved").next()?.split("</local-command-stdout>").next()?,
@@ -413,6 +414,10 @@ mod model_name_tests {
         let haiku = r#"{"type":"user","message":{"content":"<local-command-stdout>Set model to `Haiku 4.5`</local-command-stdout>"}}"#;
         let stats = super::claude_stats([haiku, answer].into_iter()).unwrap();
         assert_eq!((stats.model.as_deref(), stats.context_window), (Some("Haiku 4.5"), 200_000));
+
+        // `/model` keeping the model it is on says which one that is, just the same.
+        let kept = r#"{"type":"user","message":{"content":"<local-command-stdout>Kept model as `Opus 5.5 (1M context) (default)`</local-command-stdout>"}}"#;
+        assert_eq!(super::claude_stats([kept].into_iter()).unwrap().model.as_deref(), Some("Opus 5.5"));
 
         // Chosen before anything was said: named, with an empty meter.
         let fresh = super::claude_stats([switch].into_iter()).unwrap();

@@ -142,23 +142,36 @@ fn headline(text: &str) -> Option<String> {
 
 /// Distinct models (`claude-…` ids) used by the newest `limit` sessions, most recent first.
 pub fn recent_models(limit: usize) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
     let mut files = Vec::new();
     fsutil::jsonl_files(&projects_dir(), 1, &mut files);
     let mut models: Vec<String> = Vec::new();
     for (path, _) in fsutil::newest(files, limit) {
-        let Ok(file) = std::fs::File::open(&path) else { continue };
-        let found = std::io::BufRead::lines(std::io::BufReader::new(file)).map_while(Result::ok).take(2000).find_map(|line| {
-            if !line.contains("\"model\":\"claude-") {
-                return None;
-            }
-            let v: serde_json::Value = serde_json::from_str(&line).ok()?;
-            v["message"]["model"].as_str().filter(|m| m.starts_with("claude-")).map(str::to_string)
-        });
-        if let Some(model) = found.filter(|m| !models.contains(m)) {
+        let Ok(mut file) = std::fs::File::open(&path) else { continue };
+        // The model a session is on now is its latest answer's, not the first one's: a session
+        // started on one model and moved to another with `/model` would otherwise keep naming the
+        // old one — and the newest session is the one the next pane is most likely to resemble.
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        if file.seek(SeekFrom::Start(len.saturating_sub(256 * 1024))).is_err() {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if file.read_to_end(&mut bytes).is_err() {
+            continue;
+        }
+        if let Some(model) = last_model(&String::from_utf8_lossy(&bytes)).filter(|m| !models.contains(m)) {
             models.push(model);
         }
     }
     models
+}
+
+/// The model of the latest answer in some transcript text.
+fn last_model(text: &str) -> Option<String> {
+    text.lines().rev().filter(|line| line.contains("\"model\":\"claude-")).find_map(|line| {
+        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+        v["message"]["model"].as_str().filter(|m| m.starts_with("claude-")).map(str::to_string)
+    })
 }
 
 /// The default model from Claude Code's user settings (`model` in settings.json), if set.
@@ -447,6 +460,19 @@ fn owned_by_other(peers: &[PeerSession], session_id: &str, pid: Option<u32>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_session_is_on_the_model_of_its_latest_answer() {
+        let text = [
+            r#"{"type":"assistant","message":{"model":"claude-opus-5","content":[]}}"#,
+            r#"{"type":"user","message":{"content":"<local-command-stdout>Set model to `Opus 5.5`</local-command-stdout>"}}"#,
+            r#"{"type":"assistant","message":{"model":"claude-opus-5-5","content":[]}}"#,
+            r#"{"type":"user","message":{"content":"a question"}}"#,
+        ]
+        .join("\n");
+        assert_eq!(super::last_model(&text).as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(super::last_model("no answers here"), None);
+    }
+
     use super::*;
 
     #[test]
