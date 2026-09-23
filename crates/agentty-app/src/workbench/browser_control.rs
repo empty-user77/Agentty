@@ -82,6 +82,32 @@ impl Workbench {
                 window.refresh();
                 return send(json(serde_json::json!({ "opened": true, "url": url })));
             }
+            // `viewport` alone reports the size; `WxH` or a device id sets it; `off` ends it.
+            "viewport" => {
+                if self.browser_request.is_some() {
+                    self.prepare_browser(window, cx);
+                }
+                if self.browser.is_none() {
+                    return send(Err("the browser is not open — run `agentty browser open [url]` first".into()));
+                }
+                let next = match arg(0).as_deref() {
+                    None => self.browser.as_ref().and_then(|b| b.responsive.viewport),
+                    Some("off" | "none") => None,
+                    Some(size) => match super::responsive::Viewport::parse(size) {
+                        Some(viewport) => Some(viewport),
+                        None => {
+                            let devices: Vec<&str> = super::responsive::DEVICES.iter().map(|d| d.0).collect();
+                            return send(Err(format!("expected WIDTHxHEIGHT, off, or one of: {}", devices.join(", "))));
+                        }
+                    },
+                };
+                self.set_viewport(next, cx);
+                window.refresh();
+                return send(json(match next {
+                    Some(v) => serde_json::json!({ "responsive": true, "width": v.width, "height": v.height, "device": v.device() }),
+                    None => serde_json::json!({ "responsive": false }),
+                }));
+            }
             "close" => {
                 self.browser = None;
                 crate::webview::focus_gpui_view(window);

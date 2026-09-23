@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- The in-app browser has a responsive mode, like Chrome's device toolbar: the phone button next to
+  the address bar lays the page out at a device's size (iPhone, Pixel, Galaxy, iPad, laptop,
+  desktop) or any width × height, centred and scaled to fit the panel. The size can be typed,
+  rotated, or dragged from the right and bottom edges. Agents set it with
+  `agentty browser viewport <WxH|device|off>` (MCP: `browser_viewport`) and are told to check
+  their pages at phone and tablet sizes.
+
+### Changed
+- The AI CLI status bar shows the ports of local servers started in a pane by default (it was
+  off until turned on in Settings → Appearance → Status bar).
+
 ### Changed
 - "Later" in the update popup keeps it away for 24 hours, across restarts; a newer version is
   announced right away. Meanwhile the update shows in the status bar in place of the version

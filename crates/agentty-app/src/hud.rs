@@ -45,11 +45,6 @@ impl HudItem {
         matches!(self, Self::Model | Self::Context | Self::Status | Self::Branch | Self::Spacer)
     }
 
-    /// Hidden until the user turns it on.
-    fn opt_in(self) -> bool {
-        matches!(self, Self::Ports)
-    }
-
     pub fn label_key(self) -> &'static str {
         match self {
             Self::Model => "hud.model",
@@ -97,7 +92,7 @@ pub fn lenient<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<
 }
 
 pub fn default_layout() -> Vec<HudEntry> {
-    HudItem::DEFAULT.iter().map(|&item| HudEntry { item, visible: !item.opt_in() }).collect()
+    HudItem::DEFAULT.iter().map(|&item| HudEntry { item, visible: true }).collect()
 }
 
 /// A saved layout made whole: each item once, required ones visible, and items this version added
@@ -114,7 +109,7 @@ pub fn normalized(saved: &[HudEntry]) -> Vec<HudEntry> {
             continue;
         }
         let after = HudItem::DEFAULT[..index].iter().rev().find_map(|before| layout.iter().position(|e| e.item == *before));
-        layout.insert(after.map_or(0, |at| at + 1), HudEntry { item, visible: !item.opt_in() });
+        layout.insert(after.map_or(0, |at| at + 1), HudEntry { item, visible: true });
     }
     layout
 }
