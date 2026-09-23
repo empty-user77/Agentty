@@ -10,6 +10,9 @@ All notable changes to this project are documented here. The format follows
   the sidebar hidden or shown, the files panel, the in-app browser with its tabs, a plugin panel,
   the Docker and database panels, and a pane in focus view.
 - The recent sessions list shows each agent's logo in its own colours.
+- Quitting while terminals are running asks first ("Every session running in Agentty ends when it
+  quits"): ⌘Q, the menu, the menu bar popover's Quit and, on Windows and Linux, closing the main
+  window. A restart to install an update does not ask.
 
 ### Fixed
 - A tab opened in a workspace right after its last tab closed was not saved, and opening that

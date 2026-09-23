@@ -532,7 +532,7 @@ impl Workbench {
             }
             TrayAction::RefreshUsage => self.refresh_account_usage(cx),
             // Outside this window's update, so it can ask about unsaved files first.
-            TrayAction::Quit => cx.defer(crate::request_quit),
+            TrayAction::Quit => cx.defer(crate::request_quit_asking),
             // Handled by the app loop (`tray_popover`).
             TrayAction::TogglePopover | TrayAction::ClosePopover => {}
         }

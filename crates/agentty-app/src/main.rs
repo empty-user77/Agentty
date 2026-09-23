@@ -368,7 +368,9 @@ pub fn set_app_menus(cx: &mut App) {
 }
 
 fn register_app_actions(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| request_quit(cx));
+    // Deferred: a menu or key action arrives while the window that dispatched it is still busy,
+    // and the question needs to read (and then use) that window.
+    cx.on_action(|_: &Quit, cx| cx.defer(request_quit_asking));
     cx.on_action(|action: &OpenGuide, cx| {
         let url = action.url(cx);
         cx.open_url(&url);
@@ -896,6 +898,40 @@ pub fn request_quit(cx: &mut App) {
     // here: quitting with "Prevent sleep" on would otherwise keep the machine awake for good.
     platform::wakelock::set(false);
     cx.quit();
+}
+
+/// Quitting by hand (⌘Q, the menu, the menu bar popover): it ends every terminal, so while any is
+/// running it asks first. An update's restart quits through `request_quit` directly.
+pub fn request_quit_asking(cx: &mut App) {
+    let windows = workbenches(cx);
+    let running = windows.iter().any(|handle| handle.read(cx).is_ok_and(|wb| wb.all_panes().iter().any(|pane| pane.read(cx).is_running())));
+    let Some(main) = windows.into_iter().next().filter(|_| running) else { return request_quit(cx) };
+    let (title, body, quit, cancel) = (
+        i18n::t(cx, "quit_confirm.title"),
+        i18n::t(cx, "quit_confirm.body"),
+        i18n::t(cx, "quit_confirm.quit"),
+        i18n::t(cx, "confirm.cancel"),
+    );
+    // The window may be hidden behind the menu bar item: bring it up, the question is asked on it.
+    let answer = main.update(cx, |_, window, cx| {
+        window.activate_window();
+        window.prompt(
+            gpui::PromptLevel::Warning,
+            title,
+            Some(body),
+            &[gpui::PromptButton::ok(quit), gpui::PromptButton::cancel(cancel)],
+            cx,
+        )
+    });
+    cx.activate(true);
+    if let Ok(answer) = answer {
+        cx.spawn(async move |cx| {
+            if answer.await == Ok(0) {
+                let _ = cx.update(request_quit);
+            }
+        })
+        .detach();
+    }
 }
 
 /// A quit was called off: every window asks about its unsaved files again next time.

@@ -199,7 +199,7 @@ impl Workbench {
                                 this.persist(cx);
                                 // Without a menu bar item, closing the main window ends Agentty.
                                 if slot == 0 {
-                                    cx.defer(crate::request_quit);
+                                    cx.defer(crate::request_quit_asking);
                                 } else if !this.ask_about_unsaved_files(crate::editor::AfterDiscard::CloseWindow, window, cx) {
                                     window.remove_window();
                                 }

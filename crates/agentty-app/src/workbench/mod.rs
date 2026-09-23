@@ -787,6 +787,14 @@ impl Workbench {
                 return true;
             }
             if closes {
+                // Closing the main window ends Agentty and every terminal in it: while one runs,
+                // ask first (the answer quits through the usual path).
+                let running =
+                    entity.read_with(cx, |this, cx| this.all_panes().iter().any(|pane| pane.read(cx).is_running())).unwrap_or(false);
+                if running {
+                    cx.defer(crate::request_quit_asking);
+                    return false;
+                }
                 // The last window closing ends Agentty, and the quit hook holds only a weak
                 // handle to this workbench: by the time it runs the window is gone and nothing
                 // would be written. Save while there is still something to save.
@@ -4074,6 +4082,7 @@ impl Workbench {
             "quit" => cx.quit(),
             // Like ⌘Q: asks about unsaved files in the editor first.
             "request-quit" => cx.defer(crate::request_quit),
+            "quit-ask" => cx.defer(crate::request_quit_asking),
             _ => eprintln!("agentty: unknown debug command {command}"),
         }
         cx.notify();
