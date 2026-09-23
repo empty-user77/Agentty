@@ -71,6 +71,9 @@ pub enum TerminalEvent {
     RevealPath(PathBuf),
     /// The pane moved to another folder (a `cd`), and no longer works where it was started.
     DirectoryChanged,
+    /// An agent started or quit in the pane, or moved to another session (`/clear`, `/resume`):
+    /// what the pane comes back as after a restart.
+    SessionChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,6 +247,8 @@ pub struct TerminalView {
     agent_since_ms: Option<u64>,
     /// Any known agent CLI in the foreground, by brand id (`claude`, `gemini`, `agy`, …).
     pub live_tool: Option<&'static str>,
+    /// The process running `live_tool` (on Windows the only way to reach the agent itself).
+    live_tool_pid: Option<u32>,
     /// When Esc was last pressed while the agent worked (interrupt detection).
     esc_at: Option<Instant>,
     /// Consecutive probes without the busy hint while marked as working.
@@ -370,6 +375,7 @@ impl TerminalView {
             live_agent: None,
             agent_since_ms: None,
             live_tool: None,
+            live_tool_pid: None,
             esc_at: None,
             quiet_ticks: 0,
             subagents: Vec::new(),
@@ -456,13 +462,15 @@ impl TerminalView {
     /// Samples what is running in the foreground, where, and on which branch. Cheap syscalls only.
     fn probe(&mut self, cx: &mut Context<Self>) {
         let Some(backend) = &self.backend else { return };
-        let live_tool = crate::procinfo::foreground_tool(backend.tty_fd, backend.child_pid);
+        let live = crate::procinfo::foreground_tool(backend.tty_fd, backend.child_pid);
+        let live_tool = live.map(|(tool, _)| tool);
         let live_agent = match live_tool {
             Some("claude") => Some(PaneKind::Claude),
             Some("codex") => Some(PaneKind::Codex),
             _ => None,
         };
-        let foreground = crate::procinfo::foreground_pid(backend.tty_fd).unwrap_or(backend.child_pid);
+        // ConPTY has no foreground process group (Windows): the agent's own process stands in.
+        let foreground = crate::procinfo::foreground_pid(backend.tty_fd).or(live.map(|(_, pid)| pid)).unwrap_or(backend.child_pid);
         let cwd = crate::procinfo::cwd_of(foreground).or_else(|| crate::procinfo::cwd_of(backend.child_pid));
         let mut changed = live_agent != self.live_agent || live_tool != self.live_tool;
         if self.spec.kind != PaneKind::Shell {
@@ -481,8 +489,12 @@ impl TerminalView {
         if live_agent.is_some() && self.live_agent.is_none() {
             self.agent_since_ms = Some(crate::ui::now_ms());
         }
+        if live_agent != self.live_agent {
+            cx.emit(TerminalEvent::SessionChanged);
+        }
         self.live_agent = live_agent;
         self.live_tool = live_tool;
+        self.live_tool_pid = live.map(|(_, pid)| pid);
         if cwd.is_some() && cwd != self.live_cwd {
             // Where the pane works is part of the layout, so a `cd` is worth saving — but only
             // when it really moved away from the folder the pane was started in. The first probe
@@ -699,7 +711,7 @@ impl TerminalView {
             .backend
             .as_ref()
             .filter(|_| agent == agentty_bridge::model::Agent::Claude)
-            .and_then(|backend| crate::procinfo::foreground_pid(backend.tty_fd));
+            .and_then(|backend| crate::procinfo::foreground_pid(backend.tty_fd).or(self.live_tool_pid));
         let cwd = self.display_cwd();
         // An agent typed into an old shell pane: transcripts written before it started are not its own.
         let since = self.agent_since_ms.unwrap_or(self.launched_at_ms);
@@ -728,6 +740,9 @@ impl TerminalView {
                 let same_session = view.session_id_live.as_ref() == Some(&id);
                 let mut changed = !same_session || view.subagent_files != subagents;
                 view.session_id_live = Some(id);
+                if !same_session {
+                    cx.emit(TerminalEvent::SessionChanged);
+                }
                 view.subagent_files = subagents;
                 // A transcript that cannot be read right now keeps its last reading, but a new session
                 // (no transcript until its first prompt) never inherits the previous session's.
@@ -864,6 +879,7 @@ impl TerminalView {
         self.backend
             .as_ref()
             .and_then(|b| crate::procinfo::cwd_of(b.child_pid))
+            .or_else(|| self.live_cwd.clone())
             .filter(|p| p.is_dir())
             .unwrap_or_else(|| self.spec.cwd.clone())
     }
@@ -1025,6 +1041,7 @@ impl TerminalView {
                 }
                 self.live_agent = None;
                 self.live_tool = None;
+                self.live_tool_pid = None;
                 self.forget_agent_state();
             }
             SignalKind::Usage => {}
@@ -1269,9 +1286,23 @@ impl TerminalView {
         cx.emit(TerminalEvent::Activated);
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.activate(cx);
         let keystroke = &event.keystroke;
+        // Windows Terminal's convention: Ctrl+V pastes, and Ctrl+C copies while text is selected
+        // (clearing the selection); without one it stays the interrupt.
+        let m = keystroke.modifiers;
+        if cfg!(windows) && m.control && !m.alt && !m.shift && !m.platform {
+            if keystroke.key == "v" {
+                self.paste(&Paste, window, cx);
+                cx.stop_propagation();
+                return;
+            }
+            if keystroke.key == "c" && self.copy_and_deselect(cx) {
+                cx.stop_propagation();
+                return;
+            }
+        }
         if keystroke.key == "escape" && matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_))
         {
             self.esc_at = Some(Instant::now());
@@ -1284,7 +1315,7 @@ impl TerminalView {
             self.quiet_ticks = 0;
             cx.emit(TerminalEvent::StatusChanged);
         }
-        if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta) {
+        if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta, self.live_agent.is_some()) {
             // This key went to the program rather than to the input method, so whatever was being
             // composed is not what the program has. Drawing it on would put it over the text the
             // program echoes back.
@@ -1305,6 +1336,18 @@ impl TerminalView {
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+    }
+
+    /// Copies the selected text and clears the selection; false when nothing is selected.
+    fn copy_and_deselect(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(backend) = &self.backend else { return false };
+        let mut term = backend.term.lock();
+        let Some(text) = term.selection_to_string().filter(|t| !t.is_empty()) else { return false };
+        term.selection = None;
+        drop(term);
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        cx.notify();
+        true
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {

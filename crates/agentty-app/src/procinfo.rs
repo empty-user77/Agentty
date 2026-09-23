@@ -30,7 +30,14 @@ pub fn cwd_of(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Windows: the folder in the process's parameters block. PowerShell keeps its location apart
+/// from that folder; the prompt Agentty installs (`shell_integration`) brings the two together.
+#[cfg(windows)]
+pub fn cwd_of(pid: u32) -> Option<PathBuf> {
+    windows::cwd_of(pid)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub fn cwd_of(_pid: u32) -> Option<PathBuf> {
     None
 }
@@ -81,7 +88,13 @@ pub fn parent_pid(pid: u32) -> Option<u32> {
 }
 
 /// Windows panes are identified by their token, not their process tree.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+#[allow(dead_code)]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    windows::processes().get(&pid).copied()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 #[allow(dead_code)]
 pub fn parent_pid(_pid: u32) -> Option<u32> {
     None
@@ -107,16 +120,35 @@ pub fn executable_path(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/exe")).ok()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+pub fn executable_path(pid: u32) -> Option<PathBuf> {
+    windows::executable_path(pid)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub fn executable_path(_pid: u32) -> Option<PathBuf> {
     None
+}
+
+/// A program's name without the folder and without Windows' `.exe` (`claude`, `node`).
+fn program_name(path: &str) -> String {
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let lower = file.to_ascii_lowercase();
+    match lower.strip_suffix(".exe") {
+        Some(stem) => stem.to_string(),
+        None => file.to_string(),
+    }
 }
 
 /// Which agent CLI (by `crate::brand` id) a process is running: its executable, or for script
 /// runtimes (node, bun, python) the script path in its arguments.
 pub fn tool_for_process(path: &std::path::Path, args: &[String]) -> Option<&'static str> {
-    let text = path.to_string_lossy();
-    let name = path.file_name()?.to_string_lossy().to_string();
+    // Windows paths are compared with forward slashes, and programs without their `.exe`.
+    let text = path.to_string_lossy().replace('\\', "/");
+    let name = program_name(&text);
+    if name.is_empty() {
+        return None;
+    }
     if name == "claude" || text.contains("/claude/versions/") {
         return Some("claude");
     }
@@ -129,20 +161,20 @@ pub fn tool_for_process(path: &std::path::Path, args: &[String]) -> Option<&'sta
     // CLIs whose process is not called like their command. Cursor's `agent` / `cursor-agent` start
     // `~/.local/share/cursor-agent/versions/<version>/…` (its own node, or a single executable);
     // xAI's `grok` / `agent` are links to `~/.grok/downloads/grok-<os>-<arch>`.
-    let normalized = text.replace('\\', "/");
-    if normalized.contains("/cursor-agent/versions/")
+    if text.contains("/cursor-agent/versions/")
         || args.iter().skip(1).take(3).any(|a| a.replace('\\', "/").contains("/cursor-agent/versions/"))
     {
         return Some("cursor");
     }
-    if name.starts_with("grok-") && normalized.contains("/.grok/") {
+    if name.starts_with("grok-") && text.contains("/.grok/") {
         return Some("grok");
     }
     if matches!(name.as_str(), "node" | "bun" | "deno" | "python" | "python3") {
         // `node /…/bin/gemini …`, `node /…/@openai/codex/bin/codex.js`
         for arg in args.iter().skip(1).take(3) {
-            let script = std::path::Path::new(arg);
-            let stem = script.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let arg = &arg.replace('\\', "/");
+            let file = arg.rsplit('/').next().unwrap_or(arg);
+            let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem).to_string();
             if arg.contains("@openai/codex") || stem == "codex" {
                 return Some("codex");
             }
@@ -201,9 +233,36 @@ fn stat_group(stat: &str) -> Option<u32> {
     rest.split_whitespace().nth(2)?.parse().ok()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Windows has no process groups: every process below the pane's shell, nearest first.
+#[cfg(windows)]
+pub fn group_pids(root: u32) -> Vec<u32> {
+    let mut pids = vec![root];
+    pids.extend(nearest_first(root, &windows::processes()));
+    pids
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub fn group_pids(pgid: u32) -> Vec<u32> {
     vec![pgid]
+}
+
+/// Every pid below `root`, children before grandchildren: the program the user started comes
+/// before whatever it runs itself (an agent's MCP servers, a build it started).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn nearest_first(root: u32, parents: &std::collections::HashMap<u32, u32>) -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut level = vec![root];
+    while !level.is_empty() && found.len() < 256 {
+        let mut next: Vec<u32> = parents
+            .iter()
+            .filter(|(pid, parent)| level.contains(parent) && **pid != **parent && !found.contains(*pid) && **pid != root)
+            .map(|(pid, _)| *pid)
+            .collect();
+        next.sort_unstable();
+        found.extend(&next);
+        level = next;
+    }
+    found
 }
 
 /// Command-line arguments of a process (`KERN_PROCARGS2`).
@@ -229,9 +288,64 @@ pub fn process_args(pid: u32) -> Vec<String> {
     raw.split(|b| *b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).to_string()).collect()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+pub fn process_args(pid: u32) -> Vec<String> {
+    windows::command_line(pid).map(|line| split_command_line(&line)).unwrap_or_default()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub fn process_args(_pid: u32) -> Vec<String> {
     Vec::new()
+}
+
+/// A Windows command line split into arguments the way the C runtime does: spaces separate,
+/// double quotes group, and backslashes escape only the quotes they come before.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn split_command_line(line: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut started = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                let mut slashes = 1;
+                while chars.peek() == Some(&'\\') {
+                    chars.next();
+                    slashes += 1;
+                }
+                if chars.peek() == Some(&'"') {
+                    current.extend(std::iter::repeat_n('\\', slashes / 2));
+                    if slashes % 2 == 1 {
+                        current.push('"');
+                        chars.next();
+                    }
+                } else {
+                    current.extend(std::iter::repeat_n('\\', slashes));
+                }
+                started = true;
+            }
+            '"' => {
+                quoted = !quoted;
+                started = true;
+            }
+            ' ' | '\t' if !quoted => {
+                if started {
+                    args.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            _ => {
+                current.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        args.push(current);
+    }
+    args
 }
 
 /// `argc` (i32), the executable path, NUL padding, then `argc` NUL-terminated arguments.
@@ -250,8 +364,8 @@ pub fn parse_procargs(buffer: &[u8]) -> Vec<String> {
     rest.split(|b| *b == 0).take(argc).map(|a| String::from_utf8_lossy(a).to_string()).collect()
 }
 
-/// The agent CLI running in the foreground of a terminal, if any.
-pub fn foreground_tool(tty_fd: TtyFd, fallback_pid: u32) -> Option<&'static str> {
+/// The agent CLI running in the foreground of a terminal, if any, and the process that runs it.
+pub fn foreground_tool(tty_fd: TtyFd, fallback_pid: u32) -> Option<(&'static str, u32)> {
     let pgid = foreground_pid(tty_fd).unwrap_or(fallback_pid);
     let mut pids = group_pids(pgid);
     if !pids.contains(&pgid) {
@@ -259,9 +373,9 @@ pub fn foreground_tool(tty_fd: TtyFd, fallback_pid: u32) -> Option<&'static str>
     }
     pids.into_iter().take(32).find_map(|pid| {
         let path = executable_path(pid)?;
-        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let name = program_name(&path.to_string_lossy());
         let args = if matches!(name.as_str(), "node" | "bun" | "deno" | "python" | "python3") { process_args(pid) } else { Vec::new() };
-        tool_for_process(&path, &args)
+        tool_for_process(&path, &args).map(|tool| (tool, pid))
     })
 }
 
@@ -522,5 +636,269 @@ mod port_tests {
         assert_eq!(descendants(800, &parents), vec![850, 900]);
         assert_eq!(descendants(850, &parents), vec![900]);
         assert!(descendants(900, &parents).is_empty());
+    }
+}
+
+/// Process queries on Windows: the process table from a ToolHelp snapshot, the rest through the
+/// process's handle. Only processes of the same user open; anything else reads as unknown.
+#[cfg(windows)]
+mod windows {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation, ProcessCommandLineInformation};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_BASIC_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_VM_READ,
+    };
+
+    struct Handle(HANDLE);
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            // SAFETY: the handle was returned open by the call that created it and is closed once.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    fn open(pid: u32, access: u32) -> Option<Handle> {
+        // SAFETY: OpenProcess has no memory preconditions; a null handle means it failed.
+        let handle = unsafe { OpenProcess(access, 0, pid) };
+        (!handle.is_null()).then_some(Handle(handle))
+    }
+
+    /// Every process and its parent. Several panes ask within the same second, so one snapshot
+    /// serves them all for a moment.
+    pub fn processes() -> HashMap<u32, u32> {
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+        static CACHE: Mutex<Option<(Instant, HashMap<u32, u32>)>> = Mutex::new(None);
+        if let Ok(cache) = CACHE.lock() {
+            if let Some((_, table)) = cache.as_ref().filter(|(at, _)| at.elapsed() < Duration::from_millis(500)) {
+                return table.clone();
+            }
+        }
+        let table = snapshot();
+        if let Ok(mut cache) = CACHE.lock() {
+            *cache = Some((Instant::now(), table.clone()));
+        }
+        table
+    }
+
+    fn snapshot() -> HashMap<u32, u32> {
+        let mut table = HashMap::new();
+        // SAFETY: a process snapshot has no preconditions; failure returns INVALID_HANDLE_VALUE.
+        let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if raw == INVALID_HANDLE_VALUE {
+            return table;
+        }
+        let snapshot = Handle(raw);
+        let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        // SAFETY: `entry` is a PROCESSENTRY32W with dwSize set, as both calls require.
+        let mut more = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
+        while more {
+            table.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+            // SAFETY: as above.
+            more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
+        }
+        table
+    }
+
+    pub fn executable_path(pid: u32) -> Option<PathBuf> {
+        let process = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let mut buffer = vec![0u16; 32_768];
+        let mut len = buffer.len() as u32;
+        // SAFETY: `buffer` holds `len` UTF-16 units; the call writes at most that many.
+        let ok = unsafe { QueryFullProcessImageNameW(process.0, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut len) };
+        (ok != 0 && len > 0).then(|| PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])))
+    }
+
+    /// The command line as the process was given it (Windows 8.1 and later).
+    pub fn command_line(pid: u32) -> Option<String> {
+        let process = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let mut size = 0u32;
+        // SAFETY: asking for the size with an empty buffer; the status is expected to be an error.
+        unsafe { NtQueryInformationProcess(process.0, ProcessCommandLineInformation, std::ptr::null_mut(), 0, &mut size) };
+        if !(16..=1 << 20).contains(&size) {
+            return None;
+        }
+        // u64s keep the UNICODE_STRING at the front aligned.
+        let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+        let bytes = (buffer.len() * 8) as u32;
+        // SAFETY: `buffer` is `bytes` long, at least the size the previous call asked for.
+        let status =
+            unsafe { NtQueryInformationProcess(process.0, ProcessCommandLineInformation, buffer.as_mut_ptr().cast(), bytes, &mut size) };
+        if status < 0 {
+            return None;
+        }
+        // A UNICODE_STRING (length in bytes, then a pointer) whose text follows it in `buffer`.
+        let length = (buffer[0] & 0xffff) as usize / 2;
+        let text = buffer[1] as usize;
+        let start = buffer.as_ptr() as usize;
+        let end = start + buffer.len() * 8;
+        if text < start || text + length * 2 > end {
+            return None;
+        }
+        // SAFETY: the range was just checked to lie inside `buffer`, which is u16-aligned.
+        let units = unsafe { std::slice::from_raw_parts(text as *const u16, length) };
+        Some(String::from_utf16_lossy(units))
+    }
+
+    /// Reads a `T` from another process's memory.
+    #[cfg(target_pointer_width = "64")]
+    fn read<T: Copy + Default>(process: &Handle, address: usize) -> Option<T> {
+        let mut value = T::default();
+        let mut read = 0usize;
+        let size = std::mem::size_of::<T>();
+        // SAFETY: `value` is `size` bytes of plain data; the call writes at most that many.
+        let ok = unsafe { ReadProcessMemory(process.0, address as *const _, (&mut value as *mut T).cast(), size, &mut read) };
+        (ok != 0 && read == size).then_some(value)
+    }
+
+    /// The current folder in the process parameters (`PEB.ProcessParameters->CurrentDirectory`).
+    /// Offsets are those of 64-bit Windows, the only Windows Agentty is built for.
+    #[cfg(target_pointer_width = "64")]
+    pub fn cwd_of(pid: u32) -> Option<PathBuf> {
+        const PARAMETERS_IN_PEB: usize = 0x20;
+        const CURRENT_DIRECTORY_IN_PARAMETERS: usize = 0x38;
+        let process = open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)?;
+        // SAFETY: a zeroed PROCESS_BASIC_INFORMATION is a valid value of that plain struct.
+        let mut info: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is exactly the size ProcessBasicInformation writes.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                process.0,
+                ProcessBasicInformation,
+                (&mut info as *mut PROCESS_BASIC_INFORMATION).cast(),
+                std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if status < 0 || info.PebBaseAddress.is_null() {
+            return None;
+        }
+        let parameters: usize = read(&process, info.PebBaseAddress as usize + PARAMETERS_IN_PEB)?;
+        if parameters == 0 {
+            return None;
+        }
+        // UNICODE_STRING: length in bytes (u16), capacity (u16), padding, then the text's address.
+        let header: [u64; 2] = read(&process, parameters + CURRENT_DIRECTORY_IN_PARAMETERS)?;
+        let length = (header[0] & 0xffff) as usize / 2;
+        if length == 0 || header[1] == 0 {
+            return None;
+        }
+        let mut units = vec![0u16; length];
+        let mut read_bytes = 0usize;
+        // SAFETY: `units` holds `length` u16s, the number of bytes asked for.
+        let ok =
+            unsafe { ReadProcessMemory(process.0, header[1] as usize as *const _, units.as_mut_ptr().cast(), length * 2, &mut read_bytes) };
+        if ok == 0 || read_bytes != length * 2 {
+            return None;
+        }
+        Some(PathBuf::from(super::trim_dir(&String::from_utf16_lossy(&units))))
+    }
+
+    #[cfg(not(target_pointer_width = "64"))]
+    pub fn cwd_of(_pid: u32) -> Option<PathBuf> {
+        None
+    }
+}
+
+/// Windows keeps the current folder with a trailing backslash (`C:\work\`); only a drive's root
+/// keeps it (`C:\`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn trim_dir(path: &str) -> String {
+    let trimmed = path.trim_end_matches('\\');
+    if trimmed.len() == 2 && trimmed.ends_with(':') {
+        format!("{trimmed}\\")
+    } else if trimmed.is_empty() {
+        path.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod windows_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn recognizes_windows_agent_processes() {
+        let native = Path::new(r"C:\Users\me\.local\bin\claude.exe");
+        assert_eq!(tool_for_process(native, &[]), Some("claude"));
+        let codex = Path::new(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\vendor\x86_64-pc-windows-msvc\codex\codex.exe");
+        assert_eq!(tool_for_process(codex, &[]), Some("codex"));
+        let node = Path::new(r"C:\Program Files\nodejs\node.exe");
+        let args = |script: &str| vec![node.display().to_string(), script.to_string()];
+        assert_eq!(
+            tool_for_process(node, &args(r"C:\Users\me\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js")),
+            Some("claude")
+        );
+        assert_eq!(
+            tool_for_process(node, &args(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js")),
+            Some("codex")
+        );
+        assert_eq!(tool_for_process(node, &args(r"C:\work\server.js")), None);
+        assert_eq!(tool_for_process(Path::new(r"C:\Program Files\PowerShell\7\pwsh.exe"), &[]), None);
+    }
+
+    #[test]
+    fn splits_command_lines_like_the_c_runtime() {
+        assert_eq!(
+            split_command_line(r#""C:\Program Files\nodejs\node.exe" C:\npm\cli.js --resume "a b""#),
+            [r"C:\Program Files\nodejs\node.exe", r"C:\npm\cli.js", "--resume", "a b"]
+        );
+        assert_eq!(split_command_line(r#"a\\\"b "c\\" d"#), [r#"a\"b"#, r"c\", "d"]);
+        assert_eq!(split_command_line(r#"x "" y"#), ["x", "", "y"]);
+        assert!(split_command_line("   ").is_empty());
+    }
+
+    #[test]
+    fn trims_windows_folders() {
+        assert_eq!(trim_dir(r"C:\work\app\"), r"C:\work\app");
+        assert_eq!(trim_dir(r"C:\"), r"C:\");
+        assert_eq!(trim_dir(r"\\server\share\dir\"), r"\\server\share\dir");
+    }
+
+    #[test]
+    fn lists_descendants_nearest_first() {
+        // shell 10 → claude 20 → (mcp 40 → 50), 30 started later by the shell.
+        let parents = std::collections::HashMap::from([(10, 1), (20, 10), (30, 10), (40, 20), (50, 40), (60, 1)]);
+        assert_eq!(nearest_first(10, &parents), [20, 30, 40, 50]);
+        // A recycled pid that names itself as its parent does not loop.
+        let looped = std::collections::HashMap::from([(10, 10), (20, 10)]);
+        assert_eq!(nearest_first(10, &looped), [20]);
+    }
+
+    /// The real queries against this test process and a child it starts.
+    #[test]
+    #[cfg(windows)]
+    fn reads_processes_on_windows() {
+        let me = std::process::id();
+        let expected = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(cwd_of(me).unwrap().canonicalize().unwrap(), expected);
+        let exe = executable_path(me).unwrap();
+        assert_eq!(exe.canonicalize().unwrap(), std::env::current_exe().unwrap().canonicalize().unwrap());
+        assert!(!process_args(me).is_empty());
+        let dir = std::env::temp_dir();
+        let mut child =
+            std::process::Command::new("cmd.exe").args(["/d", "/c", "ping -n 30 127.0.0.1 >NUL"]).current_dir(&dir).spawn().unwrap();
+        let pid = child.id();
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let found = group_pids(me).contains(&pid);
+        let parent = parent_pid(pid);
+        let cwd = cwd_of(pid).and_then(|p| p.canonicalize().ok());
+        let args = process_args(pid);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(found, "child {pid} not below {me}");
+        assert_eq!(parent, Some(me));
+        assert_eq!(cwd, dir.canonicalize().ok());
+        assert!(args.iter().any(|a| a == "/c"), "{args:?}");
     }
 }

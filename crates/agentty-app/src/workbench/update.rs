@@ -300,7 +300,11 @@ impl Workbench {
                             (s.update_later_version.clone(), s.update_later_until)
                         };
                         let waiting = put_off(&later.0, later.1, &release.version, unix_now());
-                        if !waiting && this.updates.announced.as_deref() != Some(release.version.as_str()) {
+                        // Installing restarts Agentty and ends every terminal in it: while one runs,
+                        // the update only waits in the status bar. The popup comes on its own once
+                        // none is left, at a later check.
+                        let working = this.all_panes().iter().any(|pane| pane.read(cx).is_running());
+                        if !waiting && !working && this.updates.announced.as_deref() != Some(release.version.as_str()) {
                             this.updates.announced = Some(release.version.clone());
                             this.updates.popup = true;
                         }
@@ -402,6 +406,8 @@ impl Workbench {
         let (label, busy) = match &self.updates.state {
             UpdateState::Available(release) => (tf(cx, "update.available_short", &[("version", &release.version)]), false),
             UpdateState::Installing(_) => (t(cx, "update.installing").to_string(), true),
+            // Opened from here: the release is looked up again before the popup offers it.
+            UpdateState::Checking if self.updates.popup => (t(cx, "update.checking").to_string(), true),
             _ => return div().text_color(hex(Chrome::SUCCESS)).child(format!("● Agentty v{CURRENT_VERSION}")).into_any_element(),
         };
         div()
@@ -421,7 +427,12 @@ impl Workbench {
             })
             .child(label)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                // A newer version may have come out since this one was announced: check again, so
+                // the popup offers the latest. A failed check keeps the release already known.
                 this.updates.popup = true;
+                if matches!(this.updates.state, UpdateState::Available(_)) {
+                    this.check_for_updates(false, cx);
+                }
                 cx.notify();
             }))
             .into_any_element()

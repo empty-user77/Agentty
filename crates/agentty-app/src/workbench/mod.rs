@@ -858,7 +858,7 @@ impl Workbench {
             // A `cd` moves where the pane works, and that is part of the saved layout. Saving it
             // here rather than at quit is what makes it survive every way Agentty can go down —
             // a closed window, a force quit or a crash never reach the quit hook.
-            TerminalEvent::DirectoryChanged => this.persist_soon(cx),
+            TerminalEvent::DirectoryChanged | TerminalEvent::SessionChanged => this.persist_soon(cx),
             TerminalEvent::TitleChanged | TerminalEvent::StatusChanged => {
                 // A shell that changed folder may have entered a project with an agent harness.
                 this.watch_harness(&pane, cx);
@@ -2286,15 +2286,17 @@ impl Workbench {
 
     fn snapshot_pane(pane: &Pane, cx: &gpui::App) -> PaneSnapshot {
         let view = pane.read(cx);
-        let session_id = match view.spec.kind {
-            PaneKind::Codex => {
-                view.spec.session_id.clone().or_else(|| agentty_bridge::codex::find_recent(&view.spec.cwd, view.launched_at_ms))
-            }
-            _ => view.spec.session_id.clone(),
+        let running = view.agent_kind().filter(|kind| *kind != PaneKind::Shell);
+        let (kind, session_id) =
+            persist::saved_session(view.spec.kind, running, view.session_id_live.clone(), view.spec.session_id.clone());
+        let session_id = match kind {
+            PaneKind::Codex => session_id.or_else(|| agentty_bridge::codex::find_recent(&view.spec.cwd, view.launched_at_ms)),
+            _ => session_id,
         };
         PaneSnapshot {
-            kind: view.spec.kind,
-            cwd: view.current_dir(),
+            kind,
+            // A session resumes only in the folder it was held in: the agent's own, not the shell's.
+            cwd: if running.is_some() { view.display_cwd() } else { view.current_dir() },
             title: view.display_title(),
             session_id,
             tool: Some(view.tool_id().to_string()),

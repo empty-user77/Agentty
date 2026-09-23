@@ -43,7 +43,7 @@ gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "r
 
 [target.'cfg(windows)'.dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders", "windows-manifest"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console", "Win32_System_Power"] }
+windows-sys = { version = "0.61", features = ["Wdk_System_Threading", "Win32_Foundation", "Win32_Globalization", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Kernel", "Win32_System_Power", "Win32_System_Threading"] }
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3"

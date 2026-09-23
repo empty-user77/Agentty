@@ -5,6 +5,31 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- A new version no longer opens the update popup while a terminal is running, since installing
+  restarts Agentty and ends its sessions. The status bar says an update is available; click it to
+  install when you are ready. The click checks again first, so the popup offers the newest version.
+- macOS: Option is used as Meta by default (Settings → Terminal), so Option shortcuts work in
+  shells and agents — word moves and deletes, Claude Code's Option+P / Option+T. Turn it off to
+  type characters such as é with Option.
+
+### Fixed
+- Windows: panes now remember where you are. A `cd` in PowerShell is followed, so after a restart
+  every tab and split reopens in its own folder, and new tabs and splits open where the current
+  pane is, instead of all falling back to the workspace folder.
+- Windows: Claude Code and Codex running in a pane are now recognised (status, session, model),
+  including when installed through npm.
+- Claude Code or Codex started by hand in a terminal comes back after a restart, resuming its
+  conversation, like an agent tab Agentty started. An agent that moved to another conversation
+  (`/clear`, `/resume`) resumes the one it was in last, not the one it started with.
+- macOS: ⌘⌫ / ⌘⌦ delete to the start / end of the line and ⌘← / ⌘→ jump to its start and end in
+  terminals, Claude Code and Codex, as in iTerm2 and Ghostty. ⌥⌦ deletes the next word.
+- Windows and Linux: Alt shortcuts reach the terminal (Alt+B / F / D in shells, Claude Code's Alt+P,
+  Alt+T, Alt+V); they did nothing before.
+- Windows: Ctrl+V pastes and Ctrl+C copies selected text (and still interrupts without a
+  selection), as in Windows Terminal.
+- Ctrl+Backspace deletes a word in Claude Code and Codex, and Ctrl+/ is undo.
+
 ## [0.1.20] - 2026-09-23
 
 ### Added

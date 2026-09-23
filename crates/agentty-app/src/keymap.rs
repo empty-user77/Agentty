@@ -221,61 +221,92 @@ mod tests {
         assert_eq!(parse("cmd--"), (Chord { cmd: true, ..Chord::default() }, "-"));
     }
 
+    /// Every chord bound in main.rs, with its context.
+    const APP_BINDINGS: &[(&str, Option<&str>)] = &[
+        ("cmd-q", None),
+        ("cmd-shift-n", None),
+        ("cmd-t", None),
+        ("alt-cmd-c", None),
+        ("alt-cmd-x", None),
+        ("cmd-n", None),
+        ("cmd-w", None),
+        ("cmd-shift-w", None),
+        ("cmd-d", None),
+        ("cmd-shift-d", None),
+        ("cmd-]", None),
+        ("cmd-[", None),
+        ("cmd-shift-]", None),
+        ("cmd-shift-[", None),
+        ("ctrl-tab", None),
+        ("ctrl-shift-tab", None),
+        ("cmd-alt-down", None),
+        ("cmd-alt-up", None),
+        ("cmd-b", None),
+        ("cmd-shift-e", None),
+        ("cmd-shift-s", None),
+        ("cmd-shift-f", None),
+        ("cmd-alt-u", None),
+        ("cmd-,", None),
+        ("cmd-shift-x", None),
+        ("cmd-shift-g", None),
+        ("ctrl-cmd-m", None),
+        ("cmd-shift-b", None),
+        ("cmd-alt-b", None),
+        ("cmd-f", None),
+        ("cmd-=", None),
+        ("cmd-+", None),
+        ("cmd--", None),
+        ("cmd-0", None),
+        ("cmd-shift-u", None),
+        ("cmd-shift-p", None),
+        ("cmd-shift-enter", None),
+        ("cmd-shift-o", None),
+        ("ctrl-1", None),
+        ("ctrl-9", None),
+        ("cmd-1", None),
+        ("cmd-9", None),
+        ("cmd-enter", Some("GitView")),
+        ("cmd-p", Some("GitView")),
+        ("cmd-shift-t", Some("GitView")),
+        ("cmd-r", Some("GitView")),
+        ("cmd-c", Some("Terminal")),
+        ("cmd-v", Some("Terminal")),
+        ("cmd-k", Some("Terminal")),
+        ("cmd-a", Some("Terminal")),
+    ];
+
+    /// Shortcuts people use inside terminals (shells, Claude Code, Codex, vim, tmux) never reach an
+    /// app binding while a terminal has the keyboard, on either platform: the terminal gets them.
+    #[test]
+    fn terminal_shortcuts_stay_with_the_terminal() {
+        let mut essential: Vec<String> = Vec::new();
+        for c in 'a'..='z' {
+            essential.push(format!("ctrl-{c}"));
+            essential.push(format!("alt-{c}"));
+        }
+        // Left to the app on purpose: Ctrl+Alt+letter (Meta-Ctrl, Emacs only; AltGr characters
+        // never arrive as Ctrl+Alt), Ctrl+Tab, Ctrl+1…9 and, on Windows / Linux, Alt+1…9 — the
+        // tab and workspace keys of Windows Terminal, GNOME Terminal and iTerm2.
+        for key in ["left", "right", "up", "down", "backspace", "delete", "home", "end", "enter", "."] {
+            for modifiers in ["", "ctrl-", "alt-", "shift-", "ctrl-shift-", "alt-shift-"] {
+                essential.push(format!("{modifiers}{key}"));
+            }
+        }
+        for key in ["ctrl-/", "ctrl-space", "ctrl-]", "ctrl-\\", "ctrl-_", "ctrl-@", "shift-tab", "escape", "tab"] {
+            essential.push(key.to_string());
+        }
+        // The Mac's line-editing shortcuts (sent to the terminal by `terminal::keys`).
+        let mac_only = ["cmd-backspace", "cmd-delete", "cmd-left", "cmd-right"];
+        for (keys, context) in APP_BINDINGS.iter().filter(|(_, c)| c.is_none() || *c == Some("Terminal")) {
+            assert!(!essential.iter().any(|e| e == keys) && !mac_only.contains(keys), "macOS: {keys} ({context:?}) takes a terminal key");
+            let other = translate_binding(keys, *context);
+            assert!(!essential.iter().any(|e| *e == other), "Windows / Linux: {other} ({context:?}) takes a terminal key");
+        }
+    }
+
     #[test]
     fn translated_app_bindings_do_not_collide() {
-        // Every chord bound in main.rs, grouped by context.
-        let bindings: &[(&str, Option<&str>)] = &[
-            ("cmd-q", None),
-            ("cmd-shift-n", None),
-            ("cmd-t", None),
-            ("alt-cmd-c", None),
-            ("alt-cmd-x", None),
-            ("cmd-n", None),
-            ("cmd-w", None),
-            ("cmd-shift-w", None),
-            ("cmd-d", None),
-            ("cmd-shift-d", None),
-            ("cmd-]", None),
-            ("cmd-[", None),
-            ("cmd-shift-]", None),
-            ("cmd-shift-[", None),
-            ("ctrl-tab", None),
-            ("ctrl-shift-tab", None),
-            ("cmd-alt-down", None),
-            ("cmd-alt-up", None),
-            ("cmd-b", None),
-            ("cmd-shift-e", None),
-            ("cmd-shift-s", None),
-            ("cmd-shift-f", None),
-            ("cmd-alt-u", None),
-            ("cmd-,", None),
-            ("cmd-shift-x", None),
-            ("cmd-shift-g", None),
-            ("ctrl-cmd-m", None),
-            ("cmd-shift-b", None),
-            ("cmd-alt-b", None),
-            ("cmd-f", None),
-            ("cmd-=", None),
-            ("cmd-+", None),
-            ("cmd--", None),
-            ("cmd-0", None),
-            ("cmd-shift-u", None),
-            ("cmd-shift-p", None),
-            ("cmd-shift-enter", None),
-            ("cmd-shift-o", None),
-            ("ctrl-1", None),
-            ("ctrl-9", None),
-            ("cmd-1", None),
-            ("cmd-9", None),
-            ("cmd-enter", Some("GitView")),
-            ("cmd-p", Some("GitView")),
-            ("cmd-shift-t", Some("GitView")),
-            ("cmd-r", Some("GitView")),
-            ("cmd-c", Some("Terminal")),
-            ("cmd-v", Some("Terminal")),
-            ("cmd-k", Some("Terminal")),
-            ("cmd-a", Some("Terminal")),
-        ];
+        let bindings = APP_BINDINGS;
         let translated: Vec<(String, Option<&str>)> =
             bindings.iter().map(|(keys, context)| (translate_binding(keys, *context).into_owned(), *context)).collect();
         for (i, a) in translated.iter().enumerate() {
