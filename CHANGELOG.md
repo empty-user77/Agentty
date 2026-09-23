@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-09-23
+
 ### Changed
 - A new version no longer opens the update popup while a terminal is running, since installing
   restarts Agentty and ends its sessions. The status bar says an update is available; click it to
