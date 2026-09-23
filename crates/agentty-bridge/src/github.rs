@@ -52,6 +52,39 @@ pub fn pull_request(repo: &Path, branch: &str) -> Option<PullRequest> {
     parse(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// A pull request in the list of a repository: [`PullRequest`] and the branch it is from.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchPullRequest {
+    #[serde(flatten)]
+    pub pr: PullRequest,
+    pub head_ref_name: String,
+    /// The commit GitHub has at the tip of the branch.
+    #[serde(default)]
+    pub head_ref_oid: String,
+}
+
+/// The latest pull requests of the repository at `repo` (open, merged and closed), newest first.
+/// `None` when `gh` is missing, signed out, or the repository is not on GitHub.
+pub fn pull_requests(repo: &Path) -> Option<Vec<BranchPullRequest>> {
+    if !repo.is_dir() {
+        return None;
+    }
+    let output = process::command("gh")
+        .current_dir(repo)
+        .args(["pr", "list", "--state", "all", "--limit", "200", "--json", "number,state,title,url,headRefName,headRefOid"])
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
 fn parse(json: &str) -> Option<PullRequest> {
     serde_json::from_str(json).ok()
 }
@@ -69,6 +102,15 @@ mod tests {
         assert!(!pr.is_merged());
         assert_eq!(pr.url, "https://github.com/o/r/pull/262");
         assert!(parse("no pull requests found").is_none());
+    }
+
+    #[test]
+    fn reads_the_list_gh_prints() {
+        let json = r#"[{"number":7,"state":"MERGED","title":"Fix","url":"https://github.com/o/r/pull/7","headRefName":"agentty/fix","headRefOid":"abc123"}]"#;
+        let list: Vec<BranchPullRequest> = serde_json::from_str(json).unwrap();
+        assert_eq!(list[0].head_ref_name, "agentty/fix");
+        assert!(list[0].pr.is_merged());
+        assert_eq!(list[0].head_ref_oid, "abc123");
     }
 
     #[test]

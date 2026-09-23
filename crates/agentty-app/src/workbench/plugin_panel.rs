@@ -249,7 +249,6 @@ impl Workbench {
                 .bg(hex(Chrome::PANEL))
                 .relative()
                 .child(header)
-                .children(mode_menu)
                 .child(
                     div()
                         .id("plugin-panel-scroll")
@@ -262,6 +261,8 @@ impl Workbench {
                         .group(crate::ui::SCROLL_GROUP)
                         .child(crate::ui::scrollbar(self.plugin_scroll.clone())),
                 )
+                // Last, so it paints over the panel's body instead of under it.
+                .children(mode_menu)
                 .into_any_element(),
         )
     }
@@ -309,6 +310,7 @@ impl Workbench {
     fn render_panel_mode_menu(&self, plugin_id: &str, cx: &mut Context<Self>) -> AnyElement {
         let current = self.plugin_panel_mode(plugin_id, cx);
         let mut menu = div()
+            .occlude()
             .absolute()
             .top(px(30.))
             .right(px(4.))

@@ -10,6 +10,7 @@ mod chrome;
 mod confirm;
 mod context_menu;
 mod db_page;
+mod disk_page;
 mod docker_panel;
 mod drop_split;
 mod editor_host;
@@ -48,6 +49,7 @@ mod status_menus;
 mod system_page;
 mod tab_menu;
 mod tasks;
+mod tree_manager;
 pub mod update;
 pub mod worktrees;
 
@@ -246,6 +248,10 @@ pub enum Page {
     Processes,
     /// Monitoring → the capture proxy: what tabs talk to.
     Proxy,
+    /// Monitoring → every git working tree on this computer.
+    Worktrees,
+    /// Monitoring → what fills the disk, and clearing build output and caches.
+    Disk,
     Settings,
     Extensions,
     Plugins,
@@ -441,6 +447,8 @@ pub struct Workbench {
     /// whichever one happens to have the keyboard.
     status_menu_pane: Option<Pane>,
     processes: processes::ProcessMonitor,
+    tree_manager: tree_manager::TreeManager,
+    disk_manager: disk_page::DiskManager,
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
@@ -651,6 +659,8 @@ impl Workbench {
             status_menu: None,
             status_menu_pane: None,
             processes: Default::default(),
+            tree_manager: Default::default(),
+            disk_manager: Default::default(),
             inventory: Default::default(),
             browser: None,
             browser_request: None,
@@ -2550,6 +2560,8 @@ impl Render for Workbench {
             }
             Some(Page::Processes) => self.render_processes(cx).into_any_element(),
             Some(Page::Proxy) => self.render_proxy_page(cx).into_any_element(),
+            Some(Page::Worktrees) => self.render_tree_manager(cx).into_any_element(),
+            Some(Page::Disk) => self.render_disk_page(cx).into_any_element(),
             Some(Page::Settings) => self.render_settings(window, cx).into_any_element(),
             Some(Page::Extensions) => gpui::AnyView::from(self.extensions_view(window, cx))
                 .cached(gpui::StyleRefinement::default().size_full())
@@ -2989,6 +3001,8 @@ impl Workbench {
             Page::Usage => "usage",
             Page::Processes => "processes",
             Page::Proxy => "proxy",
+            Page::Worktrees => "worktrees",
+            Page::Disk => "disk",
             Page::Settings => "settings",
             Page::Extensions => "extensions",
             Page::Plugins => "plugins",
@@ -3279,6 +3293,8 @@ impl Workbench {
                     "usage" => Some(Page::Usage),
                     "processes" => Some(Page::Processes),
                     "proxy" => Some(Page::Proxy),
+                    "worktrees" => Some(Page::Worktrees),
+                    "disk" => Some(Page::Disk),
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
                     "plugins" => Some(Page::Plugins),

@@ -42,7 +42,7 @@ impl Worktree {
     }
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let output = crate::process::command("git")
         .arg("-C")
         .arg(dir)
