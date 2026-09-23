@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 - A new version no longer opens the update popup while a terminal is running, since installing
   restarts Agentty and ends its sessions. The status bar says an update is available; click it to
-  install when you are ready.
+  install when you are ready. The click checks again first, so the popup offers the newest version.
 - macOS: Option is used as Meta by default (Settings → Terminal), so Option shortcuts work in
   shells and agents — word moves and deletes, Claude Code's Option+P / Option+T. Turn it off to
   type characters such as é with Option.
