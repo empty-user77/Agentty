@@ -158,6 +158,34 @@ pub fn preferred_language() -> String {
     }
 }
 
+/// The system's region setting as a locale name (`ko_KR`, `ko-KR`, `ko_KR.UTF-8`), for the
+/// country in usage statistics. The setting, not where the computer is.
+pub fn region_locale() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleLocale"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("LANG").ok())
+            .unwrap_or_default()
+    }
+    #[cfg(windows)]
+    {
+        windows_locale().unwrap_or_default()
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        ["LC_ALL", "LC_CTYPE", "LANG"]
+            .iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .find(|v| !v.is_empty() && v != "C" && v != "POSIX")
+            .unwrap_or_default()
+    }
+}
+
 #[cfg(windows)]
 fn windows_locale() -> Option<String> {
     use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
