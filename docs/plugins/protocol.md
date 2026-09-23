@@ -1,4 +1,4 @@
-# Agentty plugin protocol (API version 2)
+# Agentty plugin protocol (API version 3)
 
 For writing plugins without the Node.js SDK. Read the [plugin guide](README.md) first; this page
 only describes the wire format.
@@ -7,6 +7,7 @@ only describes the wire format.
 |---|---|
 | 1 | the panel, commands, links, `storage/*`, `net/fetch`, `prompt/inject`, `session/get` |
 | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
+| 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
 
 A plugin that uses something a version added says so, with `apiVersion` in its manifest and in its
 marketplace entry. An Agentty that speaks less than that says to update rather than installing a
@@ -43,6 +44,7 @@ with the same 16 MB line limit as stdout.
 | `context/changed` | notification | `{ context }` |
 | `url/open` | notification | `{ path, query, url, context }` |
 | `pane/status` | notification | `{ paneId, status, running, agent, title, cwd }` — a pane this plugin started changed what it is doing (`workspace.read`) |
+| `browser/hidden` | notification | `{ tabId }` — the user took one of the plugin's pages out of the browser panel; it keeps running out of sight (`browser.control`) |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin (a command, the panel
@@ -134,6 +136,69 @@ than written over, so nothing the plugin had is lost without trace. Keys are
 lower-case letters, digits, `.`, `-` and `_`; at most 64 of them, and a megabyte in total. A plugin
 that runs as a process can write its own files instead; a WebAssembly plugin has no files, so this
 is how it keeps anything.
+
+### The browser (`browser.control`, API version 3)
+
+A plugin with `browser.control` drives pages in Agentty's in-app browser — the one the user is
+signed in to — on the sites its manifest names, and nowhere else:
+
+```json
+"apiVersion": 3,
+"permissions": ["browser.control"],
+"browser": {
+  "sites": [
+    { "host": "x.com", "aliases": ["twitter.com"], "home": "https://x.com/home",
+      "signIn": "https://x.com/i/flow/login", "signedInCookie": "auth_token" }
+  ]
+}
+```
+
+`host` and `aliases` cover their subdomains; pages are `https` (plain `http` only for `localhost`
+and `127.0.0.1`). `home` and `signIn` must be pages of the site. `signedInCookie` names a cookie the
+site sets only while the user is signed in: Agentty checks that it is there — never what it holds —
+to say whether the site is signed in and until when. At most 8 sites; the permission and the list
+come together.
+
+| Method | `params` | Result |
+|---|---|---|
+| `browser/sites` | `{}` | `[{ host, signedIn: true \| false \| null, expiresAt: ms \| null }]` |
+| `browser/open` | `{ url, mode?: "auto" \| "background" \| "visible" }` | `{ tabId }` |
+| `browser/navigate` | `{ tabId, url }` | `null` |
+| `browser/eval` | `{ tabId, script, args?, timeoutMs? }` | `{ value }` |
+| `browser/wait` | `{ tabId, timeoutMs? }` | `{ url, title }` once the page has loaded |
+| `browser/info` | `{ tabId }` | `{ tabId, url, title, loading, visible, site }` |
+| `browser/show` · `browser/hide` · `browser/close` | `{ tabId, message? }` | `null` |
+| `browser/signIn` | `{ host, message? }` | `{ tabId, signedIn, expiresAt?, reason?: "closed" \| "timeout" }` |
+
+- **The user decides first.** The first browser call a plugin makes shows a dialog naming the
+  plugin and its sites, and saying that what it does there is done in the user's name. Until the
+  user allows it, calls wait for the answer; after "Don't allow" they fail with `-32001` until the
+  plugin restarts. An update that names a new site asks again. The plugin's page in the Plugins
+  view shows the sites and takes the permission back.
+- **Pages** run out of sight (parked outside the window: never drawn, never throttled, so a page
+  that loads more as it scrolls keeps working with Agentty minimized) or as a tab of the browser
+  panel. `auto` runs them out of sight and shows them when the user is needed; the user can pin a
+  plugin to one or the other. Three pages per plugin; they close when the plugin stops or restarts.
+- **Scripts** (`browser/eval`) are the body of an async function with `args`, run in a content
+  world of their own — the page's scripts share the DOM but cannot see or replace the plugin's.
+  They run only while the page is on one of the plugin's sites, checked when the call arrives and
+  again inside the page. The value comes back as JSON, 4 MB at most; `timeoutMs` is 15 s by default
+  and 60 s at most.
+- **Signing in is the user's.** `browser/signIn` opens the site's sign-in page as a tab with a line
+  above it saying which plugin asks, and a Cancel; if Agentty is not in front, a notification says
+  so too. It answers once `signedInCookie` appears, the user closes the tab, or ten minutes pass. A
+  plugin never gets a password, a cookie or a way to type one in on the user's behalf.
+- **Staying signed in is Agentty's.** For every site of an enabled `browser.control` plugin,
+  Agentty keeps session cookies (the ones without an expiry, which end with the browser) in the
+  Keychain and puts them back at start, and every six hours visits a signed-in site's `home` out of
+  sight, which keeps sessions that end when unused going. "Clear cookies, cache and history" in the
+  browser settings forgets them; private mode turns all of it off (and `browser/open` refuses).
+- **It reaches the network too.** A script running in a page can make requests from that page, and
+  a page can be sent anywhere; so `browser.control` lets a plugin carry what it reads out of Agentty
+  even without `net.request`. The dialog and the Plugins view say the plugin acts in the user's
+  name; allow it only for plugins you trust.
+- A plugin that a link reached has no browser until it restarts (`-32001`). Windows and Linux have
+  no in-app browser yet: every `browser/*` call answers `-32002`.
 
 Errors use these codes:
 

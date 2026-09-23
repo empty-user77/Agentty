@@ -7,6 +7,7 @@ pub mod link;
 pub mod manifest;
 pub mod market;
 pub mod net;
+pub mod sites;
 pub mod storage;
 pub mod store;
 pub mod ui;
@@ -42,6 +43,18 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("terminal/send", Some("terminal.write")),
     ("session/get", Some("session.read")),
     ("workspace/list", Some("workspace.read")),
+    // The in-app browser, signed in as the user: only on the sites the manifest names, and never
+    // its cookies.
+    ("browser/sites", Some("browser.control")),
+    ("browser/open", Some("browser.control")),
+    ("browser/navigate", Some("browser.control")),
+    ("browser/eval", Some("browser.control")),
+    ("browser/wait", Some("browser.control")),
+    ("browser/info", Some("browser.control")),
+    ("browser/show", Some("browser.control")),
+    ("browser/hide", Some("browser.control")),
+    ("browser/close", Some("browser.control")),
+    ("browser/signIn", Some("browser.control")),
 ];
 
 /// `None` for unknown methods; `Some(None)` when no permission is needed.

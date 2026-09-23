@@ -12,6 +12,7 @@ mod assets;
 mod branch_picker;
 mod brand;
 mod browser_cli;
+mod browser_keeper;
 mod browser_mcp;
 mod capture;
 mod db_cli;
@@ -604,6 +605,7 @@ fn main() {
 
         notifications::prepare();
         let mut plugin_events = plugins::init(cx);
+        browser_keeper::start(cx);
         cx.spawn(async move |cx| {
             while let Some(envelope) = plugin_events.next().await {
                 if cx.update(|cx| plugins::handle(envelope, cx)).is_err() {
@@ -993,6 +995,18 @@ fn active_workbench(cx: &App) -> Option<gpui::WindowHandle<Workbench>> {
 /// Runs `f` with the frontmost workbench; false when no window is open.
 pub fn with_active_workbench(cx: &mut App, f: impl FnOnce(&mut Workbench, &mut gpui::Window, &mut gpui::Context<Workbench>)) -> bool {
     let Some(handle) = active_workbench(cx) else { return false };
+    handle.update(cx, |workbench, window, cx| f(workbench, window, cx)).is_ok()
+}
+
+/// Runs `f` with the window holding the plugin browser page `tab` (the active window for a call
+/// that names none, or a page no window holds, which then answers that there is no such tab).
+pub fn with_workbench_for_browser(
+    cx: &mut App,
+    tab: Option<u64>,
+    f: impl FnOnce(&mut Workbench, &mut gpui::Window, &mut gpui::Context<Workbench>),
+) -> bool {
+    let holder = tab.and_then(|tab| workbenches(cx).into_iter().find(|w| w.read(cx).is_ok_and(|wb| wb.holds_plugin_browser(tab))));
+    let Some(handle) = holder.or_else(|| active_workbench(cx)) else { return false };
     handle.update(cx, |workbench, window, cx| f(workbench, window, cx)).is_ok()
 }
 

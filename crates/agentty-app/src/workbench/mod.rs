@@ -32,6 +32,7 @@ mod palette;
 pub mod panes;
 mod persist;
 mod picker;
+pub mod plugin_browser;
 mod plugin_host;
 mod plugin_panel;
 mod plugin_window;
@@ -470,6 +471,16 @@ pub struct Workbench {
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
+    /// Pages plugins drive (`browser/*`), in sight or not.
+    plugin_browsers: Vec<plugin_browser::PluginBrowser>,
+    /// Plugin pages to put in the browser panel at the next render.
+    plugin_pages_to_show: Vec<u64>,
+    /// Plugins whose browser consent dialog is open, with the calls waiting for the answer.
+    browser_asking: std::collections::HashMap<String, Vec<crate::plugins::PluginCall>>,
+    /// Plugins the user said no to, with the run the answer holds for.
+    browser_refused: std::collections::HashMap<String, u64>,
+    /// Out-of-sight visits that keep a site's session going (`browser_keeper`).
+    site_refreshes: Vec<(u64, crate::webview::WebView)>,
     find_bar: Option<find::FindBar>,
     /// Panes already told that they share a working tree with another agent (once each).
     shared_tree_warned: std::collections::HashSet<u64>,
@@ -687,6 +698,11 @@ impl Workbench {
             inventory: Default::default(),
             browser: None,
             browser_request: None,
+            plugin_browsers: Vec::new(),
+            plugin_pages_to_show: Vec::new(),
+            browser_asking: Default::default(),
+            browser_refused: Default::default(),
+            site_refreshes: Vec::new(),
             find_bar: None,
             shared_tree_warned: Default::default(),
             servers: Default::default(),
@@ -3653,6 +3669,57 @@ impl Workbench {
                 }
             }
             "browser-reload" => self.reload_browser(argument == "hard", cx),
+            // `browser-js <body>`: runs an async function body in the tab in front, prints the result.
+            "browser-js" => {
+                let view = self.browser.as_ref().map(|browser| browser.webview());
+                let ran = view.is_some_and(|view| match view.borrow().as_ref() {
+                    Some(page) => {
+                        page.call_async(argument, &[], Box::new(|result| eprintln!("browser-js: {result:?}")));
+                        true
+                    }
+                    None => false,
+                });
+                if !ran {
+                    eprintln!("browser-js: no page");
+                }
+            }
+            // `browser-keeper remember|restore|forget|sites`: the sign-in keeper by hand.
+            "browser-keeper" => match argument {
+                "remember" => crate::browser_keeper::remember(cx),
+                "restore" => crate::browser_keeper::restore(cx),
+                "forget" => crate::browser_keeper::forget_all(),
+                _ => {
+                    for site in crate::browser_keeper::kept_sites(cx) {
+                        let host = site.host.clone();
+                        let refreshed = crate::browser_keeper::refreshed_at(&host);
+                        plugin_browser::site_status(&site, move |status| {
+                            eprintln!("browser-keeper: {host} status={status:?} refreshed={refreshed:?}")
+                        });
+                    }
+                }
+            },
+            // `browser-refresh <host>`: a keep-alive visit to one kept site now.
+            "browser-refresh" => {
+                if let Some(site) = crate::browser_keeper::kept_sites(cx).into_iter().find(|site| site.host == argument) {
+                    self.refresh_site(&site, window, cx);
+                }
+            }
+            // `plugin-browsers`: the pages plugins drive.
+            "plugin-browsers" => {
+                for page in &self.plugin_browsers {
+                    let borrowed = page.webview.borrow();
+                    let view = borrowed.as_ref();
+                    eprintln!(
+                        "plugin-browsers: id={} plugin={} shown={} url={:?} loading={:?}",
+                        page.id,
+                        page.plugin,
+                        page.shown,
+                        view.and_then(crate::webview::WebView::current_url),
+                        view.map(crate::webview::WebView::is_loading)
+                    );
+                }
+                eprintln!("plugin-browsers: refreshes={}", self.site_refreshes.len());
+            }
             // `browser-tab [url]`, `browser-tab close <index>`, `browser-tab select <index>`.
             "browser-tab" => match argument.split_once(' ') {
                 Some(("close", index)) => self.close_browser_tab(index.parse().unwrap_or(0), window, cx),

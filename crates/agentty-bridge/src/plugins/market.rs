@@ -71,6 +71,9 @@ pub struct Entry {
     pub mode: PanelMode,
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// The sites `browser.control` works on, shown on the card before installing.
+    #[serde(default)]
+    pub browser: Option<super::sites::BrowserContribution>,
     /// The plugin protocol the module is built against. An entry that leaves it out is from
     /// before the field existed, which can only mean the first one.
     #[serde(default = "first_api_version")]
@@ -161,6 +164,9 @@ impl Entry {
                 bail!("unknown permission {permission}");
             }
         }
+        if let Some(browser) = &entry.browser {
+            browser.validate()?;
+        }
         let host = module_url_host(&entry.module.url)?;
         if !module_host_allowed(&host) {
             bail!("a module is not served from {host}");
@@ -208,6 +214,7 @@ impl Entry {
                 }),
             },
             permissions: self.permissions.clone(),
+            browser: self.browser.clone(),
             detect: Vec::new(),
             keywords: self.keywords.clone(),
         }

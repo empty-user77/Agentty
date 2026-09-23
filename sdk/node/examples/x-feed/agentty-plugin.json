@@ -1,0 +1,33 @@
+{
+  "id": "x-feed",
+  "name": "X Feed Reader",
+  "version": "0.1.0",
+  "publisher": "Agentty",
+  "description": "Reads the posts of an X account through the in-app browser you are signed in to.",
+  "icon": "sparkles",
+  "main": "main.mjs",
+  "runtime": "node",
+  "apiVersion": 3,
+  "permissions": [
+    "browser.control"
+  ],
+  "browser": {
+    "sites": [
+      {
+        "host": "x.com",
+        "aliases": [
+          "twitter.com"
+        ],
+        "home": "https://x.com/home",
+        "signIn": "https://x.com/i/flow/login",
+        "signedInCookie": "auth_token"
+      }
+    ]
+  },
+  "contributes": {
+    "panel": {
+      "title": "X Feed Reader",
+      "icon": "sparkles"
+    }
+  }
+}

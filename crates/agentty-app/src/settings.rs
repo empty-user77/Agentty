@@ -210,6 +210,14 @@ pub struct Settings {
     /// something other than what the plugin asks for.
     #[serde(default)]
     pub plugin_panel_modes: std::collections::BTreeMap<String, String>,
+    /// Where each plugin's browser pages run (`background`, `visible`), when the user picked one
+    /// instead of letting the plugin decide (`auto`, the default, is not stored).
+    #[serde(default)]
+    pub plugin_browser_modes: std::collections::BTreeMap<String, String>,
+    /// Sites the user allowed each plugin to use the browser on (asked the first time it tries,
+    /// and again when an update names a site that is not in here).
+    #[serde(default)]
+    pub plugin_browser_grants: std::collections::BTreeMap<String, Vec<String>>,
     /// Width of the Docker panel docked right of the terminals.
     pub docker_panel_width: f32,
     /// Width of the database panel docked right of the terminals.
@@ -588,6 +596,8 @@ impl Default for Settings {
             files_panel_width: 300.0,
             plugin_panel_width: crate::workbench::side_panels::DEFAULT_PLUGIN_WIDTH,
             plugin_panel_modes: std::collections::BTreeMap::new(),
+            plugin_browser_modes: std::collections::BTreeMap::new(),
+            plugin_browser_grants: std::collections::BTreeMap::new(),
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
             db_panel_width: crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH,
             files_panel_trees_height: 0.0,

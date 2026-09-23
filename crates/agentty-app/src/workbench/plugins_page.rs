@@ -9,7 +9,7 @@ use crate::plugins::{self, RunState};
 use crate::settings::settings;
 use crate::text_input::TextInput;
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::{action_button, hint, icon, icon_named, tilde, IconSize, TypeScale};
+use crate::ui::{action_button, chip, hint, icon, icon_named, tilde, IconSize, TypeScale};
 use agentty_bridge::model::Agent;
 use agentty_bridge::plugins::manifest::{Manifest, Runtime, Surface, PERMISSIONS};
 use agentty_bridge::plugins::market;
@@ -1389,7 +1389,8 @@ impl Workbench {
         // Reading the user's work and sending requests out is the pair that makes a leak possible.
         let reads = ["session.read", "workspace.read"].iter().any(|p| manifest.has_permission(p));
         let combo = reads && manifest.has_permission("net.request");
-        div().pt_4().flex().flex_col().gap_3().child(list).when(combo, |d| {
+        let browser = manifest.has_permission("browser.control").then(|| self.render_browser_access(manifest, cx));
+        div().pt_4().flex().flex_col().gap_3().child(list).children(browser).when(combo, |d| {
             d.child(
                 div()
                     .p_3()
@@ -1401,6 +1402,101 @@ impl Workbench {
                     .child(div().flex_1().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "plugins.perm.combo"))),
             )
         })
+    }
+
+    /// The sites a `browser.control` plugin may use, whether the user allowed it, and where its
+    /// pages run. Allowing happens the first time the plugin tries (a dialog); taking it back is here.
+    fn render_browser_access(&self, manifest: &Manifest, cx: &mut Context<Self>) -> AnyElement {
+        use super::plugin_browser::{granted, revoke, BrowserMode};
+        let sites = manifest.browser.clone().unwrap_or_default();
+        let allowed = granted(&manifest.id, &sites, cx);
+        let chosen = BrowserMode::chosen(&manifest.id, cx);
+        let mut site_list = div().flex().flex_wrap().gap_1p5();
+        for site in &sites.sites {
+            let name = match site.aliases.is_empty() {
+                true => site.host.clone(),
+                false => format!("{} · {}", site.host, site.aliases.join(" · ")),
+            };
+            site_list = site_list.child(
+                div().px_2().py_0p5().rounded_sm().bg(hex_alpha(Chrome::ERROR, 0.14)).t_small().text_color(hex(Chrome::BRIGHT)).child(name),
+            );
+        }
+        let mut modes = div().flex().gap_1p5();
+        for mode in BrowserMode::ALL {
+            let id = manifest.id.clone();
+            modes = modes.child(chip(
+                SharedString::from(format!("browser-mode-{}", mode.id())),
+                t(
+                    cx,
+                    match mode {
+                        BrowserMode::Auto => "plugin_browser.mode.auto",
+                        BrowserMode::Background => "plugin_browser.mode.background",
+                        BrowserMode::Visible => "plugin_browser.mode.visible",
+                    },
+                ),
+                chosen == mode,
+                move |_, _, cx| {
+                    let id = id.clone();
+                    crate::settings::update_settings(cx, move |settings| match mode {
+                        BrowserMode::Auto => {
+                            settings.plugin_browser_modes.remove(&id);
+                        }
+                        other => {
+                            settings.plugin_browser_modes.insert(id, other.id().to_string());
+                        }
+                    });
+                },
+            ));
+        }
+        let id = manifest.id.clone();
+        div()
+            .p_3()
+            .rounded_md()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .bg(hex_alpha(Chrome::ERROR, 0.08))
+            .border_1()
+            .border_color(hex_alpha(Chrome::ERROR, 0.3))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(icon("globe", 14., hex(Chrome::ERROR)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .t_small()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(t(cx, "plugin_browser.sites_title")),
+                    )
+                    .child(
+                        div()
+                            .t_caption()
+                            .text_color(hex(if allowed { Chrome::SUCCESS } else { Chrome::MUTED }))
+                            .child(t(cx, if allowed { "plugin_browser.allowed" } else { "plugin_browser.not_allowed" })),
+                    )
+                    .when(allowed, |d| {
+                        d.child(action_button(
+                            SharedString::from(format!("browser-revoke-{id}")),
+                            t(cx, "plugin_browser.revoke"),
+                            move |_, _, cx| revoke(&id, cx),
+                        ))
+                    }),
+            )
+            .child(site_list)
+            .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "plugin_browser.sites_note")))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "plugin_browser.mode")))
+                    .child(modes),
+            )
+            .into_any_element()
     }
 
     fn render_logs(&self, id: &str, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1552,6 +1648,7 @@ fn permission_strings(permission: &str) -> (&'static str, &'static str) {
         "session.read" => ("plugins.perm.session", "plugins.perm.session.body"),
         "workspace.read" => ("plugins.perm.workspace", "plugins.perm.workspace.body"),
         "net.request" => ("plugins.perm.net", "plugins.perm.net.body"),
+        "browser.control" => ("plugins.perm.browser", "plugins.perm.browser.body"),
         _ => ("plugins.perm.unknown", "plugins.perm.unknown"),
     }
 }

@@ -282,6 +282,9 @@ pub fn default_context(cx: &App) -> Value {
     json!({ "workspace": null, "pane": null, "language": crate::settings::settings(cx).language.code() })
 }
 
+/// Every start of any plugin gets the next number (see `Runtime::generation`).
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// Starts the plugin unless it runs. `context` goes into `initialize`; it is passed in because
 /// callers are often inside a window update, where the window can't be read.
 fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
@@ -294,7 +297,9 @@ fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
     let host = host_mut(cx);
     let tx = host.tx.clone();
     let runtime = host.runtimes.entry(id.to_string()).or_insert_with(Runtime::new);
-    runtime.generation += 1;
+    // Unique across the app, not per runtime: a runtime is made again when the plugin list is
+    // reloaded, and a count that started over would hand the new run what the old one was given.
+    runtime.generation = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     runtime.stopping = false;
     runtime.state = RunState::Starting;
     runtime.log(format!("— starting {} {} —", plugin.name(), plugin.manifest.as_ref().map_or("", |m| m.version.as_str())));
@@ -362,6 +367,12 @@ pub fn open_link(
 /// Plugins with a process running right now.
 pub fn running_plugins(cx: &App) -> Vec<String> {
     host(cx).runtimes.iter().filter(|(_, r)| r.process.is_some()).map(|(id, _)| id.clone()).collect()
+}
+
+/// The run of a plugin that is running now (it changes on every start), so what was given to one
+/// run — a browser page — is not handed to the next.
+pub fn generation(id: &str, cx: &App) -> Option<u64> {
+    host(cx).runtimes.get(id).filter(|r| r.process.is_some()).map(|r| r.generation)
 }
 
 /// Sends to a plugin only if it is already running (never starts one).
@@ -602,6 +613,29 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
         "terminal/send" if guarded => {
             reply(Err((codes::PERMISSION_DENIED, "a plugin that a link reached may not type into terminals; restart it first".into())), cx)
         }
+        // The browser is signed in as the user: a link's author must not get to drive it.
+        browser if browser.starts_with("browser/") && guarded => {
+            reply(Err((codes::PERMISSION_DENIED, "a plugin that a link reached may not use the browser; restart it first".into())), cx)
+        }
+        browser if browser.starts_with("browser/") && !crate::platform::HAS_WEBVIEW => {
+            reply(Err((codes::UNAVAILABLE, "the in-app browser is not available on this platform yet".into())), cx)
+        }
+        browser if browser.starts_with("browser/") => {
+            let unanswered = request_id.clone();
+            let tab = params.get("tabId").and_then(Value::as_u64);
+            let request = PluginCall {
+                plugin: plugin_id.to_string(),
+                plugin_name: manifest.name.clone(),
+                request_id,
+                method: method.to_string(),
+                params,
+            };
+            // A page lives in the window it was opened in: calls about it go there.
+            let delivered = crate::with_workbench_for_browser(cx, tab, |workbench, window, cx| workbench.plugin_call(request, window, cx));
+            if let (false, Some(request_id)) = (delivered, unanswered) {
+                respond(plugin_id, &request_id, Err((codes::UNAVAILABLE, "no Agentty window is open".into())), cx);
+            }
+        }
         _ => {
             if method == "prompt/inject" && guarded {
                 // Whatever a link asks for, the user picks where it goes and presses Enter.
@@ -734,6 +768,7 @@ fn fetch(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App
 }
 
 /// A plugin call that needs a window (prompts, terminals, sessions, notifications).
+#[derive(Clone)]
 pub struct PluginCall {
     pub plugin: String,
     pub plugin_name: String,

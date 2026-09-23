@@ -126,24 +126,22 @@ And two the workflow itself has to get right:
   go through the "Send to…" dialog (`link_guarded`). An AgentOS started that way asks first — and
   it still follows the session the user placed, so asking costs it nothing but a turn.
 
-## Why it needs no permission for a browser
+## Reading and posting through the browser
 
-The obvious way to make an AgentOS that posts would be to give plugins a browser. That would hand
-every plugin the user's logged-in sessions, and it is not what happens here.
+There are two ways for an AgentOS to act on a site.
 
-The plugin asks an agent, and Agentty already gives every agent session its own browser, driven
-from the shell it is already allowed to use:
+**Through an agent.** Agentty gives every agent session its own browser, driven from the shell it
+is already allowed to use (`agentty browser navigate | text | click | type | elements | screenshot`).
+A workflow step is then a prompt that says which page to open and what to do, sent to a session
+the user is watching; the rules that matter — never sign in, never install anything, stop and say
+what you saw — go in the workflow's glossary so no step can be written without them.
 
-```
-agentty browser navigate <url>        agentty browser text [selector]
-agentty browser click <selector>      agentty browser type <selector> <text>
-agentty browser elements              agentty browser screenshot <path.png>
-```
-
-So a workflow that posts is a prompt that says which page to open and what to type, sent to a
-session the user is watching. The rules that matter — never sign in, never install anything, stop
-and say what you saw, do not act while you are reading — are part of that prompt, and a workflow
-puts them in one place with the glossary so no step can be written without them.
+**Directly, with `browser.control`** (API version 3). The plugin names its sites in the manifest
+and drives pages there itself: open, wait, run a script that reads the posts or fills a form. That
+is faster and exact where a prompt is neither — reading a feed, collecting its images — and it is
+bounded the same way everywhere: only the named sites, the user allows it once in a dialog that
+says it acts in their name, signing in is always the user's, cookies never reach the plugin. See
+the [protocol](protocol.md#the-browser-browsercontrol-api-version-3).
 
 ## The examples
 

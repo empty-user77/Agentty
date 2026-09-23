@@ -144,6 +144,7 @@ plugin.start(); // after registering handlers
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
+| `browser.sites()` · `open(url)` · `eval(tabId, fn, args)` · `wait` · `signIn(host)` … — the in-app browser on the manifest's sites ([protocol](protocol.md#the-browser-browsercontrol-api-version-3); example: `sdk/node/examples/x-feed`) | `browser.control` |
 | `log(...)` — writes to the plugin log (stderr) | |
 
 `plugin.info` holds the `initialize` data; `plugin.context` is the latest context. Environment
@@ -383,6 +384,7 @@ be served from a release of a repository, or from the same host as the list itse
 | `session.read` | `getSession` — reading AI conversations |
 | `workspace.read` | `listWorkspaces` |
 | `net.request` | `net/fetch` — HTTP requests to addresses the plugin chooses |
+| `browser.control` | `browser/*` — pages of the sites in `browser.sites`, in the browser the user is signed in to: reading them and acting there in the user's name. The user allows it in a dialog the first time; signing in is always the user's, and cookies never reach the plugin |
 
 `storage/get`, `storage/set` and `storage/keys` need no permission: they are the plugin's own
 folder (`<data dir>/plugin-data/<id>/storage.json`, `0600`), up to 64 keys and a megabyte. A

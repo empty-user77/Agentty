@@ -385,6 +385,7 @@ impl Workbench {
                 }
             }
             "session/get" => self.plugin_session(call, cx),
+            browser if browser.starts_with("browser/") => self.plugin_browser_call(call, window, cx),
             other => call.reply(Err((codes::METHOD_NOT_FOUND, format!("unknown method {other}"))), cx),
         }
     }

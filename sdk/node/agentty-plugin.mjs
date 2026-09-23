@@ -13,7 +13,7 @@
 import { createInterface } from 'node:readline';
 
 export const SDK_VERSION = '1.0.0';
-export const API_VERSION = 1;
+export const API_VERSION = 3;
 
 /** Builders for the panel UI tree. Every interactive element needs an `id` unique in the panel. */
 export const ui = {
@@ -57,7 +57,7 @@ export function createPlugin(streams = {}) {
   const commands = new Map();
   const events = new Map();
   const urls = new Map();
-  const listeners = { activate: [], panelOpen: [], panelClose: [], context: [], event: [], url: [], shutdown: [] };
+  const listeners = { activate: [], panelOpen: [], panelClose: [], context: [], event: [], url: [], shutdown: [], browserHidden: [] };
   const pending = new Map();
   let nextId = 1;
   let started = false;
@@ -159,6 +159,64 @@ export function createPlugin(streams = {}) {
     revealPath(path) {
       return call('host/revealPath', { path });
     },
+    /**
+     * The in-app browser, signed in as the user, on the sites `browser.sites` names in the
+     * manifest. Needs `browser.control` (apiVersion 3). A plugin never sees a cookie: it hears
+     * whether a site is signed in and asks the user to sign in when it is not.
+     */
+    browser: {
+      /** [{ host, signedIn: true | false | null, expiresAt: ms | null }] */
+      sites() {
+        return call('browser/sites', {});
+      },
+      /** Opens a page of one of the plugin's sites → { tabId }. mode: auto | background | visible */
+      open(url, { mode } = {}) {
+        return call('browser/open', { url, mode });
+      },
+      navigate(tabId, url) {
+        return call('browser/navigate', { tabId, url });
+      },
+      /**
+       * Runs `script` (a function, or the body of an async function) in the page with `args`, and
+       * resolves to what it returns (anything JSON can carry).
+       */
+      async eval(tabId, script, args = null, { timeoutMs } = {}) {
+        const body = typeof script === 'function' ? `return (${script.toString()})(args);` : String(script);
+        const { value } = await call('browser/eval', { tabId, script: body, args, timeoutMs });
+        return value;
+      },
+      /** Resolves once the page has finished loading → { url, title }. */
+      wait(tabId, { timeoutMs } = {}) {
+        return call('browser/wait', { tabId, timeoutMs });
+      },
+      /** { tabId, url, title, loading, visible, site } */
+      info(tabId) {
+        return call('browser/info', { tabId });
+      },
+      /** Shows the page as a tab of the browser panel, with a message for the user. */
+      show(tabId, message) {
+        return call('browser/show', { tabId, message });
+      },
+      hide(tabId) {
+        return call('browser/hide', { tabId });
+      },
+      close(tabId) {
+        return call('browser/close', { tabId });
+      },
+      /**
+       * Opens the site's sign-in page for the user and resolves once they are signed in, closed the
+       * tab or ten minutes passed → { signedIn, expiresAt?, reason? }.
+       */
+      signIn(host, { message } = {}) {
+        return call('browser/signIn', { host, message });
+      },
+    },
+    /** The user took a plugin page out of the browser panel: handler({ tabId }). It still runs. */
+    onBrowserHidden(handler) {
+      listeners.browserHidden.push(handler);
+      return plugin;
+    },
+
     /** Writes to Agentty's log for this plugin (stderr). */
     log(...parts) {
       process.stderr.write(parts.map((p) => (typeof p === 'string' ? p : safeJson(p))).join(' ') + '\n');
@@ -267,6 +325,9 @@ export function createPlugin(streams = {}) {
         else await guarded(() => run(listeners.url, params));
         return;
       }
+      case 'browser/hidden':
+        await guarded(() => run(listeners.browserHidden, params));
+        return;
       case 'shutdown':
         await shutdown(0);
         return;

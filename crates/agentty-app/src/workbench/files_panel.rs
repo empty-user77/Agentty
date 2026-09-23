@@ -17,7 +17,7 @@ use std::time::Duration;
 pub const MIN_WIDTH: f32 = 220.;
 /// Width the terminals keep when the browser and this panel are both docked at the right.
 const MIN_TERMINALS: f32 = 440.;
-const MIN_BROWSER: f32 = 320.;
+pub(super) const MIN_BROWSER: f32 = 320.;
 /// The working-tree list: one row at least, and by default no more than six and a half (the half row
 /// says "there is more"); the handle under it sets any height in between.
 const MIN_TREES_HEIGHT: f32 = TREE_ROW_HEIGHT;

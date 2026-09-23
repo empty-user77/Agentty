@@ -112,6 +112,39 @@ export interface Session {
   turns: { role: 'user' | 'assistant'; text: string }[];
 }
 
+export type BrowserMode = 'auto' | 'background' | 'visible';
+
+export interface SiteStatus {
+  host: string;
+  /** null when the site's manifest entry names no `signedInCookie`. */
+  signedIn: boolean | null;
+  /** When the sign-in ends (ms since the epoch); null for a session that ends with the browser. */
+  expiresAt: number | null;
+}
+
+export interface BrowserTabInfo {
+  tabId: number;
+  url: string | null;
+  title: string | null;
+  loading: boolean;
+  visible: boolean;
+  /** The plugin's site the page is on, or null when it is elsewhere (scripts are refused there). */
+  site: string | null;
+}
+
+export interface Browser {
+  sites(): Promise<SiteStatus[]>;
+  open(url: string, options?: { mode?: BrowserMode }): Promise<{ tabId: number }>;
+  navigate(tabId: number, url: string): Promise<void>;
+  eval<T = unknown, A = unknown>(tabId: number, script: string | ((args: A) => T | Promise<T>), args?: A, options?: { timeoutMs?: number }): Promise<T>;
+  wait(tabId: number, options?: { timeoutMs?: number }): Promise<{ url: string; title: string | null }>;
+  info(tabId: number): Promise<BrowserTabInfo>;
+  show(tabId: number, message?: string): Promise<void>;
+  hide(tabId: number): Promise<void>;
+  close(tabId: number): Promise<void>;
+  signIn(host: string, options?: { message?: string }): Promise<{ tabId: number; signedIn: boolean | null; expiresAt?: number | null; reason?: 'closed' | 'timeout' }>;
+}
+
 export class AgenttyError extends Error {
   code: number;
 }
@@ -140,6 +173,9 @@ export interface Plugin {
   listWorkspaces(): Promise<WorkspaceInfo[]>;
   openUrl(url: string): Promise<void>;
   revealPath(path: string): Promise<void>;
+  /** The in-app browser on the manifest's `browser.sites`. Needs `browser.control`. */
+  browser: Browser;
+  onBrowserHidden(handler: (event: { tabId: number }) => unknown): Plugin;
   log(...parts: unknown[]): void;
   start(): Plugin;
 }

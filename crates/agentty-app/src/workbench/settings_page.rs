@@ -602,6 +602,7 @@ impl Workbench {
                             t(cx, "settings.browser_clear_button"),
                             cx.listener(|this, _: &ClickEvent, _, cx| {
                                 crate::webview::clear_website_data();
+                                crate::browser_keeper::forget_all();
                                 this.set_status(t(cx, "settings.browser_cleared"), cx);
                             }),
                         ),

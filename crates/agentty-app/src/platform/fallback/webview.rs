@@ -54,6 +54,10 @@ impl WebView {
         None
     }
 
+    pub fn new_background(_window: &gpui::Window, _prefs: &crate::settings::BrowserSettings) -> Option<Self> {
+        None
+    }
+
     pub fn id(&self) -> usize {
         0
     }
@@ -92,6 +96,10 @@ impl WebView {
         reply(Err(UNSUPPORTED.into()));
     }
 
+    pub fn call_in_world(&self, _body: &str, _args: &[(&str, &str)], _world: Option<&str>, reply: Reply) {
+        reply(Err(UNSUPPORTED.into()));
+    }
+
     pub fn snapshot_png(&self, _path: std::path::PathBuf, reply: Reply) {
         reply(Err(UNSUPPORTED.into()));
     }
@@ -109,7 +117,29 @@ impl WebView {
     pub fn set_zoom(&mut self, _zoom: f64) {}
 
     pub fn hide(&mut self) {}
+
+    pub fn park(&mut self) {}
 }
+
+/// One cookie of the in-app browser (there is none on this platform).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Cookie {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    pub expires: Option<f64>,
+    pub secure: bool,
+    pub http_only: bool,
+    pub same_site: Option<String>,
+}
+
+pub fn cookies(_keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Cookie>) + 'static) {
+    reply(Vec::new());
+}
+
+pub fn set_cookies(_cookies: &[Cookie]) {}
 
 pub fn take_key_commands(_views: &[usize]) -> Vec<(usize, BrowserKey)> {
     Vec::new()
