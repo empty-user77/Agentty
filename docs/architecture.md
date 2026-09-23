@@ -296,6 +296,23 @@ connection and records method, path (query values masked) and status, never head
 in-memory ring. Once started the listener lives as long as the app, because panes keep pointing at it; stopping capture
 only stops recording. An upstream proxy from the app's own environment is chained.
 
+## Monitoring → Worktrees and Disk
+
+`agentty-bridge/src/inventory.rs` finds repositories under the home folder (four folders deep, skipping `Library`,
+`node_modules`, `target` and the like), through Agentty's own worktree folder and from the folders open in the app, then
+asks each for `git worktree list`. Per tree: `git status --porcelain` (uncommitted files, and the newest of their
+modification times), the last commit time, and commits the default branch lacks; a second pass asks `gh pr list` once
+per GitHub repository. A pull request merged at exactly the tree's commit makes its branch removable with `branch -D`,
+since a squash merge is invisible to `branch -d`. Removal never touches a project's own tree or a tree an open pane is
+in, and skips trees with uncommitted changes unless the user ticked that.
+
+`agentty-bridge/src/disk.rs` measures allocated blocks without following links (hard links counted once), in parallel,
+and never enters `~/Library/Containers`, `Group Containers` or cloud folders (macOS would ask for permission). What it
+offers to clear is fixed: build output next to its project file (`target` beside `Cargo.toml` with Cargo's
+`CACHEDIR.TAG`, `.next` beside `package.json`, …), the tools' own cache folders (npm, Yarn, Cargo registry, Gradle,
+Homebrew, …), the trash and logs — never dependencies such as `node_modules` or `~/.m2`. `disk::clean` checks an item
+against the same rules again before anything is removed, so nothing it did not find itself can be passed to it.
+
 ## Status bar layout and onboarding
 
 `hud.rs` holds the order and visibility of the AI CLI status bar items (`settings.hud`, read leniently so an unknown

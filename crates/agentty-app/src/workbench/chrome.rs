@@ -302,7 +302,7 @@ impl Workbench {
                     .child(item(
                         "activity-usage",
                         "chart-column",
-                        matches!(self.page, Some(Page::Usage | Page::Processes | Page::Proxy)),
+                        matches!(self.page, Some(Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk)),
                         "page.monitoring",
                         Box::new(|this, cx| this.open_page(Page::Usage, cx)),
                         cx,
@@ -1637,6 +1637,8 @@ impl Workbench {
                     (Page::Usage, None, t(cx, "page.usage")),
                     (Page::Processes, None, t(cx, "page.processes")),
                     (Page::Proxy, None, t(cx, "page.proxy")),
+                    (Page::Worktrees, None, t(cx, "page.worktrees")),
+                    (Page::Disk, None, t(cx, "page.disk")),
                     (Page::Extensions, Some("skills"), t(cx, "ext.skills")),
                     (Page::Extensions, Some("agents"), t(cx, "ext.agents")),
                     (Page::Extensions, Some("mcp"), t(cx, "ext.mcp")),
@@ -1649,7 +1651,7 @@ impl Workbench {
                 tabs
             };
             let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
-                Page::Usage | Page::Processes | Page::Proxy | Page::Extensions => monitoring(),
+                Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Extensions => monitoring(),
                 Page::Git => vec![(page, None, t(cx, "page.git"))],
                 Page::Flow => vec![(page, None, t(cx, "page.flow"))],
                 Page::Settings => vec![(page, None, t(cx, "page.settings"))],

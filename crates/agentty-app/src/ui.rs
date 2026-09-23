@@ -2,7 +2,9 @@
 
 use crate::launch::PaneKind;
 use crate::theme::{hex, hex_alpha, Chrome};
-use gpui::{div, prelude::*, px, svg, AnimationExt, App, ClickEvent, Div, ElementId, Hsla, SharedString, Stateful, Styled, Svg, Window};
+use gpui::{
+    div, prelude::*, px, svg, AnimationExt, App, ClickEvent, Div, ElementId, Hsla, Pixels, SharedString, Stateful, Styled, Svg, Window,
+};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -580,29 +582,192 @@ pub fn money(value: f64) -> String {
     }
 }
 
-/// Thin overlay scrollbar for a scroll container (place as the last child of a `relative()`
-/// container that tracks `handle`). Drawn at paint time from the live scroll offset, so it
-/// never lags a frame behind and costs nothing when content fits.
-/// [`scrollbar`] for a virtual `list`.
-pub fn list_scrollbar(state: gpui::ListState) -> impl IntoElement {
-    let bar = gpui::canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let viewport = state.viewport_bounds();
-            let max_y = f32::from(state.max_offset_for_scrollbar().height);
-            let height = f32::from(viewport.size.height);
-            if height <= 0. || max_y <= 0.5 {
+/// What a floating scrollbar scrolls: a scroll container or a virtual `list`.
+#[derive(Clone)]
+enum Scrolled {
+    Handle(gpui::ScrollHandle),
+    List(gpui::ListState),
+}
+
+impl Scrolled {
+    fn viewport(&self) -> gpui::Bounds<Pixels> {
+        match self {
+            Scrolled::Handle(handle) => handle.bounds(),
+            Scrolled::List(state) => state.viewport_bounds(),
+        }
+    }
+
+    /// How far it scrolls along `vertical` / across.
+    fn max(&self, vertical: bool) -> f32 {
+        let max = match self {
+            Scrolled::Handle(handle) => handle.max_offset(),
+            Scrolled::List(state) => state.max_offset_for_scrollbar(),
+        };
+        f32::from(if vertical { max.height } else { max.width })
+    }
+
+    /// How far it is scrolled now (positive).
+    fn scrolled(&self, vertical: bool) -> f32 {
+        let offset = match self {
+            Scrolled::Handle(handle) => handle.offset(),
+            Scrolled::List(state) => state.scroll_px_offset_for_scrollbar(),
+        };
+        -f32::from(if vertical { offset.y } else { offset.x })
+    }
+
+    fn scroll_to(&self, vertical: bool, value: f32) {
+        let value = value.clamp(0., self.max(vertical));
+        match self {
+            Scrolled::Handle(handle) => {
+                let mut offset = handle.offset();
+                if vertical {
+                    offset.y = px(-value);
+                } else {
+                    offset.x = px(-value);
+                }
+                handle.set_offset(offset);
+            }
+            Scrolled::List(state) => state.set_offset_from_scrollbar(gpui::point(px(0.), px(value))),
+        }
+    }
+
+    fn drag_started(&self) {
+        if let Scrolled::List(state) = self {
+            state.scrollbar_drag_started();
+        }
+    }
+
+    fn drag_ended(&self) {
+        if let Scrolled::List(state) = self {
+            state.scrollbar_drag_ended();
+        }
+    }
+}
+
+thread_local! {
+    /// The bar being dragged — by where it is on screen, since the element is built anew every
+    /// frame — and where on its thumb the pointer took hold.
+    static SCROLLBAR_DRAG: std::cell::Cell<Option<(gpui::Bounds<Pixels>, f32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Thumb of a bar `length` long: (start along the track, size).
+fn thumb(scrolled: &Scrolled, vertical: bool, track: f32) -> Option<(f32, f32)> {
+    let max = scrolled.max(vertical);
+    if track <= 0. || max <= 0.5 {
+        return None;
+    }
+    let size = (track * track / (track + max)).max(24.);
+    let progress = (scrolled.scrolled(vertical) / max).clamp(0., 1.);
+    Some(((track - size) * progress, size))
+}
+
+/// A floating bar along the right (`vertical`) or bottom edge. The thumb only shows while the
+/// pointer is inside the area it belongs to (or while it is dragged); dragging it scrolls, and a
+/// click on the track jumps there. Drawn at paint time from the live scroll offset, so it never
+/// lags a frame behind and costs nothing when the content fits.
+fn floating_bar(scrolled: Scrolled, vertical: bool) -> gpui::Div {
+    let dragging = |bounds: gpui::Bounds<Pixels>| SCROLLBAR_DRAG.with(|d| d.get()).is_some_and(|(b, _)| b == bounds);
+    // Where the thumb is along the viewport, in window coordinates.
+    let geometry = |scrolled: &Scrolled, vertical: bool| {
+        let viewport = scrolled.viewport();
+        let (origin, track) = if vertical {
+            (f32::from(viewport.origin.y), f32::from(viewport.size.height))
+        } else {
+            (f32::from(viewport.origin.x), f32::from(viewport.size.width))
+        };
+        thumb(scrolled, vertical, track).map(|(start, size)| (origin, track, origin + start, size))
+    };
+    let paint_thumb = move |bounds: gpui::Bounds<Pixels>, scrolled: &Scrolled, window: &mut Window| {
+        let Some((_, _, start, size)) = geometry(scrolled, vertical) else { return };
+        let active = dragging(bounds);
+        let alpha = if active { 0.32 } else { 0.18 };
+        let rect = if vertical {
+            gpui::Bounds::new(gpui::point(bounds.right() - px(8.), px(start + 2.)), gpui::size(px(5.), px(size - 4.)))
+        } else {
+            gpui::Bounds::new(gpui::point(px(start + 2.), bounds.bottom() - px(8.)), gpui::size(px(size - 4.), px(5.)))
+        };
+        window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, alpha)).corner_radii(px(3.)));
+    };
+
+    let shown = {
+        let scrolled = scrolled.clone();
+        gpui::canvas(|_, _, _| {}, move |bounds, _, window, _| paint_thumb(bounds, &scrolled, window)).size_full()
+    };
+    // Takes the pointer whether or not the thumb shows, so a drag that leaves the area goes on.
+    let handle = gpui::canvas(
+        |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
+        move |bounds, hitbox, window, _| {
+            if geometry(&scrolled, vertical).is_none() {
                 return;
             }
-            let thumb = (height * height / (height + max_y)).max(24.);
-            let progress = (-f32::from(state.scroll_px_offset_for_scrollbar().y) / max_y).clamp(0., 1.);
-            let top = f32::from(viewport.origin.y) + (height - thumb) * progress;
-            let rect = gpui::Bounds::new(gpui::point(bounds.right() - px(8.), px(top + 2.)), gpui::size(px(5.), px(thumb - 4.)));
-            window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, 0.18)).corner_radii(px(3.)));
+            if dragging(bounds) {
+                // Hidden with the rest of the area otherwise; keep it in sight while it moves.
+                paint_thumb(bounds, &scrolled, window);
+            }
+            window.set_cursor_style(gpui::CursorStyle::Arrow, &hitbox);
+            let along = move |position: gpui::Point<Pixels>| f32::from(if vertical { position.y } else { position.x });
+            let down = scrolled.clone();
+            window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                if phase != gpui::DispatchPhase::Capture || event.button != gpui::MouseButton::Left || !hitbox.is_hovered(window) {
+                    return;
+                }
+                let Some((origin, track, start, size)) = geometry(&down, vertical) else { return };
+                let at = along(event.position);
+                // On the thumb: hold it where it was taken. On the track: centre it there.
+                let grab = if (start..start + size).contains(&at) { at - start } else { size / 2. };
+                let max = down.max(vertical);
+                down.drag_started();
+                down.scroll_to(vertical, (at - grab - origin) / (track - size).max(1.) * max);
+                SCROLLBAR_DRAG.with(|d| d.set(Some((bounds, grab))));
+                cx.stop_propagation();
+                window.refresh();
+            });
+            let moved = scrolled.clone();
+            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, cx| {
+                if phase != gpui::DispatchPhase::Capture || !dragging(bounds) {
+                    return;
+                }
+                let Some((grab_bounds, grab)) = SCROLLBAR_DRAG.with(|d| d.get()) else { return };
+                if grab_bounds != bounds || !event.dragging() {
+                    return;
+                }
+                let Some((origin, track, _, size)) = geometry(&moved, vertical) else { return };
+                let max = moved.max(vertical);
+                moved.scroll_to(vertical, (along(event.position) - grab - origin) / (track - size).max(1.) * max);
+                cx.stop_propagation();
+                window.refresh();
+            });
+            let up = scrolled.clone();
+            window.on_mouse_event(move |_: &gpui::MouseUpEvent, phase, window, cx| {
+                if phase != gpui::DispatchPhase::Capture || !dragging(bounds) {
+                    return;
+                }
+                SCROLLBAR_DRAG.with(|d| d.set(None));
+                up.drag_ended();
+                cx.stop_propagation();
+                window.refresh();
+            });
         },
     )
-    .size_full();
-    hidden_until_pointed_at(bar).absolute().top_0().right_0().h_full().w(px(10.))
+    .absolute()
+    .inset_0();
+    let bar = div().size_full().relative().child(hidden_until_pointed_at(shown).size_full()).child(handle);
+    if vertical {
+        bar.absolute().top_0().right_0().h_full().w(px(10.))
+    } else {
+        bar.absolute().left_0().bottom_0().w_full().h(px(10.))
+    }
+}
+
+/// Thin overlay scrollbar for a scroll container (place as the last child of a `relative()`
+/// container that tracks `handle`).
+pub fn scrollbar(handle: gpui::ScrollHandle) -> impl IntoElement {
+    floating_bar(Scrolled::Handle(handle), true)
+}
+
+/// [`scrollbar`] for a virtual `list`.
+pub fn list_scrollbar(state: gpui::ListState) -> impl IntoElement {
+    floating_bar(Scrolled::List(state), true)
 }
 
 /// The group a floating scrollbar watches: it stays out of sight until the pointer is somewhere
@@ -615,50 +780,10 @@ fn hidden_until_pointed_at(bar: impl IntoElement) -> gpui::Div {
     div().invisible().group_hover(SCROLL_GROUP, |s| s.visible()).child(bar)
 }
 
-pub fn scrollbar(handle: gpui::ScrollHandle) -> impl IntoElement {
-    let bar = gpui::canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let viewport = handle.bounds();
-            let max = handle.max_offset();
-            let (height, max_y) = (f32::from(viewport.size.height), f32::from(max.height));
-            if height <= 0. || max_y <= 0.5 {
-                return;
-            }
-            let content = height + max_y;
-            let thumb = (height * height / content).max(24.);
-            let progress = (-f32::from(handle.offset().y) / max_y).clamp(0., 1.);
-            let top = f32::from(viewport.origin.y) + (height - thumb) * progress;
-            let rect = gpui::Bounds::new(gpui::point(bounds.right() - px(8.), px(top + 2.)), gpui::size(px(5.), px(thumb - 4.)));
-            window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, 0.18)).corner_radii(px(3.)));
-        },
-    )
-    .size_full();
-    hidden_until_pointed_at(bar).absolute().top_0().right_0().h_full().w(px(10.))
-}
-
 /// The same bar along the bottom, for a table that is wider than its pane: without it a grid of
 /// many columns gives no sign that there is more to the right.
 pub fn scrollbar_h(handle: gpui::ScrollHandle) -> impl IntoElement {
-    let bar = gpui::canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let viewport = handle.bounds();
-            let max = handle.max_offset();
-            let (width, max_x) = (f32::from(viewport.size.width), f32::from(max.width));
-            if width <= 0. || max_x <= 0.5 {
-                return;
-            }
-            let content = width + max_x;
-            let thumb = (width * width / content).max(24.);
-            let progress = (-f32::from(handle.offset().x) / max_x).clamp(0., 1.);
-            let left = f32::from(viewport.origin.x) + (width - thumb) * progress;
-            let rect = gpui::Bounds::new(gpui::point(px(left + 2.), bounds.bottom() - px(8.)), gpui::size(px(thumb - 4.), px(5.)));
-            window.paint_quad(gpui::fill(rect, hex_alpha(0xffffff, 0.18)).corner_radii(px(3.)));
-        },
-    )
-    .size_full();
-    hidden_until_pointed_at(bar).absolute().left_0().bottom_0().w_full().h(px(10.))
+    floating_bar(Scrolled::Handle(handle), false)
 }
 
 #[cfg(test)]

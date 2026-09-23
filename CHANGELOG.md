@@ -15,6 +15,14 @@ All notable changes to this project are documented here. The format follows
   project on the account with the repository it deploys from drawn as a code → build → live
   diagram. Both logins can be done from there, before there is anything to publish. A folder that
   can be published still opens on the publishing steps, and the two are a tab apart.
+- Monitoring → Worktrees lists every git worktree on this computer, grouped by project: when it was
+  last worked on, uncommitted changes, commits not merged yet, its pull request and its size.
+  Several can be removed at once, with their branches when nothing on them would be lost; the
+  project folder itself and worktrees open in a pane are never removed.
+- Monitoring → Disk shows how full the disk is, which folders take the room, and what can be
+  cleared without anything noticing: each project's build output ("Remove build junk") and caches
+  ("Clear cache"), the development tools' caches, the trash and logs. Dependencies and anything a
+  project needs to run are never offered.
 
 ### Changed
 - The first-run setup is shorter, and now includes the terminal font.
@@ -27,6 +35,8 @@ All notable changes to this project are documented here. The format follows
   exists. A login is asked for only when a repository has to be created.
 
 ### Fixed
+- The menu behind a plugin panel's layout button drew under the panel's contents; it is on top now.
+- Scrollbars can be dragged, and a click on the track jumps there.
 - A split pane's bar no longer cuts the model's name: "Opus 5.5 (1M context)" came out as "Opus 5"
   once the pane was narrow. The full name and version always show; short of room the window reads
   "(1M)" and the context meter keeps only its figure, while the folder and branch give way — and the
