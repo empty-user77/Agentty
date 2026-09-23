@@ -298,6 +298,12 @@ pub struct Settings {
     /// it costs energy, so the user turns it on for a long unattended run.
     #[serde(default)]
     pub prevent_sleep: bool,
+    /// How long "Prevent sleep" stays on once turned on: 0 = always (the default), else hours.
+    #[serde(default)]
+    pub prevent_sleep_hours: u32,
+    /// When (Unix seconds) a timed "Prevent sleep" turns itself off; 0 while it is always on or off.
+    #[serde(default)]
+    pub prevent_sleep_until: u64,
     /// The first-launch system check ran (Windows / Linux).
     pub setup_check_shown: bool,
     /// The first-run onboarding was finished or skipped.
@@ -619,6 +625,8 @@ impl Default for Settings {
             sort_finished_to_top: false,
             workspace_search_bar: true,
             prevent_sleep: false,
+            prevent_sleep_hours: 0,
+            prevent_sleep_until: 0,
             setup_check_shown: false,
             onboarding_done: false,
             update_later_version: String::new(),
@@ -628,6 +636,27 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Longest "Prevent sleep" time that can be set, in hours.
+    pub const PREVENT_SLEEP_MAX_HOURS: u32 = 72;
+
+    /// Turns "Prevent sleep" on or off; a timed one counts from now.
+    pub fn set_prevent_sleep(&mut self, on: bool, now: u64) {
+        self.prevent_sleep = on;
+        self.prevent_sleep_until = if on && self.prevent_sleep_hours > 0 { now + u64::from(self.prevent_sleep_hours) * 3600 } else { 0 };
+    }
+
+    /// "Always" (0) or a number of hours; while it is on, the new time counts from now.
+    pub fn set_prevent_sleep_hours(&mut self, hours: u32, now: u64) {
+        self.prevent_sleep_hours = hours.min(Self::PREVENT_SLEEP_MAX_HOURS);
+        let on = self.prevent_sleep;
+        self.set_prevent_sleep(on, now);
+    }
+
+    /// Seconds a timed "Prevent sleep" has left; `None` when it is off or always on.
+    pub fn prevent_sleep_left(&self, now: u64) -> Option<u64> {
+        (self.prevent_sleep && self.prevent_sleep_until > 0).then(|| self.prevent_sleep_until.saturating_sub(now))
+    }
+
     pub fn path() -> PathBuf {
         agentty_bridge::fsutil::data_dir().join("settings.json")
     }
@@ -762,6 +791,31 @@ pub fn terminal_theme(cx: &App) -> &TerminalTheme {
 }
 
 /// Applies a change, persists it and repaints every window.
+/// Seconds since the Unix epoch, for settings that remember a moment.
+pub fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Turns a timed "Prevent sleep" off once its time is up — also when that happened while Agentty
+/// was closed — and keeps the time left on screen fresh. Checked every 30 seconds.
+pub fn start_prevent_sleep_timer(cx: &mut App) {
+    cx.spawn(async move |cx| loop {
+        let running = cx.update(|cx| {
+            let now = unix_now();
+            match settings(cx).prevent_sleep_left(now) {
+                Some(0) => update_settings(cx, move |s| s.set_prevent_sleep(false, now)),
+                Some(_) => cx.refresh_windows(),
+                None => {}
+            }
+        });
+        if running.is_err() {
+            break;
+        }
+        cx.background_executor().timer(std::time::Duration::from_secs(30)).await;
+    })
+    .detach();
+}
+
 pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     cx.update_global::<SettingsStore, _>(|store, _| {
         let aliases_before = store.settings.aliases.clone();
@@ -810,6 +864,31 @@ mod browser_settings_tests {
         // Once migrated, picking the bundled font again is a choice, and it is kept.
         let current = Settings { font_family: BUNDLED_FONT.into(), ..Settings::default() }.migrate();
         assert_eq!(current.font_family, BUNDLED_FONT);
+    }
+
+    #[test]
+    fn timed_prevent_sleep_counts_from_when_it_is_turned_on() {
+        let mut s = Settings::default();
+        // Always by default.
+        assert_eq!(s.prevent_sleep_hours, 0);
+        s.set_prevent_sleep(true, 1_000);
+        assert_eq!((s.prevent_sleep_until, s.prevent_sleep_left(1_000)), (0, None));
+        // Two hours, while on: counts from now.
+        s.set_prevent_sleep_hours(2, 5_000);
+        assert_eq!(s.prevent_sleep_until, 5_000 + 7_200);
+        assert_eq!(s.prevent_sleep_left(6_000), Some(6_200));
+        assert_eq!(s.prevent_sleep_left(20_000), Some(0));
+        // Off and on again: a fresh two hours.
+        s.set_prevent_sleep(false, 7_000);
+        assert_eq!((s.prevent_sleep_until, s.prevent_sleep_left(7_000)), (0, None));
+        s.set_prevent_sleep(true, 9_000);
+        assert_eq!(s.prevent_sleep_until, 9_000 + 7_200);
+        // Back to always.
+        s.set_prevent_sleep_hours(0, 9_500);
+        assert_eq!(s.prevent_sleep_until, 0);
+        // Hours are capped.
+        s.set_prevent_sleep_hours(500, 0);
+        assert_eq!(s.prevent_sleep_hours, Settings::PREVENT_SLEEP_MAX_HOURS);
     }
 
     #[test]

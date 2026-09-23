@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Settings → General → Prevent sleep can stay on for a set number of hours (1–72) instead of
+  always; it then turns itself off, also when the time ran out while Agentty was closed. The time
+  left is shown under the switch. "Always" stays the default.
+
 ### Changed
 - "Later" in the update popup keeps it away for 24 hours, across restarts; a newer version is
   announced right away. Meanwhile the update shows in the status bar in place of the version

@@ -625,6 +625,7 @@ fn main() {
         // New windows never take the slot of a saved (open or recently closed) one.
         NEXT_WINDOW_SLOT.fetch_max(workbench::next_free_window_slot(), std::sync::atomic::Ordering::Relaxed);
         cx.on_action(|_: &NewWindow, cx| new_window(cx));
+        settings::start_prevent_sleep_timer(cx);
         metrics::start_uploads(cx);
         metrics::track(cx, "app_launched", serde_json::json!({ "windows": workbenches(cx).len() }));
 
