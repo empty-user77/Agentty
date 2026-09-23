@@ -40,8 +40,8 @@ Written in Rust with [GPUI](https://gpui.rs) and `alacritty_terminal`. No Electr
   Telegram when you are away.
 - **Sessions share context** — drag a line between two agents to hand a conversation over, keep it live in both
   directions, or migrate a session from Claude Code to Codex and back.
-- **Parallel work without collisions** — a second agent in the same project starts in its own git worktree on a new
-  branch, and an agent can split work into several sessions at once once you confirm.
+- **Parallel work without collisions** — a second agent in the same project can start in its own git worktree on a new
+  branch (or join the one in use — you are asked), and an agent can split work into several sessions at once once you confirm.
 - **More than a terminal** — files panel with an editor, a GitHub Desktop-style Git page, a Docker panel, a database
   page, an in-app browser, usage and cost monitoring, and an extensions page for skills, subagents and MCP servers.
 - **Careful with your data** — agents read databases inside a read-only transaction and every write waits for your

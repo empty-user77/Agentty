@@ -428,20 +428,31 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
             let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
             let cwd = std::path::PathBuf::from(request["cwd"].as_str().unwrap_or_default());
             let label = request["label"].as_str().unwrap_or_default();
-            let response = if cwd.is_absolute() && is_agent_label(label) {
-                let (reply, answer) = std::sync::mpsc::channel();
-                let message = SocketMessage::Worktree(WorktreeRequest { pane, cwd, label: label.to_string(), reply });
-                if tx.unbounded_send(message).is_err() {
-                    return;
+            if !(cwd.is_absolute() && is_agent_label(label)) {
+                if let Some(writer) = writer.as_mut() {
+                    use std::io::Write;
+                    let _ = writeln!(writer, "{}", browser_reply(Err("bad request".into())));
                 }
-                // Creating a tree is a `git worktree add`: seconds at most.
-                answer.recv_timeout(Duration::from_secs(30)).unwrap_or_else(|_| browser_reply(Err("timed out".into())))
-            } else {
-                browser_reply(Err("bad request".into()))
-            };
-            if let Some(writer) = writer.as_mut() {
-                use std::io::Write;
-                let _ = writeln!(writer, "{response}");
+                continue;
+            }
+            let (reply, answer) = std::sync::mpsc::channel();
+            let message = SocketMessage::Worktree(WorktreeRequest { pane, cwd, label: label.to_string(), reply });
+            if tx.unbounded_send(message).is_err() {
+                return;
+            }
+            // Creating a tree is a `git worktree add`: seconds at most. When the user is asked which
+            // tree to use, a first line says so and the answer takes as long as they do.
+            let mut wait = Duration::from_secs(30);
+            loop {
+                let response = answer.recv_timeout(wait).unwrap_or_else(|_| browser_reply(Err("timed out".into())));
+                if let Some(writer) = writer.as_mut() {
+                    use std::io::Write;
+                    let _ = writeln!(writer, "{response}");
+                }
+                if !is_asking(&response) {
+                    break;
+                }
+                wait = ASK_WAIT;
             }
             continue;
         }
@@ -519,6 +530,14 @@ pub fn is_agent_label(label: &str) -> bool {
     matches!(label, "claude" | "codex")
 }
 
+/// How long an agent typed into a shell waits for the user to pick its working tree.
+const ASK_WAIT: Duration = Duration::from_secs(600);
+
+/// A reply that only says the user is being asked; the real answer follows on the next line.
+fn is_asking(reply: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(reply).is_ok_and(|v| v["result"]["asking"] == true)
+}
+
 /// `agentty worktree-for <claude|codex>`: run by the shell wrappers right before an agent starts
 /// in a pane. Prints the working tree to start in when another agent already works in this folder
 /// (Agentty created it), nothing otherwise. Always exits 0 and stays quiet on errors, so the agent
@@ -540,9 +559,21 @@ pub fn worktree_for(args: &[String]) -> i32 {
     // command line. Agentty answers within this, or the agent starts where it was typed.
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
+    let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    let _ = BufReader::new(stream).read_line(&mut line);
-    let reply: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
+    let _ = reader.read_line(&mut line);
+    let mut reply: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
+    // Another agent already works here and the user is asked where this one goes: say so under
+    // the command, and wait for the choice (Agentty's own dialog), not for a machine.
+    if reply["result"]["asking"] == true {
+        if let Some(message) = reply["result"]["message"].as_str() {
+            eprintln!("{message}");
+        }
+        let _ = reader.get_ref().set_read_timeout(Some(ASK_WAIT));
+        line.clear();
+        let _ = reader.read_line(&mut line);
+        reply = serde_json::from_str(line.trim()).unwrap_or_default();
+    }
     if let Some(path) = reply["result"]["path"].as_str() {
         if let Some(message) = reply["result"]["message"].as_str() {
             eprintln!("{message}");
@@ -599,6 +630,17 @@ pub fn forward_signal(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_question_to_the_user_is_told_apart_from_the_answer() {
+        // The wrapper keeps waiting after "asking", and starts the agent on anything else.
+        let asking = browser_reply(Ok(serde_json::json!({ "asking": true, "message": "choose" }).to_string()));
+        assert!(super::is_asking(&asking));
+        assert!(!super::is_asking(&browser_reply(Ok("null".into()))));
+        assert!(!super::is_asking(&browser_reply(Ok(serde_json::json!({ "path": "/tmp/tree" }).to_string()))));
+        assert!(!super::is_asking(&browser_reply(Err("timed out".into()))));
+        assert!(!super::is_asking("not json"));
+    }
+
     use super::*;
 
     /// Tests run in one process, in parallel: each gets a socket of its own.

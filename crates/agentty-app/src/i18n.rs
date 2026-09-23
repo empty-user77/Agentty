@@ -316,7 +316,27 @@ strings! {
     "processes.footnote" => ["Active: using CPU or working in Agentty · Waiting: idle in a terminal · Inactive: stopped, or left running without a terminal. Totals include each agent's child processes (MCP servers, shells, tools). Click a row for its processes.", "활성: CPU를 쓰거나 Agentty에서 작업 중 · 대기: 터미널에서 유휴 상태 · 비활성: 정지됐거나 터미널 없이 남아 있음. 합계에는 각 에이전트의 하위 프로세스(MCP 서버, 셸, 도구)가 포함됩니다. 행을 누르면 프로세스 목록이 펼쳐집니다.", "アクティブ: CPU 使用中または Agentty で作業中・待機: 端末でアイドル・非アクティブ: 停止、または端末なしで残存。合計には各エージェントの子プロセス（MCP サーバー、シェル、ツール）を含みます。行をクリックするとプロセスを表示します。", "活跃：正在使用 CPU 或在 Agentty 中工作 · 等待：在终端中空闲 · 不活跃：已停止或在无终端的情况下残留。合计包含各智能体的子进程（MCP 服务器、Shell、工具）。点击行可展开进程列表。"],
     "page.usage" => ["AI Usage", "AI 사용량", "AI 使用量", "AI 用量"],
     "settings.auto_worktree" => ["A working tree per AI session", "AI 세션마다 별도 워크트리 사용", "AI セッションごとにワークツリーを分ける", "每个 AI 会话使用独立工作树"],
-    "settings.auto_worktree_hint" => ["Reopening a project already in use starts in a working tree of its own.", "이미 작업 중인 프로젝트를 다시 열면 별도 워크트리에서 시작합니다.", "すでに作業中のプロジェクトを再度開くと、専用のワークツリーで始めます。", "再次打开正在使用的项目时，在独立的工作树中开始。"],
+    "settings.auto_worktree_hint" => ["Opening an AI session where another is at work asks: a new working tree, or the existing one.", "이미 AI가 작업 중인 곳에서 새 세션을 열면, 새 워크트리를 만들지 기존 워크트리를 열지 묻습니다.", "すでに AI が作業中の場所でセッションを開くと、新しいワークツリーを作るか既存のものを開くか尋ねます。", "在已有 AI 工作的地方打开会话时，会询问是新建工作树还是打开现有的。"],
+    "worktree.ask_title" => [
+        "An agent already works in this worktree",
+        "이 워크트리에서 이미 AI가 작업 중이에요",
+        "このワークツリーではすでに AI が作業中です",
+        "此工作树中已有 AI 在工作"
+    ],
+    "worktree.ask_body" => [
+        "{tree} — a new worktree keeps the two sessions' files apart; the existing one lets them look at and work on the same files.",
+        "{tree} — 새 워크트리를 만들면 두 세션의 파일이 겹치지 않고, 기존 워크트리를 열면 같은 파일을 함께 보거나 작업합니다.",
+        "{tree} — 新しいワークツリーを作ると 2 つのセッションのファイルは分かれ、既存のワークツリーを開くと同じファイルを一緒に見たり作業したりできます。",
+        "{tree} — 新建工作树可让两个会话的文件互不干扰；打开现有工作树则可一起查看或处理相同的文件。"
+    ],
+    "worktree.ask_new" => ["Create a new worktree", "새 워크트리 만들기", "新しいワークツリーを作成", "新建工作树"],
+    "worktree.ask_existing" => ["Open the existing worktree", "기존 워크트리 열기", "既存のワークツリーを開く", "打开现有工作树"],
+    "worktree.ask_shell" => [
+        "Choose in the Agentty window where this session starts.",
+        "이 세션을 어디서 시작할지 Agentty 창에서 골라주세요.",
+        "このセッションをどこで始めるか、Agentty のウィンドウで選んでください。",
+        "请在 Agentty 窗口中选择此会话从哪里开始。"
+    ],
     "worktree.creating" => ["Another session works in this project — creating a working tree…", "이 프로젝트에서 다른 세션이 작업 중입니다 — 워크트리를 만드는 중…", "このプロジェクトでは別のセッションが作業中です — ワークツリーを作成中…", "此项目已有其他会话在工作 — 正在创建工作树…"],
     "settings.agent_tasks" => ["Agents can start parallel tasks", "에이전트가 병렬 작업을 시작할 수 있음", "エージェントが並列タスクを開始できる", "智能体可启动并行任务"],
     "settings.agent_tasks_hint" => ["Lets an agent split work into parallel sessions, with your approval.", "에이전트가 작업을 나눠 병렬 세션으로 실행하도록 허용합니다(승인 필요).", "エージェントが作業を分けて並列セッションで実行できるようにします（承認が必要）。", "允许代理拆分任务并以并行会话运行（需你批准）。"],
@@ -413,7 +433,7 @@ strings! {
     "onboarding.opt_auto_open" => ["Open local servers by themselves", "로컬 서버 자동으로 열기", "ローカルサーバーを自動で開く", "自动打开本地服务器"],
     "onboarding.opt_auto_open_body" => ["npm run dev → its page opens in the in-app browser", "npm run dev 를 실행하면 인앱 브라우저로 바로 열림", "npm run dev を実行するとアプリ内ブラウザで開く", "运行 npm run dev 后在内置浏览器中打开"],
     "onboarding.opt_worktree" => ["A working tree per AI session", "AI 세션마다 별도 워크트리", "AI セッションごとにワークツリー", "每个 AI 会话独立工作树"],
-    "onboarding.opt_worktree_body" => ["Sessions in one project never edit the same files", "같은 프로젝트의 세션끼리 파일이 충돌하지 않게 분리", "同じプロジェクトのセッション同士でファイルが衝突しない", "同一项目的会话不会修改相同文件"],
+    "onboarding.opt_worktree_body" => ["Offer a separate worktree when a session joins another", "이미 작업 중인 곳이면 별도 워크트리를 만들지 물어봄", "作業中の場所なら別のワークツリーを作るか尋ねる", "已有会话在工作时，询问是否新建工作树"],
     "onboarding.opt_stop_servers" => ["Stop servers with their tab", "탭을 닫으면 서버도 종료", "タブを閉じたらサーバーも停止", "关闭标签页时停止服务器"],
     "onboarding.opt_stop_servers_body" => ["Dev servers started in a tab end when it closes", "탭에서 띄운 개발 서버를 함께 종료해 포트를 비움", "タブで起動した開発サーバーを一緒に停止", "同时停止标签页中启动的开发服务器"],
     "onboarding.opt_notify" => ["Notifications", "알림", "通知", "通知"],
@@ -473,7 +493,7 @@ strings! {
     "launcher.target_tab" => ["New tab", "새 탭", "新しいタブ", "新标签页"],
     "launcher.target_right" => ["Split right", "오른쪽 분할", "右に分割", "向右分屏"],
     "launcher.target_down" => ["Split down", "아래 분할", "下に分割", "向下分屏"],
-    "worktree.shared" => ["Another AI session already works in this folder, so the two can overwrite each other's files. Open agents from the + menu (new tab or split) to give each its own working tree.", "이 폴더에서 이미 다른 AI 세션이 작업 중이라 서로의 파일을 덮어쓸 수 있습니다. + 메뉴(새 탭 · 분할)로 에이전트를 열면 세션마다 별도 워크트리에서 시작합니다.", "このフォルダでは別の AI セッションが作業中のため、互いのファイルを上書きする可能性があります。+ メニュー（新しいタブ・分割）からエージェントを開くと、セッションごとに専用のワークツリーで開始します。", "此文件夹中已有其他 AI 会话在工作，两者可能互相覆盖文件。通过 + 菜单（新标签页或分屏）打开代理，每个会话将在独立的工作树中启动。"],
+    "worktree.shared" => ["Another AI session already works in this folder, so the two can overwrite each other's files. Open agents from the + menu (new tab or split) to be asked about a working tree of its own.", "이 폴더에서 이미 다른 AI 세션이 작업 중이라 서로의 파일을 덮어쓸 수 있습니다. + 메뉴(새 탭 · 분할)로 에이전트를 열면 별도 워크트리로 시작할지 물어봅니다.", "このフォルダでは別の AI セッションが作業中のため、互いのファイルを上書きする可能性があります。+ メニュー（新しいタブ・分割）からエージェントを開くと、専用のワークツリーで始めるか尋ねます。", "此文件夹中已有其他 AI 会话在工作，两者可能互相覆盖文件。通过 + 菜单（新标签页或分屏）打开代理时，会询问是否使用独立的工作树。"],
     "docker.title" => ["Docker", "Docker", "Docker", "Docker"],
     "docker.tooltip" => ["Docker containers of this project", "이 프로젝트의 Docker 컨테이너", "このプロジェクトの Docker コンテナ", "此项目的 Docker 容器"],
     "docker.chip_running" => ["{n} running", "{n} 실행 중", "{n} 実行中", "{n} 运行中"],

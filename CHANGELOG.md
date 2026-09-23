@@ -18,6 +18,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - The first-run setup is shorter, and now includes the terminal font.
+- A new AI session opened where another is already at work asks where it goes — "Create a new
+  worktree" or "Open the existing worktree" — instead of always getting a worktree of its own: two
+  sessions on one branch, to look at it or work on it together, is often what is wanted. The same
+  question comes up for `claude` or `codex` typed into a terminal, which waits for the answer.
 - Launch no longer asks for a GitHub login it does not need: a signed-in GitHub CLI is used as it
   stands, and so is an SSH key this computer already has — enough to push to a repository that
   exists. A login is asked for only when a repository has to be created.

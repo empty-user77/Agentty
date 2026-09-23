@@ -17,6 +17,10 @@ pub enum AskAction {
     Delete(SessionInfo),
     /// Continue the session; `compact` asks the agent to compact its context first.
     Resume { session: SessionInfo, compact: bool },
+    /// Start a new agent session in a working tree of its own.
+    NewTree(super::worktrees::TreeRequest),
+    /// Start it in the working tree another agent already works in.
+    SameTree(super::worktrees::TreeRequest),
 }
 
 #[derive(Clone)]
@@ -37,6 +41,9 @@ pub struct Ask {
 
 impl Workbench {
     pub(super) fn ask(&mut self, ask: Ask, cx: &mut Context<Self>) {
+        if let Some(previous) = self.ask.take() {
+            self.release(&previous);
+        }
         self.ask = Some(ask);
         self.launcher_open = false;
         self.notices_open = false;
@@ -44,11 +51,24 @@ impl Workbench {
     }
 
     pub(super) fn dismiss_ask(&mut self, cx: &mut Context<Self>) -> bool {
-        let had = self.ask.take().is_some();
-        if had {
-            cx.notify();
+        let Some(ask) = self.ask.take() else { return false };
+        self.release(&ask);
+        cx.notify();
+        true
+    }
+
+    /// A question closed without an answer: a shell waiting on it starts its agent where it was
+    /// typed, instead of waiting on a dialog that is gone — and, having just been asked, is not
+    /// warned about sharing the tree on top of it.
+    fn release(&mut self, ask: &Ask) {
+        for choice in &ask.choices {
+            if let AskAction::SameTree(request) = &choice.action {
+                if let Some(pane) = request.shell_pane() {
+                    self.shared_tree_warned.insert(pane);
+                }
+                request.stay();
+            }
         }
-        had
     }
 
     fn perform_ask(&mut self, action: AskAction, window: &mut Window, cx: &mut Context<Self>) {
@@ -57,6 +77,8 @@ impl Workbench {
             AskAction::Migrate(session) => self.migrate_session(session, window, cx),
             AskAction::Delete(session) => self.delete_session(session, cx),
             AskAction::Resume { session, compact } => self.resume_session_compacting(&session, compact, window, cx),
+            AskAction::NewTree(request) => self.start_in_new_tree(request, window, cx),
+            AskAction::SameTree(request) => self.start_in_same_tree(request, window, cx),
         }
         cx.notify();
     }

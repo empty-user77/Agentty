@@ -1272,7 +1272,7 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.launch_in_own_tree(&choice, target, &cwd, window, cx) {
+        if self.launch_in_own_tree(&choice, target, &cwd, cx) {
             return;
         }
         self.launch_in(choice, target, cwd, None, window, cx);
