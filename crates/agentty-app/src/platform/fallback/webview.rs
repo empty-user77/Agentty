@@ -106,6 +106,8 @@ impl WebView {
 
     pub fn set_frame(&mut self, _bounds: gpui::Bounds<gpui::Pixels>) {}
 
+    pub fn set_zoom(&mut self, _zoom: f64) {}
+
     pub fn hide(&mut self) {}
 }
 

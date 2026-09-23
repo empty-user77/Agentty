@@ -279,6 +279,15 @@ See [docs/plugins](plugins/README.md) for the plugin developer guide and protoco
 - Live tests against real servers: `AGENTTY_DB_LIVE=1 cargo test -p agentty-db --test live` (containers in the file's
   header).
 
+## In-app browser: responsive mode
+
+`workbench/responsive.rs` lays the page out at a chosen size: the native view is placed over a
+device-sized frame centred on a dark backdrop, and the page zoom (`WKWebView.pageZoom`) is set to
+the scale that fits the frame in the panel, so the page's CSS width stays the device's width. The
+scale holds while an edge is dragged. The bar under the address bar picks a device, types the size
+and rotates it; `agentty browser viewport` / `browser_viewport` and the debug driver's
+`browser-viewport` set it the same way.
+
 ## Local servers
 
 `workbench/servers.rs` samples listening TCP ports under each pane's shell every few seconds (`procinfo::listeners`,

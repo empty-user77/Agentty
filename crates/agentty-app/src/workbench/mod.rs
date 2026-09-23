@@ -39,6 +39,7 @@ mod plugins_page;
 mod processes;
 mod prompt_dialog;
 mod proxy_page;
+mod responsive;
 pub mod resume_hint;
 mod servers;
 mod service_status;
@@ -3503,6 +3504,11 @@ impl Workbench {
             },
             // `browser-net` opens or closes the network panel; `browser-net <id>` opens one call.
             "browser-net" => self.debug_browser_network(argument, cx),
+            // `browser-viewport 375x667|iphone-se|off`: responsive mode, as the toolbar sets it.
+            "browser-viewport" => {
+                let next = if argument == "off" { None } else { responsive::Viewport::parse(argument) };
+                self.set_viewport(next, cx);
+            }
             "link" => self.open_link(argument.to_string(), cx),
             // `agentty-link agentty://…`: as if another app opened the link.
             "agentty-link" => self.open_agentty_link(argument, window, cx),

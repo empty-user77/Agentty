@@ -320,7 +320,8 @@ From here on, work through the harness: delegate to these agents and apply these
 - Polished, modern, responsive UI (mobile and desktop), real copy instead of lorem ipsum, empty
   and error states, accessible contrast and labels.
 - Verify before calling it done: `npm run build` passes, the page has no console errors
-  (`browser_console`), and a screenshot (`browser_screenshot`) looks right.
+  (`browser_console`), and a screenshot (`browser_screenshot`) looks right — at desktop width and
+  at phone and tablet sizes (`browser_viewport` with `iphone-15-pro`, then `ipad-air`, then `off`).
 
 ## 6. Hand-off
 - Write a short README.md (what it is, how to run it) and CLAUDE.md + AGENTS.md with the project

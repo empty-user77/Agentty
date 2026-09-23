@@ -74,6 +74,12 @@ fn tools() -> Vec<Value> {
         ),
         tool("browser_console", "Console output and uncaught errors of the page.", json!({ "clear": { "type": "boolean" } }), &[]),
         tool("browser_screenshot", "Screenshot of what the page shows (returned as an image).", json!({}), &[]),
+        tool(
+            "browser_viewport",
+            "Responsive mode: lay the page out at a device's size to test mobile and tablet layouts. size is WIDTHxHEIGHT (375x667), a device (iphone-se, iphone-15-pro, iphone-15-pro-max, pixel-8, galaxy-s24, ipad-mini, ipad-air, ipad-pro, laptop, desktop) or off; without it, returns the current size.",
+            json!({ "size": s("WIDTHxHEIGHT, a device id, or off") }),
+            &[],
+        ),
         tool("browser_close", "Close the in-app browser.", json!({}), &[]),
     ]
 }
@@ -105,6 +111,7 @@ fn command_for(name: &str, args: &Value) -> Option<(String, Vec<String>)> {
             );
             ("screenshot".into(), vec![std::env::temp_dir().join(name).display().to_string()])
         }
+        "browser_viewport" => ("viewport".into(), list(vec![text("size")])),
         "browser_close" => ("close".into(), vec![]),
         _ => return None,
     })

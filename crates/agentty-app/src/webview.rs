@@ -421,6 +421,8 @@ pub struct WebView {
     /// The navigation and UI delegate (WebKit holds it weakly, so it is owned here).
     delegate: Id,
     visible: bool,
+    /// Page zoom last set (the browser setting, or the responsive mode's scale).
+    zoom: f64,
 }
 
 impl WebView {
@@ -479,7 +481,7 @@ impl WebView {
             let _: () = msg_send![view, setHidden: YES];
             let _: () = msg_send![parent, addSubview: view];
             VIEWS.lock().unwrap_or_else(|e| e.into_inner()).push(view as usize);
-            Some(Self { view, parent, delegate, visible: false })
+            Some(Self { view, parent, delegate, visible: false, zoom: prefs.zoom.clamp(0.3, 3.0) as f64 })
         }
     }
 
@@ -657,6 +659,18 @@ impl WebView {
             if !self.visible {
                 let _: () = msg_send![self.view, setHidden: NO];
                 self.visible = true;
+            }
+        }
+    }
+
+    /// CSS zoom of the page. Responsive mode uses it to lay the page out at a device's width in a
+    /// smaller frame: at zoom `z`, a frame `w` points wide holds `w / z` CSS pixels.
+    pub fn set_zoom(&mut self, zoom: f64) {
+        let zoom = zoom.clamp(0.1, 3.0);
+        if (zoom - self.zoom).abs() > 1e-4 {
+            self.zoom = zoom;
+            unsafe {
+                let _: () = msg_send![self.view, setPageZoom: zoom];
             }
         }
     }

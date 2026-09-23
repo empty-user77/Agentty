@@ -67,6 +67,7 @@ pub const ICONS: &[&str] = &[
     "refresh-cw",
     "rows-2",
     "settings",
+    "smartphone",
     "star",
     "terminal",
     "workflow",

@@ -20,6 +20,10 @@ pub const HELP: &str = "agentty browser — control Agentty's in-app browser
   agentty browser eval <javascript>     run JavaScript (await allowed); prints JSON
   agentty browser console [clear]       console logs and page errors
   agentty browser screenshot [path.png] save what the page shows
+  agentty browser viewport [WxH|device|off]
+                                        responsive mode: lay the page out at a size
+                                        (375x667, iphone-se, ipad-air, …); no argument
+                                        prints the current size
 
 Results are JSON on stdout; errors go to stderr with exit status 1.
 Works in terminals opened by Agentty (uses $AGENTTY_SOCKET).";

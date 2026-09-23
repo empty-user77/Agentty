@@ -182,6 +182,8 @@ pub struct BrowserPanel {
     keys: Vec<(usize, BrowserKey)>,
     calls_scroll: gpui::ScrollHandle,
     detail_scroll: gpui::ScrollHandle,
+    /// Responsive mode: the page at a device's size.
+    pub(super) responsive: super::responsive::Responsive,
     _subscription: Subscription,
 }
 
@@ -372,6 +374,7 @@ impl Workbench {
                 keys: Vec::new(),
                 calls_scroll: gpui::ScrollHandle::new(),
                 detail_scroll: gpui::ScrollHandle::new(),
+                responsive: super::responsive::Responsive::new(window, cx),
                 _subscription: subscription,
             });
             self.watch_browser(cx);
@@ -671,6 +674,8 @@ impl Workbench {
             // Native views swallow mouse events; hide it so the resize drags keep reaching GPUI.
             || self.browser_resizing
             || self.browser_net_drag.is_some()
+            // The device list opens over the page; an edge drag must keep reaching GPUI.
+            || self.browser.as_ref().is_some_and(|b| b.responsive.menu || b.responsive.dragging)
     }
 
     /// Splitter between the terminals and the browser: a real layout column (not overlapping the
@@ -720,20 +725,28 @@ impl Workbench {
                 view.hide();
             }
         }
-        // The native view is positioned over this element after layout.
+        // The native view is positioned over this element after layout. In responsive mode the
+        // element is the device-sized frame and the page zoom lays it out at the device's width.
         let placeholder = webview.clone();
+        let zoom = match browser.responsive.viewport {
+            Some(_) => browser.responsive.scale() as f64,
+            None => settings(cx).browser.zoom as f64,
+        };
         let content = gpui::canvas(
             |_, _, _| {},
             move |bounds, _, _, _| {
                 if let Some(view) = placeholder.borrow_mut().as_mut() {
                     if !covered {
+                        view.set_zoom(zoom);
                         view.set_frame(bounds);
                     }
                 }
             },
         )
         .flex_1()
-        .size_full();
+        .size_full()
+        .into_any_element();
+        let content = self.render_responsive_stage(&browser.responsive, content, cx);
         Some(
             div()
                 .relative()
@@ -745,6 +758,7 @@ impl Workbench {
                 .bg(hex(0xffffff))
                 .child(self.render_browser_tabs(browser, cx))
                 .child(self.render_browser_toolbar(browser, cx))
+                .children(self.render_responsive_bar(&browser.responsive, cx))
                 .child(progress_bar(tab.loading || tab.finishing(), tab.progress))
                 .child(
                     div()
@@ -766,7 +780,10 @@ impl Workbench {
                                     .text_color(hex(Chrome::MUTED))
                                     .child(tab.title.clone()),
                             )
-                        }),
+                        })
+                        // Over everything else in the page area, the native view included (it is
+                        // hidden while the list is open).
+                        .children(self.render_device_menu(cx)),
                 )
                 .when(browser.network_open, |d| d.child(self.render_network_panel(browser, cx)))
                 .child(self.render_network_bar(browser, cx))
@@ -913,6 +930,7 @@ impl Workbench {
                     .text_color(hex(Chrome::BRIGHT))
                     .child(browser.address.clone()),
             )
+            .child(self.render_responsive_button(browser.responsive.viewport.is_some(), cx))
             .child(icon_only(
                 "browser-external",
                 "arrow-up-right",

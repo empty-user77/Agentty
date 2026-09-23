@@ -117,7 +117,7 @@ pub struct CommandAlias {
     pub command: String,
 }
 
-pub const SETTINGS_VERSION: u32 = 4;
+pub const SETTINGS_VERSION: u32 = 5;
 
 pub const BUNDLED_FONT: &str = "JetBrains Mono";
 /// The coding font Korean developers reach for: its Hangul is exactly two cells wide. Not bundled
@@ -692,6 +692,13 @@ impl Settings {
                 self.font_family.clear();
             }
         }
+        if self.settings_version < 5 {
+            // v5: the status bar shows local server ports by default. They were hidden until turned
+            // on, so a saved "hidden" was almost always the old default rather than a choice.
+            for entry in self.hud.iter_mut().filter(|e| e.item == crate::hud::HudItem::Ports) {
+                entry.visible = true;
+            }
+        }
         self.settings_version = SETTINGS_VERSION;
         self
     }
@@ -864,6 +871,20 @@ mod browser_settings_tests {
         // Once migrated, picking the bundled font again is a choice, and it is kept.
         let current = Settings { font_family: BUNDLED_FONT.into(), ..Settings::default() }.migrate();
         assert_eq!(current.font_family, BUNDLED_FONT);
+    }
+
+    #[test]
+    fn server_ports_show_in_the_status_bar_by_default() {
+        let ports = |s: &Settings| s.hud.iter().find(|e| e.item == crate::hud::HudItem::Ports).map(|e| e.visible);
+        assert_eq!(ports(&Settings::default()), Some(true));
+        // Saved hidden by an older version: shown after the upgrade.
+        let mut old = Settings { settings_version: 4, ..Settings::default() };
+        old.hud.iter_mut().for_each(|e| e.visible = e.item != crate::hud::HudItem::Ports || e.item.required());
+        assert_eq!(ports(&old.migrate()), Some(true));
+        // Hidden once this version is in use: a choice, kept.
+        let mut current = Settings::default().migrate();
+        current.hud.iter_mut().filter(|e| e.item == crate::hud::HudItem::Ports).for_each(|e| e.visible = false);
+        assert_eq!(ports(&current.migrate()), Some(false));
     }
 
     #[test]

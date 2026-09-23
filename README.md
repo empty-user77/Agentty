@@ -43,7 +43,7 @@ Written in Rust with [GPUI](https://gpui.rs) and `alacritty_terminal`. No Electr
 - **Parallel work without collisions** — a second agent in the same project can start in its own git worktree on a new
   branch (or join the one in use — you are asked), and an agent can split work into several sessions at once once you confirm.
 - **More than a terminal** — files panel with an editor, a GitHub Desktop-style Git page, a Docker panel, a database
-  page, an in-app browser, usage and cost monitoring, a list of every git worktree on the computer (with what is
+  page, an in-app browser with a responsive mode for phone and tablet sizes, usage and cost monitoring, a list of every git worktree on the computer (with what is
   uncommitted or merged, and removing several at once), a disk page that clears build output and tool caches, and an
   extensions page for skills, subagents and MCP servers.
 - **Careful with your data** — agents read databases inside a read-only transaction and every write waits for your

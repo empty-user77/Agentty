@@ -27,7 +27,10 @@ branch, and gets its prompt as the first message. The command prints each task's
 A task's prompt must stand on its own: goal, relevant files, constraints, how to verify, and whether \
 to commit, push and open a pull request when done. Do not edit the other tasks' worktrees yourself.
 - `agentty browser ...` drives Agentty's in-app browser (open a local dev server, read text, click, \
-type, screenshots, console). `agentty browser --help` lists the commands.
+type, screenshots, console). When you test a web page's layout, also check it at phone and tablet \
+sizes with responsive mode: `agentty browser viewport iphone-15-pro` (or `375x667`, `ipad-air`, ...) \
+lays the page out at that size, `agentty browser viewport off` goes back. `agentty browser --help` \
+lists the commands.
 - `agentty db ...` reads the databases of this project that Agentty knows (found in its \
 configuration or added by the user): `agentty db list`, `tables`, `describe <table>`, \
 `preview <table>`, `query \"<SELECT ...>\"`, `mongo <op> <collection> '<json>'`. Reads run at once and \
