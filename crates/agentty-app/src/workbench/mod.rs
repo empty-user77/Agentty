@@ -2856,7 +2856,6 @@ impl Render for Workbench {
             .children(self.render_tree_menu(cx))
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
-            .children((!self.updates.popup).then(|| self.render_update_badge(cx)).flatten())
             .children(self.render_connect_pick_bar(cx))
             .children(self.render_install_hint(cx))
             .children(self.render_close_confirm(cx))

@@ -652,6 +652,20 @@ fn powershell_agent_script(args: &[String], auth: &AuthSetup, legacy: bool, prof
     lines.join("\n")
 }
 
+/// Which PowerShell 7 a pane runs: the one on `PATH`, unless that is the Microsoft Store copy
+/// (`…\WindowsApps\…`) and the regular install exists too. The Store copy runs packaged, and
+/// everything started below it has its writes to `AppData` redirected into the package — a temp
+/// folder another program then can't see, a link that leads nowhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn pick_pwsh(on_path: Option<PathBuf>, regular: Option<PathBuf>) -> Option<PathBuf> {
+    let from_store = |p: &PathBuf| p.components().any(|c| c.as_os_str().eq_ignore_ascii_case("WindowsApps"));
+    match on_path {
+        Some(path) if from_store(&path) => regular.or(Some(path)),
+        Some(path) => Some(path),
+        None => regular,
+    }
+}
+
 #[cfg(windows)]
 mod windows {
     use super::{encode_powershell, powershell_agent_script, AuthSetup, LaunchSpec, Start};
@@ -661,7 +675,12 @@ mod windows {
         static PROGRAM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         PROGRAM
             .get_or_init(|| {
-                agentty_bridge::process::which("pwsh").map(|p| p.display().to_string()).unwrap_or_else(|| "powershell.exe".into())
+                let regular = std::env::var_os("ProgramFiles")
+                    .map(|dir| std::path::PathBuf::from(dir).join(r"PowerShell\7\pwsh.exe"))
+                    .filter(|p| p.is_file());
+                super::pick_pwsh(agentty_bridge::process::which("pwsh"), regular)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "powershell.exe".into())
             })
             .clone()
     }
@@ -730,6 +749,20 @@ pub fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn the_store_copy_of_pwsh_gives_way_to_the_regular_install() {
+        let store = PathBuf::from("C:/Program Files/WindowsApps/Microsoft.PowerShell_7.5.0.0_x64__8wekyb3d8bbwe/pwsh.exe");
+        let alias = PathBuf::from("C:/Users/me/AppData/Local/Microsoft/WindowsApps/pwsh.exe");
+        let regular = PathBuf::from("C:/Program Files/PowerShell/7/pwsh.exe");
+        assert_eq!(pick_pwsh(Some(store.clone()), Some(regular.clone())), Some(regular.clone()));
+        assert_eq!(pick_pwsh(Some(alias), Some(regular.clone())), Some(regular.clone()));
+        // Only the Store copy: it is still PowerShell 7.
+        assert_eq!(pick_pwsh(Some(store.clone()), None), Some(store));
+        assert_eq!(pick_pwsh(Some(regular.clone()), None), Some(regular.clone()));
+        assert_eq!(pick_pwsh(None, Some(regular.clone())), Some(regular));
+        assert_eq!(pick_pwsh(None, None), None);
+    }
 
     #[test]
     fn quotes_only_when_needed() {

@@ -447,7 +447,7 @@ pub fn prepare_codex_home(home: &Path) -> Result<()> {
     std::fs::create_dir_all(user.join("sessions")).ok();
     for name in SHARED_DIRS {
         let (source, link) = (user.join(name), home.join(name));
-        if source.is_dir() && std::fs::symlink_metadata(&link).is_err() {
+        if source.is_dir() && (std::fs::symlink_metadata(&link).is_err() || clear_dead_link(&link)) {
             if let Err(err) = link_dir(&source, &link) {
                 eprintln!("agentty: could not link {name} into the Codex home: {err:#}");
             }
@@ -460,6 +460,20 @@ pub fn prepare_codex_home(home: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Removes what an earlier, failed link left where a link belongs: a link that leads nowhere, or an
+/// empty folder. Anything holding files stays. Returns whether the place is free now.
+fn clear_dead_link(link: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(link) else { return true };
+    let dangling = !link.exists();
+    let empty = meta.is_dir() && std::fs::read_dir(link).is_ok_and(|mut entries| entries.next().is_none());
+    if !dangling && !empty {
+        return false;
+    }
+    // A junction or directory link goes with `remove_dir`, a Unix symlink with `remove_file`;
+    // `remove_dir` never removes a folder with anything in it.
+    std::fs::remove_dir(link).or_else(|_| std::fs::remove_file(link)).is_ok()
 }
 
 /// Sessions written into a private Codex home itself (only when linking was impossible).
@@ -483,25 +497,94 @@ fn link_dir(source: &Path, link: &Path) -> Result<()> {
     if std::os::windows::fs::symlink_dir(source, link).is_ok() {
         return Ok(());
     }
-    // Not `cmd /C mklink /J`: cmd.exe re-parses its command line and would act on `&`, `%`, `^`
-    // in a path (user names, `CODEX_HOME`). The paths travel as environment variables, so the
-    // script is a constant and no path is ever parsed as code.
-    let output = crate::process::windows_powershell()
-        .args(["-NoProfile", "-NonInteractive", "-Command", JUNCTION_SCRIPT])
-        .env("AGENTTY_JUNCTION_LINK", link)
-        .env("AGENTTY_JUNCTION_TARGET", source)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .output()?;
-    // PowerShell's own words, so a refusal says why (the first line is enough).
-    let why = String::from_utf8_lossy(&output.stderr).lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
-    ensure!(output.status.success() && link.is_dir(), "could not create a directory junction: {why}");
+    create_junction(source, link)
+}
+
+/// A directory junction made with the file system call itself: no `cmd /C mklink /J` (cmd.exe
+/// re-parses its command line and would act on `&`, `%`, `^` in a path) and no PowerShell, which
+/// failed without a word when started below a pseudo console (an Agentty pane, a CI runner
+/// launched from one).
+#[cfg(windows)]
+fn create_junction(target: &Path, link: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, OPEN_EXISTING};
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+
+    let target = std::fs::canonicalize(target).context("junction target")?;
+    let target = target.to_string_lossy();
+    // `canonicalize` answers `\\?\C:\…`; a junction wants the plain drive path.
+    let target = target.strip_prefix(r"\\?\").unwrap_or(&target);
+    ensure!(!target.starts_with(r"UNC\"), "a junction can't point to a network folder");
+    let buffer = mount_point_buffer(target);
+    std::fs::create_dir(link).context("junction folder")?;
+    let wide: Vec<u16> = link.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated path; the handle is closed below on every path.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_WRITE,
+            0,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        let err = std::io::Error::last_os_error();
+        let _ = std::fs::remove_dir(link);
+        bail!("could not open the junction folder: {err}");
+    }
+    let mut returned = 0u32;
+    // SAFETY: `buffer` is a complete REPARSE_DATA_BUFFER of `buffer.len()` bytes; no output.
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            buffer.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    let err = std::io::Error::last_os_error();
+    // SAFETY: `handle` came from CreateFileW above and is closed once.
+    unsafe { CloseHandle(handle) };
+    if ok == 0 {
+        let _ = std::fs::remove_dir(link);
+        bail!("could not create a directory junction: {err}");
+    }
     Ok(())
 }
 
+/// A mount-point REPARSE_DATA_BUFFER for `target` (a drive path such as `C:\Users\me\.codex\sessions`):
+/// tag, data length, reserved, then the substitute name (`\??\` + path) and the print name, each
+/// NUL-terminated UTF-16.
 #[cfg_attr(not(windows), allow(dead_code))]
-const JUNCTION_SCRIPT: &str =
-    "New-Item -ItemType Junction -Path $env:AGENTTY_JUNCTION_LINK -Target $env:AGENTTY_JUNCTION_TARGET -ErrorAction Stop | Out-Null";
+fn mount_point_buffer(target: &str) -> Vec<u8> {
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+    let substitute: Vec<u16> = format!(r"\??\{target}").encode_utf16().collect();
+    let print: Vec<u16> = target.encode_utf16().collect();
+    let (substitute_bytes, print_bytes) = (substitute.len() * 2, print.len() * 2);
+    // Four u16 offsets and lengths, then both names with their terminators.
+    let data_length = 8 + substitute_bytes + 2 + print_bytes + 2;
+    let mut buffer = Vec::with_capacity(8 + data_length);
+    buffer.extend(IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
+    buffer.extend((data_length as u16).to_le_bytes());
+    buffer.extend(0u16.to_le_bytes());
+    buffer.extend(0u16.to_le_bytes());
+    buffer.extend((substitute_bytes as u16).to_le_bytes());
+    buffer.extend(((substitute_bytes + 2) as u16).to_le_bytes());
+    buffer.extend((print_bytes as u16).to_le_bytes());
+    for unit in substitute.iter().chain(&[0]).chain(&print).chain(&[0]) {
+        buffer.extend(unit.to_le_bytes());
+    }
+    buffer
+}
 
 #[cfg(unix)]
 fn refresh_file_link(source: &Path, link: &Path) {
@@ -855,11 +938,18 @@ mod tests {
         assert!(format!("{err:#}").contains("https"), "{err:#}");
     }
 
-    /// The junction fallback's script is constant; paths only arrive through the environment.
+    /// The junction's reparse data: header, then `\??\C:\x` and `C:\x` as NUL-terminated UTF-16.
     #[test]
-    fn junction_script_contains_no_paths() {
-        assert!(JUNCTION_SCRIPT.contains("$env:AGENTTY_JUNCTION_LINK") && JUNCTION_SCRIPT.contains("$env:AGENTTY_JUNCTION_TARGET"));
-        assert!(!JUNCTION_SCRIPT.contains(['&', '%', '^', '\'', '"']));
+    fn mount_point_buffer_layout() {
+        let buffer = mount_point_buffer(r"C:\x");
+        let u16_at = |i: usize| u16::from_le_bytes([buffer[i], buffer[i + 1]]);
+        assert_eq!(u32::from_le_bytes(buffer[..4].try_into().unwrap()), 0xA000_0003);
+        // "\??\C:\x" is 8 units, "C:\x" 4: 8 header bytes + 16 + 2 + 8 + 2.
+        assert_eq!(u16_at(4), 36);
+        assert_eq!(buffer.len(), 8 + 36);
+        assert_eq!((u16_at(8), u16_at(10), u16_at(12), u16_at(14)), (0, 16, 18, 8));
+        let text: Vec<u16> = buffer[16..].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        assert_eq!(String::from_utf16(&text).unwrap(), "\\??\\C:\\x\0C:\\x\0");
     }
 
     #[test]
@@ -869,8 +959,44 @@ mod tests {
     }
 
     #[test]
+    fn what_a_failed_link_left_is_cleared_and_real_folders_stay() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("agentty-dead-link-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Nothing there: free.
+        assert!(clear_dead_link(&dir.join("none")));
+        // An empty folder: removed.
+        let empty = dir.join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(clear_dead_link(&empty) && !empty.exists());
+        // A folder with something in it: kept.
+        let full = dir.join("full");
+        std::fs::create_dir(&full).unwrap();
+        std::fs::write(full.join("a.jsonl"), "{}").unwrap();
+        assert!(!clear_dead_link(&full) && full.join("a.jsonl").exists());
+        // A link to a folder that is gone: removed (Unix; Windows needs rights for symlinks).
+        #[cfg(unix)]
+        {
+            let gone = dir.join("gone");
+            std::fs::create_dir(&gone).unwrap();
+            let link = dir.join("link");
+            std::os::unix::fs::symlink(&gone, &link).unwrap();
+            std::fs::remove_dir(&gone).unwrap();
+            assert!(clear_dead_link(&link) && std::fs::symlink_metadata(&link).is_err());
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn codex_home_links_user_sessions() {
-        let dir = std::env::temp_dir().join(format!("agentty-codex-home-{}", std::process::id()));
+        // Unique per run: Windows reuses process ids, and a failed run leaves its folder behind.
+        // Under the build folder rather than the temp folder: in `AppData`, a process started below
+        // a Microsoft Store app (PowerShell from the Store) writes into the package instead, and a
+        // link to that folder leads nowhere for the file system.
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("agentty-codex-home-{}-{nanos}", std::process::id()));
         let user = dir.join("user");
         std::fs::create_dir_all(user.join("sessions/2026")).unwrap();
         std::fs::write(user.join("config.toml"), "model = \"x\"\n").unwrap();
@@ -878,7 +1004,14 @@ mod tests {
         let home = dir.join("private");
         prepare_codex_home(&home).unwrap();
         std::env::remove_var("CODEX_HOME");
-        assert!(home.join("sessions/2026").is_dir());
+        let sessions = home.join("sessions");
+        assert!(
+            sessions.join("2026").is_dir(),
+            "sessions: {:?} → {:?}, opening it: {:?}",
+            std::fs::symlink_metadata(&sessions).map(|m| m.file_type()),
+            std::fs::read_link(&sessions),
+            std::fs::read_dir(&sessions).map(|_| ())
+        );
         assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), "model = \"x\"\n");
         assert!(!home.join("auth.json").exists());
         std::fs::remove_dir_all(dir).ok();

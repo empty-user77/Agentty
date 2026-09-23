@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- "Later" in the update popup keeps it away for 24 hours, across restarts; a newer version is
+  announced right away. Meanwhile the update shows in the status bar in place of the version
+  ("Update available v0.1.20"), and a click there opens the popup again. The floating update
+  button over the workspaces is gone.
+- Moving a tab to another workspace shows each workspace's colour as a dot before its name.
+
+### Fixed
+- On Windows, the Codex session folders are linked again when Agentty or what starts it runs
+  inside a terminal pane: the link is now made directly instead of through PowerShell.
+- A Codex session link that an earlier attempt left broken or empty is made again, instead of
+  staying broken for good.
+- On Windows, terminals use the regular PowerShell 7 install over the Microsoft Store copy when both
+  are installed: under the Store copy, what programs write to AppData is redirected into its
+  package, where other programs can't find it.
+
 ## [0.1.19] - 2026-09-23
 
 ### Changed
