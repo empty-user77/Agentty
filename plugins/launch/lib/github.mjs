@@ -16,6 +16,7 @@ import {
   sanitizeRepoName,
   extractDeviceCode,
   extractDeviceUrl,
+  sshGithubLogin,
 } from './parse.mjs';
 
 /** Walks up from `startDir` to the nearest `.git` or `package.json`, else returns `startDir` itself. */
@@ -148,6 +149,36 @@ export async function ghAuthStatus(ghBin, cwd) {
   if (result.code !== 0) return { loggedIn: false, username: null };
   const whoami = await run(ghBin, ['api', 'user', '--jq', '.login'], { cwd, env: ghEnv(), timeoutMs: 15_000 });
   return { loggedIn: true, username: whoami.code === 0 ? whoami.stdout.trim() : null };
+}
+
+/**
+ * The GitHub account an SSH key on this computer can push as, or `null`. `BatchMode` means it
+ * never asks for anything and never adds a host key: a machine that is not already set up for SSH
+ * simply answers "no".
+ */
+export async function githubSshLogin(cwd) {
+  const result = await run('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=6', '-T', 'git@github.com'], {
+    cwd,
+    env: baseEnv(),
+    timeoutMs: 15_000,
+  });
+  return sshGithubLogin(`${result.stdout}\n${result.stderr}`);
+}
+
+/**
+ * Who Launch may act as on GitHub, without asking anyone to sign in again:
+ * `{ connected, username, via, api, push }`. A signed-in `gh` (`via: 'cli'`) can do everything —
+ * create a repository, read deployments. An SSH key (`via: 'ssh'`) can push to a repository that
+ * already exists, which is all Launch needs for a project that has a remote.
+ */
+export async function githubIdentity(ghBin, cwd) {
+  if (ghBin) {
+    const status = await ghAuthStatus(ghBin, cwd);
+    if (status.loggedIn) return { connected: true, username: status.username, via: 'cli', api: true, push: true };
+  }
+  const ssh = await githubSshLogin(cwd);
+  if (ssh) return { connected: true, username: ssh, via: 'ssh', api: false, push: true };
+  return { connected: false, username: null, via: null, api: false, push: false };
 }
 
 /** `{ login, id }` of the signed-in user, for the noreply commit email Launch sets locally. */

@@ -29,6 +29,18 @@ import {
 import { pickGhAsset, pickGhChecksums, checksumFor, findGhBinary } from '../lib/tools.mjs';
 import { REQUIRED_VERCELIGNORE_LINES, IDEA_NOTES_GITIGNORE_LINES, secretFilesAtRisk, describeRemote } from '../lib/parse.mjs';
 import { isVercelProductionDeployment, pickVercelProductionDeployments, summarizeDeployment, liveUrlOf, parseInspectDomains } from '../lib/parse.mjs';
+import {
+  deployStateOf,
+  displayWidth,
+  flowDiagram,
+  normalizeVercelProject,
+  normalizeVercelProjects,
+  pickPrimaryDomain,
+  repoOfVercelLink,
+  shortenToWidth,
+  sshGithubLogin,
+} from '../lib/parse.mjs';
+import { configFileCandidates, scopeList, sessionFileCandidates } from '../lib/vercel_api.mjs';
 import { pathWithExtras } from '../lib/exec.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -281,6 +293,11 @@ function sandbox() {
   fs.writeFileSync(path.join(bin, 'gh'), FAKE_GH, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'vercel'), FAKE_VERCEL, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'supabase'), FAKE_SUPABASE, { mode: 0o755 });
+  // Nothing in a test may reach github.com: `githubIdentity` falls back to ssh when `gh` is not
+  // signed in, so the sandbox brings its own.
+  fs.writeFileSync(path.join(bin, 'ssh'), FAKE_SSH, { mode: 0o755 });
+  const home = path.join(root, 'home');
+  fs.mkdirSync(home, { recursive: true });
   const supabase = path.join(root, 'supabase-account');
   fs.mkdirSync(supabase, { recursive: true });
 
@@ -290,7 +307,7 @@ function sandbox() {
   for (const file of fs.readdirSync(path.join(pluginDir, 'lib'))) fs.copyFileSync(path.join(pluginDir, 'lib', file), path.join(plugin, 'lib', file));
   fs.copyFileSync(sdk, path.join(plugin, 'agentty-plugin.mjs'));
 
-  return { root, project, remotes, bin, plugin, supabase, data: path.join(root, 'data') };
+  return { root, project, remotes, bin, plugin, supabase, home, data: path.join(root, 'data') };
 }
 
 /** Turns the sandbox project into one that uses Supabase and has a migration waiting. */
@@ -349,12 +366,22 @@ esac
 exit 1
 `;
 
+// `ssh -T git@github.com` on a computer whose key GitHub knows (FAKE_SSH_LOGIN), or one it doesn't.
+const FAKE_SSH = `#!/bin/bash
+if [ -n "$FAKE_SSH_LOGIN" ]; then
+  echo "Hi $FAKE_SSH_LOGIN! You've successfully authenticated, but GitHub does not provide shell access." >&2
+  exit 1
+fi
+echo "git@github.com: Permission denied (publickey)." >&2
+exit 255
+`;
+
 const FAKE_GH = `#!/bin/bash
 set -e
 case "$1" in
   auth)
     case "$2" in
-      status) exit 0 ;;
+      status) if [ -n "$FAKE_GH_DELAY" ]; then sleep "$FAKE_GH_DELAY"; fi; if [ -n "$FAKE_GH_LOGGED_OUT" ]; then echo "You are not logged into any GitHub hosts." >&2; exit 1; fi; exit 0 ;;
       setup-git) exit 0 ;;
       login) exit 1 ;;
     esac
@@ -401,7 +428,15 @@ exit 1
 
 const FAKE_VERCEL = `#!/bin/bash
 case "$1" in
-  whoami) echo "fakeuser"; exit 0 ;;
+  whoami)
+    if [ -n "$FAKE_VERCEL_LOGGED_OUT" ]; then echo "Error: not authenticated" >&2; exit 1; fi
+    echo "fakeuser"; exit 0 ;;
+  project)
+    if [ "$2" = "ls" ]; then
+      echo '{"projects":[{"id":"prj_example_one","name":"my-cool-app","latestProductionUrl":"https://my-cool-app.vercel.app","updatedAt":1789000000000},{"id":"prj_example_two","name":"another-site","updatedAt":1788000000000}],"pagination":{},"contextName":"fakeuser"}'
+      exit 0
+    fi
+    ;;
   login) exit 1 ;;
   env)
     if [ "$2" = "add" ]; then cat >/dev/null; exit 0; fi
@@ -427,6 +462,11 @@ function start(box, results = {}) {
     PATH: `${box.bin}:${process.env.PATH}`,
     FAKE_REMOTES_DIR: box.remotes,
     FAKE_SB_DIR: box.supabase,
+    // The tests never read the session of a Vercel CLI the person running them is signed in to,
+    // and never reach the network: the dashboard falls back to what the fake CLI lists.
+    HOME: box.home,
+    VERCEL_TOKEN: '',
+    NOW_TOKEN: '',
     ...(box.env ?? {}),
   };
   const child = spawn(process.execPath, ['main.mjs'], { cwd: box.plugin, env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -472,8 +512,14 @@ function start(box, results = {}) {
       const index = seen.findIndex((m) => m.method === method);
       if (index !== -1) return Promise.resolve(seen.splice(index, 1)[0]);
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`no ${method} within ${timeout} ms; stderr: ${stderr}`)), timeout);
-        waiting.push({ method, resolve: (m) => (clearTimeout(timer), resolve(m)) });
+        const waiter = { method, resolve: (m) => (clearTimeout(timer), resolve(m)) };
+        // A wait that gave up leaves the queue, or the next message would go to nobody.
+        const timer = setTimeout(() => {
+          const index = waiting.indexOf(waiter);
+          if (index !== -1) waiting.splice(index, 1);
+          reject(new Error(`no ${method} within ${timeout} ms; stderr: ${stderr}`));
+        }, timeout);
+        waiting.push(waiter);
       });
     },
     stop() {
@@ -502,7 +548,7 @@ test('Launch: already logged in to GitHub and Vercel, saves the project and depl
     // Tools and both logins are already available, so the wizard lands straight on "Save to GitHub"
     // once the initial loading spinner settles.
     let panel = await waitForButton(host, 'gh-save');
-    assert.match(JSON.stringify(panel), /vite/); // framework detected
+    assert.match(JSON.stringify(panel), /Vite project/); // framework detected, written the way Vite writes it
 
     host.send('ui/event', { element: 'gh-save', event: 'click', context: host.context });
     // Wait for the panel to settle on the next step (deploy) rather than an intermediate spinner frame.
@@ -521,7 +567,9 @@ test('Launch: already logged in to GitHub and Vercel, saves the project and depl
     // A double click on "Publish": the second event arrives while the first runs and is ignored.
     host.send('ui/event', { element: 'deploy-start', event: 'click', context: host.context });
     host.send('ui/event', { element: 'deploy-start', event: 'click', context: host.context });
-    panel = await waitForText(host, /my-cool-app\.vercel\.app/);
+    // The deploy's own log carries the URL while it is still running, so wait for the state that
+    // says it finished rather than for the address appearing anywhere on the panel.
+    panel = await waitForText(host, /Launched|출시 완료/);
     assert.equal(fs.readFileSync(path.join(box.root, 'deploys.log'), 'utf8').trim().split('\n').length, 1, 'one deploy for a double click');
     // The owner's idea notes, agent settings and env files never go up with a deploy.
     const vercelignore = fs.readFileSync(path.join(box.project, '.vercelignore'), 'utf8');
@@ -563,15 +611,32 @@ test('Launch refuses to save when a real .env file is already staged', async () 
   }
 });
 
-test('no project detected when the folder has neither package.json nor index.html', async () => {
+test('a folder that is not a web project opens on the dashboard, and the deploy tab still says why', async () => {
   const box = sandbox();
-  const empty = path.join(box.root, 'empty-folder');
-  fs.mkdirSync(empty);
+  // `box.root` holds the project folder but is not one itself.
+  box.env = {};
   const host = start(box);
+  host.context.pane.cwd = box.root;
   try {
-    host.send('panel/open', { context: { ...host.context, pane: { ...host.context.pane, cwd: empty } } });
-    const panel = await waitForText(host, /package\.json|index\.html|아직 웹 프로젝트/);
-    assert.match(JSON.stringify(panel), /package\.json|index\.html|아직 웹 프로젝트/);
+    host.send('panel/open', { context: host.context });
+    // The dashboard is what is worth showing here: the account, and every project on it.
+    let panel = await waitForText(host, /Projects on Vercel/);
+    const tree = JSON.stringify(panel);
+    assert.match(tree, /"id":"tab"/, 'both tabs are offered');
+    assert.match(tree, /"value":"dashboard"/);
+    assert.match(tree, /my-cool-app/, 'the fake CLI listed the account\'s projects');
+    assert.match(tree, /another-site/);
+    assert.match(tree, /Only the project names could be read/, 'the CLI-only fallback says what is missing');
+    assert.ok(buttonIds(panel).includes('dash-open-vercel-home'));
+
+    // Nothing is missing, so no login button is offered.
+    assert.ok(!buttonIds(panel).includes('install-tools'));
+    assert.ok(!buttonIds(panel).includes('gh-login-start'));
+    assert.ok(!buttonIds(panel).includes('vercel-login-start'));
+
+    host.send('ui/event', { element: 'tab', event: 'change', value: 'project', context: host.context });
+    panel = await waitForText(host, /package\.json|index\.html/);
+    assert.ok(buttonIds(panel).includes('open-dashboard'), 'and a way back to the dashboard');
   } finally {
     host.stop();
   }
@@ -794,6 +859,9 @@ test('Launch: a repository Vercel already deploys shows the live site, and publi
     assert.match(text, /fake-user\/my-cool-app/, 'the repository pushes go to is named before publishing');
     assert.ok(!buttonIds(panel).includes('deploy-start'), 'no first-launch "Publish" for a site that is already live');
     assert.ok(!buttonIds(panel).includes('gh-save'), 'no remote confirmation needed to look at it');
+    // Every step is behind it, so the checklist is one line instead of six rows.
+    assert.match(text, /All 6 steps done/);
+    assert.ok(!text.includes('"id":"steps"'), 'no step list when nothing is left to do');
 
     // "Publish my changes" pushes to GitHub; Vercel builds it. No `vercel deploy` (it could create a second project).
     fs.writeFileSync(path.join(box.project, 'index.html'), '<h1>new</h1>');
@@ -830,3 +898,324 @@ test('the live site is shown at its own domain, and commit refs are not branch n
   assert.equal(summarizeDeployment({ ref: 'main', sha }, []).ref, 'main');
 });
 
+
+// -- the dashboard ---------------------------------------------------------------------------------
+
+test('Vercel ready states become the words the panel uses', () => {
+  assert.equal(deployStateOf('READY'), 'ready');
+  assert.equal(deployStateOf('ERROR'), 'error');
+  assert.equal(deployStateOf('BUILDING'), 'building');
+  assert.equal(deployStateOf('INITIALIZING'), 'building');
+  assert.equal(deployStateOf('QUEUED'), 'queued');
+  assert.equal(deployStateOf('CANCELED'), 'canceled');
+  assert.equal(deployStateOf(undefined), 'unknown');
+  assert.equal(deployStateOf('something else'), 'unknown');
+});
+
+test('a Vercel project link names the repository, whichever git host it is on', () => {
+  assert.deepEqual(repoOfVercelLink({ type: 'github', org: 'acme', repo: 'shop', productionBranch: 'main' }), {
+    host: 'github.com',
+    owner: 'acme',
+    name: 'shop',
+    slug: 'acme/shop',
+    url: 'https://github.com/acme/shop',
+    branch: 'main',
+  });
+  assert.equal(repoOfVercelLink({ type: 'github', org: 'acme', repo: 'shop' }).branch, null);
+  assert.equal(repoOfVercelLink({ type: 'gitlab', projectNamespace: 'acme', projectName: 'shop' }).url, 'https://gitlab.com/acme/shop');
+  assert.equal(repoOfVercelLink({ type: 'bitbucket', owner: 'acme', slug: 'shop' }).slug, 'acme/shop');
+  assert.equal(repoOfVercelLink({ type: 'github', org: 'acme' }), null, 'half a link is no link');
+  assert.equal(repoOfVercelLink(null), null);
+  assert.equal(repoOfVercelLink({ type: 'svn', org: 'acme', repo: 'shop' }), null);
+});
+
+test('the address shown for a site is its own domain before any Vercel one', () => {
+  assert.equal(pickPrimaryDomain(['www.example.com', 'example.com', 'shop.vercel.app']), 'www.example.com');
+  assert.equal(pickPrimaryDomain(['shop-git-main-acme.vercel.app', 'shop-acme.vercel.app', 'shop.vercel.app']), 'shop.vercel.app');
+  assert.equal(pickPrimaryDomain([], 'shop-abc123.vercel.app'), 'shop-abc123.vercel.app');
+  assert.equal(pickPrimaryDomain(null, null), null);
+});
+
+test('a project from Vercel becomes what the dashboard draws', () => {
+  const raw = {
+    id: 'prj_example_not_a_real_id',
+    name: 'shop',
+    framework: 'nextjs',
+    updatedAt: 1789000000000,
+    link: { type: 'github', org: 'acme', repo: 'shop-web', productionBranch: 'main' },
+    targets: {
+      production: {
+        readyState: 'READY',
+        url: 'shop-abc123-acme.vercel.app',
+        alias: ['www.example.com', 'shop.vercel.app'],
+        createdAt: 1789000000000,
+        meta: { githubCommitRef: 'main', githubCommitSha: 'abcdef1234567890', githubCommitMessage: 'fix: the cart\nand more' },
+      },
+    },
+  };
+  const project = normalizeVercelProject(raw, { scope: 'acme' });
+  assert.equal(project.name, 'shop');
+  assert.equal(project.framework, 'nextjs');
+  assert.equal(project.repo.slug, 'acme/shop-web');
+  assert.equal(project.repo.branch, 'main');
+  assert.equal(project.production.state, 'ready');
+  assert.equal(project.production.domain, 'www.example.com');
+  assert.equal(project.production.url, 'https://shop-abc123-acme.vercel.app');
+  assert.equal(project.production.sha, 'abcdef1', 'the short commit, not the whole hash');
+  assert.equal(project.production.message, 'fix: the cart', 'the first line only');
+  assert.equal(project.inspectUrl, 'https://vercel.com/acme/shop');
+
+  const bare = normalizeVercelProject({ name: 'blank' });
+  assert.equal(bare.repo, null);
+  assert.equal(bare.production, null);
+  assert.equal(normalizeVercelProject({}), null);
+  assert.equal(normalizeVercelProject('shop'), null);
+});
+
+test('projects are listed newest deploy first, and anything that is not a project is dropped', () => {
+  const payload = {
+    projects: [
+      { name: 'old', updatedAt: 1000 },
+      'not a project',
+      { name: 'newest', targets: { production: { readyState: 'READY', createdAt: 9000 } } },
+      { name: 'middle', updatedAt: 5000 },
+    ],
+  };
+  assert.deepEqual(
+    normalizeVercelProjects(payload).map((p) => p.name),
+    ['newest', 'middle', 'old'],
+  );
+  assert.deepEqual(normalizeVercelProjects(null), []);
+});
+
+test('the flow diagram links its stops and leaves the last one open', () => {
+  assert.deepEqual(
+    flowDiagram([
+      { filled: true, title: 'GitHub', lines: ['acme/shop-web', 'branch main'] },
+      { filled: false, title: 'Live', lines: ['Not deployed yet'] },
+    ]),
+    ['● GitHub', '│ acme/shop-web', '│ branch main', '│', '○ Live', '  Not deployed yet'],
+  );
+  assert.deepEqual(flowDiagram([]), []);
+});
+
+test('a diagram line is cut by the columns it takes, not the characters it has', () => {
+  assert.equal(displayWidth('abc'), 3);
+  assert.equal(displayWidth('한글'), 4);
+  assert.equal(shortenToWidth('abc', 10), 'abc');
+  assert.equal(shortenToWidth('abcdefghij', 5), 'abcd…');
+  // Eight Korean syllables are sixteen columns: six of them fit in a thirteen-column line.
+  assert.equal(shortenToWidth('가나다라마바사아', 13), '가나다라마바…');
+});
+
+test("an SSH key's GitHub account is read from what the server answers, and nothing else is", () => {
+  assert.equal(sshGithubLogin("Hi octocat! You've successfully authenticated, but GitHub does not provide shell access."), 'octocat');
+  assert.equal(sshGithubLogin('git@github.com: Permission denied (publickey).'), null);
+  assert.equal(sshGithubLogin('Hi there! Welcome.'), null);
+  assert.equal(sshGithubLogin(''), null);
+});
+
+test('the Vercel session is looked for where that platform keeps it', () => {
+  const mac = sessionFileCandidates({}, '/Users/me', 'darwin');
+  assert.equal(mac[0], '/Users/me/Library/Application Support/com.vercel.cli/auth.json');
+  assert.ok(mac.includes('/Users/me/.vercel/auth.json'), 'the older layout is still looked at');
+  const linux = sessionFileCandidates({ XDG_DATA_HOME: '/home/me/.share' }, '/home/me', 'linux');
+  assert.equal(linux[0], '/home/me/.share/com.vercel.cli/auth.json');
+  const windows = sessionFileCandidates({ APPDATA: 'C:\\Users\\me\\AppData\\Roaming' }, 'C:\\Users\\me', 'win32');
+  assert.ok(windows[0].includes('com.vercel.cli'));
+  assert.deepEqual(
+    configFileCandidates({}, '/Users/me', 'darwin').map((f) => f.split('/').pop()),
+    mac.map(() => 'config.json'),
+  );
+});
+
+test('an SSH key that can push is enough: Launch does not ask for a GitHub login it does not need', async () => {
+  const box = sandbox();
+  // No `gh` session, but this computer's SSH key belongs to an account GitHub knows.
+  box.env = { FAKE_GH_LOGGED_OUT: '1', FAKE_SSH_LOGIN: 'fake-user' };
+  const git = (...args) => execFileSync('git', args, { cwd: box.project, stdio: 'pipe' });
+  const bare = path.join(box.remotes, 'my-cool-app.git');
+  execFileSync('git', ['init', '--quiet', '--bare', bare]);
+  git('init', '--quiet');
+  git('add', '-A');
+  git('-c', 'user.name=Fake', '-c', 'user.email=fake@example.com', 'commit', '--quiet', '-m', 'first');
+  git('remote', 'add', 'origin', bare);
+  git('push', '--quiet', '-u', 'origin', 'HEAD');
+  const host = start(box);
+  try {
+    host.send('panel/open', { context: host.context });
+    // Straight to confirming the remote — no "Log in to GitHub" in the way.
+    const panel = await waitForButton(host, 'gh-save');
+    assert.ok(!buttonIds(panel).includes('gh-login-start'), 'no login is asked for');
+    assert.match(JSON.stringify(panel), /fake-user/, 'the account the SSH key belongs to is named');
+
+    host.send('ui/event', { element: 'tab', event: 'change', value: 'dashboard', context: host.context });
+    const dashboard = await waitForText(host, /Projects on Vercel/);
+    // Everything is connected, so the connections shrink to one line that still says how.
+    assert.match(JSON.stringify(dashboard), /GitHub · fake-user · SSH/);
+    assert.ok(!JSON.stringify(dashboard).includes('"title":"Connections"'), 'no full list while nothing is missing');
+  } finally {
+    host.stop();
+  }
+});
+
+test('the dashboard offers the logins that are missing, and only those', async () => {
+  const box = sandbox();
+  box.env = { FAKE_GH_LOGGED_OUT: '1', FAKE_VERCEL_LOGGED_OUT: '1' };
+  const host = start(box);
+  host.context.pane.cwd = box.root;
+  try {
+    host.send('panel/open', { context: host.context });
+    const panel = await waitForText(host, /Sign in to Vercel/);
+    // Something is missing, so the full list is there with the buttons that fix it.
+    assert.match(JSON.stringify(panel), /"title":"Connections"/);
+    const buttons = buttonIds(panel);
+    assert.ok(buttons.includes('gh-login-start'), 'GitHub is offered: neither gh nor an SSH key is signed in');
+    assert.ok(buttons.includes('vercel-login-start'));
+    assert.ok(!buttons.includes('install-tools'), 'both tools are on the PATH');
+    assert.match(JSON.stringify(panel), /Not signed in/);
+  } finally {
+    host.stop();
+  }
+});
+
+test('a converted Vercel account is not offered twice, once as itself and once as its team', () => {
+  const teams = [{ id: 'team_example_one', slug: 'acme', name: 'Acme' }];
+  // "northstar": the personal account became a team, so it is not a scope of its own any more.
+  assert.deepEqual(
+    scopeList({ username: 'me', version: 'northstar', defaultTeamId: 'team_example_one' }, teams).map((s) => s.id),
+    ['team_example_one'],
+  );
+  // An older account still has one, and it comes first.
+  const older = scopeList({ username: 'me', name: 'Me' }, teams);
+  assert.deepEqual(
+    older.map((s) => s.id),
+    [null, 'team_example_one'],
+  );
+  assert.equal(older[0].personal, true);
+  // A converted account with no team left is still somewhere to look.
+  assert.equal(scopeList({ username: 'me', version: 'northstar' }, []).length, 1);
+  assert.deepEqual(scopeList(null, null), [{ id: null, slug: 'me', name: 'Personal', personal: true }]);
+});
+
+test('an address is only built from a plain host and a plain name', () => {
+  // Everything here comes back from Vercel and ends up in a browser, so anything that is not a
+  // name or a host is dropped instead of pasted into a URL.
+  assert.equal(repoOfVercelLink({ type: 'github', org: '../../evil', repo: 'shop' }), null);
+  assert.equal(repoOfVercelLink({ type: 'github', org: 'acme', repo: 'shop?x=1' }), null);
+  assert.equal(pickPrimaryDomain(['javascript:alert(1)', 'example.com']), 'example.com');
+  assert.equal(pickPrimaryDomain(['not a host at all']), null);
+  assert.equal(normalizeVercelProject({ name: 'shop' }, { scope: 'acme/../x' }).inspectUrl, null);
+  assert.equal(normalizeVercelProject({ name: 'shop' }, { scope: 'acme' }).inspectUrl, 'https://vercel.com/acme/shop');
+  assert.equal(normalizeVercelProject({ name: 'shop', targets: { production: { url: 'shop.example/../x' } } }, {}).production.url, null);
+});
+
+test('a login started from the dashboard reports its failure on the dashboard', async () => {
+  const box = sandbox();
+  box.env = { FAKE_GH_LOGGED_OUT: '1' };
+  const host = start(box);
+  host.context.pane.cwd = box.root;
+  try {
+    host.send('panel/open', { context: host.context });
+    await waitForButton(host, 'gh-login-start');
+    // The fake `gh auth login` refuses; the walk-through is not the tab in front of the user, so
+    // the message has to appear here rather than on a step nobody is looking at.
+    host.send('ui/event', { element: 'gh-login-start', event: 'click', context: host.context });
+    const panel = await waitForText(host, /GitHub login did not finish/);
+    assert.ok(buttonIds(panel).includes('retry'), 'and can be tried again');
+    assert.match(JSON.stringify(panel), /"id":"tab"/, 'still on the dashboard');
+  } finally {
+    host.stop();
+  }
+});
+
+test('the folder decides the tab every time Launch is opened, whatever was looked at last', async () => {
+  const box = sandbox();
+  const host = start(box);
+  try {
+    host.send('panel/open', { context: host.context });
+    // A folder that can be published opens on the publishing steps.
+    await waitForButton(host, 'gh-save');
+
+    // Looking at the dashboard does not change what the next open does.
+    host.send('ui/event', { element: 'tab', event: 'change', value: 'dashboard', context: host.context });
+    await waitForText(host, /Projects on Vercel/);
+    host.send('panel/close', { context: host.context });
+    host.send('panel/open', { context: host.context });
+    await waitForButton(host, 'gh-save');
+
+    // And a folder with nothing to publish brings the dashboard back on its own.
+    const elsewhere = { ...host.context, pane: { ...host.context.pane, cwd: box.root } };
+    host.send('context/changed', { context: elsewhere });
+    await waitForText(host, /Projects on Vercel/);
+  } finally {
+    host.stop();
+  }
+});
+
+test('Launch follows the terminal the user is looking at, not the folder it was last opened on', async () => {
+  const box = sandbox();
+  const host = start(box);
+  const at = (cwd) => ({ ...host.context, pane: { ...host.context.pane, cwd } });
+  try {
+    // Opened by a link on a folder that is not a web project: that folder, for now.
+    host.send('url/open', { path: 'open', query: { path: box.root }, url: 'agentty://plugin/launch/open', context: at(box.root) });
+    await waitForText(host, /Projects on Vercel/);
+
+    // The terminal moves into the web project while the panel is open: Launch moves with it.
+    host.send('context/changed', { context: at(box.project) });
+    await waitForButton(host, 'gh-save');
+
+    // The terminal moves away while the panel is closed: the next opening looks again.
+    host.send('panel/close', { context: at(box.project) });
+    host.send('panel/open', { context: at(box.root) });
+    await waitForText(host, /Projects on Vercel/);
+    host.send('panel/close', { context: at(box.root) });
+    host.send('panel/open', { context: at(box.project) });
+    const panel = await waitForButton(host, 'gh-save');
+    assert.match(JSON.stringify(panel), /"value":"project"/, 'on the Deploy tab');
+  } finally {
+    host.stop();
+  }
+});
+
+test('moving into a web project shows its tab and a spinner at once, and a folder left behind never answers late', async () => {
+  const box = sandbox();
+  // GitHub answers slowly, as it does for real: a folder's checks are still running when the user moves on.
+  box.env = { FAKE_GH_DELAY: '1' };
+  const host = start(box);
+  const at = (cwd) => ({ ...host.context, pane: { ...host.context.pane, cwd } });
+  try {
+    host.send('panel/open', { context: at(box.root) });
+    await waitForText(host, /Projects on Vercel/);
+
+    // The folder's own tab, with the folder and a spinner, before GitHub and Vercel have answered.
+    host.send('context/changed', { context: at(box.project) });
+    const loading = await waitForText(host, /Checking how this project stands/);
+    assert.match(JSON.stringify(loading), /"value":"project"/);
+    assert.ok(JSON.stringify(loading).includes(box.project), 'already naming the new folder');
+    await waitForButton(host, 'gh-save');
+
+    // Out, back in, and out again while the web project is still being checked (GitHub takes a
+    // second here): its checks finish after the user has left, and must not win.
+    host.send('context/changed', { context: at(box.root) });
+    await waitForText(host, /Projects on Vercel/);
+    host.send('context/changed', { context: at(box.project) });
+    await waitForText(host, /Checking how this project stands/);
+    host.send('context/changed', { context: at(box.root) });
+    let last = await waitForText(host, /Projects on Vercel/);
+    // Give the web project's checks every chance to finish late, and keep whatever comes after.
+    const until = Date.now() + 3000;
+    while (Date.now() < until) {
+      const next = await host.next('ui/setPanel', Math.max(until - Date.now(), 1)).catch(() => null);
+      if (next) last = next.params.tree;
+    }
+    assert.match(JSON.stringify(last), /"value":"dashboard"/, 'still on the folder the terminal is in');
+    // The Deploy tab still describes the folder the terminal is in, not the one left behind.
+    host.send('ui/event', { element: 'tab', event: 'change', value: 'project', context: at(box.root) });
+    const deploy = await waitForText(host, /package\.json|index\.html/);
+    assert.ok(!buttonIds(deploy).includes('gh-save'), 'the web project did not take over');
+  } finally {
+    host.stop();
+  }
+});

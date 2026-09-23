@@ -8,6 +8,28 @@ copying.
 Open it from the rocket button above a pane, the command palette (**Launch: Publish this project to
 the web**), or `agentty://plugin/launch/open?path=%2FUsers%2Fme%2Fmy-app`.
 
+## Two tabs
+
+**Dashboard** is about the account, not the folder: which tools are installed, which of GitHub and
+Vercel are signed in, and every project on your Vercel account with the repository it deploys from
+drawn as a small code → build → live diagram. Logins can be done here, before there is anything to
+publish. **Deploy** is the walk-through below, for the folder in the focused pane.
+
+Whichever fits opens first — the dashboard in a folder that is not a web project, the walk-through
+in one that is — and the other is one click away.
+
+## Where the dashboard gets its facts
+
+`vercel whoami` first: it says who is signed in and, on the way, renews a CLI session that has
+expired. The list of projects and how each one is wired to a repository then comes from Vercel's
+API, called with the session the CLI already holds — it goes into one request header and nowhere
+else: never onto a command line, never into a file, never into a message. If it cannot be read at
+all, `vercel project ls` still lists the projects by name and the panel says that is all it could
+read.
+
+When one of the listed projects deploys the repository the focused folder pushes to, that is the one
+the dashboard opens on, marked as this folder.
+
 ## What each step does
 
 1. **Project check** — looks at the focused pane's folder (walking up to the nearest `package.json`
@@ -15,8 +37,12 @@ the web**), or `agentty://plugin/launch/open?path=%2FUsers%2Fme%2Fmy-app`.
 2. **Tools** — needs the GitHub CLI (`gh`) and the Vercel CLI. If neither is already on your `PATH`,
    Launch downloads/installs both into its own data folder — no Homebrew, nothing system-wide. The
    `gh` download is checked against the SHA-256 in its release's checksum file.
-3. **GitHub login** — runs `gh auth login --web` for you; the one-time code is shown big, copied to
-   the clipboard, and the browser opens on its own.
+3. **GitHub login** — only when one is really needed. A signed-in GitHub CLI is used as it stands,
+   and so is an SSH key this computer already has: pushing to a repository that exists needs
+   nothing more, so Launch goes straight on and names the account the key belongs to. A login is
+   asked for when a repository has to be *created*, which needs the CLI. It then runs
+   `gh auth login --web` for you; the one-time code is shown big, copied to the clipboard, and the
+   browser opens on its own. Both logins are kept by the CLIs themselves, so they are done once.
 4. **Save to GitHub** — commits everything (adding sensible lines to `.gitignore` first: env files,
    `.envrc`, key files, local tool state) and creates a new private repository. Public is a toggle,
    and then the owner's idea notes (`docs/idea/`) stay on the computer. A project that already has a
@@ -66,8 +92,14 @@ it** (sends the failing command and its last output to an agent via `prompt/inje
 ## Permissions
 
 `prompt.inject` (the Vercel-login terminal fallback, "Ask the agent to fix it" and "Ask the agent to
-use the database"), `workspace.read` (the focused pane's folder). Launch never reads or shows any
-token — GitHub, Vercel and Supabase sessions live in each CLI's own credential store, not in Agentty.
+use the database"), `workspace.read` (the focused pane's folder).
+
+Launch never shows a token and never keeps one. GitHub, Vercel and Supabase sessions stay in each
+CLI's own credential store; the one place Launch reads a session is the Vercel CLI's, to ask
+`api.vercel.com` for the dashboard's projects as the signed-in user, and it lives no longer than
+that request. Besides the three CLIs' own traffic, Launch itself talks to `api.github.com` and
+`objects.githubusercontent.com` (downloading the GitHub CLI), the npm registry (installing the
+Vercel and Supabase CLIs) and `api.vercel.com` — nowhere else.
 
 ## Data
 

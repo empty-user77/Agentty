@@ -5,10 +5,11 @@
 
 import path from 'node:path';
 import { existsSync, statSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import { createPlugin, ui } from './agentty-plugin.mjs';
 import { run, tailLines } from './lib/exec.mjs';
 import { ensureGh, ensureSupabase, ensureVercel, findGh, findVercel } from './lib/tools.mjs';
-import { describeRemote, sanitizeRepoName, supabaseRegionForTimeZone } from './lib/parse.mjs';
+import { describeRemote, flowDiagram, normalizeVercelProjects, sanitizeRepoName, shortenToWidth as shorten, supabaseRegionForTimeZone } from './lib/parse.mjs';
 import {
   SupabaseError,
   createSupabaseProject,
@@ -25,7 +26,7 @@ import {
 import {
   findProjectRoot,
   inspectProject,
-  ghAuthStatus,
+  githubIdentity,
   ghUserIdentity,
   ghLogin,
   ensureGitRepo,
@@ -41,6 +42,7 @@ import {
   repoUrl,
 } from './lib/github.mjs';
 import { vercelWhoami, vercelLogin, discoverEnvVars, addEnvVar, deployProduction, connectGit } from './lib/vercel.mjs';
+import { account as vercelAccount, currentTeamId, projectsPayload, projectsViaCli, scopes as vercelScopes, vercelSession } from './lib/vercel_api.mjs';
 import { loadProject, saveProject } from './lib/state.mjs';
 import { isLinkedToVercel, vercelHosting } from './lib/hosting.mjs';
 
@@ -176,6 +178,35 @@ const STRINGS = {
     sbErrLogin: "The Supabase login didn't finish. Try again and enter the code shown in the browser.",
     sbPrompt:
       'This project is now connected to a hosted Supabase project by Agentty Launch. The project URL and public (anon) key are in {file} as {url} and {key}.\n\nPlease:\n1. Add @supabase/supabase-js and one small client module that reads those two variables.\n2. Move the sample / in-memory data to Supabase tables: write SQL migrations in supabase/migrations/<timestamp>_<name>.sql that create the tables, enable row level security on every table and add policies that fit the app.\n3. Never use or ask for the service_role key, and never put keys in code — only in the env file. Keep .env.example listing the names without values.\n4. Keep `npm run build` passing.\n\nWhen the migrations are ready, tell me in plain words to open Launch and press "Apply database changes".',
+    checkingProject: 'Checking how this project stands on GitHub and Vercel…',
+    stepsAllDone: 'All {count} steps done',
+    tabDashboard: 'Dashboard',
+    tabDeploy: 'Deploy',
+    connections: 'Connections',
+    connTools: 'Command-line tools',
+    connToolsReady: 'The GitHub CLI and the Vercel CLI are ready',
+    connToolsMissing: 'Still missing: {tools}',
+    connNotSignedIn: 'Not signed in',
+    connViaCli: 'signed in with the GitHub CLI',
+    connViaSsh: 'using the SSH key on this computer',
+    connSignedInAs: '{username} — {how}',
+    connChecking: 'Checking…',
+    dashProjects: 'Projects on Vercel',
+    dashEmpty: 'This Vercel account has no projects yet.',
+    dashNeedTools: 'Install the two command-line tools to see your Vercel projects here.',
+    dashNeedVercel: 'Sign in to Vercel to see every project on your account, and how each one is connected to GitHub.',
+    dashLoading: 'Reading your Vercel account…',
+    dashLimited: 'Only the project names could be read. Sign in to Vercel again to see how each one is connected.',
+    dashOpenVercel: 'Open Vercel',
+    dashThisFolder: 'this folder',
+    flowNoRepo: 'No repository connected',
+    flowLive: 'Live',
+    flowNotDeployed: 'Not deployed yet',
+    flowBranch: 'branch {name}',
+    flowMoreDomains: '+{count} more addresses',
+    stateCanceled: 'Cancelled',
+    noProjectDashboardHint: 'Your Vercel projects are on the Dashboard tab.',
+    openDashboard: 'Open the dashboard',
   },
   ko: {
     title: '출시',
@@ -299,6 +330,35 @@ const STRINGS = {
     sbErrStarting: 'Supabase가 아직 프로젝트를 시작하는 중입니다. 1분쯤 뒤에 "다시 시도"를 눌러 주세요.',
     sbErrDbPassword: '데이터베이스 비밀번호가 맞지 않습니다. supabase.com → Project Settings → Database 에서 확인하거나 재설정할 수 있어요.',
     sbErrLogin: 'Supabase 로그인이 끝나지 않았습니다. 다시 시도해서 브라우저에 표시된 코드를 입력해 주세요.',
+    checkingProject: 'GitHub과 Vercel에서 이 프로젝트 상태를 확인하는 중…',
+    stepsAllDone: '{count}단계 모두 완료',
+    tabDashboard: '대시보드',
+    tabDeploy: '배포',
+    connections: '연결 상태',
+    connTools: '명령줄 도구',
+    connToolsReady: 'GitHub CLI와 Vercel CLI 준비 완료',
+    connToolsMissing: '아직 없음: {tools}',
+    connNotSignedIn: '로그인하지 않음',
+    connViaCli: 'GitHub CLI 로그인 사용',
+    connViaSsh: '이 컴퓨터의 SSH 키 사용',
+    connSignedInAs: '{username} — {how}',
+    connChecking: '확인 중…',
+    dashProjects: 'Vercel 프로젝트',
+    dashEmpty: '이 Vercel 계정에는 아직 프로젝트가 없습니다.',
+    dashNeedTools: '명령줄 도구 두 개를 설치하면 여기에서 Vercel 프로젝트를 볼 수 있어요.',
+    dashNeedVercel: 'Vercel에 로그인하면 계정의 모든 프로젝트와 GitHub 연결 상태를 여기에서 볼 수 있어요.',
+    dashLoading: 'Vercel 계정을 읽는 중…',
+    dashLimited: '프로젝트 이름만 읽을 수 있었어요. Vercel에 다시 로그인하면 연결 상태까지 보여드릴게요.',
+    dashOpenVercel: 'Vercel 열기',
+    dashThisFolder: '현재 폴더',
+    flowNoRepo: '연결된 저장소 없음',
+    flowLive: '서비스 주소',
+    flowNotDeployed: '아직 배포되지 않음',
+    flowBranch: '브랜치 {name}',
+    flowMoreDomains: '주소 {count}개 더',
+    stateCanceled: '취소됨',
+    noProjectDashboardHint: '대시보드 탭에서 Vercel 프로젝트를 볼 수 있어요.',
+    openDashboard: '대시보드 열기',
   },
   ja: {
     title: 'ローンチ',
@@ -364,6 +424,35 @@ const STRINGS = {
     sbDbPasswordPlaceholder: 'データベースのパスワード',
     sbDbPasswordSave: '保存して適用',
     sbAddDatabase: 'データベースを接続 (Supabase)',
+    checkingProject: 'GitHub と Vercel でこのプロジェクトの状態を確認中…',
+    stepsAllDone: '{count} ステップすべて完了',
+    tabDashboard: 'ダッシュボード',
+    tabDeploy: 'デプロイ',
+    connections: '接続状態',
+    connTools: 'コマンドラインツール',
+    connToolsReady: 'GitHub CLI と Vercel CLI は準備できています',
+    connToolsMissing: '未インストール: {tools}',
+    connNotSignedIn: '未ログイン',
+    connViaCli: 'GitHub CLI のログインを使用',
+    connViaSsh: 'このコンピューターの SSH 鍵を使用',
+    connSignedInAs: '{username} — {how}',
+    connChecking: '確認中…',
+    dashProjects: 'Vercel のプロジェクト',
+    dashEmpty: 'この Vercel アカウントにはまだプロジェクトがありません。',
+    dashNeedTools: '2 つのコマンドラインツールを入れると、ここに Vercel のプロジェクトが表示されます。',
+    dashNeedVercel: 'Vercel にログインすると、アカウントのすべてのプロジェクトと GitHub との接続がここに表示されます。',
+    dashLoading: 'Vercel アカウントを読み込み中…',
+    dashLimited: 'プロジェクト名だけを読み取れました。Vercel に再度ログインすると接続状態も表示できます。',
+    dashOpenVercel: 'Vercel を開く',
+    dashThisFolder: 'このフォルダー',
+    flowNoRepo: 'リポジトリ未接続',
+    flowLive: '公開先',
+    flowNotDeployed: 'まだデプロイされていません',
+    flowBranch: 'ブランチ {name}',
+    flowMoreDomains: '他 {count} 件のアドレス',
+    stateCanceled: 'キャンセル',
+    noProjectDashboardHint: 'Vercel のプロジェクトはダッシュボードタブにあります。',
+    openDashboard: 'ダッシュボードを開く',
   },
   zh: {
     title: '发布',
@@ -429,6 +518,35 @@ const STRINGS = {
     sbDbPasswordPlaceholder: '数据库密码',
     sbDbPasswordSave: '保存并应用',
     sbAddDatabase: '连接数据库 (Supabase)',
+    checkingProject: '正在 GitHub 和 Vercel 上检查此项目的状态…',
+    stepsAllDone: '全部 {count} 个步骤已完成',
+    tabDashboard: '仪表板',
+    tabDeploy: '部署',
+    connections: '连接状态',
+    connTools: '命令行工具',
+    connToolsReady: 'GitHub CLI 和 Vercel CLI 已就绪',
+    connToolsMissing: '尚未安装: {tools}',
+    connNotSignedIn: '未登录',
+    connViaCli: '使用 GitHub CLI 的登录',
+    connViaSsh: '使用本机的 SSH 密钥',
+    connSignedInAs: '{username} — {how}',
+    connChecking: '检查中…',
+    dashProjects: 'Vercel 项目',
+    dashEmpty: '此 Vercel 账号还没有项目。',
+    dashNeedTools: '安装这两个命令行工具后，即可在此查看 Vercel 项目。',
+    dashNeedVercel: '登录 Vercel 后，可在此查看账号中的全部项目以及它们与 GitHub 的连接方式。',
+    dashLoading: '正在读取 Vercel 账号…',
+    dashLimited: '只能读取到项目名称。重新登录 Vercel 后即可查看连接方式。',
+    dashOpenVercel: '打开 Vercel',
+    dashThisFolder: '当前文件夹',
+    flowNoRepo: '未连接仓库',
+    flowLive: '线上地址',
+    flowNotDeployed: '尚未部署',
+    flowBranch: '分支 {name}',
+    flowMoreDomains: '另有 {count} 个地址',
+    stateCanceled: '已取消',
+    noProjectDashboardHint: '仪表板标签页中可以看到 Vercel 项目。',
+    openDashboard: '打开仪表板',
   },
 };
 
@@ -478,8 +596,32 @@ function freshSupabaseState() {
   };
 }
 
+function freshDashboardState() {
+  return {
+    loading: false,
+    loaded: false,
+    error: null,
+    // 'api' — the whole picture; 'cli' — names only, when the API could not be reached.
+    source: null,
+    scopes: [],
+    scopeId: undefined, // undefined until the CLI's current scope is read; null is the personal account
+    projects: [],
+    selected: null,
+  };
+}
+
 const state = {
   panelOpen: false,
+  // 'dashboard' (the Vercel account) or 'project' (publishing the folder in the focused pane).
+  tab: null,
+  dash: freshDashboardState(),
+  ghIdentity: { connected: false, username: null, via: null, api: false, push: false },
+  originSlug: null,
+  openGeneration: 0,
+  // `{ paneCwd }` while a link or a command chose the folder instead of the focused terminal.
+  pinned: null,
+  // A context change came in while a step was running; looked at when it is over.
+  followPending: false,
   root: null,
   forcedRoot: null,
   inspect: null,
@@ -513,6 +655,99 @@ function dataDir() {
   return plugin.info?.plugin.dataDir ?? '.';
 }
 
+/** Where CLI calls that are about the account rather than a project run. */
+function workDir() {
+  return state.root ?? dataDir();
+}
+
+/** The `owner/name` the focused folder pushes to, so the dashboard can point at the same project. */
+async function readOriginSlug() {
+  if (!state.root) return null;
+  const origin = await hasOrigin(state.root);
+  const described = origin ? describeRemote(origin) : null;
+  return described?.path ?? null;
+}
+
+// -- connections and the dashboard ----------------------------------------------------------------
+
+/** Which tools are installed and which accounts are signed in — no project needed. */
+async function refreshConnections() {
+  state.ghBin = await findGh(dataDir());
+  state.vercelBin = await findVercel(dataDir());
+  // Both take a couple of seconds and have nothing to do with each other.
+  // `vercel whoami` is also what refreshes an expired CLI session, before the API is asked for anything.
+  const [identity, vercel] = await Promise.all([
+    githubIdentity(state.ghBin, workDir()),
+    state.vercelBin ? vercelWhoami(state.vercelBin, workDir()) : Promise.resolve({ loggedIn: false, username: null }),
+  ]);
+  state.ghIdentity = identity;
+  state.gh = { loggedIn: identity.connected, username: identity.username };
+  state.vercel = vercel;
+}
+
+/** Every project on the Vercel account, with the repository each one deploys from. */
+async function loadDashboard({ force = false } = {}) {
+  if (state.dash.loading || (state.dash.loaded && !force)) return;
+  state.dash.loading = true;
+  state.dash.error = null;
+  await render();
+  try {
+    // Commands that are about the account run in the plugin's own folder, so it has to be there.
+    await fs.mkdir(dataDir(), { recursive: true }).catch(() => {});
+    await refreshConnections();
+    state.dash.projects = [];
+    state.dash.scopes = [];
+    state.dash.source = null;
+    if (state.vercel.loggedIn) {
+      const session = await vercelSession();
+      const user = session ? await vercelAccount(session) : null;
+      if (user) {
+        state.dash.scopes = await vercelScopes(session, user);
+        if (state.dash.scopeId === undefined) state.dash.scopeId = await currentTeamId();
+        if (!state.dash.scopes.some((scope) => scope.id === state.dash.scopeId)) state.dash.scopeId = null;
+        const scope = state.dash.scopes.find((candidate) => candidate.id === state.dash.scopeId) ?? state.dash.scopes[0];
+        const { ok, body } = await projectsPayload(session, { teamId: scope?.id ?? null });
+        if (ok) {
+          state.dash.projects = normalizeVercelProjects(body, { scope: scope?.slug ?? null });
+          state.dash.source = 'api';
+        }
+      }
+      if (state.dash.source !== 'api') {
+        state.dash.projects = (await projectsViaCli(state.vercelBin, workDir())).projects;
+        state.dash.source = 'cli';
+      }
+    }
+    state.originSlug = await readOriginSlug();
+    state.dash.loaded = true;
+    syncDashboardSelection();
+  } catch (err) {
+    state.dash.error = err?.message ?? String(err);
+  } finally {
+    state.dash.loading = false;
+    await render();
+  }
+}
+
+/**
+ * Keeps the dashboard pointed at something sensible: the project the focused folder pushes to when
+ * the folder just changed, otherwise whatever the user already picked.
+ */
+function syncDashboardSelection({ preferFolder = false } = {}) {
+  if (!state.dash.loaded) return;
+  const here = state.dash.projects.find(isCurrentFolder) ?? null;
+  if (preferFolder && here) state.dash.selected = here.id;
+  else if (!state.dash.projects.some((project) => project.id === state.dash.selected)) {
+    state.dash.selected = (here ?? state.dash.projects[0])?.id ?? null;
+  }
+}
+
+/** Opens the dashboard tab, loading it the first time. */
+async function showDashboard({ force = false } = {}) {
+  state.tab = 'dashboard';
+  await render();
+  await loadDashboard({ force });
+}
+
 // -- panel dispatch -------------------------------------------------------------------------------
 
 /** `retry` is what "Try again" runs — the step itself unless the caller wraps it in more. */
@@ -535,6 +770,10 @@ async function runStep(step, label, command, fn, retry) {
     state.busyLabel = '';
     state.loginCode = null;
     await render();
+  }
+  if (state.followPending && state.panelOpen) {
+    state.followPending = false;
+    await followFocusedTerminal(plugin.context, { quiet: true });
   }
 }
 
@@ -570,22 +809,45 @@ async function copyToClipboard(text) {
 
 // -- project detection ------------------------------------------------------------------------
 
+/**
+ * The folder decides which tab Launch opens on — the dashboard when there is nothing here to
+ * publish, the publishing steps when there is. This runs when the panel is opened and when the
+ * focused folder changes; a tab the user picks in between stays until one of those happens.
+ */
+async function pickTab() {
+  state.tab = state.step === 'no-project' || state.step === 'no-pane' ? 'dashboard' : 'project';
+  syncDashboardSelection({ preferFolder: true });
+  await render();
+  if (state.tab === 'dashboard') await loadDashboard();
+}
+
 async function openProject(cwd) {
+  // Folders can change faster than their checks finish: only the latest look may write its answer.
+  const generation = ++state.openGeneration;
   state.error = null;
   state.step = null;
   await render();
   if (!cwd) {
     state.root = null;
+    state.inspect = null;
+    state.originSlug = null;
     state.step = 'no-pane';
-    return render();
+    return pickTab();
   }
   const root = await findProjectRoot(cwd);
+  if (generation !== state.openGeneration) return;
   state.root = root;
   state.inspect = await inspectProject(root);
+  state.originSlug = await readOriginSlug();
+  if (generation !== state.openGeneration) return;
   if (!state.inspect.hasPackageJson && !state.inspect.hasIndexHtml) {
     state.step = 'no-project';
-    return render();
+    return pickTab();
   }
+  // Whether this is a web project is known from its files, in a moment. Its tab comes up now — the
+  // folder, its framework and a spinner — rather than the last folder's screen staying up for the
+  // few seconds GitHub and Vercel take to answer the checks below.
+  await pickTab();
   state.saved = await loadProject(dataDir(), root);
   state.sb = freshSupabaseState();
   state.needsRedeploy = false;
@@ -598,24 +860,37 @@ async function openProject(cwd) {
 
 /** Re-checks from wherever things stand and advances `state.step` to the next actionable one. */
 async function resume() {
+  const root = state.root;
+  // The user moved on to another folder while this one was being checked: its answer is dropped.
+  const moved = () => state.root !== root;
   state.ghBin = await findGh(dataDir());
+  if (moved()) return;
   state.vercelBin = await findVercel(dataDir());
+  if (moved()) return;
   if (!state.ghBin || !state.vercelBin) {
     state.step = 'tools';
     return render();
   }
-  state.gh = await ghAuthStatus(state.ghBin, state.root);
-  if (!state.gh.loggedIn) {
+  state.ghIdentity = await githubIdentity(state.ghBin, state.root);
+  if (moved()) return;
+  state.gh = { loggedIn: state.ghIdentity.connected, username: state.ghIdentity.username };
+  const origin = await hasOrigin(state.root);
+  if (moved()) return;
+  state.originSlug = origin ? (describeRemote(origin)?.path ?? null) : null;
+  // Pushing to a repository that already exists needs nothing more than the SSH key this computer
+  // already has. Creating one needs the GitHub CLI signed in — the only case that still asks.
+  if (!state.ghIdentity.connected || (!origin && !state.ghIdentity.api)) {
     state.step = 'gh-login';
     return render();
   }
-  const origin = await hasOrigin(state.root);
   // Already deployed by Vercel from GitHub (set up outside Launch): show that site and its deploys
   // instead of walking through a first launch — no remote to confirm, no env vars or Vercel CLI
   // login needed to look at it.
-  state.hosting = origin ? await vercelHosting(state.ghBin, state.root, { vercelBin: state.vercelBin }) : null;
+  state.hosting = origin && state.ghIdentity.api ? await vercelHosting(state.ghBin, state.root, { vercelBin: state.vercelBin }) : null;
+  if (moved()) return;
   if (state.hosting) {
     state.repoUrl = await repoUrl(state.ghBin, state.root);
+    if (moved()) return;
     state.launched = { url: state.hosting.url ?? state.launched?.url ?? null, time: state.hosting.latest?.time ?? null, hosted: true };
     state.step = 'launched';
     return render();
@@ -626,12 +901,15 @@ async function resume() {
     return render();
   }
   state.repoUrl = await repoUrl(state.ghBin, state.root);
+  if (moved()) return;
   state.vercel = await vercelWhoami(state.vercelBin, state.root);
+  if (moved()) return;
   if (!state.vercel.loggedIn) {
     state.step = 'vercel-login';
     return render();
   }
   state.sb.info = await inspectSupabase(state.root, state.inspect);
+  if (moved()) return;
   if ((state.sb.info.used || state.sb.wanted) && !state.sb.info.configured && !state.saved?.supabaseSkipped) {
     if (!['pick', 'connected'].includes(state.sb.phase)) state.sb.phase = 'connect';
     state.step = 'supabase';
@@ -643,6 +921,7 @@ async function resume() {
     return render();
   }
   state.envDiscovery = await discoverEnvVars(state.root);
+  if (moved()) return;
   if (state.envDiscovery.files.length > 0 && !state.saved?.envVarsDone) {
     // Values that only make sense on this computer start unselected.
     state.envSelection = Object.fromEntries(Object.entries(state.envDiscovery.vars).map(([k, entry]) => [k, !entry.isLocal]));
@@ -659,17 +938,29 @@ async function resume() {
 
 // -- step actions ---------------------------------------------------------------------------------
 
+/**
+ * What happens after a tool was installed or an account signed in: the project walk-through picks
+ * up where it now stands, and the dashboard — which is about the account, not the folder — is read
+ * again if it is the tab in front of the user.
+ */
+async function afterAccountChange() {
+  const hasProject = Boolean(state.root && state.inspect && (state.inspect.hasPackageJson || state.inspect.hasIndexHtml));
+  if (hasProject) await resume();
+  else await refreshConnections();
+  if (state.tab === 'dashboard') await loadDashboard({ force: true });
+}
+
 function installTools() {
   return runStep('tools', tr('installingTools'), 'gh / vercel install', async () => {
     state.ghBin = await ensureGh(dataDir(), { log: progress });
     state.vercelBin = await ensureVercel(dataDir(), { log: progress });
-    await resume();
+    await afterAccountChange();
   });
 }
 
 function startGithubLogin() {
   return runStep('gh-login', tr('ghLoggingIn'), 'gh auth login --web', async () => {
-    const result = await ghLogin(state.ghBin, state.root, {
+    const result = await ghLogin(state.ghBin, workDir(), {
       onCode: async (code, url) => {
         state.loginCode = { tool: 'github', code, url };
         await render();
@@ -683,7 +974,7 @@ function startGithubLogin() {
     });
     if (!result.ok) throw new Error('GitHub login did not finish.');
     state.gh = { loggedIn: true, username: result.username };
-    await resume();
+    await afterAccountChange();
   });
 }
 
@@ -697,7 +988,7 @@ async function doGithubSave() {
   await ensureVercelignore(state.root);
   const risky = await envFilesToRefuse(state.root);
   if (risky.length > 0) throw new Error(tr('envGuardError', { files: risky.join(', ') }));
-  const identity = state.gh.username ? await ghUserIdentity(state.ghBin, state.root) : null;
+  const identity = state.ghIdentity.api && state.gh.username ? await ghUserIdentity(state.ghBin, state.root) : null;
   if (identity) {
     await setLocalGitUserIfMissing(state.root, { name: identity.login, email: `${identity.id}+${identity.login}@users.noreply.github.com` });
   }
@@ -725,7 +1016,7 @@ function startGithubSave() {
 
 function startVercelLogin() {
   return runStep('vercel-login', tr('vercelLoggingIn'), 'vercel login', async () => {
-    const result = await vercelLogin(state.vercelBin, state.root, {
+    const result = await vercelLogin(state.vercelBin, workDir(), {
       onCode: async (code, url) => {
         state.loginCode = { tool: 'vercel', code, url };
         await render();
@@ -744,21 +1035,21 @@ function startVercelLogin() {
     if (!result.ok) throw new Error('Vercel login did not finish.');
     state.vercel = { loggedIn: true, username: result.username };
     state.vercelFallback = false;
-    await resume();
+    await afterAccountChange();
   });
 }
 
 async function openVercelLoginTerminal() {
-  await plugin.injectPrompt({ target: 'newTab', agent: 'shell', text: `${state.vercelBin} login`, cwd: state.root });
+  await plugin.injectPrompt({ target: 'newTab', agent: 'shell', text: `${state.vercelBin} login`, cwd: workDir() });
   await plugin.notify(tr('vercelLoginTerminalHint'), 'info');
 }
 
 function checkVercelLoginAgain() {
   return runStep('vercel-login', tr('checkAgain'), 'vercel whoami', async () => {
-    state.vercel = await vercelWhoami(state.vercelBin, state.root);
+    state.vercel = await vercelWhoami(state.vercelBin, workDir());
     if (!state.vercel.loggedIn) throw new Error(tr('stillNotLoggedIn'));
     state.vercelFallback = false;
-    await resume();
+    await afterAccountChange();
   });
 }
 
@@ -1070,6 +1361,9 @@ function stepsChecklist() {
     { id: 'deploy', label: tr('stepDeploy') },
   ].filter(Boolean);
   const items = rows.map((r) => ({ id: r.id, title: r.label, icon: STEP_ICON[statusOf(r.id)], tone: STEP_TONE[statusOf(r.id)] }));
+  // Every step behind it: the list says nothing a single line can't. One step still open, running
+  // or failed, and the whole list is back so it is clear which one.
+  if (items.every((item) => statusOf(item.id) === 'done')) return ui.badge(tr('stepsAllDone', { count: items.length }), 'success');
   return ui.list('steps', items);
 }
 
@@ -1095,6 +1389,10 @@ function loginCodeBlock(tool) {
     ),
     ui.text(tr('ghLoginWaiting'), 'muted'),
   ]);
+}
+
+function openDashboardButton() {
+  return ui.button('open-dashboard', tr('openDashboard'), { icon: 'globe', variant: 'primary' });
 }
 
 /** "Connect a database" for projects that don't use Supabase (yet), or skipped it earlier. */
@@ -1193,11 +1491,16 @@ function body() {
   const failed = state.error?.step === state.step;
   switch (state.step) {
     case null:
-      return ui.spinner();
+      return ui.spinner(tr('checkingProject'));
     case 'no-pane':
-      return ui.text(tr('noPane'), 'muted');
+      return ui.column([ui.text(tr('noPane'), 'muted'), openDashboardButton()]);
     case 'no-project':
-      return ui.column([ui.text(tr('noProjectTitle'), 'title'), ui.text(tr('noProjectBody', { root: state.root ?? '' }), 'muted')]);
+      return ui.column([
+        ui.text(tr('noProjectTitle'), 'title'),
+        ui.text(tr('noProjectBody', { root: state.root ?? '' }), 'muted'),
+        ui.text(tr('noProjectDashboardHint'), 'small'),
+        openDashboardButton(),
+      ]);
     case 'tools':
       return ui.column([
         ui.text(tr('toolsBody'), 'muted'),
@@ -1302,6 +1605,275 @@ function body() {
   }
 }
 
+// -- the dashboard ---------------------------------------------------------------------------------
+
+const PROVIDER_NAMES = { 'github.com': 'GitHub', 'gitlab.com': 'GitLab', 'bitbucket.org': 'Bitbucket' };
+
+// Frameworks are written the way their own sites write them, whether the name came from the
+// project's package.json or from Vercel.
+const FRAMEWORK_NAMES = {
+  angular: 'Angular',
+  astro: 'Astro',
+  blitzjs: 'Blitz.js',
+  'create-react-app': 'React',
+  docusaurus: 'Docusaurus',
+  'docusaurus-2': 'Docusaurus',
+  eleventy: 'Eleventy',
+  ember: 'Ember',
+  gatsby: 'Gatsby',
+  hugo: 'Hugo',
+  jekyll: 'Jekyll',
+  next: 'Next.js',
+  nextjs: 'Next.js',
+  node: 'Node.js',
+  nodejs: 'Node.js',
+  nuxt: 'Nuxt',
+  nuxtjs: 'Nuxt',
+  react: 'React',
+  remix: 'Remix',
+  solidstart: 'SolidStart',
+  static: 'Static site',
+  svelte: 'Svelte',
+  sveltekit: 'SvelteKit',
+  vite: 'Vite',
+  vue: 'Vue',
+  vuejs: 'Vue',
+};
+
+function frameworkName(slug) {
+  if (!slug) return null;
+  return FRAMEWORK_NAMES[String(slug).toLowerCase()] ?? slug;
+}
+
+function vercelStateLabel(deployState) {
+  switch (deployState) {
+    case 'ready':
+      return tr('stateSuccess');
+    case 'building':
+      return tr('stateBuilding');
+    case 'queued':
+      return tr('stateQueued');
+    case 'error':
+      return tr('stateFailure');
+    case 'canceled':
+      return tr('stateCanceled');
+    default:
+      // The CLI-only fallback knows a project is deployed but not how the last build went.
+      return null;
+  }
+}
+
+function vercelStateTone(deployState) {
+  if (deployState === 'ready') return 'success';
+  if (deployState === 'error') return 'error';
+  if (deployState === 'building' || deployState === 'queued') return 'warning';
+  return 'neutral';
+}
+
+// Columns one line of the diagram may take. The panel is docked and can be dragged narrow, and a
+// line that is longer than this wraps and breaks the connectors, so everything is cut to fit at
+// the width the panel opens at.
+const FLOW_COLUMNS = 34;
+
+/** Where one project's code lives, what Vercel made of it and where that ended up. */
+function projectFlow(project) {
+  const { repo, production } = project;
+  const branch = repo?.branch ?? production?.ref ?? null;
+  const extraDomains = Math.max((production?.domains.length ?? 0) - 1, 0);
+  const title = `Vercel · ${project.name}`;
+  return flowDiagram([
+    {
+      filled: Boolean(repo),
+      title: repo ? (PROVIDER_NAMES[repo.host] ?? repo.host) : 'GitHub',
+      lines: repo ? [shorten(repo.slug, FLOW_COLUMNS), branch ? shorten(tr('flowBranch', { name: branch }), FLOW_COLUMNS) : null] : [tr('flowNoRepo')],
+    },
+    {
+      filled: true,
+      title: shorten(title, FLOW_COLUMNS + 2),
+      lines: [
+        shorten(
+          [frameworkName(project.framework), production ? vercelStateLabel(production.state) : null, production?.createdAt ? relativeTime(production.createdAt) : null]
+            .filter(Boolean)
+            .join(' · '),
+          FLOW_COLUMNS,
+        ),
+        production?.sha ? shorten([production.sha, production.message].filter(Boolean).join('  '), FLOW_COLUMNS) : null,
+      ],
+    },
+    {
+      filled: Boolean(production?.domain),
+      title: tr('flowLive'),
+      lines: production?.domain
+        ? [shorten(production.domain, FLOW_COLUMNS), extraDomains > 0 ? tr('flowMoreDomains', { count: extraDomains }) : null]
+        : [tr('flowNotDeployed')],
+    },
+  ]).join('\n');
+}
+
+/** The project the dashboard is showing in detail. */
+function selectedProject() {
+  return state.dash.projects.find((project) => project.id === state.dash.selected) ?? null;
+}
+
+/** Whether a dashboard project is the repository the focused folder pushes to. */
+function isCurrentFolder(project) {
+  return Boolean(state.originSlug && project.repo && project.repo.slug.toLowerCase() === state.originSlug.toLowerCase());
+}
+
+function connectionItems() {
+  // Until the first look has finished, nothing is "missing" — it is simply not known yet.
+  if (state.dash.loading && !state.dash.loaded) {
+    return ['tools', 'github', 'vercel'].map((id, index) => ({
+      id,
+      title: index === 0 ? tr('connTools') : index === 1 ? 'GitHub' : 'Vercel',
+      subtitle: tr('connChecking'),
+      icon: ['terminal', 'git-branch', 'cloud'][index],
+      tone: 'neutral',
+    }));
+  }
+  const toolsReady = Boolean(state.ghBin && state.vercelBin);
+  const missing = [!state.ghBin ? 'GitHub CLI' : null, !state.vercelBin ? 'Vercel CLI' : null].filter(Boolean).join(', ');
+  const gh = state.ghIdentity;
+  const scope = state.dash.scopes.find((candidate) => candidate.id === state.dash.scopeId);
+  return [
+    {
+      id: 'tools',
+      title: tr('connTools'),
+      subtitle: toolsReady ? tr('connToolsReady') : tr('connToolsMissing', { tools: missing }),
+      icon: 'terminal',
+      tone: toolsReady ? 'success' : 'warning',
+    },
+    {
+      id: 'github',
+      title: 'GitHub',
+      subtitle: gh.connected ? tr('connSignedInAs', { username: gh.username ?? '', how: tr(gh.via === 'ssh' ? 'connViaSsh' : 'connViaCli') }) : tr('connNotSignedIn'),
+      icon: 'git-branch',
+      tone: gh.connected ? 'success' : 'warning',
+    },
+    {
+      id: 'vercel',
+      title: 'Vercel',
+      subtitle: state.vercel.loggedIn
+        ? [state.vercel.username, scope && !scope.personal ? scope.name : null].filter(Boolean).join(' · ')
+        : tr('connNotSignedIn'),
+      icon: 'cloud',
+      tone: state.vercel.loggedIn ? 'success' : 'warning',
+    },
+  ];
+}
+
+/** Only what is still missing gets a button, so the row is empty once everything is connected. */
+function connectionActions() {
+  if (state.running || (state.dash.loading && !state.dash.loaded)) return null;
+  const buttons = [];
+  const primary = () => (buttons.length === 0 ? 'primary' : 'secondary');
+  if (!state.ghBin || !state.vercelBin) buttons.push(ui.button('install-tools', tr('installTools'), { icon: 'download', variant: primary() }));
+  if (state.ghBin && !state.ghIdentity.connected) buttons.push(ui.button('gh-login-start', tr('ghLoginButton'), { icon: 'git-branch', variant: primary() }));
+  if (state.vercelBin && !state.vercel.loggedIn) buttons.push(ui.button('vercel-login-start', tr('vercelLoginButton'), { icon: 'cloud', variant: primary() }));
+  if (state.vercelBin && !state.vercel.loggedIn && state.vercelFallback) buttons.push(ui.button('vercel-login-check', tr('checkAgain'), { icon: 'refresh-cw' }));
+  if (state.vercel.loggedIn) buttons.push(ui.button('dash-open-vercel-home', tr('dashOpenVercel'), { icon: 'arrow-up-right' }));
+  return buttons.length > 0 ? ui.row(buttons, { gap: 'small', wrap: true }) : null;
+}
+
+function dashboardProjectItems() {
+  return state.dash.projects.map((project) => {
+    const here = isCurrentFolder(project);
+    const when = project.production?.createdAt ?? project.updatedAt;
+    return {
+      id: project.id,
+      title: project.name,
+      subtitle: [project.repo?.slug ?? tr('flowNoRepo'), here ? tr('dashThisFolder') : null].filter(Boolean).join(' · '),
+      detail: when ? relativeTime(when) : null,
+      icon: here ? 'folder-open' : 'globe',
+      tone: project.production ? vercelStateTone(project.production.state) : 'neutral',
+    };
+  });
+}
+
+function projectCard(project) {
+  const production = project.production;
+  return ui.column([
+    ui.row(
+      [
+        ui.text(project.name, 'title'),
+        production ? (vercelStateLabel(production.state) ? ui.badge(vercelStateLabel(production.state), vercelStateTone(production.state)) : null) : ui.badge(tr('flowNotDeployed'), 'neutral'),
+      ],
+      { gap: 'small', wrap: true },
+    ),
+    ui.text(projectFlow(project), 'code'),
+    ui.row(
+      [
+        production?.domain ? ui.button('dash-open-site', tr('openSite'), { icon: 'external-link', variant: 'primary' }) : null,
+        project.repo ? ui.button('dash-open-repo', tr('openRepo'), { icon: 'git-branch' }) : null,
+        project.inspectUrl ? ui.button('dash-open-project', tr('hostedInspect'), { icon: 'arrow-up-right' }) : null,
+      ],
+      { gap: 'small', wrap: true },
+    ),
+  ]);
+}
+
+function dashboardProjects() {
+  if (state.dash.loading) return ui.spinner(tr('dashLoading'));
+  if (!state.vercelBin) return ui.text(tr('dashNeedTools'), 'muted');
+  if (!state.vercel.loggedIn) return ui.text(tr('dashNeedVercel'), 'muted');
+  const items = dashboardProjectItems();
+  const selected = selectedProject();
+  const scopeOptions = state.dash.scopes.map((scope) => ({ value: scope.id ?? 'personal', label: scope.personal ? scope.name || scope.slug : scope.name }));
+  return ui.column([
+    ui.section(`${tr('dashProjects')} · ${items.length}`, [
+      scopeOptions.length > 1 ? ui.choice('dash-scope', scopeOptions, state.dash.scopeId ?? 'personal') : null,
+      state.dash.source === 'cli' ? ui.text(tr('dashLimited'), 'small') : null,
+      ui.list('dash-projects', items, { empty: tr('dashEmpty') }),
+    ]),
+    selected ? ui.divider() : null,
+    selected ? projectCard(selected) : null,
+  ]);
+}
+
+/** A failed install or login — the steps the dashboard itself starts, so it answers for them. */
+function accountError() {
+  if (state.running || !state.error) return null;
+  return ['tools', 'gh-login', 'vercel-login'].includes(state.error.step) ? state.error.message : null;
+}
+
+/** Whether there is nothing left to install or to sign in to. */
+function everythingConnected() {
+  return Boolean(state.ghBin && state.vercelBin) && state.ghIdentity.connected && state.vercel.loggedIn;
+}
+
+/**
+ * Connections take the room they need and no more: one line of two badges once both accounts are
+ * there, the full list with its buttons while something is still missing or being looked at.
+ */
+function connectionsBlock() {
+  if (state.dash.loading && !state.dash.loaded) return ui.section(tr('connections'), [ui.list('connections', connectionItems())]);
+  if (!everythingConnected()) return ui.section(tr('connections'), [ui.list('connections', connectionItems()), connectionActions()]);
+  const github = [state.ghIdentity.username, state.ghIdentity.via === 'ssh' ? 'SSH' : null].filter(Boolean).join(' · ');
+  return ui.row(
+    [
+      ui.badge(`GitHub · ${github}`, 'success'),
+      ui.badge(`Vercel · ${state.vercel.username ?? ''}`, 'success'),
+      ui.button('dash-open-vercel-home', tr('dashOpenVercel'), { icon: 'arrow-up-right', variant: 'ghost' }),
+    ],
+    { gap: 'small', wrap: true },
+  );
+}
+
+function dashboardBody() {
+  return ui.column([
+    connectionsBlock(),
+    state.running ? ui.column([ui.spinner(state.busyLabel), ...state.progressLines.map((line) => ui.text(line, 'small'))]) : null,
+    state.loginCode ? loginCodeBlock(state.loginCode.tool) : null,
+    state.vercelFallback && !state.vercel.loggedIn ? ui.text(tr('vercelFallbackBody'), 'small') : null,
+    // A login started here fails here: `errorBlock` only shows a failure of the step the
+    // publishing walk-through is on, which is not the tab the user is looking at.
+    state.dash.error ? ui.text(state.dash.error, 'error') : null,
+    accountError() ? ui.column([ui.text(accountError(), 'error'), ui.button('retry', tr('tryAgain'), { icon: 'refresh-cw', variant: 'primary' })]) : null,
+    everythingConnected() ? null : ui.divider(),
+    dashboardProjects(),
+  ]);
+}
+
 function deployStateLabel(deployState) {
   switch (deployState) {
     case 'success':
@@ -1365,14 +1937,30 @@ function hostedBody() {
 async function render() {
   if (!state.panelOpen) return;
   const framework = state.inspect?.framework;
+  // No tabs until the first look at the folder has decided which one to open on.
+  const tabs =
+    state.tab === null
+      ? null
+      : ui.choice(
+          'tab',
+          [
+            { value: 'dashboard', label: tr('tabDashboard') },
+            { value: 'project', label: tr('tabDeploy') },
+          ],
+          state.tab,
+        );
+  const project = [
+    state.root ? ui.text(state.root, 'small') : null,
+    state.inspect && state.step !== 'no-project' ? ui.text(framework ? tr('frameworkLine', { framework: frameworkName(framework) }) : tr('frameworkUnknown'), 'muted') : null,
+    state.step && state.step !== 'no-project' && state.step !== 'no-pane' ? stepsChecklist() : null,
+    state.step ? ui.divider() : null,
+    body(),
+  ];
   await plugin.setPanel(
     ui.column([
       ui.row([ui.text(tr('title'), 'title'), ui.button('refresh', tr('refresh'), { icon: 'refresh-cw', variant: 'ghost' })], { gap: 'small' }),
-      state.root ? ui.text(state.root, 'small') : null,
-      state.inspect && state.step !== 'no-project' ? ui.text(framework ? tr('frameworkLine', { framework }) : tr('frameworkUnknown'), 'muted') : null,
-      state.step && state.step !== 'no-project' && state.step !== 'no-pane' ? stepsChecklist() : null,
-      state.step ? ui.divider() : null,
-      body(),
+      tabs,
+      ...(state.tab === 'dashboard' ? [dashboardBody()] : project),
     ]),
   );
 }
@@ -1383,11 +1971,33 @@ function projectCwdFromContext(context) {
   return context?.pane?.cwd ?? null;
 }
 
+/** The folder of the terminal in front of the user, from this event or the last context Agentty sent. */
+function focusedCwd(context) {
+  return projectCwdFromContext(context) ?? projectCwdFromContext(plugin.context);
+}
+
+/**
+ * Launch is about the terminal the user is looking at: its folder is the project, and that folder
+ * picks the tab. A folder given by a link or a command (`state.pinned`) stays until that terminal
+ * moves somewhere else or the panel closes. `quiet`: a context change with the same folder — the
+ * pane's status, say — leaves the panel alone instead of re-picking the tab under the user.
+ */
+async function followFocusedTerminal(context, { quiet = false } = {}) {
+  const cwd = focusedCwd(context);
+  if (state.pinned && (cwd === null || cwd === state.pinned.paneCwd)) return quiet ? null : pickTab();
+  state.pinned = null;
+  if (!cwd) return state.root && quiet ? null : openProject(null);
+  const root = await findProjectRoot(cwd);
+  if (root !== state.root || state.step === 'no-pane') return openProject(cwd);
+  return quiet ? null : pickTab();
+}
+
 async function openForContext(context, overridePath) {
   await plugin.showPanel();
   state.panelOpen = true;
-  const cwd = overridePath ?? projectCwdFromContext(context) ?? plugin.context?.pane?.cwd ?? null;
-  await openProject(cwd);
+  const paneCwd = focusedCwd(context);
+  state.pinned = overridePath ? { paneCwd } : null;
+  await openProject(overridePath ?? paneCwd ?? null);
 }
 
 async function openValidAbsoluteDir(candidate, context) {
@@ -1401,20 +2011,65 @@ async function openValidAbsoluteDir(candidate, context) {
 plugin
   .onPanelOpen(async (context) => {
     state.panelOpen = true;
-    if (!state.root) await openProject(projectCwdFromContext(context));
-    else await render();
+    await followFocusedTerminal(context);
   })
   .onPanelClose(() => {
     state.panelOpen = false;
+    // A folder given by a link or a command is for this opening only.
+    state.pinned = null;
   })
   .onContextChange(async (context) => {
-    if (!state.panelOpen || state.running) return;
-    const cwd = projectCwdFromContext(context);
-    if (!cwd) return;
-    const root = await findProjectRoot(cwd);
-    if (root !== state.root) await openProject(cwd);
+    // Closed: the next opening looks for itself. Busy: a step must not have its folder changed
+    // under it, so the look waits until the step is over (see `runStep`).
+    if (!state.panelOpen) return;
+    if (state.running) {
+      state.followPending = true;
+      return;
+    }
+    await followFocusedTerminal(context, { quiet: true });
   })
-  .onEvent('refresh', () => (state.root ? resume() : openProject(projectCwdFromContext(plugin.context))))
+  .onEvent('refresh', async () => {
+    if (state.tab === 'dashboard') return loadDashboard({ force: true });
+    // Refresh is also "look at what I am looking at": a folder changed since is picked up here.
+    const cwd = focusedCwd(plugin.context);
+    if (cwd && !state.pinned && (await findProjectRoot(cwd)) !== state.root) return openProject(cwd);
+    return state.root ? resume() : openProject(cwd);
+  })
+  .onEvent('tab', (event) => {
+    const picked = String(event.value ?? '');
+    if (picked !== 'dashboard' && picked !== 'project') return null;
+    state.tab = picked;
+    return picked === 'dashboard' ? showDashboard() : render();
+  })
+  .onEvent('open-dashboard', () => showDashboard())
+  .onEvent('dash-projects', (event) => {
+    // Only a row that is actually on screen: an id from anywhere else changes nothing.
+    if (event.event !== 'select' || !state.dash.projects.some((project) => project.id === event.item)) return null;
+    state.dash.selected = event.item;
+    return render();
+  })
+  .onEvent('dash-scope', (event) => {
+    const picked = String(event.value ?? '');
+    const scopeId = picked === 'personal' ? null : picked;
+    // Only one of the account's own scopes: an id from anywhere else is not asked about.
+    if (scopeId === state.dash.scopeId || !state.dash.scopes.some((scope) => scope.id === scopeId)) return null;
+    state.dash.scopeId = scopeId;
+    state.dash.selected = null;
+    return loadDashboard({ force: true });
+  })
+  .onEvent('dash-open-site', async () => {
+    const domain = selectedProject()?.production?.domain;
+    if (domain) await plugin.openUrl(domain.startsWith('http') ? domain : `https://${domain}`);
+  })
+  .onEvent('dash-open-repo', async () => {
+    const url = selectedProject()?.repo?.url;
+    if (url) await plugin.openUrl(url);
+  })
+  .onEvent('dash-open-project', async () => {
+    const url = selectedProject()?.inspectUrl;
+    if (url) await plugin.openUrl(url);
+  })
+  .onEvent('dash-open-vercel-home', () => plugin.openUrl('https://vercel.com/dashboard'))
   .onEvent('install-tools', installTools)
   .onEvent('gh-login-start', startGithubLogin)
   .onEvent('copy-code', async () => {
@@ -1479,6 +2134,9 @@ plugin
   .command('launch.open', ({ context, args }) => (typeof args?.path === 'string' ? openValidAbsoluteDir(args.path, context) : openForContext(context)))
   .command('launch.redeploy', async ({ context }) => {
     await openForContext(context);
+    // This command is about the folder, so it shows the folder's tab whatever was pinned.
+    state.tab = 'project';
+    await render();
     if (state.step === 'launched') await startUpdateSite();
   })
   .onUrl('open', ({ query, context }) => openValidAbsoluteDir(query?.path, context))

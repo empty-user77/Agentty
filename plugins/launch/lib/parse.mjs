@@ -403,3 +403,185 @@ export function parseInspectDomains(output) {
   return [...custom, ...vercel];
 }
 
+
+// -- the dashboard: Vercel projects and how they hang together with their repositories ----------
+
+/** Vercel's `readyState` in the words the panel uses. */
+export function deployStateOf(readyState) {
+  switch (String(readyState ?? '').toUpperCase()) {
+    case 'READY':
+      return 'ready';
+    case 'ERROR':
+      return 'error';
+    case 'CANCELED':
+    case 'DELETED':
+      return 'canceled';
+    case 'BUILDING':
+    case 'INITIALIZING':
+      return 'building';
+    case 'QUEUED':
+      return 'queued';
+    default:
+      return 'unknown';
+  }
+}
+
+// Everything below builds an address out of what Vercel answers, and an address is opened in a
+// browser: a name that is not a plain name, or a host that is not a plain host, is dropped rather
+// than pasted into a URL.
+const NAME_SEGMENT = /^[A-Za-z0-9._-]{1,100}$/;
+const HOSTNAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+
+/** `{ host, owner, name, slug, url, branch }` of the repository a Vercel project deploys from, or null. */
+export function repoOfVercelLink(link) {
+  if (!link || typeof link !== 'object') return null;
+  const type = String(link.type ?? '').toLowerCase();
+  const branch = typeof link.productionBranch === 'string' && link.productionBranch ? link.productionBranch : null;
+  const pick = (host, owner, name) =>
+    NAME_SEGMENT.test(String(owner ?? '')) && NAME_SEGMENT.test(String(name ?? ''))
+      ? { host, owner, name, slug: `${owner}/${name}`, url: `https://${host}/${owner}/${name}`, branch }
+      : null;
+  if (type === 'github') return pick('github.com', link.org, link.repo);
+  if (type === 'gitlab') return pick('gitlab.com', link.projectNamespace, link.projectName);
+  if (type === 'bitbucket') return pick('bitbucket.org', link.owner, link.slug);
+  return null;
+}
+
+/** Whether a string is a plain host name, safe to put in an `https://` address. */
+export function isHostname(value) {
+  return typeof value === 'string' && HOSTNAME.test(value);
+}
+
+/** Whether a string is a plain name, safe to put in a path segment of an address. */
+export function isNameSegment(value) {
+  return typeof value === 'string' && NAME_SEGMENT.test(value);
+}
+
+/** The address to show for a production deployment: a domain of its own before a Vercel one. */
+export function pickPrimaryDomain(aliases, fallback = null) {
+  const hosts = (Array.isArray(aliases) ? aliases : []).filter((a) => typeof a === 'string' && HOSTNAME.test(a));
+  const custom = hosts.filter((h) => !h.endsWith('.vercel.app'));
+  if (custom.length > 0) return custom[0];
+  const plain = hosts.filter((h) => !h.includes('-git-')).sort((a, b) => a.length - b.length);
+  return plain[0] ?? hosts[0] ?? fallback;
+}
+
+function firstLine(text) {
+  const line = String(text ?? '').split('\n')[0].trim();
+  return line.length > 0 ? line : null;
+}
+
+/** The commit metadata of a deployment, whichever git provider it came from. */
+function commitOf(meta) {
+  if (!meta || typeof meta !== 'object') return { ref: null, sha: null, message: null };
+  const value = (name) => meta[`github${name}`] ?? meta[`gitlab${name}`] ?? meta[`bitbucket${name}`] ?? null;
+  const sha = value('CommitSha');
+  return {
+    ref: typeof value('CommitRef') === 'string' ? value('CommitRef') : null,
+    sha: typeof sha === 'string' && sha.length >= 7 ? sha.slice(0, 7) : null,
+    message: firstLine(value('CommitMessage')),
+  };
+}
+
+/**
+ * One project from Vercel's `/v9/projects`, in the shape the dashboard draws:
+ * `{ id, name, framework, repo, production, updatedAt }`. `null` when it isn't a project.
+ */
+export function normalizeVercelProject(raw, { scope = null } = {}) {
+  if (!raw || typeof raw !== 'object' || typeof raw.name !== 'string' || raw.name.length === 0) return null;
+  const target =
+    (raw.targets && typeof raw.targets === 'object' ? raw.targets.production : null) ??
+    (Array.isArray(raw.latestDeployments) ? raw.latestDeployments.find((d) => d?.target === 'production') : null) ??
+    null;
+  const commit = commitOf(target?.meta);
+  const deploymentUrl = typeof target?.url === 'string' && HOSTNAME.test(target.url) ? target.url : null;
+  const domains = Array.isArray(target?.alias) ? target.alias.filter((a) => typeof a === 'string') : [];
+  const production = target
+    ? {
+        state: deployStateOf(target.readyState ?? target.state),
+        domain: pickPrimaryDomain(domains, deploymentUrl),
+        domains,
+        url: deploymentUrl ? `https://${deploymentUrl}` : null,
+        createdAt: Number.isFinite(target.createdAt) ? target.createdAt : null,
+        ...commit,
+      }
+    : null;
+  return {
+    id: typeof raw.id === 'string' ? raw.id : raw.name,
+    name: raw.name,
+    framework: typeof raw.framework === 'string' && raw.framework ? raw.framework : null,
+    repo: repoOfVercelLink(raw.link),
+    production,
+    updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : null,
+    // `https://vercel.com/<scope>/<project>` — the project's page, not a deployment's.
+    inspectUrl: NAME_SEGMENT.test(String(scope ?? '')) && NAME_SEGMENT.test(raw.name) ? `https://vercel.com/${scope}/${raw.name}` : null,
+  };
+}
+
+/** Every project in a `/v9/projects` answer, newest first. */
+export function normalizeVercelProjects(payload, options = {}) {
+  const list = Array.isArray(payload) ? payload : Array.isArray(payload?.projects) ? payload.projects : [];
+  return list
+    .map((raw) => normalizeVercelProject(raw, options))
+    .filter(Boolean)
+    .sort((a, b) => (b.production?.createdAt ?? b.updatedAt ?? 0) - (a.production?.createdAt ?? a.updatedAt ?? 0));
+}
+
+/**
+ * The code → build → live diagram drawn under a project. Every stop is
+ * `{ filled, title, lines }` and already carries formatted, translated text: this only
+ * decides the shape, and keeps each line short enough for a narrow panel.
+ */
+export function flowDiagram(stops) {
+  const list = (stops ?? []).filter(Boolean);
+  const out = [];
+  list.forEach((stop, index) => {
+    const last = index === list.length - 1;
+    out.push(`${stop.filled === false ? '○' : '●'} ${stop.title}`);
+    for (const line of (stop.lines ?? []).filter(Boolean)) out.push(`${last ? ' ' : '│'} ${line}`);
+    if (!last) out.push('│');
+  });
+  return out;
+}
+
+/** Roughly the columns a string takes in a monospace block: the wide scripts count double. */
+export function displayWidth(text) {
+  let width = 0;
+  for (const char of String(text ?? '')) {
+    const code = char.codePointAt(0);
+    const wide =
+      (code >= 0x1100 && code <= 0x115f) ||
+      (code >= 0x2e80 && code <= 0xa4cf) ||
+      (code >= 0xa960 && code <= 0xa97f) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe30 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1f9ff) ||
+      (code >= 0x20000 && code <= 0x3fffd);
+    width += wide ? 2 : 1;
+  }
+  return width;
+}
+
+/** Cuts a diagram line to `columns`, counting Korean, Japanese and Chinese as the two columns they take. */
+export function shortenToWidth(text, columns = 44) {
+  const value = String(text ?? '').trim();
+  if (displayWidth(value) <= columns) return value;
+  let out = '';
+  let width = 0;
+  for (const char of value) {
+    const next = width + displayWidth(char);
+    if (next > columns - 1) break;
+    out += char;
+    width = next;
+  }
+  return `${out}…`;
+}
+
+/** The account an SSH key on this computer belongs to, from what `ssh -T git@github.com` answers. */
+export function sshGithubLogin(output) {
+  const match = /(?:^|\n)\s*Hi ([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)!\s+You've successfully authenticated/.exec(String(output ?? ''));
+  return match ? match[1] : null;
+}
