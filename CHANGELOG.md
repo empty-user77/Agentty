@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- On Windows and Linux, terminals keep the bundled JetBrains Mono when no font was picked, and
+  D2Coding is no longer recommended there: PowerShell's glyphs break in it. macOS is unchanged.
+
+### Fixed
+- Database query results scroll sideways: columns past the right edge of the page can be reached.
+- On Windows, linking the Codex session folders and showing notifications no longer fail when
+  Agentty (or what starts it) runs below PowerShell 7.
+
 ## [0.1.18] - 2026-09-23
 
 ### Added

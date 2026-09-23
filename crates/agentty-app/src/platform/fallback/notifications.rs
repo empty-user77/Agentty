@@ -8,7 +8,7 @@ pub fn show(_pane_id: u64, title: &str, body: &str) {
     let (title, body) = (clean(title, 120), clean(body, 300));
     std::thread::spawn(move || {
         #[cfg(windows)]
-        let _ = agentty_bridge::process::command("powershell.exe")
+        let _ = agentty_bridge::process::windows_powershell()
             .args([
                 "-NoProfile",
                 "-NonInteractive",

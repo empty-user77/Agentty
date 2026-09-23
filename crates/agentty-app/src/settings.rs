@@ -137,16 +137,18 @@ pub fn korean_font_installed(cx: &App) -> bool {
     })
 }
 
-/// The font the terminals use when the user has not picked one: D2Coding for someone reading
-/// Agentty in Korean who has it installed, the bundled font otherwise.
+/// The font the terminals use when the user has not picked one: on macOS, D2Coding for someone
+/// reading Agentty in Korean who has it installed; the bundled font otherwise, and always on Windows
+/// and Linux, where D2Coding lacks glyphs PowerShell and other shells draw.
 pub fn default_terminal_font(cx: &App) -> &'static str {
     let language = settings(cx).language.resolved();
-    // Asked only in Korean: finding out means loading a font family.
-    default_font_for(language, language == Language::Ko && korean_font_installed(cx))
+    let mac = cfg!(target_os = "macos");
+    // Asked only where it can matter: finding out means loading a font family.
+    default_font_for(mac, language, mac && language == Language::Ko && korean_font_installed(cx))
 }
 
-fn default_font_for(language: Language, korean_font_installed: bool) -> &'static str {
-    if language == Language::Ko && korean_font_installed {
+fn default_font_for(mac: bool, language: Language, korean_font_installed: bool) -> &'static str {
+    if mac && language == Language::Ko && korean_font_installed {
         KOREAN_FONT
     } else {
         BUNDLED_FONT
@@ -781,11 +783,13 @@ mod browser_settings_tests {
 
     #[test]
     fn the_font_is_only_chosen_for_someone_who_did_not_pick_one() {
-        // Korean with D2Coding installed gets it; anyone else, or without it, the bundled font.
-        assert_eq!(default_font_for(Language::Ko, true), KOREAN_FONT);
-        assert_eq!(default_font_for(Language::Ko, false), BUNDLED_FONT);
-        assert_eq!(default_font_for(Language::En, true), BUNDLED_FONT);
-        assert_eq!(default_font_for(Language::Ja, true), BUNDLED_FONT);
+        // macOS in Korean with D2Coding installed gets it; anyone else, or without it, the bundled font.
+        assert_eq!(default_font_for(true, Language::Ko, true), KOREAN_FONT);
+        assert_eq!(default_font_for(true, Language::Ko, false), BUNDLED_FONT);
+        assert_eq!(default_font_for(true, Language::En, true), BUNDLED_FONT);
+        assert_eq!(default_font_for(true, Language::Ja, true), BUNDLED_FONT);
+        // Windows and Linux always get the bundled font: D2Coding breaks PowerShell's glyphs.
+        assert_eq!(default_font_for(false, Language::Ko, true), BUNDLED_FONT);
 
         // A fresh install has picked nothing.
         assert!(Settings::default().font_family.is_empty());

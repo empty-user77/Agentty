@@ -486,15 +486,16 @@ fn link_dir(source: &Path, link: &Path) -> Result<()> {
     // Not `cmd /C mklink /J`: cmd.exe re-parses its command line and would act on `&`, `%`, `^`
     // in a path (user names, `CODEX_HOME`). The paths travel as environment variables, so the
     // script is a constant and no path is ever parsed as code.
-    let status = crate::process::command("powershell.exe")
+    let output = crate::process::windows_powershell()
         .args(["-NoProfile", "-NonInteractive", "-Command", JUNCTION_SCRIPT])
         .env("AGENTTY_JUNCTION_LINK", link)
         .env("AGENTTY_JUNCTION_TARGET", source)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-    ensure!(status.success() && link.is_dir(), "could not create a directory junction");
+        .output()?;
+    // PowerShell's own words, so a refusal says why (the first line is enough).
+    let why = String::from_utf8_lossy(&output.stderr).lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+    ensure!(output.status.success() && link.is_dir(), "could not create a directory junction: {why}");
     Ok(())
 }
 

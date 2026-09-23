@@ -12,6 +12,17 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
     command
 }
 
+/// Windows PowerShell 5.1 for a background script, without the `PSModulePath` it would inherit.
+/// PowerShell 7 puts its own module folders there, and everything started below a `pwsh` window
+/// (an Agentty pane, a CI runner launched from one) passes that on: 5.1 then loads 7's modules and
+/// fails on its own basic commands (`New-Item`, …). Without the variable it builds its default.
+pub fn windows_powershell() -> Command {
+    let system = std::env::var_os("SystemRoot").map(|root| PathBuf::from(root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe"));
+    let mut command = command(system.filter(|p| p.is_file()).map(PathBuf::into_os_string).unwrap_or_else(|| "powershell.exe".into()));
+    command.env_remove("PSModulePath");
+    command
+}
+
 pub fn hide_window(command: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
@@ -290,6 +301,12 @@ fn is_program(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_powershell_drops_the_inherited_module_path() {
+        let command = windows_powershell();
+        assert!(command.get_envs().any(|(key, value)| key == "PSModulePath" && value.is_none()));
+    }
 
     #[test]
     fn finds_programs_on_a_path() {
