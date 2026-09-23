@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Windows: panes now remember where you are. A `cd` in PowerShell is followed, so after a restart
+  every tab and split reopens in its own folder, and new tabs and splits open where the current
+  pane is, instead of all falling back to the workspace folder.
+- Windows: Claude Code and Codex running in a pane are now recognised (status, session, model),
+  including when installed through npm.
+- Claude Code or Codex started by hand in a terminal comes back after a restart, resuming its
+  conversation, like an agent tab Agentty started. An agent that moved to another conversation
+  (`/clear`, `/resume`) resumes the one it was in last, not the one it started with.
+
 ## [0.1.20] - 2026-09-23
 
 ### Added

@@ -245,6 +245,29 @@ impl NodeSnapshot {
     }
 }
 
+/// What a pane is saved as: its kind and the session to resume. `running` is the agent in the
+/// pane now, `live` the session it is in, `launched` the one the pane was started with.
+///
+/// Claude or Codex typed into a shell comes back as that agent, resumed, once its session is known
+/// (the shell is where quitting it leads anyway). `/clear` and `/resume` move an agent to another
+/// session than it was started with: the one running now is the one to come back to.
+pub fn saved_session(
+    spec: PaneKind,
+    running: Option<PaneKind>,
+    live: Option<String>,
+    launched: Option<String>,
+) -> (PaneKind, Option<String>) {
+    let kind = match spec {
+        PaneKind::Shell => running.filter(|_| live.is_some()).unwrap_or(PaneKind::Shell),
+        kind => kind,
+    };
+    let live = live.filter(|_| running == Some(kind));
+    match kind {
+        PaneKind::Shell => (kind, None),
+        _ => (kind, live.or(launched)),
+    }
+}
+
 impl PaneSnapshot {
     /// How to bring this pane back: resume the agent session if its transcript still exists.
     pub fn launch_spec(&self) -> LaunchSpec {
@@ -276,6 +299,26 @@ impl PartialEq for PaneSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panes_are_saved_with_the_session_running_now() {
+        let id = |s: &str| Some(s.to_string());
+        use PaneKind::{Claude, Codex, Shell};
+        // A plain shell, and a shell whose agent's session is not known yet.
+        assert_eq!(saved_session(Shell, None, None, None), (Shell, None));
+        assert_eq!(saved_session(Shell, Some(Claude), None, None), (Shell, None));
+        // Claude typed into a shell comes back as Claude in that session.
+        assert_eq!(saved_session(Shell, Some(Claude), id("typed"), None), (Claude, id("typed")));
+        assert_eq!(saved_session(Shell, Some(Codex), id("typed"), None), (Codex, id("typed")));
+        // ... and as a shell once it quit, even though the pane remembers the session.
+        assert_eq!(saved_session(Shell, None, id("typed"), None), (Shell, None));
+        // A launched Claude after `/clear` resumes the new session.
+        assert_eq!(saved_session(Claude, Some(Claude), id("after-clear"), id("launched")), (Claude, id("after-clear")));
+        assert_eq!(saved_session(Claude, Some(Claude), None, id("launched")), (Claude, id("launched")));
+        // Claude quit and Codex was typed in its shell: the Claude session is still what comes back.
+        assert_eq!(saved_session(Claude, Some(Codex), id("codex"), id("launched")), (Claude, id("launched")));
+        assert_eq!(saved_session(Claude, None, id("old"), id("launched")), (Claude, id("launched")));
+    }
 
     #[test]
     fn closed_windows_keep_the_most_recent() {
