@@ -764,7 +764,7 @@ strings! {
     "flow.two_way" => ["⇄", "⇄", "⇄", "⇄"],
     "update.check_menu" => ["Check for Updates…", "업데이트 확인…", "アップデートを確認…", "检查更新…"],
     "update.install_menu" => ["Install Update and Relaunch", "업데이트 설치 후 재실행", "アップデートをインストールして再起動", "安装更新并重新启动"],
-    "update.available_short" => ["Update available: {version}", "업데이트 사용 가능: {version}", "アップデートあり: {version}", "有可用更新：{version}"],
+    "update.available_short" => ["Update available v{version}", "업데이트 사용 가능 v{version}", "アップデートあり v{version}", "有可用更新 v{version}"],
     "update.available_title" => ["Agentty {version} is available", "Agentty {version} 업데이트가 있습니다", "Agentty {version} が利用可能です", "Agentty {version} 已发布"],
     "update.available_body" => ["You have {current}. Install now and Agentty will restart with {version}.", "현재 버전은 {current}입니다. 지금 설치하면 {version}(으)로 재실행됩니다.", "現在のバージョンは {current} です。今すぐインストールすると {version} で再起動します。", "当前版本为 {current}。立即安装后将以 {version} 重新启动。"],
     "update.available_body_manual" => ["You have {current}. Download {version} from the release page.", "현재 버전은 {current}입니다. 릴리즈 페이지에서 {version}을(를) 내려받을 수 있습니다.", "現在のバージョンは {current} です。リリースページから {version} をダウンロードできます。", "当前版本为 {current}。你可以在发布页面下载 {version}。"],

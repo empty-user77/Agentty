@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- "Later" in the update popup keeps it away for 24 hours, across restarts; a newer version is
+  announced right away. Meanwhile the update shows in the status bar in place of the version
+  ("Update available v0.1.20"), and a click there opens the popup again. The floating update
+  button over the workspaces is gone.
+- Moving a tab to another workspace shows each workspace's colour as a dot before its name.
+
 ## [0.1.19] - 2026-09-23
 
 ### Changed

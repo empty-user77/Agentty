@@ -114,8 +114,10 @@ impl Workbench {
             .child(div().px_3().pt_1().pb_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "tab.move_to")));
         for ws in self.workspaces.iter().filter(|w| w.id != active.id) {
             let id = ws.id;
-            list = list.child(menu_item(
+            // The workspace's own colour, when it has one, so the list reads like the sidebar.
+            list = list.child(crate::ui::menu_item_with_dot(
                 SharedString::from(format!("tab-menu-move-{id}")),
+                super::accent_color(ws.color),
                 self.workspace_title(ws, cx),
                 cx.listener(move |this, _: &ClickEvent, window, cx| this.move_tab(index, Some(id), window, cx)),
             ));

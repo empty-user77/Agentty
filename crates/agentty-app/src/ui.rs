@@ -418,6 +418,25 @@ pub fn menu_item(
     label: impl Into<SharedString>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    menu_item_base(id, on_click).child(label.into())
+}
+
+/// [`menu_item`] with a colour dot before the label (a workspace's own colour, for one).
+pub fn menu_item_with_dot(
+    id: impl Into<ElementId>,
+    dot: Option<u32>,
+    label: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    menu_item_base(id, on_click)
+        .flex()
+        .items_center()
+        .gap_2()
+        .children(dot.map(|color| div().size(px(8.)).flex_shrink_0().rounded_full().bg(hex(color))))
+        .child(div().min_w_0().truncate().child(label.into()))
+}
+
+fn menu_item_base(id: impl Into<ElementId>, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Stateful<Div> {
     div()
         .id(id)
         .px_3()
@@ -428,7 +447,6 @@ pub fn menu_item(
         .text_color(hex(Chrome::FOREGROUND))
         .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
         .on_click(on_click)
-        .child(label.into())
 }
 
 /// Floating panel for menus and dropdowns. It blocks the mouse for what's underneath, so hovering

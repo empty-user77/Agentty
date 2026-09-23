@@ -2707,7 +2707,7 @@ impl Workbench {
             .border_color(hex(Chrome::BORDER))
             .t_small()
             .text_color(hex(Chrome::MUTED))
-            .child(div().text_color(hex(Chrome::SUCCESS)).child(format!("● Agentty v{}", super::update::CURRENT_VERSION)))
+            .child(self.render_version_status(cx))
             .children(kind)
             .children(self.render_advisor_chip(cx))
             .children(cwd.map(|cwd| {

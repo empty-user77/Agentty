@@ -257,6 +257,19 @@ fn spawn_relauncher(current: &Path, staged: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// How long "Later" keeps the update popup away.
+const LATER: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Whether "Later" still holds for `version`: it was pressed for that version and the day is not
+/// over. A newer version is announced right away.
+fn put_off(later_version: &str, later_until: u64, version: &str, now: u64) -> bool {
+    later_version == version && now < later_until
+}
+
 impl Workbench {
     pub(super) fn start_update_checks(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
@@ -284,7 +297,12 @@ impl Workbench {
             let _ = this.update(cx, |this, cx| {
                 this.updates.state = match result {
                     Ok(Some(release)) => {
-                        if this.updates.announced.as_deref() != Some(release.version.as_str()) {
+                        let later = {
+                            let s = crate::settings::settings(cx);
+                            (s.update_later_version.clone(), s.update_later_until)
+                        };
+                        let waiting = put_off(&later.0, later.1, &release.version, unix_now());
+                        if !waiting && this.updates.announced.as_deref() != Some(release.version.as_str()) {
                             this.updates.announced = Some(release.version.clone());
                             this.updates.popup = true;
                         }
@@ -380,51 +398,35 @@ impl Workbench {
         .detach();
     }
 
-    /// "Update available: x.y.z" at the bottom of the sidebar.
-    /// Floating pill in the bottom-left corner while an update waits: "Update available: 0.2.0".
-    /// A click opens the update popup.
-    pub(super) fn render_update_badge(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The status bar's version, which becomes the update's own entry while one waits or installs:
+    /// a click opens the update popup (again, after "Later").
+    pub(super) fn render_version_status(&self, cx: &mut Context<Self>) -> AnyElement {
         let (label, busy) = match &self.updates.state {
             UpdateState::Available(release) => (tf(cx, "update.available_short", &[("version", &release.version)]), false),
             UpdateState::Installing(_) => (t(cx, "update.installing").to_string(), true),
-            _ => return None,
+            _ => return div().text_color(hex(Chrome::SUCCESS)).child(format!("● Agentty v{CURRENT_VERSION}")).into_any_element(),
         };
-        let pill = div()
-            .id("update-badge")
-            .h(px(28.))
+        div()
+            .id("update-status")
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap_1p5()
-            .pl_2p5()
-            .pr_3()
-            .rounded_full()
-            .bg(hex(Chrome::ACCENT))
-            .border_1()
-            .border_color(hex_alpha(0xffffff, 0.18))
-            .shadow_lg()
-            .text_color(hex(Chrome::BRIGHT))
-            .t_small()
+            .gap_1()
+            .text_color(hex(Chrome::BLUE))
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
-            .hover(|s| s.bg(hex(0x1a8ae6)))
+            .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
             .child(if busy {
-                crate::ui::spinner(IconSize::INLINE, hex(Chrome::BRIGHT)).into_any_element()
+                crate::ui::spinner(IconSize::INLINE, hex(Chrome::BLUE)).into_any_element()
             } else {
-                icon("package", IconSize::INLINE, hex(Chrome::BRIGHT)).into_any_element()
+                icon("package", IconSize::INLINE, hex(Chrome::BLUE)).into_any_element()
             })
             .child(label)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.updates.popup = true;
                 cx.notify();
-            }));
-        Some(
-            div()
-                .absolute()
-                .left(px(super::chrome::ACTIVITY_BAR_WIDTH + 12.))
-                .bottom(px(super::chrome::STATUS_BAR_HEIGHT + 12.))
-                .child(crate::ui::fade_in("update-badge-fade", pill))
-                .into_any_element(),
-        )
+            }))
+            .into_any_element()
     }
 
     pub(super) fn render_update_popup(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -444,6 +446,20 @@ impl Workbench {
             this.updates.popup = false;
             cx.notify();
         });
+        // "Later" puts the popup off for a day, across restarts; the status bar keeps the update.
+        let later = cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.updates.popup = false;
+            // Announced again once the day is over.
+            this.updates.announced = None;
+            if let UpdateState::Available(release) = &this.updates.state {
+                let version = release.version.clone();
+                crate::settings::update_settings(cx, move |s| {
+                    s.update_later_version = version;
+                    s.update_later_until = unix_now() + LATER.as_secs();
+                });
+            }
+            cx.notify();
+        });
         let (title, body, actions): (String, String, gpui::AnyElement) = match &self.updates.state {
             UpdateState::Available(release) => {
                 let page = release.page_url.clone();
@@ -461,7 +477,7 @@ impl Workbench {
                         .flex()
                         .gap_2()
                         .child(button("update-notes", t(cx, "update.notes").into(), false).on_click(move |_, _, cx| cx.open_url(&page)))
-                        .child(button("update-later", t(cx, "update.later").into(), false).on_click(close))
+                        .child(button("update-later", t(cx, "update.later").into(), false).on_click(later))
                         .child(
                             button("update-install", t(cx, if manual { "update.download" } else { "update.install" }).into(), true)
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.install_update(cx))),
@@ -714,6 +730,20 @@ impl Workbench {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn later_holds_a_day_for_that_version_only() {
+        let now = 1_000_000;
+        let until = now + LATER.as_secs();
+        assert!(put_off("0.2.0", until, "0.2.0", now));
+        assert!(put_off("0.2.0", until, "0.2.0", until - 1));
+        // The day is over: announced again.
+        assert!(!put_off("0.2.0", until, "0.2.0", until));
+        // A newer version is announced right away.
+        assert!(!put_off("0.2.0", until, "0.2.1", now));
+        // Never pressed.
+        assert!(!put_off("", 0, "0.2.0", now));
+    }
 
     #[test]
     fn development_binary_is_not_a_bundle() {
