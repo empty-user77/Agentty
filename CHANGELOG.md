@@ -11,6 +11,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 - Database query results scroll sideways: columns past the right edge of the page can be reached.
+- On Windows, linking the Codex session folders and showing notifications no longer fail when
+  Agentty (or what starts it) runs below PowerShell 7.
 
 ## [0.1.18] - 2026-09-23
 
