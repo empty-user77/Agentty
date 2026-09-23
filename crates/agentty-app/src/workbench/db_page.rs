@@ -1388,7 +1388,8 @@ impl Workbench {
                             .size_full()
                             .overflow_scroll()
                             .track_scroll(&self.db.grid_scroll)
-                            .child(div().flex().flex_col().child(header).children(rows)),
+                            // As wide as its columns, so the grid scrolls sideways as well as down.
+                            .child(div().flex().flex_col().flex_shrink_0().min_w(width).child(header).children(rows)),
                     )
                     .group(crate::ui::SCROLL_GROUP)
                     .child(crate::ui::scrollbar(self.db.grid_scroll.clone()))
