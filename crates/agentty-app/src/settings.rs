@@ -117,9 +117,51 @@ pub struct CommandAlias {
     pub command: String,
 }
 
-pub const SETTINGS_VERSION: u32 = 3;
+pub const SETTINGS_VERSION: u32 = 4;
 
 pub const BUNDLED_FONT: &str = "JetBrains Mono";
+/// The coding font Korean developers reach for: its Hangul is exactly two cells wide. Not bundled
+/// (it is several times the size of Agentty itself); recommended when it is missing.
+pub const KOREAN_FONT: &str = "D2Coding";
+/// Where D2Coding is published (SIL Open Font License), for the recommendation to point at.
+pub const KOREAN_FONT_URL: &str = "https://github.com/naver/d2-coding-font/releases/latest";
+
+/// Whether D2Coding is installed. Asks for that one family rather than listing every font on the
+/// computer, and only once a run: a font installed while Agentty runs counts from the next start.
+pub fn korean_font_installed(cx: &App) -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(|| {
+        let text = cx.text_system();
+        // A family that is missing resolves to a fallback, which answers to its own name.
+        text.get_font_for_id(text.resolve_font(&gpui::font(KOREAN_FONT))).is_some_and(|f| f.family.as_ref() == KOREAN_FONT)
+    })
+}
+
+/// The font the terminals use when the user has not picked one: D2Coding for someone reading
+/// Agentty in Korean who has it installed, the bundled font otherwise.
+pub fn default_terminal_font(cx: &App) -> &'static str {
+    let language = settings(cx).language.resolved();
+    // Asked only in Korean: finding out means loading a font family.
+    default_font_for(language, language == Language::Ko && korean_font_installed(cx))
+}
+
+fn default_font_for(language: Language, korean_font_installed: bool) -> &'static str {
+    if language == Language::Ko && korean_font_installed {
+        KOREAN_FONT
+    } else {
+        BUNDLED_FONT
+    }
+}
+
+/// The font the terminals, diffs and editor draw with: the one the user picked, else the default.
+pub fn terminal_font(cx: &App) -> String {
+    let picked = &settings(cx).font_family;
+    if picked.is_empty() {
+        default_terminal_font(cx).to_string()
+    } else {
+        picked.clone()
+    }
+}
 /// Nerd Font-patched JetBrains Mono, used for Powerline / Nerd Font glyphs. (The symbols-only font
 /// cannot be used: GPUI skips fonts without an `m` glyph.)
 pub const SYMBOLS_FONT: &str = "JetBrainsMono Nerd Font Mono";
@@ -132,6 +174,7 @@ pub struct Settings {
     pub settings_version: u32,
     pub language: Language,
     pub theme: String,
+    /// The font the user picked; empty until they pick one (see `terminal_font`).
     pub font_family: String,
     pub font_size: f32,
     pub line_height: f32,
@@ -513,7 +556,7 @@ impl Default for Settings {
             settings_version: SETTINGS_VERSION,
             language: Language::System,
             theme: DEFAULT_THEME.into(),
-            font_family: BUNDLED_FONT.into(),
+            font_family: String::new(),
             font_size: 13.0,
             line_height: 1.0,
             cursor_shape: CursorShapeSetting::Beam,
@@ -600,6 +643,14 @@ impl Settings {
             // other two, and keeps it.
             if self.cursor_shape == CursorShapeSetting::Block {
                 self.cursor_shape = CursorShapeSetting::Beam;
+            }
+        }
+        if self.settings_version < 4 {
+            // v4: the font is empty until the user picks one, so the default can follow the
+            // language (D2Coding in Korean, when installed). The bundled font was the one default
+            // there was, so still holding it means it was never changed.
+            if self.font_family == BUNDLED_FONT {
+                self.font_family.clear();
             }
         }
         self.settings_version = SETTINGS_VERSION;
@@ -727,6 +778,27 @@ pub fn reload_themes(cx: &mut App) {
 #[cfg(test)]
 mod browser_settings_tests {
     use super::*;
+
+    #[test]
+    fn the_font_is_only_chosen_for_someone_who_did_not_pick_one() {
+        // Korean with D2Coding installed gets it; anyone else, or without it, the bundled font.
+        assert_eq!(default_font_for(Language::Ko, true), KOREAN_FONT);
+        assert_eq!(default_font_for(Language::Ko, false), BUNDLED_FONT);
+        assert_eq!(default_font_for(Language::En, true), BUNDLED_FONT);
+        assert_eq!(default_font_for(Language::Ja, true), BUNDLED_FONT);
+
+        // A fresh install has picked nothing.
+        assert!(Settings::default().font_family.is_empty());
+        // The old default was the only value there was: holding it means it was never changed.
+        let old = |font: &str| Settings { settings_version: 3, font_family: font.into(), ..Settings::default() }.migrate();
+        assert_eq!(old(BUNDLED_FONT).font_family, "");
+        // A font someone picked stays theirs, D2Coding included.
+        assert_eq!(old("D2Coding").font_family, "D2Coding");
+        assert_eq!(old("Menlo").font_family, "Menlo");
+        // Once migrated, picking the bundled font again is a choice, and it is kept.
+        let current = Settings { font_family: BUNDLED_FONT.into(), ..Settings::default() }.migrate();
+        assert_eq!(current.font_family, BUNDLED_FONT);
+    }
 
     #[test]
     fn system_language_codes() {

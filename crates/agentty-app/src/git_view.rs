@@ -3,7 +3,6 @@
 //! All git work runs on background threads through `agentty_bridge::git`.
 
 use crate::i18n::{t, tf};
-use crate::settings::settings;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, now_ms, popover, relative_time, tilde, IconSize, TypeScale};
@@ -617,7 +616,7 @@ impl GitView {
 }
 
 fn mono(cx: &gpui::App) -> SharedString {
-    settings(cx).font_family.clone().into()
+    crate::settings::terminal_font(cx).into()
 }
 
 fn kind_badge(kind: char) -> Div {

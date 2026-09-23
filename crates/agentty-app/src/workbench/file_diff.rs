@@ -132,7 +132,7 @@ impl Workbench {
             }
             Some(lines) => {
                 let rows = lines.clone();
-                let font: SharedString = crate::settings::settings(cx).font_family.clone().into();
+                let font: SharedString = crate::settings::terminal_font(cx).into();
                 let gutter = rows.iter().filter_map(|l| l.old.max(l.new)).max().unwrap_or(0).to_string().len().max(3) as f32 * 8. + 12.;
                 let handle = diff.scroll.clone();
                 let base = handle.0.borrow().base_handle.clone();
