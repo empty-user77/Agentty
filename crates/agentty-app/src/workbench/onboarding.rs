@@ -632,20 +632,33 @@ impl Workbench {
             .when(crate::platform::HAS_WEBVIEW, |d| d.child(opener("onboarding-link-inapp", "settings.link_inapp", LinkOpener::InApp, cx)))
             .child(opener("onboarding-link-external", "settings.link_external", LinkOpener::External, cx));
         let in_app = prefs.link_opener == LinkOpener::InApp && crate::platform::HAS_WEBVIEW;
-        let bar_at = |id: &'static str, label: &'static str, value: crate::hud::HudPosition, cx: &mut Context<Self>| {
+        // The terminal font: the default (which follows the language), or the other of the two
+        // that matter here — the bundled one and, when it is installed, D2Coding. Every other font
+        // is in Settings → Terminal Style.
+        let default_font = crate::settings::default_terminal_font(cx);
+        let font_chip = |id: &'static str, label: String, value: &'static str, cx: &mut Context<Self>| {
             chip(
                 id,
-                t(cx, label),
-                prefs.agent_bar_position == value,
-                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.agent_bar_position = value)),
+                label,
+                prefs.font_family == value,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.font_family = value.to_string())),
             )
         };
-        let bar_positions = div()
+        let fonts = div()
             .flex()
             .flex_shrink_0()
             .gap_1()
-            .child(bar_at("onboarding-bar-top", "settings.position_top", crate::hud::HudPosition::Top, cx))
-            .child(bar_at("onboarding-bar-bottom", "settings.position_bottom", crate::hud::HudPosition::Bottom, cx));
+            .child(font_chip("onboarding-font-default", tf(cx, "settings.font_default", &[("font", default_font)]), "", cx))
+            .when(default_font != crate::settings::BUNDLED_FONT, |d| {
+                d.child(font_chip("onboarding-font-bundled", crate::settings::BUNDLED_FONT.to_string(), crate::settings::BUNDLED_FONT, cx))
+            })
+            .when(default_font != crate::settings::KOREAN_FONT && crate::settings::korean_font_installed(cx), |d| {
+                d.child(font_chip("onboarding-font-korean", crate::settings::KOREAN_FONT.to_string(), crate::settings::KOREAN_FONT, cx))
+            });
+        // Only on a fresh install: "show again" later is a tour, not a setup step. Settings →
+        // Terminal Style keeps the same notice for as long as it applies.
+        let font_notice =
+            (!prefs.onboarding_done).then(|| super::settings_page::korean_font_notice("onboarding-korean-font", cx)).flatten();
 
         let list = div()
             .id("onboarding-basics")
@@ -676,13 +689,8 @@ impl Workbench {
                     .into_any_element(),
                 ))
             })
-            .child(row(
-                "rows-2",
-                Chrome::ORANGE,
-                t(cx, "onboarding.opt_bar_position"),
-                t(cx, "onboarding.opt_bar_position_body"),
-                bar_positions.into_any_element(),
-            ))
+            .child(row("code", Chrome::ORANGE, t(cx, "onboarding.opt_font"), t(cx, "onboarding.opt_font_body"), fonts.into_any_element()))
+            .children(font_notice)
             .child(row(
                 "git-fork",
                 Chrome::PURPLE,
@@ -712,13 +720,6 @@ impl Workbench {
                 t(cx, "onboarding.opt_idea"),
                 t(cx, "onboarding.opt_idea_body"),
                 switch("onboarding-idea", prefs.idea_mode, |s| s.idea_mode = !s.idea_mode, cx).into_any_element(),
-            ))
-            .child(row(
-                "chart-column",
-                Chrome::MUTED,
-                t(cx, "settings.analytics"),
-                t(cx, "onboarding.opt_analytics_body"),
-                switch("onboarding-analytics", prefs.analytics, |s| s.analytics = !s.analytics, cx).into_any_element(),
             ));
 
         div()

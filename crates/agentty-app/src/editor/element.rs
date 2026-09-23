@@ -263,10 +263,7 @@ impl Element for EditorElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Prepainted {
-        let (family, points) = {
-            let prefs = crate::settings::settings(cx);
-            (prefs.font_family.clone(), prefs.font_size)
-        };
+        let (family, points) = (crate::settings::terminal_font(cx), crate::settings::settings(cx).font_size);
         let font = gpui::font(family);
         let font_size = px(points);
         let line_height = (points * 1.5).round();

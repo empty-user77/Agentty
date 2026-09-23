@@ -1786,11 +1786,12 @@ impl Element for TerminalElement {
         // every visible terminal on every repaint — every keystroke echoed, every burst an agent
         // prints — and the settings also hold the recent folders, the aliases, the saved layout and
         // more, so copying the lot of it here was work done sixty times a second for nothing.
+        let font_family = crate::settings::terminal_font(cx);
         let prefs = {
             let settings = settings(cx);
             GridPrefs {
                 font_size: settings.font_size,
-                font_family: settings.font_family.clone(),
+                font_family,
                 letter_spacing: settings.letter_spacing,
                 line_height: settings.line_height,
                 padding: settings.padding,
