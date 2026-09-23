@@ -1007,9 +1007,10 @@ mod tests {
         let sessions = home.join("sessions");
         assert!(
             sessions.join("2026").is_dir(),
-            "sessions: {:?} → {:?}",
+            "sessions: {:?} → {:?}, opening it: {:?}",
             std::fs::symlink_metadata(&sessions).map(|m| m.file_type()),
-            std::fs::read_link(&sessions)
+            std::fs::read_link(&sessions),
+            std::fs::read_dir(&sessions).map(|_| ())
         );
         assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), "model = \"x\"\n");
         assert!(!home.join("auth.json").exists());
