@@ -38,10 +38,18 @@ const SITE = 'x';
 const HOME = 'https://x.com/home';
 /** The key of the panel outside a workspace (the user put the plugin in another mode). */
 const MAIN = '';
-const SCHEDULES = [0, 30, 60, 180, 360, 720, 1440];
+const SCHEDULES = [0, 30, 60, 180, 1440];
 const SOURCES = ['accounts', 'top', 'latest'];
-const MIN_LIKES = [0, 10, 100, 1000, 10000];
-const MAX_AGES = [0, 1, 6, 24, 72];
+const MIN_LIKES = [0, 10, 100, 1000];
+const MAX_AGES = [24, 72, 0];
+/** How fast likes and replies go, in three words; "custom" once the details were changed. */
+const SPEEDS = {
+  safe: { minMs: 2000, maxMs: 5000, maxPer10Min: 2, likesPerDay: 30, repliesPerDay: 10 },
+  normal: { minMs: 100, maxMs: 5000, maxPer10Min: 3, likesPerDay: 50, repliesPerDay: 20 },
+  fast: { minMs: 100, maxMs: 3000, maxPer10Min: 6, likesPerDay: 100, repliesPerDay: 40 },
+};
+/** The steps of setting up an automation, in order. */
+const STEPS = ['account', 'source', 'actions', 'timing'];
 const PER_WINDOW = [1, 2, 3, 5, 8, 12, 20];
 const LIKES_A_DAY = [10, 30, 50, 100, 200];
 const REPLIES_A_DAY = [5, 10, 20, 50, 100];
@@ -61,6 +69,8 @@ const autos = new Map();
 const engagements = new Map();
 /** Posts some automation is liking or replying to right now. */
 const acting = new Set();
+/** Which X account each sign-in profile is: `{ profile: '@handle' }`. */
+let handles = {};
 
 /** An automation's settings as first made; saved ones are laid over it. */
 const defaultConfig = () => ({
@@ -68,7 +78,9 @@ const defaultConfig = () => ({
   profile: 'default',
   targets: [],
   limit: 10,
-  schedule: 0,
+  schedule: 60,
+  // Runs on its own every `schedule` minutes once the user turned it on.
+  enabled: false,
   // Which posts: the accounts' own, or the top or latest posts found for keywords.
   source: 'accounts',
   keywords: [],
@@ -78,7 +90,7 @@ const defaultConfig = () => ({
   reply: { pattern: '', ai: false, instructions: '', required: '', maxLength: 280 },
   // A random pause of minMs..maxMs between actions, at most 1..maxPer10Min actions (drawn anew)
   // every 10 minutes, and daily caps per sign-in.
-  pace: { minMs: 100, maxMs: 5000, maxPer10Min: 3, likesPerDay: 50, repliesPerDay: 20, perUnit: 3 },
+  pace: { preset: 'normal', ...SPEEDS.normal, perUnit: 3 },
 });
 
 function withDefaults(saved) {
@@ -87,6 +99,8 @@ function withDefaults(saved) {
   return {
     ...base,
     ...saved,
+    // Settings from before the on/off switch: an interval meant "on".
+    enabled: saved.enabled ?? (saved.schedule ?? 0) > 0,
     tasks: { ...base.tasks, ...saved.tasks },
     reply: { ...base.reply, ...saved.reply },
     pace: { ...base.pace, ...saved.pace },
@@ -111,6 +125,9 @@ function auto(instance) {
       nextAt: null,
       ui: {
         view: 'automation',
+        // The step shown open; `undefined` until the user picks one: the first unfinished one.
+        step: undefined,
+        advanced: false,
         newTarget: '',
         newKeyword: '',
         newProfile: '',
@@ -189,6 +206,19 @@ async function refreshSignIn(profile) {
 
 const signedIn = (profile) => (signIns.get(profile) ?? []).some((site) => site.signedIn);
 
+/** What the user calls a sign-in: its @handle once known. */
+const accountLabel = (profile) => handles[profile] ?? (profile === 'default' ? t('acct.default') : t('acct.other'));
+
+/** Reads which X account the automation's page is signed in to, and remembers it. */
+async function learnHandle(a) {
+  if (a.tabId === null || !signedIn(a.config.profile)) return;
+  const handle = await plugin.browser.eval(a.tabId, whoAmI).catch(() => null);
+  if (!handle || handles[a.config.profile] === handle) return;
+  handles = { ...handles, [a.config.profile]: handle };
+  await store.saveHandles(handles);
+  await renderAll();
+}
+
 /**
  * The user may sign in (or out) right in an automation's page, without the sign-in button: the
  * profiles in use are looked at again — every few seconds while one is signed out, every minute
@@ -209,7 +239,10 @@ function watchSignIns() {
       await refreshSignIn(profile);
       changed ||= JSON.stringify(signIns.get(profile) ?? null) !== before;
     }
-    if (changed) await renderAll();
+    if (changed) {
+      for (const a of autos.values()) await learnHandle(a);
+      await renderAll();
+    }
     setTimeout(look, 5000);
   };
   setTimeout(look, 5000);
@@ -250,6 +283,8 @@ async function openAutomation(instance, title) {
   }
   schedule(a);
   await render(instance);
+  // Once the page is up: whose account it is.
+  setTimeout(() => learnHandle(a).catch(() => {}), 8000);
 }
 
 async function closeAutomation(instance) {
@@ -273,7 +308,7 @@ function schedule(a) {
   a.timer = null;
   a.nextAt = null;
   const minutes = a.config.schedule;
-  if (!minutes) return;
+  if (!minutes || !a.config.enabled) return;
   const delay = minutes * 60000 * (0.85 + Math.random() * 0.3);
   a.nextAt = Date.now() + delay;
   a.timer = setTimeout(() => runAutomation(a.instance).catch((err) => plugin.log(err.stack ?? String(err))), delay);
@@ -430,6 +465,10 @@ async function engageUnit(a, unit, tabId) {
   await render(a.instance);
   await goTo(a, tabId, sourcePath(c.source, unit));
   if (!a.self) a.self = await plugin.browser.eval(tabId, whoAmI).catch(() => null);
+  if (a.self && handles[c.profile] !== a.self) {
+    handles = { ...handles, [c.profile]: a.self };
+    await store.saveHandles(handles);
+  }
   const { signin, posts } = await findPosts(a, unit, tabId, state);
   if (signin) {
     a.status = t('sign_in.asked');
@@ -839,7 +878,6 @@ async function updateDraft(id, change) {
 const when = (ms) => (ms ? new Date(ms).toLocaleString() : '—');
 const count = (n) => (n === null || n === undefined ? '–' : n >= 10000 ? `${Math.round(n / 1000)}K` : String(n));
 const STATUS_TONE = { refined: 'info', selected: 'success', skipped: 'neutral', drafted: 'warning', uploaded: 'success', draft: 'warning', ready: 'success', discarded: 'neutral' };
-const scheduleLabel = (n) => (!n ? t('auto.schedule.manual') : n < 60 ? t('auto.schedule.minutes', { n }) : t('auto.schedule.hours', { n: n / 60 }));
 
 function signInBadges(profile) {
   const sites = signIns.get(profile) ?? [];
@@ -855,119 +893,219 @@ function signInBadges(profile) {
   );
 }
 
-function renderTargets(a) {
+// --- The automation, step by step ---------------------------------------------------------------
+
+const scheduleLabel = (n) => (!n ? t('when.once') : n < 60 ? t('when.minutes', { n }) : n < 1440 ? t('when.hours', { n: n / 60 }) : t('when.daily'));
+const likesLabel = (n) => (n ? t('src.min_likes', { n: n.toLocaleString() }) : t('src.any_likes'));
+const ageLabel = (n) => (!n ? t('src.any_age') : n > 24 && n % 24 === 0 ? t('src.max_days', { n: n / 24 }) : t('src.max_age', { n }));
+
+/** What the automation looks at, in a few words. */
+function sourceSummary(c) {
+  const units = unitsOf(c);
+  if (!units.length) return t('step.source.none');
+  const shown = units.slice(0, 3).map((u) => (c.source === 'accounts' ? `@${u}` : `"${u}"`)).join(', ') + (units.length > 3 ? ` +${units.length - 3}` : '');
+  const kind = c.source === 'accounts' ? t('src.new_posts') : c.source === 'top' ? t('src.top') : t('src.latest');
+  const filters = [c.minLikes ? likesLabel(c.minLikes) : null, c.maxAgeHours ? ageLabel(c.maxAgeHours) : null].filter(Boolean);
+  return [`${shown} ${kind}`, ...filters].join(' · ');
+}
+
+function actionsSummary(c) {
+  const parts = [collecting(c) && t('act.collect_short'), c.tasks.like && t('act.like'), c.tasks.reply && t('act.reply')].filter(Boolean);
+  return parts.length ? parts.join(' + ') : t('step.actions.none');
+}
+
+const speedOf = (c) => (c.pace.preset && c.pace.preset !== 'custom' ? t(`speed.${c.pace.preset}`) : t('speed.custom'));
+
+/** Each step: done or not, and what it is set to. */
+function stepsOf(a) {
   const c = a.config;
+  const replyReady = !c.tasks.reply || c.reply.ai || c.reply.pattern.trim() || c.reply.required.trim();
+  return {
+    account: { done: signedIn(c.profile), summary: signedIn(c.profile) ? accountLabel(c.profile) : t('step.account.todo') },
+    source: { done: unitsOf(c).length > 0, summary: sourceSummary(c) },
+    actions: { done: (collecting(c) || engaging(c)) && !!replyReady, summary: actionsSummary(c) },
+    timing: { done: true, summary: engaging(c) ? `${scheduleLabel(c.schedule)} · ${speedOf(c)}` : scheduleLabel(c.schedule) },
+  };
+}
+
+/** The step shown open: the one the user picked, else the first one not done (none when all are). */
+function openStep(a) {
+  if (a.ui.step) return a.ui.step;
+  const steps = stepsOf(a);
+  const unfinished = STEPS.find((id) => !steps[id].done) ?? null;
+  // Folded by the user, or never picked: an unfinished step still shows, so nothing is left half set.
+  return a.ui.step === null && !unfinished ? null : unfinished;
+}
+
+function renderAccountStep(a) {
+  const c = a.config;
+  const profiles = ['default', ...data.profiles];
   return [
-    ui.row([ui.input('newTarget', { placeholder: t('account.placeholder'), value: a.ui.newTarget }), ui.button('addTarget', t('account.add'), { icon: 'plus' })], { gap: 'small' }),
-    ui.list(
-      'targets',
-      c.targets.map((account) => {
-        const record = data.accounts.find((r) => r.account === account);
-        const last = record?.lastRun;
-        return {
-          id: account,
-          title: `@${account}${record?.gap ? t('account.gap') : ''}`,
-          subtitle: last ? t('account.last', { when: new Date(last.at).toLocaleString(), new: last.new, seen: last.duplicates, why: t(`why.${last.stoppedBecause}`) }) : t('account.never'),
-          detail: record ? t('account.kept', { n: Object.keys(record.known).length, runs: record.runs ?? 0 }) : undefined,
-          icon: 'x-twitter',
-          tone: record?.gap ? 'warning' : last?.error ? 'error' : 'info',
-          actions: [
-            ...(record?.gap ? [{ id: 'backfill', icon: 'undo-2', tooltip: t('account.backfill') }] : []),
-            { id: 'folder', icon: 'folder', tooltip: t('files') },
-            { id: 'remove', icon: 'x', tooltip: t('auto.target.remove') },
-          ],
-        };
-      }),
-      { empty: t('auto.targets.none') },
-    ),
+    profiles.length > 1 ? ui.choice('profile', profiles.map((p) => ({ value: p, label: accountLabel(p) })), c.profile) : null,
+    signedIn(c.profile)
+      ? ui.row([ui.badge(t('acct.signed_in', { who: accountLabel(c.profile) }), 'success')], { gap: 'small' })
+      : ui.column([ui.text(t('acct.sign_in_hint'), 'muted'), ui.button('signin', t('acct.sign_in'), { icon: 'key-round', variant: 'primary' })]),
+    ui.row([
+      data.profilesSupported ? ui.button('addAccount', t('acct.add'), { icon: 'plus', variant: 'ghost' }) : null,
+      c.profile !== 'default' ? ui.button('removeProfile', t('acct.remove'), { variant: 'ghost' }) : null,
+    ], { gap: 'small', wrap: true }),
+    data.profilesSupported ? null : ui.text(t('auto.profile.unsupported'), 'small'),
   ];
 }
 
-function renderKeywords(a) {
+function renderSourceStep(a) {
+  const c = a.config;
+  const byAccount = c.source === 'accounts';
   return [
-    ui.row([ui.input('newKeyword', { placeholder: t('src.keyword_placeholder'), value: a.ui.newKeyword }), ui.button('addKeyword', t('account.add'), { icon: 'plus' })], { gap: 'small' }),
-    ui.list(
-      'keywords',
-      a.config.keywords.map((keyword) => ({ id: keyword, title: keyword, icon: 'search', tone: 'info', actions: [{ id: 'remove', icon: 'x', tooltip: t('auto.target.remove') }] })),
-      { empty: t('src.keywords.none') },
-    ),
+    ui.choice('srcKind', [{ value: 'accounts', label: t('src.kind.accounts') }, { value: 'keywords', label: t('src.kind.keywords') }], byAccount ? 'accounts' : 'keywords'),
+    ...(byAccount
+      ? [
+          ui.row([ui.input('newTarget', { placeholder: t('account.placeholder'), value: a.ui.newTarget }), ui.button('addTarget', t('account.add'), { icon: 'plus' })], { gap: 'small' }),
+          ui.list(
+            'targets',
+            c.targets.map((account) => {
+              const last = data.accounts.find((r) => r.account === account)?.lastRun;
+              return {
+                id: account,
+                title: `@${account}`,
+                subtitle: last ? t('account.checked', { when: new Date(last.at).toLocaleString() }) : t('account.never'),
+                icon: 'x-twitter',
+                tone: 'info',
+                actions: [{ id: 'remove', icon: 'x', tooltip: t('auto.target.remove') }],
+              };
+            }),
+            { empty: t('auto.targets.none') },
+          ),
+        ]
+      : [
+          ui.choice('srcSort', [{ value: 'top', label: t('src.top') }, { value: 'latest', label: t('src.latest') }], c.source),
+          ui.row([ui.input('newKeyword', { placeholder: t('src.keyword_placeholder'), value: a.ui.newKeyword }), ui.button('addKeyword', t('account.add'), { icon: 'plus' })], { gap: 'small' }),
+          ui.list('keywords', c.keywords.map((k) => ({ id: k, title: k, icon: 'search', tone: 'info', actions: [{ id: 'remove', icon: 'x', tooltip: t('auto.target.remove') }] })), { empty: t('src.keywords.none') }),
+        ]),
+    ui.text(t('src.filters'), 'small'),
+    ui.choice('minLikes', MIN_LIKES.map((n) => ({ value: String(n), label: likesLabel(n) })), String(MIN_LIKES.includes(c.minLikes) ? c.minLikes : 0)),
+    ui.choice('maxAge', MAX_AGES.map((n) => ({ value: String(n), label: ageLabel(n) })), String(MAX_AGES.includes(c.maxAgeHours) ? c.maxAgeHours : 0)),
   ];
 }
 
-function renderEngaging(a) {
+function renderActionsStep(a) {
   const c = a.config;
-  const items = [];
-  if (c.tasks.reply) {
+  return [
+    c.source === 'accounts' ? ui.toggle('tCollect', t('act.collect'), c.tasks.collect) : null,
+    ui.toggle('tLike', t('act.like_long'), c.tasks.like),
+    ui.toggle('tReply', t('act.reply_long'), c.tasks.reply),
+    ...(c.tasks.reply
+      ? [
+          ui.input('rPattern', { value: c.reply.pattern, rows: 2, placeholder: t('reply.pattern_ph') }),
+          ui.text(t('reply.fields'), 'small'),
+          ui.toggle('rAi', t('reply.ai'), c.reply.ai),
+          c.reply.ai ? ui.input('rInstructions', { value: c.reply.instructions, rows: 2, placeholder: t('reply.instructions') }) : null,
+          ui.input('rRequired', { value: c.reply.required, rows: 2, placeholder: t('reply.required') }),
+        ]
+      : []),
+    engaging(c) ? ui.text(t('act.warning'), 'error') : null,
+  ];
+}
+
+function renderTimingStep(a) {
+  const c = a.config;
+  const p = c.pace;
+  const speeds = [...Object.keys(SPEEDS), ...(p.preset === 'custom' ? ['custom'] : [])];
+  const items = [ui.choice('schedule', SCHEDULES.map((n) => ({ value: String(n), label: scheduleLabel(n) })), String(SCHEDULES.includes(c.schedule) ? c.schedule : 60))];
+  if (engaging(c)) {
     items.push(
-      ui.section(t('reply.title'), [
-        ui.text(t('reply.pattern'), 'small'),
-        ui.input('rPattern', { value: c.reply.pattern, rows: 3 }),
-        ui.toggle('rAi', t('reply.ai'), c.reply.ai),
-        c.reply.ai ? ui.input('rInstructions', { value: c.reply.instructions, rows: 3, placeholder: t('reply.instructions') }) : null,
-        ui.text(t('reply.required'), 'small'),
-        ui.input('rRequired', { value: c.reply.required, rows: 3 }),
-      ]),
+      ui.choice('speed', speeds.map((s) => ({ value: s, label: t(`speed.${s}`) })), p.preset ?? 'custom'),
+      ui.text(t('speed.desc', { min: p.minMs, max: p.maxMs, n: p.maxPer10Min, likes: p.likesPerDay, replies: p.repliesPerDay }), 'small'),
     );
   }
-  const state = engagements.get(c.profile);
-  const today = state ? countToday(state.log) : { like: 0, reply: 0 };
-  items.push(
-    ui.section(t('safe.title'), [
-      ui.text(t('safe.delay'), 'small'),
-      ui.row([ui.input('paceMin', { value: String(c.pace.minMs), placeholder: t('safe.min') }), ui.input('paceMax', { value: String(c.pace.maxMs), placeholder: t('safe.max') })], { gap: 'small' }),
-      ui.choice('perWindow', PER_WINDOW.map((n) => ({ value: String(n), label: t('safe.window', { n }) })), String(c.pace.maxPer10Min)),
-      ui.row([
-        c.tasks.like ? ui.choice('likesDay', LIKES_A_DAY.map((n) => ({ value: String(n), label: t('safe.likes_day', { n }) })), String(c.pace.likesPerDay)) : null,
-        c.tasks.reply ? ui.choice('repliesDay', REPLIES_A_DAY.map((n) => ({ value: String(n), label: t('safe.replies_day', { n }) })), String(c.pace.repliesPerDay)) : null,
-      ], { gap: 'small', wrap: true }),
-      ui.choice('perUnit', PER_UNIT.map((n) => ({ value: String(n), label: t('safe.per_unit', { n }) })), String(c.pace.perUnit)),
-      ui.text(t('eng.today', { likes: today.like, replies: today.reply }), 'muted'),
-    ]),
-  );
+  items.push(ui.toggle('advanced', t('step.advanced'), a.ui.advanced));
+  if (a.ui.advanced) {
+    if (engaging(c)) {
+      items.push(
+        ui.text(t('safe.delay'), 'small'),
+        ui.row([ui.input('paceMin', { value: String(p.minMs), placeholder: t('safe.min') }), ui.input('paceMax', { value: String(p.maxMs), placeholder: t('safe.max') })], { gap: 'small' }),
+        ui.choice('perWindow', PER_WINDOW.map((n) => ({ value: String(n), label: t('safe.window', { n }) })), String(p.maxPer10Min)),
+        c.tasks.like ? ui.choice('likesDay', LIKES_A_DAY.map((n) => ({ value: String(n), label: t('safe.likes_day', { n }) })), String(p.likesPerDay)) : null,
+        c.tasks.reply ? ui.choice('repliesDay', REPLIES_A_DAY.map((n) => ({ value: String(n), label: t('safe.replies_day', { n }) })), String(p.repliesPerDay)) : null,
+        ui.choice('perUnit', PER_UNIT.map((n) => ({ value: String(n), label: t('safe.per_unit', { n }) })), String(p.perUnit)),
+      );
+    }
+    if (collecting(c)) items.push(ui.choice('limit', [5, 10, 20].filter((n) => n <= MAX_PER_RUN).map((n) => ({ value: String(n), label: t('per_run', { n }) })), String(c.limit)));
+    items.push(ui.input('title', { placeholder: t('auto.name'), value: c.title ?? '' }));
+  }
   return items;
 }
 
+const STEP_FORMS = { account: renderAccountStep, source: renderSourceStep, actions: renderActionsStep, timing: renderTimingStep };
+const STEP_ICONS = { account: 'key-round', source: 'search', actions: 'heart', timing: 'clock' };
+
 function renderAutomation(a) {
   const c = a.config;
-  const profiles = [{ value: 'default', label: t('auto.profile.default') }, ...data.profiles.map((p) => ({ value: p, label: p }))];
-  const ready = unitsOf(c).length > 0 && (collecting(c) || engaging(c));
-  return [
-    ui.input('title', { placeholder: t('auto.name'), value: c.title ?? '' }),
-    ui.section(t('auto.profile'), [
-      ui.choice('profile', profiles, c.profile),
-      data.profilesSupported
-        ? ui.row([ui.input('newProfile', { placeholder: t('auto.profile.placeholder'), value: a.ui.newProfile }), ui.button('addProfile', t('auto.profile.add'), { icon: 'plus' })], { gap: 'small' })
-        : ui.text(t('auto.profile.unsupported'), 'small'),
-      // The button only while there is something to do: signed in, the badge says it all.
-      ui.row([...signInBadges(c.profile), signedIn(c.profile) ? null : ui.button('signin', t('sign_in'), { icon: 'key-round', variant: 'ghost' })], { gap: 'small' }),
-      c.profile !== 'default' ? ui.button('removeProfile', t('auto.profile.remove'), { variant: 'danger' }) : null,
-    ]),
-    ui.section(t('src.title'), [
-      ui.choice('source', SOURCES.map((s) => ({ value: s, label: t(`src.${s}`) })), c.source),
-      ...(c.source === 'accounts' ? renderTargets(a) : renderKeywords(a)),
-      ui.row([
-        ui.choice('minLikes', MIN_LIKES.map((n) => ({ value: String(n), label: n ? t('src.min_likes', { n }) : t('src.any_likes') })), String(c.minLikes)),
-        ui.choice('maxAge', MAX_AGES.map((n) => ({ value: String(n), label: n ? t('src.max_age', { n }) : t('src.any_age') })), String(c.maxAgeHours)),
-      ], { gap: 'small', wrap: true }),
-    ]),
-    ui.section(t('act.title'), [
-      c.source === 'accounts' ? ui.toggle('tCollect', t('act.collect'), c.tasks.collect) : null,
-      ui.toggle('tLike', t('act.like'), c.tasks.like),
-      ui.toggle('tReply', t('act.reply'), c.tasks.reply),
-      engaging(c) ? ui.text(t('act.warning'), 'error') : null,
-    ]),
-    ...(engaging(c) ? renderEngaging(a) : []),
-    ui.section(t('auto.schedule'), [
-      ui.choice('schedule', SCHEDULES.map((n) => ({ value: String(n), label: scheduleLabel(n) })), String(c.schedule)),
-      collecting(c) ? ui.choice('limit', [5, 10, 20].filter((n) => n <= MAX_PER_RUN).map((n) => ({ value: String(n), label: t('per_run', { n }) })), String(c.limit)) : null,
-      a.nextAt ? ui.text(t('auto.next', { when: when(a.nextAt) }), 'small') : null,
-    ]),
-    ui.row([
-      a.busy ? ui.button('stop', a.stop ? t('auto.stopping') : t('auto.stop'), { icon: 'circle-x', variant: 'danger', disabled: a.stop }) : ui.button('run', t('auto.run'), { icon: 'play', variant: 'primary', disabled: !ready }),
-    ]),
-    a.busy ? ui.spinner(a.status) : ui.text(a.status || t('auto.idle'), 'muted'),
-    a.log.length ? ui.section(t('collect.recent'), a.log.map((line) => ui.text(line, 'small'))) : null,
+  const steps = stepsOf(a);
+  const open = openStep(a);
+  const allDone = STEPS.every((id) => steps[id].done);
+  const index = open ? STEPS.indexOf(open) : -1;
+  const last = index === STEPS.length - 1;
+  const items = [
+    ui.text(t('flow.intro'), 'muted'),
+    ui.list(
+      'steps',
+      STEPS.map((id, i) => ({
+        id,
+        title: `${i + 1}. ${t(`step.${id}`)}`,
+        subtitle: steps[id].summary,
+        icon: steps[id].done ? 'circle-check' : STEP_ICONS[id],
+        tone: id === open ? 'info' : steps[id].done ? 'success' : 'neutral',
+        actions: [{ id: 'edit', icon: id === open ? 'chevron-up' : 'pencil', tooltip: t('step.edit') }],
+      })),
+    ),
   ];
+  if (open) {
+    items.push(
+      ui.section(`${index + 1}. ${t(`step.${open}`)}`, [
+        ui.text(t(`step.${open}.help`), 'small'),
+        ...STEP_FORMS[open](a),
+        ui.row([
+          ui.button('stepNext', last ? t('step.finish') : t('step.next'), { icon: 'chevron-right', variant: 'primary', disabled: !steps[open].done }),
+        ]),
+      ]),
+    );
+  }
+  // What it will do, and the switch.
+  if (allDone) {
+    const sentence = t('flow.summary', { account: accountLabel(c.profile), source: sourceSummary(c), actions: actionsSummary(c) });
+    items.push(
+      ui.section(c.enabled ? t('flow.on') : t('flow.ready'), [
+        ui.text(sentence),
+        ui.text(c.enabled && c.schedule ? t('flow.every', { when: scheduleLabel(c.schedule) }) : c.schedule ? t('flow.off_hint', { when: scheduleLabel(c.schedule) }) : t('flow.once_hint'), 'muted'),
+        ui.row([
+          c.schedule
+            ? c.enabled
+              ? ui.button('disable', t('flow.turn_off'), { icon: 'circle-pause', variant: 'secondary' })
+              : ui.button('enable', t('flow.turn_on'), { icon: 'play', variant: 'primary' })
+            : null,
+          a.busy
+            ? ui.button('stop', a.stop ? t('auto.stopping') : t('auto.stop'), { icon: 'circle-x', variant: 'danger', disabled: a.stop })
+            : ui.button('run', t('flow.run_once'), { icon: 'zap', variant: c.schedule ? 'ghost' : 'primary' }),
+        ], { gap: 'small', wrap: true }),
+      ]),
+    );
+  } else {
+    items.push(ui.text(t('flow.not_ready'), 'muted'));
+  }
+  items.push(a.busy ? ui.spinner(a.status) : a.status ? ui.text(a.status, 'muted') : null);
+  if (c.enabled && a.nextAt && !a.busy) items.push(ui.text(t('auto.next', { when: when(a.nextAt) }), 'small'));
+  if (engaging(c)) {
+    const state = engagements.get(c.profile);
+    const today = state ? countToday(state.log) : { like: 0, reply: 0 };
+    items.push(ui.text(t('eng.today', { likes: today.like, replies: today.reply }), 'small'));
+  }
+  if (a.log.length) {
+    items.push(
+      ui.section(t('collect.recent'), [...a.log.slice(0, 4).map((line) => ui.text(line, 'small')), ui.button('toLog', t('flow.all_log'), { icon: 'list', variant: 'ghost' })]),
+    );
+  }
+  return items;
 }
 
 function renderPosts(a) {
@@ -1022,6 +1160,7 @@ function renderDrafts(a) {
   const open = data.drafts.find((d) => d.id === a.ui.openDraft);
   const list = data.drafts.filter((d) => (a.ui.draftFilter === 'open' ? d.status === 'draft' || d.status === 'ready' : d.status === a.ui.draftFilter));
   const items = [
+    ui.row([ui.button('openStyles', t('view.styles'), { icon: 'palette', variant: 'ghost' })]),
     ui.choice('draftFilter', [{ value: 'open', label: t('drafts.todo') }, ...DRAFT_STATUS.map((s) => ({ value: s, label: t(`stage.${s}`) }))], a.ui.draftFilter),
     ui.list(
       'drafts',
@@ -1074,6 +1213,7 @@ function renderStyles(a) {
             ui.input('sFooter', { value: style.footer ?? '', placeholder: t('style.footer') }),
           ];
   return [
+    ui.button('backToDrafts', t('style.back'), { icon: 'chevron-left', variant: 'ghost' }),
     ui.row([ui.choice('editStyle', data.styles.map((s) => ({ value: s.id, label: s.name })), style.id), ui.button('newStyle', t('style.new'), { icon: 'plus' })], { gap: 'small', wrap: true }),
     ui.input('sName', { value: style.name, placeholder: t('style.name') }),
     ui.row([
@@ -1139,9 +1279,8 @@ function render(instance) {
       { value: 'automation', label: t('view.automation') },
       { value: 'posts', label: t('view.posts', { n: data.posts.filter((p) => p.status === 'refined' || p.status === 'selected').length }) },
       { value: 'drafts', label: t('view.drafts', { n: ready }) },
-      { value: 'styles', label: t('view.styles') },
       { value: 'log', label: t('view.log') },
-    ], a.ui.view),
+    ], a.ui.view === 'styles' ? 'drafts' : a.ui.view),
     ui.divider(),
     ...(views[a.ui.view] ?? renderAutomation)(a),
   ]);
@@ -1190,11 +1329,6 @@ on('profile', async (a, e) => {
   await ensurePage(a).catch((err) => note(a, err.message));
   await render(a.instance);
 });
-on('newProfile', async (a, e) => {
-  a.ui.newProfile = e.value ?? '';
-  if (e.event === 'submit') await addProfile(a);
-});
-on('addProfile', (a) => addProfile(a));
 async function addProfile(a) {
   const name = a.ui.newProfile.trim();
   if (!/^[a-z0-9_-]{1,32}$/.test(name) || name === 'default') {
@@ -1231,15 +1365,17 @@ on('removeProfile', async (a) => {
   await refreshSignIn('default');
   await renderAll();
 });
-on('signin', async (a) => {
+on('signin', (a) => signInHere(a));
+async function signInHere(a) {
   a.status = t('sign_in.waiting');
   await render(a.instance);
   const result = await plugin.browser.signIn('x.com', { message: t('sign_in.message'), profile: a.config.profile, instance: a.instance || undefined });
   await act(a, 'signin', { ok: !!result.signedIn, url: 'https://x.com', detail: result.reason ?? '' });
   a.status = result.signedIn ? t('sign_in.done') : t('sign_in.failed', { reason: result.reason ?? '?' });
   await refreshSignIn(a.config.profile);
+  if (result.signedIn) setTimeout(() => learnHandle(a).catch(() => {}), 4000);
   await renderAll();
-});
+}
 on('newTarget', async (a, e) => {
   a.ui.newTarget = e.value ?? '';
   if (e.event === 'submit') await addTarget(a);
@@ -1283,6 +1419,7 @@ on('targets', async (a, e) => {
 });
 on('schedule', async (a, e) => {
   a.config.schedule = Number(e.value) || 0;
+  if (!a.config.schedule) a.config.enabled = false;
   await saveConfig(a);
   if (!a.busy) schedule(a);
   await render(a.instance);
@@ -1345,11 +1482,11 @@ setting('rAi', (c, v) => (c.reply.ai = on_(v)));
 textSetting('rPattern', (c, v) => (c.reply.pattern = v.slice(0, 1000)));
 textSetting('rInstructions', (c, v) => (c.reply.instructions = v.slice(0, 2000)));
 textSetting('rRequired', (c, v) => (c.reply.required = v.slice(0, 1000)));
-textSetting('paceMin', (c, v) => (c.pace.minMs = ms(v, c.pace.minMs)));
-textSetting('paceMax', (c, v) => (c.pace.maxMs = ms(v, c.pace.maxMs)));
-setting('perWindow', (c, v) => (c.pace.maxPer10Min = Math.max(1, Number(v) || 1)));
-setting('likesDay', (c, v) => (c.pace.likesPerDay = Number(v) || LIKES_A_DAY[0]));
-setting('repliesDay', (c, v) => (c.pace.repliesPerDay = Number(v) || REPLIES_A_DAY[0]));
+textSetting('paceMin', (c, v) => ((c.pace.minMs = ms(v, c.pace.minMs)), (c.pace.preset = 'custom')));
+textSetting('paceMax', (c, v) => ((c.pace.maxMs = ms(v, c.pace.maxMs)), (c.pace.preset = 'custom')));
+setting('perWindow', (c, v) => ((c.pace.maxPer10Min = Math.max(1, Number(v) || 1)), (c.pace.preset = 'custom')));
+setting('likesDay', (c, v) => ((c.pace.likesPerDay = Number(v) || LIKES_A_DAY[0]), (c.pace.preset = 'custom')));
+setting('repliesDay', (c, v) => ((c.pace.repliesPerDay = Number(v) || REPLIES_A_DAY[0]), (c.pace.preset = 'custom')));
 setting('perUnit', (c, v) => (c.pace.perUnit = Number(v) || 1));
 on('logWho', (a, e) => ((a.ui.logFilter.who = e.value), render(a.instance)));
 on('logAction', (a, e) => ((a.ui.logFilter.action = e.value), render(a.instance)));
@@ -1361,6 +1498,62 @@ on('log', async (a, e) => {
   // Shown in this automation's own page, as a click in X would.
   const tabId = await ensurePage(a).catch(() => null);
   if (tabId !== null) await goTo(a, tabId, new URL(entry.url).pathname).catch((err) => note(a, err.message));
+});
+on('steps', (a, e) => {
+  if (!STEPS.includes(e.item)) return;
+  a.ui.step = openStep(a) === e.item ? null : e.item;
+  return render(a.instance);
+});
+on('stepNext', (a) => {
+  // Step by step, in order; after the last one the steps fold away (an unfinished one reopens).
+  const open = openStep(a);
+  if (!open || !stepsOf(a)[open].done) return render(a.instance);
+  a.ui.step = STEPS[STEPS.indexOf(open) + 1] ?? null;
+  return render(a.instance);
+});
+on('srcKind', async (a, e) => {
+  if (a.busy) return render(a.instance);
+  a.config.source = e.value === 'accounts' ? 'accounts' : a.config.source === 'accounts' ? 'top' : a.config.source;
+  await saveConfig(a);
+  await render(a.instance);
+});
+on('srcSort', async (a, e) => {
+  if (a.busy || !['top', 'latest'].includes(e.value)) return render(a.instance);
+  a.config.source = e.value;
+  await saveConfig(a);
+  await render(a.instance);
+});
+on('speed', async (a, e) => {
+  const preset = SPEEDS[e.value];
+  if (!preset) return render(a.instance);
+  a.config.pace = { ...a.config.pace, ...preset, preset: e.value };
+  await saveConfig(a);
+  await render(a.instance);
+});
+on('advanced', (a, e) => ((a.ui.advanced = on_(e.value)), render(a.instance)));
+on('toLog', (a) => ((a.ui.view = 'log'), (a.ui.logFilter.who = 'this'), render(a.instance)));
+on('enable', async (a) => {
+  a.config.enabled = true;
+  await saveConfig(a);
+  // Turned on: a first run now, then on its own.
+  if (a.busy) schedule(a);
+  else await runAutomation(a.instance);
+});
+on('disable', async (a) => {
+  a.config.enabled = false;
+  await saveConfig(a);
+  schedule(a);
+  await render(a.instance);
+});
+on('addAccount', async (a) => {
+  if (a.busy) return;
+  // A sign-in of its own, named for the machine only: the user sees the @handle.
+  await refreshProfiles();
+  let n = 2;
+  while (data.profiles.includes(`account-${n}`)) n += 1;
+  a.ui.newProfile = `account-${n}`;
+  await addProfile(a);
+  await signInHere(a);
 });
 on('run', (a) => runAutomation(a.instance));
 on('stop', (a) => {
@@ -1404,6 +1597,8 @@ on('makeDrafts', async (a) => {
   await makeDrafts(a);
   await renderAll();
 });
+on('openStyles', (a) => ((a.ui.view = 'styles'), render(a.instance)));
+on('backToDrafts', (a) => ((a.ui.view = 'drafts'), render(a.instance)));
 on('draftFilter', (a, e) => ((a.ui.draftFilter = e.value), render(a.instance)));
 on('drafts', async (a, e) => {
   const draft = data.drafts.find((d) => d.id === e.item);
@@ -1473,6 +1668,7 @@ plugin
   .onActivate(async (info) => {
     setLanguage(info.language);
     store = createStore(info.plugin.dataDir);
+    handles = await store.handles();
     recentActions.push(...(await store.actions(RECENT_ACTIONS)));
     await reload();
     await refreshProfiles();

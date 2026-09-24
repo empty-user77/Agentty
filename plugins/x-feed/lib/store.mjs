@@ -203,6 +203,14 @@ export function createStore(root) {
     },
     engageDir: (id) => join(root, 'engage', 'runs', folderName(id)),
 
+    /** Which X account each sign-in profile is (`{ profile: '@handle' }`), as last seen. */
+    async handles() {
+      return readJson(join(root, 'handles.json'), {});
+    },
+    async saveHandles(handles) {
+      await writeJson(join(root, 'handles.json'), handles);
+    },
+
     /**
      * Every action an automation takes in X — pages opened, runs, collections, likes, replies,
      * sign-ins — one JSON line each, in the file of its day (appended, never rewritten).

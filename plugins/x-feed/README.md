@@ -10,6 +10,22 @@ collect → refine → select → convert → (ready to post) → post
 Agentty keeps the in-app browser and your sign-in; this plugin never sees a password or a cookie.
 It reads the profiles you follow at a person's pace (a few posts per run, a pause between each).
 
+## Setting up an automation
+
+Each tab of the plugin's workspace is one automation, set up in four steps:
+
+1. **X account**: sign in once in the page beside it (Agentty keeps the sign-in). **Another X
+   account** adds a sign-in of its own; the automation shows the account's @handle.
+2. **Whose posts**: accounts' new posts, or a keyword search (popular or latest), with at most two
+   filters: at least N likes, posted in the last day / 3 days.
+3. **What to do**: save them, like them, reply to them (a reply text, optionally rewritten by AI
+   per post, and what every reply must contain).
+4. **How often**: every 30 minutes to once a day, and a speed (slow, normal, fast) for likes and
+   replies. **Details** has the exact pauses and caps.
+
+Then **Turn on**: it runs now and then on its own. Agentty only has to be running; its window can
+be behind others or minimized.
+
 ## Where everything is
 
 Under the plugin's data folder (`~/.agentty/plugin-data/x-feed/`):
