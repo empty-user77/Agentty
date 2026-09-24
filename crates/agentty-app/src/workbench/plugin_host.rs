@@ -271,6 +271,10 @@ impl Workbench {
     pub(super) fn send_plugin_event(&mut self, plugin: &str, event: UiEvent, cx: &mut Context<Self>) {
         let mut params = serde_json::to_value(event).unwrap_or_default();
         params["context"] = self.plugin_context(plugin, None, cx);
+        // In the plugin's workspace, which automation the panel belonged to.
+        if let Some(instance) = self.active_instance(plugin, cx) {
+            params["instance"] = Value::String(instance);
+        }
         plugins::notify_plugin(plugin, "ui/event", params, cx);
     }
 
@@ -385,6 +389,15 @@ impl Workbench {
                 }
             }
             "session/get" => self.plugin_session(call, cx),
+            "workspace/instances" => {
+                let list = self.plugin_instances(&call.plugin, cx);
+                call.reply(Ok(Value::Array(list)), cx);
+            }
+            "workspace/setInstanceTitle" => {
+                let (instance, title) = (call.params["instance"].as_str().unwrap_or_default(), call.params["title"].as_str());
+                let result = self.set_instance_title(&call.plugin, instance, title, cx);
+                call.reply(result.map(|()| Value::Null).map_err(|e| (codes::INVALID_PARAMS, e)), cx);
+            }
             browser if browser.starts_with("browser/") => self.plugin_browser_call(call, window, cx),
             other => call.reply(Err((codes::METHOD_NOT_FOUND, format!("unknown method {other}"))), cx),
         }
@@ -474,6 +487,16 @@ impl Workbench {
                 };
                 self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, target, window, cx)?
             }
+            PromptTarget::Own if request.instance.is_some() => {
+                let plugin = request.plugin.clone().ok_or("only a plugin has a workspace of its own")?;
+                let instance = request.instance.clone().unwrap_or_default();
+                let (spec, later) = self.prompt_spec(kind, text, request.cwd.clone(), request.submit, cx);
+                let pane = self.open_in_instance(&plugin, &instance, spec, cx)?;
+                type_later(&pane, later, cx);
+                // The job opens beside the automation's terminals; the user stays where they are.
+                cx.notify();
+                return Ok(pane.read(cx).pane_id);
+            }
             PromptTarget::Own => {
                 let plugin = request.plugin.clone().ok_or("only a plugin has a workspace of its own")?;
                 if self.plugin_workspace(&plugin).is_none() {
@@ -520,6 +543,27 @@ impl Workbench {
         self.focus_pane(&pane, window, cx);
         cx.notify();
         Ok(pane.read(cx).pane_id)
+    }
+
+    /// How a prompt starts: an agent with it as the first message, or a program it is typed into
+    /// once ready (never with Enter in a shell).
+    pub(super) fn prompt_spec(
+        &mut self,
+        kind: PaneKind,
+        text: String,
+        cwd: Option<PathBuf>,
+        submit: bool,
+        cx: &mut Context<Self>,
+    ) -> (LaunchSpec, Option<(String, u64)>) {
+        let cwd = cwd.filter(|p| p.is_dir()).unwrap_or_else(|| self.default_cwd(cx));
+        match (kind.agent(), submit) {
+            (Some(agent), true) => {
+                let mut spec = LaunchSpec::with_prompt(agent, text, String::new(), cwd);
+                spec.title = LaunchSpec::new(kind, PathBuf::new()).title;
+                (spec, None)
+            }
+            (agent, _) => (LaunchSpec::new(kind, cwd), Some((text, if agent.is_some() { 4000 } else { 1200 }))),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -624,6 +668,17 @@ impl Workbench {
         self.plugins_page.focus = focus;
         cx.notify();
     }
+}
+
+/// Types a prompt into a pane that has just started, once its program is ready.
+fn type_later(pane: &Pane, later: Option<(String, u64)>, cx: &mut Context<Workbench>) {
+    let Some((text, delay)) = later else { return };
+    let typed = pane.clone();
+    cx.spawn(async move |_, cx| {
+        cx.background_executor().timer(Duration::from_millis(delay)).await;
+        let _ = cx.update(|cx| typed.update(cx, |view, _| view.insert_text(&text)));
+    })
+    .detach();
 }
 
 /// Types into a pane: agents get Enter after the paste when `submit`; shells only when the plugin

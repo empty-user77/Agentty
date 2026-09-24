@@ -163,6 +163,9 @@ pub fn saved_window(slot: usize) -> Option<persist::WindowState> {
 pub struct Tab {
     pub root: PaneNode<Pane>,
     pub active: Pane,
+    /// In a plugin's workspace, the automation this tab is: its panel, its browser pages and
+    /// these terminals go together, and each tab runs on its own.
+    pub instance: Option<persist::TabInstance>,
 }
 
 pub struct Workspace {
@@ -479,8 +482,13 @@ pub struct Workbench {
     before_plugin_workspace: Option<u64>,
     /// The plugin whose workspace is in front and whose panel it brought up.
     plugin_workspace_shown: Option<String>,
-    /// The browser was opened by that workspace (and closes when it is left).
-    plugin_workspace_browser: bool,
+    /// The user's own browser, set aside while a plugin's workspace (whose browser shows its
+    /// automation's pages) is in front.
+    stashed_browser: Option<browser::BrowserPanel>,
+    /// The plugin and automation whose pages the browser shows now.
+    instance_shown: Option<(String, String)>,
+    /// Automations each plugin has been told about, and the run it was told in.
+    known_instances: HashMap<String, (Option<u64>, Vec<String>)>,
     /// Whether the workspace list was open before a plugin's workspace folded it away.
     plugin_workspace_sidebar: Option<bool>,
     /// An edge of a plugin's workspace being dragged.
@@ -715,7 +723,9 @@ impl Workbench {
             plugin_browsers: Vec::new(),
             before_plugin_workspace: None,
             plugin_workspace_shown: None,
-            plugin_workspace_browser: false,
+            stashed_browser: None,
+            instance_shown: None,
+            known_instances: HashMap::new(),
             plugin_workspace_sidebar: None,
             plugin_ws_drag: None,
             plugin_pages_to_show: Vec::new(),
@@ -1014,7 +1024,7 @@ impl Workbench {
         match tab.root.remove(pane) {
             Some(root) => {
                 let active = if tab.active == *pane { root.leaves()[0].clone() } else { tab.active };
-                ws.tabs.insert(t, Tab { root, active });
+                ws.tabs.insert(t, Tab { root, active, instance: tab.instance });
             }
             None => {
                 if ws.active_tab >= ws.tabs.len() {
@@ -1134,7 +1144,7 @@ impl Workbench {
             name,
             group,
             cwd,
-            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane }],
+            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
             active_tab: 0,
             dormant: None,
             asleep_on_close: false,
@@ -1171,7 +1181,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
         ws.active_tab = ws.tabs.len() - 1;
         self.page = None;
         self.session_viewer = None;
@@ -1195,7 +1205,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone() });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
         ws.active_tab = ws.tabs.len() - 1;
         self.persist(cx);
         cx.notify();
@@ -2019,7 +2029,7 @@ impl Workbench {
         let leaves = root.leaves();
         let active = leaves.get(snapshot.active_pane).unwrap_or(&leaves[0]).clone();
         let ws = &mut self.workspaces[w];
-        ws.tabs.push(Tab { root, active });
+        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
         ws.active_tab = ws.tabs.len() - 1;
         self.active_workspace = w;
         self.page = None;
@@ -2433,6 +2443,7 @@ impl Workbench {
 
     fn snapshot_tab(&self, tab: &Tab, cx: &gpui::App) -> TabSnapshot {
         TabSnapshot {
+            instance: tab.instance.clone(),
             layout: NodeSnapshot::from_tree(&tab.root.map(&mut |pane| Self::snapshot_pane(pane, cx))),
             active_pane: tab.root.leaves().iter().position(|p| *p == tab.active).unwrap_or(0),
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
@@ -2618,7 +2629,7 @@ impl Workbench {
             if self.zoomed.is_none() {
                 self.zoomed = tab.zoomed_pane.and_then(|index| leaves.get(index)).cloned();
             }
-            tabs.push(Tab { root, active });
+            tabs.push(Tab { root, active, instance: tab.instance.clone() });
         }
         let ws = &mut self.workspaces[index];
         ws.active_tab = snapshot.active_tab.min(tabs.len().saturating_sub(1));
@@ -2629,7 +2640,7 @@ impl Workbench {
         if ws.tabs.is_empty() {
             let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, snapshot.cwd.clone()), cx);
             let ws = &mut self.workspaces[index];
-            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane });
+            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
         }
     }
 
@@ -2807,9 +2818,13 @@ impl Render for Workbench {
             .id("workbench")
             .key_context("Workbench")
             .track_focus(&self.focus_handle)
-            .on_action(
-                cx.listener(|this, _: &NewTerminalTab, window, cx| this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, window, cx)),
-            )
+            .on_action(cx.listener(|this, _: &NewTerminalTab, window, cx| {
+                // In a plugin's workspace a new tab is a new automation.
+                match this.front_plugin_workspace(cx).filter(|_| this.page.is_none()) {
+                    Some(plugin) => this.new_plugin_instance(&plugin, cx),
+                    None => this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, window, cx),
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &NewClaudeTab, window, cx| this.request_launch(PaneKind::Claude, LaunchTarget::NewTab, window, cx)),
             )

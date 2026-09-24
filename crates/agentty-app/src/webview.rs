@@ -459,15 +459,70 @@ pub fn any_view() -> bool {
     !VIEWS.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }
 
+/// A browser profile: a store of cookies and site data of its own (a second sign-in to the same
+/// site), named by a UUID. `None` is the in-app browser's own store.
+pub type Profile = Option<[u8; 16]>;
+
+/// Whether this macOS keeps stores apart by profile (`dataStoreForIdentifier:`, macOS 14).
+pub fn profiles_supported() -> bool {
+    unsafe {
+        let responds: BOOL = msg_send![class!(WKWebsiteDataStore), respondsToSelector: sel!(dataStoreForIdentifier:)];
+        responds == YES
+    }
+}
+
+unsafe fn ns_uuid(bytes: &[u8; 16]) -> Id {
+    let uuid: Id = msg_send![class!(NSUUID), alloc];
+    let uuid: Id = msg_send![uuid, initWithUUIDBytes: bytes.as_ptr()];
+    msg_send![uuid, autorelease]
+}
+
+/// The store `profile` keeps its cookies in (null when this macOS has none for profiles).
+unsafe fn data_store(profile: Profile) -> Id {
+    match profile {
+        None => msg_send![class!(WKWebsiteDataStore), defaultDataStore],
+        Some(_) if !profiles_supported() => std::ptr::null_mut(),
+        Some(bytes) => msg_send![class!(WKWebsiteDataStore), dataStoreForIdentifier: ns_uuid(&bytes)],
+    }
+}
+
 unsafe fn cookie_store() -> Id {
-    let store: Id = msg_send![class!(WKWebsiteDataStore), defaultDataStore];
+    cookie_store_of(None)
+}
+
+unsafe fn cookie_store_of(profile: Profile) -> Id {
+    let store = data_store(profile);
+    if store.is_null() {
+        return std::ptr::null_mut();
+    }
     msg_send![store, httpCookieStore]
+}
+
+/// Deletes a profile's store: its cookies, cache and site data (macOS 14).
+pub fn remove_profile(bytes: [u8; 16]) {
+    use block::ConcreteBlock;
+    if !profiles_supported() {
+        return;
+    }
+    unsafe {
+        let done = ConcreteBlock::new(|_error: Id| {}).copy();
+        let _: () = msg_send![class!(WKWebsiteDataStore), removeDataStoreForIdentifier: ns_uuid(&bytes) completionHandler: &*done];
+    }
 }
 
 /// The in-app browser's cookies whose domain `keep` accepts, delivered on the main thread.
 pub fn cookies(keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Cookie>) + 'static) {
+    cookies_of(None, keep, reply)
+}
+
+/// [`cookies`] of `profile`'s store.
+pub fn cookies_of(profile: Profile, keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Cookie>) + 'static) {
     use block::ConcreteBlock;
     unsafe {
+        let store = cookie_store_of(profile);
+        if store.is_null() {
+            return reply(Vec::new());
+        }
         let reply = std::cell::RefCell::new(Some(reply));
         let done = ConcreteBlock::new(move |list: Id| {
             let Some(reply) = reply.borrow_mut().take() else { return };
@@ -505,7 +560,7 @@ pub fn cookies(keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Coo
             reply(out);
         })
         .copy();
-        let _: () = msg_send![cookie_store(), getAllCookies: &*done];
+        let _: () = msg_send![store, getAllCookies: &*done];
     }
 }
 
@@ -566,20 +621,28 @@ pub struct WebView {
 impl WebView {
     /// Creates the web view inside `window`'s content view (hidden until `set_frame`).
     pub fn new(window: &gpui::Window, prefs: &crate::settings::BrowserSettings) -> Option<Self> {
-        Self::create(window, prefs, false)
+        Self::create(window, prefs, false, None)
     }
 
     /// A web view a plugin drives while nobody looks at it: parked outside the window, where it is
     /// never drawn but still counts as shown, and never throttled for being out of sight — a page
     /// that loads more as it is scrolled would otherwise stop halfway.
     pub fn new_background(window: &gpui::Window, prefs: &crate::settings::BrowserSettings) -> Option<Self> {
-        let mut view = Self::create(window, prefs, true)?;
+        Self::new_background_in(window, prefs, None)
+    }
+
+    /// [`new_background`] with `profile`'s cookies and site data (see [`Profile`]).
+    pub fn new_background_in(window: &gpui::Window, prefs: &crate::settings::BrowserSettings, profile: Profile) -> Option<Self> {
+        if profile.is_some() && !profiles_supported() {
+            return None;
+        }
+        let mut view = Self::create(window, prefs, true, profile)?;
         view.keep_running = true;
         view.park();
         Some(view)
     }
 
-    fn create(window: &gpui::Window, prefs: &crate::settings::BrowserSettings, background: bool) -> Option<Self> {
+    fn create(window: &gpui::Window, prefs: &crate::settings::BrowserSettings, background: bool, profile: Profile) -> Option<Self> {
         let ns_window = crate::native::ns_window(window)?;
         let gpui_view = crate::native::ns_view(window)?;
         unsafe {
@@ -619,6 +682,12 @@ impl WebView {
             }
             if prefs.private_mode {
                 let store: Id = msg_send![class!(WKWebsiteDataStore), nonPersistentDataStore];
+                let _: () = msg_send![config, setWebsiteDataStore: store];
+            } else if profile.is_some() {
+                let store = data_store(profile);
+                if store.is_null() {
+                    return None;
+                }
                 let _: () = msg_send![config, setWebsiteDataStore: store];
             }
             let view: Id = msg_send![web_view_class(), alloc];

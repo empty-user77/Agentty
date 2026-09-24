@@ -1785,13 +1785,19 @@ impl Workbench {
                         .when(view.status.in_turn(), |d| {
                             d.child(crate::ui::dot_spinner(("tab-working", view.pane_id as usize), 12., hex_alpha(Chrome::BRIGHT, 0.9)))
                         })
-                        .child(div().truncate().child(
-                            // A plugin workspace's own terminal (in the plugin's folder) goes by the plugin's name.
-                            match (&ws.plugin, &ws.name) {
-                                (Some(_), Some(name)) if !view.is_agent() && view.current_dir() == ws.cwd => name.clone(),
-                                _ => view.display_title(),
-                            },
-                        ))
+                        .child(
+                            div().truncate().child(
+                                // In a plugin's workspace a tab is an automation: the name the plugin gave
+                                // it, else "Automation n".
+                                match (&ws.plugin, &tab.instance) {
+                                    (Some(_), Some(instance)) => instance
+                                        .title
+                                        .clone()
+                                        .unwrap_or_else(|| tf(cx, "plugin_workspace.automation", &[("n", &(index + 1).to_string())])),
+                                    _ => view.display_title(),
+                                },
+                            ),
+                        )
                         .when(leaves.len() > 1, |d| {
                             d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("⊞{}", leaves.len())))
                         })
@@ -1885,6 +1891,10 @@ impl Workbench {
                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
                         if this.just_dismissed("launcher") {
                             return;
+                        }
+                        // In a plugin's workspace "+" starts a new automation, not a terminal.
+                        if let Some(plugin) = this.front_plugin_workspace(cx).filter(|_| this.page.is_none()) {
+                            return this.new_plugin_instance(&plugin, cx);
                         }
                         this.launcher_open = !this.launcher_open;
                         this.launcher_target = LaunchTarget::NewTab;

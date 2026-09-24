@@ -50,6 +50,8 @@ pub enum RunState {
 pub struct Runtime {
     pub state: RunState,
     pub panel: Option<Node>,
+    /// Panels of the plugin's automations (tabs of its workspace), by automation id.
+    pub panels: HashMap<String, Node>,
     pub badge: String,
     pub logs: VecDeque<String>,
     process: Option<PluginProcess>,
@@ -75,6 +77,7 @@ impl Runtime {
         Self {
             state: RunState::Stopped,
             panel: None,
+            panels: HashMap::new(),
             badge: String::new(),
             logs: VecDeque::new(),
             process: None,
@@ -392,6 +395,7 @@ pub fn stop(id: &str, cx: &mut App) {
         runtime.abandon();
         runtime.state = RunState::Stopped;
         runtime.panel = None;
+        runtime.panels.clear();
         runtime.badge.clear();
     }
     touch(cx);
@@ -517,8 +521,16 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             let tree = Node::from_value(params.get("tree").cloned().unwrap_or(Value::Null));
             let result = match tree {
                 Ok(tree) => {
+                    let instance = params.get("instance").and_then(Value::as_str).map(str::to_string);
                     if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
-                        runtime.panel = Some(tree);
+                        match instance {
+                            // One panel per automation; a plugin cannot pile up more than it could run.
+                            Some(instance) if runtime.panels.len() < 64 || runtime.panels.contains_key(&instance) => {
+                                runtime.panels.insert(instance, tree);
+                            }
+                            Some(_) => {}
+                            None => runtime.panel = Some(tree),
+                        }
                     }
                     touch(cx);
                     Ok(Value::Null)

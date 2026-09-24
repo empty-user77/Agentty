@@ -58,6 +58,10 @@ impl WebView {
         None
     }
 
+    pub fn new_background_in(_window: &gpui::Window, _prefs: &crate::settings::BrowserSettings, _profile: Profile) -> Option<Self> {
+        None
+    }
+
     pub fn id(&self) -> usize {
         0
     }
@@ -140,6 +144,18 @@ pub fn cookies(_keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Co
 }
 
 pub fn set_cookies(_cookies: &[Cookie]) {}
+
+pub type Profile = Option<[u8; 16]>;
+
+pub fn profiles_supported() -> bool {
+    false
+}
+
+pub fn cookies_of(_profile: Profile, _keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Cookie>) + 'static) {
+    reply(Vec::new());
+}
+
+pub fn remove_profile(_bytes: [u8; 16]) {}
 
 pub fn any_view() -> bool {
     false

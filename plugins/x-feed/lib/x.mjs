@@ -58,6 +58,26 @@ export async function scrollLikeAHand() {
   return window.scrollY;
 }
 
+/**
+ * Moves the page to `args.path` the way X itself does when a link is clicked (its own router), and
+ * says whether it could: only an X page can. A full load of a profile address is what a person
+ * rarely does, and X has been seen to stall on it; this is what a click does.
+ */
+export function goToPath(args) {
+  if (!/(^|\.)(x|twitter)\.com$/.test(location.hostname)) return false;
+  if (location.pathname === args.path) return true;
+  history.pushState({}, '', args.path);
+  window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+  return true;
+}
+
+export const HOME = 'https://x.com/home';
+
+/** Whether X's app is up in the page (its main column is there), not stuck on its splash. */
+export function appReady() {
+  return !!document.querySelector('[data-testid="primaryColumn"], [data-testid="loginButton"], main[role="main"]');
+}
+
 /** The profile page of `account` (`@name`, `name`, or a full URL of a page on x.com). */
 export function profileUrl(account) {
   const value = String(account).trim();

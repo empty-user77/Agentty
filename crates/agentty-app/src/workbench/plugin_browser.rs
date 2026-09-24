@@ -29,7 +29,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Pages one plugin may have open at once.
-const MAX_PAGES_PER_PLUGIN: usize = 3;
+/// Pages one plugin may have open at once: a few per automation it runs side by side.
+const MAX_PAGES_PER_PLUGIN: usize = 12;
 /// Largest script a plugin may send, and the largest answer it gets back.
 const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 const MAX_RESULT_BYTES: usize = 4 * 1024 * 1024;
@@ -83,6 +84,10 @@ pub struct PluginBrowser {
     pub(super) shown: bool,
     /// Opened by `browser/signIn`: the site the user is asked to sign in to, shown above the page.
     pub(super) sign_in: Option<String>,
+    /// The browser profile the page runs in (`None`: the in-app browser's own sign-ins).
+    pub(super) profile: Option<String>,
+    /// The automation (a tab of the plugin's workspace) the page belongs to.
+    pub(super) instance: Option<String>,
 }
 
 /// What the plugin named, read fresh on every call: an update may have changed it.
@@ -148,9 +153,15 @@ fn timeout_of(params: &Value) -> Duration {
 /// Whether `site` is signed in (by its `signedInCookie`) and until when, in ms since the epoch.
 /// `None` when the site did not say which cookie means signed in.
 pub fn site_status(site: &Site, reply: impl FnOnce(Option<(bool, Option<u64>)>) + 'static) {
+    site_status_in(None, site, reply)
+}
+
+/// [`site_status`] in a plugin's browser profile.
+pub fn site_status_in(profile: crate::webview::Profile, site: &Site, reply: impl FnOnce(Option<(bool, Option<u64>)>) + 'static) {
     let Some(name) = site.signed_in_cookie.clone() else { return reply(None) };
     let site = site.clone();
-    crate::webview::cookies(
+    crate::webview::cookies_of(
+        profile,
         move |domain| site.covers_cookie_domain(domain),
         move |cookies| {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.);
@@ -246,6 +257,25 @@ impl Workbench {
                 call.reply(result.map(|_| Value::Null), cx);
             }
             "browser/signIn" => self.plugin_sign_in(call, window, cx),
+            "browser/profiles" => {
+                let names = crate::browser_profiles::names(&call.plugin);
+                call.reply(Ok(json!({ "supported": crate::webview::profiles_supported(), "profiles": names })), cx);
+            }
+            "browser/removeProfile" => {
+                let name = call.params["profile"].as_str().unwrap_or_default().to_string();
+                // Its pages go first: they run in the store about to be deleted.
+                let pages: Vec<u64> = self
+                    .plugin_browsers
+                    .iter()
+                    .filter(|p| p.plugin == call.plugin && p.profile.as_deref() == Some(name.as_str()))
+                    .map(|p| p.id)
+                    .collect();
+                for id in pages {
+                    self.close_plugin_page(id, cx);
+                }
+                let removed = crate::browser_profiles::remove(&call.plugin, &name);
+                call.reply(Ok(json!({ "removed": removed })), cx);
+            }
             other => call.reply(Err((codes::METHOD_NOT_FOUND, format!("unknown method {other}"))), cx),
         }
     }
@@ -323,7 +353,10 @@ impl Workbench {
         if self.plugin_browsers.iter().filter(|page| page.plugin == call.plugin).count() >= MAX_PAGES_PER_PLUGIN {
             return Err((codes::UNAVAILABLE, format!("at most {MAX_PAGES_PER_PLUGIN} browser tabs per plugin")));
         }
-        let Some(view) = WebView::new_background(window, &prefs) else {
+        let profile_name = call.params["profile"].as_str().map(str::to_string).filter(|name| name != crate::browser_profiles::DEFAULT);
+        let profile =
+            crate::browser_profiles::resolve(&call.plugin, profile_name.as_deref(), true).map_err(|e| (codes::INVALID_PARAMS, e))?;
+        let Some(view) = WebView::new_background_in(window, &prefs, profile) else {
             return Err((codes::UNAVAILABLE, "the in-app browser is not available".into()));
         };
         view.load(&url);
@@ -336,12 +369,19 @@ impl Workbench {
             webview: Rc::new(RefCell::new(Some(view))),
             shown: false,
             sign_in: None,
+            profile: profile_name,
+            instance: call.params["instance"].as_str().map(str::to_string),
         });
         let requested = call.params["mode"].as_str().and_then(BrowserMode::from_id).unwrap_or(BrowserMode::Auto);
         let visible = match BrowserMode::chosen(&call.plugin, cx) {
             // A plugin that works in a workspace of its own shows its pages there.
             BrowserMode::Auto => {
-                requested == BrowserMode::Visible || (requested == BrowserMode::Auto && self.wants_workspace(&call.plugin, cx))
+                // In the plugin's workspace, a page of the automation in front shows there.
+                let in_front = match call.params["instance"].as_str() {
+                    Some(instance) => self.active_instance(&call.plugin, cx).as_deref() == Some(instance),
+                    None => true,
+                };
+                requested == BrowserMode::Visible || (requested == BrowserMode::Auto && self.wants_workspace(&call.plugin, cx) && in_front)
             }
             chosen => chosen == BrowserMode::Visible,
         };
@@ -381,10 +421,20 @@ impl Workbench {
 
     fn answer_browser_sites(&mut self, call: PluginCall, cx: &mut Context<Self>) {
         let sites = sites_of(&call.plugin, cx).sites;
+        let profile = match crate::browser_profiles::resolve(&call.plugin, call.params["profile"].as_str(), false) {
+            Ok(profile) => profile,
+            // A profile never used has signed in nowhere yet.
+            Err(_) => {
+                return call.reply(
+                    Ok(Value::Array(sites.iter().map(|s| json!({ "host": s.host, "signedIn": false, "expiresAt": null })).collect())),
+                    cx,
+                )
+            }
+        };
         let mut waiting = Vec::new();
         for site in sites {
             let (sender, receiver) = futures::channel::oneshot::channel();
-            site_status(&site, move |status| {
+            site_status_in(profile, &site, move |status| {
                 let _ = sender.send(status);
             });
             waiting.push((site.host, receiver));
@@ -485,7 +535,11 @@ impl Workbench {
             return call.reply(Err((codes::INVALID_PARAMS, format!("{host} is not one of the plugin's sites"))), cx);
         };
         let mut open = call.clone();
-        open.params = json!({ "url": site.sign_in_url() });
+        open.params = json!({ "url": site.sign_in_url(), "profile": call.params["profile"], "instance": call.params["instance"] });
+        let profile = match crate::browser_profiles::resolve(&call.plugin, call.params["profile"].as_str(), true) {
+            Ok(profile) => profile,
+            Err(error) => return call.reply(Err((codes::INVALID_PARAMS, error)), cx),
+        };
         let id = match self.open_plugin_page(&open, true, window, cx) {
             Ok(id) => id,
             Err(error) => return call.reply(Err(error), cx),
@@ -510,7 +564,7 @@ impl Workbench {
             let (sender, receiver) = futures::channel::oneshot::channel();
             let checked = site.clone();
             let _ = cx.update(|_| {
-                site_status(&checked, move |status| {
+                site_status_in(profile, &checked, move |status| {
                     let _ = sender.send(status);
                 })
             });
@@ -610,7 +664,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn hide_plugin_page(&mut self, id: u64, cx: &mut Context<Self>) {
+    pub(super) fn hide_plugin_page(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(browser) = self.browser.as_mut() {
             if let Some(index) = browser.tabs.iter().position(|tab| tab.owner == Some(id)) {
                 if browser.tabs.len() == 1 {

@@ -175,6 +175,17 @@ export function createStore(root) {
       return `media/${kind}/${name}`;
     },
 
+    /** An automation's settings (a tab of the plugin's workspace), by its id. */
+    async engine(id) {
+      return readJson(join(root, 'engines', `${folderName(id)}.json`), null);
+    },
+    async saveEngine(id, engine) {
+      await writeJson(join(root, 'engines', `${folderName(id)}.json`), engine);
+    },
+    async removeEngine(id) {
+      await rm(join(root, 'engines', `${folderName(id)}.json`), { force: true });
+    },
+
     async styles(defaults) {
       const saved = await readJson(join(root, 'styles.json'), null);
       if (!saved?.styles?.length) return defaults;

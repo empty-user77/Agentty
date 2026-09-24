@@ -58,7 +58,7 @@ export function createPlugin(streams = {}) {
   const commands = new Map();
   const events = new Map();
   const urls = new Map();
-  const listeners = { activate: [], panelOpen: [], panelClose: [], context: [], event: [], url: [], shutdown: [], browserHidden: [] };
+  const listeners = { activate: [], panelOpen: [], panelClose: [], context: [], event: [], url: [], shutdown: [], browserHidden: [], instanceOpen: [], instanceClose: [] };
   const pending = new Map();
   let nextId = 1;
   let started = false;
@@ -116,9 +116,30 @@ export function createPlugin(streams = {}) {
       return plugin;
     },
 
-    /** Replaces the panel's content. */
-    setPanel(tree) {
-      return call('ui/setPanel', { tree });
+    /**
+     * Replaces the panel's content. In a plugin workspace (`mode: "workspace"`) each automation
+     * (tab) has its own panel: pass its `instance`. UI events from it carry that `instance`.
+     */
+    setPanel(tree, { instance } = {}) {
+      return call('ui/setPanel', { tree, instance });
+    },
+    /** The automations (tabs) of the plugin's workspace → [{ instance, title, active }]. */
+    instances() {
+      return call('workspace/instances', {});
+    },
+    /** Names an automation's tab. */
+    setInstanceTitle(instance, title) {
+      return call('workspace/setInstanceTitle', { instance, title });
+    },
+    /** A new automation (tab) in the plugin's workspace, or one that exists when the plugin starts: handler({ instance, title }). */
+    onInstanceOpen(handler) {
+      listeners.instanceOpen.push(handler);
+      return plugin;
+    },
+    /** The user closed an automation's tab: handler({ instance }). Its pages are closed already. */
+    onInstanceClose(handler) {
+      listeners.instanceClose.push(handler);
+      return plugin;
     },
     /** Opens (focuses) this plugin's panel. */
     showPanel() {
@@ -166,13 +187,17 @@ export function createPlugin(streams = {}) {
      * whether a site is signed in and asks the user to sign in when it is not.
      */
     browser: {
-      /** [{ host, signedIn: true | false | null, expiresAt: ms | null }] */
-      sites() {
-        return call('browser/sites', {});
+      /** [{ host, signedIn: true | false | null, expiresAt: ms | null }] in `profile` (default: the browser's own). */
+      sites({ profile } = {}) {
+        return call('browser/sites', { profile });
       },
-      /** Opens a page of one of the plugin's sites → { tabId }. mode: auto | background | visible */
-      open(url, { mode } = {}) {
-        return call('browser/open', { url, mode });
+      /**
+       * Opens a page of one of the plugin's sites → { tabId }. mode: auto | background | visible.
+       * profile: a sign-in of its own (made the first time a name is used; macOS 14+).
+       * instance: the automation (a tab of the plugin's workspace) the page belongs to.
+       */
+      open(url, { mode, profile, instance } = {}) {
+        return call('browser/open', { url, mode, profile, instance });
       },
       navigate(tabId, url) {
         return call('browser/navigate', { tabId, url });
@@ -208,8 +233,16 @@ export function createPlugin(streams = {}) {
        * Opens the site's sign-in page for the user and resolves once they are signed in, closed the
        * tab or ten minutes passed → { signedIn, expiresAt?, reason? }.
        */
-      signIn(host, { message } = {}) {
-        return call('browser/signIn', { host, message });
+      signIn(host, { message, profile, instance } = {}) {
+        return call('browser/signIn', { host, message, profile, instance });
+      },
+      /** The profiles the plugin has made → { supported, profiles: [name] }. */
+      profiles() {
+        return call('browser/profiles', {});
+      },
+      /** Deletes a profile with everything signed in there → { removed }. */
+      removeProfile(profile) {
+        return call('browser/removeProfile', { profile });
       },
     },
     /** The user took a plugin page out of the browser panel: handler({ tabId }). It still runs. */
@@ -328,6 +361,12 @@ export function createPlugin(streams = {}) {
       }
       case 'browser/hidden':
         await guarded(() => run(listeners.browserHidden, params));
+        return;
+      case 'instance/open':
+        await guarded(() => run(listeners.instanceOpen, params));
+        return;
+      case 'instance/close':
+        await guarded(() => run(listeners.instanceClose, params));
         return;
       case 'shutdown':
         await shutdown(0);

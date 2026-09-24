@@ -45,6 +45,9 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("workspace/list", Some("workspace.read")),
     // The in-app browser, signed in as the user: only on the sites the manifest names, and never
     // its cookies.
+    // The plugin's own workspace: its automations (tabs) and what they are called.
+    ("workspace/instances", None),
+    ("workspace/setInstanceTitle", None),
     ("browser/sites", Some("browser.control")),
     ("browser/open", Some("browser.control")),
     ("browser/navigate", Some("browser.control")),
@@ -55,6 +58,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("browser/hide", Some("browser.control")),
     ("browser/close", Some("browser.control")),
     ("browser/signIn", Some("browser.control")),
+    ("browser/profiles", Some("browser.control")),
+    ("browser/removeProfile", Some("browser.control")),
 ];
 
 /// `None` for unknown methods; `Some(None)` when no permission is needed.
@@ -154,6 +159,10 @@ pub struct PromptRequest {
     pub pane_id: Option<u64>,
     #[serde(default)]
     pub workspace_id: Option<u64>,
+    /// With `target: "own"`: the automation (a tab of the plugin's workspace) the job belongs to;
+    /// it opens beside that tab's terminals instead of as a tab of its own.
+    #[serde(default)]
+    pub instance: Option<String>,
     /// `claude`, `codex` or `shell` for new sessions (default: Claude Code).
     #[serde(default)]
     pub agent: Option<String>,
@@ -184,6 +193,7 @@ impl Default for PromptRequest {
             target: PromptTarget::Ask,
             pane_id: None,
             workspace_id: None,
+            instance: None,
             agent: None,
             cwd: None,
             submit: true,

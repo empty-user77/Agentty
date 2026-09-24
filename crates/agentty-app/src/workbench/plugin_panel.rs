@@ -67,12 +67,17 @@ impl Workbench {
         }
         self.reconcile_plugin_windows(window, cx);
         let mut fields = Vec::new();
-        if let Some(tree) = plugins::runtime(cx, &plugin).and_then(|r| r.panel.as_ref()) {
+        if let Some(tree) = self.plugin_tree(&plugin, cx) {
             tree.inputs(&mut fields);
         }
-        self.plugin_inputs.retain(|(owner, id), _| *owner == plugin && fields.iter().any(|field| field.id == *id));
+        // An automation's fields are its own: the same id in another tab is another field.
+        let scope = match self.active_instance(&plugin, cx) {
+            Some(instance) => format!("{plugin}#{instance}"),
+            None => plugin.clone(),
+        };
+        self.plugin_inputs.retain(|(owner, id), _| *owner == scope && fields.iter().any(|field| field.id == *id));
         for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows } in fields {
-            let key = (plugin.clone(), id.clone());
+            let key = (scope.clone(), id.clone());
             if let Some(existing) = self.plugin_inputs.get_mut(&key) {
                 if existing.applied != value {
                     existing.applied = value.clone();
@@ -93,10 +98,10 @@ impl Workbench {
                 input.set_text(value.clone(), cx);
                 input
             });
-            let (owner, element) = (plugin.clone(), id.clone());
+            let (owner, element, scope) = (plugin.clone(), id.clone(), scope.clone());
             let subscription = cx.subscribe(&input, move |this, input, event: &TextInputEvent, cx| {
                 let text = input.read(cx).text().to_string();
-                let key = (owner.clone(), element.clone());
+                let key = (scope.clone(), element.clone());
                 match event {
                     TextInputEvent::Confirmed => {
                         let event = UiEvent {
@@ -116,12 +121,12 @@ impl Workbench {
                         }
                         field.generation += 1;
                         let generation = field.generation;
-                        let (owner, element) = (owner.clone(), element.clone());
+                        let (owner, element, scope) = (owner.clone(), element.clone(), key.0.clone());
                         cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(Duration::from_millis(250)).await;
                             let _ = this.update(cx, |this, cx| {
                                 let current =
-                                    this.plugin_inputs.get(&(owner.clone(), element.clone())).is_some_and(|f| f.generation == generation);
+                                    this.plugin_inputs.get(&(scope.clone(), element.clone())).is_some_and(|f| f.generation == generation);
                                 if current {
                                     let event = UiEvent {
                                         element: element.clone(),
@@ -151,7 +156,7 @@ impl Workbench {
         let close = icon_only_close(cx);
         let runtime = plugins::runtime(cx, &plugin_id);
         let state = runtime.map(|r| r.state.clone()).unwrap_or(RunState::Stopped);
-        let tree = runtime.and_then(|r| r.panel.clone());
+        let tree = self.plugin_tree(&plugin_id, cx).cloned();
         let log_tail: Vec<String> = runtime.map(|r| r.logs.iter().rev().take(12).rev().cloned().collect()).unwrap_or_default();
         let panel_title = manifest.contributes.panel.as_ref().map_or(manifest.name.clone(), |p| p.title.clone());
         let panel_icon = icon_named(manifest.contributes.panel.as_ref().and_then(|p| p.icon.as_deref()).or(manifest.icon.as_deref()));

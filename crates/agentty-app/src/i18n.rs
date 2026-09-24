@@ -1615,6 +1615,7 @@ strings! {
     "plugins.mode.push" => ["Beside the terminals", "터미널 옆에 (밀어서)", "ターミナルの横に", "在终端旁边"],
     "plugins.mode.overlay" => ["Floating over the window", "창 위에 띄워서", "ウィンドウの上に重ねて", "浮在窗口上方"],
     "plugins.mode.window" => ["In a window of its own", "별도 창으로", "独立したウィンドウで", "独立窗口"],
+    "plugin_workspace.automation" => ["Automation {n}", "자동화 {n}", "自動化 {n}", "自动化 {n}"],
     "workspace.plugin_card" => ["Plugin workspace", "플러그인 작업공간", "プラグインのワークスペース", "插件工作区"],
     "plugins.mode.workspace" => ["A workspace of its own (terminals and browser)", "전용 작업공간 (터미널·브라우저)", "専用ワークスペース（ターミナルとブラウザ）", "专属工作区（终端和浏览器）"],
     "plugins.mode.full" => ["Filling the whole area", "전체 화면으로", "全体に広げて", "占满整个区域"],

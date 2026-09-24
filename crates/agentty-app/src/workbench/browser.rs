@@ -329,6 +329,12 @@ impl Workbench {
     /// Pages ask for new windows too, so the count is capped: a page in a loop must not fill the
     /// panel (and the memory of one web view per tab) without end.
     pub(super) fn open_browser_tab(&mut self, url: Option<String>, cx: &mut Context<Self>) {
+        // In a plugin's workspace the browser's "+" (and ⌘T) starts a new automation of the plugin.
+        if url.is_none() {
+            if let Some(plugin) = self.front_plugin_workspace(cx).filter(|_| self.page.is_none()) {
+                return self.new_plugin_instance(&plugin, cx);
+            }
+        }
         let Some(browser) = self.browser.as_mut() else { return self.open_browser(url, cx) };
         if browser.tabs.len() >= MAX_TABS {
             return;
@@ -390,6 +396,7 @@ impl Workbench {
             };
             self.build_browser_panel(tabs, active, url, window, cx);
         }
+        self.sync_plugin_instances(cx);
         if let Some(tabs) = self.sync_plugin_browsers(cx) {
             match self.browser.as_mut() {
                 Some(browser) => {

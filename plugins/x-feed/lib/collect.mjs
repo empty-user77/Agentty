@@ -6,7 +6,7 @@
 // limit (and then says the next run may find a gap to fill), or where the timeline ends.
 
 import { join } from 'node:path';
-import { accountOf, fetchEmbed as fetchEmbedDefault, markPinned, profileUrl, readTimeline, scrollLikeAHand } from './x.mjs';
+import { accountOf, appReady, fetchEmbed as fetchEmbedDefault, goToPath, HOME, markPinned, profileUrl, readTimeline, scrollLikeAHand } from './x.mjs';
 import { refine, toMarkdown } from './refine.mjs';
 import { downloadMedia } from './media.mjs';
 import { day as dayOf, newId } from './store.mjs';
@@ -26,7 +26,8 @@ export const readingPause = () => sleep(2500 + Math.random() * 3500 + (Math.rand
  * Reads new posts of `account` off its profile.
  *
  * `browser` is `plugin.browser`; `options`: { limit, mode, backfill, pause, fetchEmbed, fetchImpl,
- * progress, log, now }. Returns the run record, which is also saved. A run that meets the sign-in
+ * progress, log, now, tabId, profile, instance, engine }. With `tabId` the run reads in that page (an
+ * automation's own tab) and leaves it open; otherwise it opens one in `profile` and closes it. Returns the run record, which is also saved. A run that meets the sign-in
  * wall before reading anything stops with `stoppedBecause: "signin"` and the page left open
  * (`tabId`), for the caller to ask the user.
  */
@@ -55,6 +56,7 @@ export async function collect(browser, store, account, options = {}) {
     new: 0,
     duplicates: 0,
     stoppedBecause: null,
+    engine: options.engine ?? null,
     gap: false,
     error: null,
     postIds: [],
@@ -63,14 +65,27 @@ export async function collect(browser, store, account, options = {}) {
 
   const fresh = [];
   const seen = [];
-  let tabId = null;
+  let tabId = options.tabId ?? null;
+  const ownPage = tabId === null;
   let knownInARow = 0;
   let reachedKnown = false;
   let idle = 0;
   try {
     progress({ step: 'open', run });
-    ({ tabId } = await browser.open(url, { mode: options.mode }));
-    await browser.wait(tabId, { timeoutMs: 30000 });
+    // In through the front door, then to the profile as a click would take a person there.
+    if (ownPage) {
+      ({ tabId } = await browser.open(HOME, { mode: options.mode, profile: options.profile, instance: options.instance }));
+      await browser.wait(tabId, { timeoutMs: 30000 });
+    }
+    // A page stuck on X's splash (or somewhere else) starts again from home.
+    const ready = await browser.eval(tabId, appReady).catch(() => false);
+    const moved = ready && (await browser.eval(tabId, goToPath, { path: new URL(url).pathname }).catch(() => false));
+    if (!moved) {
+      await browser.navigate(tabId, HOME);
+      await browser.wait(tabId, { timeoutMs: 30000 });
+      await pause();
+      await browser.eval(tabId, goToPath, { path: new URL(url).pathname });
+    }
     // Enough reads for the limit, bounded however the page behaves.
     for (let reads = 0; reads < limit * 3 + 8 && !run.stoppedBecause; reads += 1) {
       await pause();
@@ -124,7 +139,7 @@ export async function collect(browser, store, account, options = {}) {
     run.tabId = tabId;
     return run;
   }
-  if (tabId !== null && options.mode !== 'visible') await browser.close(tabId).catch(() => {});
+  if (ownPage && tabId !== null && options.mode !== 'visible') await browser.close(tabId).catch(() => {});
 
   // Posts are taken in, one at a time, oldest of the run last so an interrupted run keeps the newest.
   for (const [index, seenPost] of fresh.entries()) {

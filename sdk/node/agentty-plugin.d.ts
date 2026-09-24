@@ -88,7 +88,7 @@ export interface UiEvent {
 
 export interface UrlOpen { path: string; query: Record<string, string>; url: string }
 
-export type PromptTarget = 'ask' | 'active' | 'newWorkspace' | 'newTab' | 'pane' | 'workspace';
+export type PromptTarget = 'ask' | 'active' | 'newWorkspace' | 'newTab' | 'split' | 'pane' | 'workspace' | 'own';
 
 export interface PromptRequest {
   text: string;
@@ -96,6 +96,8 @@ export interface PromptRequest {
   target?: PromptTarget;
   paneId?: number;
   workspaceId?: number;
+  /** With target 'own': the automation (tab) the job opens beside. */
+  instance?: string;
   agent?: 'claude' | 'codex' | 'shell';
   cwd?: string;
   submit?: boolean;
@@ -133,8 +135,8 @@ export interface BrowserTabInfo {
 }
 
 export interface Browser {
-  sites(): Promise<SiteStatus[]>;
-  open(url: string, options?: { mode?: BrowserMode }): Promise<{ tabId: number }>;
+  sites(options?: { profile?: string }): Promise<SiteStatus[]>;
+  open(url: string, options?: { mode?: BrowserMode; profile?: string; instance?: string }): Promise<{ tabId: number }>;
   navigate(tabId: number, url: string): Promise<void>;
   eval<T = unknown, A = unknown>(tabId: number, script: string | ((args: A) => T | Promise<T>), args?: A, options?: { timeoutMs?: number }): Promise<T>;
   wait(tabId: number, options?: { timeoutMs?: number }): Promise<{ url: string; title: string | null }>;
@@ -142,7 +144,9 @@ export interface Browser {
   show(tabId: number, message?: string): Promise<void>;
   hide(tabId: number): Promise<void>;
   close(tabId: number): Promise<void>;
-  signIn(host: string, options?: { message?: string }): Promise<{ tabId: number; signedIn: boolean | null; expiresAt?: number | null; reason?: 'closed' | 'timeout' }>;
+  signIn(host: string, options?: { message?: string; profile?: string; instance?: string }): Promise<{ tabId: number; signedIn: boolean | null; expiresAt?: number | null; reason?: 'closed' | 'timeout' }>;
+  profiles(): Promise<{ supported: boolean; profiles: string[] }>;
+  removeProfile(profile: string): Promise<{ removed: boolean }>;
 }
 
 export class AgenttyError extends Error {
@@ -162,7 +166,11 @@ export interface Plugin {
   onPanelClose(handler: (context: Context) => unknown): Plugin;
   onContextChange(handler: (context: Context) => unknown): Plugin;
   onShutdown(handler: () => unknown): Plugin;
-  setPanel(tree: UiNode): Promise<void>;
+  setPanel(tree: UiNode, options?: { instance?: string }): Promise<void>;
+  instances(): Promise<{ instance: string; title: string | null; active: boolean }[]>;
+  setInstanceTitle(instance: string, title: string): Promise<void>;
+  onInstanceOpen(handler: (event: { instance: string; title: string | null }) => unknown): Plugin;
+  onInstanceClose(handler: (event: { instance: string }) => unknown): Plugin;
   showPanel(): Promise<void>;
   notify(message: string, kind?: 'info' | 'success' | 'warning' | 'error'): Promise<void>;
   setBadge(text: string): Promise<void>;

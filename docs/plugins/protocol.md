@@ -45,6 +45,8 @@ with the same 16 MB line limit as stdout.
 | `url/open` | notification | `{ path, query, url, context }` |
 | `pane/status` | notification | `{ paneId, status, running, agent, title, cwd }` — a pane this plugin started changed what it is doing (`workspace.read`) |
 | `browser/hidden` | notification | `{ tabId }` — the user took one of the plugin's pages out of the browser panel; it keeps running out of sight (`browser.control`) |
+| `instance/open` | notification | `{ instance, title }` — an automation (a tab of the plugin's workspace) exists: each one when the plugin starts, then every new one |
+| `instance/close` | notification | `{ instance }` — the user closed an automation's tab; its pages are closed already |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin (a command, the panel
@@ -57,7 +59,9 @@ when you don't care.
 
 | Method | Permission | `params` | Result |
 |---|---|---|---|
-| `ui/setPanel` | | `{ tree }` | `null` |
+| `ui/setPanel` | | `{ tree, instance? }` — with `instance`, the panel of that automation | `null` |
+| `workspace/instances` | | `{}` | `[{ instance, title, active }]` — the automations of the plugin's workspace |
+| `workspace/setInstanceTitle` | | `{ instance, title }` | `null` — what the automation's tab is called |
 | `ui/showPanel` | | `{}` | `null` |
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
@@ -161,20 +165,28 @@ come together.
 
 | Method | `params` | Result |
 |---|---|---|
-| `browser/sites` | `{}` | `[{ host, signedIn: true \| false \| null, expiresAt: ms \| null }]` |
-| `browser/open` | `{ url, mode?: "auto" \| "background" \| "visible" }` | `{ tabId }` |
+| `browser/sites` | `{ profile? }` | `[{ host, signedIn: true \| false \| null, expiresAt: ms \| null }]` |
+| `browser/open` | `{ url, mode?: "auto" \| "background" \| "visible", profile?, instance? }` | `{ tabId }` |
 | `browser/navigate` | `{ tabId, url }` | `null` |
 | `browser/eval` | `{ tabId, script, args?, timeoutMs? }` | `{ value }` |
 | `browser/wait` | `{ tabId, timeoutMs? }` | `{ url, title }` once the page has loaded |
 | `browser/info` | `{ tabId }` | `{ tabId, url, title, loading, visible, site }` |
 | `browser/show` · `browser/hide` · `browser/close` | `{ tabId, message? }` | `null` |
-| `browser/signIn` | `{ host, message? }` | `{ tabId, signedIn, expiresAt?, reason?: "closed" \| "timeout" }` |
+| `browser/signIn` | `{ host, message?, profile?, instance? }` | `{ tabId, signedIn, expiresAt?, reason?: "closed" \| "timeout" }` |
+| `browser/profiles` | `{}` | `{ supported, profiles: [name] }` |
+| `browser/removeProfile` | `{ profile }` | `{ removed }` — the profile's store, sign-ins included, is deleted |
 
 - **The user decides first.** The first browser call a plugin makes shows a dialog naming the
   plugin and its sites, and saying that what it does there is done in the user's name. Until the
   user allows it, calls wait for the answer; after "Don't allow" they fail with `-32001` until the
   plugin restarts. An update that names a new site asks again. The plugin's page in the Plugins
   view shows the sites and takes the permission back.
+- **Profiles** are sign-ins of their own (macOS 14 and later): a page opened with `profile: "brand-b"`
+  keeps its cookies and site data apart from the in-app browser and from the plugin's other
+  profiles, so each can be signed in to another account of the same site. The name is the plugin's
+  (lower-case letters, digits, `-`, `_`); the store it means is Agentty's, made the first time the
+  name is used, deleted by `browser/removeProfile` or with the plugin. No `profile`, or `"default"`,
+  is the in-app browser's own sign-in.
 - **Pages** run out of sight (parked outside the window: never drawn, never throttled, so a page
   that loads more as it scrolls keeps working with Agentty minimized) or as a tab of the browser
   panel. `auto` runs them out of sight and shows them when the user is needed; the user can pin a
@@ -297,6 +309,15 @@ across restarts): the panel docked at the right, the browser with the plugin's p
 visible there unless the plugin asks otherwise), and the terminals as tabs. `prompt/inject` with
 `target: "own"` opens a new tab there for each job, so several run side by side. Leaving the
 workspace puts the window back as it was; the icon, pressed again, goes back to where the user was.
+
+In that workspace **a tab is an automation**. Each has its own panel (`ui/setPanel` with its
+`instance`; UI events from it carry the same `instance`), its own browser pages (`browser/open`
+with `instance`: the browser shows the pages of the tab in front, the others keep running out of
+sight) and its own terminals (`prompt/inject` with `target: "own"` and `instance` opens the job
+beside that tab's terminals without bringing it to the front). The tab strip's "+", ⌘T and the
+browser's "+" make a new automation: the plugin hears `instance/open` and sets it up; closing the
+tab sends `instance/close`. Five tabs are five automations running side by side. Nothing of this
+is specific to a site: a plugin for any site gets it by declaring `mode: "workspace"`.
 
 ## UI tree
 

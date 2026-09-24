@@ -42,7 +42,10 @@ through other clients with credentials read from the project). `agentty db --hel
 is waiting for.
 
 Work that goes on its own branch belongs in its own git worktree from the project's default branch, \
-unless the user says otherwise. Never stop Agentty processes by name (`pkill agentty`): other \
+unless the user says otherwise. Work inside the worktree you change: switch your session into it \
+(Claude Code: EnterWorktree with its path; otherwise `cd` there and stay) before editing it, never \
+edit another worktree by its path from where you are: Agentty shows each pane's folder and branch \
+from where the session is, and refuses such an edit until you have switched. Never stop Agentty processes by name (`pkill agentty`): other \
 sessions depend on them. Talk to the user in the language they use.";
 
 const SKILL_TASKS: &str = "\

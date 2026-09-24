@@ -51,7 +51,9 @@ function fakeBrowser(timeline, { perScreen = 3, wall = false, empty = false } = 
     async close() {
       calls.closed += 1;
     },
+    async navigate() {},
     async eval(_tab, fn, args) {
+      if (fn.name === 'goToPath' || fn.name === 'appReady') return true;
       if (fn.name === 'scrollLikeAHand') {
         calls.scrolls += 1;
         shown += perScreen;

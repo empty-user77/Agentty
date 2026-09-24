@@ -452,10 +452,19 @@ fn statusline_wrapper() -> String {
 
 fn claude_hook_settings() -> String {
     let hook = |kind: &str| serde_json::json!([{ "hooks": [{ "type": "command", "command": hook_command(kind) }] }]);
+    // File edits first pass the worktree guard: an edit in another worktree of the same repository
+    // waits until the session has switched into it (see `worktree_guard`).
+    let mut pre_tool = hook("working");
+    if let Some(list) = pre_tool.as_array_mut() {
+        list.push(serde_json::json!({
+            "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+            "hooks": [{ "type": "command", "command": format!("{} worktree-guard", shell_quote(&hook_exe())) }],
+        }));
+    }
     serde_json::json!({
         "hooks": {
             "UserPromptSubmit": hook("working"),
-            "PreToolUse": hook("working"),
+            "PreToolUse": pre_tool,
             "PostToolUse": hook("working"),
             "PostToolUseFailure": hook("working"),
             "PermissionRequest": hook("permission"),
@@ -857,6 +866,17 @@ pub(crate) mod tests {
 
         let prompt = LaunchSpec::with_prompt(Agent::Claude, "go on".into(), "t".into(), PathBuf::from("/tmp"));
         assert_eq!(prompt.command().unwrap().last().unwrap(), "go on");
+    }
+
+    /// File edits go through the worktree guard, and every tool call still reports status.
+    #[test]
+    fn file_edits_pass_the_worktree_guard() {
+        let settings: serde_json::Value = serde_json::from_str(&claude_hook_settings()).unwrap();
+        let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        let guard = pre.iter().find(|entry| entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit").expect("a guard on file edits");
+        assert!(guard["hooks"][0]["command"].as_str().unwrap().ends_with(" worktree-guard"));
+        // Status reporting still sees every tool call.
+        assert!(pre.iter().any(|entry| entry.get("matcher").is_none()));
     }
 
     /// Runs the generated hook commands through `sh` against a real socket.

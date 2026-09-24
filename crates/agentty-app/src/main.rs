@@ -14,12 +14,14 @@ mod brand;
 mod browser_cli;
 mod browser_keeper;
 mod browser_mcp;
+mod browser_profiles;
 mod capture;
 mod db_cli;
 mod debug;
 mod editor;
 mod extensions_view;
 mod tasks_cli;
+mod worktree_guard;
 // AppKit / WebKit on macOS; the same API from `platform/fallback/` on Windows and Linux.
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/file_drop.rs")]
 mod file_drop;
@@ -512,6 +514,12 @@ fn main() {
             std::process::exit(1);
         }
         return;
+    }
+
+    // `agentty worktree-guard`: Claude Code hook — an edit in another worktree of the same
+    // repository waits until the session has moved there.
+    if args.get(1).map(String::as_str) == Some("worktree-guard") {
+        std::process::exit(worktree_guard::run());
     }
 
     if args.get(1).map(String::as_str) == Some("statusline") {

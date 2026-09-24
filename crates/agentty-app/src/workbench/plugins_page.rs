@@ -423,6 +423,10 @@ impl Workbench {
         self.drop_plugin_panel(id, cx);
         match store::uninstall(id) {
             Ok(()) => {
+                // Its browser profiles (and the accounts signed in there) go with it, and so does
+                // what the user allowed it.
+                crate::browser_profiles::remove_all(id);
+                super::plugin_browser::revoke(id, cx);
                 plugins::reload(cx);
                 if self.plugins_page.selected.as_deref() == Some(id) {
                     self.plugins_page.selected = None;
