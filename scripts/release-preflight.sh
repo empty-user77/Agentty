@@ -14,6 +14,7 @@ cd "$ROOT"
 VERSION="${1:-}"
 RELEASE_REPO="${AGENTTY_RELEASE_REPO:-empty-user77/agentty-releases}"
 SOURCE_REPO="${AGENTTY_SOURCE_REPO:-empty-user77/Agentty}"
+TAP_REPO="${AGENTTY_TAP_REPO:-empty-user77/homebrew-agentty}"
 ENV_FILE="$ROOT/.env.agentty-prod"
 FAILED=0
 
@@ -42,7 +43,7 @@ hooks="$(git config --get core.hooksPath || true)"
 # ─── GitHub ───
 if gh auth status >/dev/null 2>&1; then
   pass "gh authenticated"
-  for repo in "$SOURCE_REPO" "$RELEASE_REPO"; do
+  for repo in "$SOURCE_REPO" "$RELEASE_REPO" "$TAP_REPO"; do
     [[ "$(gh api "repos/$repo" --jq .permissions.push 2>/dev/null)" == "true" ]] && pass "active gh account can push to $repo" \
       || fail "active gh account cannot push to $repo (gh auth switch)"
   done

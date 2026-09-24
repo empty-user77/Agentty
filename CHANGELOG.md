@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- macOS: install with Homebrew — `brew install --cask empty-user77/agentty/agentty`.
+
 ### Changed
 - Agentty opens as you left it: the window's size and place (on a screen that is still connected),
   the sidebar hidden or shown, the files panel, the in-app browser with its tabs, a plugin panel,

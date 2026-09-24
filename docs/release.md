@@ -77,6 +77,10 @@ security find-identity -v -p codesigning | grep "Developer ID Application"
 `empty-user77/agentty-releases` with the DMG, zip, Windows and Linux files and checksums. `AGENTTY_RELEASE_NOTES=<file.md>` sets the release
 notes. Review the draft on GitHub, then publish.
 
+After publishing, `./scripts/update-homebrew-cask.sh <version>` points the Homebrew cask (`Casks/agentty.rb` in
+`empty-user77/homebrew-agentty`) at the release's app zip, with the sha256 from the published `SHA256SUMS`;
+`verify-release.sh <version> --published` checks it. Users install with `brew install --cask empty-user77/agentty/agentty`.
+
 **Release notes are always written in English.** The full procedure (version bump, changelog, tag, notes, draft,
 publish, update-feed check) is in [`.claude/skills/release/SKILL.md`](../.claude/skills/release/SKILL.md).
 

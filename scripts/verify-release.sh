@@ -108,6 +108,8 @@ else
       fail "downloaded installers do not match published checksums"
     fi
     rm -rf "$tmp"
+    "$ROOT/scripts/update-homebrew-cask.sh" "$VERSION" --check >/dev/null 2>&1 \
+      && pass "Homebrew cask serves $VERSION" || fail "Homebrew cask is not at $VERSION (scripts/update-homebrew-cask.sh $VERSION)"
   else
     [[ "$draft" == "true" ]] && pass "release is a draft (not shipped to users yet)" || fail "release is already published"
   fi

@@ -12,7 +12,8 @@ update to every user** (macOS and Windows install it in place; Linux users are p
 A release holds: the notarized DMG and app zip (built here), the Windows installer
 `Agentty-X.Y.Z-windows-x64-setup.exe` and the same installer in `Agentty-X.Y.Z-windows-x64-setup.zip` (Chrome blocks
 unsigned `.exe` downloads), `Agentty-X.Y.Z-linux-amd64.deb`, `Agentty-X.Y.Z-linux-x86_64.rpm`, and
-`Agentty-X.Y.Z-SHA256SUMS.txt` over all of them. The Windows and Linux files are built by the **Release packages**
+`Agentty-X.Y.Z-SHA256SUMS.txt` over all of them. After publishing, the Homebrew cask in the tap
+`empty-user77/homebrew-agentty` is pointed at the new app zip (`brew install --cask empty-user77/agentty/agentty`). The Windows and Linux files are built by the **Release packages**
 workflow (`.github/workflows/release-packages.yml`) that the tag push starts on the self-hosted Windows PC and Mac; the
 workflow has no token for `agentty-releases`, so they are downloaded here and uploaded with the DMG.
 
@@ -74,7 +75,7 @@ Common fixes:
 |---|---|
 | git hooks not installed | `scripts/install-hooks.sh` |
 | `.env.agentty-prod` missing | Ask the user to copy it from the previous checkout (e.g. `! cp -p <old repo>/.env.agentty-prod .`). Never create it from values you saw elsewhere. |
-| account cannot push | `gh auth switch -u empty-user77` |
+| account cannot push | `gh auth switch -u empty-user77` (also covers the Homebrew tap `empty-user77/homebrew-agentty`) |
 | certificate not in keychain | unlock the login keychain |
 | runner offline | ask the user to start the Windows PC's runner service / the Mac's runner, or Docker Desktop |
 
@@ -137,7 +138,8 @@ Write `dist/release-notes-vX.Y.Z.md` (dist/ is gitignored) from the changelog en
 - ...
 
 ## Install
-**macOS** — download `Agentty-X.Y.Z-release<build>-arm64.dmg`, open it and drag **Agentty** into Applications.
+**macOS** — download `Agentty-X.Y.Z-release<build>-arm64.dmg`, open it and drag **Agentty** into Applications, or
+`brew install --cask empty-user77/agentty/agentty`.
 Requires macOS 13+ on Apple silicon. Signed with Developer ID and notarized by Apple.
 
 **Windows** — download `Agentty-X.Y.Z-windows-x64-setup.exe` (or `Agentty-X.Y.Z-windows-x64-setup.zip` if your
@@ -180,12 +182,20 @@ Two separate calls: combining `--draft=false --latest` fails with HTTP 422 ("Lat
 prerelease") and has left the release published as a **pre-release**, which the update feed ignores. Always check with
 step 9.
 
+### 8b. Homebrew cask
+```sh
+scripts/update-homebrew-cask.sh X.Y.Z
+```
+Commits `Casks/agentty.rb` to `empty-user77/homebrew-agentty` with the new version and the zip's sha256 from the
+published `SHA256SUMS`. It refuses a draft or pre-release, so it only runs after step 8. Skip it for a release that
+went out without its macOS files.
+
 ### 9. Verify the update feed
 ```sh
 scripts/verify-release.sh X.Y.Z --published
 ```
 Adds: release is public, `releases/latest` serves vX.Y.Z, and the downloaded DMG, installer and packages match the
-published checksums.
+published checksums, and the Homebrew cask serves X.Y.Z.
 Then report (in Korean): version, release URL, asset names, and that installed apps pick it up within an hour (or at
 next launch).
 
