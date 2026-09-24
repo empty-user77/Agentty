@@ -418,6 +418,8 @@ unsafe fn current_url_of(view: Id) -> Option<String> {
 pub struct WebView {
     view: Id,
     parent: Id,
+    /// GPUI's own view, which gets the keyboard back when this one is hidden or goes away.
+    gpui_view: Id,
     /// The navigation and UI delegate (WebKit holds it weakly, so it is owned here).
     delegate: Id,
     visible: bool,
@@ -429,6 +431,7 @@ impl WebView {
     /// Creates the web view inside `window`'s content view (hidden until `set_frame`).
     pub fn new(window: &gpui::Window, prefs: &crate::settings::BrowserSettings) -> Option<Self> {
         let ns_window = crate::native::ns_window(window)?;
+        let gpui_view = crate::native::ns_view(window)?;
         unsafe {
             let parent: Id = msg_send![ns_window, contentView];
             if parent.is_null() {
@@ -481,7 +484,7 @@ impl WebView {
             let _: () = msg_send![view, setHidden: YES];
             let _: () = msg_send![parent, addSubview: view];
             VIEWS.lock().unwrap_or_else(|e| e.into_inner()).push(view as usize);
-            Some(Self { view, parent, delegate, visible: false, zoom: prefs.zoom.clamp(0.3, 3.0) as f64 })
+            Some(Self { view, parent, gpui_view, delegate, visible: false, zoom: prefs.zoom.clamp(0.3, 3.0) as f64 })
         }
     }
 
@@ -678,9 +681,20 @@ impl WebView {
     pub fn hide(&mut self) {
         if self.visible {
             unsafe {
+                self.release_keyboard();
                 let _: () = msg_send![self.view, setHidden: YES];
             }
             self.visible = false;
+        }
+    }
+
+    /// Hands the keyboard to GPUI's view when this page holds it. Hiding or removing the first
+    /// responder makes AppKit give the keyboard to the window itself (GPUI's view does not accept
+    /// first responder from a click), and from then on every key only beeps.
+    unsafe fn release_keyboard(&self) {
+        if holds_keyboard(&*self.view) {
+            let window: Id = msg_send![self.view, window];
+            let _: BOOL = msg_send![window, makeFirstResponder: self.gpui_view];
         }
     }
 }
@@ -697,6 +711,7 @@ impl Drop for WebView {
         unsafe {
             let _: () = msg_send![self.view, setNavigationDelegate: std::ptr::null_mut::<Object>()];
             let _: () = msg_send![self.view, setUIDelegate: std::ptr::null_mut::<Object>()];
+            self.release_keyboard();
             let _: () = msg_send![self.view, removeFromSuperview];
             let _: () = msg_send![self.view, release];
             let _: () = msg_send![self.delegate, release];
@@ -715,18 +730,20 @@ pub fn clear_website_data() {
     }
 }
 
-/// Gives keyboard focus back to GPUI's view, but only when the web view currently holds it.
+/// Gives keyboard focus back to GPUI's view when a web view holds it, or when nothing does (the
+/// window itself is first responder, as after a focused web view was hidden: keys then only beep).
 /// (GPUI draws into a subview of the content view; making anything else first responder breaks
 /// its hover, cursor and keyboard handling.)
 pub fn focus_gpui_view(window: &gpui::Window) {
     let (Some(ns_window), Some(gpui_view)) = (crate::native::ns_window(window), crate::native::ns_view(window)) else { return };
     unsafe {
         let responder: Id = msg_send![ns_window, firstResponder];
-        if responder.is_null() || responder == gpui_view {
+        if responder == gpui_view {
             return;
         }
-        let is_view: BOOL = msg_send![responder, isKindOfClass: class!(NSView)];
+        let is_view: BOOL = if responder.is_null() { NO } else { msg_send![responder, isKindOfClass: class!(NSView)] };
         if is_view != YES {
+            let _: BOOL = msg_send![ns_window, makeFirstResponder: gpui_view];
             return;
         }
         let mut current = responder;
