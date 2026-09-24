@@ -4010,6 +4010,11 @@ impl Workbench {
                     eprintln!("hover: {:?}", pane.read(cx).debug_hover());
                 }
             }
+            // `activate`: the app and this window in front, so typed keys reach the field clicked.
+            "activate" => {
+                cx.activate(true);
+                window.activate_window();
+            }
             "focus-info" => {
                 let alias = self
                     .alias_form

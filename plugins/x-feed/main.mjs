@@ -272,6 +272,13 @@ async function openAutomation(instance, title) {
   const saved = await store.engine(engineKey(instance));
   if (saved) a.config = withDefaults(saved);
   if (!a.config.title && title) a.config.title = title;
+  // Untitled: the name its tab shows ("Automation 2"), so the log and the tab say the same.
+  if (!a.config.title && instance) {
+    const list = await plugin.instances().catch(() => []);
+    const index = list.findIndex((i) => i.instance === instance);
+    a.config.title = t('auto.default_name', { n: index >= 0 ? index + 1 : list.length + 1 });
+    await saveConfig(a);
+  }
   // The tab shows the automation's own name, whatever it last showed.
   if (instance && a.config.title && a.config.title !== title) await plugin.setInstanceTitle(instance, a.config.title).catch(() => {});
   await refreshSignIn(a.config.profile);
@@ -930,11 +937,11 @@ function stepsOf(a) {
 
 /** The step shown open: the one the user picked, else the first one not done (none when all are). */
 function openStep(a) {
+  // Picked, or being filled in (see `STEP_OF`): it stays open until Next, even once it is done.
   if (a.ui.step) return a.ui.step;
   const steps = stepsOf(a);
-  const unfinished = STEPS.find((id) => !steps[id].done) ?? null;
-  // Folded by the user, or never picked: an unfinished step still shows, so nothing is left half set.
-  return a.ui.step === null && !unfinished ? null : unfinished;
+  // Otherwise the first unfinished step shows by itself, and none once all are done.
+  return STEPS.find((id) => !steps[id].done) ?? null;
 }
 
 function renderAccountStep(a) {
@@ -1299,9 +1306,21 @@ async function renderAll() {
 function on(id, handler) {
   plugin.onEvent(id, async (event) => {
     const a = auto(event.instance ?? MAIN);
+    // Using a step's fields keeps that step open while it is filled in.
+    if (STEP_OF[id] && a.ui.view === 'automation') a.ui.step = STEP_OF[id];
     await handler(a, event);
   });
 }
+
+/** Which step each field of the automation view belongs to. */
+const STEP_OF = Object.fromEntries(
+  Object.entries({
+    account: ['profile', 'signin', 'addAccount', 'removeProfile'],
+    source: ['srcKind', 'srcSort', 'newTarget', 'addTarget', 'targets', 'newKeyword', 'addKeyword', 'keywords', 'minLikes', 'maxAge'],
+    actions: ['tCollect', 'tLike', 'tReply', 'rPattern', 'rAi', 'rInstructions', 'rRequired'],
+    timing: ['schedule', 'speed', 'advanced', 'paceMin', 'paceMax', 'perWindow', 'likesDay', 'repliesDay', 'perUnit', 'limit', 'title'],
+  }).flatMap(([step, ids]) => ids.map((id) => [id, step])),
+);
 
 async function reveal(a, path) {
   await plugin.revealPath(path).catch((err) => note(a, err.message));
@@ -1381,17 +1400,32 @@ on('newTarget', async (a, e) => {
   if (e.event === 'submit') await addTarget(a);
 });
 on('addTarget', (a) => addTarget(a));
+/**
+ * Adds what was typed: one account or several (`@a, @b`, spaces or lines between them, profile
+ * addresses too). What is not an account is left in the field, so it can be fixed.
+ */
 async function addTarget(a) {
-  const account = accountOf(profileUrl(a.ui.newTarget || ''));
-  if (!account || !/^[A-Za-z0-9_]{1,15}$/.test(account)) {
+  const pieces = String(a.ui.newTarget || '').split(/[\s,]+/).filter(Boolean);
+  if (!pieces.length) {
     a.status = t('account.invalid');
     return render(a.instance);
   }
-  a.ui.newTarget = '';
-  if (!a.config.targets.includes(account)) a.config.targets = [...a.config.targets, account];
-  await store.saveAccount(await store.account(SITE, account));
+  const added = [];
+  const wrong = [];
+  for (const piece of pieces) {
+    const account = accountOf(profileUrl(piece));
+    if (!account || !/^[A-Za-z0-9_]{1,15}$/.test(account)) {
+      wrong.push(piece);
+      continue;
+    }
+    if (!a.config.targets.includes(account)) a.config.targets = [...a.config.targets, account];
+    if (!added.includes(account)) added.push(account);
+    await store.saveAccount(await store.account(SITE, account));
+  }
+  a.ui.newTarget = wrong.join(' ');
   await saveConfig(a);
-  a.status = t('account.added', { account });
+  // What was added shows in the list; only what could not be added needs saying.
+  a.status = wrong.length ? t('account.some_invalid', { wrong: wrong.join(', ') }) : '';
   await reload();
   await render(a.instance);
 }
@@ -1440,11 +1474,15 @@ on('newKeyword', async (a, e) => {
   if (e.event === 'submit') await addKeyword(a);
 });
 on('addKeyword', (a) => addKeyword(a));
+/** Adds one keyword, or several separated by commas or lines (a keyword may have spaces). */
 async function addKeyword(a) {
-  const keyword = a.ui.newKeyword.replace(/\s+/g, ' ').trim().slice(0, 100);
-  if (!keyword) return;
+  const keywords = String(a.ui.newKeyword || '')
+    .split(/[,\n]+/)
+    .map((k) => k.replace(/\s+/g, ' ').trim().slice(0, 100))
+    .filter(Boolean);
+  if (!keywords.length) return;
   a.ui.newKeyword = '';
-  if (!a.config.keywords.includes(keyword)) a.config.keywords = [...a.config.keywords, keyword];
+  a.config.keywords = [...new Set([...a.config.keywords, ...keywords])];
   await saveConfig(a);
   await render(a.instance);
 }

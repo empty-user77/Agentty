@@ -28,6 +28,8 @@ pub struct PluginInput {
     /// Last value the plugin sent; a different one replaces what is typed.
     applied: String,
     generation: u64,
+    /// Enter was pressed and the plugin has not answered yet.
+    submitted: bool,
     _subscription: Subscription,
 }
 
@@ -52,7 +54,26 @@ fn tone_color(tone: Tone) -> u32 {
 
 impl Workbench {
     /// Creates and syncs the panel's text fields; called from render before drawing.
+    /// Whose fields the panel shows: an automation's are its own (the same id in another tab is
+    /// another field), so they are made and looked up under the automation in front.
+    fn plugin_input_scope(&self, plugin: &str, cx: &gpui::App) -> String {
+        match self.active_instance(plugin, cx) {
+            Some(instance) => format!("{plugin}#{instance}"),
+            None => plugin.to_string(),
+        }
+    }
+
     pub(super) fn prepare_plugin_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A plugin's workspace in front whose plugin just came back (turned off and on, updated)
+        // gets its panel again: nothing else switches workspaces meanwhile to bring it up.
+        self.sync_plugin_workspace(cx);
+        // In a plugin's workspace the panel is part of the layout: it is always that plugin's, even
+        // when it was dropped while the workspace stayed in front.
+        if let Some(front) = self.front_plugin_workspace(cx).filter(|_| self.page.is_none()) {
+            if self.plugin_panel.as_deref() != Some(front.as_str()) {
+                self.open_plugin_panel(&front, cx);
+            }
+        }
         let Some(plugin) = self.plugin_panel.clone() else {
             self.reconcile_plugin_windows(window, cx);
             self.plugin_inputs.clear();
@@ -70,21 +91,21 @@ impl Workbench {
         if let Some(tree) = self.plugin_tree(&plugin, cx) {
             tree.inputs(&mut fields);
         }
-        // An automation's fields are its own: the same id in another tab is another field.
-        let scope = match self.active_instance(&plugin, cx) {
-            Some(instance) => format!("{plugin}#{instance}"),
-            None => plugin.clone(),
-        };
+        let scope = self.plugin_input_scope(&plugin, cx);
         self.plugin_inputs.retain(|(owner, id), _| *owner == scope && fields.iter().any(|field| field.id == *id));
         for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows } in fields {
             let key = (scope.clone(), id.clone());
             if let Some(existing) = self.plugin_inputs.get_mut(&key) {
+                existing.input.update(cx, |i, cx| i.set_placeholder(placeholder.clone(), cx));
                 if existing.applied != value {
                     existing.applied = value.clone();
                     let input = existing.input.clone();
                     let typed = input.read(cx).text().to_string();
-                    // A plugin echoing an older value while the user keeps typing must not undo keystrokes.
-                    let stale_echo = input.focus_handle(cx).is_focused(window) && typed.starts_with(&value);
+                    // A plugin echoing an older value while the user keeps typing must not undo
+                    // keystrokes. Right after Enter, though, an empty value is the plugin clearing
+                    // the field it just took the text from.
+                    let clears_after_submit = std::mem::take(&mut existing.submitted) && value.is_empty();
+                    let stale_echo = input.focus_handle(cx).is_focused(window) && typed.starts_with(&value) && !clears_after_submit;
                     if typed != value && !stale_echo {
                         input.update(cx, |i, cx| i.set_text(value, cx));
                     }
@@ -104,6 +125,12 @@ impl Workbench {
                 let key = (scope.clone(), element.clone());
                 match event {
                     TextInputEvent::Confirmed => {
+                        // The plugin now has this text: a value it sends back that differs (an
+                        // empty one after it took what was typed) replaces it.
+                        if let Some(field) = this.plugin_inputs.get_mut(&key) {
+                            field.applied = text.clone();
+                            field.submitted = true;
+                        }
                         let event = UiEvent {
                             element: element.clone(),
                             event: "submit".into(),
@@ -116,6 +143,8 @@ impl Workbench {
                     TextInputEvent::Changed => {
                         // Typing sends `change` once it pauses; the plugin's own updates don't echo back.
                         let Some(field) = this.plugin_inputs.get_mut(&key) else { return };
+                        // Typing again: an empty value from the plugin is an old one, not a clear.
+                        field.submitted = false;
                         if field.applied == text {
                             return;
                         }
@@ -128,6 +157,9 @@ impl Workbench {
                                 let current =
                                     this.plugin_inputs.get(&(scope.clone(), element.clone())).is_some_and(|f| f.generation == generation);
                                 if current {
+                                    if let Some(field) = this.plugin_inputs.get_mut(&(scope.clone(), element.clone())) {
+                                        field.applied = text.clone();
+                                    }
                                     let event = UiEvent {
                                         element: element.clone(),
                                         event: "change".into(),
@@ -144,7 +176,8 @@ impl Workbench {
                     _ => {}
                 }
             });
-            self.plugin_inputs.insert(key, PluginInput { input, applied: value, generation: 0, _subscription: subscription });
+            self.plugin_inputs
+                .insert(key, PluginInput { input, applied: value, generation: 0, submitted: false, _subscription: subscription });
         }
     }
 
@@ -454,7 +487,7 @@ impl Workbench {
                     .child(label.clone())
                     .into_any_element()
             }
-            Node::Input { id, .. } => match self.plugin_inputs.get(&(plugin.to_string(), id.clone())) {
+            Node::Input { id, .. } => match self.plugin_inputs.get(&(self.plugin_input_scope(plugin, cx), id.clone())) {
                 Some(field) => div()
                     .w_full()
                     .px_2()

@@ -203,6 +203,16 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Changes the hint shown while the field is empty (a plugin may reword it).
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+        let placeholder = placeholder.into();
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            self.placeholder_key = None;
+            cx.notify();
+        }
+    }
+
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         let text: SharedString = text.into();
         // One line holds no line break: the text system refuses to lay one out (and a plugin can
