@@ -472,7 +472,11 @@ impl Workbench {
                 for (index, item) in items.iter().enumerate() {
                     let (owner, element, item_id) = (plugin.to_string(), id.clone(), item.id.clone());
                     let group = SharedString::from(format!("plugin-row-{plugin}-{id}-{index}"));
-                    let mut actions = div().flex().items_center().gap_0p5().flex_shrink_0();
+                    // Shown over the right end of the row while it is hovered, so they take no room
+                    // (and leave no gap) the rest of the time.
+                    let mut actions =
+                        div().absolute().top_0().bottom_0().right(px(4.)).pl_2().flex().items_center().gap_0p5().bg(hex(Chrome::HOVER));
+                    let has_actions = !item.actions.is_empty();
                     for (action_index, action) in item.actions.iter().enumerate() {
                         let (owner, element, item_id, action_id) = (plugin.to_string(), id.clone(), item.id.clone(), action.id.clone());
                         let mut button = div()
@@ -511,6 +515,7 @@ impl Workbench {
                         div()
                             .id(SharedString::from(format!("plugin-row-{plugin}-{id}-{index}")))
                             .group(group.clone())
+                            .relative()
                             .px_2()
                             .py_1p5()
                             .flex()
@@ -541,22 +546,16 @@ impl Workbench {
                                     .child(div().t_small().text_color(hex(Chrome::BRIGHT)).truncate().child(item.title.clone()))
                                     .children(
                                         item.subtitle.clone().map(|s| div().t_caption().text_color(hex(Chrome::MUTED)).truncate().child(s)),
+                                    )
+                                    // The detail is a line of its own under them: beside them it took
+                                    // the width the title needs as soon as the panel is narrow.
+                                    .children(
+                                        item.detail
+                                            .clone()
+                                            .map(|d| div().t_caption().text_color(hex_alpha(Chrome::MUTED, 0.8)).truncate().child(d)),
                                     ),
                             )
-                            .children(
-                                // At most part of the row, cut short: a long detail must not squeeze
-                                // the title and subtitle to nothing.
-                                item.detail.clone().map(|d| {
-                                    div()
-                                        .max_w(gpui::relative(0.45))
-                                        .min_w_0()
-                                        .t_caption()
-                                        .text_color(hex(Chrome::MUTED))
-                                        .truncate()
-                                        .child(d)
-                                }),
-                            )
-                            .child(actions.invisible().group_hover(group, |s| s.visible())),
+                            .when(has_actions, |d| d.child(actions.invisible().group_hover(group, |s| s.visible()))),
                     );
                 }
                 list.into_any_element()
