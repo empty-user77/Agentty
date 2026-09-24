@@ -24,7 +24,8 @@ export const ui = {
   text: (text, style = 'body') => ({ type: 'text', text: String(text ?? ''), style }),
   /** variant: primary | secondary | ghost | danger */
   button: (id, label, { icon, variant = 'secondary', disabled = false } = {}) => ({ type: 'button', id, label, icon, variant, disabled }),
-  input: (id, { placeholder = '', value = '' } = {}) => ({ type: 'input', id, placeholder, value }),
+  /** rows > 1: a text area that many lines tall (max 24), where Enter adds a line. */
+  input: (id, { placeholder = '', value = '', rows } = {}) => ({ type: 'input', id, placeholder, value, ...(rows ? { rows } : {}) }),
   /** items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }] — tone colors the icon */
   list: (id, items, { empty } = {}) => ({ type: 'list', id, items, empty }),
   /** options: [{ value, label }] */

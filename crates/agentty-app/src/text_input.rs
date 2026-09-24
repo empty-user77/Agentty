@@ -204,7 +204,14 @@ impl TextInput {
     }
 
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.content = text.into();
+        let text: SharedString = text.into();
+        // One line holds no line break: the text system refuses to lay one out (and a plugin can
+        // set any value it likes), so breaks become spaces rather than taking the window down.
+        self.content = if !self.is_multiline() && text.contains(['\n', '\r']) {
+            text.replace("\r\n", " ").replace(['\n', '\r'], " ").into()
+        } else {
+            text
+        };
         self.selected_range = self.content.len()..self.content.len();
         self.marked_range = None;
         cx.emit(TextInputEvent::Changed);
@@ -630,6 +637,10 @@ impl Element for TextElement {
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());
+        // `set_text` keeps line breaks out of a one-line field; a break that got in any other way
+        // is drawn as a space (same length, so the offsets still line up) instead of panicking.
+        let display_text: SharedString =
+            if display_text.contains(['\n', '\r']) { display_text.replace(['\n', '\r'], " ").into() } else { display_text };
         let line = window.text_system().shape_line(display_text, font_size, &runs, None);
         let cursor_pos = line.x_for_index(to_display(cursor));
         let (selection, cursor) = if selected_range.is_empty() {

@@ -68,7 +68,7 @@ pub struct Entry {
     #[serde(default)]
     pub surface: Surface,
     #[serde(default)]
-    pub mode: PanelMode,
+    pub mode: Option<PanelMode>,
     #[serde(default)]
     pub permissions: Vec<String>,
     /// The sites `browser.control` works on, shown on the card before installing.

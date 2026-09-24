@@ -218,6 +218,9 @@ pub struct Settings {
     /// and again when an update names a site that is not in here).
     #[serde(default)]
     pub plugin_browser_grants: std::collections::BTreeMap<String, Vec<String>>,
+    /// A plugin's own workspace: the width of its panel and the height of its terminals.
+    pub plugin_workspace_panel_width: f32,
+    pub plugin_workspace_terminal_height: f32,
     /// Width of the Docker panel docked right of the terminals.
     pub docker_panel_width: f32,
     /// Width of the database panel docked right of the terminals.
@@ -598,6 +601,8 @@ impl Default for Settings {
             plugin_panel_modes: std::collections::BTreeMap::new(),
             plugin_browser_modes: std::collections::BTreeMap::new(),
             plugin_browser_grants: std::collections::BTreeMap::new(),
+            plugin_workspace_panel_width: 380.,
+            plugin_workspace_terminal_height: 280.,
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
             db_panel_width: crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH,
             files_panel_trees_height: 0.0,

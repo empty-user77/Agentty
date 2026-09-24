@@ -93,6 +93,9 @@ pub struct WorkspaceSnapshot {
     /// When one of its panes last said something, so a closed workspace keeps its "5분 전".
     #[serde(default)]
     pub last_activity_ms: Option<u64>,
+    /// The plugin the workspace belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

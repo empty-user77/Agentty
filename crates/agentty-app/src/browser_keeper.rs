@@ -98,30 +98,42 @@ fn private_mode(cx: &App) -> bool {
 }
 
 /// Puts saved session cookies back (at startup) and forgets sites no plugin names any more.
-pub fn restore(cx: &App) {
+///
+/// The Keychain is read off the main thread: macOS may ask the user before handing an entry over,
+/// and that question must not freeze the window while it waits.
+pub fn restore(cx: &mut App) {
     if !crate::platform::HAS_WEBVIEW || private_mode(cx) {
         return;
     }
     let kept = kept_sites(cx);
-    let stale: Vec<String> =
-        with_index(|index| index.sites.keys().filter(|host| !kept.iter().any(|s| &s.host == *host)).cloned().collect());
-    for host in stale {
-        forget(&host);
-    }
-    for site in kept {
-        let saved = with_index(|index| index.sites.get(&site.host).is_some_and(|record| record.saved_at.is_some()));
-        if !saved {
-            continue;
+    let load = cx.background_executor().spawn(async move {
+        let stale: Vec<String> =
+            with_index(|index| index.sites.keys().filter(|host| !kept.iter().any(|s| &s.host == *host)).cloned().collect());
+        for host in stale {
+            forget(&host);
         }
-        let Ok(text) = agentty_bridge::secret_store::load(&service(), &account(&site.host)) else { continue };
-        let Ok(cookies) = serde_json::from_str::<Vec<Cookie>>(&text) else { continue };
-        // Only what belongs to the site, whatever the entry holds.
-        let cookies: Vec<Cookie> = cookies.into_iter().filter(|c| site.covers_cookie_domain(&c.domain) && c.expires.is_none()).collect();
-        crate::webview::set_cookies(&cookies);
-    }
+        let mut cookies = Vec::new();
+        for site in kept {
+            let saved = with_index(|index| index.sites.get(&site.host).is_some_and(|record| record.saved_at.is_some()));
+            if !saved {
+                continue;
+            }
+            let Ok(text) = agentty_bridge::secret_store::load(&service(), &account(&site.host)) else { continue };
+            let Ok(list) = serde_json::from_str::<Vec<Cookie>>(&text) else { continue };
+            // Only what belongs to the site, whatever the entry holds.
+            cookies.extend(list.into_iter().filter(|c| site.covers_cookie_domain(&c.domain) && c.expires.is_none()));
+        }
+        cookies
+    });
+    cx.spawn(async move |cx| {
+        let cookies = load.await;
+        let _ = cx.update(|_| crate::webview::set_cookies(&cookies));
+    })
+    .detach();
 }
 
-/// Saves the kept sites' session cookies now (after a sign-in, and every few minutes).
+/// Saves the kept sites' session cookies now (after a sign-in, and every few minutes). The cookies
+/// are read on the main thread (WebKit's), the Keychain written on another.
 pub fn remember(cx: &App) {
     if !crate::platform::HAS_WEBVIEW || private_mode(cx) {
         return;
@@ -136,18 +148,20 @@ pub fn remember(cx: &App) {
                     return;
                 }
                 let Ok(text) = serde_json::to_string(&session) else { return };
-                let digest = digest(&text);
-                let unchanged = with_index(|index| index.sites.get(&host).and_then(|r| r.digest.clone()) == Some(digest.clone()));
-                if unchanged {
-                    return;
-                }
-                if agentty_bridge::secret_store::store(&service(), &account(&host), &text).is_ok() {
-                    with_index(|index| {
-                        let record = index.sites.entry(host).or_default();
-                        record.saved_at = Some(now_ms());
-                        record.digest = Some(digest);
-                    });
-                }
+                std::thread::spawn(move || {
+                    let digest = digest(&text);
+                    let unchanged = with_index(|index| index.sites.get(&host).and_then(|r| r.digest.clone()) == Some(digest.clone()));
+                    if unchanged {
+                        return;
+                    }
+                    if agentty_bridge::secret_store::store(&service(), &account(&host), &text).is_ok() {
+                        with_index(|index| {
+                            let record = index.sites.entry(host).or_default();
+                            record.saved_at = Some(now_ms());
+                            record.digest = Some(digest);
+                        });
+                    }
+                });
             },
         );
     }
@@ -159,12 +173,14 @@ pub fn forget(host: &str) {
     with_index(|index| index.sites.remove(host));
 }
 
-/// Deletes everything saved (the browser's "clear cookies" button).
+/// Deletes everything saved (the browser's "clear cookies" button), off the main thread.
 pub fn forget_all() {
-    let hosts: Vec<String> = with_index(|index| index.sites.keys().cloned().collect());
-    for host in hosts {
-        forget(&host);
-    }
+    std::thread::spawn(|| {
+        let hosts: Vec<String> = with_index(|index| index.sites.keys().cloned().collect());
+        for host in hosts {
+            forget(&host);
+        }
+    });
 }
 
 /// When `host` was last refreshed, in ms since the epoch.
@@ -196,7 +212,22 @@ fn digest(text: &str) -> String {
 
 /// Restores the saved sessions and keeps them fresh while Agentty runs.
 pub fn start(cx: &mut App) {
-    restore(cx);
+    cx.spawn(async move |cx| {
+        // Once a window is up, and WebKit has read its cookie file (cookies put back before that
+        // would be written into an empty store and then replaced by the file).
+        loop {
+            cx.background_executor().timer(Duration::from_millis(500)).await;
+            let started = cx
+                .update(|cx| {
+                    crate::with_active_workbench(cx, |workbench, window, cx| workbench.with_cookies_loaded(window, cx, |_, cx| restore(cx)))
+                })
+                .unwrap_or(true);
+            if started {
+                break;
+            }
+        }
+    })
+    .detach();
     cx.spawn(async move |cx| {
         // First look a minute in: nothing should compete with the app starting up.
         cx.background_executor().timer(Duration::from_secs(60)).await;

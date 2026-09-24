@@ -34,7 +34,7 @@ impl Workbench {
     /// bar, the workspace list, the other panels) is counted first.
     pub(super) fn plugin_panel_width(&self, cx: &gpui::App) -> f32 {
         let Some(plugin) = self.plugin_panel.as_ref() else { return 0. };
-        if !self.plugin_panel_mode(plugin, cx).is_docked() {
+        if !self.plugin_panel_docked_here(plugin, cx) {
             return 0.;
         }
         self.plugin_panel_shown_width(cx).min(self.dockable_width(cx).max(MIN_WIDTH))

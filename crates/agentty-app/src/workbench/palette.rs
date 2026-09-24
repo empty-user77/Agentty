@@ -250,7 +250,7 @@ impl Workbench {
             if let Some(panel) = &manifest.contributes.panel {
                 let id = plugin.id.clone();
                 let label = crate::i18n::tf(cx, "plugins.palette_panel", &[("name", &panel.title)]);
-                plugin_items.push((label, None, Rc::new(move |this, _, cx| this.open_plugin_panel(&id, cx))));
+                plugin_items.push((label, None, Rc::new(move |this, window, cx| this.show_plugin(&id, window, cx))));
             }
             for command in manifest.contributes.commands.iter().filter(|c| c.palette) {
                 let (id, command_id) = (plugin.id.clone(), command.id.clone());

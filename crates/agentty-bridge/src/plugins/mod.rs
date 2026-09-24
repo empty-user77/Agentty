@@ -136,6 +136,9 @@ pub enum PromptTarget {
     Pane,
     /// An idle agent in `workspaceId`, or a new agent tab there.
     Workspace,
+    /// A new tab in the plugin's own workspace (`mode: "workspace"`), made if it has none yet: one
+    /// tab per job, so a plugin can run several side by side.
+    Own,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

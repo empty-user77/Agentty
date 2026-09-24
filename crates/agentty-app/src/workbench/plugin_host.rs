@@ -336,7 +336,7 @@ impl Workbench {
                 call.reply(Ok(Value::Null), cx);
             }
             "ui/showPanel" => {
-                self.open_plugin_panel(&call.plugin, cx);
+                self.show_plugin(&call.plugin, window, cx);
                 call.reply(Ok(Value::Null), cx);
             }
             "context/get" => call.reply(Ok(self.plugin_context(&call.plugin, None, cx)), cx),
@@ -473,6 +473,23 @@ impl Workbench {
                     _ => LaunchTarget::NewWorkspace,
                 };
                 self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, target, window, cx)?
+            }
+            PromptTarget::Own => {
+                let plugin = request.plugin.clone().ok_or("only a plugin has a workspace of its own")?;
+                if self.plugin_workspace(&plugin).is_none() {
+                    self.create_plugin_workspace(&plugin, window, cx);
+                }
+                let index = self.plugin_workspace(&plugin).ok_or("the plugin's workspace could not be made")?;
+                // The job's tab opens where the plugin works, and that is where the user sees it.
+                if index != self.active_workspace {
+                    let current = self.workspaces.get(self.active_workspace).filter(|ws| ws.plugin.is_none()).map(|ws| ws.id);
+                    if current.is_some() {
+                        self.before_plugin_workspace = current;
+                    }
+                    self.activate_workspace(index, window, cx);
+                }
+                let cwd = request.cwd.clone().filter(|p| p.is_dir()).unwrap_or_else(|| self.workspaces[index].cwd.clone());
+                self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, LaunchTarget::NewTab, window, cx)?
             }
             PromptTarget::Workspace => {
                 let index =

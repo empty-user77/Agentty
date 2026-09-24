@@ -67,7 +67,7 @@ when you don't care.
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
 | `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
-| `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` or `{ status: "sent", paneId }` |
+| `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` — `target`: `ask` · `active` · `newWorkspace` · `newTab` · `split` · `pane` · `workspace` · `own` (a new tab in the plugin's own workspace) | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
@@ -278,13 +278,25 @@ button, and their choice is kept; this is what it does first:
 
 | `mode` | |
 |---|---|
-| `push` (default) | docked beside the terminals, which move over to make room |
+| `push` | docked beside the terminals, which move over to make room |
 | `overlay` | floating above the window at its right edge; nothing else moves |
 | `window` | a window of its own, which can be moved and resized |
 | `full` | the whole area the terminals and pages use |
+| `workspace` | a workspace of the plugin's own: its terminals as tabs, the browser with its pages beside them, the panel docked right of those |
+
+A manifest that names no `mode` gets `push` when the plugin works in terminals (it has
+`prompt.inject` or `terminal.write`) and `full` otherwise: a plugin that does its work out of sight
+gets the whole area.
 
 A docked panel never takes so much room that the rest of the window is squeezed: dragged past what
 can be docked, it becomes an overlay.
+
+**`workspace`** is for plugins whose work runs in agents and pages the user watches. Its icon
+switches to the plugin's workspace (made the first time, in the plugin's data folder, and kept
+across restarts): the panel docked at the right, the browser with the plugin's pages (they open
+visible there unless the plugin asks otherwise), and the terminals as tabs. `prompt/inject` with
+`target: "own"` opens a new tab there for each job, so several run side by side. Leaving the
+workspace puts the window back as it was; the icon, pressed again, goes back to where the user was.
 
 ## UI tree
 

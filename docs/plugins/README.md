@@ -100,7 +100,7 @@ appears in the tab strip and the command in the palette (⇧⌘P).
 | `permissions` | `[]` | see [Permissions](#permissions-and-safety) |
 | `activationEvents` | `[]` | `["onStartup"]` starts the plugin with Agentty; otherwise on first use |
 | `detect` | `[]` | paths (`~` allowed) of an app the plugin integrates with; found → "Recommended" in the store |
-| `contributes.panel` | | `{ "title", "icon", "surface", "mode" }` — the panel the plugin fills with UI. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom). `mode` picks how it opens: `push` (default, docked beside the terminals), `overlay` (floating over them), `window` (a window of its own) or `full` (the whole area). The user can change the mode and their choice is kept |
+| `contributes.panel` | | `{ "title", "icon", "surface", "mode" }` — the panel the plugin fills with UI. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom). `mode` picks how it opens: `push` (docked beside the terminals), `overlay` (floating over them), `window` (a window of its own), `full` (the whole area) or `workspace` (a workspace of its own with terminals and the browser, for work the user watches). Without `mode`: `push` for a plugin with `prompt.inject` or `terminal.write`, `full` otherwise. The user can change the mode and their choice is kept |
 | `contributes.commands[]` | | `{ "id", "title", "description", "icon", "palette" }` |
 
 Commands appear in the command palette (unless `"palette": false`) and run through
@@ -144,7 +144,7 @@ plugin.start(); // after registering handlers
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
-| `browser.sites()` · `open(url)` · `eval(tabId, fn, args)` · `wait` · `signIn(host)` … — the in-app browser on the manifest's sites ([protocol](protocol.md#the-browser-browsercontrol-api-version-3); example: `sdk/node/examples/x-feed`) | `browser.control` |
+| `browser.sites()` · `open(url)` · `eval(tabId, fn, args)` · `wait` · `signIn(host)` … — the in-app browser on the manifest's sites ([protocol](protocol.md#the-browser-browsercontrol-api-version-3); example: `plugins/x-feed`) | `browser.control` |
 | `log(...)` — writes to the plugin log (stderr) | |
 
 `plugin.info` holds the `initialize` data; `plugin.context` is the latest context. Environment

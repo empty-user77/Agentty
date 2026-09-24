@@ -1119,7 +1119,7 @@ impl Workbench {
             row = row.child(action_button(
                 button_id("panel"),
                 t(cx, "plugins.open_panel"),
-                cx.listener(move |this, _: &ClickEvent, _, cx| this.open_plugin_panel(&id, cx)),
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.show_plugin(&id, window, cx)),
             ));
         }
         if store::builtin_update_available(plugin) {

@@ -141,6 +141,10 @@ pub fn cookies(_keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Co
 
 pub fn set_cookies(_cookies: &[Cookie]) {}
 
+pub fn any_view() -> bool {
+    false
+}
+
 pub fn take_key_commands(_views: &[usize]) -> Vec<(usize, BrowserKey)> {
     Vec::new()
 }

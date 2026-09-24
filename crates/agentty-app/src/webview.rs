@@ -453,6 +453,12 @@ pub struct Cookie {
     pub same_site: Option<String>,
 }
 
+/// Whether any web view exists. WebKit loads the saved cookies only once one does: before that
+/// the cookie store answers as if it were empty.
+pub fn any_view() -> bool {
+    !VIEWS.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+}
+
 unsafe fn cookie_store() -> Id {
     let store: Id = msg_send![class!(WKWebsiteDataStore), defaultDataStore];
     msg_send![store, httpCookieStore]

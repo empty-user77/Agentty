@@ -35,7 +35,7 @@ export const ui: {
   section(title: string, children: Child[]): UiNode;
   text(text: string, style?: TextStyle): UiNode;
   button(id: string, label: string, options?: { icon?: string; variant?: Variant; disabled?: boolean }): UiNode;
-  input(id: string, options?: { placeholder?: string; value?: string }): UiNode;
+  input(id: string, options?: { placeholder?: string; value?: string; rows?: number }): UiNode;
   list(id: string, items: ListItem[], options?: { empty?: string }): UiNode;
   choice(id: string, options: ChoiceOption[], value?: string): UiNode;
   toggle(id: string, label: string, value?: boolean): UiNode;

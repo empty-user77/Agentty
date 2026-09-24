@@ -36,6 +36,7 @@ pub mod plugin_browser;
 mod plugin_host;
 mod plugin_panel;
 mod plugin_window;
+mod plugin_workspace;
 mod plugins_page;
 mod processes;
 mod prompt_dialog;
@@ -181,6 +182,9 @@ pub struct Workspace {
     pub closed_tabs: Vec<TabSnapshot>,
     /// Colour the card is filled with.
     pub color: Option<u32>,
+    /// The plugin this workspace belongs to (`mode: "workspace"`): its panel and the browser come
+    /// up while it is in front.
+    pub plugin: Option<String>,
 }
 
 /// How many closed tabs a workspace remembers.
@@ -471,6 +475,16 @@ pub struct Workbench {
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
+    /// The workspace the user was in before going to a plugin's (its icon, pressed again, goes back).
+    before_plugin_workspace: Option<u64>,
+    /// The plugin whose workspace is in front and whose panel it brought up.
+    plugin_workspace_shown: Option<String>,
+    /// The browser was opened by that workspace (and closes when it is left).
+    plugin_workspace_browser: bool,
+    /// Whether the workspace list was open before a plugin's workspace folded it away.
+    plugin_workspace_sidebar: Option<bool>,
+    /// An edge of a plugin's workspace being dragged.
+    plugin_ws_drag: Option<plugin_workspace::PluginWorkspaceDrag>,
     /// Pages plugins drive (`browser/*`), in sight or not.
     plugin_browsers: Vec<plugin_browser::PluginBrowser>,
     /// Plugin pages to put in the browser panel at the next render.
@@ -699,6 +713,11 @@ impl Workbench {
             browser: None,
             browser_request: None,
             plugin_browsers: Vec::new(),
+            before_plugin_workspace: None,
+            plugin_workspace_shown: None,
+            plugin_workspace_browser: false,
+            plugin_workspace_sidebar: None,
+            plugin_ws_drag: None,
             plugin_pages_to_show: Vec::new(),
             browser_asking: Default::default(),
             browser_refused: Default::default(),
@@ -1026,6 +1045,7 @@ impl Workbench {
                         color_value: ws.color,
                         branch: last_branch,
                         last_activity_ms: Some(last_activity),
+                        plugin: ws.plugin.clone(),
                     });
                 }
                 None => {
@@ -1120,6 +1140,7 @@ impl Workbench {
             asleep_on_close: false,
             closed_tabs: Vec::new(),
             color: None,
+            plugin: None,
         });
         self.activate_workspace(self.workspaces.len() - 1, window, cx);
         self.persist(cx);
@@ -1214,6 +1235,7 @@ impl Workbench {
         if let Some(snapshot) = self.workspaces[index].dormant.take() {
             self.revive(index, snapshot, cx);
         }
+        self.sync_plugin_workspace(cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -2421,7 +2443,8 @@ impl Workbench {
     fn panel_state(&self) -> persist::PanelState {
         let browser = self.browser.as_ref();
         persist::PanelState {
-            sidebar_hidden: !self.sidebar_open,
+            // What the user chose, not what a plugin's workspace folded away for the moment.
+            sidebar_hidden: !self.plugin_workspace_sidebar.unwrap_or(self.sidebar_open),
             files_open: self.files_panel.is_some(),
             files_pinned: self.files_panel.as_ref().and_then(|panel| panel.pinned.clone()),
             // Written to disk: an address carrying a credential keeps only its origin.
@@ -2440,7 +2463,11 @@ impl Workbench {
     /// Opens what was open around the terminals at the last save. Nothing here is counted as
     /// a use of the feature: it is the same session coming back.
     fn restore_panels(&mut self, panels: persist::PanelState, cx: &mut Context<Self>) {
-        self.sidebar_open = !panels.sidebar_hidden;
+        // A plugin's workspace in front keeps the list folded; it opens as saved on leaving.
+        match self.plugin_workspace_sidebar.as_mut() {
+            Some(saved) => *saved = !panels.sidebar_hidden,
+            None => self.sidebar_open = !panels.sidebar_hidden,
+        }
         if panels.files_open {
             self.show_files_panel(panels.files_pinned.filter(|p| p.is_dir()), cx);
         }
@@ -2449,7 +2476,10 @@ impl Workbench {
             self.browser_request = Some(panels.browser_tabs[active].clone());
             self.browser_restore = Some((panels.browser_tabs, active));
         }
-        if let Some(plugin) = panels.plugin.filter(|id| crate::plugins::plugin(cx, id).is_some_and(|p| p.enabled)) {
+        // A workspace plugin's panel comes back with its workspace, not by itself.
+        if let Some(plugin) =
+            panels.plugin.filter(|id| crate::plugins::plugin(cx, id).is_some_and(|p| p.enabled) && !self.wants_workspace(id, cx))
+        {
             self.open_plugin_panel(&plugin, cx);
         }
         if panels.docker_open && !self.docker.open {
@@ -2510,6 +2540,7 @@ impl Workbench {
                     closed_tabs: ws.closed_tabs.clone(),
                     color: None,
                     color_value: ws.color,
+                    plugin: ws.plugin.clone(),
                     tabs: ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)).collect(),
                     // What the card says while the workspace is open, so it says the same once it
                     // is folded away: the branch it is on and when it last did something.
@@ -2562,6 +2593,7 @@ impl Workbench {
                 active_tab: 0,
                 closed_tabs: snapshot.closed_tabs.clone(),
                 color: stored_color(snapshot.color_value, snapshot.color),
+                plugin: snapshot.plugin.clone(),
                 dormant: Some(snapshot),
                 asleep_on_close: false,
             });
@@ -2612,11 +2644,16 @@ impl Workbench {
                 || self.files_trees_drag.is_some()
                 || self.browser_net_drag.is_some()
                 || self.split_drag.is_some()
+                || self.plugin_ws_drag.is_some()
                 || self.flow.is_dragging()
             {
                 self.end_drags(cx);
             }
             return;
+        }
+        if let Some(drag) = self.plugin_ws_drag {
+            let viewport = window.viewport_size();
+            return self.drag_plugin_workspace(drag, f32::from(event.position.x), f32::from(event.position.y), viewport, cx);
         }
         if let Some((start_y, start_height)) = self.browser_net_drag {
             // Dragging up makes the network panel taller; the page above keeps a readable height.
@@ -2672,7 +2709,9 @@ impl Workbench {
             || self.side_resizing.is_some()
             || self.files_trees_drag.is_some()
             || self.browser_net_drag.is_some()
+            || self.plugin_ws_drag.is_some()
         {
+            self.plugin_ws_drag = None;
             self.sidebar_resizing = false;
             self.browser_resizing = false;
             self.files_resizing = false;
@@ -2760,6 +2799,9 @@ impl Render for Workbench {
                 }
             }
         };
+        let mut main = Some(main);
+        // A plugin's own workspace in front, drawn in its own layout.
+        let plugin_workspace = self.front_plugin_workspace(cx).filter(|_| self.page.is_none());
 
         div()
             .id("workbench")
@@ -2951,6 +2993,7 @@ impl Render for Workbench {
                         || this.files_trees_drag.is_some()
                         || this.browser_net_drag.is_some()
                         || this.split_drag.is_some()
+                        || this.plugin_ws_drag.is_some()
                     {
                         this.end_drags(cx);
                     }
@@ -2981,36 +3024,42 @@ impl Render for Workbench {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(self.render_tab_strip(cx))
+                            // A plugin's workspace has a layout of its own (its tabs sit with its terminals).
+                            .when(plugin_workspace.is_none(), |d| d.child(self.render_tab_strip(cx)))
                             .children(self.render_service_banner(cx))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    // A floating or full-area panel is drawn over this row.
-                                    .relative()
-                                    .child(div().flex_1().min_w_0().h_full().child(main))
-                                    .when(self.page.is_none(), |d| {
-                                        let docked = self.plugin_panel_width(cx) > 0.;
-                                        d.children(self.render_browser_splitter(cx))
-                                            .children(self.render_browser(cx))
-                                            .when(docked, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx)))
-                                            .children(self.render_plugin_panel(cx))
-                                            .when(self.docker.open, |d| {
-                                                d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx))
-                                            })
-                                            .children(self.render_docker_panel(cx))
-                                            .when(self.db.panel_open, |d| {
-                                                d.child(self.render_side_splitter(side_panels::SidePanel::Database, cx))
-                                            })
-                                            .children(self.render_db_panel(cx))
-                                            .children(self.render_files_splitter(cx))
-                                            .children(self.render_files_panel(cx))
-                                            // Over everything on this row, whatever else is docked.
-                                            .children(self.render_plugin_overlay(cx))
-                                    }),
-                            )
+                            .when_some(plugin_workspace.clone(), |d, plugin| {
+                                d.child(self.render_plugin_workspace(&plugin, main.take(), cx))
+                            })
+                            .when(plugin_workspace.is_none(), |d| {
+                                d.child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .flex()
+                                        // A floating or full-area panel is drawn over this row.
+                                        .relative()
+                                        .child(div().flex_1().min_w_0().h_full().children(main.take()))
+                                        .when(self.page.is_none(), |d| {
+                                            let docked = self.plugin_panel_width(cx) > 0.;
+                                            d.children(self.render_browser_splitter(cx))
+                                                .children(self.render_browser(cx))
+                                                .when(docked, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx)))
+                                                .children(self.render_plugin_panel(cx))
+                                                .when(self.docker.open, |d| {
+                                                    d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx))
+                                                })
+                                                .children(self.render_docker_panel(cx))
+                                                .when(self.db.panel_open, |d| {
+                                                    d.child(self.render_side_splitter(side_panels::SidePanel::Database, cx))
+                                                })
+                                                .children(self.render_db_panel(cx))
+                                                .children(self.render_files_splitter(cx))
+                                                .children(self.render_files_panel(cx))
+                                                // Over everything on this row, whatever else is docked.
+                                                .children(self.render_plugin_overlay(cx))
+                                        }),
+                                )
+                            })
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
                             // Opens under the bell, at the right end of the title bar.
                             .when(self.notices_open, |d| {
@@ -3738,7 +3787,7 @@ impl Workbench {
             // `agentty-link agentty://…`: as if another app opened the link.
             "agentty-link" => self.open_agentty_link(argument, window, cx),
             // `plugin-panel <id>` / `plugin-command <id> <command>`.
-            "plugin-panel" => self.toggle_plugin_panel(argument, cx),
+            "plugin-panel" => self.toggle_plugin(argument, window, cx),
             "plugin-command" => {
                 if let Some((plugin, command)) = argument.split_once(' ') {
                     self.run_plugin_command(plugin, command, None, cx);
@@ -3764,17 +3813,21 @@ impl Workbench {
                 }
             }
             // `plugin-event <plugin> <element> <event> [value]`: what a click or a keystroke in a
-            // plugin's panel sends, without the mouse.
+            // plugin's panel sends, without the mouse. `plugin-event <plugin> <list> action
+            // <item>/<action>` presses a button on a list row.
             "plugin-event" => {
                 let mut parts = argument.splitn(4, ' ');
                 if let (Some(plugin), Some(element), Some(event)) = (parts.next(), parts.next(), parts.next()) {
-                    let value = parts.next().map(|value| serde_json::Value::String(value.to_string()));
+                    let rest = parts.next();
+                    let row =
+                        rest.filter(|_| event == "action" || event == "select").map(|rest| rest.split_once('/').unwrap_or((rest, "")));
+                    let value = rest.filter(|_| row.is_none()).map(|value| serde_json::Value::String(value.to_string()));
                     let event = agentty_bridge::plugins::ui::UiEvent {
                         element: element.to_string(),
                         event: event.to_string(),
                         value,
-                        item: None,
-                        action: None,
+                        item: row.map(|(item, _)| item.to_string()),
+                        action: row.map(|(_, action)| action.to_string()).filter(|action| !action.is_empty()),
                     };
                     self.send_plugin_event(plugin, event, cx);
                 }

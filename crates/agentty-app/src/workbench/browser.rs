@@ -808,8 +808,14 @@ impl Workbench {
         Some(
             div()
                 .relative()
-                .w(px(self.docked_widths(cx).0))
-                .flex_shrink_0()
+                // In a plugin's workspace the browser fills its part of the layout.
+                .map(|d| {
+                    if self.front_plugin_workspace(cx).is_some() && self.page.is_none() {
+                        d.flex_1().min_w_0().w_full()
+                    } else {
+                        d.w(px(self.docked_widths(cx).0)).flex_shrink_0()
+                    }
+                })
                 .h_full()
                 .flex()
                 .flex_col()

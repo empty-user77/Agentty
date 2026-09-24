@@ -271,7 +271,7 @@ impl Workbench {
     /// how this panel opens.
     pub(super) fn render_plugin_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plugin_id = self.plugin_panel.clone()?;
-        if self.plugin_panel_mode(&plugin_id, cx) != PanelMode::Push {
+        if !self.plugin_panel_docked_here(&plugin_id, cx) {
             return None;
         }
         let width = self.plugin_panel_width(cx);
@@ -284,7 +284,7 @@ impl Workbench {
     pub(super) fn render_plugin_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plugin_id = self.plugin_panel.clone()?;
         let mode = self.plugin_panel_mode(&plugin_id, cx);
-        if matches!(mode, PanelMode::Push | PanelMode::Window) {
+        if matches!(mode, PanelMode::Push | PanelMode::Window | PanelMode::Workspace) {
             return None;
         }
         let contents = self.render_plugin_panel_contents(&plugin_id, cx)?;
@@ -329,6 +329,7 @@ impl Workbench {
                 PanelMode::Overlay => ("plugins.mode.overlay", "layout-panel-left"),
                 PanelMode::Window => ("plugins.mode.window", "app-window"),
                 PanelMode::Full => ("plugins.mode.full", "maximize-2"),
+                PanelMode::Workspace => ("plugins.mode.workspace", "square-terminal"),
             };
             let plugin = plugin_id.to_string();
             menu = menu.child(
@@ -646,10 +647,10 @@ impl Workbench {
     }
 
     /// An icon on any of the three surfaces: opens or closes the panel, wherever that panel goes.
-    pub(super) fn toggle_plugin_surface(&mut self, plugin: &str, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toggle_plugin_surface(&mut self, plugin: &str, window: &mut Window, cx: &mut Context<Self>) {
         // The window the panel may need is opened by `reconcile_plugin_windows` on the next
         // render, the same as for every other way a panel opens.
-        self.toggle_plugin_panel(plugin, cx);
+        self.toggle_plugin(plugin, window, cx);
     }
 
     /// Tab-strip buttons of plugins that put their panel there (the default surface).

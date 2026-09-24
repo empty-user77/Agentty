@@ -1,15 +1,17 @@
 {
   "id": "x-feed",
-  "name": "X Feed Reader",
-  "version": "0.1.0",
+  "name": "X Feed",
+  "version": "0.2.0",
   "publisher": "Agentty",
-  "description": "Reads the posts of an X account through the in-app browser you are signed in to.",
-  "icon": "sparkles",
+  "description": "Collect posts from X accounts, keep them refined with their images and videos, pick the best and turn them into drafts in your own style, ready to post.",
+  "icon": "x-twitter",
   "main": "main.mjs",
   "runtime": "node",
   "apiVersion": 3,
   "permissions": [
-    "browser.control"
+    "browser.control",
+    "prompt.inject",
+    "workspace.read"
   ],
   "browser": {
     "sites": [
@@ -26,8 +28,10 @@
   },
   "contributes": {
     "panel": {
-      "title": "X Feed Reader",
-      "icon": "sparkles"
+      "title": "X Feed",
+      "icon": "x-twitter",
+      "surface": "sidebar",
+      "mode": "workspace"
     }
   }
 }

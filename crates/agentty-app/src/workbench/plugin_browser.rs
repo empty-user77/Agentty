@@ -183,7 +183,7 @@ impl Workbench {
             return self.ask_browser_consent(call, sites, window, cx);
         }
         match call.method.as_str() {
-            "browser/sites" => self.plugin_browser_sites(call, cx),
+            "browser/sites" => self.plugin_browser_sites(call, window, cx),
             "browser/open" => {
                 let result = self.open_plugin_page(&call, false, window, cx);
                 call.reply(result.map(|id| json!({ "tabId": id })), cx);
@@ -339,7 +339,10 @@ impl Workbench {
         });
         let requested = call.params["mode"].as_str().and_then(BrowserMode::from_id).unwrap_or(BrowserMode::Auto);
         let visible = match BrowserMode::chosen(&call.plugin, cx) {
-            BrowserMode::Auto => requested == BrowserMode::Visible,
+            // A plugin that works in a workspace of its own shows its pages there.
+            BrowserMode::Auto => {
+                requested == BrowserMode::Visible || (requested == BrowserMode::Auto && self.wants_workspace(&call.plugin, cx))
+            }
             chosen => chosen == BrowserMode::Visible,
         };
         if sign_in || visible {
@@ -348,7 +351,34 @@ impl Workbench {
         Ok(id)
     }
 
-    fn plugin_browser_sites(&mut self, call: PluginCall, cx: &mut Context<Self>) {
+    /// Makes sure WebKit has loaded the saved cookies: with no web view yet it has not, and the
+    /// cookie store would say nobody is signed in anywhere. Then runs `then`.
+    pub fn with_cookies_loaded(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+    ) {
+        if crate::webview::any_view() || !crate::platform::HAS_WEBVIEW {
+            return then(self, cx);
+        }
+        let prefs = settings(cx).browser.clone();
+        let warm = WebView::new_background(window, &prefs);
+        cx.spawn(async move |this, cx| {
+            // Long enough for the network process to read the cookie file.
+            cx.background_executor().timer(Duration::from_millis(600)).await;
+            let _ = this.update(cx, |this, cx| then(this, cx));
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            drop(warm);
+        })
+        .detach();
+    }
+
+    fn plugin_browser_sites(&mut self, call: PluginCall, window: &mut Window, cx: &mut Context<Self>) {
+        self.with_cookies_loaded(window, cx, move |this, cx| this.answer_browser_sites(call, cx));
+    }
+
+    fn answer_browser_sites(&mut self, call: PluginCall, cx: &mut Context<Self>) {
         let sites = sites_of(&call.plugin, cx).sites;
         let mut waiting = Vec::new();
         for site in sites {

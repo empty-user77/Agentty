@@ -1615,6 +1615,7 @@ strings! {
     "plugins.mode.push" => ["Beside the terminals", "터미널 옆에 (밀어서)", "ターミナルの横に", "在终端旁边"],
     "plugins.mode.overlay" => ["Floating over the window", "창 위에 띄워서", "ウィンドウの上に重ねて", "浮在窗口上方"],
     "plugins.mode.window" => ["In a window of its own", "별도 창으로", "独立したウィンドウで", "独立窗口"],
+    "plugins.mode.workspace" => ["A workspace of its own (terminals and browser)", "전용 작업공간 (터미널·브라우저)", "専用ワークスペース（ターミナルとブラウザ）", "专属工作区（终端和浏览器）"],
     "plugins.mode.full" => ["Filling the whole area", "전체 화면으로", "全体に広げて", "占满整个区域"],
     "plugins.perm.net" => ["Make HTTP requests", "HTTP 요청 보내기", "HTTP リクエストを送る", "发送 HTTP 请求"],
     "plugins.perm.prompt.body" => ["It can open an agent session of its own and send it text, without asking. A plugin may instead let you pick where a prompt goes; one that a link reached always has to.", "묻지 않고 자체 에이전트 세션을 열어 텍스트를 보낼 수 있습니다. 플러그인이 보낼 위치를 물어볼 수도 있고, 링크로 실행된 경우에는 반드시 물어봅니다.", "確認なしに自分のエージェントセッションを開いてテキストを送れます。送信先をあなたに選ばせることもでき、リンクから実行された場合は必ずそうなります。", "可以不征求同意地开启自己的智能体会话并发送文本。插件也可以让你选择发往哪里；由链接触发时则必须如此。"],
