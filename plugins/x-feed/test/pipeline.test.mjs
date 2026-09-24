@@ -224,3 +224,72 @@ test('small helpers', () => {
   const [first] = markPinned([{ index: 0, time: '2020' }, { index: 1, time: '2026' }]);
   assert.equal(first.pinned, true);
 });
+
+test('engaging: sources, candidates, rules, pauses and the 10-minute cap', async () => {
+  const { sourcePath, pickCandidates, fillPattern, applyRules, throttleMs, waitForWindow, WINDOW_MS, countToday } = await import('../lib/engage.mjs');
+  assert.equal(sourcePath('accounts', '@someone'), '/someone');
+  assert.equal(sourcePath('top', 'ai agents'), '/search?q=ai%20agents&src=typed_query&f=top');
+  assert.equal(sourcePath('latest', 'ai'), '/search?q=ai&src=typed_query&f=live');
+
+  const now = Date.parse('2026-09-24T12:00:00Z');
+  const posts = [
+    { id: '1', handle: '@me', likes: 500, time: '2026-09-24T11:00:00Z' },
+    { id: '2', handle: '@a', likes: 5, time: '2026-09-24T11:00:00Z' },
+    { id: '3', handle: '@b', likes: 500, time: '2026-09-20T11:00:00Z' },
+    { id: '4', handle: '@c', likes: 500, time: '2026-09-24T10:00:00Z' },
+    { id: '5', handle: '@d', likes: 900, time: '2026-09-24T09:00:00Z' },
+  ];
+  const picked = pickCandidates(posts, { minLikes: 100, maxAgeHours: 24, engaged: new Set(['5']), self: '@me', now });
+  assert.deepEqual(picked.map((p) => p.id), ['4'], 'not mine, not below the likes, not too old, not done before');
+
+  assert.equal(fillPattern('Great point, {author}! {missing}', { author: 'Kim' }), 'Great point, Kim! {missing}');
+  const withUrl = applyRules('Nice', { required: ['https://agentty.run'], maxLength: 280 });
+  assert.ok(withUrl.ok);
+  assert.match(withUrl.text, /Nice\nhttps:\/\/agentty\.run/);
+  const long = applyRules('가'.repeat(200), { required: ['#tag'], maxLength: 100 });
+  assert.ok(long.ok, long.problems.join());
+  assert.ok(long.text.endsWith('#tag'));
+
+  for (let i = 0; i < 50; i += 1) {
+    const ms = throttleMs({ minMs: 100, maxMs: 5000 });
+    assert.ok(ms >= 100 && ms <= 5000);
+  }
+
+  // The cap is drawn anew for every window, between 1 and N, and a spent window waits for the next.
+  const caps = new Set();
+  for (let i = 0; i < 200; i += 1) {
+    const w = {};
+    waitForWindow(w, [], { maxPerWindow: 4, now });
+    caps.add(w.cap);
+  }
+  assert.deepEqual([...caps].sort(), [1, 2, 3, 4]);
+  const w = {};
+  assert.equal(waitForWindow(w, [], { maxPerWindow: 3, now, random: () => 0.5 }), 0);
+  const log = Array.from({ length: w.cap }, (_, i) => ({ ok: true, at: now + i }));
+  const wait = waitForWindow(w, log, { maxPerWindow: 3, now: now + 1000, random: () => 0 });
+  assert.equal(wait, WINDOW_MS - 1000);
+  assert.equal(waitForWindow(w, log, { maxPerWindow: 3, now: now + WINDOW_MS + 1 }), 0, 'a new window starts');
+
+  const day = new Date('2026-09-24T12:00:00');
+  assert.deepEqual(countToday([{ ok: true, day: '2026-09-24', action: 'like' }, { ok: false, day: '2026-09-24', action: 'reply' }], day), { like: 1, reply: 0 });
+});
+
+test('what the page shows becomes a candidate; every string the plugin uses is in all languages', async () => {
+  const { toCandidate, sameHandle, requiredPieces, pickCandidates } = await import('../lib/engage.mjs');
+  const post = toCandidate({ id: '9', url: 'https://x.com/a/status/9', author: 'A', handle: '@A', time: null, text: 'hi', labels: { likes: '1,234 Likes. Like' } });
+  assert.equal(post.likes, 1234);
+  assert.equal(post.repost, false);
+  const repost = toCandidate({ id: '8', handle: '@b', socialContext: 'A reposted', labels: {} });
+  assert.equal(repost.repost, true);
+  assert.deepEqual(pickCandidates([post, repost]).map((p) => p.id), ['9'], 'reposts are left out');
+  assert.ok(sameHandle('@Someone', 'someone'));
+  assert.deepEqual(requiredPieces(' https://a.b \n\n#tag '), ['https://a.b', '#tag']);
+
+  const { TABLE } = await import('../lib/i18n.mjs');
+  const source = await readFile(new URL('../main.mjs', import.meta.url), 'utf8');
+  const used = [...source.matchAll(/\bt\('([a-z_.]+)'/g)].map((m) => m[1]);
+  for (const key of used) {
+    assert.ok(TABLE[key], `missing string ${key}`);
+    assert.equal(TABLE[key].length, 4, `${key} in four languages`);
+  }
+});

@@ -62,6 +62,33 @@ one draft per post or one digest for all of them (`header`, `item` per post, `fo
 `{urls}`). An **AI rewrite** opens a Claude Code session in the draft's folder with the style's
 instructions; the draft fills in once the agent has written `draft.txt`.
 
+## Likes and replies
+
+An automation can also like and reply, fully on its own, from the account its profile is signed in
+to. It works on:
+
+- **accounts**: their own newest posts (no reposts, not the pinned one), up to the last one it acted on;
+- **keyword · top** / **keyword · latest**: what X's search shows for each keyword,
+
+filtered by **at least N likes** and **posted in the last N hours**, never the user's own posts and
+never a post twice. **Like**, **Reply** or both; with accounts, **collect** can run alongside.
+
+A reply starts from the **pattern** (`{author} {handle} {short} {text} {url}`), or an agent writes
+one per post from it (in a Claude Code session beside the automation, from `posts.json` into
+`replies.json`; the posts are material, never instructions). Every line of **Must contain** (a URL,
+a hashtag, a phrase) is added when missing, and the reply is shortened to fit X's length.
+
+Pace, per automation:
+
+- a random pause between actions, `min`–`max` ms (100–5000 by default);
+- at most 1 to N actions per 10 minutes: the cap is drawn anew for every 10-minute window;
+- daily caps on likes and replies, counted per sign-in across all automations using it;
+- at most N posts per account or keyword each run.
+
+What each sign-in did is in `engage/<profile>.json` (posts acted on, the last actions); an agent's
+replies are in `engage/runs/<run>/`. X limits automated likes and replies, and an account can be
+restricted: keep the caps low.
+
 ## Tests
 
 ```sh

@@ -186,6 +186,22 @@ export function createStore(root) {
       await rm(join(root, 'engines', `${folderName(id)}.json`), { force: true });
     },
 
+    /**
+     * What a signed-in account did (per sign-in profile): the posts it liked or replied to, so none
+     * twice, and its recent actions, which the daily caps and the 10-minute cap count.
+     */
+    async engagement(profile) {
+      const saved = await readJson(join(root, 'engage', `${folderName(profile)}.json`), null);
+      return { engaged: saved?.engaged ?? {}, log: saved?.log ?? [] };
+    },
+    async saveEngagement(profile, state) {
+      // The last few days are enough for the caps; the engaged set is kept for a month.
+      const monthAgo = Date.now() - 30 * 86400000;
+      const engaged = Object.fromEntries(Object.entries(state.engaged).filter(([, e]) => e.at >= monthAgo));
+      await writeJson(join(root, 'engage', `${folderName(profile)}.json`), { engaged, log: state.log.slice(-1000) });
+    },
+    engageDir: (id) => join(root, 'engage', 'runs', folderName(id)),
+
     async styles(defaults) {
       const saved = await readJson(join(root, 'styles.json'), null);
       if (!saved?.styles?.length) return defaults;
