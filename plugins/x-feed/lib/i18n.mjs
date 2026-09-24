@@ -1,0 +1,151 @@
+// What X Feed says, in the languages Agentty speaks. `{name}` is filled in by `t`.
+
+const STRINGS = {
+  ready: ['Ready.', '준비됨.', '準備完了。', '就绪。'],
+  'view.collect': ['Collect', '수집', '収集', '收集'],
+  'view.posts': ['Posts ({n})', '게시글 ({n})', '投稿 ({n})', '帖子 ({n})'],
+  'view.drafts': ['Drafts ({n} ready)', '초안 (준비 {n})', '下書き（準備済み {n}）', '草稿（就绪 {n}）'],
+  'view.styles': ['Styles', '스타일', 'スタイル', '样式'],
+
+  'site.signed_in': ['{host}: signed in', '{host}: 로그인됨', '{host}: サインイン済み', '{host}: 已登录'],
+  'site.signed_in_until': ['{host}: signed in until {date}', '{host}: {date}까지 로그인', '{host}: {date} までサインイン', '{host}: 登录至 {date}'],
+  'site.signed_out': ['{host}: not signed in', '{host}: 로그인 필요', '{host}: 未サインイン', '{host}: 未登录'],
+  'sign_in': ['Sign in', '로그인', 'サインイン', '登录'],
+  'sign_in.waiting': ['Waiting for you to sign in to x.com in the browser tab…', '브라우저 탭에서 x.com 로그인을 기다리는 중…', 'ブラウザのタブで x.com へのサインインを待っています…', '正在等待你在浏览器标签页中登录 x.com…'],
+  'sign_in.message': ['Sign in to x.com to collect posts', '게시글을 수집하려면 x.com에 로그인하세요', '投稿を収集するには x.com にサインインしてください', '请登录 x.com 以收集帖子'],
+  'sign_in.done': ['Signed in.', '로그인했습니다.', 'サインインしました。', '已登录。'],
+  'sign_in.failed': ['Not signed in ({reason}).', '로그인하지 않았습니다 ({reason}).', 'サインインしていません（{reason}）。', '未登录（{reason}）。'],
+  'sign_in.asked': ['x.com asks to sign in: sign in in the browser tab.', 'x.com이 로그인을 요구합니다. 브라우저 탭에서 로그인하세요.', 'x.com がサインインを求めています。ブラウザのタブでサインインしてください。', 'x.com 要求登录：请在浏览器标签页中登录。'],
+
+  'account.placeholder': ['Add an account: @name', '계정 추가: @아이디', 'アカウントを追加: @name', '添加账号：@name'],
+  'account.add': ['Add', '추가', '追加', '添加'],
+  'account.invalid': ['Enter an X account like @name.', '@아이디 형식의 X 계정을 입력하세요.', '@name の形式で X アカウントを入力してください。', '请输入 @name 格式的 X 账号。'],
+  'account.added': ['Added @{account}.', '@{account}을(를) 추가했습니다.', '@{account} を追加しました。', '已添加 @{account}。'],
+  'account.removed': ['@{account} removed (its files are kept)', '@{account} 삭제됨 (파일은 보관)', '@{account} を削除しました（ファイルは残ります）', '已移除 @{account}（文件保留）'],
+  'per_run': ['{n} per run', '1회 {n}개', '1回 {n}件', '每次 {n} 条'],
+  'mode.auto': ['Auto', '자동', '自動', '自动'],
+  'mode.background': ['Background', '백그라운드', 'バックグラウンド', '后台'],
+  'mode.visible': ['Visible', '보이게', '表示', '可见'],
+  'collect.all': ['Collect all accounts', '전체 계정 수집', 'すべてのアカウントを収集', '收集全部账号'],
+  'collect.busy': ['Collecting {who}…', '{who} 수집 중…', '{who} を収集中…', '正在收集 {who}…'],
+  'collect.opening': ['Opening @{account}…', '@{account} 여는 중…', '@{account} を開いています…', '正在打开 @{account}…'],
+  'collect.reading': ['@{account}: reading ({found} new, {seen} already collected)…', '@{account}: 읽는 중 (신규 {found}, 이미 수집 {seen})…', '@{account}: 読み込み中（新規 {found}、収集済み {seen}）…', '@{account}：读取中（新 {found}，已收集 {seen}）…'],
+  'collect.saving': ['@{account}: saving post {index}/{total} with its media…', '@{account}: 게시글 {index}/{total} 저장 중 (미디어 포함)…', '@{account}: 投稿 {index}/{total} をメディアと保存中…', '@{account}：正在保存帖子 {index}/{total}（含媒体）…'],
+  'collect.result': ['@{account}: {new} new post(s){gap}.', '@{account}: 신규 {new}개{gap}.', '@{account}: 新規 {new} 件{gap}。', '@{account}：新增 {new} 条{gap}。'],
+  'collect.gap': [' — more may be left: use Continue', ' — 남은 글이 있을 수 있음: "이어서 수집"', ' — まだ残っている可能性: 「続きを収集」', ' — 可能还有更多：使用“继续”'],
+  'collect.log': ['@{account}: {new} new, {seen} already collected{failed} ({why}){gap}', '@{account}: 신규 {new}, 이미 수집 {seen}{failed} ({why}){gap}', '@{account}: 新規 {new}、収集済み {seen}{failed}（{why}）{gap}', '@{account}：新 {new}，已收集 {seen}{failed}（{why}）{gap}'],
+  'collect.failed': [', {n} failed', ', 실패 {n}', '、失敗 {n}', '，失败 {n}'],
+  'collect.break': ['Taking a short break before the next account…', '다음 계정 전에 잠시 쉬는 중…', '次のアカウントの前に少し休憩中…', '在下一个账号前稍作休息…'],
+  'collect.none': ['No accounts yet. Add one above.', '아직 계정이 없습니다. 위에서 추가하세요.', 'アカウントがありません。上で追加してください。', '还没有账号。请在上方添加。'],
+  'collect.recent': ['Recent runs', '최근 수집', '最近の収集', '最近的收集'],
+  'account.last': ['Last: {when} · {new} new · {seen} seen · {why}', '최근: {when} · 신규 {new} · 확인 {seen} · {why}', '前回: {when} · 新規 {new} · 確認 {seen} · {why}', '上次：{when} · 新 {new} · 已见 {seen} · {why}'],
+  'account.never': ['Not collected yet', '아직 수집 안 함', 'まだ収集していません', '尚未收集'],
+  'account.kept': ['{n} post(s) kept · {runs} run(s)', '보관 {n}개 · 수집 {runs}회', '保存 {n} 件 · {runs} 回', '已保存 {n} 条 · {runs} 次'],
+  'account.gap': [' · gap', ' · 누락 가능', ' · 未取得あり', ' · 可能缺漏'],
+  'account.collect': ['Collect new posts', '새 게시글 수집', '新しい投稿を収集', '收集新帖子'],
+  'account.backfill': ['Continue: fill the gap from the last run', '이어서 수집: 지난 수집에서 남은 글 채우기', '続きを収集: 前回の残りを埋める', '继续：补齐上次遗漏'],
+  'files': ['Show the files', '파일 보기', 'ファイルを表示', '显示文件'],
+  'account.remove': ['Stop following (keeps the files)', '수집 대상에서 제거 (파일은 보관)', '収集対象から外す（ファイルは残る）', '停止关注（保留文件）'],
+
+  'why.limit': ['reached the limit', '한도 도달', '上限に到達', '达到上限'],
+  'why.caught-up': ['caught up with earlier runs', '이전 수집까지 따라잡음', '前回までに追いついた', '已追上之前的收集'],
+  'why.end': ['end of the timeline', '타임라인 끝', 'タイムラインの終わり', '时间线结束'],
+  'why.no-more': ['nothing more loaded', '더 불러올 글 없음', 'これ以上読み込まれない', '没有更多内容'],
+  'why.read-limit': ['read as far as a run goes', '1회 읽기 범위 끝', '1回で読める範囲の終わり', '单次读取已到上限'],
+  'why.empty': ['the account has no posts', '게시글 없는 계정', '投稿のないアカウント', '账号没有帖子'],
+  'why.signin': ['sign-in needed', '로그인 필요', 'サインインが必要', '需要登录'],
+  'why.error': ['failed', '실패', '失敗', '失败'],
+
+  'filter.accounts': ['All accounts', '전체 계정', 'すべてのアカウント', '全部账号'],
+  'filter.days': ['All days', '전체 날짜', 'すべての日付', '全部日期'],
+  'filter.stage': ['Any stage', '전체 단계', 'すべての段階', '全部阶段'],
+  'filter.kind': ['Any kind', '전체 종류', 'すべての種類', '全部类型'],
+  'select.top': ['Select top 3 by likes', '좋아요 상위 3개 선정', 'いいね上位 3 件を選ぶ', '选择点赞前 3'],
+  'select.shown': ['Select all shown', '보이는 것 모두 선정', '表示中をすべて選ぶ', '选择全部显示项'],
+  'select.clear': ['Clear selection', '선정 해제', '選択を解除', '清除选择'],
+  'select.count': ['{shown} shown · {selected} selected', '{shown}개 표시 · {selected}개 선정', '{shown} 件表示 · {selected} 件選択', '显示 {shown} · 已选 {selected}'],
+  'select.done': ['Selected {n} post(s).', '{n}개를 선정했습니다.', '{n} 件を選びました。', '已选择 {n} 条。'],
+  'select.first': ['Select posts first (Posts → Select).', '먼저 게시글을 선정하세요 (게시글 → 선정).', '先に投稿を選んでください（投稿 → 選ぶ）。', '请先选择帖子（帖子 → 选择）。'],
+  'post.select': ['Select', '선정', '選ぶ', '选择'],
+  'post.unselect': ['Unselect', '선정 해제', '選択を外す', '取消选择'],
+  'post.skip': ['Skip', '제외', '除外', '跳过'],
+  'post.pinned': ['pinned', '고정', '固定', '置顶'],
+  'post.detail': ['{status} · ♥ {likes} · ↻ {reposts} · {images} image(s) · {videos} video(s)', '{status} · ♥ {likes} · ↻ {reposts} · 이미지 {images} · 영상 {videos}', '{status} · ♥ {likes} · ↻ {reposts} · 画像 {images} · 動画 {videos}', '{status} · ♥ {likes} · ↻ {reposts} · 图片 {images} · 视频 {videos}'],
+  'posts.none': ['Nothing here. Collect first, or change the filters.', '표시할 글이 없습니다. 먼저 수집하거나 필터를 바꿔 보세요.', '何もありません。先に収集するか、フィルターを変えてください。', '这里没有内容。请先收集，或更改筛选。'],
+  'convert.title': ['Convert the selection', '선정한 글 변환', '選んだ投稿を変換', '转换所选内容'],
+  'convert.make': ['Make drafts from {n} selected', '선정 {n}개로 초안 만들기', '選んだ {n} 件から下書きを作る', '用已选 {n} 条生成草稿'],
+  'convert.done': ['Made {n} draft(s) in "{style}".', '"{style}" 스타일로 초안 {n}개를 만들었습니다.', '「{style}」で下書きを {n} 件作りました。', '已用“{style}”生成 {n} 份草稿。'],
+  'convert.agent_done': ['A draft is written ({length}/{max}).', '초안 작성 완료 ({length}/{max}).', '下書きができました（{length}/{max}）。', '草稿已写好（{length}/{max}）。'],
+  'job.title': ['Draft: {style}', '초안: {style}', '下書き: {style}', '草稿：{style}'],
+
+  'drafts.todo': ['To do', '할 일', '未処理', '待办'],
+  'drafts.none': ['No drafts. Select posts and convert them.', '초안이 없습니다. 글을 선정해서 변환하세요.', '下書きがありません。投稿を選んで変換してください。', '没有草稿。请选择帖子并转换。'],
+  'drafts.waiting': ['(waiting for text)', '(작성 대기 중)', '（本文待ち）', '（等待文本）'],
+  'drafts.ai': ['AI {state}', 'AI {state}', 'AI {state}', 'AI {state}'],
+  'drafts.detail': ['{length}/{max} · {media} media · {sources} source(s)', '{length}/{max} · 미디어 {media} · 원본 {sources}', '{length}/{max} · メディア {media} · 元 {sources}', '{length}/{max} · 媒体 {media} · 来源 {sources}'],
+  'draft.edit': ['Edit', '편집', '編集', '编辑'],
+  'draft.heading': ['Draft · {style} · {status}', '초안 · {style} · {status}', '下書き · {style} · {status}', '草稿 · {style} · {status}'],
+  'draft.placeholder': ['The post text', '게시할 본문', '投稿本文', '帖子正文'],
+  'draft.length': ['{length}/{max} characters · {media} media: {files}', '{length}/{max}자 · 미디어 {media}: {files}', '{length}/{max} 文字 · メディア {media}: {files}', '{length}/{max} 字 · 媒体 {media}：{files}'],
+  'draft.none': ['none', '없음', 'なし', '无'],
+  'draft.problems': ['Not ready: {problems}', '업로드 불가: {problems}', '未準備: {problems}', '尚未就绪：{problems}'],
+  'draft.from': ['From: {urls}', '원본: {urls}', '元: {urls}', '来源：{urls}'],
+  'draft.save': ['Save', '저장', '保存', '保存'],
+  'draft.saved': ['Draft saved.', '초안을 저장했습니다.', '下書きを保存しました。', '草稿已保存。'],
+  'draft.ready': ['Ready to post', '업로드 준비 완료', '投稿準備完了', '准备发布'],
+  'draft.unready': ['Back to draft', '초안으로 되돌리기', '下書きに戻す', '退回草稿'],
+  'draft.discard': ['Discard', '폐기', '破棄', '丢弃'],
+  'draft.close': ['Close', '닫기', '閉じる', '关闭'],
+
+  'style.new': ['New style', '새 스타일', '新しいスタイル', '新样式'],
+  'style.name': ['Name', '이름', '名前', '名称'],
+  'style.template': ['Template', '템플릿', 'テンプレート', '模板'],
+  'style.ai': ['AI rewrite', 'AI 재작성', 'AI で書き直し', 'AI 改写'],
+  'style.per_post': ['One draft per post', '글마다 초안 하나', '投稿ごとに下書き 1 件', '每条帖子一份草稿'],
+  'style.instructions': ['How the agent should write it', '에이전트가 쓰는 방식', 'エージェントの書き方', '代理的写法'],
+  'style.header': ['Header: {account} {date}', '머리말: {account} {date}', '見出し: {account} {date}', '开头：{account} {date}'],
+  'style.item': ['Each post: {short} {url}', '각 글: {short} {url}', '各投稿: {short} {url}', '每条：{short} {url}'],
+  'style.footer': ['Footer: {urls}', '꼬리말: {urls}', '末尾: {urls}', '结尾：{urls}'],
+  'style.media.all': ['All media', '미디어 전부', 'メディアすべて', '全部媒体'],
+  'style.media.first': ['First only', '첫 번째만', '最初のみ', '仅第一个'],
+  'style.media.none': ['No media', '미디어 없음', 'メディアなし', '无媒体'],
+  'style.hashtags.keep': ['Keep hashtags', '해시태그 유지', 'ハッシュタグを残す', '保留话题标签'],
+  'style.hashtags.drop': ['Drop hashtags', '해시태그 제거', 'ハッシュタグを外す', '去掉话题标签'],
+  'style.chars': ['{n} chars', '{n}자', '{n} 文字', '{n} 字'],
+  'style.fields': ['Template fields: {text} {short} {name} {handle} {account} {date} {url} {likes} {hashtags}; digest footer: {urls}.', '템플릿 항목: {text} {short} {name} {handle} {account} {date} {url} {likes} {hashtags}, 다이제스트 꼬리말: {urls}', 'テンプレート項目: {text} {short} {name} {handle} {account} {date} {url} {likes} {hashtags}、ダイジェストの末尾: {urls}', '模板字段：{text} {short} {name} {handle} {account} {date} {url} {likes} {hashtags}；摘要结尾：{urls}'],
+  'style.save': ['Save style', '스타일 저장', 'スタイルを保存', '保存样式'],
+  'style.saved': ['Style saved.', '스타일을 저장했습니다.', 'スタイルを保存しました。', '样式已保存。'],
+  'style.delete': ['Delete', '삭제', '削除', '删除'],
+
+  'stage.all': ['all', '전체', 'すべて', '全部'],
+  'stage.refined': ['refined', '정제됨', '整理済み', '已整理'],
+  'stage.selected': ['selected', '선정됨', '選択済み', '已选择'],
+  'stage.skipped': ['skipped', '제외됨', '除外', '已跳过'],
+  'stage.drafted': ['drafted', '초안 작성됨', '下書き作成済み', '已生成草稿'],
+  'stage.uploaded': ['uploaded', '업로드됨', '投稿済み', '已发布'],
+  'stage.draft': ['draft', '초안', '下書き', '草稿'],
+  'stage.ready': ['ready', '업로드 준비', '準備済み', '就绪'],
+  'stage.discarded': ['discarded', '폐기됨', '破棄', '已丢弃'],
+  'kind.post': ['post', '일반', '通常', '普通'],
+  'kind.quote': ['quote', '인용', '引用', '引用'],
+  'kind.reply': ['reply', '답글', '返信', '回复'],
+  'kind.repost': ['repost', '리포스트', 'リポスト', '转发'],
+};
+
+const LANGUAGES = ['en', 'ko', 'ja', 'zh'];
+let current = 0;
+
+/** Picks the language Agentty speaks (`initialize`'s `language`); English for anything else. */
+export function setLanguage(code) {
+  const index = LANGUAGES.indexOf(String(code ?? '').slice(0, 2));
+  current = index < 0 ? 0 : index;
+}
+
+/** `key` in the current language, `{name}` filled in from `vars` (unknown keys are shown as is). */
+export function t(key, vars = {}) {
+  const text = STRINGS[key]?.[current] ?? STRINGS[key]?.[0] ?? key;
+  return text.replace(/\{(\w+)\}/g, (whole, name) => (name in vars ? String(vars[name]) : whole));
+}
+
+export const KEYS = Object.keys(STRINGS);
+export const TABLE = STRINGS;

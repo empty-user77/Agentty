@@ -853,7 +853,11 @@ impl Workbench {
             Some(dormant) => dormant.cwd.clone(),
             None => ws.tabs.get(ws.active_tab).map(|t| t.active.read(cx).display_cwd()).unwrap_or_else(|| ws.cwd.clone()),
         };
-        let path = tilde(&cwd);
+        // A plugin's workspace works in the plugin's own folder: say whose it is instead.
+        let path = match &ws.plugin {
+            Some(_) => t(cx, "workspace.plugin_card").to_string(),
+            None => tilde(&cwd),
+        };
         // The path is shortened on its own; the counts are short and go after it whole, so a cut
         // never lands in the middle of "탭 2개".
         let detail = {
@@ -1604,6 +1608,7 @@ impl Workbench {
     }
 
     pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let in_plugin_workspace = self.front_plugin_workspace(cx).is_some() && self.page.is_none();
         // Tabs take the room they need (scrolling when crowded); the spacer gets the rest.
         let mut tabs = div().id("tabs").flex().flex_shrink().min_w_0().h_full().overflow_x_scroll();
         // The start page is always the first tab, whatever else is open: it is how everything else
@@ -1780,7 +1785,13 @@ impl Workbench {
                         .when(view.status.in_turn(), |d| {
                             d.child(crate::ui::dot_spinner(("tab-working", view.pane_id as usize), 12., hex_alpha(Chrome::BRIGHT, 0.9)))
                         })
-                        .child(div().truncate().child(view.display_title()))
+                        .child(div().truncate().child(
+                            // A plugin workspace's own terminal (in the plugin's folder) goes by the plugin's name.
+                            match (&ws.plugin, &ws.name) {
+                                (Some(_), Some(name)) if !view.is_agent() && view.current_dir() == ws.cwd => name.clone(),
+                                _ => view.display_title(),
+                            },
+                        ))
                         .when(leaves.len() > 1, |d| {
                             d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("⊞{}", leaves.len())))
                         })
@@ -1915,59 +1926,76 @@ impl Workbench {
                         }),
                     ),
             )
-            // Plugins with a panel, then cmux-style quick actions: icons only.
-            .children(self.render_plugin_header_buttons(cx))
-            .child(ringed(
-                header_icon(
-                    "header-browser",
-                    "globe",
-                    self.browser.is_some(),
-                    (t(cx, "tooltip.browser"), Some("⇧⌘B")),
-                    cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
-                ),
-                "header-browser",
-            ))
-            .when(crate::platform::HAS_MINI_MODE, |d| {
+            // In a plugin's own workspace the strip holds its job tabs and the splits only: the
+            // browser, the files panel and the other plugins belong to the ordinary layout.
+            .when(in_plugin_workspace, |d| {
                 d.child(ringed(
                     header_icon(
-                        "header-mini",
-                        "picture-in-picture-2",
+                        "header-split-right",
+                        "columns-2",
                         false,
-                        (t(cx, "mini.enter"), Some("⌃⌘M")),
-                        cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
+                        (t(cx, "split.right"), Some("⌘D")),
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
                     ),
-                    "header-mini",
+                    "header-split-right",
                 ))
             })
-            .child(ringed(
-                header_icon(
-                    "header-split-right",
-                    "columns-2",
-                    false,
-                    (t(cx, "split.right"), Some("⌘D")),
-                    cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
-                ),
-                "header-split-right",
-            ))
-            .child(header_icon(
-                "header-split-down",
-                "rows-2",
-                false,
-                (t(cx, "split.down"), Some("⇧⌘D")),
-                cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
-            ))
-            // The files panel docks at the right edge, so its button is the last one. A tree, not a
-            // framed panel: next to the split buttons a frame reads as one more way to split.
-            .child(ringed(
-                header_icon(
-                    "header-files",
-                    "list-tree",
-                    self.files_panel.is_some(),
-                    (t(cx, "files.title"), Some("⌥⌘B")),
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_files_panel(cx)),
-                ),
-                "header-files",
-            ))
+            .when(!in_plugin_workspace, |d| {
+                d
+                    // Plugins with a panel, then cmux-style quick actions: icons only.
+                    .children(self.render_plugin_header_buttons(cx))
+                    .child(ringed(
+                        header_icon(
+                            "header-browser",
+                            "globe",
+                            self.browser.is_some(),
+                            (t(cx, "tooltip.browser"), Some("⇧⌘B")),
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)),
+                        ),
+                        "header-browser",
+                    ))
+                    .when(crate::platform::HAS_MINI_MODE, |d| {
+                        d.child(ringed(
+                            header_icon(
+                                "header-mini",
+                                "picture-in-picture-2",
+                                false,
+                                (t(cx, "mini.enter"), Some("⌃⌘M")),
+                                cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_mini(window, cx)),
+                            ),
+                            "header-mini",
+                        ))
+                    })
+                    .child(ringed(
+                        header_icon(
+                            "header-split-right",
+                            "columns-2",
+                            false,
+                            (t(cx, "split.right"), Some("⌘D")),
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Horizontal, window, cx)),
+                        ),
+                        "header-split-right",
+                    ))
+                    .child(header_icon(
+                        "header-split-down",
+                        "rows-2",
+                        false,
+                        (t(cx, "split.down"), Some("⇧⌘D")),
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.split(super::Axis::Vertical, window, cx)),
+                    ))
+                    // The files panel docks at the right edge, so its button is the last one. A tree, not a
+                    // framed panel: next to the split buttons a frame reads as one more way to split.
+                    .child(ringed(
+                        header_icon(
+                            "header-files",
+                            "list-tree",
+                            self.files_panel.is_some(),
+                            (t(cx, "files.title"), Some("⌥⌘B")),
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_files_panel(cx)),
+                        ),
+                        "header-files",
+                    ))
+            })
     }
 
     pub(super) fn render_launcher(&self, cx: &mut Context<Self>) -> AnyElement {

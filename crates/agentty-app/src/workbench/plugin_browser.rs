@@ -365,11 +365,12 @@ impl Workbench {
         let prefs = settings(cx).browser.clone();
         let warm = WebView::new_background(window, &prefs);
         cx.spawn(async move |this, cx| {
+            // Kept until this ends: two seconds after the answer, the view has done its job.
+            let _warm = warm;
             // Long enough for the network process to read the cookie file.
             cx.background_executor().timer(Duration::from_millis(600)).await;
             let _ = this.update(cx, |this, cx| then(this, cx));
             cx.background_executor().timer(Duration::from_secs(2)).await;
-            drop(warm);
         })
         .detach();
     }

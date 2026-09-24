@@ -544,7 +544,17 @@ impl Workbench {
                                     ),
                             )
                             .children(
-                                item.detail.clone().map(|d| div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(d)),
+                                // At most part of the row, cut short: a long detail must not squeeze
+                                // the title and subtitle to nothing.
+                                item.detail.clone().map(|d| {
+                                    div()
+                                        .max_w(gpui::relative(0.45))
+                                        .min_w_0()
+                                        .t_caption()
+                                        .text_color(hex(Chrome::MUTED))
+                                        .truncate()
+                                        .child(d)
+                                }),
                             )
                             .child(actions.invisible().group_hover(group, |s| s.visible())),
                     );
