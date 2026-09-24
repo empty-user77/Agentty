@@ -62,6 +62,23 @@ one draft per post or one digest for all of them (`header`, `item` per post, `fo
 `{urls}`). An **AI rewrite** opens a Claude Code session in the draft's folder with the style's
 instructions; the draft fills in once the agent has written `draft.txt`.
 
+## Posting
+
+A draft marked **ready** has **Post now**: it is posted from the automation's page, with that
+automation's sign-in: the compose window, the text pasted in, the images or video attached, and
+Post pressed only once everything has uploaded and the window holds exactly the draft's text.
+The new post's address is read back from the account's own timeline; the draft becomes
+`uploaded` with `postedUrl`, `postedAt`, `postedBy`, and so do the posts it was made from. A post
+takes up to 4 images or one video (11 MB of media at most).
+
+## Log
+
+Everything an automation does in X is written to `actions/<day>.jsonl`, one line per action:
+`at`, `automation`, `profile`, `action` (`run`, `done`, `open`, `find`, `collect`, `like`,
+`reply`, `post`, `agent`, `wait`, `limit`, `signin`), `url`, `target`, `ok` and `detail`.
+The **Log** view shows the latest ones, by automation, by action or only the failures; a line
+with an address opens it in the automation's own page.
+
 ## Likes and replies
 
 An automation can also like and reply, fully on its own, from the account its profile is signed in

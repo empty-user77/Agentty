@@ -28,6 +28,7 @@ import {
   waitForWindow,
   whoAmI,
 } from './lib/engage.mjs';
+import { composeInPage, composeState, discardCompose, fingerprint, mediaForPage, pressPost, sameText } from './lib/publish.mjs';
 import { createStore, day, DRAFT_STATUS, readJson, writeJson, writeText } from './lib/store.mjs';
 import { accountOf, appReady, goToPath, markPinned, profileUrl, readTimeline, scrollLikeAHand } from './lib/x.mjs';
 import { setLanguage, t } from './lib/i18n.mjs';
@@ -119,11 +120,36 @@ function auto(instance) {
         openDraft: null,
         draftText: '',
         editStyle: DEFAULT_STYLES[0].id,
+        logFilter: { who: 'all', action: 'all', failed: false },
       },
     };
     autos.set(instance, a);
   }
   return a;
+}
+
+/** The latest actions (newest first), as the log view shows them; all of them are on disk. */
+const recentActions = [];
+const RECENT_ACTIONS = 300;
+
+/**
+ * Records one action an automation took in X: when, which automation and sign-in, what, where
+ * (URL), on what, whether it worked and the details. Kept in `actions/<day>.jsonl`.
+ */
+async function act(a, action, fields = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    automation: a.config.title || a.instance || 'main',
+    instance: a.instance || null,
+    profile: a.config.profile,
+    action,
+    ok: true,
+    ...fields,
+  };
+  recentActions.unshift(entry);
+  recentActions.length = Math.min(recentActions.length, RECENT_ACTIONS);
+  await store.appendAction(entry).catch((err) => plugin.log(`action log: ${err.message}`));
+  if (a.ui.view === 'log') await render(a.instance);
 }
 
 const note = (a, line) => {
@@ -213,6 +239,8 @@ async function openAutomation(instance, title) {
   const saved = await store.engine(engineKey(instance));
   if (saved) a.config = withDefaults(saved);
   if (!a.config.title && title) a.config.title = title;
+  // The tab shows the automation's own name, whatever it last showed.
+  if (instance && a.config.title && a.config.title !== title) await plugin.setInstanceTitle(instance, a.config.title).catch(() => {});
   await refreshSignIn(a.config.profile);
   await engagementOf(a.config.profile);
   try {
@@ -275,6 +303,8 @@ async function runAutomation(instance) {
   let total = 0;
   let accounts = 0;
   const done = { like: 0, reply: 0 };
+  const tasks = [collecting(c) && 'collect', c.tasks.like && 'like', c.tasks.reply && 'reply'].filter(Boolean);
+  await act(a, 'run', { target: units.map((u) => unitName(c, u)).join(', '), detail: `${c.source} · ${tasks.join('+')}` });
   try {
     const tabId = await ensurePage(a);
     a.self = null;
@@ -315,6 +345,7 @@ async function runAutomation(instance) {
     a.status = err.message;
     plugin.log(err.stack ?? String(err));
   } finally {
+    await act(a, 'done', { ok: !a.stop, detail: a.stop ? t('auto.stop') : a.status });
     a.busy = false;
     a.stop = false;
     schedule(a);
@@ -331,7 +362,7 @@ async function rest(a, ms) {
 }
 
 /** Moves the automation's page to `path` as a click would; from home when X's app is not up. */
-async function goTo(tabId, path) {
+async function goTo(a, tabId, path) {
   const ready = await plugin.browser.eval(tabId, appReady).catch(() => false);
   const moved = ready && (await plugin.browser.eval(tabId, goToPath, { path }).catch(() => false));
   if (!moved) {
@@ -340,6 +371,7 @@ async function goTo(tabId, path) {
     await sleep(1500 + Math.random() * 2000);
     await plugin.browser.eval(tabId, goToPath, { path });
   }
+  await act(a, 'open', { url: `https://x.com${path}`, detail: moved ? '' : 'from home' });
   await sleep(2500 + Math.random() * 2500);
 }
 
@@ -380,7 +412,8 @@ async function findPosts(a, unit, tabId, state) {
       minLikes: c.minLikes,
       maxAgeHours: c.maxAgeHours,
       engaged: new Set([...Object.keys(state.engaged), ...acting]),
-      self: a.self,
+      // An account the user listed is meant, their own included; a keyword never picks their posts.
+      self: c.source === 'accounts' ? null : a.self,
     });
     if (reachedDone || picked.length >= want || page.atEnd) break;
     await plugin.browser.eval(tabId, scrollLikeAHand);
@@ -395,14 +428,16 @@ async function engageUnit(a, unit, tabId) {
   const state = await engagementOf(c.profile);
   a.status = t('eng.finding', { unit: unitName(c, unit) });
   await render(a.instance);
-  await goTo(tabId, sourcePath(c.source, unit));
+  await goTo(a, tabId, sourcePath(c.source, unit));
   if (!a.self) a.self = await plugin.browser.eval(tabId, whoAmI).catch(() => null);
   const { signin, posts } = await findPosts(a, unit, tabId, state);
   if (signin) {
     a.status = t('sign_in.asked');
+    await act(a, 'signin', { ok: false, target: unitName(c, unit), detail: t('sign_in.asked') });
     result.signin = true;
     return result;
   }
+  await act(a, 'find', { target: unitName(c, unit), detail: posts.map((p) => p.url).join(' ') || t('eng.none') });
   if (!posts.length) {
     note(a, `${unitName(c, unit)}: ${t('eng.none')}`);
     return result;
@@ -457,8 +492,10 @@ async function agentReplies(a, posts, required) {
       agent: 'claude',
       submit: true,
     });
+    await act(a, 'agent', { detail: `${posts.length} → ${dir}` });
   } catch (err) {
     note(a, t('eng.agent_failed', { reason: err.message }));
+    await act(a, 'agent', { ok: false, detail: err.message });
     return new Map();
   }
   const deadline = Date.now() + 5 * 60 * 1000;
@@ -467,9 +504,12 @@ async function agentReplies(a, posts, required) {
     await sleep(3000);
     const list = await readJson(join(dir, 'replies.json'), null);
     if (!Array.isArray(list)) continue;
-    return new Map(list.filter((e) => e && ids.has(String(e.id)) && typeof e.text === 'string').map((e) => [String(e.id), e.text.trim()]));
+    const written = new Map(list.filter((e) => e && ids.has(String(e.id)) && typeof e.text === 'string').map((e) => [String(e.id), e.text.trim()]));
+    await act(a, 'agent', { detail: `${written.size}/${posts.length} written` });
+    return written;
   }
   note(a, t('eng.agent_failed', { reason: a.stop ? t('auto.stop') : 'timeout' }));
+  await act(a, 'agent', { ok: false, detail: a.stop ? 'stopped' : 'timeout' });
   return new Map();
 }
 
@@ -484,6 +524,7 @@ async function paceWait(a, state) {
     const wait = waitForWindow(a.window, state.log, { maxPerWindow: p.maxPer10Min });
     if (!wait) break;
     a.status = t('eng.window', { when: new Date(Date.now() + wait).toLocaleTimeString() });
+    await act(a, 'wait', { detail: `10 min cap ${a.window.cap}, until ${new Date(Date.now() + wait).toISOString()}` });
     await render(a.instance);
     if (!(await rest(a, wait))) return false;
   }
@@ -497,9 +538,10 @@ async function actOn(a, tabId, post, reply, state) {
   const c = a.config;
   const done = { like: 0, reply: 0, capped: false };
   const who = post.handle ?? post.id;
-  const record = (action, ok, extra = {}) => {
+  const record = async (action, ok, extra = {}) => {
     state.log.push({ at: Date.now(), day: day(), action, ok, id: post.id, handle: post.handle, url: post.url, automation: c.title || a.instance, ...extra });
     note(a, ok ? t(action === 'like' ? 'eng.liked' : 'eng.replied', { handle: who }) : t('eng.failed', { action: t(`act.${action}`), handle: who, error: extra.error ?? '?' }));
+    await act(a, action, { ok, url: post.url, target: post.handle, detail: extra.error ?? extra.text ?? '' });
   };
   const today = countToday(state.log);
   const likesLeft = today.like < c.pace.likesPerDay;
@@ -508,32 +550,35 @@ async function actOn(a, tabId, post, reply, state) {
   const wantReply = c.tasks.reply && repliesLeft && reply?.ok;
   if ((!c.tasks.like || !likesLeft) && (!c.tasks.reply || !repliesLeft)) {
     note(a, t('eng.daily', { action: [c.tasks.like && t('act.like'), c.tasks.reply && t('act.reply')].filter(Boolean).join(', ') }));
+    await act(a, 'limit', { ok: false, url: post.url, detail: `today ${today.like} likes, ${today.reply} replies` });
     done.capped = true;
     return done;
   }
   if (!wantLike && !wantReply) return done;
-  await goTo(tabId, new URL(post.url).pathname);
+  await goTo(a, tabId, new URL(post.url).pathname);
   const engaged = { at: Date.now() };
   if (wantLike && (await paceWait(a, state))) {
     const r = await plugin.browser.eval(tabId, likeInPage, { id: post.id }, { timeoutMs: 20000 }).catch((err) => ({ error: err.message }));
     if (r.liked) {
       done.like = 1;
       engaged.like = true;
-      record('like', true);
+      await record('like', true);
     } else if (r.already) {
       engaged.like = true;
+      await act(a, 'like', { url: post.url, target: post.handle, detail: 'already liked' });
     } else {
-      record('like', false, { error: r.error ?? (r.found ? 'no like button' : 'post not on the page') });
+      await record('like', false, { error: r.error ?? (r.found ? 'no like button' : 'post not on the page') });
     }
   }
+  if (c.tasks.reply && !reply?.ok) await act(a, 'reply', { ok: false, url: post.url, target: post.handle, detail: reply?.problems?.join(', ') ?? 'no reply' });
   if (wantReply && (await paceWait(a, state))) {
     const r = await plugin.browser.eval(tabId, replyInPage, { text: reply.text }, { timeoutMs: 30000 }).catch((err) => ({ error: err.message }));
     if (r.sent) {
       done.reply = 1;
       engaged.reply = reply.text;
-      record('reply', true, { text: reply.text });
+      await record('reply', true, { text: reply.text });
     } else {
-      record('reply', false, { error: r.error });
+      await record('reply', false, { error: r.error });
     }
   }
   // Tried once (not cut short by Stop): never again, whatever happened.
@@ -565,6 +610,7 @@ async function collectOne(a, account, tabId) {
     await render(a.instance);
     const answer = await plugin.browser.signIn('x.com', { message: t('sign_in.message'), profile: a.config.profile, instance: a.instance || undefined });
     await refreshSignIn(a.config.profile);
+    await act(a, 'signin', { ok: !!answer.signedIn, url: 'https://x.com', detail: answer.reason ?? '' });
     if (!answer.signedIn) {
       a.status = t('sign_in.failed', { reason: answer.reason ?? '?' });
       return run;
@@ -574,6 +620,13 @@ async function collectOne(a, account, tabId) {
   const failed = run.failed.length ? t('collect.failed', { n: run.failed.length }) : '';
   const gap = run.gap ? t('collect.gap') : '';
   note(a, t('collect.log', { account, new: run.new, seen: run.duplicates, failed, why: t(`why.${run.stoppedBecause}`), gap }));
+  await act(a, 'collect', {
+    ok: run.stoppedBecause !== 'error',
+    url: profileUrl(account),
+    target: `@${account}`,
+    detail: `${run.new} new, ${run.duplicates} known, ${run.failed.length} failed, ${run.stoppedBecause}${run.error ? `: ${run.error}` : ''}`,
+    posts: run.postIds,
+  });
   return run;
 }
 
@@ -677,6 +730,87 @@ async function watchRewrite(a, id) {
   if (draft) {
     draft.ai = { ...draft.ai, state: 'timeout' };
     await store.saveDraft(draft);
+  }
+}
+
+/**
+ * Posts a ready draft from this automation's page (its sign-in): the compose window, the text,
+ * the media; then the new post's address from the user's own timeline. The draft is `uploaded`
+ * with that address, and so are the posts it was made from.
+ */
+async function publishDraft(a, id) {
+  // Taken before anything is awaited: a second click must not post the draft twice.
+  if (a.busy) return;
+  a.busy = true;
+  const draft = await store.draft(id).catch(() => null);
+  if (!draft || draft.status !== 'ready') {
+    a.busy = false;
+    a.status = draft ? t('publish.not_ready') : '';
+    return render(a.instance);
+  }
+  a.status = t('publish.posting');
+  await render(a.instance);
+  const fail = async (step, error) => {
+    a.status = t('publish.failed', { error });
+    await act(a, 'post', { ok: false, detail: `${step}: ${error}`, draft: id });
+  };
+  try {
+    const files = await mediaForPage(draft.media.map((m) => m.path), store.draftDir(id));
+    const tabId = await ensurePage(a);
+    await goTo(a, tabId, '/home');
+    const self = await plugin.browser.eval(tabId, whoAmI).catch(() => null);
+    const composed = await plugin.browser.eval(tabId, composeInPage, { text: draft.text, files }, { timeoutMs: 60000 });
+    if (!composed.ok) return await fail(composed.step, composed.error);
+    // Uploads take their time: the window is looked at until everything is in and Post is on.
+    let state = null;
+    for (const deadline = Date.now() + 180000; Date.now() < deadline; ) {
+      await sleep(1500);
+      state = await plugin.browser.eval(tabId, composeState);
+      if (!state.open || (state.canPost && !state.uploading && state.media >= files.length)) break;
+    }
+    if (!state?.open) return await fail('compose', 'the compose window closed');
+    if (!state.canPost || state.uploading || state.media < files.length) {
+      await plugin.browser.eval(tabId, discardCompose).catch(() => {});
+      return await fail('media', state.message ?? 'the media did not finish uploading');
+    }
+    if (!sameText(state.text, draft.text)) {
+      await plugin.browser.eval(tabId, discardCompose).catch(() => {});
+      return await fail('text', `the window holds other text: ${state.text.slice(0, 120)}`);
+    }
+    await sleep(800 + Math.random() * 1200);
+    const pressed = await plugin.browser.eval(tabId, pressPost);
+    if (!pressed.pressed) return await fail('post', 'the Post button was off');
+    for (const deadline = Date.now() + 30000; Date.now() < deadline; ) {
+      await sleep(1000);
+      state = await plugin.browser.eval(tabId, composeState);
+      if (!state.open) break;
+    }
+    if (state.open) return await fail('post', state.message ?? 'the compose window did not close');
+
+    // The new post, on the user's own timeline.
+    let url = null;
+    if (self) {
+      await sleep(2500 + Math.random() * 2000);
+      await goTo(a, tabId, `/${self.replace(/^@/, '')}`);
+      const mark = fingerprint(draft.text).slice(0, 20);
+      const page = await plugin.browser.eval(tabId, readTimeline, { seen: [] }, { timeoutMs: 20000 }).catch(() => ({ posts: [] }));
+      const mine = page.posts.find((p) => sameHandle(p.handle, self) && (!mark || p.text.replace(/\s+/g, ' ').includes(mark)));
+      url = mine?.url ?? null;
+    }
+    await updateDraft(id, { status: 'uploaded', postedUrl: url, postedAt: new Date().toISOString(), postedBy: self });
+    for (const source of draft.sources) {
+      const post = await store.post(source.site, source.day, source.account, source.id);
+      if (post) await store.setPostStatus(post, 'uploaded');
+    }
+    await act(a, 'post', { url, target: self, detail: `${draft.text.replace(/\s+/g, ' ').slice(0, 120)} · ${files.length} media`, draft: id });
+    a.status = t('publish.done', { url: url ?? t('publish.url_unknown') });
+  } catch (err) {
+    await fail('error', err.message);
+    plugin.log(err.stack ?? String(err));
+  } finally {
+    a.busy = false;
+    await reload();
+    await renderAll();
   }
 }
 
@@ -911,11 +1045,13 @@ function renderDrafts(a) {
         ui.text(t('draft.length', { length: check.length, max: check.max, media: open.media.length, files: open.media.map((m) => m.path.split('/').pop()).join(', ') || t('draft.none') }), check.ok ? 'muted' : 'error'),
         check.problems.length ? ui.text(t('draft.problems', { problems: check.problems.join(', ') }), 'error') : null,
         ui.text(t('draft.from', { urls: open.sources.map((s) => s.url).join(' ') }), 'small'),
+        open.postedAt ? ui.text(t('publish.posted_at', { when: new Date(open.postedAt).toLocaleString(), url: open.postedUrl ?? t('publish.url_unknown') }), 'small') : null,
         ui.row([
           ui.button('saveDraft', t('draft.save'), { icon: 'save' }),
           open.status === 'ready'
             ? ui.button('unready', t('draft.unready'), { variant: 'secondary' })
             : ui.button('ready', t('draft.ready'), { icon: 'circle-check', variant: 'primary', disabled: !check.ok }),
+          open.status === 'ready' ? ui.button('publish', t('publish.now'), { icon: 'send', variant: 'primary', disabled: a.busy }) : null,
           ui.button('discard', t('draft.discard'), { variant: 'danger' }),
           ui.button('closeDraft', t('draft.close'), { variant: 'ghost' }),
         ], { gap: 'small', wrap: true }),
@@ -955,9 +1091,48 @@ function renderStyles(a) {
   ];
 }
 
+const ACTIONS = ['run', 'done', 'open', 'find', 'collect', 'like', 'reply', 'post', 'agent', 'wait', 'limit', 'signin'];
+const ACTION_ICON = { run: 'play', done: 'circle-check', open: 'globe', find: 'search', collect: 'download', like: 'heart', reply: 'message-circle', post: 'send', agent: 'bot', wait: 'clock', limit: 'circle-x', signin: 'key-round' };
+
+function shownActions(a) {
+  const { who, action, failed } = a.ui.logFilter;
+  return recentActions.filter(
+    (e) =>
+      (who === 'all' || (e.instance || 'main') === (a.instance || 'main')) &&
+      (action === 'all' || e.action === action) &&
+      (!failed || !e.ok),
+  );
+}
+
+function renderLog(a) {
+  const f = a.ui.logFilter;
+  const shown = shownActions(a).slice(0, 150);
+  return [
+    ui.row([
+      ui.choice('logWho', [{ value: 'all', label: t('log.all') }, { value: 'this', label: t('log.this') }], f.who),
+      ui.choice('logAction', [{ value: 'all', label: t('log.any') }, ...ACTIONS.map((x) => ({ value: x, label: t(`log.a.${x}`) }))], f.action),
+    ], { gap: 'small', wrap: true }),
+    ui.row([ui.toggle('logFailed', t('log.failed_only'), f.failed), ui.button('logFolder', t('files'), { icon: 'folder', variant: 'ghost' })], { gap: 'small', wrap: true }),
+    ui.text(t('log.count', { shown: shown.length, all: recentActions.length }), 'muted'),
+    ui.list(
+      'log',
+      shown.map((e, index) => ({
+        id: String(index),
+        title: `${new Date(e.at).toLocaleString()} · ${t(`log.a.${e.action}`)}${e.target ? ` · ${e.target}` : ''}${e.ok ? '' : ` · ${t('log.failed')}`}`,
+        subtitle: e.url || e.detail || '',
+        detail: [e.automation, e.profile, e.url ? e.detail : ''].filter(Boolean).join(' · ').slice(0, 300),
+        icon: ACTION_ICON[e.action] ?? 'circle',
+        tone: e.ok ? (['like', 'reply', 'post'].includes(e.action) ? 'success' : 'neutral') : 'error',
+        actions: e.url ? [{ id: 'open', icon: 'external-link', tooltip: t('log.open') }] : [],
+      })),
+      { empty: t('log.none') },
+    ),
+  ];
+}
+
 function render(instance) {
   const a = auto(instance);
-  const views = { automation: renderAutomation, posts: renderPosts, drafts: renderDrafts, styles: renderStyles };
+  const views = { automation: renderAutomation, posts: renderPosts, drafts: renderDrafts, styles: renderStyles, log: renderLog };
   const ready = data.drafts.filter((d) => d.status === 'ready').length;
   const tree = ui.column([
     ui.choice('view', [
@@ -965,6 +1140,7 @@ function render(instance) {
       { value: 'posts', label: t('view.posts', { n: data.posts.filter((p) => p.status === 'refined' || p.status === 'selected').length }) },
       { value: 'drafts', label: t('view.drafts', { n: ready }) },
       { value: 'styles', label: t('view.styles') },
+      { value: 'log', label: t('view.log') },
     ], a.ui.view),
     ui.divider(),
     ...(views[a.ui.view] ?? renderAutomation)(a),
@@ -1059,6 +1235,7 @@ on('signin', async (a) => {
   a.status = t('sign_in.waiting');
   await render(a.instance);
   const result = await plugin.browser.signIn('x.com', { message: t('sign_in.message'), profile: a.config.profile, instance: a.instance || undefined });
+  await act(a, 'signin', { ok: !!result.signedIn, url: 'https://x.com', detail: result.reason ?? '' });
   a.status = result.signedIn ? t('sign_in.done') : t('sign_in.failed', { reason: result.reason ?? '?' });
   await refreshSignIn(a.config.profile);
   await renderAll();
@@ -1140,6 +1317,8 @@ on('keywords', async (a, e) => {
   await saveConfig(a);
   await render(a.instance);
 });
+/** A switch's value: true, or the text "true" some senders use. */
+const on_ = (v) => v === true || v === 'true';
 /** A setting that changes the panel: saved, then drawn again. */
 const setting = (id, apply) =>
   on(id, async (a, e) => {
@@ -1159,10 +1338,10 @@ const ms = (value, fallback) => {
 };
 setting('minLikes', (c, v) => (c.minLikes = Number(v) || 0));
 setting('maxAge', (c, v) => (c.maxAgeHours = Number(v) || 0));
-setting('tCollect', (c, v) => (c.tasks.collect = !!v));
-setting('tLike', (c, v) => (c.tasks.like = !!v));
-setting('tReply', (c, v) => (c.tasks.reply = !!v));
-setting('rAi', (c, v) => (c.reply.ai = !!v));
+setting('tCollect', (c, v) => (c.tasks.collect = on_(v)));
+setting('tLike', (c, v) => (c.tasks.like = on_(v)));
+setting('tReply', (c, v) => (c.tasks.reply = on_(v)));
+setting('rAi', (c, v) => (c.reply.ai = on_(v)));
 textSetting('rPattern', (c, v) => (c.reply.pattern = v.slice(0, 1000)));
 textSetting('rInstructions', (c, v) => (c.reply.instructions = v.slice(0, 2000)));
 textSetting('rRequired', (c, v) => (c.reply.required = v.slice(0, 1000)));
@@ -1172,6 +1351,17 @@ setting('perWindow', (c, v) => (c.pace.maxPer10Min = Math.max(1, Number(v) || 1)
 setting('likesDay', (c, v) => (c.pace.likesPerDay = Number(v) || LIKES_A_DAY[0]));
 setting('repliesDay', (c, v) => (c.pace.repliesPerDay = Number(v) || REPLIES_A_DAY[0]));
 setting('perUnit', (c, v) => (c.pace.perUnit = Number(v) || 1));
+on('logWho', (a, e) => ((a.ui.logFilter.who = e.value), render(a.instance)));
+on('logAction', (a, e) => ((a.ui.logFilter.action = e.value), render(a.instance)));
+on('logFailed', (a, e) => ((a.ui.logFilter.failed = on_(e.value)), render(a.instance)));
+on('logFolder', (a) => reveal(a, store.actionsDir));
+on('log', async (a, e) => {
+  const entry = shownActions(a).slice(0, 150)[Number(e.item)];
+  if (!entry?.url || a.busy) return;
+  // Shown in this automation's own page, as a click in X would.
+  const tabId = await ensurePage(a).catch(() => null);
+  if (tabId !== null) await goTo(a, tabId, new URL(entry.url).pathname).catch((err) => note(a, err.message));
+});
 on('run', (a) => runAutomation(a.instance));
 on('stop', (a) => {
   a.stop = true;
@@ -1241,6 +1431,7 @@ on('unready', async (a) => {
   await updateDraft(a.ui.openDraft, { status: 'draft' });
   await renderAll();
 });
+on('publish', (a) => publishDraft(a, a.ui.openDraft));
 on('discard', async (a) => {
   await updateDraft(a.ui.openDraft, { status: 'discarded' });
   a.ui.openDraft = null;
@@ -1256,7 +1447,7 @@ on('newStyle', (a) => {
 });
 on('sName', (a, e) => editStyle(a, { name: e.value }));
 on('sKind', (a, e) => (editStyle(a, { kind: e.value }), render(a.instance)));
-on('sPerPost', (a, e) => (editStyle(a, { perPost: !!e.value }), render(a.instance)));
+on('sPerPost', (a, e) => (editStyle(a, { perPost: on_(e.value) }), render(a.instance)));
 on('sTemplate', (a, e) => editStyle(a, { template: e.value }));
 on('sInstructions', (a, e) => editStyle(a, { instructions: e.value }));
 on('sHeader', (a, e) => editStyle(a, { header: e.value }));
@@ -1282,6 +1473,7 @@ plugin
   .onActivate(async (info) => {
     setLanguage(info.language);
     store = createStore(info.plugin.dataDir);
+    recentActions.push(...(await store.actions(RECENT_ACTIONS)));
     await reload();
     await refreshProfiles();
     watchSignIns();

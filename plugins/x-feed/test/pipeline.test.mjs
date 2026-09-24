@@ -274,6 +274,50 @@ test('engaging: sources, candidates, rules, pauses and the 10-minute cap', async
   assert.deepEqual(countToday([{ ok: true, day: '2026-09-24', action: 'like' }, { ok: false, day: '2026-09-24', action: 'reply' }], day), { like: 1, reply: 0 });
 });
 
+test('posting: the media X takes with one post, and the text the new post is found by', async () => {
+  const { mediaForPage, fingerprint } = await import('../lib/publish.mjs');
+  const { writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'x-feed-post-'));
+  try {
+    const file = async (name) => {
+      await writeFile(join(root, name), 'fake media bytes');
+      return name;
+    };
+    const images = await Promise.all(['1.jpg', '2.png', '3.webp', '4.jpg', '5.jpg'].map(file));
+    const four = await mediaForPage(images.slice(0, 4), root);
+    assert.deepEqual(four.map((f) => f.type), ['image/jpeg', 'image/png', 'image/webp', 'image/jpeg']);
+    assert.equal(Buffer.from(four[0].data, 'base64').toString(), 'fake media bytes');
+    await assert.rejects(mediaForPage(images, root), /at most 4 images/);
+    const video = await file('v.mp4');
+    await assert.rejects(mediaForPage([video, images[0]], root), /one video/);
+    await assert.rejects(mediaForPage([await file('notes.txt')], root), /not a file X takes/);
+    assert.equal((await mediaForPage([video], root))[0].type, 'video/mp4');
+    // Only the draft's own files: a path out of its folder is refused before anything is read.
+    await assert.rejects(mediaForPage(['../elsewhere.jpg'], join(root, 'draft')), /not a file of this draft/);
+    await assert.rejects(mediaForPage(['/etc/hosts.png'], root), /not a file of this draft/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+  assert.equal(fingerprint('🚀 Ship 41 moved\n\nhttps://t.co/x #SpaceX'), '🚀 Ship 41 moved');
+});
+
+test('every action goes into the log of its day and comes back newest first', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'x-feed-log-'));
+  try {
+    const store = createStore(root);
+    await store.appendAction({ at: '2026-09-23T10:00:00', action: 'open', url: 'https://x.com/a' });
+    await store.appendAction({ at: '2026-09-24T10:00:00', action: 'like', url: 'https://x.com/a/status/1', ok: true });
+    await store.appendAction({ at: '2026-09-24T10:01:00', action: 'reply', url: 'https://x.com/a/status/1', ok: false, detail: 'no reply box' });
+    assert.deepEqual((await readdir(join(root, 'actions'))).sort(), ['2026-09-23.jsonl', '2026-09-24.jsonl']);
+    const all = await store.actions();
+    assert.deepEqual(all.map((e) => e.action), ['reply', 'like', 'open']);
+    assert.equal(all[0].detail, 'no reply box');
+    assert.deepEqual((await store.actions(2)).map((e) => e.action), ['reply', 'like']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('what the page shows becomes a candidate; every string the plugin uses is in all languages', async () => {
   const { toCandidate, sameHandle, requiredPieces, pickCandidates } = await import('../lib/engage.mjs');
   const post = toCandidate({ id: '9', url: 'https://x.com/a/status/9', author: 'A', handle: '@A', time: null, text: 'hi', labels: { likes: '1,234 Likes. Like' } });

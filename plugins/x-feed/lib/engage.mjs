@@ -162,8 +162,8 @@ export async function likeInPage(args) {
 }
 
 /**
- * On a post's own page: types `args.text` into its reply box and sends it. { sent, error }.
- * Typing goes through the editor's own input path (insertText), as a paste would.
+ * On a post's own page: pastes `args.text` into its reply box and sends it, only when the box
+ * then holds exactly that text. { sent, error }.
  */
 export async function replyInPage(args) {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -176,9 +176,14 @@ export async function replyInPage(args) {
   box.scrollIntoView({ block: 'center' });
   box.focus();
   await wait(200 + Math.random() * 400);
-  document.execCommand('insertText', false, args.text);
-  box.dispatchEvent(new InputEvent('input', { bubbles: true, data: args.text, inputType: 'insertText' }));
+  // As a paste: X's editor takes line breaks from a paste, not from typed-in text.
+  const clip = new DataTransfer();
+  clip.setData('text/plain', args.text);
+  box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clip, bubbles: true, cancelable: true }));
   await wait(400 + Math.random() * 600);
+  const flat = (text) => String(text ?? '').replace(/\s+/g, '');
+  const holder = box.closest('[data-testid="tweetTextarea_0"]') ?? box;
+  if (flat(holder.innerText) !== flat(args.text)) return { sent: false, error: `the reply box holds other text: ${holder.innerText.trim().slice(0, 80)}` };
   const button = document.querySelector('[data-testid="tweetButtonInline"]');
   if (!button) return { sent: false, error: 'no reply button' };
   if (button.getAttribute('aria-disabled') === 'true' || button.disabled) return { sent: false, error: 'the reply button stayed disabled' };

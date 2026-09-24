@@ -937,6 +937,15 @@ impl Workbench {
             // a closed window, a force quit or a crash never reach the quit hook.
             TerminalEvent::DirectoryChanged | TerminalEvent::SessionChanged => this.persist_soon(cx),
             TerminalEvent::TitleChanged | TerminalEvent::StatusChanged => {
+                // Looked at, or answered (the agent is at work again): its notifications stop
+                // calling the user. A finished turn's stays until then.
+                let (pane_id, moved_on, seen) = {
+                    let view = pane.read(cx);
+                    (view.pane_id, view.status.in_turn(), !view.attention)
+                };
+                if moved_on || seen {
+                    crate::notifications::withdraw(pane_id);
+                }
                 // A shell that changed folder may have entered a project with an agent harness.
                 this.watch_harness(&pane, cx);
                 // It may also have landed on another branch, whose pull request the card shows.
@@ -2031,6 +2040,7 @@ impl Workbench {
         let ws = &mut self.workspaces[w];
         ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
         ws.active_tab = ws.tabs.len() - 1;
+        self.split_shared_instances(w);
         self.active_workspace = w;
         self.page = None;
         self.persist(cx);
@@ -2642,6 +2652,23 @@ impl Workbench {
             let ws = &mut self.workspaces[index];
             ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
         }
+        self.split_shared_instances(index);
+    }
+
+    /// Every tab is an automation of its own: a tab whose id another tab already has (a layout
+    /// saved before ids were checked, or a closed tab reopened) gets a new one.
+    fn split_shared_instances(&mut self, index: usize) {
+        let mut seen = std::collections::HashSet::new();
+        let shared: Vec<usize> = self.workspaces[index]
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(t, tab)| tab.instance.as_ref().filter(|i| !seen.insert(i.id.clone())).map(|_| t))
+            .collect();
+        for t in shared {
+            let fresh = self.new_instance();
+            self.workspaces[index].tabs[t].instance = Some(fresh);
+        }
     }
 
     // -- mouse drags shared by the whole window --------------------------------------------------
@@ -3106,6 +3133,7 @@ impl Render for Workbench {
             .children(self.render_db_approval(cx))
             .children(self.render_harness_dialog(cx))
             .children(self.render_onboarding(cx))
+            .children(self.render_waiting_banner(cx))
             .children(self.render_toast(cx))
     }
 }
@@ -3171,18 +3199,21 @@ impl Workbench {
         .detach();
     }
 
+    /// How far from the right edge an overlay must stay: left of the panels docked at the right.
+    /// The browser is a native view, and anything drawn under it would never be seen.
+    pub(super) fn overlay_right_inset(&self, cx: &gpui::App) -> f32 {
+        if self.page.is_some() {
+            return 0.;
+        }
+        let (browser, files) = self.docked_widths(cx);
+        self.browser.as_ref().map_or(0., |_| browser + 5.)
+            + self.side_panels_total(cx)
+            + self.files_panel.as_ref().map_or(0., |_| files + 5.)
+    }
+
     fn render_toast(&self, cx: &gpui::App) -> Option<impl IntoElement> {
         let (text, id) = self.toast.clone()?;
-        // Left of the panels docked at the right: the browser is a native view, and anything drawn
-        // under it (a toast about a server that just stopped, say) would never be seen.
-        let docked = if self.page.is_none() {
-            let (browser, files) = self.docked_widths(cx);
-            self.browser.as_ref().map_or(0., |_| browser + 5.)
-                + self.side_panels_total(cx)
-                + self.files_panel.as_ref().map_or(0., |_| files + 5.)
-        } else {
-            0.
-        };
+        let docked = self.overlay_right_inset(cx);
         Some(
             div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).right(px(16. + docked)).child(crate::ui::fade_in(
                 SharedString::from(format!("toast-{id}")),

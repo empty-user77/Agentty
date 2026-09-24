@@ -5,11 +5,12 @@
 //   <data>/x/<day>/<account>/posts/<id>/         raw.json, post.json, post.md, images/, videos/
 //   <data>/drafts/<draft id>/                    draft.json, draft.md, media/
 //   <data>/styles.json                           the styles drafts are made in
+//   <data>/actions/<day>.jsonl                   every action taken in X, one line each
 //
 // Files are written whole and moved into place, so a crash leaves the old file or the new one,
 // never half of either.
 
-import { mkdir, readFile, writeFile, rename, readdir, rm, copyFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile, rename, readdir, rm, copyFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -201,6 +202,36 @@ export function createStore(root) {
       await writeJson(join(root, 'engage', `${folderName(profile)}.json`), { engaged, log: state.log.slice(-1000) });
     },
     engageDir: (id) => join(root, 'engage', 'runs', folderName(id)),
+
+    /**
+     * Every action an automation takes in X — pages opened, runs, collections, likes, replies,
+     * sign-ins — one JSON line each, in the file of its day (appended, never rewritten).
+     */
+    async appendAction(entry) {
+      const at = entry.at ? new Date(entry.at) : new Date();
+      const file = join(root, 'actions', `${day(at)}.jsonl`);
+      await mkdir(dirname(file), { recursive: true });
+      await appendFile(file, `${JSON.stringify({ ...entry, at: at.toISOString() })}\n`);
+    },
+    /** The latest `limit` actions, newest first, from the most recent days on file. */
+    async actions(limit = 300) {
+      const dir = join(root, 'actions');
+      const days = (await readdir(dir).catch(() => [])).filter((n) => n.endsWith('.jsonl')).sort().reverse();
+      const found = [];
+      for (const name of days) {
+        const lines = (await readFile(join(dir, name), 'utf8').catch(() => '')).split('\n').filter(Boolean).reverse();
+        for (const line of lines) {
+          try {
+            found.push(JSON.parse(line));
+          } catch {
+            // A line cut short by a crash: skipped.
+          }
+          if (found.length >= limit) return found;
+        }
+      }
+      return found;
+    },
+    actionsDir: join(root, 'actions'),
 
     async styles(defaults) {
       const saved = await readJson(join(root, 'styles.json'), null);

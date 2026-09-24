@@ -151,8 +151,21 @@ impl Workbench {
     }
 
     /// A fresh automation id (unique in this window, kept with the tab across restarts).
+    /// A new automation, with an id no other tab has — open, asleep or recently closed. The id counter
+    /// starts over at every launch while saved tabs keep theirs, so a number alone may be taken;
+    /// two tabs sharing an id would share their panel, pages and settings.
     pub(super) fn new_instance(&mut self) -> TabInstance {
-        TabInstance { id: format!("a{}", self.next_id()), title: None }
+        let taken: std::collections::HashSet<String> = self
+            .workspaces
+            .iter()
+            .flat_map(|ws| {
+                let open = ws.tabs.iter().filter_map(|t| t.instance.as_ref());
+                let asleep = ws.dormant.iter().flat_map(|s| s.tabs.iter().chain(&s.closed_tabs)).filter_map(|t| t.instance.as_ref());
+                let closed = ws.closed_tabs.iter().filter_map(|t| t.instance.as_ref());
+                open.chain(asleep).chain(closed).map(|i| i.id.clone())
+            })
+            .collect();
+        TabInstance { id: unused_instance_id(&taken, || self.next_id()), title: None }
     }
 
     /// The automation in front, when `plugin`'s workspace is.
@@ -468,5 +481,34 @@ impl Workbench {
             }
         });
         cx.notify();
+    }
+}
+
+/// The first `a<n>` from `next` that is not in `taken`.
+fn unused_instance_id(taken: &std::collections::HashSet<String>, mut next: impl FnMut() -> u64) -> String {
+    loop {
+        let id = format!("a{}", next());
+        if !taken.contains(&id) {
+            return id;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unused_instance_id;
+    use std::collections::HashSet;
+
+    #[test]
+    fn a_new_automation_never_takes_the_id_of_a_saved_one() {
+        // After a restart the counter starts low again while tabs a3..a5 came back from the layout.
+        let taken: HashSet<String> = ["a3", "a4", "a5"].map(String::from).into_iter().collect();
+        let mut counter = 3;
+        let id = unused_instance_id(&taken, || {
+            counter += 1;
+            counter
+        });
+        assert_eq!(id, "a6");
+        assert_eq!(unused_instance_id(&HashSet::new(), || 7), "a7");
     }
 }

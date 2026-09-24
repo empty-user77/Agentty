@@ -29,6 +29,9 @@ pub fn show(_pane_id: u64, title: &str, body: &str) {
     });
 }
 
+/// Toasts and `notify-send` notifications are not taken back here: they expire on their own.
+pub fn withdraw(_pane_id: u64) {}
+
 /// Printable text only, bounded in length.
 fn clean(text: &str, max: usize) -> String {
     text.chars().filter(|c| !c.is_control()).take(max).collect()

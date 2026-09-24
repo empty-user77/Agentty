@@ -922,6 +922,15 @@ impl TerminalView {
         self.last_activity_ms = crate::ui::now_ms();
         let mut notice = None;
         match kind {
+            // A question to the user: the agent waits for the answer, which is told like a
+            // permission request (a notice, the system notification, the banner until answered).
+            SignalKind::Working if detail.asks_user() => {
+                let question = detail.target.clone();
+                self.status = AgentStatus::Question(question.clone());
+                self.attention = true;
+                self.working_since = None;
+                return self.finish_signal(Some(NoticeKind::Question), question, cx);
+            }
             SignalKind::Working => {
                 if let Some((id, _)) = &detail.subagent {
                     // Tool calls inside a subagent keep the main turn working.

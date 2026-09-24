@@ -973,6 +973,13 @@ strings! {
     "status.needs_input" => ["Waiting for your input", "입력을 기다리는 중", "入力を待っています", "等待你的输入"],
     "status.permission" => ["Permission request", "권한 요청", "権限リクエスト", "权限请求"],
     "status.question" => ["Waiting for your answer", "답변 요청", "回答待ち", "等待你的回答"],
+    "waiting.go" => ["Click to go to that terminal", "클릭하면 해당 터미널로 이동", "クリックでそのターミナルへ", "点击前往该终端"],
+    "waiting.go_more" => [
+        "Click to go to that terminal · {n} more waiting",
+        "클릭하면 해당 터미널로 이동 · 그 밖에 {n}개 대기 중",
+        "クリックでそのターミナルへ · ほかに {n} 件待機中",
+        "点击前往该终端 · 另有 {n} 个在等待"
+    ],
     "status.interrupted" => ["Paused", "일시중단", "一時停止", "已暂停"],
     "confirm.close_pane" => ["Close this pane?", "이 분할창을 닫을까요?", "このペインを閉じますか？", "关闭此窗格？"],
     "confirm.close_pane_body" => ["The process running in it will be stopped.", "실행 중인 프로세스가 종료됩니다.", "実行中のプロセスは終了します。", "其中运行的进程将被终止。"],

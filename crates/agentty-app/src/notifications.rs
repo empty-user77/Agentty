@@ -104,6 +104,31 @@ pub fn show(pane_id: u64, title: &str, body: &str) {
         let request: Id = msg_send![class!(UNNotificationRequest), requestWithIdentifier: ns_string(&identifier) content: content trigger: std::ptr::null_mut::<Object>()];
         let _: () = msg_send![center, addNotificationRequest: request withCompletionHandler: std::ptr::null_mut::<Object>()];
         let _: () = msg_send![content, release];
+        if pane_id != 0 {
+            let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
+            let list = shown.entry(pane_id).or_default();
+            list.push(identifier);
+            // A pane that keeps notifying keeps only its latest ones on record.
+            let excess = list.len().saturating_sub(20);
+            list.drain(..excess);
+        }
+    }
+}
+
+/// Identifiers of the notifications each pane has in Notification Center.
+static SHOWN: std::sync::Mutex<std::collections::BTreeMap<u64, Vec<String>>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// Takes the pane's notifications out of Notification Center: what they asked for is done (the
+/// question was answered, the pane was looked at), so none of them should still call the user.
+pub fn withdraw(pane_id: u64) {
+    let Some(identifiers) = SHOWN.lock().unwrap_or_else(|e| e.into_inner()).remove(&pane_id) else { return };
+    let Some(center) = center() else { return };
+    unsafe {
+        let array: Id = msg_send![class!(NSMutableArray), array];
+        for identifier in &identifiers {
+            let _: () = msg_send![array, addObject: ns_string(identifier)];
+        }
+        let _: () = msg_send![center, removeDeliveredNotificationsWithIdentifiers: array];
     }
 }
 
