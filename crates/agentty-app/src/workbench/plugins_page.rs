@@ -427,6 +427,10 @@ impl Workbench {
                 // what the user allowed it.
                 crate::browser_profiles::remove_all(id);
                 super::plugin_browser::revoke(id, cx);
+                let gone = id.to_string();
+                crate::settings::update_settings(cx, move |s| {
+                    s.plugin_browser_modes.remove(&gone);
+                });
                 plugins::reload(cx);
                 if self.plugins_page.selected.as_deref() == Some(id) {
                     self.plugins_page.selected = None;

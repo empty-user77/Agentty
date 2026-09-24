@@ -200,6 +200,11 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<()> {
     state.save()
 }
 
+/// Whether `id` is one of the plugins shipped inside Agentty.
+pub fn is_builtin_id(id: &str) -> bool {
+    BUILTIN.iter().any(|b| b.manifest().id == id)
+}
+
 /// A plugin shipped inside Agentty: its files are embedded in the binary.
 pub struct BuiltinPlugin {
     pub manifest_json: &'static str,
@@ -457,6 +462,12 @@ fn finish_install(manifest: &Manifest, staged: &Path, source: Source, origin: Op
         }
     };
     anyhow::ensure!(staged_manifest.id == manifest.id, "plugin id changed while installing");
+    // The ids of the plugins Agentty ships are theirs: another plugin under that name would get
+    // their folder, their data and the trust their name carries.
+    if source != Source::Builtin && is_builtin_id(&manifest.id) {
+        let _ = std::fs::remove_dir_all(staged);
+        bail!("\"{}\" is the id of a plugin that comes with Agentty", manifest.id);
+    }
     let mut state = StateFile::load();
     if state.plugins.get(&manifest.id).is_some_and(|s| s.source == Source::Dev) {
         let _ = std::fs::remove_dir_all(staged);
@@ -599,7 +610,30 @@ fn leb128(bytes: &[u8]) -> Option<(u64, &[u8])> {
 
 /// The file to draw as `plugin`'s logo, if it has one. A folder plugin names a file of its own in
 /// the manifest; a module's logo was written out when it was installed.
+///
+/// What is returned is a copy named after the picture's contents: the renderer keeps pictures by
+/// path, so an update that changes the logo must change the path too, or the old one stays on
+/// screen. The copy is made only from a small raster image (the same rule as a module's logo — a
+/// folder plugin's SVG could name the user's own files for the renderer to open).
 pub fn logo_file(plugin: &InstalledPlugin) -> Option<PathBuf> {
+    let source = logo_source(plugin)?;
+    let meta = std::fs::metadata(&source).ok()?;
+    let stamp = (meta.len(), meta.modified().ok());
+    /// A logo file's size and change time, and the copy drawn for it.
+    type Seen = ((u64, Option<std::time::SystemTime>), Option<PathBuf>);
+    static SHOWN: std::sync::Mutex<BTreeMap<PathBuf, Seen>> = std::sync::Mutex::new(BTreeMap::new());
+    let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((seen, copy)) = shown.get(&source) {
+        if *seen == stamp {
+            return copy.clone();
+        }
+    }
+    let copy = logo_copy(&plugin.id, &source);
+    shown.insert(source, (stamp, copy.clone()));
+    copy
+}
+
+fn logo_source(plugin: &InstalledPlugin) -> Option<PathBuf> {
     if let Some(relative) = plugin.manifest.as_ref()?.logo.as_deref().and_then(parse_logo) {
         let path = plugin.dir.join(relative);
         if path.is_file() {
@@ -608,6 +642,34 @@ pub fn logo_file(plugin: &InstalledPlugin) -> Option<PathBuf> {
     }
     let carried = plugin.dir.join(LOGO_FILE);
     carried.is_file().then_some(carried)
+}
+
+/// `source` copied to `<data>/cache/plugin-logos/<id>-<hash>`, when it is a logo worth drawing.
+fn logo_copy(id: &str, source: &Path) -> Option<PathBuf> {
+    if std::fs::metadata(source).ok()?.len() > MAX_LOGO_BYTES as u64 {
+        return None;
+    }
+    let bytes = std::fs::read(source).ok()?;
+    if !logo_bytes_ok(&bytes) {
+        return None;
+    }
+    // FNV-1a: a name for the contents, not a security check.
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+    let dir = fsutil::data_dir().join("cache").join("plugin-logos");
+    let copy = dir.join(format!("{id}-{hash:016x}"));
+    if !copy.is_file() {
+        std::fs::create_dir_all(&dir).ok()?;
+        // Older copies of this plugin's logo go.
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&format!("{id}-")) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        std::fs::write(&copy, &bytes).ok()?;
+    }
+    Some(copy)
 }
 
 #[cfg(test)]
@@ -878,6 +940,22 @@ pub(crate) mod tests {
             assert!(!plugin.dir.join("stolen").exists(), "a link to a file was copied");
             assert!(!plugin.dir.join("stolen-dir").exists(), "a link to a folder was copied");
             let _ = std::fs::remove_dir_all(&source);
+        });
+    }
+
+    #[test]
+    fn another_plugin_cannot_take_the_id_of_one_agentty_ships() {
+        with_data_dir(|_| {
+            let folder = std::env::temp_dir().join(format!("agentty-squat-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join(MANIFEST_FILE), r#"{"id":"cosmica","name":"Not Cosmica","version":"9.0.0","main":"main.mjs"}"#)
+                .unwrap();
+            std::fs::write(folder.join("main.mjs"), "// nothing").unwrap();
+            let err = install_from_folder(&folder).unwrap_err();
+            assert!(err.to_string().contains("comes with Agentty"), "{err:#}");
+            assert!(!plugins_dir().join("cosmica").exists());
+            let _ = std::fs::remove_dir_all(&folder);
         });
     }
 

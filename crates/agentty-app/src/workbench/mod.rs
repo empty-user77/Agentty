@@ -553,6 +553,12 @@ pub struct Workbench {
     /// Panes a plugin started, and the status each was last told about: how a plugin hears that
     /// the agent it set to work has finished.
     plugin_panes: HashMap<u64, (String, &'static str)>,
+    /// Panes each plugin launched itself (prompt/inject into a new tab, split or workspace): the
+    /// ones it may type into without the user having just asked it to.
+    plugin_launched: HashMap<u64, String>,
+    /// When the user last used each plugin's UI (a panel control, one of its commands): for a
+    /// short while after that, the plugin may act on the terminal the user is in.
+    plugin_gesture: HashMap<String, std::time::Instant>,
     /// Whether the loop that looks at those panes while nothing is drawn is already running.
     plugin_pane_poll: bool,
     /// Plugins whose own window has been asked for but not yet opened — opening is deferred, and
@@ -763,6 +769,8 @@ impl Workbench {
             plugin_mode_menu: false,
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
+            plugin_launched: HashMap::new(),
+            plugin_gesture: HashMap::new(),
             plugin_pane_poll: false,
             plugin_windows_opening: std::collections::HashSet::new(),
             plugin_windows_closing: std::collections::HashSet::new(),

@@ -373,7 +373,7 @@ impl TextInput {
         let row = row.min(self.last_lines.len() - 1);
         let (start, layout) = &self.last_lines[row];
         let end = self.line_end(self.line_at(*start).0);
-        (start + layout.closest_index_for_x(position.x - bounds.left())).min(end)
+        (start + layout.closest_index_for_x(position.x - bounds.left()).min(layout.len())).min(end)
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -739,47 +739,76 @@ impl TextElement {
                 .then(|| input.placeholder_key.map_or_else(|| input.placeholder.clone(), |key| crate::i18n::t(cx, key).into()));
             (input.content.clone(), input.selected_range.clone(), input.cursor_offset(), input.rows.max(1), placeholder)
         };
-        // Keep the cursor's line in view, and never scroll past text that has since shrunk.
-        let cursor_line = content[..cursor].matches('\n').count();
-        let total = content.split('\n').count();
+        let text = placeholder.clone().unwrap_or_else(|| content.clone());
+        let color = if placeholder.is_some() { hex_alpha(Chrome::FOREGROUND, 0.4) } else { style.color };
+        let shape = |window: &mut Window, piece: &str| {
+            let run = TextRun { len: piece.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
+            let runs = if run.len > 0 { vec![run] } else { Vec::new() };
+            window.text_system().shape_line(SharedString::from(piece.to_string()), font_size, &runs, None)
+        };
+        // Each line is cut into the rows that fit the field's width (at a space when there is
+        // one), so a long sentence wraps instead of running out of the field.
+        let width = bounds.size.width - px(2.);
+        let mut rows_of_text: Vec<(usize, usize)> = Vec::new();
+        let mut offset = 0;
+        for line_text in text.split('\n') {
+            let line_start = offset;
+            offset += line_text.len() + 1;
+            let mut from = 0;
+            loop {
+                let rest = &line_text[from..];
+                let shaped = shape(window, rest);
+                if shaped.width <= width || rest.is_empty() {
+                    rows_of_text.push((line_start + from, line_start + line_text.len()));
+                    break;
+                }
+                let mut cut = shaped.closest_index_for_x(width).min(rest.len());
+                while cut > 0 && !rest.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                if let Some(space) = rest[..cut].rfind(' ').filter(|i| *i > 0) {
+                    cut = space + 1;
+                }
+                if cut == 0 {
+                    cut = rest.chars().next().map_or(rest.len(), char::len_utf8);
+                }
+                rows_of_text.push((line_start + from, line_start + from + cut));
+                from += cut;
+            }
+        }
+        // Keep the cursor's row in view, and never scroll past text that has since shrunk.
+        let cursor_row = rows_of_text.iter().rposition(|(start, end)| *start <= cursor && cursor <= *end).unwrap_or(0);
+        let total = rows_of_text.len();
         let scroll = self.input.update(cx, |input, _| {
             input.scroll_line = input.scroll_line.min(total.saturating_sub(1));
-            if cursor_line < input.scroll_line {
-                input.scroll_line = cursor_line;
-            } else if cursor_line >= input.scroll_line + rows {
-                input.scroll_line = cursor_line + 1 - rows;
+            if cursor_row < input.scroll_line {
+                input.scroll_line = cursor_row;
+            } else if cursor_row >= input.scroll_line + rows {
+                input.scroll_line = cursor_row + 1 - rows;
             }
             input.scroll_line
         });
 
-        let text = placeholder.clone().unwrap_or_else(|| content.clone());
-        let color = if placeholder.is_some() { hex_alpha(Chrome::FOREGROUND, 0.4) } else { style.color };
         let mut lines = Vec::new();
         let mut selections = Vec::new();
         let mut cursor_quad = None;
-        let mut offset = 0;
-        for (index, line_text) in text.split('\n').enumerate() {
-            let start = offset;
-            offset += line_text.len() + 1;
+        for (index, (start, end)) in rows_of_text.iter().copied().enumerate() {
             if index < scroll || index >= scroll + rows {
                 continue;
             }
-            let run =
-                TextRun { len: line_text.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
-            let runs = if run.len > 0 { vec![run] } else { Vec::new() };
-            let shaped = window.text_system().shape_line(SharedString::from(line_text.to_string()), font_size, &runs, None);
+            let row_text = &text[start..end];
+            let shaped = shape(window, row_text);
             let top = bounds.top() + line_height * (index - scroll) as f32;
-            let end = start + line_text.len();
             if placeholder.is_none() {
                 if selected_range.is_empty() {
-                    if (start..=end).contains(&cursor) {
+                    if index == cursor_row {
                         let x = bounds.left() + shaped.x_for_index(cursor - start);
                         cursor_quad = Some(fill(Bounds::new(point(x, top), size(px(1.5), line_height)), hex(Chrome::BLUE)));
                     }
                 } else if selected_range.start <= end && selected_range.end >= start {
-                    let from = shaped.x_for_index(selected_range.start.saturating_sub(start).min(line_text.len()));
+                    let from = shaped.x_for_index(selected_range.start.saturating_sub(start).min(row_text.len()));
                     let to = match selected_range.end > end {
-                        // A line inside the selection is covered to its end, and a little past it
+                        // A row inside the selection is covered to its end, and a little past it
                         // so the line break is visible.
                         true => shaped.width + px(4.),
                         false => shaped.x_for_index(selected_range.end - start),

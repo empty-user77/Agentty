@@ -48,6 +48,7 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     // The plugin's own workspace: its automations (tabs) and what they are called.
     ("workspace/instances", None),
     ("workspace/setInstanceTitle", None),
+    ("workspace/closeInstance", None),
     ("browser/sites", Some("browser.control")),
     ("browser/open", Some("browser.control")),
     ("browser/navigate", Some("browser.control")),
@@ -171,6 +172,10 @@ pub struct PromptRequest {
     /// Press Enter after typing it (new agent sessions always start with it).
     #[serde(default = "default_submit")]
     pub submit: bool,
+    /// `"files"`: a new agent that only reads and writes files in `cwd` — no shell, no web, no MCP
+    /// tools. For text that is not the user's (web pages, posts, mail) handed to an agent.
+    #[serde(default)]
+    pub tools: Option<String>,
     /// Who asked, shown in the dialog (a plugin name or an app).
     #[serde(default)]
     pub source: Option<String>,
@@ -185,6 +190,13 @@ fn default_submit() -> bool {
     true
 }
 
+impl PromptRequest {
+    /// Whether the agent it starts gets files only (`tools: "files"`).
+    pub fn restricted(&self) -> bool {
+        self.tools.as_deref() == Some("files")
+    }
+}
+
 impl Default for PromptRequest {
     fn default() -> Self {
         Self {
@@ -197,6 +209,7 @@ impl Default for PromptRequest {
             agent: None,
             cwd: None,
             submit: true,
+            tools: None,
             source: None,
             plugin: None,
         }

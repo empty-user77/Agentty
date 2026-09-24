@@ -144,6 +144,9 @@ impl Entry {
         if !valid_id(&entry.id) {
             bail!("\"{}\" is not a plugin id", entry.id);
         }
+        if super::store::is_builtin_id(&entry.id) {
+            bail!("\"{}\" is the id of a plugin that comes with Agentty", entry.id);
+        }
         entry.name = plain(&entry.name, "name", MAX_NAME, true)?;
         entry.description = plain(&entry.description, "description", MAX_DESCRIPTION, false)?;
         entry.publisher = plain(&entry.publisher, "publisher", MAX_NAME, false)?;

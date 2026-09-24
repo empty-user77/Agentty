@@ -62,6 +62,7 @@ when you don't care.
 | `ui/setPanel` | | `{ tree, instance? }` — with `instance`, the panel of that automation | `null` |
 | `workspace/instances` | | `{}` | `[{ instance, title, active }]` — the automations of the plugin's workspace |
 | `workspace/setInstanceTitle` | | `{ instance, title }` | `null` — what the automation's tab is called |
+| `workspace/closeInstance` | | `{ instance }` | `null` — closes that automation's tab (one of the plugin's own, open); it is not offered among the recently closed tabs |
 | `ui/showPanel` | | `{}` | `null` |
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
@@ -71,8 +72,22 @@ when you don't care.
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
 | `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
-| `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` — `target`: `ask` · `active` · `newWorkspace` · `newTab` · `split` · `pane` · `workspace` · `own` (a new tab in the plugin's own workspace) | `{ status: "asked" }` or `{ status: "sent", paneId }` |
+| `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit?, tools? }` — `target`: `ask` · `active` · `newWorkspace` · `newTab` · `split` · `pane` · `workspace` · `own` (a new tab in the plugin's own workspace) | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
+
+**Files-only agents.** `tools: "files"` starts the agent with nothing but reading and writing
+files in `cwd`, which must be a folder of the plugin's own data: no shell, no web, no MCP servers
+(so not the in-app browser, which is signed in as the user); Claude Code runs in `acceptEdits`, Codex
+in its `workspace-write` sandbox without network. Give an agent text that is not the user's — web
+pages, posts, mail — only this way, and check what it writes before acting on it.
+
+**Whose terminals.** A plugin types freely only into terminals of its own: ones `prompt/inject`
+started for it (`newTab`, `newWorkspace`, `split`, `own`) and any in its own workspace. Another
+terminal — the user's own agents and shells, `active`, `pane`, `workspace` — takes a prompt or
+`terminal/send` only within 10 seconds of the user using the plugin (a click in its panel, one of
+its commands), and never while that terminal waits for the user to approve or answer something. A
+`prompt/inject` outside that goes to the `ask` dialog instead (`{ status: "asked" }`, not sent until
+the user sends it); `terminal/send` fails with `-32001`.
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |

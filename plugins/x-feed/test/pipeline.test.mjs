@@ -271,7 +271,7 @@ test('engaging: sources, candidates, rules, pauses and the 10-minute cap', async
   assert.equal(waitForWindow(w, log, { maxPerWindow: 3, now: now + WINDOW_MS + 1 }), 0, 'a new window starts');
 
   const day = new Date('2026-09-24T12:00:00');
-  assert.deepEqual(countToday([{ ok: true, day: '2026-09-24', action: 'like' }, { ok: false, day: '2026-09-24', action: 'reply' }], day), { like: 1, reply: 0 });
+  assert.deepEqual(countToday([{ ok: true, day: '2026-09-24', action: 'like' }, { ok: false, day: '2026-09-24', action: 'reply' }], day), { like: 1, reply: 0, repost: 0 });
 });
 
 test('posting: the media X takes with one post, and the text the new post is found by', async () => {
@@ -299,6 +299,23 @@ test('posting: the media X takes with one post, and the text the new post is fou
     await rm(root, { recursive: true, force: true });
   }
   assert.equal(fingerprint('🚀 Ship 41 moved\n\nhttps://t.co/x #SpaceX'), '🚀 Ship 41 moved');
+});
+
+test('two automations saving the same account at once both keep what they added', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'x-feed-race-'));
+  try {
+    const store = createStore(root);
+    // Both read the record before either saves, as two automations running side by side do.
+    const one = await store.account('x', 'someone');
+    const two = await store.account('x', 'someone');
+    one.known['1'] = { day: '2026-09-24', status: 'refined' };
+    two.known['2'] = { day: '2026-09-24', status: 'refined' };
+    await Promise.all([store.saveAccount(one), store.saveAccount(two)]);
+    const saved = await store.account('x', 'someone');
+    assert.deepEqual(Object.keys(saved.known).sort(), ['1', '2']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('every action goes into the log of its day and comes back newest first', async () => {
@@ -335,5 +352,23 @@ test('what the page shows becomes a candidate; every string the plugin uses is i
   for (const key of used) {
     assert.ok(TABLE[key], `missing string ${key}`);
     assert.equal(TABLE[key].length, 4, `${key} in four languages`);
+  }
+});
+
+test('what a stranger\'s post could make an agent write is not posted, and media come from X only', async () => {
+  const { agentReplyProblems } = await import('../lib/engage.mjs');
+  const { mediaHostAllowed } = await import('../lib/media.mjs');
+  const post = { handle: '@someone' };
+  assert.deepEqual(agentReplyProblems('Great point, @someone!', { post }), []);
+  assert.deepEqual(agentReplyProblems('More at https://agentty.run', { required: ['https://agentty.run'], post }), []);
+  assert.ok(agentReplyProblems('Claim it at https://evil.example/x', { post }).some((p) => p.startsWith('link')));
+  assert.ok(agentReplyProblems('see evil.io now', { post }).some((p) => p.startsWith('link')));
+  assert.ok(agentReplyProblems('cc @attacker', { post }).some((p) => p.startsWith('mention')));
+  assert.ok(agentReplyProblems('a\nb\nc\nd\ne\nf\ng', { post }).includes('too many lines'));
+
+  assert.ok(mediaHostAllowed('https://pbs.twimg.com/media/a.jpg?name=orig'));
+  assert.ok(mediaHostAllowed('https://video.twimg.com/ext_tw_video/1/pu/vid/720x1280/a.mp4'));
+  for (const bad of ['http://pbs.twimg.com/a.jpg', 'https://127.0.0.1/a.jpg', 'https://evil.example/twimg.com/a.jpg', 'https://twimg.com.evil.example/a.jpg', 'file:///etc/hosts', 'not a url']) {
+    assert.ok(!mediaHostAllowed(bad), bad);
   }
 });

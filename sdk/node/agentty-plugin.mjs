@@ -131,6 +131,10 @@ export function createPlugin(streams = {}) {
     setInstanceTitle(instance, title) {
       return call('workspace/setInstanceTitle', { instance, title });
     },
+    /** Closes one of the plugin's own automations (its tab), e.g. after the user deleted it. */
+    closeInstance(instance) {
+      return call('workspace/closeInstance', { instance });
+    },
     /** A new automation (tab) in the plugin's workspace, or one that exists when the plugin starts: handler({ instance, title }). */
     onInstanceOpen(handler) {
       listeners.instanceOpen.push(handler);

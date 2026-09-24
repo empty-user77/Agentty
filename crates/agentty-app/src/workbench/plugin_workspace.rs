@@ -232,6 +232,28 @@ impl Workbench {
         Ok(())
     }
 
+    /// Closes the tab of one of `plugin`'s own automations (the plugin deleted it). Only a tab of
+    /// that plugin's workspace, and only one that is open, can be closed this way.
+    pub(super) fn close_instance(
+        &mut self,
+        plugin: &str,
+        instance: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let index = self.plugin_workspace(plugin).ok_or("the plugin has no workspace")?;
+        let ws = &self.workspaces[index];
+        let tab = ws.tabs.iter().find(|t| t.instance.as_ref().is_some_and(|i| i.id == instance)).ok_or("no such open automation")?;
+        let panes = tab.root.leaves();
+        self.perform_close(super::confirm::CloseTarget::Tabs(panes), window, cx);
+        // Deleted, not closed: it is not offered among the recently closed tabs.
+        for ws in &mut self.workspaces {
+            ws.closed_tabs.retain(|t| t.instance.as_ref().is_none_or(|i| i.id != instance));
+        }
+        self.persist(cx);
+        Ok(())
+    }
+
     /// A new automation: a tab of the plugin's workspace (in front), which the plugin hears about.
     pub(super) fn new_plugin_instance(&mut self, plugin: &str, cx: &mut Context<Self>) {
         let Some(index) = self.plugin_workspace(plugin) else { return };

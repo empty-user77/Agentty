@@ -145,15 +145,7 @@ export async function collect(browser, store, account, options = {}) {
   for (const [index, seenPost] of fresh.entries()) {
     progress({ step: 'save', run, index, total: fresh.length });
     try {
-      const embed = await (options.fetchEmbed ?? fetchEmbedDefault)(seenPost.id);
-      const collectedAt = now().toISOString();
-      let post = refine(seenPost, embed, { site, account: name, day: run.day, runId: run.runId, collectedAt });
-      await store.saveRaw(site, run.day, name, post.id, { seen: seenPost, embed, collectedAt });
-      post = await downloadMedia(post, store.postDir(site, run.day, name, post.id), { fetchImpl: options.fetchImpl, log });
-      await store.savePost(post);
-      await store.saveMarkdown(post, toMarkdown(post));
-      record.known[post.id] = { day: run.day, status: post.status, postedAt: post.postedAt, kind: post.kind };
-      await store.saveAccount(record);
+      const post = await takePost(store, seenPost, record, { ...options, day: run.day, runId: run.runId, now, log });
       run.postIds.push(post.id);
       run.new += 1;
     } catch (err) {
@@ -174,6 +166,30 @@ export async function collect(browser, store, account, options = {}) {
   await store.saveAccount(record);
   await store.addRun(site, run.day, name, run);
   return run;
+}
+
+/**
+ * Takes one post in: its embed data, refined, its media downloaded, written down under the
+ * account `record` it belongs to (saved), so it is never taken twice. `options`: { day, runId,
+ * foundBy, fetchEmbed, fetchImpl, log, now }. Returns the refined post.
+ */
+export async function takePost(store, seenPost, record, options = {}) {
+  const site = record.site;
+  const now = options.now ?? (() => new Date());
+  const log = options.log ?? (() => {});
+  const day = options.day ?? dayOf(now());
+  const embed = await (options.fetchEmbed ?? fetchEmbedDefault)(seenPost.id);
+  const collectedAt = now().toISOString();
+  let post = refine(seenPost, embed, { site, account: record.account, day, runId: options.runId ?? null, collectedAt });
+  // Where it was found, when not on its account's own timeline (a keyword search, say).
+  if (options.foundBy) post.foundBy = options.foundBy;
+  await store.saveRaw(site, day, record.account, post.id, { seen: seenPost, embed, collectedAt });
+  post = await downloadMedia(post, store.postDir(site, day, record.account, post.id), { fetchImpl: options.fetchImpl, log });
+  await store.savePost(post);
+  await store.saveMarkdown(post, toMarkdown(post));
+  record.known[post.id] = { day, status: post.status, postedAt: post.postedAt, kind: post.kind };
+  await store.saveAccount(record);
+  return post;
 }
 
 /** Where a post's files are, for the UI's "open folder". */

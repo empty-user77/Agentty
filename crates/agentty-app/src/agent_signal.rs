@@ -113,10 +113,28 @@ fn authenticate(stream: &mut Stream, launcher_token: Option<&str>) -> Caller {
     if !stream.peer_is_this_user() {
         return Caller::Nobody;
     }
-    match stream.peer_pid().and_then(|pid| pane_of(pid, crate::procinfo::parent_pid)) {
+    let pid = stream.peer_pid();
+    match pid.and_then(|pid| pane_of(pid, crate::procinfo::parent_pid)) {
         Some(pane) => Caller::Pane(pane),
+        // A process Agentty started that is not in a pane is one of its plugins (or something a
+        // plugin started): it speaks to Agentty through its own channel, with its permissions,
+        // never here as if it were another launch of the app.
+        None if pid.is_some_and(|pid| descends_from(pid, std::process::id(), crate::procinfo::parent_pid)) => Caller::Nobody,
         None => Caller::Launcher,
     }
+}
+
+/// Whether `ancestor` is among `pid`'s parents.
+#[cfg(unix)]
+fn descends_from(mut pid: u32, ancestor: u32, parent_of: impl Fn(u32) -> Option<u32>) -> bool {
+    for _ in 0..64 {
+        match parent_of(pid) {
+            Some(parent) if parent == ancestor => return true,
+            Some(parent) if parent > 1 && parent != pid => pid = parent,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Windows: the connection's first line is `auth\t<token>` — a pane's token, or the launch token.
@@ -659,6 +677,24 @@ mod tests {
     }
 
     use super::*;
+
+    /// A plugin (a child of Agentty outside every pane) is not taken for another launch of it.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_of_agentty_is_told_apart_from_another_launch() {
+        // 900 = Agentty; 950 = a plugin's node; 960 = something the plugin started; 42 = a launch from Finder.
+        let parent = |pid: u32| match pid {
+            960 => Some(950),
+            950 => Some(900),
+            900 => Some(1),
+            42 => Some(1),
+            _ => None,
+        };
+        assert!(descends_from(950, 900, parent));
+        assert!(descends_from(960, 900, parent));
+        assert!(!descends_from(42, 900, parent));
+        assert!(!descends_from(900, 900, parent), "Agentty is not its own child");
+    }
 
     /// Tests run in one process, in parallel: each gets a socket of its own.
     #[cfg(unix)]

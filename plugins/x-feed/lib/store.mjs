@@ -58,6 +58,8 @@ export async function writeText(file, text) {
 }
 
 export function createStore(root) {
+  /** The save of each account file under way, for the next one to wait on. */
+  const accountSaves = new Map();
   const siteDir = (site) => join(root, folderName(site));
   const accountFile = (site, account) => join(siteDir(site), 'accounts', `${folderName(account)}.json`);
   const dayDir = (site, when, account) => join(siteDir(site), when, folderName(account));
@@ -85,8 +87,26 @@ export function createStore(root) {
         }
       );
     },
+    /**
+     * Saves an account's record. Two automations may save the same account at once (one reading
+     * its timeline, one saving a keyword's post by it): saves of one account take turns, and the
+     * posts known on file stay known, so neither loses what the other added.
+     */
     async saveAccount(record) {
-      await writeJson(accountFile(record.site, record.account), record);
+      const file = accountFile(record.site, record.account);
+      const previous = accountSaves.get(file) ?? Promise.resolve();
+      const next = previous.catch(() => {}).then(async () => {
+        const onFile = await readJson(file, null);
+        const known = { ...(onFile?.known ?? {}), ...record.known };
+        record.known = known;
+        await writeJson(file, { ...record, known });
+      });
+      accountSaves.set(file, next);
+      try {
+        await next;
+      } finally {
+        if (accountSaves.get(file) === next) accountSaves.delete(file);
+      }
     },
     /** Every account followed on `site`. */
     async accounts(site) {
@@ -186,6 +206,11 @@ export function createStore(root) {
     async removeEngine(id) {
       await rm(join(root, 'engines', `${folderName(id)}.json`), { force: true });
     },
+    /** Every automation's settings on file, by id. */
+    async engineIds() {
+      const names = await readdir(join(root, 'engines')).catch(() => []);
+      return names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5));
+    },
 
     /**
      * What a signed-in account did (per sign-in profile): the posts it liked or replied to, so none
@@ -241,9 +266,14 @@ export function createStore(root) {
     },
     actionsDir: join(root, 'actions'),
 
-    async styles(defaults) {
+    async styles(defaults, replaced = {}) {
       const saved = await readJson(join(root, 'styles.json'), null);
       if (!saved?.styles?.length) return defaults;
+      // A built-in style the user never changed follows the new version of it.
+      for (const style of saved.styles) {
+        const next = defaults.find((d) => d.id === style.id);
+        if (next && replaced[style.id] && style.instructions === replaced[style.id]) Object.assign(style, { instructions: next.instructions, name: next.name });
+      }
       // A default style added by an update shows up next to the user's own.
       const ids = new Set(saved.styles.map((style) => style.id));
       return [...saved.styles, ...defaults.filter((style) => !ids.has(style.id))];

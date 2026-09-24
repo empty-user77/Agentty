@@ -96,9 +96,20 @@ fn sites_of(plugin: &str, cx: &gpui::App) -> BrowserContribution {
 }
 
 /// Whether the user allowed `plugin` the browser on every site it names now.
+/// Every domain — aliases included — must be one the user saw in the dialog: an update that adds
+/// an alias to a site already allowed asks again.
 pub fn granted(plugin: &str, sites: &BrowserContribution, cx: &gpui::App) -> bool {
     let grants = settings(cx).plugin_browser_grants.get(plugin).cloned().unwrap_or_default();
-    !sites.sites.is_empty() && sites.sites.iter().all(|site| grants.contains(&site.host))
+    covered(&grants, sites)
+}
+
+fn covered(grants: &[String], sites: &BrowserContribution) -> bool {
+    !sites.sites.is_empty() && sites.sites.iter().flat_map(|site| site.domains()).all(|domain| grants.iter().any(|g| g == domain))
+}
+
+/// What the dialog showed and the user allowed: every domain of every site.
+fn granted_domains(sites: &BrowserContribution) -> Vec<String> {
+    sites.sites.iter().flat_map(|site| site.domains().map(str::to_string)).collect()
 }
 
 /// Takes back what the user allowed (the plugin page's "Revoke"); its open pages close.
@@ -319,7 +330,7 @@ impl Workbench {
                     }
                     return;
                 }
-                let hosts = sites.sites.iter().map(|site| site.host.clone()).collect::<Vec<_>>();
+                let hosts = granted_domains(&sites);
                 crate::settings::update_settings(cx, move |settings| {
                     settings.plugin_browser_grants.insert(plugin_of_answer, hosts);
                 });
@@ -747,6 +758,24 @@ mod tests {
             assert_eq!(BrowserMode::from_id(mode.id()), Some(mode));
         }
         assert_eq!(BrowserMode::from_id("sideways"), None);
+    }
+
+    #[test]
+    fn an_alias_added_by_an_update_is_asked_for_again() {
+        let site = |host: &str, aliases: &[&str]| Site {
+            host: host.into(),
+            aliases: aliases.iter().map(|a| a.to_string()).collect(),
+            home: None,
+            sign_in: None,
+            signed_in_cookie: None,
+        };
+        let before = BrowserContribution { sites: vec![site("x.com", &[])] };
+        let allowed = granted_domains(&before);
+        assert!(covered(&allowed, &before));
+        let widened = BrowserContribution { sites: vec![site("x.com", &["unrelated.example"])] };
+        assert!(!covered(&allowed, &widened), "the new alias was never shown to the user");
+        assert!(covered(&granted_domains(&widened), &widened));
+        assert!(!covered(&[], &BrowserContribution { sites: vec![] }));
     }
 
     #[test]

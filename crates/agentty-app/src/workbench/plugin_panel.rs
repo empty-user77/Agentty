@@ -67,10 +67,11 @@ impl Workbench {
         // A plugin's workspace in front whose plugin just came back (turned off and on, updated)
         // gets its panel again: nothing else switches workspaces meanwhile to bring it up.
         self.sync_plugin_workspace(cx);
-        // In a plugin's workspace the panel is part of the layout: it is always that plugin's, even
-        // when it was dropped while the workspace stayed in front.
+        // In a plugin's workspace the panel is part of the layout: dropped while the workspace
+        // stayed in front (its plugin turned off and on), it comes back. Another plugin's panel
+        // opened from there is left alone.
         if let Some(front) = self.front_plugin_workspace(cx).filter(|_| self.page.is_none()) {
-            if self.plugin_panel.as_deref() != Some(front.as_str()) {
+            if self.plugin_panel.is_none() {
                 self.open_plugin_panel(&front, cx);
             }
         }

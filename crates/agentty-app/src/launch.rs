@@ -83,7 +83,17 @@ pub struct LaunchSpec {
     /// worktree not made again yet) and the pane started in `cwd` instead. Saved in its place
     /// until the pane moves, so it isn't lost for good.
     pub missing_cwd: Option<PathBuf>,
+    /// An agent a plugin started to work on text that is not the user's (posts from the web, say):
+    /// it reads and writes files where it was started, and nothing else — no shell, no web, no MCP
+    /// tools (so not the in-app browser, which is signed in as the user). A prompt hidden in that
+    /// text then has nothing to reach with.
+    pub restricted: bool,
 }
+
+/// Claude Code tools a restricted agent does not get: everything that runs a program, reaches the
+/// network or starts other agents. What is left reads and writes files.
+const RESTRICTED_DENIED_TOOLS: &[&str] =
+    &["Bash", "BashOutput", "KillShell", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit", "Skill", "SlashCommand"];
 
 /// What the user picked in the launcher.
 #[derive(Debug, Clone, PartialEq)]
@@ -148,7 +158,7 @@ impl LaunchSpec {
             PaneKind::Codex => "Codex".to_string(),
         };
         let session_id = (kind == PaneKind::Claude).then(|| uuid::Uuid::new_v4().to_string());
-        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None, missing_cwd: None }
+        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None, missing_cwd: None, restricted: false }
     }
 
     pub fn shell_command(command: String, title: String, cwd: PathBuf) -> Self {
@@ -161,6 +171,7 @@ impl LaunchSpec {
             model: None,
             advisor: None,
             missing_cwd: None,
+            restricted: false,
         }
     }
 
@@ -178,6 +189,7 @@ impl LaunchSpec {
             model: None,
             advisor: None,
             missing_cwd: None,
+            restricted: false,
         }
     }
 
@@ -241,13 +253,20 @@ impl LaunchSpec {
                 if let Some(model) = advisor.model() {
                     args.extend(["--advisor".into(), model.into()]);
                 }
-                if crate::agents::claude_auto_mode() && agentty_bridge::idea::is_idea_project(&self.cwd) {
+                if self.restricted {
+                    // Files in its folder only. `acceptEdits` lets it write there without asking
+                    // (it works unattended) whatever the user's default mode is; the tools that
+                    // reach out are taken away, and no MCP server is loaded at all.
+                    args.extend(["--permission-mode".into(), "acceptEdits".into()]);
+                    args.extend(["--disallowedTools".into(), RESTRICTED_DENIED_TOOLS.join(",")]);
+                    args.extend(["--strict-mcp-config".into()]);
+                } else if crate::agents::claude_auto_mode() && agentty_bridge::idea::is_idea_project(&self.cwd) {
                     // "Build my idea" projects belong to people who cannot judge a permission prompt:
                     // Claude Code's auto mode decides instead. Only the command line can turn it on —
                     // `"defaultMode": "auto"` in the project's own settings is ignored.
                     args.extend(["--permission-mode".into(), "auto".into()]);
                 }
-                if crate::settings::browser_tools_enabled() {
+                if crate::settings::browser_tools_enabled() && !self.restricted {
                     // The in-app browser as MCP tools (added to the user's own servers). `--mcp-config`
                     // takes any number of values, so it must not be the last option: a prompt right
                     // after it is read as another config file ("Invalid MCP configuration").
@@ -262,7 +281,11 @@ impl LaunchSpec {
                 if let Some(guide) = crate::agent_guide::codex_override() {
                     args.extend(["-c".into(), guide]);
                 }
-                if crate::settings::browser_tools_enabled() {
+                if self.restricted {
+                    // Its folder only, no network, never asking (it works unattended).
+                    args.extend(["--sandbox".into(), "workspace-write".into(), "--ask-for-approval".into(), "never".into()]);
+                    args.extend(["-c".into(), "sandbox_workspace_write.network_access=false".into()]);
+                } else if crate::settings::browser_tools_enabled() {
                     args.extend(["-c".into(), codex_browser_mcp_override()]);
                 }
                 if let Some(model) = &self.model {
@@ -877,6 +900,33 @@ pub(crate) mod tests {
         assert!(guard["hooks"][0]["command"].as_str().unwrap().ends_with(" worktree-guard"));
         // Status reporting still sees every tool call.
         assert!(pre.iter().any(|entry| entry.get("matcher").is_none()));
+    }
+
+    /// An agent a plugin starts on text that is not the user's gets files only: no shell, no web,
+    /// no MCP (the in-app browser is signed in as the user), whatever the user's own mode is.
+    #[test]
+    fn a_restricted_agent_reads_and_writes_files_only() {
+        let mut spec = LaunchSpec::with_prompt(Agent::Claude, "summarize posts.json".into(), String::new(), std::env::temp_dir());
+        spec.restricted = true;
+        let args = spec.command().unwrap();
+        let after = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
+        assert_eq!(after("--permission-mode").as_deref(), Some("acceptEdits"));
+        let denied = after("--disallowedTools").unwrap();
+        for tool in ["Bash", "WebFetch", "WebSearch", "Task"] {
+            assert!(denied.split(',').any(|t| t == tool), "{tool} is not denied: {denied}");
+        }
+        assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+        assert!(!args.iter().any(|a| a == "--mcp-config"), "no in-app browser tools");
+        assert_eq!(args.last().map(String::as_str), Some("summarize posts.json"));
+
+        let mut codex = LaunchSpec::with_prompt(Agent::Codex, "x".into(), String::new(), std::env::temp_dir());
+        codex.restricted = true;
+        let args = codex.command().unwrap();
+        assert!(args.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "workspace-write"));
+        assert!(args.iter().any(|a| a == "sandbox_workspace_write.network_access=false"));
+
+        let open = LaunchSpec::with_prompt(Agent::Claude, "x".into(), String::new(), std::env::temp_dir());
+        assert!(!open.command().unwrap().iter().any(|a| a == "--disallowedTools"), "other agents are left as they were");
     }
 
     /// Runs the generated hook commands through `sh` against a real socket.

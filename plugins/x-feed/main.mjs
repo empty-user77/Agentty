@@ -10,9 +10,10 @@
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createPlugin, ui } from './agentty-plugin.mjs';
-import { collect, MAX_PER_RUN } from './lib/collect.mjs';
-import { checkDraft, DEFAULT_STYLES, draftMarkdown, planDrafts, rewritePrompt, sourceMarkdown } from './lib/convert.mjs';
+import { collect, MAX_PER_RUN, readingPause, takePost } from './lib/collect.mjs';
+import { checkDraft, DEFAULT_STYLES, draftMarkdown, OLD_REWRITE_RULE, planDrafts, rewritePrompt, sourceMarkdown } from './lib/convert.mjs';
 import {
+  agentReplyProblems,
   applyRules,
   countToday,
   fillPattern,
@@ -20,6 +21,7 @@ import {
   pickCandidates,
   repliesPrompt,
   replyInPage,
+  repostInPage,
   requiredPieces,
   sameHandle,
   sourcePath,
@@ -28,10 +30,13 @@ import {
   waitForWindow,
   whoAmI,
 } from './lib/engage.mjs';
-import { composeInPage, composeState, discardCompose, fingerprint, mediaForPage, pressPost, sameText } from './lib/publish.mjs';
+import { chunksOf, composeInPage, composeState, discardCompose, fingerprint, mediaForPage, pressPost, sameText, stashChunk } from './lib/publish.mjs';
 import { createStore, day, DRAFT_STATUS, readJson, writeJson, writeText } from './lib/store.mjs';
 import { accountOf, appReady, goToPath, markPinned, profileUrl, readTimeline, scrollLikeAHand } from './lib/x.mjs';
 import { setLanguage, t } from './lib/i18n.mjs';
+
+// Everything it writes (posts, drafts, logs) is readable by the user only.
+process.umask(0o077);
 
 const plugin = createPlugin();
 const SITE = 'x';
@@ -44,15 +49,16 @@ const MIN_LIKES = [0, 10, 100, 1000];
 const MAX_AGES = [24, 72, 0];
 /** How fast likes and replies go, in three words; "custom" once the details were changed. */
 const SPEEDS = {
-  safe: { minMs: 2000, maxMs: 5000, maxPer10Min: 2, likesPerDay: 30, repliesPerDay: 10 },
-  normal: { minMs: 100, maxMs: 5000, maxPer10Min: 3, likesPerDay: 50, repliesPerDay: 20 },
-  fast: { minMs: 100, maxMs: 3000, maxPer10Min: 6, likesPerDay: 100, repliesPerDay: 40 },
+  safe: { minMs: 2000, maxMs: 5000, maxPer10Min: 2, likesPerDay: 30, repostsPerDay: 5, repliesPerDay: 10 },
+  normal: { minMs: 100, maxMs: 5000, maxPer10Min: 3, likesPerDay: 50, repostsPerDay: 10, repliesPerDay: 20 },
+  fast: { minMs: 100, maxMs: 3000, maxPer10Min: 6, likesPerDay: 100, repostsPerDay: 20, repliesPerDay: 40 },
 };
 /** The steps of setting up an automation, in order. */
 const STEPS = ['account', 'source', 'actions', 'timing'];
 const PER_WINDOW = [1, 2, 3, 5, 8, 12, 20];
 const LIKES_A_DAY = [10, 30, 50, 100, 200];
 const REPLIES_A_DAY = [5, 10, 20, 50, 100];
+const REPOSTS_A_DAY = [3, 5, 10, 20, 50];
 const PER_UNIT = [1, 3, 5, 10];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -86,7 +92,7 @@ const defaultConfig = () => ({
   keywords: [],
   minLikes: 0,
   maxAgeHours: 24,
-  tasks: { collect: true, like: false, reply: false },
+  tasks: { collect: true, like: false, repost: false, reply: false },
   reply: { pattern: '', ai: false, instructions: '', required: '', maxLength: 280 },
   // A random pause of minMs..maxMs between actions, at most 1..maxPer10Min actions (drawn anew)
   // every 10 minutes, and daily caps per sign-in.
@@ -103,11 +109,14 @@ function withDefaults(saved) {
     enabled: saved.enabled ?? (saved.schedule ?? 0) > 0,
     tasks: { ...base.tasks, ...saved.tasks },
     reply: { ...base.reply, ...saved.reply },
-    pace: { ...base.pace, ...saved.pace },
+    pace: { ...base.pace, repostsPerDay: SPEEDS[saved.pace?.preset]?.repostsPerDay ?? base.pace.repostsPerDay, ...saved.pace },
   };
 }
 
-const language = () => ({ ko: 'Korean', ja: 'Japanese', zh: 'Chinese' })[plugin.info?.language] ?? 'English';
+const LANGUAGE_NAMES = { en: 'English', ko: 'Korean', ja: 'Japanese', zh: 'Chinese' };
+const language = () => LANGUAGE_NAMES[plugin.info?.language] ?? 'English';
+/** The language an automation writes posts and replies in: its own choice, else Agentty's. */
+const writeLanguage = (a) => LANGUAGE_NAMES[a?.config?.writeLanguage] ?? language();
 
 function auto(instance) {
   let a = autos.get(instance);
@@ -183,7 +192,7 @@ async function reload() {
   data.accounts = await store.accounts(SITE);
   data.posts = (await Promise.all(data.accounts.map((a) => store.posts(SITE, a.account)))).flat();
   data.drafts = await store.drafts();
-  data.styles = await store.styles(DEFAULT_STYLES);
+  data.styles = await store.styles(DEFAULT_STYLES, { rewrite: OLD_REWRITE_RULE });
 }
 
 async function refreshProfiles() {
@@ -270,7 +279,11 @@ async function ensurePage(a) {
 async function openAutomation(instance, title) {
   const a = auto(instance);
   const saved = await store.engine(engineKey(instance));
-  if (saved) a.config = withDefaults(saved);
+  if (saved) {
+    // A reopened tab: its settings come back as they were.
+    const { closedAt: _closed, ...kept } = saved;
+    a.config = withDefaults(kept);
+  }
   if (!a.config.title && title) a.config.title = title;
   // Untitled: the name its tab shows ("Automation 2"), so the log and the tab say the same.
   if (!a.config.title && instance) {
@@ -294,14 +307,46 @@ async function openAutomation(instance, title) {
   setTimeout(() => learnHandle(a).catch(() => {}), 8000);
 }
 
+/** Days a closed automation's settings are kept, for its tab to be reopened. */
+const KEEP_CLOSED_DAYS = 30;
+
 async function closeAutomation(instance) {
   const a = autos.get(instance);
   if (!a) return;
   a.stop = true;
   clearTimeout(a.timer);
   autos.delete(instance);
-  // Its settings go with its tab; what it collected stays in the shared store.
-  await store.removeEngine(engineKey(instance));
+  if (a.deleted) return;
+  // A closed tab keeps its settings (it can be reopened); only Delete removes them. What it
+  // collected stays in the shared store either way.
+  await store.saveEngine(engineKey(instance), { ...a.config, closedAt: new Date().toISOString() });
+}
+
+/** Settings of automations closed long ago, whose tabs are not coming back. */
+async function forgetOldAutomations() {
+  const cutoff = Date.now() - KEEP_CLOSED_DAYS * 86400000;
+  for (const id of await store.engineIds()) {
+    const saved = await store.engine(id);
+    if (saved?.closedAt && Date.parse(saved.closedAt) < cutoff) await store.removeEngine(id);
+  }
+}
+
+/** Deletes an automation: its settings, and its tab. */
+async function deleteAutomation(a) {
+  a.deleted = true;
+  a.stop = true;
+  a.config.enabled = false;
+  clearTimeout(a.timer);
+  await store.removeEngine(engineKey(a.instance));
+  await act(a, 'delete', { detail: a.config.title ?? '' });
+  if (a.instance) {
+    if (a.tabId !== null) await plugin.browser.close(a.tabId).catch(() => {});
+    await plugin.closeInstance(a.instance).catch((err) => plugin.log(`closeInstance: ${err.message}`));
+  } else {
+    // The panel outside a workspace has no tab: it starts over.
+    autos.delete(a.instance);
+    await render(a.instance);
+  }
 }
 
 async function saveConfig(a) {
@@ -323,8 +368,8 @@ function schedule(a) {
 
 /** What a run goes through: the accounts, or the keywords. */
 const unitsOf = (c) => (c.source === 'accounts' ? c.targets : c.keywords);
-const engaging = (c) => c.tasks.like || c.tasks.reply;
-const collecting = (c) => c.source === 'accounts' && c.tasks.collect;
+const engaging = (c) => c.tasks.like || c.tasks.repost || c.tasks.reply;
+const collecting = (c) => c.tasks.collect;
 const unitName = (c, unit) => (c.source === 'accounts' ? `@${unit}` : unit);
 
 async function runAutomation(instance) {
@@ -344,15 +389,20 @@ async function runAutomation(instance) {
   a.stop = false;
   let total = 0;
   let accounts = 0;
-  const done = { like: 0, reply: 0 };
-  const tasks = [collecting(c) && 'collect', c.tasks.like && 'like', c.tasks.reply && 'reply'].filter(Boolean);
+  const done = { like: 0, repost: 0, reply: 0 };
+  const tasks = [collecting(c) && 'collect', c.tasks.like && 'like', c.tasks.repost && 'repost', c.tasks.reply && 'reply'].filter(Boolean);
   await act(a, 'run', { target: units.map((u) => unitName(c, u)).join(', '), detail: `${c.source} · ${tasks.join('+')}` });
   try {
     const tabId = await ensurePage(a);
     a.self = null;
     for (const [index, unit] of units.entries()) {
       if (a.stop) break;
-      if (collecting(c)) {
+      if (collecting(c) && c.source !== 'accounts') {
+        const run = await collectKeyword(a, unit, tabId);
+        total += run.new;
+        accounts += 1;
+        if (run.signin) break;
+      } else if (collecting(c)) {
         if (busyAccounts.has(unit)) {
           note(a, t('auto.busy_elsewhere', { account: unit }));
         } else {
@@ -369,6 +419,7 @@ async function runAutomation(instance) {
       if (engaging(c) && !a.stop) {
         const result = await engageUnit(a, unit, tabId);
         done.like += result.like;
+        done.repost += result.repost;
         done.reply += result.reply;
         if (result.signin || result.capped) break;
       }
@@ -380,8 +431,8 @@ async function runAutomation(instance) {
       }
     }
     const parts = [];
-    if (collecting(c)) parts.push(t('auto.done', { new: total, accounts }));
-    if (engaging(c)) parts.push(t('eng.done', { likes: done.like, replies: done.reply }));
+    if (collecting(c)) parts.push(t(c.source === 'accounts' ? 'auto.done' : 'auto.done_keywords', { new: total, accounts }));
+    if (engaging(c)) parts.push(t('eng.done', { likes: done.like, reposts: done.repost, replies: done.reply }));
     if (a.status !== t('sign_in.asked')) a.status = parts.join(' ');
   } catch (err) {
     a.status = err.message;
@@ -394,6 +445,64 @@ async function runAutomation(instance) {
     await reload();
     await renderAll();
   }
+}
+
+/**
+ * Saves what a keyword search shows: the posts that pass the filters and were not saved before,
+ * at most the run's limit, each under its own author's account (and marked with the keyword).
+ */
+async function collectKeyword(a, keyword, tabId) {
+  const c = a.config;
+  const run = { new: 0, failed: 0, signin: false };
+  a.status = t('eng.finding', { unit: unitName(c, keyword) });
+  await render(a.instance);
+  await goTo(a, tabId, sourcePath(c.source, keyword));
+  const seen = [];
+  const picked = [];
+  for (let reads = 0; reads < 4 && picked.length < c.limit; reads += 1) {
+    const page = await plugin.browser.eval(tabId, readTimeline, { seen }, { timeoutMs: 20000 });
+    if (page.signInWall && !seen.length) {
+      run.signin = true;
+      a.status = t('sign_in.asked');
+      await act(a, 'signin', { ok: false, target: unitName(c, keyword), detail: t('sign_in.asked') });
+      return run;
+    }
+    const fresh = [];
+    for (const raw of page.posts) {
+      seen.push(raw.id);
+      fresh.push({ raw, candidate: toCandidate(raw) });
+    }
+    const passing = new Set(pickCandidates(fresh.map((f) => f.candidate), { minLikes: c.minLikes, maxAgeHours: c.maxAgeHours }).map((p) => p.id));
+    for (const { raw, candidate } of fresh) {
+      if (!passing.has(candidate.id) || picked.length >= c.limit) continue;
+      const account = String(candidate.handle ?? '').replace(/^@/, '');
+      if (!/^[A-Za-z0-9_]{1,15}$/.test(account)) continue;
+      const record = await store.account(SITE, account);
+      if (record.known[candidate.id]) continue;
+      picked.push({ raw, record });
+    }
+    a.status = t('collect.kw_reading', { keyword, found: picked.length });
+    await render(a.instance);
+    if (picked.length >= c.limit || page.atEnd) break;
+    await plugin.browser.eval(tabId, scrollLikeAHand);
+    await readingPause();
+  }
+  for (const [index, { raw, record }] of picked.entries()) {
+    if (a.stop) break;
+    a.status = t('collect.kw_saving', { keyword, index: index + 1, total: picked.length });
+    await render(a.instance);
+    try {
+      await takePost(store, raw, record, { foundBy: { kind: c.source, keyword }, log: (line) => plugin.log(line) });
+      run.new += 1;
+    } catch (err) {
+      run.failed += 1;
+      plugin.log(`post ${raw.id}: ${err.stack ?? err.message}`);
+    }
+    if (index < picked.length - 1) await readingPause();
+  }
+  note(a, t('collect.log_keyword', { keyword, new: run.new, failed: run.failed ? t('collect.failed', { n: run.failed }) : '' }));
+  await act(a, 'collect', { url: `https://x.com${sourcePath(c.source, keyword)}`, target: unitName(c, keyword), detail: `${run.new} new, ${run.failed} failed` });
+  return run;
 }
 
 /** Waits `ms`, a second at a time, and says false when the automation was stopped meanwhile. */
@@ -466,7 +575,7 @@ async function findPosts(a, unit, tabId, state) {
 
 async function engageUnit(a, unit, tabId) {
   const c = a.config;
-  const result = { like: 0, reply: 0, signin: false, capped: false };
+  const result = { like: 0, repost: 0, reply: 0, signin: false, capped: false };
   const state = await engagementOf(c.profile);
   a.status = t('eng.finding', { unit: unitName(c, unit) });
   await render(a.instance);
@@ -495,6 +604,7 @@ async function engageUnit(a, unit, tabId) {
       if (a.stop) break;
       const done = await actOn(a, tabId, post, replies.get(post.id), state);
       result.like += done.like;
+      result.repost += done.repost;
       result.reply += done.reply;
       if (done.capped) {
         result.capped = true;
@@ -514,7 +624,11 @@ async function writeReplies(a, posts) {
   const written = r.ai ? await agentReplies(a, posts, required) : new Map();
   const replies = new Map();
   for (const post of posts) {
-    const checked = applyRules(written.get(post.id) || fillPattern(r.pattern, post), { required, maxLength: r.maxLength });
+    const fromAgent = written.get(post.id);
+    let checked = applyRules(fromAgent || fillPattern(r.pattern, post), { required, maxLength: r.maxLength });
+    // What the agent wrote goes out on its own only when it carries nothing the user did not ask for.
+    const unsafe = fromAgent ? agentReplyProblems(checked.text, { pattern: r.pattern, required, post }) : [];
+    if (unsafe.length) checked = { ...checked, ok: false, problems: [...checked.problems, ...unsafe] };
     replies.set(post.id, checked);
     if (!checked.ok) note(a, t('eng.no_reply', { handle: post.handle ?? post.id, problems: checked.problems.join(', ') }));
   }
@@ -530,12 +644,14 @@ async function agentReplies(a, posts, required) {
   await render(a.instance);
   try {
     await plugin.injectPrompt({
-      text: repliesPrompt({ language: language(), instructions: r.instructions, pattern: r.pattern, required, maxLength: r.maxLength }),
+      text: repliesPrompt({ language: language(), writeIn: writeLanguage(a), instructions: r.instructions, pattern: r.pattern, required, maxLength: r.maxLength }),
       title: t('eng.writing', { n: posts.length }),
       cwd: dir,
       target: 'own',
       instance: a.instance || undefined,
       agent: 'claude',
+      // Posts are strangers' text: the agent reads and writes files there, nothing else.
+      tools: 'files',
       submit: true,
     });
     await act(a, 'agent', { detail: `${posts.length} → ${dir}` });
@@ -580,44 +696,50 @@ async function paceWait(a, state) {
 }
 
 /** Likes and/or replies to one post on its own page, within the daily caps. */
+/** Likes, reposts and/or replies to one post on its own page, within the daily caps. */
 async function actOn(a, tabId, post, reply, state) {
   const c = a.config;
-  const done = { like: 0, reply: 0, capped: false };
+  const done = { like: 0, reply: 0, repost: 0, capped: false };
   const who = post.handle ?? post.id;
   const record = async (action, ok, extra = {}) => {
     state.log.push({ at: Date.now(), day: day(), action, ok, id: post.id, handle: post.handle, url: post.url, automation: c.title || a.instance, ...extra });
-    note(a, ok ? t(action === 'like' ? 'eng.liked' : 'eng.replied', { handle: who }) : t('eng.failed', { action: t(`act.${action}`), handle: who, error: extra.error ?? '?' }));
+    note(a, ok ? t(`eng.${action}d`, { handle: who }) : t('eng.failed', { action: t(`act.${action}`), handle: who, error: extra.error ?? '?' }));
     await act(a, action, { ok, url: post.url, target: post.handle, detail: extra.error ?? extra.text ?? '' });
   };
   const today = countToday(state.log);
-  const likesLeft = today.like < c.pace.likesPerDay;
-  const repliesLeft = today.reply < c.pace.repliesPerDay;
-  const wantLike = c.tasks.like && likesLeft;
-  const wantReply = c.tasks.reply && repliesLeft && reply?.ok;
-  if ((!c.tasks.like || !likesLeft) && (!c.tasks.reply || !repliesLeft)) {
-    note(a, t('eng.daily', { action: [c.tasks.like && t('act.like'), c.tasks.reply && t('act.reply')].filter(Boolean).join(', ') }));
-    await act(a, 'limit', { ok: false, url: post.url, detail: `today ${today.like} likes, ${today.reply} replies` });
+  const left = { like: today.like < c.pace.likesPerDay, repost: today.repost < c.pace.repostsPerDay, reply: today.reply < c.pace.repliesPerDay };
+  const tasks = ['like', 'repost', 'reply'].filter((task) => c.tasks[task]);
+  if (tasks.every((task) => !left[task])) {
+    note(a, t('eng.daily', { action: tasks.map((task) => t(`act.${task}`)).join(', ') }));
+    await act(a, 'limit', { ok: false, url: post.url, detail: `today ${today.like} likes, ${today.repost} reposts, ${today.reply} replies` });
     done.capped = true;
     return done;
   }
-  if (!wantLike && !wantReply) return done;
+  const want = { like: c.tasks.like && left.like, repost: c.tasks.repost && left.repost, reply: c.tasks.reply && left.reply && reply?.ok };
+  if (!want.like && !want.repost && !want.reply) {
+    if (c.tasks.reply && !reply?.ok) await act(a, 'reply', { ok: false, url: post.url, target: post.handle, detail: reply?.problems?.join(', ') ?? 'no reply' });
+    return done;
+  }
   await goTo(a, tabId, new URL(post.url).pathname);
   const engaged = { at: Date.now() };
-  if (wantLike && (await paceWait(a, state))) {
-    const r = await plugin.browser.eval(tabId, likeInPage, { id: post.id }, { timeoutMs: 20000 }).catch((err) => ({ error: err.message }));
-    if (r.liked) {
-      done.like = 1;
-      engaged.like = true;
-      await record('like', true);
+  // One button each, the same way: pressed if not pressed yet.
+  const press = async (action, script, pressedKey) => {
+    const r = await plugin.browser.eval(tabId, script, { id: post.id }, { timeoutMs: 20000 }).catch((err) => ({ error: err.message }));
+    if (r[pressedKey]) {
+      done[action] = 1;
+      engaged[action] = true;
+      await record(action, true);
     } else if (r.already) {
-      engaged.like = true;
-      await act(a, 'like', { url: post.url, target: post.handle, detail: 'already liked' });
+      engaged[action] = true;
+      await act(a, action, { url: post.url, target: post.handle, detail: `already ${action}d` });
     } else {
-      await record('like', false, { error: r.error ?? (r.found ? 'no like button' : 'post not on the page') });
+      await record(action, false, { error: r.error ?? (r.found ? `no ${action} button` : 'post not on the page') });
     }
-  }
+  };
+  if (want.like && (await paceWait(a, state))) await press('like', likeInPage, 'liked');
+  if (want.repost && (await paceWait(a, state))) await press('repost', repostInPage, 'reposted');
   if (c.tasks.reply && !reply?.ok) await act(a, 'reply', { ok: false, url: post.url, target: post.handle, detail: reply?.problems?.join(', ') ?? 'no reply' });
-  if (wantReply && (await paceWait(a, state))) {
+  if (want.reply && (await paceWait(a, state))) {
     const r = await plugin.browser.eval(tabId, replyInPage, { text: reply.text }, { timeoutMs: 30000 }).catch((err) => ({ error: err.message }));
     if (r.sent) {
       done.reply = 1;
@@ -628,7 +750,7 @@ async function actOn(a, tabId, post, reply, state) {
     }
   }
   // Tried once (not cut short by Stop): never again, whatever happened.
-  if (engaged.like || engaged.reply || !a.stop) state.engaged[post.id] = engaged;
+  if (engaged.like || engaged.repost || engaged.reply || !a.stop) state.engaged[post.id] = engaged;
   await store.saveEngagement(c.profile, state);
   await render(a.instance);
   return done;
@@ -736,12 +858,14 @@ async function startRewrite(a, draft, posts, style) {
   await rm(join(dir, 'draft.txt'), { force: true });
   try {
     await plugin.injectPrompt({
-      text: rewritePrompt(style, language()),
+      text: rewritePrompt(style, language(), writeLanguage(a)),
       title: t('job.title', { style: style.name }),
       cwd: dir,
       target: 'own',
       instance: a.instance || undefined,
       agent: 'claude',
+      // Posts are strangers' text: the agent reads and writes files there, nothing else.
+      tools: 'files',
       submit: true,
     });
     draft.ai = { state: 'writing', startedAt: new Date().toISOString() };
@@ -805,7 +929,17 @@ async function publishDraft(a, id) {
     const tabId = await ensurePage(a);
     await goTo(a, tabId, '/home');
     const self = await plugin.browser.eval(tabId, whoAmI).catch(() => null);
-    const composed = await plugin.browser.eval(tabId, composeInPage, { text: draft.text, files }, { timeoutMs: 60000 });
+    // The media go into the page a piece at a time (a message has a size limit), then the
+    // compose window gets the text and the files put together from those pieces.
+    const listed = [];
+    for (const file of files) {
+      const pieces = chunksOf(file.data);
+      for (const [index, data] of pieces.entries()) {
+        await plugin.browser.eval(tabId, stashChunk, { name: file.name, index, data }, { timeoutMs: 60000 });
+      }
+      listed.push({ name: file.name, type: file.type, pieces: pieces.length });
+    }
+    const composed = await plugin.browser.eval(tabId, composeInPage, { text: draft.text, files: listed }, { timeoutMs: 60000 });
     if (!composed.ok) return await fail(composed.step, composed.error);
     // Uploads take their time: the window is looked at until everything is in and Post is on.
     let state = null;
@@ -917,7 +1051,7 @@ function sourceSummary(c) {
 }
 
 function actionsSummary(c) {
-  const parts = [collecting(c) && t('act.collect_short'), c.tasks.like && t('act.like'), c.tasks.reply && t('act.reply')].filter(Boolean);
+  const parts = [collecting(c) && t('act.collect_short'), c.tasks.like && t('act.like'), c.tasks.repost && t('act.repost'), c.tasks.reply && t('act.reply')].filter(Boolean);
   return parts.length ? parts.join(' + ') : t('step.actions.none');
 }
 
@@ -995,14 +1129,26 @@ function renderSourceStep(a) {
   ];
 }
 
+/** The languages posts and replies can be written in: Agentty's own, or one picked. */
+function languageChoice(a) {
+  return ui.choice(
+    'writeLanguage',
+    [{ value: 'auto', label: t('lang.auto', { name: t(`lang.${plugin.info?.language ?? 'en'}`) }) }, ...Object.keys(LANGUAGE_NAMES).map((code) => ({ value: code, label: t(`lang.${code}`) }))],
+    a.config.writeLanguage ?? 'auto',
+  );
+}
+
 function renderActionsStep(a) {
   const c = a.config;
   return [
-    c.source === 'accounts' ? ui.toggle('tCollect', t('act.collect'), c.tasks.collect) : null,
+    ui.toggle('tCollect', t('act.collect'), c.tasks.collect),
     ui.toggle('tLike', t('act.like_long'), c.tasks.like),
+    ui.toggle('tRepost', t('act.repost_long'), c.tasks.repost),
     ui.toggle('tReply', t('act.reply_long'), c.tasks.reply),
     ...(c.tasks.reply
       ? [
+          ui.text(t('lang.write'), 'small'),
+          languageChoice(a),
           ui.input('rPattern', { value: c.reply.pattern, rows: 2, placeholder: t('reply.pattern_ph') }),
           ui.text(t('reply.fields'), 'small'),
           ui.toggle('rAi', t('reply.ai'), c.reply.ai),
@@ -1022,7 +1168,7 @@ function renderTimingStep(a) {
   if (engaging(c)) {
     items.push(
       ui.choice('speed', speeds.map((s) => ({ value: s, label: t(`speed.${s}`) })), p.preset ?? 'custom'),
-      ui.text(t('speed.desc', { min: p.minMs, max: p.maxMs, n: p.maxPer10Min, likes: p.likesPerDay, replies: p.repliesPerDay }), 'small'),
+      ui.text(t('speed.desc', { min: p.minMs, max: p.maxMs, n: p.maxPer10Min, likes: p.likesPerDay, reposts: p.repostsPerDay, replies: p.repliesPerDay }), 'small'),
     );
   }
   items.push(ui.toggle('advanced', t('step.advanced'), a.ui.advanced));
@@ -1033,6 +1179,7 @@ function renderTimingStep(a) {
         ui.row([ui.input('paceMin', { value: String(p.minMs), placeholder: t('safe.min') }), ui.input('paceMax', { value: String(p.maxMs), placeholder: t('safe.max') })], { gap: 'small' }),
         ui.choice('perWindow', PER_WINDOW.map((n) => ({ value: String(n), label: t('safe.window', { n }) })), String(p.maxPer10Min)),
         c.tasks.like ? ui.choice('likesDay', LIKES_A_DAY.map((n) => ({ value: String(n), label: t('safe.likes_day', { n }) })), String(p.likesPerDay)) : null,
+        c.tasks.repost ? ui.choice('repostsDay', REPOSTS_A_DAY.map((n) => ({ value: String(n), label: t('safe.reposts_day', { n }) })), String(p.repostsPerDay)) : null,
         c.tasks.reply ? ui.choice('repliesDay', REPLIES_A_DAY.map((n) => ({ value: String(n), label: t('safe.replies_day', { n }) })), String(p.repliesPerDay)) : null,
         ui.choice('perUnit', PER_UNIT.map((n) => ({ value: String(n), label: t('safe.per_unit', { n }) })), String(p.perUnit)),
       );
@@ -1104,9 +1251,18 @@ function renderAutomation(a) {
   if (c.enabled && a.nextAt && !a.busy) items.push(ui.text(t('auto.next', { when: when(a.nextAt) }), 'small'));
   if (engaging(c)) {
     const state = engagements.get(c.profile);
-    const today = state ? countToday(state.log) : { like: 0, reply: 0 };
-    items.push(ui.text(t('eng.today', { likes: today.like, replies: today.reply }), 'small'));
+    const today = state ? countToday(state.log) : { like: 0, repost: 0, reply: 0 };
+    items.push(ui.text(t('eng.today', { likes: today.like, reposts: today.repost, replies: today.reply }), 'small'));
   }
+  items.push(
+    ui.row([
+      ui.button('deleteAuto', a.ui.confirmDelete ? t('auto.delete_confirm') : t('auto.delete'), {
+        icon: 'trash-2',
+        variant: a.ui.confirmDelete ? 'danger' : 'ghost',
+        disabled: a.busy,
+      }),
+    ]),
+  );
   if (a.log.length) {
     items.push(
       ui.section(t('collect.recent'), [...a.log.slice(0, 4).map((line) => ui.text(line, 'small')), ui.button('toLog', t('flow.all_log'), { icon: 'list', variant: 'ghost' })]),
@@ -1157,6 +1313,8 @@ function renderPosts(a) {
       { empty: t('posts.none') },
     ),
     ui.section(t('convert.title'), [
+      ui.text(t('lang.write'), 'small'),
+      languageChoice(a),
       ui.choice('style', data.styles.map((s) => ({ value: s.id, label: s.name })), a.ui.styleId),
       ui.button('makeDrafts', t('convert.make', { n: selected }), { icon: 'wand-sparkles', variant: 'primary', disabled: !selected }),
     ]),
@@ -1192,15 +1350,18 @@ function renderDrafts(a) {
         check.problems.length ? ui.text(t('draft.problems', { problems: check.problems.join(', ') }), 'error') : null,
         ui.text(t('draft.from', { urls: open.sources.map((s) => s.url).join(' ') }), 'small'),
         open.postedAt ? ui.text(t('publish.posted_at', { when: new Date(open.postedAt).toLocaleString(), url: open.postedUrl ?? t('publish.url_unknown') }), 'small') : null,
-        ui.row([
-          ui.button('saveDraft', t('draft.save'), { icon: 'save' }),
-          open.status === 'ready'
-            ? ui.button('unready', t('draft.unready'), { variant: 'secondary' })
-            : ui.button('ready', t('draft.ready'), { icon: 'circle-check', variant: 'primary', disabled: !check.ok }),
-          open.status === 'ready' ? ui.button('publish', t('publish.now'), { icon: 'send', variant: 'primary', disabled: a.busy }) : null,
-          ui.button('discard', t('draft.discard'), { variant: 'danger' }),
-          ui.button('closeDraft', t('draft.close'), { variant: 'ghost' }),
-        ], { gap: 'small', wrap: true }),
+        // Posted or thrown away: there is nothing left to do with it but look.
+        ['uploaded', 'discarded'].includes(open.status)
+          ? ui.row([ui.button('closeDraft', t('draft.close'), { variant: 'ghost' })])
+          : ui.row([
+              ui.button('saveDraft', t('draft.save'), { icon: 'save' }),
+              open.status === 'ready'
+                ? ui.button('unready', t('draft.unready'), { variant: 'secondary' })
+                : ui.button('ready', t('draft.ready'), { icon: 'circle-check', variant: 'primary', disabled: !check.ok }),
+              open.status === 'ready' ? ui.button('publish', t('publish.now'), { icon: 'send', variant: 'primary', disabled: a.busy }) : null,
+              ui.button('discard', t('draft.discard'), { variant: 'danger' }),
+              ui.button('closeDraft', t('draft.close'), { variant: 'ghost' }),
+            ], { gap: 'small', wrap: true }),
       ]),
     );
   }
@@ -1238,8 +1399,8 @@ function renderStyles(a) {
   ];
 }
 
-const ACTIONS = ['run', 'done', 'open', 'find', 'collect', 'like', 'reply', 'post', 'agent', 'wait', 'limit', 'signin'];
-const ACTION_ICON = { run: 'play', done: 'circle-check', open: 'globe', find: 'search', collect: 'download', like: 'heart', reply: 'message-circle', post: 'send', agent: 'bot', wait: 'clock', limit: 'circle-x', signin: 'key-round' };
+const ACTIONS = ['run', 'done', 'open', 'find', 'collect', 'like', 'repost', 'reply', 'post', 'agent', 'wait', 'limit', 'signin', 'delete'];
+const ACTION_ICON = { run: 'play', done: 'circle-check', open: 'globe', find: 'search', collect: 'download', like: 'heart', reply: 'message-circle', repost: 'refresh-cw', post: 'send', delete: 'trash-2', agent: 'bot', wait: 'clock', limit: 'circle-x', signin: 'key-round' };
 
 function shownActions(a) {
   const { who, action, failed } = a.ui.logFilter;
@@ -1269,7 +1430,7 @@ function renderLog(a) {
         subtitle: e.url || e.detail || '',
         detail: [e.automation, e.profile, e.url ? e.detail : ''].filter(Boolean).join(' · ').slice(0, 300),
         icon: ACTION_ICON[e.action] ?? 'circle',
-        tone: e.ok ? (['like', 'reply', 'post'].includes(e.action) ? 'success' : 'neutral') : 'error',
+        tone: e.ok ? (['like', 'repost', 'reply', 'post'].includes(e.action) ? 'success' : 'neutral') : 'error',
         actions: e.url ? [{ id: 'open', icon: 'external-link', tooltip: t('log.open') }] : [],
       })),
       { empty: t('log.none') },
@@ -1317,8 +1478,8 @@ const STEP_OF = Object.fromEntries(
   Object.entries({
     account: ['profile', 'signin', 'addAccount', 'removeProfile'],
     source: ['srcKind', 'srcSort', 'newTarget', 'addTarget', 'targets', 'newKeyword', 'addKeyword', 'keywords', 'minLikes', 'maxAge'],
-    actions: ['tCollect', 'tLike', 'tReply', 'rPattern', 'rAi', 'rInstructions', 'rRequired'],
-    timing: ['schedule', 'speed', 'advanced', 'paceMin', 'paceMax', 'perWindow', 'likesDay', 'repliesDay', 'perUnit', 'limit', 'title'],
+    actions: ['writeLanguage', 'tCollect', 'tLike', 'tRepost', 'tReply', 'rPattern', 'rAi', 'rInstructions', 'rRequired'],
+    timing: ['schedule', 'speed', 'advanced', 'paceMin', 'paceMax', 'perWindow', 'likesDay', 'repostsDay', 'repliesDay', 'perUnit', 'limit', 'title'],
   }).flatMap(([step, ids]) => ids.map((id) => [id, step])),
 );
 
@@ -1515,6 +1676,7 @@ setting('minLikes', (c, v) => (c.minLikes = Number(v) || 0));
 setting('maxAge', (c, v) => (c.maxAgeHours = Number(v) || 0));
 setting('tCollect', (c, v) => (c.tasks.collect = on_(v)));
 setting('tLike', (c, v) => (c.tasks.like = on_(v)));
+setting('tRepost', (c, v) => (c.tasks.repost = on_(v)));
 setting('tReply', (c, v) => (c.tasks.reply = on_(v)));
 setting('rAi', (c, v) => (c.reply.ai = on_(v)));
 textSetting('rPattern', (c, v) => (c.reply.pattern = v.slice(0, 1000)));
@@ -1525,6 +1687,8 @@ textSetting('paceMax', (c, v) => ((c.pace.maxMs = ms(v, c.pace.maxMs)), (c.pace.
 setting('perWindow', (c, v) => ((c.pace.maxPer10Min = Math.max(1, Number(v) || 1)), (c.pace.preset = 'custom')));
 setting('likesDay', (c, v) => ((c.pace.likesPerDay = Number(v) || LIKES_A_DAY[0]), (c.pace.preset = 'custom')));
 setting('repliesDay', (c, v) => ((c.pace.repliesPerDay = Number(v) || REPLIES_A_DAY[0]), (c.pace.preset = 'custom')));
+setting('repostsDay', (c, v) => ((c.pace.repostsPerDay = Number(v) || REPOSTS_A_DAY[0]), (c.pace.preset = 'custom')));
+setting('writeLanguage', (c, v) => (c.writeLanguage = LANGUAGE_NAMES[v] ? v : null));
 setting('perUnit', (c, v) => (c.pace.perUnit = Number(v) || 1));
 on('logWho', (a, e) => ((a.ui.logFilter.who = e.value), render(a.instance)));
 on('logAction', (a, e) => ((a.ui.logFilter.action = e.value), render(a.instance)));
@@ -1592,6 +1756,19 @@ on('addAccount', async (a) => {
   a.ui.newProfile = `account-${n}`;
   await addProfile(a);
   await signInHere(a);
+});
+on('deleteAuto', async (a) => {
+  if (a.busy) return;
+  if (!a.ui.confirmDelete) {
+    // Asked once more before anything goes; the question fades if not answered.
+    a.ui.confirmDelete = true;
+    setTimeout(() => {
+      a.ui.confirmDelete = false;
+      render(a.instance).catch(() => {});
+    }, 5000);
+    return render(a.instance);
+  }
+  await deleteAutomation(a);
 });
 on('run', (a) => runAutomation(a.instance));
 on('stop', (a) => {
@@ -1708,6 +1885,7 @@ plugin
     store = createStore(info.plugin.dataDir);
     handles = await store.handles();
     recentActions.push(...(await store.actions(RECENT_ACTIONS)));
+    await forgetOldAutomations().catch((err) => plugin.log(`old automations: ${err.message}`));
     await reload();
     await refreshProfiles();
     watchSignIns();

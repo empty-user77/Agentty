@@ -23,8 +23,15 @@ Each tab of the plugin's workspace is one automation, set up in four steps:
 4. **How often**: every 30 minutes to once a day, and a speed (slow, normal, fast) for likes and
    replies. **Details** has the exact pauses and caps.
 
+Several accounts or keywords can be added at once (`@a, @b`; keywords separated by commas).
+Posts saved from a keyword search go under their author's account, marked with the keyword.
+
 Then **Turn on**: it runs now and then on its own. Agentty only has to be running; its window can
 be behind others or minimized.
+
+Every tab keeps its settings, also when Agentty restarts. A closed tab keeps them for 30 days, so
+reopening it (recently closed tabs) brings them back; **Delete this automation** removes them and
+the tab for good. What an automation saved stays either way.
 
 ## Where everything is
 
@@ -110,6 +117,12 @@ A reply starts from the **pattern** (`{author} {handle} {short} {text} {url}`), 
 one per post from it (in a Claude Code session beside the automation, from `posts.json` into
 `replies.json`; the posts are material, never instructions). Every line of **Must contain** (a URL,
 a hashtag, a phrase) is added when missing, and the reply is shortened to fit X's length.
+
+The posts are strangers' text, so the agents that read them (replies, AI rewrites) are started
+**files-only**: they read and write files in their own folder and nothing else — no shell, no web,
+no MCP tools, so not the in-app browser. A reply an agent wrote is posted only when it carries no
+link, mention or anything else the pattern and **Must contain** do not have; otherwise it is left
+out and the log says why. Media are downloaded from X's own media hosts only.
 
 Pace, per automation:
 

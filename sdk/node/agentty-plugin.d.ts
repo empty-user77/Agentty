@@ -101,6 +101,12 @@ export interface PromptRequest {
   agent?: 'claude' | 'codex' | 'shell';
   cwd?: string;
   submit?: boolean;
+  /**
+   * `"files"`: the new agent only reads and writes files in `cwd` (a folder of the plugin's own
+   * data) — no shell, no web, no MCP tools. Use it whenever the prompt carries text that is not
+   * the user's (web pages, posts, mail), so instructions hidden in it have nothing to reach with.
+   */
+  tools?: 'files';
 }
 
 export interface Session {
@@ -169,6 +175,8 @@ export interface Plugin {
   setPanel(tree: UiNode, options?: { instance?: string }): Promise<void>;
   instances(): Promise<{ instance: string; title: string | null; active: boolean }[]>;
   setInstanceTitle(instance: string, title: string): Promise<void>;
+  /** Closes one of the plugin's own automations (its tab), e.g. after the user deleted it. */
+  closeInstance(instance: string): Promise<void>;
   onInstanceOpen(handler: (event: { instance: string; title: string | null }) => unknown): Plugin;
   onInstanceClose(handler: (event: { instance: string }) => unknown): Plugin;
   showPanel(): Promise<void>;

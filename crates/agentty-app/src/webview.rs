@@ -4,6 +4,7 @@
 
 #![allow(unexpected_cfgs)] // objc 0.2 macros check a `cargo-clippy` cfg
 
+use block::Block;
 use cocoa::foundation::{NSPoint, NSRect, NSSize};
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
@@ -284,6 +285,46 @@ extern "C" fn create_web_view(_: &Object, _: Sel, view: Id, _config: Id, action:
     std::ptr::null_mut()
 }
 
+/// The content world called `name`, kept for the app's lifetime. WebKit drops a world nothing
+/// holds on to, and its scripts' state with it: a plugin's scripts must find, in the next call,
+/// what they left in the page in the last one.
+unsafe fn named_world(name: &str) -> Id {
+    static WORLDS: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
+    let mut worlds = WORLDS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, world)) = worlds.iter().find(|(n, _)| n == name) {
+        return *world as Id;
+    }
+    let world: Id = msg_send![class!(WKContentWorld), worldWithName: ns_string(name)];
+    let world: Id = msg_send![world, retain];
+    worlds.push((name.to_string(), world as usize));
+    world
+}
+
+/// Whether a page may go to `url` by itself (a link, a redirect, a script, a form): the web and
+/// what a page builds in memory. `file:`, `javascript:` and apps' own schemes (`zoommtg:`,
+/// `agentty:`, …) are refused outright rather than left to what WebKit happens to do with them.
+fn navigation_allowed(url: &str) -> bool {
+    let scheme = url.split(':').next().unwrap_or_default().to_ascii_lowercase();
+    matches!(scheme.as_str(), "http" | "https" | "about" | "data" | "blob")
+}
+
+/// `webView:decidePolicyForNavigationAction:decisionHandler:`.
+extern "C" fn decide_navigation(_: &Object, _: Sel, _view: Id, action: Id, handler: Id) {
+    let url = unsafe {
+        let request: Id = msg_send![action, request];
+        let url: Id = if request.is_null() { std::ptr::null_mut() } else { msg_send![request, URL] };
+        if url.is_null() {
+            None
+        } else {
+            rust_string(msg_send![url, absoluteString])
+        }
+    };
+    // WKNavigationActionPolicyCancel = 0, Allow = 1.
+    let policy: isize = if url.as_deref().is_some_and(navigation_allowed) { 1 } else { 0 };
+    let handler = handler as *mut Block<(isize,), ()>;
+    unsafe { (*handler).call((policy,)) };
+}
+
 /// `WKNavigationDelegate` + `WKUIDelegate`: records failed loads and requests for new windows.
 fn delegate_class() -> &'static Class {
     static REGISTER: Once = Once::new();
@@ -291,6 +332,10 @@ fn delegate_class() -> &'static Class {
         let mut decl = ClassDecl::new("AgenttyWebNavigation", class!(NSObject)).expect("AgenttyWebNavigation registered twice");
         unsafe {
             decl.add_method(sel!(webView:didStartProvisionalNavigation:), did_start as extern "C" fn(&Object, Sel, Id, Id));
+            decl.add_method(
+                sel!(webView:decidePolicyForNavigationAction:decisionHandler:),
+                decide_navigation as extern "C" fn(&Object, Sel, Id, Id, Id),
+            );
             decl.add_method(sel!(webView:didFailProvisionalNavigation:withError:), did_fail as extern "C" fn(&Object, Sel, Id, Id, Id));
             decl.add_method(sel!(webView:didFailNavigation:withError:), did_fail as extern "C" fn(&Object, Sel, Id, Id, Id));
             decl.add_method(
@@ -824,7 +869,7 @@ impl WebView {
                 let _: () = msg_send![dictionary, setObject: ns_string(value) forKey: ns_string(key)];
             }
             let world: Id = match world {
-                Some(name) => msg_send![class!(WKContentWorld), worldWithName: ns_string(name)],
+                Some(name) => named_world(name),
                 None => msg_send![class!(WKContentWorld), pageWorld],
             };
             let reply = std::cell::RefCell::new(Some(reply));

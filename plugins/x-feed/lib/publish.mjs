@@ -9,8 +9,17 @@ import { extname, basename, resolve, sep } from 'node:path';
 
 /** What X takes with one post: up to 4 images, or 1 video (or GIF). */
 export const MAX_IMAGES = 4;
-/** Media travel into the page as text (base64) in one message, which the host caps at 16 MB. */
-export const MAX_MEDIA_BYTES = 11 * 1024 * 1024;
+/** What one post's media may weigh in all (X takes videos up to 512 MB; kept well below). */
+export const MAX_MEDIA_BYTES = 200 * 1024 * 1024;
+/** Media travel into the page as base64 in pieces of this size: a message is capped at 16 MB. */
+export const CHUNK_CHARS = 3 * 1024 * 1024;
+
+/** A file's base64 in pieces for `stashChunk`, first to last. */
+export function chunksOf(data, size = CHUNK_CHARS) {
+  const pieces = [];
+  for (let at = 0; at < data.length; at += size) pieces.push(data.slice(at, at + size));
+  return pieces.length ? pieces : [''];
+}
 
 const TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.mov': 'video/quicktime' };
 
@@ -57,6 +66,18 @@ export function fingerprint(text) {
 // ---------------------------------------------------------------------------------------------
 
 /**
+ * In the page: keeps one piece of a file (`args.name`, piece `args.index`, base64 `args.data`)
+ * until `composeInPage` puts the file together. The first piece starts the file over.
+ */
+export function stashChunk(args) {
+  const store = (globalThis.__xfeedFiles ??= {});
+  if (args.index === 0) store[args.name] = [];
+  const bytes = Uint8Array.from(atob(args.data), (c) => c.charCodeAt(0));
+  store[args.name].push(bytes);
+  return store[args.name].length;
+}
+
+/**
  * Opens the compose window, types `args.text` and attaches `args.files`. { ok, error, step }.
  * Uploading goes on after this returns: `composeState` says when it is done.
  */
@@ -85,8 +106,11 @@ export async function composeInPage(args) {
     if (!input) return { ok: false, step: 'media', error: 'no file input' };
     const transfer = new DataTransfer();
     for (const file of args.files) {
-      const bytes = Uint8Array.from(atob(file.data), (c) => c.charCodeAt(0));
-      transfer.items.add(new File([bytes], file.name, { type: file.type }));
+      // Put together from the pieces sent before (`stashChunk`), then let go of them.
+      const pieces = globalThis.__xfeedFiles?.[file.name];
+      if (!pieces || pieces.length !== file.pieces) return { ok: false, step: 'media', error: `${file.name} did not arrive whole` };
+      transfer.items.add(new File(pieces, file.name, { type: file.type }));
+      delete globalThis.__xfeedFiles[file.name];
     }
     input.files = transfer.files;
     input.dispatchEvent(new Event('change', { bubbles: true }));

@@ -30,10 +30,23 @@ export function extensionOf(url, type) {
   return String(format || fromType || fromPath || 'bin').toLowerCase().replace('jpeg', 'jpg');
 }
 
+/** Where X serves images and videos from: nothing else is ever downloaded. */
+export function mediaHostAllowed(url) {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return protocol === 'https:' && (hostname === 'twimg.com' || hostname.endsWith('.twimg.com'));
+  } catch {
+    return false;
+  }
+}
+
 /** Fetches `url` into `folder/base.<ext>` (streamed, size-capped); returns the file name. */
 export async function download(url, folder, base, { maxBytes, fetchImpl = fetch, tries = 3 } = {}) {
+  // An address read off a page is not trusted to be X's: no other host, no local one.
+  if (!mediaHostAllowed(url)) throw new Error(`not an X media address: ${String(url).slice(0, 80)}`);
   await mkdir(folder, { recursive: true });
   let lastError;
+  let partial = null;
   for (let attempt = 1; attempt <= tries; attempt += 1) {
     try {
       const response = await fetchImpl(url);
@@ -46,7 +59,7 @@ export async function download(url, folder, base, { maxBytes, fetchImpl = fetch,
         await response.body?.cancel?.();
         return name;
       }
-      const partial = `${target}.part`;
+      partial = `${target}.part`;
       let received = 0;
       const counted = Readable.fromWeb(response.body).on('data', (chunk) => {
         received += chunk.length;
@@ -57,7 +70,7 @@ export async function download(url, folder, base, { maxBytes, fetchImpl = fetch,
       return name;
     } catch (err) {
       lastError = err;
-      await rm(join(folder, `${base}.part`), { force: true }).catch(() => {});
+      if (partial) await rm(partial, { force: true }).catch(() => {});
       if (err.final) break;
       await sleep(800 * attempt);
     }
