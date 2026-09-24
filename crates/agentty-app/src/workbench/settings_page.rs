@@ -707,7 +707,7 @@ impl Workbench {
                                 let url = crate::guide_url(settings(cx).language.code(), "");
                                 cx.open_url(&url);
                             }))
-                            .child(crate::ui::action_button_with_icon("about-x", "x-twitter", "@raylee_world", |_, _, cx| {
+                            .child(crate::ui::action_button_with_icon("about-x", "x-twitter", "@agentty_run", |_, _, cx| {
                                 cx.open_url(super::update::X_URL)
                             }))
                             .child(link(

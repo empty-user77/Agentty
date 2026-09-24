@@ -8,7 +8,7 @@
   <a href="https://www.agentty.run">agentty.run</a> ·
   <a href="https://www.agentty.run/docs">Guide</a> ·
   <a href="https://github.com/empty-user77/agentty-releases/releases">Download</a> ·
-  <a href="https://x.com/raylee_world">@raylee_world</a>
+  <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
 
 <p align="center">
@@ -62,6 +62,12 @@ Download from [agentty-releases](https://github.com/empty-user77/agentty-release
 | Windows 10 1809+ (x64) | `Agentty-X.Y.Z-windows-x64-setup.exe` — per user, no admin rights |
 | Debian 12+ / Ubuntu 22.04+ | `Agentty-X.Y.Z-linux-amd64.deb` — `sudo apt install ./Agentty-*.deb` |
 | RHEL 9+ / Fedora | `Agentty-X.Y.Z-linux-x86_64.rpm` — `sudo dnf install ./Agentty-*.rpm` |
+
+On macOS you can also install with [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask empty-user77/agentty/agentty
+```
 
 Agentty updates itself: on macOS and Windows it installs the new version and restarts, on Linux it points at the new
 packages.
