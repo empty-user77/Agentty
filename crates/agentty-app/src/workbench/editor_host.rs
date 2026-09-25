@@ -52,6 +52,8 @@ impl Workbench {
         let editor = cx.new(CodeEditor::new);
         let subscription = cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| match event {
             EditorEvent::TabsChanged => cx.notify(),
+            EditorEvent::OpenUrl(url) => this.open_link(url.clone(), cx),
+            EditorEvent::OpenFile(path, project) => this.open_in_editor(path, project, window, cx),
             EditorEvent::Empty => {
                 this.editor_shown = false;
                 this.focus_active(window, cx);
@@ -83,6 +85,14 @@ impl Workbench {
             && self.page.is_none()
             && self.session_viewer.is_none()
             && (self.file_diff.is_some() || self.editor.as_ref().is_some_and(|e| !e.read(cx).is_empty()))
+    }
+
+    /// The markdown preview is a native view over the editor: out of sight whenever the editor is
+    /// (another tab, a page, a diff) or something of the workbench is drawn over it.
+    pub(super) fn place_markdown_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor.clone() else { return };
+        let covered = !self.editor_visible(cx) || self.file_diff.is_some() || self.overlay_open();
+        editor.update(cx, |editor, _| editor.set_preview_covered(covered));
     }
 
     /// Back to the terminals (the files stay open in their tabs).

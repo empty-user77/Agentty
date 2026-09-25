@@ -45,6 +45,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "syntect",
  "toml 1.1.6+spec-1.1.0",
  "two-face",

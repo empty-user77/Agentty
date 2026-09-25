@@ -792,6 +792,14 @@ impl WebView {
         }
     }
 
+    /// Shows `html` as a page of its own, with no address (`about:blank`): what it may load is up
+    /// to its Content-Security-Policy, and it reads no local files.
+    pub fn load_html(&self, html: &str) {
+        unsafe {
+            let _: Id = msg_send![self.view, loadHTMLString: ns_string(html) baseURL: std::ptr::null_mut::<Object>()];
+        }
+    }
+
     pub fn back(&self) {
         unsafe {
             let _: Id = msg_send![self.view, goBack];

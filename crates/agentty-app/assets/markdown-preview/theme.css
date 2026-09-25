@@ -1,0 +1,40 @@
+/* The theme colors VS Code hands its webviews, as its Dark Modern theme sets them, with the
+   editor's own background and text from Agentty's chrome (theme.rs: Chrome::EDITOR, FOREGROUND). */
+:root {
+	--vscode-font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+	--vscode-font-weight: normal;
+	--vscode-font-size: 13px;
+	--vscode-editor-font-family: Menlo, Monaco, "Courier New", monospace;
+	--monaco-monospace-font: "SF Mono", Monaco, Menlo, Consolas, "Ubuntu Mono", "Liberation Mono", "DejaVu Sans Mono", "Courier New", monospace;
+
+	--vscode-editor-background: #1e1e21;
+	--vscode-editor-foreground: #d2d2d8;
+	--vscode-textLink-foreground: #4daafc;
+	--vscode-textLink-activeForeground: #4daafc;
+	--vscode-textPreformat-foreground: #d0d0d0;
+	--vscode-textPreformat-background: #3c3c3c;
+	--vscode-textBlockQuote-background: #2b2b2b;
+	--vscode-textBlockQuote-border: #616161;
+	--vscode-textCodeBlock-background: #0a0a0a66;
+	--vscode-widget-border: #313131;
+	--vscode-editorWidget-border: #454545;
+	--vscode-widget-shadow: #0000005c;
+	--vscode-contrastBorder: transparent;
+	--vscode-scrollbarSlider-background: #79797966;
+	--vscode-scrollbarSlider-hoverBackground: #646464b3;
+	--vscode-scrollbarSlider-activeBackground: #bfbfbf66;
+	--vscode-keybindingLabel-background: #8080802b;
+	--vscode-keybindingLabel-foreground: #cccccc;
+	--vscode-keybindingLabel-border: #33333399;
+	--vscode-keybindingLabel-bottomBorder: #44444499;
+	--vscode-diffEditor-insertedTextBackground: #9ccc2c33;
+	--vscode-diffEditor-removedTextBackground: #ff000033;
+	--vscode-editorError-foreground: #f85149;
+	--vscode-testing-iconPassed: #73c991;
+	--vscode-toolbar-hoverBackground: #5a5d5e50;
+	--vscode-toolbar-activeBackground: #63666750;
+}
+
+html {
+	background-color: var(--vscode-editor-background);
+}
