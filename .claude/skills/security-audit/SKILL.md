@@ -117,12 +117,13 @@ pull request body. Judge each change as if it were already public:
   or a screenshot carries absolute paths, machine names and sometimes an environment.
 - Does it name something private — another project of the maintainer's, an internal service, a
   repository nobody else can see?
-- Does it assume the repository is private? `.github/workflows/ci.yml` says so in a comment, and a
-  self-hosted runner reachable from `pull_request` is the thing that assumption protects: once the
+- Does it assume the repository is private? CI runs on GitHub's hosted runners; a self-hosted
+  runner reachable from `pull_request` is what that assumption would have to protect: once the
   repository is public, a fork's pull request runs its own code on the maintainer's machine.
   `security-audit.py` warns about this (SA05) and blocks it outright if such a workflow also holds
-  secrets. The guard is
-  `if: github.event.pull_request.head.repo.full_name == github.repository` on the job.
+  secrets. An `if:` guard on the job does not hold: a pull request runs its own copy of the
+  workflow, so a fork can delete it. Keep self-hosted runners off `pull_request` entirely (push,
+  tag and `workflow_dispatch` only).
 - A commit message and a pull request body are as public as the code. Nothing goes in one that
   would not go in a file.
 

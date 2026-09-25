@@ -21,15 +21,15 @@ Each release also carries, built by the **Release packages** workflow (`.github/
 
 | File | Built by | On |
 |---|---|---|
-| `Agentty-X.Y.Z-windows-x64-setup.exe` | `scripts/package-windows.ps1 -Installer` (Inno Setup, `packaging/windows/agentty.iss`) | self-hosted Windows PC |
-| `Agentty-X.Y.Z-windows-x64-setup.zip` | the same installer zipped, for browsers that block unsigned `.exe` downloads | self-hosted Windows PC |
-| `Agentty-X.Y.Z-linux-amd64.deb`, `Agentty-X.Y.Z-linux-x86_64.rpm` | `scripts/build-linux-packages.sh` (nfpm, `packaging/linux/nfpm.yaml`) | the Mac, in an x86_64 AlmaLinux 9 container |
+| `Agentty-X.Y.Z-windows-x64-setup.exe` | `scripts/package-windows.ps1 -Installer` (Inno Setup, `packaging/windows/agentty.iss`) | GitHub-hosted Windows runner |
+| `Agentty-X.Y.Z-windows-x64-setup.zip` | the same installer zipped, for browsers that block unsigned `.exe` downloads | GitHub-hosted Windows runner |
+| `Agentty-X.Y.Z-linux-amd64.deb`, `Agentty-X.Y.Z-linux-x86_64.rpm` | `scripts/build-linux-packages.sh` (nfpm, `packaging/linux/nfpm.yaml`) | GitHub-hosted Ubuntu runner, in an x86_64 AlmaLinux 9 container |
 
-- The Windows PC needs Inno Setup 6 (`winget install JRSoftware.InnoSetup`); without it the job fails and says so. The
+- The Windows job installs Inno Setup 6 when the runner image does not have it. The
   installer is per user (`PrivilegesRequired=lowest`, `%LOCALAPPDATA%\Programs\Agentty`), requires Windows 10 1809
   (`MinVersion=10.0.17763`) and registers what `install.ps1` does. It is not code-signed.
-- The Linux build runs under emulation (`--platform linux/amd64`), so it is slow; named volumes keep the toolchain and
-  `target/`. AlmaLinux 9's glibc 2.34 makes the binary run on RHEL 9, Debian 12, Ubuntu 22.04 and newer. nfpm is
+- The Linux build runs in an x86_64 container (`--platform linux/amd64`: native on the hosted runner, emulated on an
+  Apple silicon Mac); named volumes keep the toolchain and `target/` between local runs. AlmaLinux 9's glibc 2.34 makes the binary run on RHEL 9, Debian 12, Ubuntu 22.04 and newer. nfpm is
   downloaded at a pinned version and checked against a pinned SHA-256. `--check` installs each package with `apt` /
   `dnf` in a clean container and fails when a shared library is missing.
 - The workflow uploads the files as run artifacts only; it holds no token for `agentty-releases`.

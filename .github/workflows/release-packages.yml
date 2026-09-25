@@ -8,7 +8,7 @@ on:
   push:
     tags: ['v*']
   # Pull requests that change the packaging build it too, so a broken installer shows up before the release. Only
-  # these paths: the Linux build is emulated and slow, and shares the Mac with CI.
+  # these paths: the packages take a while to build.
   pull_request:
     paths:
       - .github/workflows/release-packages.yml
@@ -33,20 +33,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Same self-hosted Windows PC as CI's check-windows (see ci.yml for the PATH and execution policy notes). It also
-  # needs Inno Setup 6: winget install JRSoftware.InnoSetup (the package script fails with that hint when missing).
+  # GitHub's hosted runners, like CI: a fresh machine per job, so a pull request from anybody can run here. No job holds
+  # a secret.
   windows:
-    # A pull request from a fork is somebody else's code, and these runners are the
-    # maintainer's own machines: it would build and test itself on them. Their own
-    # branches, and everything on main, still run.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: windows-2025
     timeout-minutes: 120
-    env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}\..\agentty-target
-    defaults:
-      run:
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -58,33 +49,33 @@ jobs:
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
           if ("v$version" -ne $env:TAG) { throw "Cargo.toml has $version, the tag is $env:TAG" }
-      - name: Put cargo on PATH
-        run: |
-          $bin = Join-Path $env:USERPROFILE '.cargo\bin'
-          if (-not (Test-Path (Join-Path $bin 'rustup.exe'))) { throw "rustup not found in $bin (runner user: $env:USERNAME)" }
-          Add-Content -Path $env:GITHUB_PATH -Value $bin
       - name: Install toolchain
         run: rustup toolchain install
-      # No install round trip: the runner is a personal PC, and installing or uninstalling would touch the Agentty the
-      # user runs there.
+      # The installer is built with Inno Setup 6; installed here only when the image does not have it, from the
+      # project's own GitHub release and checked against a pinned SHA-256, since what it builds ships to users.
+      - name: Inno Setup
+        env:
+          INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+          INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
+        run: |
+          $found = (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -or (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")
+          if (-not $found) {
+            $setup = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+            Invoke-WebRequest -Uri $env:INNO_URL -OutFile $setup
+            $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLower()
+            if ($hash -ne $env:INNO_SHA256) { throw "Inno Setup download does not match its checksum ($hash)" }
+            Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
+          }
       - name: Build installer and zips
         run: |
           ./scripts/package-windows.ps1 -Installer
-          $info = (Get-Item "$env:CARGO_TARGET_DIR\release\agentty.exe").VersionInfo
+          $info = (Get-Item "target\release\agentty.exe").VersionInfo
           if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
-          # Not `Get-FileHash`: that cmdlet arrived in PowerShell 4 and this runner's is older.
-          $sha = [System.Security.Cryptography.SHA256]::Create()
           Get-ChildItem dist | Where-Object { $_.Name -like '*-windows-*' } | ForEach-Object {
-            $stream = [System.IO.File]::OpenRead($_.FullName)
-            try {
-              $hash = [System.BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLower()
-            } finally {
-              $stream.Dispose()
-            }
-            "{0}  {1}" -f $hash, $_.Name
+            "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name
           }
-      # A pull request only checks that the packages build and install; a tag or a run by hand keeps them for
-      # scripts/fetch-release-packages.sh. Stored artifacts count against the account's Actions storage.
+      # A pull request only checks that the packages build; a tag or a run by hand keeps them for
+      # scripts/fetch-release-packages.sh.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request'
         with:
@@ -96,15 +87,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Runs on the Apple silicon Mac in an emulated x86_64 AlmaLinux 9 container (Docker Desktop must be running), so the
-  # first build is slow; the toolchain, registry and target/ are kept in named volumes for the next one.
+  # Builds in an AlmaLinux 9 x86_64 container on the hosted Ubuntu runner (native x86_64, no emulation) and installs
+  # each package in a clean container.
   linux:
-    # A pull request from a fork is somebody else's code, and these runners are the
-    # maintainer's own machines: it would build and test itself on them. Their own
-    # branches, and everything on main, still run.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 300
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -116,12 +103,10 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
           [[ "v$version" == "$TAG" ]] || { echo "::error::Cargo.toml has $version, the tag is $TAG"; exit 1; }
-      - name: Docker is running
-        run: docker info --format '{{.ServerVersion}} {{.Architecture}}' || { echo "::error::Docker Desktop is not running on the runner"; exit 1; }
       - name: Build .deb and .rpm, install each in a clean container
         run: scripts/build-linux-packages.sh --check
       # A pull request only checks that the packages build and install; a tag or a run by hand keeps them for
-      # scripts/fetch-release-packages.sh. Stored artifacts count against the account's Actions storage.
+      # scripts/fetch-release-packages.sh.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request'
         with:

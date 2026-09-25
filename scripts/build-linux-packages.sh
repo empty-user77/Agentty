@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds dist/Agentty-<version>-linux-amd64.deb and dist/Agentty-<version>-linux-x86_64.rpm.
 #
-# Run from any machine with Docker (the release workflow runs it on the Apple silicon Mac): the build happens in an
-# AlmaLinux 9 x86_64 container (`--platform linux/amd64`, emulated on ARM, so expect a slow first build). AlmaLinux 9
+# Run from any machine with Docker (the release workflow runs it on a hosted Ubuntu runner): the build happens in an
+# AlmaLinux 9 x86_64 container (`--platform linux/amd64`; emulated on ARM, so expect a slow first build there). AlmaLinux 9
 # has glibc 2.34, so the binary also runs on RHEL 9, Debian 12 and Ubuntu 22.04 and newer. Cargo's registry, the
 # toolchain and target/ live in named volumes, so later runs reuse them. nfpm (pinned version and checksum) writes both
 # packages from packaging/linux/nfpm.yaml.
