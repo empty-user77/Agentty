@@ -366,6 +366,10 @@ fn looks_like_token(value: &str) -> bool {
 /// Hides credentials in command arguments shown in the UI. First the shapes that name a secret
 /// (`--token x`), then — inside every argument — anything that is one whatever it is called:
 /// `FIGMA_PAT=figd_…`, `Cookie: session=…`, `Bearer …`, a URL with a token in its user, path or query.
+///
+/// Best effort, not a boundary: a short or plain-looking secret under an unremarkable name gets
+/// through. Secrets are kept out of arguments in the first place (the Keychain, stdin, the
+/// environment); this only catches what a user typed there anyway.
 pub fn redact_args(args: &[&str]) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut hide_next = false;

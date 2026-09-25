@@ -76,8 +76,6 @@ if [[ -f "$ENV_FILE" ]]; then
   git check-ignore -q "$ENV_FILE" && pass ".env.agentty-prod is gitignored" || fail ".env.agentty-prod is NOT gitignored"
   missing="$(bash -c '
     set -a; source "$1"; set +a
-    for n in IDENTITY TEAM_ID APPLE_ID APPLE_PASSWORD; do l="COSTERM_$n"; c="AGENTTY_$n"
-      [ -z "${!c:-}" ] && [ -n "${!l:-}" ] && export "$c=${!l}"; done
     for v in AGENTTY_IDENTITY AGENTTY_TEAM_ID AGENTTY_APPLE_ID AGENTTY_APPLE_PASSWORD AGENTTY_GA_MEASUREMENT_ID AGENTTY_GA_API_SECRET; do
       [ -n "${!v:-}" ] || printf "%s " "$v"; done
     security find-identity -v -p codesigning 2>/dev/null | grep -qF "Developer ID Application: ${AGENTTY_IDENTITY:-}" || printf "KEYCHAIN_IDENTITY "

@@ -1,0 +1,7 @@
+# Every change needs the maintainer's review; listed separately are the paths that decide what runs
+# on the maintainer's own CI machines and the repository's security guards.
+*               @empty-user77
+/.github/       @empty-user77
+/.githooks/     @empty-user77
+/.claude/       @empty-user77
+/scripts/       @empty-user77

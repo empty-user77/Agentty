@@ -61,13 +61,12 @@ Before every commit and push: stage the change in its own command, run the `secu
 - Prompts, rules and skills that ship in code or bundled docs (first messages to agents, build guides, plugin
   prompts, `.claude/skills`) are written in English only. They are not UI strings: they stay out of `i18n.rs` and
   the plugins' translated tables, and tell the agent which language to talk in (`Talk to me in {language}`).
-- Reply to the user in Korean.
 
 ## Releases
 
 - Releases go to `empty-user77/agentty-releases` following `.claude/skills/release/SKILL.md`.
-- **Release notes, release titles and `CHANGELOG.md` are always written in English**, even though conversation with
-  the user is in Korean.
+- **Release notes, release titles and `CHANGELOG.md` are always written in English**, whatever language the
+  conversation with the user is in.
 - Don't spell out changes users may take as sensitive (analytics, data collection, removed privacy or opt-out
   settings, permissions, pricing) in release notes or `CHANGELOG.md`: describe them neutrally or leave them out, never
   write anything untrue, and show the user the notes first. `README.md` and `docs/` still describe current behavior.

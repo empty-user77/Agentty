@@ -16,8 +16,12 @@ env:
 jobs:
   # All jobs run on the self-hosted Apple silicon Mac (check-linux in Docker there) except
   # check-windows, which runs on a self-hosted Windows PC. These are the maintainer's own machines,
-  # so every job below is guarded: a pull request from a fork never reaches them. That guard, not
-  # the repository being private, is what keeps somebody else's code off this hardware.
+  # so every job below is guarded: a pull request from a fork is skipped. The guard alone is not
+  # enough in a public repository: a pull request runs the workflow file from its own branch, so a
+  # fork can delete the guard. What keeps a stranger's code off this hardware is the repository
+  # setting that makes every outside contributor's run wait for the maintainer's approval
+  # (Settings > Actions > General > "Require approval for all outside collaborators"); read a pull
+  # request's changes to .github/ and scripts/ before approving it.
   secrets:
     # A pull request from a fork is somebody else's code, and these runners are the
     # maintainer's own machines: it would build and test itself on them. Their own
@@ -34,9 +38,10 @@ jobs:
         run: python3 scripts/security-audit.py --all
       - name: Scan commits in this push / pull request
         if: github.event_name == 'pull_request' || github.event.before != '0000000000000000000000000000000000000000'
-        run: |
-          base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          python3 scripts/check-secrets.py --range "$base..${{ github.sha }}"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: python3 scripts/check-secrets.py --range "$BASE..$HEAD"
 
   check:
     # A pull request from a fork is somebody else's code, and these runners are the

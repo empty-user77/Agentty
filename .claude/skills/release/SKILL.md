@@ -160,7 +160,7 @@ Plain, factual English; no Korean, no internal jargon, no secrets. Show the note
 ```sh
 AGENTTY_RELEASE_NOTES=dist/release-notes-vX.Y.Z.md ./scripts/build-dmg.sh publish > <scratchpad>/release.log 2>&1
 ```
-(background; `build-dmg.sh` loads `.env.agentty-prod`, maps legacy `COSTERM_*` names, refuses to publish without GA
+(background; `build-dmg.sh` loads `.env.agentty-prod`, refuses to publish without GA
 credentials, and refuses — before building — when a Windows / Linux file from step 4b is missing in `dist/`. It adds
 them to `SHA256SUMS.txt` and uploads them with the DMG.) The log should end with `Notarized and stapled`, `Uploaded to …` and `Done`, but that is not the proof:
 

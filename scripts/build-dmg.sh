@@ -56,11 +56,6 @@ case "$MODE" in
       log "Loading credentials from .env.agentty-prod"
       set -a; source "$ROOT/.env.agentty-prod"; set +a
     fi
-    # Older credential files use the COSTERM_* names.
-    for n in IDENTITY TEAM_ID APPLE_ID APPLE_PASSWORD; do
-      legacy="COSTERM_$n"; current="AGENTTY_$n"
-      if [[ -z "${!current:-}" && -n "${!legacy:-}" ]]; then export "$current=${!legacy}"; fi
-    done
     : "${AGENTTY_IDENTITY:?Set AGENTTY_IDENTITY (or create .env.agentty-prod)}"
     : "${AGENTTY_TEAM_ID:?Set AGENTTY_TEAM_ID}"
     : "${AGENTTY_APPLE_ID:?Set AGENTTY_APPLE_ID}"
