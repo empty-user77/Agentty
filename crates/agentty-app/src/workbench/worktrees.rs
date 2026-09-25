@@ -141,6 +141,8 @@ impl Workbench {
     /// "An agent already works here": a new working tree, or the existing one.
     pub(super) fn ask_which_tree(&mut self, request: TreeRequest, cx: &mut Context<Self>) {
         let root = request.root().to_path_buf();
+        // Closing the question sends a waiting shell's agent into the existing tree: that is already an answer.
+        let cancel = request.shell_pane().is_none();
         // The branch the other session is on, as its own bar shows it; the folder when it has none.
         let branch = self.all_panes().iter().find_map(|pane| {
             let view = pane.read(cx);
@@ -161,6 +163,7 @@ impl Workbench {
                 },
                 AskChoice { label: t(cx, "worktree.ask_new").into(), action: AskAction::NewTree(request), primary: true, danger: false },
             ],
+            cancel,
         };
         self.ask(ask, cx);
     }

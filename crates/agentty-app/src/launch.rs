@@ -618,6 +618,19 @@ fn legacy_native_argument(arg: &str) -> String {
     out
 }
 
+/// npm installs an agent as a `.cmd` batch shim, and cmd.exe parses the arguments of a batch file
+/// again: a `<`, `>`, `&` or `%` in them (Agentty's guide for Codex, a task prompt) breaks the
+/// line ("< was unexpected at this time"), a newline cuts it short. The shim only runs
+/// `node <package script> %*`, so that is run directly: `$__agentty` becomes node and
+/// `$__agentty_script` the script. Other batch files are left as they are.
+const NPM_SHIM_BYPASS: &str = r#"$__agentty_script = @()
+if ($__agentty -match '\.(cmd|bat)$' -and (Get-Content -LiteralPath $__agentty -Raw) -match '"%~?dp0%?\\([^"]+?\.[cm]?js)"') {
+  $__agentty_js = Join-Path (Split-Path -LiteralPath $__agentty) $Matches[1]
+  $__agentty_node = Join-Path (Split-Path -LiteralPath $__agentty) 'node.exe'
+  if (-not (Test-Path -LiteralPath $__agentty_node)) { $__agentty_node = (Get-Command 'node' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
+  if ($__agentty_node -and (Test-Path -LiteralPath $__agentty_js)) { $__agentty_script = @($__agentty_js); $__agentty = $__agentty_node }
+}"#;
+
 /// PowerShell script of an agent pane: credentials, the agent, then cleanup (the pane's
 /// PowerShell stays open afterwards through `-NoExit`).
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -653,11 +666,12 @@ fn powershell_agent_script(args: &[String], auth: &AuthSetup, legacy: bool, prof
             arguments.iter().map(|a| powershell_quote(&if legacy { legacy_native_argument(a) } else { a.clone() })).collect();
         // Applications only: npm's `.ps1` shims fail under the default execution policy.
         lines.push(format!(
-            "$__agentty = Get-Command {} -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1",
+            "$__agentty = (Get-Command {} -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source",
             powershell_quote(program)
         ));
+        lines.push(NPM_SHIM_BYPASS.into());
         lines.push(format!(
-            "if ($__agentty) {{ & $__agentty.Source {} }} else {{ Write-Host {} -ForegroundColor Red }}",
+            "if ($__agentty) {{ & $__agentty @__agentty_script {} }} else {{ Write-Host {} -ForegroundColor Red }}",
             arguments.join(" "),
             powershell_quote(&format!("Agentty: '{program}' was not found on PATH."))
         ));
@@ -667,7 +681,7 @@ fn powershell_agent_script(args: &[String], auth: &AuthSetup, legacy: bool, prof
     if !cleanup.is_empty() {
         lines.push(format!("Remove-Item -LiteralPath {} -ErrorAction SilentlyContinue", cleanup.join(", ")));
     }
-    lines.push("Remove-Variable __agentty -ErrorAction SilentlyContinue".into());
+    lines.push("Remove-Variable __agentty, __agentty_script, __agentty_js, __agentty_node -ErrorAction SilentlyContinue".into());
     if let Some(profile) = profile {
         lines.push(profile.to_string());
     }
@@ -1071,12 +1085,12 @@ pub(crate) mod tests {
         assert!(script.contains("$env:ANTHROPIC_API_KEY = $env:AGENTTY_AUTH_ANTHROPIC_API_KEY"));
         assert!(script.contains("$env:CLAUDE_CODE_DISABLE_ADVISOR_TOOL = '1'"));
         assert!(script.contains("Get-Command 'claude' -CommandType Application"));
-        assert!(script.contains("& $__agentty.Source '--resume' 'it''s'"));
+        assert!(script.contains("& $__agentty @__agentty_script '--resume' 'it''s'"));
         assert!(script.contains("Remove-Item -LiteralPath Env:AGENTTY_AUTH_ANTHROPIC_API_KEY"));
         assert!(script.contains("Env:ANTHROPIC_API_KEY, Env:CLAUDE_CODE_DISABLE_ADVISOR_TOOL"));
         // The copy is removed before the agent starts.
         let copy = script.find("Remove-Item -LiteralPath Env:AGENTTY_AUTH_").unwrap();
-        assert!(copy < script.find("& $__agentty.Source").unwrap());
+        assert!(copy < script.find("& $__agentty @__agentty_script").unwrap());
         assert!(script.ends_with(". 'C:\\a\\aliases.ps1'"));
         assert!(!script.contains("not_a_real_key"));
     }
@@ -1139,6 +1153,38 @@ pub(crate) mod tests {
         assert!(out.contains("[--x][it's \"q\"][a b][$HOME] key=example-value copy=none other=none advisor=1"), "{out}");
         assert!(out.contains("after=||"), "{out}");
         assert!(run(&missing).contains("'agentty-no-such-agent' was not found on PATH"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// An npm `.cmd` shim is skipped: node runs the package script, and arguments cmd.exe would
+    /// choke on (`<`, `&`, `%`, quotes, newlines) arrive intact.
+    #[test]
+    #[cfg(unix)]
+    fn powershell_agent_script_skips_npm_shims() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(pwsh) = test_pwsh() else { return };
+        let dir = std::env::temp_dir().join(format!("agentty-shim-{}", std::process::id()));
+        let package = dir.join("node_modules").join("@example").join("agent").join("bin");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("agent.js"), "").unwrap();
+        fake_program(&dir, "node.exe");
+        let shim = dir.join("agenttyshim.cmd");
+        std::fs::write(
+            &shim,
+            "@ECHO off\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@example\\agent\\bin\\agent.js\" %*\r\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let args: Vec<String> =
+            [shim.display().to_string().as_str(), "-c", "guide=\"use <plan.json> & 100%\"\nnext"].iter().map(|s| s.to_string()).collect();
+        let script = powershell_agent_script(&args, &AuthSetup::default(), false, None);
+        let output = std::process::Command::new(&pwsh)
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encode_powershell(&script)])
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&output.stdout).to_string() + &String::from_utf8_lossy(&output.stderr);
+        // Join-Path uses the platform separator, so only the tail is compared.
+        assert!(out.contains("agent.js][-c][guide=\"use <plan.json> & 100%\"\nnext]"), "{out}");
         std::fs::remove_dir_all(dir).ok();
     }
 
