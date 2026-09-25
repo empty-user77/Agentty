@@ -1,4 +1,5 @@
-//! Update checks against the public release channel (GitHub Releases of `agentty-releases`) and a
+//! Update checks against the public release channel (GitHub Releases of `empty-user77/Agentty`, since v0.2.0;
+//! v0.1.x apps read `agentty-releases`, which carries v0.2.0 as its last release) and a
 //! verified download of the file that installs the new version here: the DMG on macOS, the setup
 //! program on Windows. Linux has none (the .deb / .rpm go through the package manager), so a
 //! release there only links to its page. Installing (mount, signature check, swap, relaunch; or
@@ -10,9 +11,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub const RELEASE_REPO: &str = "empty-user77/agentty-releases";
+pub const RELEASE_REPO: &str = "empty-user77/Agentty";
 /// Where every version can be downloaded by hand.
-pub const RELEASES_PAGE: &str = "https://github.com/empty-user77/agentty-releases/releases";
+pub const RELEASES_PAGE: &str = "https://github.com/empty-user77/Agentty/releases";
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -323,10 +324,10 @@ mod tests {
 
     #[test]
     fn web_fallback_reads_tag_and_checksums() {
-        let tag = tag_from_release_url("https://github.com/empty-user77/agentty-releases/releases/tag/v0.1.6");
+        let tag = tag_from_release_url("https://github.com/empty-user77/Agentty/releases/tag/v0.1.6");
         assert_eq!(tag.as_deref(), Some("v0.1.6"));
-        assert_eq!(tag_from_release_url("https://github.com/empty-user77/agentty-releases/releases"), None);
-        assert_eq!(tag_from_release_url("https://example.com/empty-user77/agentty-releases/releases/tag/v0.1.6"), None);
+        assert_eq!(tag_from_release_url("https://github.com/empty-user77/Agentty/releases"), None);
+        assert_eq!(tag_from_release_url("https://example.com/empty-user77/Agentty/releases/tag/v0.1.6"), None);
 
         let listing = "aaa  Agentty-0.1.6-release20260918131331-arm64.dmg\nbbb  Agentty-0.1.6-arm64.zip\n";
         let release = release_from_checksums("v0.1.6", listing, "macos", "aarch64").unwrap();
@@ -336,11 +337,11 @@ mod tests {
         assert!(trusted_url(&dmg_url));
         assert_eq!(
             dmg_url,
-            "https://github.com/empty-user77/agentty-releases/releases/download/v0.1.6/Agentty-0.1.6-release20260918131331-arm64.dmg"
+            "https://github.com/empty-user77/Agentty/releases/download/v0.1.6/Agentty-0.1.6-release20260918131331-arm64.dmg"
         );
         assert_eq!(
             release.checksums_url.as_deref(),
-            Some("https://github.com/empty-user77/agentty-releases/releases/download/v0.1.6/Agentty-0.1.6-SHA256SUMS.txt")
+            Some("https://github.com/empty-user77/Agentty/releases/download/v0.1.6/Agentty-0.1.6-SHA256SUMS.txt")
         );
         assert!(release_from_checksums("v0.1.6", "aaa  Agentty-0.1.6-arm64.zip\n", "macos", "aarch64").is_none());
         assert!(release_from_checksums("v0.1.6", "aaa  ../evil-arm64.dmg\n", "macos", "aarch64").is_none());
@@ -359,7 +360,7 @@ mod tests {
         assert_eq!(windows.installer_name.as_deref(), Some("Agentty-0.2.0-windows-x64-setup.exe"));
         assert_eq!(
             windows.installer_url.as_deref(),
-            Some("https://github.com/empty-user77/agentty-releases/releases/download/v0.2.0/Agentty-0.2.0-windows-x64-setup.exe")
+            Some("https://github.com/empty-user77/Agentty/releases/download/v0.2.0/Agentty-0.2.0-windows-x64-setup.exe")
         );
         let mac = release_from_checksums("v0.2.0", FULL_LISTING, "macos", "aarch64").unwrap();
         assert_eq!(mac.installer_name.as_deref(), Some("Agentty-0.2.0-release20261001120000-arm64.dmg"));
@@ -368,7 +369,7 @@ mod tests {
         let linux = release_from_checksums("v0.2.0", FULL_LISTING, "linux", "x86_64").unwrap();
         assert_eq!(linux.version, "0.2.0");
         assert_eq!(linux.installer_url, None);
-        assert_eq!(linux.page_url, "https://github.com/empty-user77/agentty-releases/releases/tag/v0.2.0");
+        assert_eq!(linux.page_url, "https://github.com/empty-user77/Agentty/releases/tag/v0.2.0");
 
         // A release without a Windows installer (older ones) still announces itself on Windows.
         let mac_only = "aaa  Agentty-0.1.6-release1-arm64.dmg\nbbb  Agentty-0.1.6-arm64.zip\n";
@@ -442,7 +443,7 @@ mod tests {
     fn picks_published_dmg_for_arch() {
         let json = serde_json::json!({
             "tag_name": "v0.2.0", "draft": false, "prerelease": false, "body": "Notes",
-            "html_url": "https://github.com/empty-user77/agentty-releases/releases/tag/v0.2.0",
+            "html_url": "https://github.com/empty-user77/Agentty/releases/tag/v0.2.0",
             "assets": [
                 { "name": "Agentty-0.2.0-arm64.zip", "browser_download_url": "https://github.com/x/y/releases/download/v0.2.0/Agentty-0.2.0-arm64.zip" },
                 { "name": "Agentty-0.2.0-release1-arm64.dmg", "browser_download_url": "https://github.com/x/y/releases/download/v0.2.0/Agentty-0.2.0-release1-arm64.dmg" },
@@ -464,7 +465,7 @@ mod tests {
         let asset = |name: &str| serde_json::json!({ "name": name, "browser_download_url": format!("https://github.com/x/y/releases/download/v0.2.0/{name}") });
         let json = serde_json::json!({
             "tag_name": "v0.2.0", "draft": false, "prerelease": false,
-            "html_url": "https://github.com/empty-user77/agentty-releases/releases/tag/v0.2.0",
+            "html_url": "https://github.com/empty-user77/Agentty/releases/tag/v0.2.0",
             "assets": [
                 asset("Agentty-0.2.0-release1-arm64.dmg"),
                 asset("Agentty-0.2.0-windows-x64-setup.zip"),

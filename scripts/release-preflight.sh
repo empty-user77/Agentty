@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="${1:-}"
-RELEASE_REPO="${AGENTTY_RELEASE_REPO:-empty-user77/agentty-releases}"
+RELEASE_REPO="${AGENTTY_RELEASE_REPO:-empty-user77/Agentty}"
 SOURCE_REPO="${AGENTTY_SOURCE_REPO:-empty-user77/Agentty}"
 TAP_REPO="${AGENTTY_TAP_REPO:-empty-user77/homebrew-agentty}"
 ENV_FILE="$ROOT/.env.agentty-prod"

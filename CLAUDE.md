@@ -65,7 +65,9 @@ Before every commit and push: stage the change in its own command, run the `secu
 
 ## Releases
 
-- Releases go to `empty-user77/agentty-releases` following `.claude/skills/release/SKILL.md`.
+- Releases go to `empty-user77/Agentty` following `.claude/skills/release/SKILL.md` (v0.2.0 also to the old channel,
+  `agentty-releases`, as the bridge for v0.1.x apps). User documentation lives in `docs/{en,ko,ja,zh}` and
+  `docs/meta.json`; agentty.run/docs renders it.
 - **Release notes, release titles and `CHANGELOG.md` are always written in English**, whatever language the
   conversation with the user is in.
 - Don't spell out changes users may take as sensitive (analytics, data collection, removed privacy or opt-out

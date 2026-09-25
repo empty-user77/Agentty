@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.agentty.run">agentty.run</a> ·
   <a href="https://www.agentty.run/docs">문서</a> ·
-  <a href="https://github.com/empty-user77/agentty-releases/releases">다운로드</a> ·
+  <a href="https://github.com/empty-user77/Agentty/releases">다운로드</a> ·
   <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
 
@@ -52,7 +52,7 @@ Rust + [GPUI](https://gpui.rs) + `alacritty_terminal`로 만들었습니다. Ele
 
 ## 설치
 
-[agentty-releases](https://github.com/empty-user77/agentty-releases/releases)에서 내려받으세요.
+[Releases](https://github.com/empty-user77/Agentty/releases)에서 내려받으세요.
 
 | 플랫폼 | 파일 |
 |---|---|

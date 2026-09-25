@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.agentty.run">agentty.run</a> ·
   <a href="https://www.agentty.run/docs">文档</a> ·
-  <a href="https://github.com/empty-user77/agentty-releases/releases">下载</a> ·
+  <a href="https://github.com/empty-user77/Agentty/releases">下载</a> ·
   <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
 
@@ -48,7 +48,7 @@ Agentty 是一个原生、GPU 渲染的终端，让 **Claude Code**、**Codex** 
 
 ## 安装
 
-从 [agentty-releases](https://github.com/empty-user77/agentty-releases/releases) 下载：
+从 [Releases](https://github.com/empty-user77/Agentty/releases) 下载：
 
 | 平台 | 文件 |
 |---|---|

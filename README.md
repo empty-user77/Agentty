@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.agentty.run">agentty.run</a> ·
   <a href="https://www.agentty.run/docs">Documentation</a> ·
-  <a href="https://github.com/empty-user77/agentty-releases/releases">Download</a> ·
+  <a href="https://github.com/empty-user77/Agentty/releases">Download</a> ·
   <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
 
@@ -50,7 +50,7 @@ Written in Rust with [GPUI](https://gpui.rs) and `alacritty_terminal`. No Electr
 
 ## Install
 
-Download the latest release from [agentty-releases](https://github.com/empty-user77/agentty-releases/releases):
+Download the latest release from [Releases](https://github.com/empty-user77/Agentty/releases):
 
 | Platform | File |
 |---|---|
@@ -85,6 +85,7 @@ and Settings → System installs whatever is missing.
 | | |
 |---|---|
 | [agentty.run/docs](https://www.agentty.run/docs) | What every part of the app does |
+| [docs/en](docs/en/introduction.md) | The same user documentation as Markdown ([한국어](docs/ko/introduction.md) · [日本語](docs/ja/introduction.md) · [中文](docs/zh/introduction.md)) |
 | [docs/configuration.md](docs/configuration.md) | `settings.json`, agent sign-in, harnesses, databases, themes, and the files Agentty keeps |
 | [docs/platforms.md](docs/platforms.md) | What differs on Windows and Linux, and how to build there |
 | [docs/plugins](docs/plugins/README.md) | Writing a plugin (Node.js SDK or [the protocol](docs/plugins/protocol.md)) and [using one](docs/plugins/usage.md) |

@@ -17,8 +17,8 @@ type ViewAction = Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)>;
 
 pub const TITLE_BAR_HEIGHT: f32 = 36.;
 /// Links shown under the start page.
-const RELEASES_URL: &str = "https://github.com/empty-user77/agentty-releases/releases";
-const GITHUB_URL: &str = "https://github.com/empty-user77/agentty-releases";
+const RELEASES_URL: &str = "https://github.com/empty-user77/Agentty/releases";
+const GITHUB_URL: &str = "https://github.com/empty-user77/Agentty";
 const AUTHOR_URL: &str = "https://raylee.app";
 /// Where to read how to install the agent CLIs Agentty is built around.
 const CLAUDE_INSTALL_URL: &str = "https://code.claude.com/docs/en/quickstart";

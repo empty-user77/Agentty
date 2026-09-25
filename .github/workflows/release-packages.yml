@@ -2,7 +2,7 @@ name: Release packages
 
 # Builds the Windows installer and the Linux packages for a release. Runs when a vX.Y.Z tag is pushed (the release
 # skill pushes it) and by hand for any ref. Nothing is published from here and the workflow holds no token for
-# agentty-releases: the release skill downloads the artifacts (scripts/fetch-release-packages.sh) and uploads them
+# the release: the release skill downloads the artifacts (scripts/fetch-release-packages.sh) and uploads them
 # with the DMG from the maintainer's Mac.
 on:
   push:

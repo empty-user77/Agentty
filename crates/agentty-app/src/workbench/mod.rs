@@ -3663,8 +3663,7 @@ impl Workbench {
                 path if path.ends_with(".dmg") => self.install_local_dmg(PathBuf::from(path), cx),
                 "check-failed" => {
                     self.updates.state = update::UpdateState::CheckFailed(
-                        "update check failed: https://api.github.com/repos/empty-user77/agentty-releases/releases/latest: status code 403"
-                            .into(),
+                        "update check failed: https://api.github.com/repos/empty-user77/Agentty/releases/latest: status code 403".into(),
                     );
                     self.updates.popup = true;
                     cx.notify();
@@ -3673,7 +3672,7 @@ impl Workbench {
                     self.updates.state = update::UpdateState::Available(agentty_bridge::update::Release {
                         version: "0.2.0".into(),
                         notes: "- Faster startup\n- Git page".into(),
-                        page_url: "https://github.com/empty-user77/agentty-releases/releases".into(),
+                        page_url: "https://github.com/empty-user77/Agentty/releases".into(),
                         installer_url: None,
                         installer_name: None,
                         checksums_url: None,
