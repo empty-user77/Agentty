@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://www.agentty.run">agentty.run</a> ·
-  <a href="https://www.agentty.run/docs">ガイド</a> ·
+  <a href="https://www.agentty.run/docs">ドキュメント</a> ·
   <a href="https://github.com/empty-user77/agentty-releases/releases">ダウンロード</a> ·
   <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
@@ -106,8 +106,11 @@ Ctrl+Alt+Shift、⌥⌘ が Ctrl+Alt になり、Ctrl+文字はシェルに渡�
 ## プラグイン
 
 プラグインはターミナルの横のパネルを埋め、エージェントペインの上にボタンを、コマンドパレットに項目を追加し、
-プロンプトを送れます — 送り先は必ず「送信先を選択」ダイアログで利用者が選びます。プラグインは別プロセスで動き、
-マニフェストで宣言したことしかできません。その一覧はインストール前にプラグインページで確認できます。標準添付の
+プロンプトを送れます — 送り先は必ず「送信先を選択」ダイアログで利用者が選びます。プラグインが求める権限はインストール前に
+プラグインページで確認でき、プラグインが Agentty に頼める操作を制限します。WebAssembly プラグインはその権限の外には
+何も触れられません。Node.js、Python またはネイティブプログラムとして動くプラグインは、Agentty の外ではあなたと同じ
+ファイルとネットワークへのアクセス権を持つため、信頼できるものだけをインストールしてください。プラグインは
+[Agentty Marketplace](https://github.com/empty-user77/Agentty-Marketplace) を通じて配布されます。標準添付の
 **Cosmica** プラグインは [Cosmica](https://www.cosmica.ink/) のノートをプロンプトに変え、セッションの要約を書き戻します。
 
 詳しくは [docs/plugins](docs/plugins/README.md) を参照してください。プラグインページから新規作成して Claude Code に

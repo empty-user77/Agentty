@@ -14,7 +14,7 @@ A release holds: the notarized DMG and app zip (built here), the Windows install
 unsigned `.exe` downloads), `Agentty-X.Y.Z-linux-amd64.deb`, `Agentty-X.Y.Z-linux-x86_64.rpm`, and
 `Agentty-X.Y.Z-SHA256SUMS.txt` over all of them. After publishing, the Homebrew cask in the tap
 `empty-user77/homebrew-agentty` is pointed at the new app zip (`brew install --cask empty-user77/agentty/agentty`). The Windows and Linux files are built by the **Release packages**
-workflow (`.github/workflows/release-packages.yml`) that the tag push starts on the self-hosted Windows PC and Mac; the
+workflow (`.github/workflows/release-packages.yml`) that the tag push starts on GitHub's hosted runners; the
 workflow has no token for `agentty-releases`, so they are downloaded here and uploaded with the DMG.
 
 ## Rules
@@ -66,8 +66,7 @@ workflow has no token for `agentty-releases`, so they are downloaded here and up
 scripts/release-preflight.sh X.Y.Z
 ```
 It checks: on `main`, up to date, tag free, secret-scanning hooks installed, the active `gh` account can push to both
-repos, latest CI green, version newer than the published one, the self-hosted Windows and macOS runners online (the
-Release packages workflow needs both), Docker running, `.env.agentty-prod` present/private/gitignored with all signing,
+repos, latest CI green, version newer than the published one, `.env.agentty-prod` present/private/gitignored with all signing,
 notarization and GA variables set, the Developer ID certificate in the keychain, and the build tools.
 
 Common fixes:
@@ -77,7 +76,6 @@ Common fixes:
 | `.env.agentty-prod` missing | Ask the user to copy it from the previous checkout (e.g. `! cp -p <old repo>/.env.agentty-prod .`). Never create it from values you saw elsewhere. |
 | account cannot push | `gh auth switch -u empty-user77` (also covers the Homebrew tap `empty-user77/homebrew-agentty`) |
 | certificate not in keychain | unlock the login keychain |
-| runner offline | ask the user to start the Windows PC's runner service / the Mac's runner, or Docker Desktop |
 
 Uncommitted feature work is only a warning: commit it (conventional message, with the Co-Authored-By trailer) before
 step 2 so the release commit contains only the bump and changelog.
@@ -114,12 +112,11 @@ push starts the **Release packages** workflow.
 ```sh
 scripts/fetch-release-packages.sh X.Y.Z > <scratchpad>/packages.log 2>&1
 ```
-(background; the Linux build is emulated x86_64 on the Mac and can take an hour or more.) It finds the workflow run
+(background; the packages take a while to build.) It finds the workflow run
 for the tag's commit, waits for it, and copies the four files into `dist/`. If the run fails, read
 `gh run view <id> --log-failed`, fix on `main` and ship the next patch version; do not move the tag. If no run
-started, dispatch one: `gh workflow run release-packages.yml -f ref=vX.Y.Z`. A Windows job that fails with "Inno Setup
-6 (ISCC.exe) was not found" needs `winget install JRSoftware.InnoSetup` on the Windows PC — ask the user; never install
-software on that PC yourself.
+started, dispatch one: `gh workflow run release-packages.yml -f ref=vX.Y.Z`. The Windows job installs Inno Setup 6 itself
+when the runner image lacks it.
 
 Only with the user's explicit OK may a release go out without these files: then set `AGENTTY_MAC_ONLY=1` for steps 6,
 7 and 9 and drop the Windows / Linux lines from the notes.

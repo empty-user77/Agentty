@@ -11,8 +11,10 @@ cargo fmt --all                   # format
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Requirements: macOS 13+, Rust 1.98 (pinned in `rust-toolchain.toml`) and Xcode command line tools. GPUI compiles its Metal shaders at runtime
-(`runtime_shaders` feature), so the separate Metal toolchain is not required.
+Requirements: Rust 1.98 (pinned in `rust-toolchain.toml`) and your platform's build tools. On macOS 13+ that is the Xcode
+command line tools; GPUI compiles its Metal shaders at runtime (`runtime_shaders` feature), so the separate Metal
+toolchain is not required. For Windows (Visual Studio Build Tools with the Windows SDK) and Linux (the system
+libraries to install), see [docs/platforms.md](docs/platforms.md).
 
 ## Project layout
 

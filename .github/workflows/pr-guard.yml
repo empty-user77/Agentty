@@ -1,0 +1,69 @@
+name: PR guard
+
+# Checks every pull request, a fork's included, before anyone reads it: credentials (gitleaks, with
+# .gitleaks.toml), personal data, plugin modules and binaries, scripts, workflows that would get more
+# than read access, the guards themselves, permission bypasses and dependencies from outside the
+# registries. See scripts/pr-guard.py for the rules.
+#
+# The pull request is read, never run: no build, no install, no script of its own. The rules and the
+# gitleaks configuration come from the base branch, so a pull request cannot loosen what it is
+# checked by. A pull request that edits this workflow still runs its own copy of it (that is how
+# `pull_request` works); PG06 flags every such change, and CODEOWNERS routes it to the maintainer.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: The rules, from the base branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+      - name: The pull request, to read
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (pinned, checksum verified)
+        env:
+          VERSION: 8.30.1
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -fsSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+      - name: Credentials in the pull request's commits (gitleaks)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          config=base/.gitleaks.toml
+          [ -f "$config" ] || config=""
+          gitleaks git ${config:+--config "$config"} --redact --no-banner --exit-code 1 \
+            --log-opts="$BASE..$HEAD" pr
+      - name: Everything else (scripts/pr-guard.py from the base branch)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          guard=base/scripts/pr-guard.py
+          # The first pull request that adds the guard has none on its base yet.
+          [ -f "$guard" ] || guard=pr/scripts/pr-guard.py
+          outside=--outside
+          case "$ASSOCIATION" in OWNER|MEMBER|COLLABORATOR) outside= ;; esac
+          python3 "$guard" --repo pr --base "$BASE" --head "$HEAD" $outside

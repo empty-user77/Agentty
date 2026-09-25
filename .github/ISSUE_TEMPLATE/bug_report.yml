@@ -27,8 +27,8 @@ body:
   - type: input
     id: os
     attributes:
-      label: macOS version and hardware
-      placeholder: macOS 26.0, Apple M4
+      label: Operating system and hardware
+      placeholder: macOS 26.0 on Apple M4 / Windows 11 x64 / Ubuntu 24.04 x64
   - type: textarea
     id: shell
     attributes:

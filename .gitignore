@@ -1,19 +1,120 @@
+# What never belongs in the repository. scripts/security-audit.py (SA01) and the PR guard
+# (scripts/pr-guard.py) block most of these even when forced past this file with `git add -f`.
+
+# -- Build output ---------------------------------------------------------------------------------
 /target
 /dist
-.DS_Store
 *.profraw
-# Left behind by the Python scanners and hooks
-__pycache__/
-*.log
-# Local tool state: machine-specific paths and permissions, never anyone else's business
-.claude/settings.local.json
-.claude/settings.local.*
+*.profdata
+perf.data*
+*.dmg
+*.pkg
+*.msi
+*.deb
+*.rpm
+*.AppImage
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.a
+*.lib
+
+# Plugin modules are published through the Agentty Marketplace only, never from this repository.
+*.wasm
+
+# Archives: a release asset or a download, not source.
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# -- Credentials and signing material ---------------------------------------------------------------
+.env
 .env.*
 !.env.example
-# Credentials — never commit
-.env
+.envrc
 *.pem
 *.p12
+*.pfx
 *.key
+*.p8
 *.cer
+*.keystore
+*.jks
 *.mobileprovision
+*.provisionprofile
+*.kdbx
+*.keychain
+*.keychain-db
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+.netrc
+.npmrc
+.pypirc
+.git-credentials
+credentials.json
+client_secret*.json
+service-account*.json
+service_account*.json
+*.tfstate
+*.tfstate.backup
+.aws/
+.ssh/
+.gnupg/
+.kube/
+.docker/config.json
+
+# -- Local tool state: machine-specific paths, sessions and conversations -----------------------------
+.claude/settings.local.json
+.claude/settings.local.*
+.claude/projects/
+*.jsonl
+.agentty*/
+.vercel/
+.supabase/
+supabase/.temp/
+node_modules/
+.npm/
+
+# -- Data that carries whole requests or someone's files ---------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.har
+*.pcap
+*.pcapng
+*.crash
+*.ips
+*.dmp
+
+# -- Editors and operating systems ----------------------------------------------------------------------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.idea/
+*.iml
+.fleet/
+.vscode/
+*.swp
+*.swo
+*~
+
+# -- Left behind by the Python scanners, hooks and tests ---------------------------------------------------
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+coverage/
+*.lcov

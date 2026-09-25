@@ -1,5 +1,11 @@
 # 2026-09-18 — workspace tools (files panel, worktrees, onboarding, monitoring, HUD)
 
+> **Historical work log.** Written while the work was done (September 2026) and kept as a record; it describes the
+> code as it was then, and details may differ from the current app. For how Agentty works today, see the
+> [documentation](../../README.md#documentation).
+>
+> **작업 당시의 기록입니다.** 2026년 9월 작업 중에 쓴 문서로, 그때의 코드를 설명하며 현재 앱과 다를 수 있습니다.
+
 Branch `feat/workspace-tools` (from `main` at `a8c513a`). Eight requests from the owner, in the order they
 are being built. Tick an item only when it is built **and** checked in the running app.
 

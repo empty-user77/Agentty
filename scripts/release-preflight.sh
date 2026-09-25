@@ -54,17 +54,6 @@ if gh auth status >/dev/null 2>&1; then
 p=lambda s: tuple(int(x) for x in s.lstrip("v").split("."))
 print(sys.argv[2]=="none" or p(sys.argv[1])>p(sys.argv[2]))' "$VERSION" "$latest")"
   [[ "$newer" == "True" ]] && pass "v$VERSION is newer than published $latest" || fail "v$VERSION is not newer than published $latest"
-  # The tag starts the "Release packages" workflow (Windows installer, Linux packages) on the self-hosted runners;
-  # with a runner offline it waits forever and the release can't go out with those files.
-  runners="$(gh api "repos/$SOURCE_REPO/actions/runners" --jq '.runners[] | "\(.status) \([.labels[].name] | join(","))"' 2>/dev/null)"
-  if [[ -z "$runners" ]]; then
-    note "cannot list $SOURCE_REPO's self-hosted runners (needs admin access); check they are online before tagging"
-  else
-    for label in Windows macOS; do
-      grep -q "^online .*\b$label\b" <<<"$runners" && pass "self-hosted $label runner online" \
-        || fail "self-hosted $label runner is offline (the Release packages workflow needs it)"
-    done
-  fi
 else
   fail "gh not authenticated (gh auth login)"
 fi
@@ -98,8 +87,6 @@ done
 xcrun --find notarytool >/dev/null 2>&1 && pass "notarytool available" || fail "notarytool not found (install Xcode command line tools)"
 [[ -f .github/workflows/release-packages.yml ]] && pass "release-packages workflow present" || fail ".github/workflows/release-packages.yml missing"
 command -v jq >/dev/null && pass "jq available" || fail "jq not found (brew install jq; verify-release.sh needs it)"
-docker info >/dev/null 2>&1 && pass "Docker is running (Linux packages build in it on this Mac)" \
-  || note "Docker is not running here; if this Mac is the runner, start Docker Desktop before tagging"
 
 echo
 if [[ "$FAILED" == 0 ]]; then

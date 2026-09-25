@@ -449,7 +449,7 @@ mod tests {
         assert!(valid_target(Channel::Slack, "C01ABCDEF"));
         assert!(!valid_target(Channel::Slack, "") && !valid_target(Channel::Slack, "has space"));
         // Discord posts to an id, not a name.
-        assert!(valid_target(Channel::Discord, "123456789012345678"));
+        assert!(valid_target(Channel::Discord, "123456789012345678")); // gitleaks:allow — a made-up id in a test
         assert!(!valid_target(Channel::Discord, "#general") && !valid_target(Channel::Discord, "1234"));
         assert!(valid_target(Channel::Telegram, "-1001234567"));
     }

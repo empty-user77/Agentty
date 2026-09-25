@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://www.agentty.run">agentty.run</a> ·
-  <a href="https://www.agentty.run/docs">가이드</a> ·
+  <a href="https://www.agentty.run/docs">문서</a> ·
   <a href="https://github.com/empty-user77/agentty-releases/releases">다운로드</a> ·
   <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
@@ -105,8 +105,11 @@ Rust 1.98(`rust-toolchain.toml`에 고정)과 플랫폼별 빌드 도구가 필�
 ## 플러그인
 
 플러그인은 터미널 옆 패널을 채우고, 에이전트 페인 위에 버튼과 명령 팔레트 항목을 추가하며, 프롬프트를 보낼 수
-있습니다 — 어디로 보낼지는 항상 "보낼 위치 선택" 창에서 사용자가 고릅니다. 플러그인은 별도 프로세스로 실행되고
-매니페스트에 선언한 일만 할 수 있으며, 그 목록은 설치 전에 플러그인 페이지에서 확인할 수 있습니다. 기본 제공되는
+있습니다 — 어디로 보낼지는 항상 "보낼 위치 선택" 창에서 사용자가 고릅니다. 플러그인이 요청하는 권한은 설치 전에
+플러그인 페이지에서 확인할 수 있으며, 플러그인이 Agentty에 요청할 수 있는 일을 제한합니다. WebAssembly 플러그인은 이
+권한 밖의 어떤 것에도 접근할 수 없습니다. Node.js, Python 또는 네이티브 프로그램으로 실행되는 플러그인은 Agentty 밖에서
+사용자와 같은 파일·네트워크 접근 권한을 가지므로, 신뢰하는 플러그인만 설치하세요. 플러그인은
+[Agentty Marketplace](https://github.com/empty-user77/Agentty-Marketplace)를 통해 배포됩니다. 기본 제공되는
 **Cosmica** 플러그인은 [Cosmica](https://www.cosmica.ink/) 노트를 프롬프트로 바꾸고 세션 요약을 다시 저장합니다.
 
 자세한 내용은 [docs/plugins](docs/plugins/README.md)를 보세요. 플러그인 페이지에서 새 플러그인을 만들고 Claude

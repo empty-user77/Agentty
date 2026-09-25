@@ -39,6 +39,12 @@ texts are in `crates/agentty-app/assets/licenses/syntax-definitions.md` and in t
 | [Lucide](https://lucide.dev) icons (`assets/icons/`) | ISC |
 | [Simple Icons](https://simpleicons.org) brand logos (`assets/logos/`) | CC0 1.0; the logos are trademarks of their owners and only identify the corresponding tools |
 
+## Certificates
+
+`crates/agentty-db/certs/rds-global-bundle.crt` is Amazon RDS's public root certificate bundle
+([trust store](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem)), used to verify TLS connections to
+RDS databases. It holds public certificates only.
+
 ## Full list
 
 Release bundles contain `Contents/Resources/THIRD_PARTY_LICENSES.txt` with the license text of every crate linked into

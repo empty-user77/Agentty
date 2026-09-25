@@ -14,20 +14,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # All jobs run on the self-hosted Apple silicon Mac (check-linux in Docker there) except
-  # check-windows, which runs on a self-hosted Windows PC. These are the maintainer's own machines,
-  # so every job below is guarded: a pull request from a fork is skipped. The guard alone is not
-  # enough in a public repository: a pull request runs the workflow file from its own branch, so a
-  # fork can delete the guard. What keeps a stranger's code off this hardware is the repository
-  # setting that makes every outside contributor's run wait for the maintainer's approval
-  # (Settings > Actions > General > "Require approval for all outside collaborators"); read a pull
-  # request's changes to .github/ and scripts/ before approving it.
+  # Everything runs on GitHub's hosted runners: a fresh machine per job, thrown away afterwards, so a
+  # pull request from anybody can run here without reaching anyone's own computer. No job holds a
+  # secret. The toolchain (and its rustfmt / clippy) comes from rust-toolchain.toml, same as locally.
   secrets:
-    # A pull request from a fork is somebody else's code, and these runners are the
-    # maintainer's own machines: it would build and test itself on them. Their own
-    # branches, and everything on main, still run.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -44,21 +35,13 @@ jobs:
         run: python3 scripts/check-secrets.py --range "$BASE..$HEAD"
 
   check:
-    # A pull request from a fork is somebody else's code, and these runners are the
-    # maintainer's own machines: it would build and test itself on them. Their own
-    # branches, and everything on main, still run.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: secrets
-    runs-on: [self-hosted, macOS, ARM64]
-    env:
-      # Kept next to the checkout, not in it: checkout cleans the work tree, and the runner's own
-      # disk is the cache (Swatinem/rust-cache deleted rustup from the runner's ~/.cargo/bin).
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../agentty-target
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # The toolchain (and its rustfmt / clippy) comes from rust-toolchain.toml, same as locally.
       - name: Install toolchain
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -68,51 +51,30 @@ jobs:
       - name: Build (release)
         run: cargo build --release -p agentty-app
 
-  # Windows can't be built on the Mac (GPUI compiles its shaders with the Windows SDK's fxc.exe).
-  # The runner needs rustup, git and Visual Studio Build Tools (C++ workload + Windows SDK). The zip
-  # is uploaded as a workflow artifact: download it from the run's Summary page.
+  # Windows can't be built on a Mac (GPUI compiles its shaders with the Windows SDK's fxc.exe), which
+  # the hosted Windows image has. The zip is uploaded as a workflow artifact: download it from the
+  # run's Summary page.
   check-windows:
-    # A pull request from a fork is somebody else's code, and these runners are the
-    # maintainer's own machines: it would build and test itself on them. Their own
-    # branches, and everything on main, still run.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: secrets
-    runs-on: [self-hosted, Windows, X64]
-    env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}\..\agentty-target
-    # Windows PowerShell refuses the runner's step scripts under the default execution policy
-    # (Restricted); bypass it for these steps only instead of changing the PC's policy.
-    defaults:
-      run:
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # The runner keeps the PATH it started with (and a service may not get the user's PATH at
-      # all), so put rustup's default location on it explicitly.
-      - name: Put cargo on PATH
-        run: |
-          $bin = Join-Path $env:USERPROFILE '.cargo\bin'
-          if (-not (Test-Path (Join-Path $bin 'rustup.exe'))) { throw "rustup not found in $bin (runner user: $env:USERNAME)" }
-          Add-Content -Path $env:GITHUB_PATH -Value $bin
       - name: Install toolchain
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
-      # No install round trip here: the runner is a personal PC, and install.ps1 -Uninstall would
-      # remove an Agentty the user installed on it.
       - name: Package
         run: |
           ./scripts/package-windows.ps1
-          $info = (Get-Item "$env:CARGO_TARGET_DIR\release\agentty.exe").VersionInfo
+          $info = (Get-Item "target\release\agentty.exe").VersionInfo
           if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
-      # Packages from main only, for a day: every stored artifact counts against the
-      # account's Actions storage, self-hosted runner or not. Pull requests still package above.
+      # Packages from main only, for a day. A failed upload must not turn a green build red: the
+      # checks above are what CI is for, and the package is a convenience.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'push'
-        # A full Actions storage quota must not turn a green build red: the checks above are what
-        # CI is for, and the package is a convenience.
         continue-on-error: true
         with:
           name: agentty-windows-x86_64
@@ -122,49 +84,31 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Linux has no runner of its own: this job runs on the Mac and builds inside an Ubuntu container
-  # (Docker Desktop must be running). Apple silicon, so the build is linux-aarch64. Cargo's registry,
-  # the toolchain and target/ live in named volumes, so later runs reuse them.
   check-linux:
-    # A pull request from a fork is somebody else's code, and these runners are the
-    # maintainer's own machines: it would build and test itself on them. Their own
-    # branches, and everything on main, still run.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: secrets
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Docker is running
-        run: docker info --format '{{.ServerVersion}} {{.Architecture}}' || { echo "::error::Docker Desktop is not running on the runner"; exit 1; }
-      - name: Clippy, test and package (Ubuntu 24.04)
+      - name: System libraries
         run: |
-          docker run --rm \
-            -v "$PWD:/src" -w /src \
-            -v agentty-linux-cargo:/root/.cargo \
-            -v agentty-linux-rustup:/root/.rustup \
-            -v agentty-linux-target:/src/target \
-            -e CARGO_TERM_COLOR=always \
-            ubuntu:24.04 bash -euo pipefail -c '
-              export DEBIAN_FRONTEND=noninteractive PATH="/root/.cargo/bin:$PATH"
-              apt-get update -qq
-              apt-get install -y -qq --no-install-recommends ca-certificates curl build-essential git \
-                pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
-                libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev zsh >/dev/null
-              command -v rustup >/dev/null || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --no-modify-path
-              rustup toolchain install
-              cargo clippy --workspace --all-targets -- -D warnings
-              cargo test --workspace
-              scripts/package-linux.sh
-            '
-      # Packages from main only, for a day: every stored artifact counts against the
-      # account's Actions storage, self-hosted runner or not. Pull requests still package above.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends build-essential pkg-config \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev zsh >/dev/null
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Package
+        run: scripts/package-linux.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'push'
-        # A full Actions storage quota must not turn a green build red: the checks above are what
-        # CI is for, and the package is a convenience.
         continue-on-error: true
         with:
-          name: agentty-linux-aarch64
+          name: agentty-linux-x86_64
           path: |
             dist/agentty-*-linux-*.tar.gz
             dist/agentty-*-linux-*.tar.gz.sha256

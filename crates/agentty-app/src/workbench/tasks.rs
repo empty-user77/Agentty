@@ -17,9 +17,6 @@ use agentty_bridge::model::Agent;
 use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, Context, SharedString, Window};
 use std::path::PathBuf;
 
-/// Lines of each prompt shown in the dialog.
-const PREVIEW_LINES: usize = 4;
-
 fn agent_of(name: Option<&str>) -> Agent {
     if name == Some("codex") {
         Agent::Codex
@@ -148,7 +145,9 @@ impl Workbench {
         let mut list = div().id("tasks-dialog-list").max_h(px(340.)).overflow_y_scroll().flex().flex_col().gap_2();
         for (index, task) in request.tasks.iter().enumerate() {
             let agent = if task.agent.as_deref() == Some("codex") { "Codex" } else { "Claude Code" };
-            let preview: String = task.prompt.lines().filter(|l| !l.trim().is_empty()).take(PREVIEW_LINES).collect::<Vec<_>>().join("\n");
+            // The whole prompt, not a preview: what is approved here runs as a new agent session, and
+            // an instruction below the first few lines must be as visible as the ones above it.
+            let preview: String = task.prompt.lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
             list = list.child(
                 div()
                     .id(SharedString::from(format!("tasks-dialog-task-{index}")))

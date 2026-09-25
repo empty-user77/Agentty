@@ -55,7 +55,14 @@ FORBIDDEN_FILES = [
 
 # -- SA02: personal data --------------------------------------------------------------------------
 
-HOME_PATH = re.compile(r"/(?:Users|home)/(?!me\b|you\b|user\b|username\b|name\b|example\b|someone\b|Shared\b|runner\b)[A-Za-z0-9._-]+")
+# A home folder with a real name in it, written any way a path appears in code: /Users/x, /home/x,
+# C:\Users\x, the doubled backslashes of a string literal, and JSON's escaped \/Users\/x.
+HOME_SEP = r"(?:\\/|\\{1,2}|/)"
+HOME_PATH = re.compile(
+    HOME_SEP + r"(?:Users|home)" + HOME_SEP
+    + r"(?!(?:me|you|user|username|name|example|someone|Shared|runner|runneradmin|Public|Default|All Users)\b)"
+    + r"(?![<$%{*])[A-Za-z0-9._-]{2,}"
+)
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}")
 EMAIL_OK = re.compile(r"(?i)@(([a-z0-9-]+\.)*example\.(com|org|net)|anthropic\.com|users\.noreply\.github\.com|github\.com|[0-9])|^git@")
 
