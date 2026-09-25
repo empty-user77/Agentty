@@ -1820,6 +1820,7 @@ impl Workbench {
                             danger: false,
                         },
                     ],
+                    cancel: true,
                 },
                 cx,
             );
@@ -2015,6 +2016,7 @@ impl Workbench {
                     primary: true,
                     danger: false,
                 }],
+                cancel: true,
             },
             cx,
         );
@@ -2032,6 +2034,7 @@ impl Workbench {
                     primary: false,
                     danger: true,
                 }],
+                cancel: true,
             },
             cx,
         );

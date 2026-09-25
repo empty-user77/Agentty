@@ -37,6 +37,9 @@ pub struct Ask {
     pub title: SharedString,
     pub body: Option<SharedString>,
     pub choices: Vec<AskChoice>,
+    /// Whether a Cancel button is shown. Off when closing the dialog does what one of the answers
+    /// does (a shell waiting on it starts its agent where it was typed): two buttons, one outcome.
+    pub cancel: bool,
 }
 
 impl Workbench {
@@ -85,22 +88,27 @@ impl Workbench {
 
     pub(super) fn render_ask(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let ask = self.ask.as_ref()?;
-        let mut buttons = div().flex().justify_end().gap_2().child(
-            div()
-                .id("ask-cancel")
-                .px_3()
-                .py_1p5()
-                .rounded_md()
-                .t_body()
-                .cursor_pointer()
-                .bg(hex(0x2d2d30))
-                .text_color(hex(Chrome::BRIGHT))
-                .hover(|s| s.opacity(0.85))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.dismiss_ask(cx);
-                }))
-                .child(t(cx, "confirm.cancel")),
-        );
+        // Long labels (and longer translations) wrap onto a second row instead of spilling out of the dialog.
+        let mut buttons = div().flex().flex_wrap().justify_end().gap_2();
+        if ask.cancel {
+            buttons = buttons.child(
+                div()
+                    .id("ask-cancel")
+                    .flex_none()
+                    .px_3()
+                    .py_1p5()
+                    .rounded_md()
+                    .t_body()
+                    .cursor_pointer()
+                    .bg(hex(0x2d2d30))
+                    .text_color(hex(Chrome::BRIGHT))
+                    .hover(|s| s.opacity(0.85))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.dismiss_ask(cx);
+                    }))
+                    .child(t(cx, "confirm.cancel")),
+            );
+        }
         for (index, choice) in ask.choices.iter().enumerate() {
             let action = choice.action.clone();
             let background = match (choice.danger, choice.primary) {
@@ -111,6 +119,7 @@ impl Workbench {
             buttons = buttons.child(
                 div()
                     .id(("ask-choice", index))
+                    .flex_none()
                     .px_3()
                     .py_1p5()
                     .rounded_md()
