@@ -27,6 +27,8 @@ libc = "0.2.189"
 plist = "1.10.1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+# The markdown preview's Content-Security-Policy lists its scripts by hash.
+sha2 = "0.11"
 # Syntax highlighting for the file editor: Sublime Text grammars (bat's curated set) on the pure-Rust regex engine.
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-fancy"] }
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }

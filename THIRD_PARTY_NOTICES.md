@@ -32,6 +32,19 @@ The file editor colors code with the Sublime Text grammars curated by the [bat](
 project, compiled into the app by `two-face`. Each grammar keeps its own license (MIT, Apache-2.0 or BSD); the full
 texts are in `crates/agentty-app/assets/licenses/syntax-definitions.md` and in the release bundle's license file.
 
+## Markdown preview
+
+The editor's markdown preview bundles the renderer VS Code's preview uses, unchanged
+(`crates/agentty-app/assets/markdown-preview/`, versions and checksums in its `README.md`). Each file keeps its own
+license; the full texts are next to them.
+
+| Component | License |
+|---|---|
+| [markdown-it](https://github.com/markdown-it/markdown-it) 14.3.2 | MIT |
+| [highlight.js](https://github.com/highlightjs/highlight.js) 11.12.0 (common languages build) | BSD-3-Clause |
+| [DOMPurify](https://github.com/cure53/DOMPurify) 3.4.16 | Apache-2.0 OR MPL-2.0 |
+| [VS Code](https://github.com/microsoft/vscode) markdown preview and webview styles (`markdown.css`, `highlight.css`, `webview-defaults.css`) | MIT |
+
 ## Icons and logos
 
 | Component | License |

@@ -20,6 +20,11 @@ ASSETS = [
     # Sublime Text grammars compiled into the app by `two-face` for the file editor's syntax colors.
     ("Syntax definitions of the file editor (bat's set via two-face; MIT, Apache-2.0, BSD)", "crates/agentty-app/assets/licenses/syntax-definitions.md"),
     ("Simple Icons brand logos (CC0 1.0)", "crates/agentty-app/assets/logos/LICENSE.txt"),
+    # The markdown preview's renderer, compiled into the app.
+    ("markdown-it (MIT)", "crates/agentty-app/assets/markdown-preview/LICENSE-markdown-it.txt"),
+    ("highlight.js (BSD-3-Clause)", "crates/agentty-app/assets/markdown-preview/LICENSE-highlight.js.txt"),
+    ("DOMPurify (Apache-2.0 OR MPL-2.0)", "crates/agentty-app/assets/markdown-preview/LICENSE-dompurify.txt"),
+    ("VS Code markdown preview styles (MIT)", "crates/agentty-app/assets/markdown-preview/LICENSE-vscode.txt"),
 ]
 
 

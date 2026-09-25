@@ -2831,6 +2831,7 @@ impl Render for Workbench {
         }
         self.open_pending_file(window, cx);
         self.prepare_browser(window, cx);
+        self.place_markdown_preview(cx);
         self.prepare_plugin_panel(window, cx);
         self.prepare_plugin_consent(window, cx);
         self.prepare_files_panel(cx);
