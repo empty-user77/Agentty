@@ -28,7 +28,7 @@ fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-echo "Downloading $TAG from $SOURCE…"
+echo "Downloading $TAG from ${SOURCE}…"
 gh release download "$TAG" --repo "$SOURCE" --dir "$tmp"
 
 sums="$tmp/Agentty-$VERSION-SHA256SUMS.txt"
@@ -47,7 +47,7 @@ gh release view "$TAG" --repo "$SOURCE" --json body --jq .body > "$notes"
   echo "automatic updates there; later versions are published only in the new place."
 } >> "$notes"
 
-echo "Creating a draft $TAG on $LEGACY…"
+echo "Creating a draft $TAG on ${LEGACY}…"
 gh release create "$TAG" --repo "$LEGACY" --draft --title "Agentty $TAG" --notes-file "$notes" >/dev/null
 (cd "$tmp" && gh release upload "$TAG" --repo "$LEGACY" $(ls | grep -v '^notes\.md$'))
 
