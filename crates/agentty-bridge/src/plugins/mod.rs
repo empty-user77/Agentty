@@ -3,6 +3,7 @@
 //!
 //! The protocol is documented in `docs/plugins/protocol.md`; the Node.js SDK lives in `sdk/node`.
 
+pub mod files;
 pub mod link;
 pub mod manifest;
 pub mod market;
@@ -39,7 +40,21 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     // The plugin's own HTTP requests. Nothing of Agentty's travels with them: no cookies, no
     // stored credentials, only what the plugin puts in the request.
     ("net/fetch", Some("net.request")),
+    // A folder of the plugin's own to keep files in (`plugin-data/<id>/files`), and nothing
+    // outside it. `files/download` also needs `net.request`, checked where it is handled.
+    ("files/write", Some("files")),
+    ("files/read", Some("files")),
+    ("files/list", Some("files")),
+    ("files/stat", Some("files")),
+    ("files/remove", Some("files")),
+    ("files/rename", Some("files")),
+    ("files/copy", Some("files")),
+    ("files/download", Some("files")),
+    ("files/path", Some("files")),
+    ("files/reveal", Some("files")),
     ("prompt/inject", Some("prompt.inject")),
+    // Only a terminal `prompt/inject` opened for the plugin: what it opened, it may close.
+    ("terminal/close", Some("prompt.inject")),
     ("terminal/send", Some("terminal.write")),
     ("session/get", Some("session.read")),
     ("workspace/list", Some("workspace.read")),

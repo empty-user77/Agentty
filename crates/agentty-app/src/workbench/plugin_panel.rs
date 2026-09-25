@@ -255,6 +255,25 @@ impl Workbench {
         let mode_menu = self.plugin_mode_menu.then(|| self.render_panel_mode_menu(&plugin_id, cx));
 
         let body: AnyElement = match (tree, state) {
+            (_, RunState::NeedsConsent) => {
+                let owner = plugin_id.clone();
+                div()
+                    .p_3()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(tf(
+                        cx,
+                        "plugins.consent.panel",
+                        &[("name", &manifest.name)],
+                    )))
+                    .child(crate::ui::action_button(
+                        "plugin-consent-again",
+                        t(cx, "plugins.consent.review"),
+                        cx.listener(move |_, _: &gpui::ClickEvent, _, cx| plugins::ask_consent_again(&owner, cx)),
+                    ))
+                    .into_any_element()
+            }
             (_, RunState::Failed(error)) => div()
                 .p_3()
                 .flex()

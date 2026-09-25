@@ -67,13 +67,29 @@ when you don't care.
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
 | `context/get` | | `{}` | context |
-| `host/info` | | `{}` | `{ version, apiVersion, language }` |
+| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
 | `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit?, tools? }` — `target`: `ask` · `active` · `newWorkspace` · `newTab` · `split` · `pane` · `workspace` · `own` (a new tab in the plugin's own workspace) | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
+| `terminal/close` | `prompt.inject` | `{ paneId }` — a terminal `prompt/inject` opened for this plugin (`newTab`, `newWorkspace`, `split`, `own`); any other is refused with `-32001` | `null` |
+| `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
+| `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
+| `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
+| `storage/get` | | `{ key }` | `{ key, value }` (`value` is null when unset) |
+| `storage/set` | | `{ key, value }` (null removes it) | `null` |
+| `storage/keys` | | `{}` | `[key]` |
+| `files/write` | `files` | `{ path, text? \| base64?, append? }` (8 MB a call) | `{ size }` |
+| `files/read` | `files` | `{ path, offset?, length?, as?: "base64" }` (4 MB a call) | `{ text \| base64, size, eof }` |
+| `files/list` | `files` | `{ path }` (`""` is the folder itself) | `[{ name, dir, size, modifiedMs }]` |
+| `files/stat` | `files` | `{ path }` | `{ name, dir, size, modifiedMs }` or `null` |
+| `files/remove` | `files` | `{ path }` (a folder with everything in it) | `{ removed }` |
+| `files/rename` · `files/copy` | `files` | `{ from, to }` | `null` · `{ size }` |
+| `files/path` | `files` | `{ path }` | `{ path }` — where it is on disk (for `prompt/inject`'s `cwd`) |
+| `files/reveal` | `files` | `{ path }` | `null` — shows it in Finder / Explorer |
+| `files/download` | `files` + `net.request` | `{ url, path, maxBytes?, headers?, timeoutMs?, proxy? }` | `{ status, url, contentType, bytes, durationMs }` |
 
 **Files-only agents.** `tools: "files"` starts the agent with nothing but reading and writing
 files in `cwd`, which must be a folder of the plugin's own data: no shell, no web, no MCP servers
@@ -88,12 +104,6 @@ terminal — the user's own agents and shells, `active`, `pane`, `workspace` —
 its commands), and never while that terminal waits for the user to approve or answer something. A
 `prompt/inject` outside that goes to the `ask` dialog instead (`{ status: "asked" }`, not sent until
 the user sends it); `terminal/send` fails with `-32001`.
-| `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
-| `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
-| `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
-| `storage/get` | | `{ key }` | `{ key, value }` (`value` is null when unset) |
-| `storage/set` | | `{ key, value }` (null removes it) | `null` |
-| `storage/keys` | | `{}` | `[key]` |
 
 Agentty drops `ui/notify` calls that arrive faster than one per 700 ms (answering them normally), and
 stops a plugin that sends more than 240 messages a second. `host/openUrl` is metered the same way —
@@ -155,6 +165,18 @@ than written over, so nothing the plugin had is lost without trace. Keys are
 lower-case letters, digits, `.`, `-` and `_`; at most 64 of them, and a megabyte in total. A plugin
 that runs as a process can write its own files instead; a WebAssembly plugin has no files, so this
 is how it keeps anything.
+
+`files/*` is a folder of the plugin's own (`<data dir>/plugin-data/<plugin>/files`, `0700`) for
+what it keeps that is more than settings: pictures, videos, drafts, logs. Paths are relative to it
+and never leave it: no absolute paths, no `..`, and a link inside is never followed. Files are
+created `0600`; a write goes to a temporary file first, so a file is either the old one or the new
+one, never half of each. A name is at most 128 characters, a path 16 folders deep, a listing 5000
+entries, a file 1 GB. `text` is UTF-8; anything else is read and written as `base64`. Like
+`storage/*`, the folder goes when the plugin is uninstalled and stays through an update.
+
+`files/download` is `net/fetch` into a file, for what is too large for a message: the same checks
+on the address and its redirects, streamed to disk, at most `maxBytes` (1 GB), and up to 15
+minutes. The file appears only once it is whole.
 
 ### The browser (`browser.control`, API version 3)
 
@@ -250,6 +272,13 @@ Errors use these codes:
 ```
 
 (`→` Agentty to plugin, `←` plugin to Agentty. Request ids are per direction.)
+
+**Permissions are asked once.** The first time a plugin that is not part of Agentty would start,
+Agentty shows the user what its manifest asks for (the permissions and, for `browser.control`, its
+sites) and starts it only when the user allows. Until then it does not run at all: no
+`initialize`, no activation. An update that asks for nothing new starts without asking again; one
+that asks for more asks for the new set. Refused, the plugin stays stopped until the user asks
+again from its page or panel. Uninstalling forgets the answer.
 
 ## WebAssembly plugins
 

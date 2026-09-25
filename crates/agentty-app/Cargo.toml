@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 alacritty_terminal = "0.26"
 anyhow.workspace = true
+base64 = "0.22"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 agentty-bridge = { path = "../agentty-bridge" }
 agentty-db = { path = "../agentty-db" }

@@ -144,7 +144,7 @@ plugin.start(); // after registering handlers
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
-| `browser.sites()` · `open(url)` · `eval(tabId, fn, args)` · `wait` · `signIn(host)` … — the in-app browser on the manifest's sites ([protocol](protocol.md#the-browser-browsercontrol-api-version-3); example: `plugins/x-feed`) | `browser.control` |
+| `browser.sites()` · `open(url)` · `eval(tabId, fn, args)` · `wait` · `signIn(host)` … — the in-app browser on the manifest's sites ([protocol](protocol.md#the-browser-browsercontrol-api-version-3); example: [X Feed](https://github.com/empty-user77/agentty-social-manager/tree/main/x)) | `browser.control` |
 | `log(...)` — writes to the plugin log (stderr) | |
 
 `plugin.info` holds the `initialize` data; `plugin.context` is the latest context. Environment

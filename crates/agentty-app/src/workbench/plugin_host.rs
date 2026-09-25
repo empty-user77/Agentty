@@ -426,6 +426,23 @@ impl Workbench {
                     None => call.reply(Err((codes::INVALID_PARAMS, "no such pane".into())), cx),
                 }
             }
+            // A terminal the plugin opened (`prompt/inject` into a new tab, split or its own
+            // workspace), closed once its agent's work is read: an automation that asks an agent
+            // every hour would otherwise leave a terminal behind every hour. Nothing else — not the
+            // user's terminals, not another plugin's.
+            "terminal/close" => {
+                let id = call.params["paneId"].as_u64().unwrap_or_default();
+                let pane = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == id);
+                match pane {
+                    Some(pane) if self.plugin_launched.get(&id) == Some(&call.plugin) => {
+                        self.plugin_launched.remove(&id);
+                        self.perform_close(super::confirm::CloseTarget::Pane(pane), window, cx);
+                        call.reply(Ok(Value::Null), cx);
+                    }
+                    Some(_) => call.reply(Err((codes::PERMISSION_DENIED, "a plugin closes only terminals it opened".into())), cx),
+                    None => call.reply(Err((codes::INVALID_PARAMS, "no such pane".into())), cx),
+                }
+            }
             "session/get" => self.plugin_session(call, cx),
             "workspace/instances" => {
                 let list = self.plugin_instances(&call.plugin, cx);

@@ -226,6 +226,7 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("session.read", "Read the conversation of AI sessions open in Agentty"),
     ("workspace.read", "See open workspaces, tabs, folders and agent status"),
     ("browser.control", "Use the in-app browser on the sites it names, signed in as you"),
+    ("files", "Keep files in a folder of its own (pictures, videos, drafts)"),
 ];
 
 impl Manifest {

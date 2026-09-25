@@ -28,6 +28,7 @@ dependencies = [
  "agentty-db",
  "alacritty_terminal",
  "anyhow",
+ "base64 0.22.1",
  "block",
  "chrono",
  "cocoa 0.26.0",

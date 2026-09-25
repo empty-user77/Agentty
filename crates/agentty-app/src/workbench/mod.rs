@@ -556,6 +556,8 @@ pub struct Workbench {
     /// Panes each plugin launched itself (prompt/inject into a new tab, split or workspace): the
     /// ones it may type into without the user having just asked it to.
     plugin_launched: HashMap<u64, String>,
+    /// The plugin whose permissions the user is being asked about.
+    plugin_consent_open: Option<String>,
     /// When the user last used each plugin's UI (a panel control, one of its commands): for a
     /// short while after that, the plugin may act on the terminal the user is in.
     plugin_gesture: HashMap<String, std::time::Instant>,
@@ -770,6 +772,7 @@ impl Workbench {
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
             plugin_launched: HashMap::new(),
+            plugin_consent_open: None,
             plugin_gesture: HashMap::new(),
             plugin_pane_poll: false,
             plugin_windows_opening: std::collections::HashSet::new(),
@@ -2794,6 +2797,7 @@ impl Render for Workbench {
         self.open_pending_file(window, cx);
         self.prepare_browser(window, cx);
         self.prepare_plugin_panel(window, cx);
+        self.prepare_plugin_consent(window, cx);
         self.prepare_files_panel(cx);
         self.prepare_docker(cx);
         self.prepare_db(window, cx);
@@ -3853,6 +3857,14 @@ impl Workbench {
             "plugin-market" => self.debug_market(argument, window, cx),
             // `plugin-enable <plugin> on|off`: the switch on the Plugins page, which is also how a
             // panel (and a panel's own window) is meant to go away when its plugin does.
+            // `plugin-consent <plugin> allow|deny`: the first-run permission question, answered as
+            // the user would (the native dialog stays open; its answer then changes nothing).
+            "plugin-consent" => {
+                if let Some((plugin, answer)) = argument.split_once(' ') {
+                    crate::plugins::answer_consent(plugin, answer.trim() == "allow", cx);
+                    eprintln!("plugin-consent: {plugin} {answer}");
+                }
+            }
             "plugin-enable" => {
                 if let Some((plugin, state)) = argument.split_once(' ') {
                     self.set_plugin_enabled_debug(plugin, state.trim() == "on", cx);

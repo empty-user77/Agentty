@@ -430,6 +430,7 @@ impl Workbench {
                 let gone = id.to_string();
                 crate::settings::update_settings(cx, move |s| {
                     s.plugin_browser_modes.remove(&gone);
+                    s.plugin_permission_grants.remove(&gone);
                 });
                 plugins::reload(cx);
                 if self.plugins_page.selected.as_deref() == Some(id) {
@@ -834,6 +835,7 @@ impl Workbench {
             (RunState::Starting, _) => (t(cx, "plugins.starting").to_string(), Chrome::ORANGE),
             (RunState::Failed(_), _) => (t(cx, "plugins.failed_short").to_string(), Chrome::ERROR),
             (RunState::Stopped, _) => (t(cx, "plugins.idle").to_string(), Chrome::MUTED),
+            (RunState::NeedsConsent, _) => (t(cx, "plugins.consent.state").to_string(), Chrome::ORANGE),
         }
     }
 
@@ -1648,6 +1650,57 @@ fn ago(at: std::time::SystemTime, cx: &Context<Workbench>) -> String {
     tf(cx, "plugins.market_kept", &[("when", &when)])
 }
 
+impl Workbench {
+    /// Asks the user, one plugin at a time, to allow what a plugin asks for before it first runs.
+    pub(super) fn prepare_plugin_consent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.plugin_consent_open.is_some() {
+            return;
+        }
+        let Some(id) = plugins::next_consent(cx) else { return };
+        let Some(plugin) = plugins::plugin(cx, &id).cloned() else {
+            plugins::answer_consent(&id, false, cx);
+            return;
+        };
+        let Some(manifest) = plugin.manifest.clone() else { return };
+        self.plugin_consent_open = Some(id.clone());
+        let mut lines = Vec::new();
+        for permission in &manifest.permissions {
+            let (label, body) = permission_strings(permission);
+            lines.push(format!("• {} — {}", t(cx, label), t(cx, body)));
+            if permission == "browser.control" {
+                if let Some(browser) = &manifest.browser {
+                    let sites: Vec<String> = browser.sites.iter().flat_map(|s| s.domains().map(str::to_string)).collect();
+                    lines.push(format!("   {}", sites.join(", ")));
+                }
+            }
+        }
+        let runtime_note = match manifest.runtime {
+            agentty_bridge::plugins::manifest::Runtime::Wasm => t(cx, "plugins.runtime.wasm_note"),
+            _ => t(cx, "plugins.runtime.process_note"),
+        };
+        let title = tf(cx, "plugins.consent.title", &[("name", &manifest.name)]);
+        let body = format!("{}\n\n{}\n\n{}", t(cx, "plugins.consent.lead"), lines.join("\n"), runtime_note);
+        let (allow, deny) = (t(cx, "plugins.consent.allow"), t(cx, "plugins.consent.deny"));
+        window.activate_window();
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            &title,
+            Some(&body),
+            &[gpui::PromptButton::new(allow), gpui::PromptButton::cancel(deny)],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let allowed = answer.await == Ok(0);
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.plugin_consent_open = None;
+                plugins::answer_consent(&id, allowed, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
 /// The two strings that name a permission to the user.
 fn permission_strings(permission: &str) -> (&'static str, &'static str) {
     match permission {
@@ -1657,6 +1710,7 @@ fn permission_strings(permission: &str) -> (&'static str, &'static str) {
         "workspace.read" => ("plugins.perm.workspace", "plugins.perm.workspace.body"),
         "net.request" => ("plugins.perm.net", "plugins.perm.net.body"),
         "browser.control" => ("plugins.perm.browser", "plugins.perm.browser.body"),
+        "files" => ("plugins.perm.files", "plugins.perm.files.body"),
         _ => ("plugins.perm.unknown", "plugins.perm.unknown"),
     }
 }

@@ -299,6 +299,70 @@ pub fn fetch(request: &FetchRequest) -> Result<FetchResponse> {
     })
 }
 
+/// How long a download may take, whatever the plugin asks: a video is not a request.
+const MAX_DOWNLOAD_TIME: Duration = Duration::from_secs(15 * 60);
+
+/// What `files/download` answers.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Downloaded {
+    pub status: u16,
+    pub url: String,
+    pub content_type: Option<String>,
+    pub bytes: u64,
+    pub duration_ms: u64,
+}
+
+/// Fetches `request` (a GET, the same checks as `fetch`) into the file `to`, streamed, at most
+/// `max_bytes`. The file appears only once it is whole: a download that fails or is cut off
+/// leaves nothing behind, not half a picture.
+pub fn download(request: &FetchRequest, to: &std::path::Path, max_bytes: u64) -> Result<Downloaded> {
+    let mut checked = check(request)?;
+    if checked.method != "GET" {
+        bail!("a download is a GET");
+    }
+    checked.timeout = request.timeout_ms.map(Duration::from_millis).unwrap_or(MAX_DOWNLOAD_TIME).min(MAX_DOWNLOAD_TIME);
+    let mut builder = crate::http::agent_builder().timeout(checked.timeout).redirects(0);
+    if let Some(proxy) = &checked.proxy {
+        builder = builder.proxy(ureq::Proxy::new(proxy).map_err(|_| anyhow::anyhow!("that proxy address cannot be used"))?);
+    }
+    let agent = builder.build();
+    let started = Instant::now();
+    let response = send(&agent, &checked)?;
+    let status = response.status();
+    if !(200..300).contains(&status) {
+        bail!("HTTP {status}");
+    }
+    if let Some(length) = response.header("content-length").and_then(|v| v.parse::<u64>().ok()) {
+        if length > max_bytes {
+            bail!("the file is {length} bytes, over the {max_bytes} allowed");
+        }
+    }
+    let url = response.get_url().to_string();
+    let content_type = response.header("content-type").map(|v| v.chars().take(MAX_HEADER_VALUE).collect());
+    let partial = to.with_extension(format!("{}part", to.extension().map(|e| format!("{}.", e.to_string_lossy())).unwrap_or_default()));
+    let result = (|| -> Result<u64> {
+        let mut file = crate::fsutil::create_private(&partial)?;
+        let mut reader = response.into_reader().take(max_bytes + 1);
+        let copied = std::io::copy(&mut reader, &mut file)?;
+        if copied > max_bytes {
+            bail!("the file is over the {max_bytes} bytes allowed");
+        }
+        file.sync_all()?;
+        Ok(copied)
+    })();
+    match result {
+        Ok(bytes) => {
+            std::fs::rename(&partial, to)?;
+            Ok(Downloaded { status, url, content_type, bytes, duration_ms: started.elapsed().as_millis() as u64 })
+        }
+        Err(err) => {
+            let _ = std::fs::remove_file(&partial);
+            Err(err)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

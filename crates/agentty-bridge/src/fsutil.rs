@@ -101,6 +101,22 @@ pub fn cached_by_mtime<T: Clone + Send + 'static>(cache: &MtimeCache<T>, path: &
     value
 }
 
+/// A new file only the user can read (`0600` on Unix from the start), replacing one left there.
+pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_file(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
 /// Writes a file only the user can read: created `0600` on Unix before any content is written,
 /// then moved into place so a reader never sees half of it.
 pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

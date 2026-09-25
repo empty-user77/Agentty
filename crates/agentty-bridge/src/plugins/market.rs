@@ -78,6 +78,10 @@ pub struct Entry {
     /// before the field existed, which can only mean the first one.
     #[serde(default = "first_api_version")]
     pub api_version: u32,
+    /// `["onStartup"]`: the plugin starts with Agentty (an automation that runs on a schedule).
+    /// Nothing else is taken from a listing.
+    #[serde(default)]
+    pub activation_events: Vec<String>,
     pub module: Module,
 }
 
@@ -206,7 +210,7 @@ impl Entry {
             main: format!("{}.wasm", self.id),
             runtime: super::manifest::Runtime::Wasm,
             api_version: self.api_version,
-            activation_events: Vec::new(),
+            activation_events: self.activation_events.iter().filter(|e| e.as_str() == "onStartup").cloned().collect(),
             contributes: super::manifest::Contributes {
                 commands: Vec::new(),
                 panel: Some(super::manifest::PanelContribution {
