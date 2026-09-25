@@ -15,6 +15,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 /// Commands the executable answers without starting the app (see `main`).
+#[cfg_attr(not(unix), allow(dead_code))] // the cleanup runs on macOS and Linux only
 pub const CLI_COMMANDS: &[&str] =
     &["mcp-connector", "worktree-guard", "statusline", "mcp-browser", "browser", "signal", "tasks", "db", "worktree-for", "notify"];
 
@@ -134,6 +135,7 @@ pub fn close_strays() -> usize {
 
 /// Whether `other` is this installation's executable: the same file, or — during an update — the
 /// previous bundle it was moved to (`update.rs` renames it to `.Agentty-previous.app`).
+#[cfg_attr(not(unix), allow(dead_code))] // the cleanup runs on macOS and Linux only
 fn same_installation(other: &Path, exe: &Path) -> bool {
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if canonical(other) == canonical(exe) {
@@ -142,6 +144,7 @@ fn same_installation(other: &Path, exe: &Path) -> bool {
     previous_bundle_exe(exe).is_some_and(|previous| other == previous)
 }
 
+#[cfg_attr(not(unix), allow(dead_code))] // the cleanup runs on macOS and Linux only
 fn previous_bundle_exe(exe: &Path) -> Option<PathBuf> {
     // …/Agentty.app/Contents/MacOS/agentty → …/.Agentty-previous.app/Contents/MacOS/agentty
     let macos = exe.parent()?;
@@ -165,6 +168,7 @@ fn same_data_dir(env: &[String]) -> bool {
 
 /// Whether a process with `args` (program first) is the app rather than one of the executable's
 /// short-lived commands (a hook, the status line, `agentty browser`).
+#[cfg_attr(not(unix), allow(dead_code))] // the cleanup runs on macOS and Linux only
 fn runs_the_app(args: &[String]) -> bool {
     !args.get(1).is_some_and(|first| CLI_COMMANDS.contains(&first.as_str()))
 }
