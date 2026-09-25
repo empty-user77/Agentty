@@ -325,7 +325,7 @@ pub fn download(entry: &Entry) -> Result<Vec<u8>> {
     if bytes.len() != entry.module.size {
         bail!("the module is {} bytes, the marketplace says {}", bytes.len(), entry.module.size);
     }
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
     if !digest.eq_ignore_ascii_case(&entry.module.sha256) {
         bail!("the module does not match its checksum");
     }
