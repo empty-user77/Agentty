@@ -341,12 +341,24 @@ pub fn prune(repo: &Path) -> Result<()> {
     git(repo, &["worktree", "prune"]).map(|_| ())
 }
 
-/// Commits on `tree`'s branch that the main working tree does not have yet.
-pub fn commits_ahead(tree: &Path, main_head: &str) -> u32 {
-    if main_head.is_empty() || !main_head.chars().all(|c| c.is_ascii_hexdigit()) {
+/// The commit a working tree's own work is counted from: the remote's default branch
+/// (`origin/HEAD`) as last fetched, else `main_head` (the project folder's `HEAD`) for a
+/// repository without a remote. Counted from the project folder alone, a tree that is up to date
+/// with GitHub showed as ahead whenever that folder had not been pulled.
+pub fn ahead_base(repo: &Path, main_head: &str) -> String {
+    git(repo, &["rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD^{commit}"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| main_head.to_string())
+}
+
+/// Commits on `tree`'s branch that `base` (see [`ahead_base`]) does not have yet.
+pub fn commits_ahead(tree: &Path, base: &str) -> u32 {
+    if base.is_empty() || !base.chars().all(|c| c.is_ascii_hexdigit()) {
         return 0;
     }
-    git(tree, &["rev-list", "--count", &format!("{main_head}..HEAD")]).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+    git(tree, &["rev-list", "--count", &format!("{base}..HEAD")]).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -540,6 +552,13 @@ mod tests {
         assert_eq!(listed.len(), 2);
         assert!(listed[0].main && listed[1].managed);
         assert_eq!(commits_ahead(&tree.path, &listed[0].head), 0);
+        // Without a remote the project folder is the base; with one, the remote's default branch,
+        // so a project folder that was not pulled does not make every tree look ahead.
+        assert_eq!(ahead_base(&repo, &listed[0].head), listed[0].head);
+        git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]).unwrap();
+        git(&repo, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]).unwrap();
+        let remote_head = git(&repo, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        assert_eq!(ahead_base(&repo, "0000000"), remote_head);
 
         // Work in the session's tree does not show up in the project's own tree.
         std::fs::write(tree.path.join("a.txt"), "two\n").unwrap();

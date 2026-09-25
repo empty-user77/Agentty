@@ -244,6 +244,7 @@ fn load(root: PathBuf, expanded: Vec<PathBuf>) -> Snapshot {
     }
     let trees = agentty_bridge::worktree::list(&root).unwrap_or_default();
     let main_head = trees.iter().find(|t| t.main).map(|t| t.head.clone()).unwrap_or_default();
+    let base = agentty_bridge::worktree::ahead_base(&root, &main_head);
     // A tree whose folder was deleted by hand stays listed (as gone) so its menu can clean it up.
     snapshot.trees = trees
         .into_iter()
@@ -257,7 +258,7 @@ fn load(root: PathBuf, expanded: Vec<PathBuf>) -> Snapshot {
             } else {
                 agentty_bridge::git::status(&tree.path).map(|s| s.files.len()).unwrap_or(0)
             };
-            let ahead = if tree.main { 0 } else { agentty_bridge::worktree::commits_ahead(&tree.path, &main_head) };
+            let ahead = if tree.main { 0 } else { agentty_bridge::worktree::commits_ahead(&tree.path, &base) };
             TreeInfo { tree, changes, ahead }
         })
         .collect();
