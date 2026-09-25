@@ -715,7 +715,7 @@ impl Workbench {
                                 t(cx, "update.notes").into(),
                                 "https://github.com/empty-user77/agentty-releases/releases",
                             ))
-                            .child(link("about-license", "GPL-3.0-or-later".into(), "https://www.gnu.org/licenses/gpl-3.0.html"))
+                            .child(link("about-license", "Apache-2.0".into(), "https://www.apache.org/licenses/LICENSE-2.0"))
                             .child(link("about-privacy", t(cx, "legal.privacy").into(), super::update::PRIVACY_URL))
                             .child(link("about-terms", t(cx, "legal.terms").into(), super::update::TERMS_URL))
                             .child(link("about-eula", t(cx, "legal.eula").into(), super::update::EULA_URL))

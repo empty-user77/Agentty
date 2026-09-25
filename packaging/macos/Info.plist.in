@@ -55,7 +55,7 @@
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © Agentty contributors. GPL-3.0-or-later.</string>
+    <string>Copyright © Agentty contributors. Apache-2.0.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Agentty shows notifications when coding agents finish or need your input.</string>
 </dict>

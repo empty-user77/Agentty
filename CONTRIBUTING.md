@@ -36,7 +36,7 @@ docs/                 architecture and configuration docs
 - **Tests.** Pure logic (layout trees, parsers, formatting) should have unit tests next to the code.
 - **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `refactor:`,
   `docs:`, `test:`, `chore:`, `perf:`, `ci:`.
-- **License.** By contributing you agree that your contributions are licensed under GPL-3.0-or-later.
+- **License.** By contributing you agree that your contributions are licensed under Apache-2.0.
 
 ## Pull requests
 

@@ -11,7 +11,7 @@ priority: optional
 maintainer: Agentty contributors <yongyongdev@gmail.com>
 vendor: Agentty contributors
 homepage: https://www.agentty.run
-license: GPL-3.0-or-later
+license: Apache-2.0
 description: |-
   Multi-agent AI terminal.
   Runs Claude Code, Codex and other coding agents side by side in terminal panes, with sessions, usage,
