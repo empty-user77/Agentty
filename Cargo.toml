@@ -16,7 +16,7 @@ keywords = ["terminal", "ai", "claude", "codex", "gpui"]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-dirs = "6"
+dirs = "7"
 
 [profile.release]
 lto = "thin"
