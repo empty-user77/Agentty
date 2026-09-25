@@ -1,5 +1,5 @@
 // Agentty — a native, GPU-rendered multi-agent terminal.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 
 // Release builds on Windows are GUI apps (no console window of their own).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]

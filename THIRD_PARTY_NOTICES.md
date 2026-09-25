@@ -1,7 +1,6 @@
 # Third-Party Notices
 
-Agentty is licensed under GPL-3.0-or-later. It bundles or links the following components under their own licenses,
-all compatible with GPLv3.
+Agentty is licensed under Apache-2.0. It bundles or links the following components under their own licenses.
 
 ## Bundled fonts (`crates/agentty-app/assets/fonts/`)
 
