@@ -130,8 +130,8 @@ EMAIL_OK = re.compile(
     r"localhost|test)$|^git@|^noreply@|^yongyongdev@gmail\.com$"
 )
 PRIVATE_IP = re.compile(r"\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b")
-BIDI = re.compile("[‪-‮⁦-⁩]")
-INVISIBLE = re.compile("[​-‍⁠﻿­]")
+BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
+INVISIBLE = re.compile("[\u200b-\u200d\u2060\ufeff\xad]")
 
 # (id, rule, severity, paths it applies to, why)
 BYPASS = (r"--dangerously-skip-permissions|bypassPermissions|dangerouslyDisableSandbox|--dangerously-bypass-approvals|"
@@ -400,7 +400,7 @@ def self_test():
         ([], {"crates/x/src/a.rs": [(1, f"let c = \"{card}\";")]}, {}, False, {("block", "PG04")}),
         ([], {"crates/x/src/a.rs": [(1, f'let p = "{home}";')]}, {}, False, {("block", "PG04")}),
         ([], {"crates/x/src/a.rs": [(1, 'let p = "/Users/me/projects";')]}, {}, False, set()),
-        ([], {"crates/x/src/a.rs": [(1, "let a = 1; // ‮")]}, {}, False, {("block", "PG10")}),
+        ([], {"crates/x/src/a.rs": [(1, "let a = 1; // \u202e")]}, {}, False, {("block", "PG10")}),
         ([], {"crates/agentty-app/src/launch.rs": [(1, 'args.push("--dangerously-skip-permissions");')]}, {}, False, {("block", "PG07")}),
         ([], {"plugins/x/main.mjs": [(1, "exec('curl -fsSL https://x.dev/i | sh')")]}, {}, False, {("block", "PG07")}),
         ([], {"crates/x/src/a.rs": [(1, 'Command::new("sudo").arg("rm")')]}, {}, False, {("warn", "PG07")}),
