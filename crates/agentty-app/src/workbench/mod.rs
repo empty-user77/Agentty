@@ -439,6 +439,8 @@ pub struct Workbench {
     /// Settings revision already acknowledged, and the toast shown for a newer one.
     settings_seen: u64,
     toast: Option<(SharedString, u64)>,
+    /// Last toast id handed out. Never reset, so a closed toast's timer can't close a newer one.
+    toast_seq: u64,
     /// Title last given to the native window (the Dock and Window menus list windows by it).
     native_title: String,
     /// Spend and limit resets per agent, for the menu bar.
@@ -701,6 +703,7 @@ impl Workbench {
             launcher_at: None,
             settings_seen: 0,
             toast: None,
+            toast_seq: 0,
             native_title: String::new(),
             account_usage: Vec::new(),
             usage_scanner: Default::default(),
@@ -3200,7 +3203,8 @@ impl Workbench {
 
     /// A toast that stays for `millis` (something worth reading, not just a confirmation).
     pub(super) fn show_toast_for(&mut self, text: impl Into<SharedString>, millis: u64, cx: &mut Context<Self>) {
-        let id = self.toast.as_ref().map_or(1, |(_, id)| id + 1);
+        self.toast_seq += 1;
+        let id = self.toast_seq;
         self.toast = Some((text.into(), id));
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(std::time::Duration::from_millis(millis)).await;
@@ -3226,7 +3230,7 @@ impl Workbench {
             + self.files_panel.as_ref().map_or(0., |_| files + 5.)
     }
 
-    fn render_toast(&self, cx: &gpui::App) -> Option<impl IntoElement> {
+    fn render_toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let (text, id) = self.toast.clone()?;
         let docked = self.overlay_right_inset(cx);
         Some(
@@ -3246,7 +3250,21 @@ impl Workbench {
                     .text_size(px(crate::ui::Type::BODY))
                     .text_color(hex(Chrome::BRIGHT))
                     .child(crate::ui::icon("circle-check", crate::ui::IconSize::INLINE, hex(Chrome::SUCCESS)))
-                    .child(text),
+                    .child(text)
+                    // Closes it now instead of waiting out its timer.
+                    .child(
+                        div()
+                            .id("toast-close")
+                            .px_1()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                            .child(crate::ui::icon("x", crate::ui::IconSize::INLINE, hex(Chrome::MUTED)))
+                            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                                this.toast = None;
+                                cx.notify();
+                            })),
+                    ),
             )),
         )
     }
