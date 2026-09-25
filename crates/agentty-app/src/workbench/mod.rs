@@ -32,9 +32,11 @@ mod palette;
 pub mod panes;
 mod persist;
 mod picker;
+pub mod plugin_browser;
 mod plugin_host;
 mod plugin_panel;
 mod plugin_window;
+mod plugin_workspace;
 mod plugins_page;
 mod processes;
 mod prompt_dialog;
@@ -161,6 +163,9 @@ pub fn saved_window(slot: usize) -> Option<persist::WindowState> {
 pub struct Tab {
     pub root: PaneNode<Pane>,
     pub active: Pane,
+    /// In a plugin's workspace, the automation this tab is: its panel, its browser pages and
+    /// these terminals go together, and each tab runs on its own.
+    pub instance: Option<persist::TabInstance>,
 }
 
 pub struct Workspace {
@@ -180,6 +185,9 @@ pub struct Workspace {
     pub closed_tabs: Vec<TabSnapshot>,
     /// Colour the card is filled with.
     pub color: Option<u32>,
+    /// The plugin this workspace belongs to (`mode: "workspace"`): its panel and the browser come
+    /// up while it is in front.
+    pub plugin: Option<String>,
 }
 
 /// How many closed tabs a workspace remembers.
@@ -470,6 +478,31 @@ pub struct Workbench {
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
+    /// The workspace the user was in before going to a plugin's (its icon, pressed again, goes back).
+    before_plugin_workspace: Option<u64>,
+    /// The plugin whose workspace is in front and whose panel it brought up.
+    plugin_workspace_shown: Option<String>,
+    /// The user's own browser, set aside while a plugin's workspace (whose browser shows its
+    /// automation's pages) is in front.
+    stashed_browser: Option<browser::BrowserPanel>,
+    /// The plugin and automation whose pages the browser shows now.
+    instance_shown: Option<(String, String)>,
+    /// Automations each plugin has been told about, and the run it was told in.
+    known_instances: HashMap<String, (Option<u64>, Vec<String>)>,
+    /// Whether the workspace list was open before a plugin's workspace folded it away.
+    plugin_workspace_sidebar: Option<bool>,
+    /// An edge of a plugin's workspace being dragged.
+    plugin_ws_drag: Option<plugin_workspace::PluginWorkspaceDrag>,
+    /// Pages plugins drive (`browser/*`), in sight or not.
+    plugin_browsers: Vec<plugin_browser::PluginBrowser>,
+    /// Plugin pages to put in the browser panel at the next render.
+    plugin_pages_to_show: Vec<u64>,
+    /// Plugins whose browser consent dialog is open, with the calls waiting for the answer.
+    browser_asking: std::collections::HashMap<String, Vec<crate::plugins::PluginCall>>,
+    /// Plugins the user said no to, with the run the answer holds for.
+    browser_refused: std::collections::HashMap<String, u64>,
+    /// Out-of-sight visits that keep a site's session going (`browser_keeper`).
+    site_refreshes: Vec<(u64, crate::webview::WebView)>,
     find_bar: Option<find::FindBar>,
     /// Panes already told that they share a working tree with another agent (once each).
     shared_tree_warned: std::collections::HashSet<u64>,
@@ -520,6 +553,14 @@ pub struct Workbench {
     /// Panes a plugin started, and the status each was last told about: how a plugin hears that
     /// the agent it set to work has finished.
     plugin_panes: HashMap<u64, (String, &'static str)>,
+    /// Panes each plugin launched itself (prompt/inject into a new tab, split or workspace): the
+    /// ones it may type into without the user having just asked it to.
+    plugin_launched: HashMap<u64, String>,
+    /// The plugin whose permissions the user is being asked about.
+    plugin_consent_open: Option<String>,
+    /// When the user last used each plugin's UI (a panel control, one of its commands): for a
+    /// short while after that, the plugin may act on the terminal the user is in.
+    plugin_gesture: HashMap<String, std::time::Instant>,
     /// Whether the loop that looks at those panes while nothing is drawn is already running.
     plugin_pane_poll: bool,
     /// Plugins whose own window has been asked for but not yet opened — opening is deferred, and
@@ -687,6 +728,18 @@ impl Workbench {
             inventory: Default::default(),
             browser: None,
             browser_request: None,
+            plugin_browsers: Vec::new(),
+            before_plugin_workspace: None,
+            plugin_workspace_shown: None,
+            stashed_browser: None,
+            instance_shown: None,
+            known_instances: HashMap::new(),
+            plugin_workspace_sidebar: None,
+            plugin_ws_drag: None,
+            plugin_pages_to_show: Vec::new(),
+            browser_asking: Default::default(),
+            browser_refused: Default::default(),
+            site_refreshes: Vec::new(),
             find_bar: None,
             shared_tree_warned: Default::default(),
             servers: Default::default(),
@@ -718,6 +771,9 @@ impl Workbench {
             plugin_mode_menu: false,
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
+            plugin_launched: HashMap::new(),
+            plugin_consent_open: None,
+            plugin_gesture: HashMap::new(),
             plugin_pane_poll: false,
             plugin_windows_opening: std::collections::HashSet::new(),
             plugin_windows_closing: std::collections::HashSet::new(),
@@ -892,6 +948,15 @@ impl Workbench {
             // a closed window, a force quit or a crash never reach the quit hook.
             TerminalEvent::DirectoryChanged | TerminalEvent::SessionChanged => this.persist_soon(cx),
             TerminalEvent::TitleChanged | TerminalEvent::StatusChanged => {
+                // Looked at, or answered (the agent is at work again): its notifications stop
+                // calling the user. A finished turn's stays until then.
+                let (pane_id, moved_on, seen) = {
+                    let view = pane.read(cx);
+                    (view.pane_id, view.status.in_turn(), !view.attention)
+                };
+                if moved_on || seen {
+                    crate::notifications::withdraw(pane_id);
+                }
                 // A shell that changed folder may have entered a project with an agent harness.
                 this.watch_harness(&pane, cx);
                 // It may also have landed on another branch, whose pull request the card shows.
@@ -979,7 +1044,7 @@ impl Workbench {
         match tab.root.remove(pane) {
             Some(root) => {
                 let active = if tab.active == *pane { root.leaves()[0].clone() } else { tab.active };
-                ws.tabs.insert(t, Tab { root, active });
+                ws.tabs.insert(t, Tab { root, active, instance: tab.instance });
             }
             None => {
                 if ws.active_tab >= ws.tabs.len() {
@@ -1010,6 +1075,7 @@ impl Workbench {
                         color_value: ws.color,
                         branch: last_branch,
                         last_activity_ms: Some(last_activity),
+                        plugin: ws.plugin.clone(),
                     });
                 }
                 None => {
@@ -1098,12 +1164,13 @@ impl Workbench {
             name,
             group,
             cwd,
-            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane }],
+            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
             active_tab: 0,
             dormant: None,
             asleep_on_close: false,
             closed_tabs: Vec::new(),
             color: None,
+            plugin: None,
         });
         self.activate_workspace(self.workspaces.len() - 1, window, cx);
         self.persist(cx);
@@ -1134,7 +1201,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
         ws.active_tab = ws.tabs.len() - 1;
         self.page = None;
         self.session_viewer = None;
@@ -1158,7 +1225,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone() });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
         ws.active_tab = ws.tabs.len() - 1;
         self.persist(cx);
         cx.notify();
@@ -1198,6 +1265,7 @@ impl Workbench {
         if let Some(snapshot) = self.workspaces[index].dormant.take() {
             self.revive(index, snapshot, cx);
         }
+        self.sync_plugin_workspace(cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -1982,8 +2050,9 @@ impl Workbench {
         let leaves = root.leaves();
         let active = leaves.get(snapshot.active_pane).unwrap_or(&leaves[0]).clone();
         let ws = &mut self.workspaces[w];
-        ws.tabs.push(Tab { root, active });
+        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
         ws.active_tab = ws.tabs.len() - 1;
+        self.split_shared_instances(w);
         self.active_workspace = w;
         self.page = None;
         self.persist(cx);
@@ -2398,6 +2467,7 @@ impl Workbench {
 
     fn snapshot_tab(&self, tab: &Tab, cx: &gpui::App) -> TabSnapshot {
         TabSnapshot {
+            instance: tab.instance.clone(),
             layout: NodeSnapshot::from_tree(&tab.root.map(&mut |pane| Self::snapshot_pane(pane, cx))),
             active_pane: tab.root.leaves().iter().position(|p| *p == tab.active).unwrap_or(0),
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
@@ -2408,7 +2478,8 @@ impl Workbench {
     fn panel_state(&self) -> persist::PanelState {
         let browser = self.browser.as_ref();
         persist::PanelState {
-            sidebar_hidden: !self.sidebar_open,
+            // What the user chose, not what a plugin's workspace folded away for the moment.
+            sidebar_hidden: !self.plugin_workspace_sidebar.unwrap_or(self.sidebar_open),
             files_open: self.files_panel.is_some(),
             files_pinned: self.files_panel.as_ref().and_then(|panel| panel.pinned.clone()),
             // Written to disk: an address carrying a credential keeps only its origin.
@@ -2427,7 +2498,11 @@ impl Workbench {
     /// Opens what was open around the terminals at the last save. Nothing here is counted as
     /// a use of the feature: it is the same session coming back.
     fn restore_panels(&mut self, panels: persist::PanelState, cx: &mut Context<Self>) {
-        self.sidebar_open = !panels.sidebar_hidden;
+        // A plugin's workspace in front keeps the list folded; it opens as saved on leaving.
+        match self.plugin_workspace_sidebar.as_mut() {
+            Some(saved) => *saved = !panels.sidebar_hidden,
+            None => self.sidebar_open = !panels.sidebar_hidden,
+        }
         if panels.files_open {
             self.show_files_panel(panels.files_pinned.filter(|p| p.is_dir()), cx);
         }
@@ -2436,7 +2511,10 @@ impl Workbench {
             self.browser_request = Some(panels.browser_tabs[active].clone());
             self.browser_restore = Some((panels.browser_tabs, active));
         }
-        if let Some(plugin) = panels.plugin.filter(|id| crate::plugins::plugin(cx, id).is_some_and(|p| p.enabled)) {
+        // A workspace plugin's panel comes back with its workspace, not by itself.
+        if let Some(plugin) =
+            panels.plugin.filter(|id| crate::plugins::plugin(cx, id).is_some_and(|p| p.enabled) && !self.wants_workspace(id, cx))
+        {
             self.open_plugin_panel(&plugin, cx);
         }
         if panels.docker_open && !self.docker.open {
@@ -2497,6 +2575,7 @@ impl Workbench {
                     closed_tabs: ws.closed_tabs.clone(),
                     color: None,
                     color_value: ws.color,
+                    plugin: ws.plugin.clone(),
                     tabs: ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)).collect(),
                     // What the card says while the workspace is open, so it says the same once it
                     // is folded away: the branch it is on and when it last did something.
@@ -2549,6 +2628,7 @@ impl Workbench {
                 active_tab: 0,
                 closed_tabs: snapshot.closed_tabs.clone(),
                 color: stored_color(snapshot.color_value, snapshot.color),
+                plugin: snapshot.plugin.clone(),
                 dormant: Some(snapshot),
                 asleep_on_close: false,
             });
@@ -2573,7 +2653,7 @@ impl Workbench {
             if self.zoomed.is_none() {
                 self.zoomed = tab.zoomed_pane.and_then(|index| leaves.get(index)).cloned();
             }
-            tabs.push(Tab { root, active });
+            tabs.push(Tab { root, active, instance: tab.instance.clone() });
         }
         let ws = &mut self.workspaces[index];
         ws.active_tab = snapshot.active_tab.min(tabs.len().saturating_sub(1));
@@ -2584,7 +2664,24 @@ impl Workbench {
         if ws.tabs.is_empty() {
             let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, snapshot.cwd.clone()), cx);
             let ws = &mut self.workspaces[index];
-            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane });
+            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+        }
+        self.split_shared_instances(index);
+    }
+
+    /// Every tab is an automation of its own: a tab whose id another tab already has (a layout
+    /// saved before ids were checked, or a closed tab reopened) gets a new one.
+    fn split_shared_instances(&mut self, index: usize) {
+        let mut seen = std::collections::HashSet::new();
+        let shared: Vec<usize> = self.workspaces[index]
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(t, tab)| tab.instance.as_ref().filter(|i| !seen.insert(i.id.clone())).map(|_| t))
+            .collect();
+        for t in shared {
+            let fresh = self.new_instance();
+            self.workspaces[index].tabs[t].instance = Some(fresh);
         }
     }
 
@@ -2599,11 +2696,16 @@ impl Workbench {
                 || self.files_trees_drag.is_some()
                 || self.browser_net_drag.is_some()
                 || self.split_drag.is_some()
+                || self.plugin_ws_drag.is_some()
                 || self.flow.is_dragging()
             {
                 self.end_drags(cx);
             }
             return;
+        }
+        if let Some(drag) = self.plugin_ws_drag {
+            let viewport = window.viewport_size();
+            return self.drag_plugin_workspace(drag, f32::from(event.position.x), f32::from(event.position.y), viewport, cx);
         }
         if let Some((start_y, start_height)) = self.browser_net_drag {
             // Dragging up makes the network panel taller; the page above keeps a readable height.
@@ -2659,7 +2761,9 @@ impl Workbench {
             || self.side_resizing.is_some()
             || self.files_trees_drag.is_some()
             || self.browser_net_drag.is_some()
+            || self.plugin_ws_drag.is_some()
         {
+            self.plugin_ws_drag = None;
             self.sidebar_resizing = false;
             self.browser_resizing = false;
             self.files_resizing = false;
@@ -2696,6 +2800,7 @@ impl Render for Workbench {
         self.open_pending_file(window, cx);
         self.prepare_browser(window, cx);
         self.prepare_plugin_panel(window, cx);
+        self.prepare_plugin_consent(window, cx);
         self.prepare_files_panel(cx);
         self.prepare_docker(cx);
         self.prepare_db(window, cx);
@@ -2747,14 +2852,21 @@ impl Render for Workbench {
                 }
             }
         };
+        let mut main = Some(main);
+        // A plugin's own workspace in front, drawn in its own layout.
+        let plugin_workspace = self.front_plugin_workspace(cx).filter(|_| self.page.is_none());
 
         div()
             .id("workbench")
             .key_context("Workbench")
             .track_focus(&self.focus_handle)
-            .on_action(
-                cx.listener(|this, _: &NewTerminalTab, window, cx| this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, window, cx)),
-            )
+            .on_action(cx.listener(|this, _: &NewTerminalTab, window, cx| {
+                // In a plugin's workspace a new tab is a new automation.
+                match this.front_plugin_workspace(cx).filter(|_| this.page.is_none()) {
+                    Some(plugin) => this.new_plugin_instance(&plugin, cx),
+                    None => this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, window, cx),
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &NewClaudeTab, window, cx| this.request_launch(PaneKind::Claude, LaunchTarget::NewTab, window, cx)),
             )
@@ -2938,6 +3050,7 @@ impl Render for Workbench {
                         || this.files_trees_drag.is_some()
                         || this.browser_net_drag.is_some()
                         || this.split_drag.is_some()
+                        || this.plugin_ws_drag.is_some()
                     {
                         this.end_drags(cx);
                     }
@@ -2968,36 +3081,42 @@ impl Render for Workbench {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(self.render_tab_strip(cx))
+                            // A plugin's workspace has a layout of its own (its tabs sit with its terminals).
+                            .when(plugin_workspace.is_none(), |d| d.child(self.render_tab_strip(cx)))
                             .children(self.render_service_banner(cx))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    // A floating or full-area panel is drawn over this row.
-                                    .relative()
-                                    .child(div().flex_1().min_w_0().h_full().child(main))
-                                    .when(self.page.is_none(), |d| {
-                                        let docked = self.plugin_panel_width(cx) > 0.;
-                                        d.children(self.render_browser_splitter(cx))
-                                            .children(self.render_browser(cx))
-                                            .when(docked, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx)))
-                                            .children(self.render_plugin_panel(cx))
-                                            .when(self.docker.open, |d| {
-                                                d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx))
-                                            })
-                                            .children(self.render_docker_panel(cx))
-                                            .when(self.db.panel_open, |d| {
-                                                d.child(self.render_side_splitter(side_panels::SidePanel::Database, cx))
-                                            })
-                                            .children(self.render_db_panel(cx))
-                                            .children(self.render_files_splitter(cx))
-                                            .children(self.render_files_panel(cx))
-                                            // Over everything on this row, whatever else is docked.
-                                            .children(self.render_plugin_overlay(cx))
-                                    }),
-                            )
+                            .when_some(plugin_workspace.clone(), |d, plugin| {
+                                d.child(self.render_plugin_workspace(&plugin, main.take(), cx))
+                            })
+                            .when(plugin_workspace.is_none(), |d| {
+                                d.child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .flex()
+                                        // A floating or full-area panel is drawn over this row.
+                                        .relative()
+                                        .child(div().flex_1().min_w_0().h_full().children(main.take()))
+                                        .when(self.page.is_none(), |d| {
+                                            let docked = self.plugin_panel_width(cx) > 0.;
+                                            d.children(self.render_browser_splitter(cx))
+                                                .children(self.render_browser(cx))
+                                                .when(docked, |d| d.child(self.render_side_splitter(side_panels::SidePanel::Plugin, cx)))
+                                                .children(self.render_plugin_panel(cx))
+                                                .when(self.docker.open, |d| {
+                                                    d.child(self.render_side_splitter(side_panels::SidePanel::Docker, cx))
+                                                })
+                                                .children(self.render_docker_panel(cx))
+                                                .when(self.db.panel_open, |d| {
+                                                    d.child(self.render_side_splitter(side_panels::SidePanel::Database, cx))
+                                                })
+                                                .children(self.render_db_panel(cx))
+                                                .children(self.render_files_splitter(cx))
+                                                .children(self.render_files_panel(cx))
+                                                // Over everything on this row, whatever else is docked.
+                                                .children(self.render_plugin_overlay(cx))
+                                        }),
+                                )
+                            })
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
                             // Opens under the bell, at the right end of the title bar.
                             .when(self.notices_open, |d| {
@@ -3029,6 +3148,7 @@ impl Render for Workbench {
             .children(self.render_db_approval(cx))
             .children(self.render_harness_dialog(cx))
             .children(self.render_onboarding(cx))
+            .children(self.render_waiting_banner(cx))
             .children(self.render_toast(cx))
     }
 }
@@ -3094,18 +3214,21 @@ impl Workbench {
         .detach();
     }
 
+    /// How far from the right edge an overlay must stay: left of the panels docked at the right.
+    /// The browser is a native view, and anything drawn under it would never be seen.
+    pub(super) fn overlay_right_inset(&self, cx: &gpui::App) -> f32 {
+        if self.page.is_some() {
+            return 0.;
+        }
+        let (browser, files) = self.docked_widths(cx);
+        self.browser.as_ref().map_or(0., |_| browser + 5.)
+            + self.side_panels_total(cx)
+            + self.files_panel.as_ref().map_or(0., |_| files + 5.)
+    }
+
     fn render_toast(&self, cx: &gpui::App) -> Option<impl IntoElement> {
         let (text, id) = self.toast.clone()?;
-        // Left of the panels docked at the right: the browser is a native view, and anything drawn
-        // under it (a toast about a server that just stopped, say) would never be seen.
-        let docked = if self.page.is_none() {
-            let (browser, files) = self.docked_widths(cx);
-            self.browser.as_ref().map_or(0., |_| browser + 5.)
-                + self.side_panels_total(cx)
-                + self.files_panel.as_ref().map_or(0., |_| files + 5.)
-        } else {
-            0.
-        };
+        let docked = self.overlay_right_inset(cx);
         Some(
             div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).right(px(16. + docked)).child(crate::ui::fade_in(
                 SharedString::from(format!("toast-{id}")),
@@ -3656,6 +3779,57 @@ impl Workbench {
                 }
             }
             "browser-reload" => self.reload_browser(argument == "hard", cx),
+            // `browser-js <body>`: runs an async function body in the tab in front, prints the result.
+            "browser-js" => {
+                let view = self.browser.as_ref().map(|browser| browser.webview());
+                let ran = view.is_some_and(|view| match view.borrow().as_ref() {
+                    Some(page) => {
+                        page.call_async(argument, &[], Box::new(|result| eprintln!("browser-js: {result:?}")));
+                        true
+                    }
+                    None => false,
+                });
+                if !ran {
+                    eprintln!("browser-js: no page");
+                }
+            }
+            // `browser-keeper remember|restore|forget|sites`: the sign-in keeper by hand.
+            "browser-keeper" => match argument {
+                "remember" => crate::browser_keeper::remember(cx),
+                "restore" => crate::browser_keeper::restore(cx),
+                "forget" => crate::browser_keeper::forget_all(),
+                _ => {
+                    for site in crate::browser_keeper::kept_sites(cx) {
+                        let host = site.host.clone();
+                        let refreshed = crate::browser_keeper::refreshed_at(&host);
+                        plugin_browser::site_status(&site, move |status| {
+                            eprintln!("browser-keeper: {host} status={status:?} refreshed={refreshed:?}")
+                        });
+                    }
+                }
+            },
+            // `browser-refresh <host>`: a keep-alive visit to one kept site now.
+            "browser-refresh" => {
+                if let Some(site) = crate::browser_keeper::kept_sites(cx).into_iter().find(|site| site.host == argument) {
+                    self.refresh_site(&site, window, cx);
+                }
+            }
+            // `plugin-browsers`: the pages plugins drive.
+            "plugin-browsers" => {
+                for page in &self.plugin_browsers {
+                    let borrowed = page.webview.borrow();
+                    let view = borrowed.as_ref();
+                    eprintln!(
+                        "plugin-browsers: id={} plugin={} shown={} url={:?} loading={:?}",
+                        page.id,
+                        page.plugin,
+                        page.shown,
+                        view.and_then(crate::webview::WebView::current_url),
+                        view.map(crate::webview::WebView::is_loading)
+                    );
+                }
+                eprintln!("plugin-browsers: refreshes={}", self.site_refreshes.len());
+            }
             // `browser-tab [url]`, `browser-tab close <index>`, `browser-tab select <index>`.
             "browser-tab" => match argument.split_once(' ') {
                 Some(("close", index)) => self.close_browser_tab(index.parse().unwrap_or(0), window, cx),
@@ -3674,7 +3848,7 @@ impl Workbench {
             // `agentty-link agentty://…`: as if another app opened the link.
             "agentty-link" => self.open_agentty_link(argument, window, cx),
             // `plugin-panel <id>` / `plugin-command <id> <command>`.
-            "plugin-panel" => self.toggle_plugin_panel(argument, cx),
+            "plugin-panel" => self.toggle_plugin(argument, window, cx),
             "plugin-command" => {
                 if let Some((plugin, command)) = argument.split_once(' ') {
                     self.run_plugin_command(plugin, command, None, cx);
@@ -3686,6 +3860,14 @@ impl Workbench {
             "plugin-market" => self.debug_market(argument, window, cx),
             // `plugin-enable <plugin> on|off`: the switch on the Plugins page, which is also how a
             // panel (and a panel's own window) is meant to go away when its plugin does.
+            // `plugin-consent <plugin> allow|deny`: the first-run permission question, answered as
+            // the user would (the native dialog stays open; its answer then changes nothing).
+            "plugin-consent" => {
+                if let Some((plugin, answer)) = argument.split_once(' ') {
+                    crate::plugins::answer_consent(plugin, answer.trim() == "allow", cx);
+                    eprintln!("plugin-consent: {plugin} {answer}");
+                }
+            }
             "plugin-enable" => {
                 if let Some((plugin, state)) = argument.split_once(' ') {
                     self.set_plugin_enabled_debug(plugin, state.trim() == "on", cx);
@@ -3700,17 +3882,21 @@ impl Workbench {
                 }
             }
             // `plugin-event <plugin> <element> <event> [value]`: what a click or a keystroke in a
-            // plugin's panel sends, without the mouse.
+            // plugin's panel sends, without the mouse. `plugin-event <plugin> <list> action
+            // <item>/<action>` presses a button on a list row.
             "plugin-event" => {
                 let mut parts = argument.splitn(4, ' ');
                 if let (Some(plugin), Some(element), Some(event)) = (parts.next(), parts.next(), parts.next()) {
-                    let value = parts.next().map(|value| serde_json::Value::String(value.to_string()));
+                    let rest = parts.next();
+                    let row =
+                        rest.filter(|_| event == "action" || event == "select").map(|rest| rest.split_once('/').unwrap_or((rest, "")));
+                    let value = rest.filter(|_| row.is_none()).map(|value| serde_json::Value::String(value.to_string()));
                     let event = agentty_bridge::plugins::ui::UiEvent {
                         element: element.to_string(),
                         event: event.to_string(),
                         value,
-                        item: None,
-                        action: None,
+                        item: row.map(|(item, _)| item.to_string()),
+                        action: row.map(|(_, action)| action.to_string()).filter(|action| !action.is_empty()),
                     };
                     self.send_plugin_event(plugin, event, cx);
                 }
@@ -3846,6 +4032,11 @@ impl Workbench {
                 if let Some(pane) = self.active_pane() {
                     eprintln!("hover: {:?}", pane.read(cx).debug_hover());
                 }
+            }
+            // `activate`: the app and this window in front, so typed keys reach the field clicked.
+            "activate" => {
+                cx.activate(true);
+                window.activate_window();
             }
             "focus-info" => {
                 let alias = self

@@ -279,6 +279,110 @@ impl Workbench {
     }
 }
 
+/// An agent waiting for the user, somewhere off screen.
+struct Waiting {
+    pane_id: u64,
+    permission: bool,
+    /// "Claude Code · workspace".
+    who: String,
+    /// What it asks, when it says.
+    what: Option<String>,
+}
+
+impl Workbench {
+    /// Agents that asked the user something (a question, a permission) and wait, where the user
+    /// is not looking — newest request first.
+    fn waiting_for_user(&self, cx: &gpui::App) -> Vec<Waiting> {
+        let mut waiting: Vec<(u64, Waiting)> = self
+            .all_panes()
+            .into_iter()
+            .filter_map(|pane| {
+                let view = pane.read(cx);
+                if !view.status.needs_user() || !view.attention || self.pane_in_view(view.pane_id, cx) {
+                    return None;
+                }
+                let (permission, what) = match &view.status {
+                    crate::terminal::AgentStatus::Permission(what) => (true, what.clone()),
+                    crate::terminal::AgentStatus::Question(what) => (false, what.clone()),
+                    _ => return None,
+                };
+                let source = match view.display_kind().agent() {
+                    Some(agent) => agent.display_name().to_string(),
+                    None => crate::ui::tilde(&view.display_cwd()),
+                };
+                let workspace = self.locate(&pane).map(|(w, _)| self.workspace_title(&self.workspaces[w], cx)).unwrap_or_default();
+                let at = self.notices.iter().find(|n| n.pane_id == view.pane_id).map_or(0, |n| n.at_ms);
+                Some((at, Waiting { pane_id: view.pane_id, permission, who: view_title_for_bubble(&source, &workspace), what }))
+            })
+            .collect();
+        waiting.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        waiting.into_iter().map(|(_, w)| w).collect()
+    }
+
+    /// Stays on screen while an agent waits for the user out of sight — until it is answered or
+    /// looked at — so a question never sits unnoticed in a tab in the back. A click goes there.
+    pub(super) fn render_waiting_banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let waiting = self.waiting_for_user(cx);
+        let first = waiting.first()?;
+        let pane_id = first.pane_id;
+        let (icon, label) = if first.permission {
+            ("shield-alert", t(cx, "status.permission"))
+        } else {
+            ("message-circle-question", t(cx, "status.question"))
+        };
+        let more = waiting.len() - 1;
+        let right = 16. + self.overlay_right_inset(cx);
+        Some(
+            div().absolute().bottom(px(super::chrome::STATUS_BAR_HEIGHT + 12.)).right(px(right)).child(
+                div()
+                    .id("waiting-banner")
+                    .occlude()
+                    .w(px(340.))
+                    .flex()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(hex(Chrome::OVERLAY))
+                    .border_1()
+                    .border_color(hex(Chrome::FAVORITE))
+                    .shadow_lg()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.jump_to_pane_id(pane_id, window, cx);
+                    }))
+                    .child(div().pt_0p5().child(crate::ui::icon(icon, crate::ui::IconSize::INLINE, hex(Chrome::FAVORITE))))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1p5()
+                                    .t_small()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .child(div().font_weight(FontWeight::MEDIUM).text_color(hex(Chrome::FAVORITE)).child(label))
+                                    .child(div().flex_1().truncate().child(first.who.clone())),
+                            )
+                            .children(
+                                first.what.clone().map(|what| div().t_body().text_color(hex(Chrome::BRIGHT)).line_clamp(2).child(what)),
+                            )
+                            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(if more > 0 {
+                                tf(cx, "waiting.go_more", &[("n", &more.to_string())])
+                            } else {
+                                t(cx, "waiting.go").to_string()
+                            })),
+                    ),
+            ),
+        )
+    }
+}
+
 fn view_title_for_bubble(source: &str, workspace: &str) -> String {
     if workspace.is_empty() {
         source.to_string()

@@ -12,10 +12,11 @@ pub const MANIFEST_FILE: &str = "agentty-plugin.json";
 /// |---|---|
 /// | 1 | the panel, commands, links, storage, `net/fetch`, `prompt/inject`, `session/get` |
 /// | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
+/// | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
 ///
 /// A plugin that uses something a version added says so, and an Agentty that speaks less than
 /// that tells the user to update instead of installing a module it cannot run.
-pub const API_VERSION: u32 = 2;
+pub const API_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +57,9 @@ pub struct Manifest {
     pub contributes: Contributes,
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// The sites `browser.control` works on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<super::sites::BrowserContribution>,
     /// Apps or files this plugin integrates with; the store marks the plugin as recommended when found.
     #[serde(default)]
     pub detect: Vec<String>,
@@ -165,9 +169,10 @@ pub struct PanelContribution {
     /// Which of Agentty's three surfaces the panel's icon sits on.
     #[serde(default)]
     pub surface: Surface,
-    /// How the panel opens. The user can change it; this is what it does first.
-    #[serde(default)]
-    pub mode: PanelMode,
+    /// How the panel opens. The user can change it; this is what it does first. Left out: see
+    /// [`Manifest::panel_mode`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PanelMode>,
 }
 
 /// How a panel takes its place in the window.
@@ -183,10 +188,14 @@ pub enum PanelMode {
     Window,
     /// The whole area the terminals and pages use, like the Git page.
     Full,
+    /// A workspace of the plugin's own: its terminals as tabs, the browser beside them and the
+    /// panel docked right of those — for plugins whose work runs in agents and pages the user
+    /// watches. The panel is shown while that workspace is the one in front.
+    Workspace,
 }
 
 impl PanelMode {
-    pub const ALL: &'static [PanelMode] = &[PanelMode::Push, PanelMode::Overlay, PanelMode::Window, PanelMode::Full];
+    pub const ALL: &'static [PanelMode] = &[PanelMode::Push, PanelMode::Overlay, PanelMode::Window, PanelMode::Full, PanelMode::Workspace];
 
     /// The name used in `agentty-plugin.json` and in the settings.
     pub fn id(self) -> &'static str {
@@ -195,6 +204,7 @@ impl PanelMode {
             PanelMode::Overlay => "overlay",
             PanelMode::Window => "window",
             PanelMode::Full => "full",
+            PanelMode::Workspace => "workspace",
         }
     }
 
@@ -204,7 +214,7 @@ impl PanelMode {
 
     /// Whether the panel sits in the window's layout (and so takes room from it).
     pub fn is_docked(self) -> bool {
-        self == PanelMode::Push
+        matches!(self, PanelMode::Push | PanelMode::Workspace)
     }
 }
 
@@ -215,6 +225,8 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("terminal.write", "Type into any open terminal and press Enter, a shell included"),
     ("session.read", "Read the conversation of AI sessions open in Agentty"),
     ("workspace.read", "See open workspaces, tabs, folders and agent status"),
+    ("browser.control", "Use the in-app browser on the sites it names, signed in as you"),
+    ("files", "Keep files in a folder of its own (pictures, videos, drafts)"),
 ];
 
 impl Manifest {
@@ -275,6 +287,18 @@ impl Manifest {
                 bail!("plugin \"{}\": unknown permission {permission}", self.id);
             }
         }
+        let sites = self.browser.as_ref().map_or(0, |browser| browser.sites.len());
+        if let Some(browser) = &self.browser {
+            browser.validate().with_context(|| format!("plugin \"{}\"", self.id))?;
+        }
+        // The permission means "on these sites": without sites it would mean nothing, and sites
+        // without it would be a list the user is shown for no reason.
+        if self.has_permission("browser.control") != (sites > 0) {
+            bail!("plugin \"{}\": browser.control and browser.sites come together", self.id);
+        }
+        if self.has_permission("browser.control") && self.api_version < 3 {
+            bail!("plugin \"{}\": browser.control needs apiVersion 3", self.id);
+        }
         Ok(())
     }
 
@@ -287,9 +311,18 @@ impl Manifest {
         self.contributes.panel.as_ref().map_or(Surface::Pane, |panel| panel.surface)
     }
 
-    /// How this plugin's panel opens until the user says otherwise.
+    /// How this plugin's panel opens until the user says otherwise: what the manifest says, else
+    /// docked beside the terminals for a plugin that works in them (it sends prompts or types),
+    /// and the whole area for one that does its work out of sight.
     pub fn panel_mode(&self) -> PanelMode {
-        self.contributes.panel.as_ref().map_or(PanelMode::Push, |panel| panel.mode)
+        if let Some(mode) = self.contributes.panel.as_ref().and_then(|panel| panel.mode) {
+            return mode;
+        }
+        if self.has_permission("prompt.inject") || self.has_permission("terminal.write") {
+            PanelMode::Push
+        } else {
+            PanelMode::Full
+        }
     }
 
     pub fn starts_with_agentty(&self) -> bool {
@@ -448,9 +481,17 @@ mod tests {
     fn a_panel_opens_the_way_it_asks_to() {
         let mut json = sample();
         assert_eq!(Manifest::parse(json.to_string().as_bytes()).unwrap().panel_mode(), PanelMode::Push);
-        for (name, mode) in
-            [("overlay", PanelMode::Overlay), ("window", PanelMode::Window), ("full", PanelMode::Full), ("push", PanelMode::Push)]
-        {
+        // Working in no terminal, a plugin gets the whole area unless it asks for something else.
+        let mut quiet = sample();
+        quiet["permissions"] = serde_json::json!([]);
+        assert_eq!(Manifest::parse(quiet.to_string().as_bytes()).unwrap().panel_mode(), PanelMode::Full);
+        for (name, mode) in [
+            ("overlay", PanelMode::Overlay),
+            ("window", PanelMode::Window),
+            ("full", PanelMode::Full),
+            ("push", PanelMode::Push),
+            ("workspace", PanelMode::Workspace),
+        ] {
             json["contributes"]["panel"] = serde_json::json!({ "title": "Hello", "mode": name });
             assert_eq!(Manifest::parse(json.to_string().as_bytes()).unwrap().panel_mode(), mode);
             assert_eq!(PanelMode::from_id(name), Some(mode));
@@ -493,6 +534,29 @@ mod tests {
             manifest[key] = value;
             assert!(Manifest::parse(manifest.to_string().as_bytes()).is_err(), "{key} accepted");
         }
+    }
+
+    #[test]
+    fn the_browser_permission_comes_with_its_sites() {
+        let with = |permissions: serde_json::Value, browser: Option<serde_json::Value>, api: u32| {
+            let mut value = sample();
+            value["permissions"] = permissions;
+            value["apiVersion"] = serde_json::json!(api);
+            if let Some(browser) = browser {
+                value["browser"] = browser;
+            }
+            Manifest::parse(value.to_string().as_bytes())
+        };
+        let sites = serde_json::json!({ "sites": [{ "host": "example.com", "signedInCookie": "session" }] });
+        let manifest = with(serde_json::json!(["browser.control"]), Some(sites.clone()), 3).unwrap();
+        assert!(manifest.browser.unwrap().site_for_url("https://www.example.com/feed").is_some());
+        // The permission without sites, sites without the permission, or an older protocol.
+        assert!(with(serde_json::json!(["browser.control"]), None, 3).is_err());
+        assert!(with(serde_json::json!([]), Some(sites.clone()), 3).is_err());
+        assert!(with(serde_json::json!(["browser.control"]), Some(sites), 2).is_err());
+        // A site that is not a site.
+        let bad = serde_json::json!({ "sites": [{ "host": "*.example.com" }] });
+        assert!(with(serde_json::json!(["browser.control"]), Some(bad), 3).is_err());
     }
 
     #[test]

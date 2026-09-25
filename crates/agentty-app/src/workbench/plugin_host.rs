@@ -18,6 +18,8 @@ use std::time::Duration;
 /// Longest single turn returned by `session/get`.
 /// Characters of a `ui/notify` message shown — a toast, not a page.
 const MAX_NOTIFY_CHARS: usize = 300;
+/// How long after the user used a plugin it may type into a terminal it did not open.
+const PLUGIN_GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
 
 const TURN_TEXT_LIMIT: usize = 20_000;
 /// Panes plugins may be told about at once.
@@ -262,6 +264,7 @@ impl Workbench {
     }
 
     pub(super) fn run_plugin_command(&mut self, plugin: &str, command: &str, pane: Option<Pane>, cx: &mut Context<Self>) {
+        self.plugin_gesture.insert(plugin.to_string(), std::time::Instant::now());
         let context = self.plugin_context(plugin, pane.as_ref(), cx);
         if !plugins::notify_plugin(plugin, "command/execute", json!({ "command": command, "args": {}, "context": context }), cx) {
             self.show_toast(tf(cx, "plugins.not_enabled", &[("name", plugin)]), cx);
@@ -269,8 +272,16 @@ impl Workbench {
     }
 
     pub(super) fn send_plugin_event(&mut self, plugin: &str, event: UiEvent, cx: &mut Context<Self>) {
+        // The user did something in the plugin's panel (typing in a field is not asking for anything).
+        if event.event != "change" {
+            self.plugin_gesture.insert(plugin.to_string(), std::time::Instant::now());
+        }
         let mut params = serde_json::to_value(event).unwrap_or_default();
         params["context"] = self.plugin_context(plugin, None, cx);
+        // In the plugin's workspace, which automation the panel belonged to.
+        if let Some(instance) = self.active_instance(plugin, cx) {
+            params["instance"] = Value::String(instance);
+        }
         plugins::notify_plugin(plugin, "ui/event", params, cx);
     }
 
@@ -336,7 +347,7 @@ impl Workbench {
                 call.reply(Ok(Value::Null), cx);
             }
             "ui/showPanel" => {
-                self.open_plugin_panel(&call.plugin, cx);
+                self.show_plugin(&call.plugin, window, cx);
                 call.reply(Ok(Value::Null), cx);
             }
             "context/get" => call.reply(Ok(self.plugin_context(&call.plugin, None, cx)), cx),
@@ -350,14 +361,42 @@ impl Workbench {
                 Ok(mut request) => {
                     request.source = Some(call.plugin_name.clone());
                     request.plugin = Some(call.plugin.clone());
+                    // Into a terminal the plugin may not type into on its own: the user decides,
+                    // in the same dialog a link's prompt goes through (never sent by itself).
+                    if let Some(pane) = self.prompt_target_pane(&request, cx) {
+                        let allowed = match (&pane, request.target) {
+                            // A workspace of the plugin's own may get a new agent tab.
+                            (_, PromptTarget::Workspace)
+                                if request
+                                    .workspace_id
+                                    .and_then(|id| self.workspaces.iter().find(|w| w.id == id))
+                                    .is_some_and(|w| w.plugin.as_deref() == Some(call.plugin.as_str())) =>
+                            {
+                                true
+                            }
+                            (Some(pane), _) => self.plugin_may_type(&call.plugin, pane, cx).is_ok(),
+                            (None, _) => false,
+                        };
+                        if !allowed {
+                            request.target = PromptTarget::Ask;
+                            request.submit = false;
+                        }
+                    }
                     if request.target == PromptTarget::Ask {
                         self.open_prompt_dialog(request, window, cx);
                         call.reply(Ok(json!({ "status": "asked" })), cx);
                     } else {
+                        let request_target = request.target;
                         let result = self.deliver_prompt(request, window, cx);
                         // The pane this plugin set to work: it hears how that pane gets on.
                         if let Ok(pane) = &result {
                             self.watch_pane_for(*pane, &call.plugin, cx);
+                            if matches!(
+                                request_target,
+                                PromptTarget::NewTab | PromptTarget::NewWorkspace | PromptTarget::Split | PromptTarget::Own
+                            ) {
+                                self.plugin_launched.insert(*pane, call.plugin.clone());
+                            }
                         }
                         call.reply(
                             result.map(|pane| json!({ "status": "sent", "paneId": pane })).map_err(|e| (codes::INVALID_PARAMS, e)),
@@ -375,17 +414,86 @@ impl Workbench {
                     None => self.active_pane(),
                 };
                 match pane {
-                    Some(pane) if !text.is_empty() => {
-                        let id = pane.read(cx).pane_id;
-                        type_into(&pane, text, submit, true, cx);
-                        call.reply(Ok(json!({ "paneId": id })), cx);
-                    }
+                    Some(pane) if !text.is_empty() => match self.plugin_may_type(&call.plugin, &pane, cx) {
+                        Ok(()) => {
+                            let id = pane.read(cx).pane_id;
+                            type_into(&pane, text, submit, true, cx);
+                            call.reply(Ok(json!({ "paneId": id })), cx);
+                        }
+                        Err(why) => call.reply(Err((codes::PERMISSION_DENIED, why)), cx),
+                    },
                     Some(_) => call.reply(Err((codes::INVALID_PARAMS, "text is empty".into())), cx),
                     None => call.reply(Err((codes::INVALID_PARAMS, "no such pane".into())), cx),
                 }
             }
+            // A terminal the plugin opened (`prompt/inject` into a new tab, split or its own
+            // workspace), closed once its agent's work is read: an automation that asks an agent
+            // every hour would otherwise leave a terminal behind every hour. Nothing else — not the
+            // user's terminals, not another plugin's.
+            "terminal/close" => {
+                let id = call.params["paneId"].as_u64().unwrap_or_default();
+                let pane = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == id);
+                match pane {
+                    Some(pane) if self.plugin_launched.get(&id) == Some(&call.plugin) => {
+                        self.plugin_launched.remove(&id);
+                        self.perform_close(super::confirm::CloseTarget::Pane(pane), window, cx);
+                        call.reply(Ok(Value::Null), cx);
+                    }
+                    Some(_) => call.reply(Err((codes::PERMISSION_DENIED, "a plugin closes only terminals it opened".into())), cx),
+                    None => call.reply(Err((codes::INVALID_PARAMS, "no such pane".into())), cx),
+                }
+            }
             "session/get" => self.plugin_session(call, cx),
+            "workspace/instances" => {
+                let list = self.plugin_instances(&call.plugin, cx);
+                call.reply(Ok(Value::Array(list)), cx);
+            }
+            "workspace/setInstanceTitle" => {
+                let (instance, title) = (call.params["instance"].as_str().unwrap_or_default(), call.params["title"].as_str());
+                let result = self.set_instance_title(&call.plugin, instance, title, cx);
+                call.reply(result.map(|()| Value::Null).map_err(|e| (codes::INVALID_PARAMS, e)), cx);
+            }
+            "workspace/closeInstance" => {
+                let instance = call.params["instance"].as_str().unwrap_or_default().to_string();
+                let result = self.close_instance(&call.plugin, &instance, window, cx);
+                call.reply(result.map(|()| Value::Null).map_err(|e| (codes::INVALID_PARAMS, e)), cx);
+            }
+            browser if browser.starts_with("browser/") => self.plugin_browser_call(call, window, cx),
             other => call.reply(Err((codes::METHOD_NOT_FOUND, format!("unknown method {other}"))), cx),
+        }
+    }
+
+    /// Whether `plugin` may type into `pane`. Its own terminals (ones it launched, or in its own
+    /// workspace) always; another one — the user's own agents and shells — only right after the
+    /// user used the plugin (a click in its panel, one of its commands), and never while that pane
+    /// waits for the user to approve or answer something: a plugin must not answer for the user.
+    fn plugin_may_type(&self, plugin: &str, pane: &Pane, cx: &gpui::App) -> Result<(), String> {
+        let id = pane.read(cx).pane_id;
+        let own_workspace = self.locate(pane).is_some_and(|(w, _)| self.workspaces[w].plugin.as_deref() == Some(plugin));
+        if own_workspace || self.plugin_launched.get(&id).is_some_and(|p| p == plugin) {
+            return Ok(());
+        }
+        if pane.read(cx).status.needs_user() {
+            return Err("that terminal is waiting for the user's answer".into());
+        }
+        let recent = self.plugin_gesture.get(plugin).is_some_and(|at| at.elapsed() < PLUGIN_GESTURE_WINDOW);
+        if recent {
+            Ok(())
+        } else {
+            Err("a plugin types into a terminal it did not open only right after the user used it".into())
+        }
+    }
+
+    /// The existing terminal a prompt request would type into, if it would type into one.
+    fn prompt_target_pane(&self, request: &PromptRequest, cx: &gpui::App) -> Option<Option<Pane>> {
+        match request.target {
+            PromptTarget::Active => Some(self.active_pane()),
+            PromptTarget::Pane => Some(request.pane_id.and_then(|id| self.all_panes().into_iter().find(|p| p.read(cx).pane_id == id))),
+            PromptTarget::Workspace => {
+                let ws = request.workspace_id.and_then(|id| self.workspaces.iter().find(|w| w.id == id));
+                Some(ws.and_then(|ws| ws.tabs.get(ws.active_tab)).map(|t| t.active.clone()))
+            }
+            _ => None,
         }
     }
 
@@ -451,6 +559,22 @@ impl Workbench {
             return Err("the prompt is empty".into());
         }
         let kind = kind_named(request.agent.as_deref());
+        let restricted = request.restricted();
+        if restricted {
+            // Files only means the plugin's own files: a folder elsewhere (the home folder, say)
+            // would put everything in it within the agent's reach.
+            let plugin = request.plugin.as_deref().ok_or("files-only agents are started by plugins")?;
+            let root = agentty_bridge::plugins::store::plugin_data_dir(plugin);
+            let inside = request
+                .cwd
+                .as_ref()
+                .and_then(|cwd| cwd.canonicalize().ok())
+                .zip(root.canonicalize().ok())
+                .is_some_and(|(cwd, root)| cwd.starts_with(root));
+            if !inside {
+                return Err("a files-only agent works in a folder of the plugin's own data".into());
+            }
+        }
         let find = |this: &Self, id: u64, cx: &gpui::App| this.all_panes().into_iter().find(|p| p.read(cx).pane_id == id);
         let pane = match request.target {
             PromptTarget::Ask => return Err("ask is handled by the dialog".into()),
@@ -471,7 +595,44 @@ impl Workbench {
                     PromptTarget::Split => LaunchTarget::SplitRight,
                     _ => LaunchTarget::NewWorkspace,
                 };
-                self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, target, window, cx)?
+                self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, restricted, target, window, cx)?
+            }
+            PromptTarget::Own if request.instance.is_some() => {
+                let plugin = request.plugin.clone().ok_or("only a plugin has a workspace of its own")?;
+                let instance = request.instance.clone().unwrap_or_default();
+                let (spec, later) = self.prompt_spec(kind, text, request.cwd.clone(), request.submit, restricted, cx);
+                let pane = self.open_in_instance(&plugin, &instance, spec, cx)?;
+                type_later(&pane, later, cx);
+                // The job opens beside the automation's terminals; the user stays where they are.
+                cx.notify();
+                return Ok(pane.read(cx).pane_id);
+            }
+            PromptTarget::Own => {
+                let plugin = request.plugin.clone().ok_or("only a plugin has a workspace of its own")?;
+                if self.plugin_workspace(&plugin).is_none() {
+                    self.create_plugin_workspace(&plugin, window, cx);
+                }
+                let index = self.plugin_workspace(&plugin).ok_or("the plugin's workspace could not be made")?;
+                // The job's tab opens where the plugin works, and that is where the user sees it.
+                if index != self.active_workspace {
+                    let current = self.workspaces.get(self.active_workspace).filter(|ws| ws.plugin.is_none()).map(|ws| ws.id);
+                    if current.is_some() {
+                        self.before_plugin_workspace = current;
+                    }
+                    self.activate_workspace(index, window, cx);
+                }
+                let cwd = request.cwd.clone().filter(|p| p.is_dir()).unwrap_or_else(|| self.workspaces[index].cwd.clone());
+                self.launch_with_prompt(
+                    kind,
+                    text,
+                    request.title.clone(),
+                    cwd,
+                    request.submit,
+                    restricted,
+                    LaunchTarget::NewTab,
+                    window,
+                    cx,
+                )?
             }
             PromptTarget::Workspace => {
                 let index =
@@ -492,7 +653,17 @@ impl Workbench {
                     }
                     _ => {
                         let cwd = self.workspaces[index].cwd.clone();
-                        self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, LaunchTarget::NewTab, window, cx)?
+                        self.launch_with_prompt(
+                            kind,
+                            text,
+                            request.title.clone(),
+                            cwd,
+                            request.submit,
+                            restricted,
+                            LaunchTarget::NewTab,
+                            window,
+                            cx,
+                        )?
                     }
                 }
             }
@@ -504,6 +675,30 @@ impl Workbench {
         Ok(pane.read(cx).pane_id)
     }
 
+    /// How a prompt starts: an agent with it as the first message, or a program it is typed into
+    /// once ready (never with Enter in a shell).
+    pub(super) fn prompt_spec(
+        &mut self,
+        kind: PaneKind,
+        text: String,
+        cwd: Option<PathBuf>,
+        submit: bool,
+        restricted: bool,
+        cx: &mut Context<Self>,
+    ) -> (LaunchSpec, Option<(String, u64)>) {
+        let cwd = cwd.filter(|p| p.is_dir()).unwrap_or_else(|| self.default_cwd(cx));
+        let (mut spec, later) = match (kind.agent(), submit) {
+            (Some(agent), true) => {
+                let mut spec = LaunchSpec::with_prompt(agent, text, String::new(), cwd);
+                spec.title = LaunchSpec::new(kind, PathBuf::new()).title;
+                (spec, None)
+            }
+            (agent, _) => (LaunchSpec::new(kind, cwd), Some((text, if agent.is_some() { 4000 } else { 1200 }))),
+        };
+        spec.restricted = restricted;
+        (spec, later)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn launch_with_prompt(
         &mut self,
@@ -512,6 +707,7 @@ impl Workbench {
         title: Option<String>,
         cwd: PathBuf,
         submit: bool,
+        restricted: bool,
         target: LaunchTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -529,6 +725,8 @@ impl Workbench {
             // Typed once the program is ready, without pressing Enter (never Enter in a shell).
             (agent, _) => (LaunchSpec::new(kind, cwd), Some((text, if agent.is_some() { 4000 } else { 1200 }))),
         };
+        let mut spec = spec;
+        spec.restricted = restricted;
         match target {
             LaunchTarget::NewWorkspace => {
                 self.create_workspace(spec, window, cx);
@@ -606,6 +804,17 @@ impl Workbench {
         self.plugins_page.focus = focus;
         cx.notify();
     }
+}
+
+/// Types a prompt into a pane that has just started, once its program is ready.
+fn type_later(pane: &Pane, later: Option<(String, u64)>, cx: &mut Context<Workbench>) {
+    let Some((text, delay)) = later else { return };
+    let typed = pane.clone();
+    cx.spawn(async move |_, cx| {
+        cx.background_executor().timer(Duration::from_millis(delay)).await;
+        let _ = cx.update(|cx| typed.update(cx, |view, _| view.insert_text(&text)));
+    })
+    .detach();
 }
 
 /// Types into a pane: agents get Enter after the paste when `submit`; shells only when the plugin

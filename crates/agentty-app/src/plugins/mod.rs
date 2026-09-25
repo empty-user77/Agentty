@@ -45,11 +45,16 @@ pub enum RunState {
     Starting,
     Running,
     Failed(String),
+    /// Not started: the user has not allowed what it asks for yet (a new plugin, or an update
+    /// that asks for more).
+    NeedsConsent,
 }
 
 pub struct Runtime {
     pub state: RunState,
     pub panel: Option<Node>,
+    /// Panels of the plugin's automations (tabs of its workspace), by automation id.
+    pub panels: HashMap<String, Node>,
     pub badge: String,
     pub logs: VecDeque<String>,
     process: Option<PluginProcess>,
@@ -75,6 +80,7 @@ impl Runtime {
         Self {
             state: RunState::Stopped,
             panel: None,
+            panels: HashMap::new(),
             badge: String::new(),
             logs: VecDeque::new(),
             process: None,
@@ -169,6 +175,10 @@ pub struct PluginHost {
     /// Windows are refreshed on a timer while plugins keep talking.
     refreshed_at: Option<Instant>,
     refresh_queued: bool,
+    /// Plugins waiting for the user to allow what they ask for, in the order they wanted to start.
+    pub consent_pending: Vec<String>,
+    /// Plugins the user did not allow, this run: not asked about again until the user asks.
+    pub consent_refused: std::collections::HashSet<String>,
 }
 
 impl Global for PluginHost {}
@@ -185,6 +195,8 @@ pub fn init(cx: &mut App) -> UnboundedReceiver<Envelope> {
         revision: 0,
         refreshed_at: None,
         refresh_queued: false,
+        consent_pending: Vec::new(),
+        consent_refused: std::collections::HashSet::new(),
     });
     // Built-in plugins are updated in place when Agentty ships a newer version.
     let outdated: Vec<String> = host(cx).installed.iter().filter(|p| store::builtin_update_available(p)).map(|p| p.id.clone()).collect();
@@ -237,6 +249,70 @@ pub fn reload(cx: &mut App) {
     touch(cx);
 }
 
+/// Whether `plugin` asks for something the user has not allowed yet. Plugins that come with
+/// Agentty are Agentty's own; any other one is asked about before its first start, and again
+/// when an update asks for more.
+pub fn needs_consent(plugin: &InstalledPlugin, cx: &App) -> bool {
+    if plugin.source == store::Source::Builtin {
+        return false;
+    }
+    let Some(manifest) = plugin.manifest.as_ref() else { return false };
+    let granted = crate::settings::settings(cx).plugin_permission_grants.get(&plugin.id).cloned().unwrap_or_default();
+    manifest.permissions.iter().any(|p| !granted.contains(p))
+}
+
+/// The next plugin waiting for the user's answer, if nobody is asking about one yet.
+pub fn next_consent(cx: &App) -> Option<String> {
+    host(cx).consent_pending.first().cloned()
+}
+
+/// The user's answer about `id`'s permissions. Allowed: remembered (its browser sites too, which
+/// the same dialog named) and the plugin starts. Not allowed: it stays stopped until the user
+/// asks again from its page or panel.
+pub fn answer_consent(id: &str, allowed: bool, cx: &mut App) {
+    host_mut(cx).consent_pending.retain(|p| p != id);
+    let Some(plugin) = plugin(cx, id).cloned() else { return };
+    if !allowed {
+        host_mut(cx).consent_refused.insert(id.to_string());
+        touch(cx);
+        return;
+    }
+    let permissions = plugin.manifest.as_ref().map(|m| m.permissions.clone()).unwrap_or_default();
+    let domains: Vec<String> = plugin
+        .manifest
+        .as_ref()
+        .and_then(|m| m.browser.as_ref())
+        .map(|b| b.sites.iter().flat_map(|s| s.domains().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let owner = id.to_string();
+    crate::settings::update_settings(cx, move |settings| {
+        settings.plugin_permission_grants.insert(owner.clone(), permissions);
+        if !domains.is_empty() {
+            settings.plugin_browser_grants.insert(owner, domains);
+        }
+    });
+    // Only a plugin still waiting for the answer leaves that state: the same answer can come twice
+    // (the dialog of another window), and a plugin already running keeps running as it is.
+    if let Some(runtime) = host_mut(cx).runtimes.get_mut(id).filter(|r| matches!(r.state, RunState::NeedsConsent)) {
+        runtime.state = RunState::Stopped;
+    }
+    let starts = plugin.manifest.as_ref().is_some_and(Manifest::starts_with_agentty);
+    if starts {
+        ensure_started(id, &default_context(cx), cx);
+    }
+    touch(cx);
+}
+
+/// Asks again about a plugin the user did not allow (its page's or panel's button).
+pub fn ask_consent_again(id: &str, cx: &mut App) {
+    let host = host_mut(cx);
+    host.consent_refused.remove(id);
+    if !host.consent_pending.iter().any(|p| p == id) {
+        host.consent_pending.push(id.to_string());
+    }
+    touch(cx);
+}
+
 pub fn plugin<'a>(cx: &'a App, id: &str) -> Option<&'a InstalledPlugin> {
     host(cx).installed.iter().find(|p| p.id == id)
 }
@@ -282,6 +358,14 @@ pub fn default_context(cx: &App) -> Value {
     json!({ "workspace": null, "pane": null, "language": crate::settings::settings(cx).language.code() })
 }
 
+/// The user's time zone right now, as minutes east of UTC.
+fn utc_offset_minutes() -> i32 {
+    chrono::Local::now().offset().local_minus_utc() / 60
+}
+
+/// Every start of any plugin gets the next number (see `Runtime::generation`).
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// Starts the plugin unless it runs. `context` goes into `initialize`; it is passed in because
 /// callers are often inside a window update, where the window can't be read.
 fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
@@ -290,11 +374,23 @@ fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
     if running {
         return true;
     }
+    // Nothing of a plugin runs before the user has seen and allowed what it asks for.
+    if needs_consent(&plugin, cx) {
+        let host = host_mut(cx);
+        host.runtimes.entry(id.to_string()).or_insert_with(Runtime::new).state = RunState::NeedsConsent;
+        if !host.consent_refused.contains(id) && !host.consent_pending.iter().any(|p| p == id) {
+            host.consent_pending.push(id.to_string());
+        }
+        touch(cx);
+        return false;
+    }
     let language = crate::settings::settings(cx).language.resolved().code().to_string();
     let host = host_mut(cx);
     let tx = host.tx.clone();
     let runtime = host.runtimes.entry(id.to_string()).or_insert_with(Runtime::new);
-    runtime.generation += 1;
+    // Unique across the app, not per runtime: a runtime is made again when the plugin list is
+    // reloaded, and a count that started over would hand the new run what the old one was given.
+    runtime.generation = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     runtime.stopping = false;
     runtime.state = RunState::Starting;
     runtime.log(format!("— starting {} {} —", plugin.name(), plugin.manifest.as_ref().map_or("", |m| m.version.as_str())));
@@ -315,6 +411,8 @@ fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
             "dataDir": store::plugin_data_dir(&plugin.id),
         },
         "language": language,
+        // A module has no clock zone of its own: the user's, for dates as the user reads them.
+        "utcOffsetMinutes": utc_offset_minutes(),
         "context": context,
     });
     let request_id = host.next_request;
@@ -364,6 +462,12 @@ pub fn running_plugins(cx: &App) -> Vec<String> {
     host(cx).runtimes.iter().filter(|(_, r)| r.process.is_some()).map(|(id, _)| id.clone()).collect()
 }
 
+/// The run of a plugin that is running now (it changes on every start), so what was given to one
+/// run — a browser page — is not handed to the next.
+pub fn generation(id: &str, cx: &App) -> Option<u64> {
+    host(cx).runtimes.get(id).filter(|r| r.process.is_some()).map(|r| r.generation)
+}
+
 /// Sends to a plugin only if it is already running (never starts one).
 pub fn send_if_running(id: &str, method: &str, params: Value, cx: &App) {
     if let Some(process) = host(cx).runtimes.get(id).and_then(|r| r.process.as_ref()) {
@@ -381,6 +485,7 @@ pub fn stop(id: &str, cx: &mut App) {
         runtime.abandon();
         runtime.state = RunState::Stopped;
         runtime.panel = None;
+        runtime.panels.clear();
         runtime.badge.clear();
     }
     touch(cx);
@@ -506,8 +611,16 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             let tree = Node::from_value(params.get("tree").cloned().unwrap_or(Value::Null));
             let result = match tree {
                 Ok(tree) => {
+                    let instance = params.get("instance").and_then(Value::as_str).map(str::to_string);
                     if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
-                        runtime.panel = Some(tree);
+                        match instance {
+                            // One panel per automation; a plugin cannot pile up more than it could run.
+                            Some(instance) if runtime.panels.len() < 64 || runtime.panels.contains_key(&instance) => {
+                                runtime.panels.insert(instance, tree);
+                            }
+                            Some(_) => {}
+                            None => runtime.panel = Some(tree),
+                        }
                     }
                     touch(cx);
                     Ok(Value::Null)
@@ -533,10 +646,16 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 "version": env!("CARGO_PKG_VERSION"),
                 "apiVersion": agentty_bridge::plugins::manifest::API_VERSION,
                 "language": crate::settings::settings(cx).language.resolved().code(),
+                "utcOffsetMinutes": utc_offset_minutes(),
             })),
             cx,
         ),
         "net/fetch" => fetch(plugin_id, request_id, params, cx),
+        "files/download" => download(plugin_id, request_id, params, cx),
+        method if method.starts_with("files/") => {
+            let result = files_call(plugin_id, method, &params, cx);
+            reply(result, cx)
+        }
         "host/timer" => timer(plugin_id, request_id, params, cx),
         // The plugin's own folder: what it keeps between runs. A wasm plugin has no files of its
         // own, so without this it forgets everything each time it starts.
@@ -601,6 +720,29 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
         }
         "terminal/send" if guarded => {
             reply(Err((codes::PERMISSION_DENIED, "a plugin that a link reached may not type into terminals; restart it first".into())), cx)
+        }
+        // The browser is signed in as the user: a link's author must not get to drive it.
+        browser if browser.starts_with("browser/") && guarded => {
+            reply(Err((codes::PERMISSION_DENIED, "a plugin that a link reached may not use the browser; restart it first".into())), cx)
+        }
+        browser if browser.starts_with("browser/") && !crate::platform::HAS_WEBVIEW => {
+            reply(Err((codes::UNAVAILABLE, "the in-app browser is not available on this platform yet".into())), cx)
+        }
+        browser if browser.starts_with("browser/") => {
+            let unanswered = request_id.clone();
+            let tab = params.get("tabId").and_then(Value::as_u64);
+            let request = PluginCall {
+                plugin: plugin_id.to_string(),
+                plugin_name: manifest.name.clone(),
+                request_id,
+                method: method.to_string(),
+                params,
+            };
+            // A page lives in the window it was opened in: calls about it go there.
+            let delivered = crate::with_workbench_for_browser(cx, tab, |workbench, window, cx| workbench.plugin_call(request, window, cx));
+            if let (false, Some(request_id)) = (delivered, unanswered) {
+                respond(plugin_id, &request_id, Err((codes::UNAVAILABLE, "no Agentty window is open".into())), cx);
+            }
         }
         _ => {
             if method == "prompt/inject" && guarded {
@@ -670,6 +812,126 @@ fn timer(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App
 /// `net/fetch`: the plugin's own HTTP request, made on a background thread and answered when it
 /// comes back. Agentty adds nothing to it — no cookie, no stored credential, no header of its own
 /// beyond what the HTTP client must set — so a plugin reaches exactly what it was given.
+/// `files/*` but `download`: the plugin's own folder, answered right away.
+fn files_call(plugin_id: &str, method: &str, params: &Value, _cx: &mut App) -> Result<Value, (i64, String)> {
+    use agentty_bridge::plugins::files;
+    use base64::Engine as _;
+    let path = params.get("path").and_then(Value::as_str).unwrap_or_default();
+    let bad = |err: anyhow::Error| (codes::INVALID_PARAMS, format!("{err:#}"));
+    match method {
+        "files/write" => {
+            let bytes = match (params.get("text").and_then(Value::as_str), params.get("base64").and_then(Value::as_str)) {
+                (Some(text), None) => text.as_bytes().to_vec(),
+                (None, Some(data)) => base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| (codes::INVALID_PARAMS, "base64 is not base64".to_string()))?,
+                _ => return Err((codes::INVALID_PARAMS, "give either text or base64".into())),
+            };
+            let append = params.get("append").and_then(Value::as_bool).unwrap_or(false);
+            files::write(plugin_id, path, &bytes, append).map(|size| json!({ "size": size })).map_err(bad)
+        }
+        "files/read" => {
+            let offset = params.get("offset").and_then(Value::as_u64).unwrap_or(0);
+            let length = params.get("length").and_then(Value::as_u64).unwrap_or(files::MAX_READ as u64) as usize;
+            let (bytes, size) = files::read(plugin_id, path, offset, length).map_err(bad)?;
+            let end = offset + bytes.len() as u64 >= size;
+            if params.get("as").and_then(Value::as_str) == Some("base64") {
+                Ok(json!({ "base64": base64::engine::general_purpose::STANDARD.encode(&bytes), "size": size, "eof": end }))
+            } else {
+                let text =
+                    String::from_utf8(bytes).map_err(|_| (codes::INVALID_PARAMS, format!("{path} is not text; read it as base64")))?;
+                Ok(json!({ "text": text, "size": size, "eof": end }))
+            }
+        }
+        "files/list" => files::list(plugin_id, path).map(|entries| json!(entries)).map_err(bad),
+        "files/stat" => files::stat(plugin_id, path).map(|entry| json!(entry)).map_err(bad),
+        "files/remove" => files::remove(plugin_id, path).map(|removed| json!({ "removed": removed })).map_err(bad),
+        "files/rename" => {
+            let (from, to) = (
+                params.get("from").and_then(Value::as_str).unwrap_or_default(),
+                params.get("to").and_then(Value::as_str).unwrap_or_default(),
+            );
+            files::rename(plugin_id, from, to).map(|()| Value::Null).map_err(bad)
+        }
+        "files/copy" => {
+            let (from, to) = (
+                params.get("from").and_then(Value::as_str).unwrap_or_default(),
+                params.get("to").and_then(Value::as_str).unwrap_or_default(),
+            );
+            files::copy(plugin_id, from, to).map(|size| json!({ "size": size })).map_err(bad)
+        }
+        // Where a file is on disk: for an agent the plugin starts to work there (`prompt/inject`
+        // with `cwd`), or to show the user.
+        "files/path" => files::resolve(plugin_id, path).map(|p| json!({ "path": p })).map_err(bad),
+        "files/reveal" => {
+            let target = files::resolve(plugin_id, path).map_err(bad)?;
+            if !target.exists() {
+                return Err((codes::INVALID_PARAMS, format!("{path} is not there")));
+            }
+            crate::platform::reveal(&target);
+            Ok(Value::Null)
+        }
+        other => Err((codes::METHOD_NOT_FOUND, format!("unknown method {other}"))),
+    }
+}
+
+/// `files/download`: a GET streamed into a file of the plugin's folder. Needs `net.request` too:
+/// it reaches the network the same way `net/fetch` does.
+fn download(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else { return };
+    let allowed =
+        crate::plugins::plugin(cx, &id).and_then(|p| p.manifest.as_ref()).is_some_and(|m| m.permissions.iter().any(|p| p == "net.request"));
+    if !allowed {
+        return respond(&id, &request_id, Err((codes::PERMISSION_DENIED, "files/download needs net.request as well".into())), cx);
+    }
+    let path = params.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+    let target = match agentty_bridge::plugins::files::resolve(&id, &path) {
+        Ok(target) if !target.is_dir() => target,
+        Ok(_) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("{path} is a folder"))), cx),
+        Err(err) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("{err:#}"))), cx),
+    };
+    let max = params
+        .get("maxBytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(agentty_bridge::plugins::files::MAX_FILE)
+        .min(agentty_bridge::plugins::files::MAX_FILE);
+    let request: agentty_bridge::plugins::net::FetchRequest = match serde_json::from_value(params) {
+        Ok(request) => request,
+        Err(err) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("invalid request: {err}"))), cx),
+    };
+    let generation = host(cx).runtimes.get(&id).map_or(0, |runtime| runtime.generation);
+    let line = format!("GET {} → {path}", agentty_bridge::extensions::redact_url(&request.url));
+    let accepted = match host_mut(cx).runtimes.get_mut(&id) {
+        Some(runtime) if runtime.fetches < MAX_CONCURRENT_FETCHES => {
+            runtime.fetches += 1;
+            runtime.log(line);
+            true
+        }
+        Some(_) => false,
+        None => return,
+    };
+    if !accepted {
+        return respond(&id, &request_id, Err((codes::UNAVAILABLE, format!("more than {MAX_CONCURRENT_FETCHES} requests at once"))), cx);
+    }
+    let task = cx.background_executor().spawn(async move { agentty_bridge::plugins::net::download(&request, &target, max) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = cx.update(|cx| {
+            {
+                let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) else { return };
+                if runtime.generation != generation {
+                    return;
+                }
+                runtime.fetches = runtime.fetches.saturating_sub(1);
+            }
+            let answer = result.map(|done| json!(done)).map_err(|err| (codes::UNAVAILABLE, format!("{err:#}")));
+            respond(&id, &request_id, answer, cx);
+        });
+    })
+    .detach();
+}
+
 fn fetch(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
     let id = plugin_id.to_string();
     let Some(request_id) = request_id else {
@@ -734,6 +996,7 @@ fn fetch(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App
 }
 
 /// A plugin call that needs a window (prompts, terminals, sessions, notifications).
+#[derive(Clone)]
 pub struct PluginCall {
     pub plugin: String,
     pub plugin_name: String,

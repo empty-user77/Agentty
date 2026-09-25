@@ -113,10 +113,28 @@ fn authenticate(stream: &mut Stream, launcher_token: Option<&str>) -> Caller {
     if !stream.peer_is_this_user() {
         return Caller::Nobody;
     }
-    match stream.peer_pid().and_then(|pid| pane_of(pid, crate::procinfo::parent_pid)) {
+    let pid = stream.peer_pid();
+    match pid.and_then(|pid| pane_of(pid, crate::procinfo::parent_pid)) {
         Some(pane) => Caller::Pane(pane),
+        // A process Agentty started that is not in a pane is one of its plugins (or something a
+        // plugin started): it speaks to Agentty through its own channel, with its permissions,
+        // never here as if it were another launch of the app.
+        None if pid.is_some_and(|pid| descends_from(pid, std::process::id(), crate::procinfo::parent_pid)) => Caller::Nobody,
         None => Caller::Launcher,
     }
+}
+
+/// Whether `ancestor` is among `pid`'s parents.
+#[cfg(unix)]
+fn descends_from(mut pid: u32, ancestor: u32, parent_of: impl Fn(u32) -> Option<u32>) -> bool {
+    for _ in 0..64 {
+        match parent_of(pid) {
+            Some(parent) if parent == ancestor => return true,
+            Some(parent) if parent > 1 && parent != pid => pid = parent,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Windows: the connection's first line is `auth\t<token>` — a pane's token, or the launch token.
@@ -192,6 +210,16 @@ pub struct SignalDetail {
     pub target: Option<String>,
     /// Subagent the event belongs to: (agent id, agent type).
     pub subagent: Option<(String, String)>,
+    /// The hook that sent it (`PreToolUse`, `PostToolUse`, …), when the agent says.
+    pub event: Option<String>,
+}
+
+impl SignalDetail {
+    /// The agent is putting a question to the user and waits for the answer (Claude Code's
+    /// `AskUserQuestion`, before it runs; the `PostToolUse` after it means it was answered).
+    pub fn asks_user(&self) -> bool {
+        self.tool.as_deref() == Some("AskUserQuestion") && self.event.as_deref() == Some("PreToolUse") && self.subagent.is_none()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -338,13 +366,20 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
     let text = |key: &str| payload[key].as_str().map(str::to_string).filter(|s| !s.is_empty());
     let message = ["message", "last-assistant-message", "last_assistant_message"].iter().find_map(|k| payload[*k].as_str()).map(first_line);
     let input = &payload["tool_input"];
-    let target = ["description", "command", "file_path", "pattern", "url", "prompt"]
-        .iter()
-        .find_map(|k| input[*k].as_str())
+    // A question to the user is shown by its first question.
+    let question = input["questions"][0]["question"].as_str();
+    let target = question
+        .or_else(|| ["description", "command", "file_path", "pattern", "url", "prompt"].iter().find_map(|k| input[*k].as_str()))
         .map(first_line)
         .filter(|s| !s.is_empty());
     let subagent = text("agent_id").map(|id| (id, text("agent_type").unwrap_or_default()));
-    let detail = SignalDetail { notification_type: text("notification_type"), tool: text("tool_name"), target, subagent };
+    let detail = SignalDetail {
+        notification_type: text("notification_type"),
+        tool: text("tool_name"),
+        target,
+        subagent,
+        event: text("hook_event_name"),
+    };
     Some(AgentSignal { pane_id, kind, message, detail })
 }
 
@@ -643,6 +678,24 @@ mod tests {
 
     use super::*;
 
+    /// A plugin (a child of Agentty outside every pane) is not taken for another launch of it.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_of_agentty_is_told_apart_from_another_launch() {
+        // 900 = Agentty; 950 = a plugin's node; 960 = something the plugin started; 42 = a launch from Finder.
+        let parent = |pid: u32| match pid {
+            960 => Some(950),
+            950 => Some(900),
+            900 => Some(1),
+            42 => Some(1),
+            _ => None,
+        };
+        assert!(descends_from(950, 900, parent));
+        assert!(descends_from(960, 900, parent));
+        assert!(!descends_from(42, 900, parent));
+        assert!(!descends_from(900, 900, parent), "Agentty is not its own child");
+    }
+
     /// Tests run in one process, in parallel: each gets a socket of its own.
     #[cfg(unix)]
     fn start_at(name: &str) -> (SignalSocket, UnboundedReceiver<SocketMessage>) {
@@ -695,6 +748,28 @@ mod tests {
             parse_line(&format!("2\tworking\t{}", r#"{"tool_name":"Agent","tool_input":{"description":"Find call sites","prompt":"…"}}"#))
                 .unwrap();
         assert_eq!((s.detail.tool.as_deref(), s.detail.target.as_deref()), (Some("Agent"), Some("Find call sites")));
+        assert!(!s.detail.asks_user());
+    }
+
+    #[test]
+    fn a_question_to_the_user_is_told_apart_from_its_answer() {
+        let asked = parse_line(&format!(
+            "3\tworking\t{}",
+            r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which post goes first?\nPick one.","header":"Post"}]}}"#
+        ))
+        .unwrap();
+        assert!(asked.detail.asks_user());
+        assert_eq!(asked.detail.target.as_deref(), Some("Which post goes first?"));
+        let answered =
+            parse_line(&format!("3\tworking\t{}", r#"{"hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","tool_input":{}}"#))
+                .unwrap();
+        assert!(!answered.detail.asks_user());
+        let in_subagent = parse_line(&format!(
+            "3\tworking\t{}",
+            r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","agent_id":"x","agent_type":"Plan","tool_input":{}}"#
+        ))
+        .unwrap();
+        assert!(!in_subagent.detail.asks_user(), "a subagent's question reaches the user through the main agent");
     }
 
     #[test]

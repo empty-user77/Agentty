@@ -31,12 +31,25 @@ pub enum NodeSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TabSnapshot {
+    /// The automation the tab is, in a plugin's workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<TabInstance>,
     pub layout: NodeSnapshot,
     #[serde(default)]
     pub active_pane: usize,
     /// The pane in focus view (⇧⌘↩), by its place among the tab's panes.
     #[serde(default)]
     pub zoomed_pane: Option<usize>,
+}
+
+/// A tab of a plugin's workspace as one automation: an id the plugin knows it by, and the name it
+/// gave it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TabInstance {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// What was open around the terminals: the sidebar and the panels docked beside them. Their
@@ -93,6 +106,9 @@ pub struct WorkspaceSnapshot {
     /// When one of its panes last said something, so a closed workspace keeps its "5분 전".
     #[serde(default)]
     pub last_activity_ms: Option<u64>,
+    /// The plugin the workspace belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -594,6 +610,7 @@ mod tests {
             branch: Some("feat/cards".into()),
             last_activity_ms: Some(1_700_000_000_000),
             tabs: vec![TabSnapshot {
+                instance: Some(TabInstance { id: "a1".into(), title: Some("Brand B".into()) }),
                 layout: NodeSnapshot::Pane(PaneSnapshot {
                     kind: PaneKind::Shell,
                     cwd: "/tmp".into(),
@@ -611,6 +628,8 @@ mod tests {
         assert_eq!(back.last_activity_ms, Some(1_700_000_000_000));
         let NodeSnapshot::Pane(pane) = &back.tabs[0].layout else { panic!("one pane") };
         assert_eq!(pane.tool.as_deref(), Some("claude"));
+        // A plugin workspace's tab stays the same automation across a restart.
+        assert_eq!(back.tabs[0].instance.as_ref().map(|i| i.id.as_str()), Some("a1"));
     }
 
     #[test]

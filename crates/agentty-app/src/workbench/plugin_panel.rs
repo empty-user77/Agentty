@@ -28,6 +28,8 @@ pub struct PluginInput {
     /// Last value the plugin sent; a different one replaces what is typed.
     applied: String,
     generation: u64,
+    /// Enter was pressed and the plugin has not answered yet.
+    submitted: bool,
     _subscription: Subscription,
 }
 
@@ -52,7 +54,27 @@ fn tone_color(tone: Tone) -> u32 {
 
 impl Workbench {
     /// Creates and syncs the panel's text fields; called from render before drawing.
+    /// Whose fields the panel shows: an automation's are its own (the same id in another tab is
+    /// another field), so they are made and looked up under the automation in front.
+    fn plugin_input_scope(&self, plugin: &str, cx: &gpui::App) -> String {
+        match self.active_instance(plugin, cx) {
+            Some(instance) => format!("{plugin}#{instance}"),
+            None => plugin.to_string(),
+        }
+    }
+
     pub(super) fn prepare_plugin_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A plugin's workspace in front whose plugin just came back (turned off and on, updated)
+        // gets its panel again: nothing else switches workspaces meanwhile to bring it up.
+        self.sync_plugin_workspace(cx);
+        // In a plugin's workspace the panel is part of the layout: dropped while the workspace
+        // stayed in front (its plugin turned off and on), it comes back. Another plugin's panel
+        // opened from there is left alone.
+        if let Some(front) = self.front_plugin_workspace(cx).filter(|_| self.page.is_none()) {
+            if self.plugin_panel.is_none() {
+                self.open_plugin_panel(&front, cx);
+            }
+        }
         let Some(plugin) = self.plugin_panel.clone() else {
             self.reconcile_plugin_windows(window, cx);
             self.plugin_inputs.clear();
@@ -67,19 +89,24 @@ impl Workbench {
         }
         self.reconcile_plugin_windows(window, cx);
         let mut fields = Vec::new();
-        if let Some(tree) = plugins::runtime(cx, &plugin).and_then(|r| r.panel.as_ref()) {
+        if let Some(tree) = self.plugin_tree(&plugin, cx) {
             tree.inputs(&mut fields);
         }
-        self.plugin_inputs.retain(|(owner, id), _| *owner == plugin && fields.iter().any(|field| field.id == *id));
+        let scope = self.plugin_input_scope(&plugin, cx);
+        self.plugin_inputs.retain(|(owner, id), _| *owner == scope && fields.iter().any(|field| field.id == *id));
         for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows } in fields {
-            let key = (plugin.clone(), id.clone());
+            let key = (scope.clone(), id.clone());
             if let Some(existing) = self.plugin_inputs.get_mut(&key) {
+                existing.input.update(cx, |i, cx| i.set_placeholder(placeholder.clone(), cx));
                 if existing.applied != value {
                     existing.applied = value.clone();
                     let input = existing.input.clone();
                     let typed = input.read(cx).text().to_string();
-                    // A plugin echoing an older value while the user keeps typing must not undo keystrokes.
-                    let stale_echo = input.focus_handle(cx).is_focused(window) && typed.starts_with(&value);
+                    // A plugin echoing an older value while the user keeps typing must not undo
+                    // keystrokes. Right after Enter, though, an empty value is the plugin clearing
+                    // the field it just took the text from.
+                    let clears_after_submit = std::mem::take(&mut existing.submitted) && value.is_empty();
+                    let stale_echo = input.focus_handle(cx).is_focused(window) && typed.starts_with(&value) && !clears_after_submit;
                     if typed != value && !stale_echo {
                         input.update(cx, |i, cx| i.set_text(value, cx));
                     }
@@ -93,12 +120,18 @@ impl Workbench {
                 input.set_text(value.clone(), cx);
                 input
             });
-            let (owner, element) = (plugin.clone(), id.clone());
+            let (owner, element, scope) = (plugin.clone(), id.clone(), scope.clone());
             let subscription = cx.subscribe(&input, move |this, input, event: &TextInputEvent, cx| {
                 let text = input.read(cx).text().to_string();
-                let key = (owner.clone(), element.clone());
+                let key = (scope.clone(), element.clone());
                 match event {
                     TextInputEvent::Confirmed => {
+                        // The plugin now has this text: a value it sends back that differs (an
+                        // empty one after it took what was typed) replaces it.
+                        if let Some(field) = this.plugin_inputs.get_mut(&key) {
+                            field.applied = text.clone();
+                            field.submitted = true;
+                        }
                         let event = UiEvent {
                             element: element.clone(),
                             event: "submit".into(),
@@ -111,18 +144,23 @@ impl Workbench {
                     TextInputEvent::Changed => {
                         // Typing sends `change` once it pauses; the plugin's own updates don't echo back.
                         let Some(field) = this.plugin_inputs.get_mut(&key) else { return };
+                        // Typing again: an empty value from the plugin is an old one, not a clear.
+                        field.submitted = false;
                         if field.applied == text {
                             return;
                         }
                         field.generation += 1;
                         let generation = field.generation;
-                        let (owner, element) = (owner.clone(), element.clone());
+                        let (owner, element, scope) = (owner.clone(), element.clone(), key.0.clone());
                         cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(Duration::from_millis(250)).await;
                             let _ = this.update(cx, |this, cx| {
                                 let current =
-                                    this.plugin_inputs.get(&(owner.clone(), element.clone())).is_some_and(|f| f.generation == generation);
+                                    this.plugin_inputs.get(&(scope.clone(), element.clone())).is_some_and(|f| f.generation == generation);
                                 if current {
+                                    if let Some(field) = this.plugin_inputs.get_mut(&(scope.clone(), element.clone())) {
+                                        field.applied = text.clone();
+                                    }
                                     let event = UiEvent {
                                         element: element.clone(),
                                         event: "change".into(),
@@ -139,7 +177,8 @@ impl Workbench {
                     _ => {}
                 }
             });
-            self.plugin_inputs.insert(key, PluginInput { input, applied: value, generation: 0, _subscription: subscription });
+            self.plugin_inputs
+                .insert(key, PluginInput { input, applied: value, generation: 0, submitted: false, _subscription: subscription });
         }
     }
 
@@ -151,7 +190,7 @@ impl Workbench {
         let close = icon_only_close(cx);
         let runtime = plugins::runtime(cx, &plugin_id);
         let state = runtime.map(|r| r.state.clone()).unwrap_or(RunState::Stopped);
-        let tree = runtime.and_then(|r| r.panel.clone());
+        let tree = self.plugin_tree(&plugin_id, cx).cloned();
         let log_tail: Vec<String> = runtime.map(|r| r.logs.iter().rev().take(12).rev().cloned().collect()).unwrap_or_default();
         let panel_title = manifest.contributes.panel.as_ref().map_or(manifest.name.clone(), |p| p.title.clone());
         let panel_icon = icon_named(manifest.contributes.panel.as_ref().and_then(|p| p.icon.as_deref()).or(manifest.icon.as_deref()));
@@ -216,6 +255,25 @@ impl Workbench {
         let mode_menu = self.plugin_mode_menu.then(|| self.render_panel_mode_menu(&plugin_id, cx));
 
         let body: AnyElement = match (tree, state) {
+            (_, RunState::NeedsConsent) => {
+                let owner = plugin_id.clone();
+                div()
+                    .p_3()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(tf(
+                        cx,
+                        "plugins.consent.panel",
+                        &[("name", &manifest.name)],
+                    )))
+                    .child(crate::ui::action_button(
+                        "plugin-consent-again",
+                        t(cx, "plugins.consent.review"),
+                        cx.listener(move |_, _: &gpui::ClickEvent, _, cx| plugins::ask_consent_again(&owner, cx)),
+                    ))
+                    .into_any_element()
+            }
             (_, RunState::Failed(error)) => div()
                 .p_3()
                 .flex()
@@ -271,7 +329,7 @@ impl Workbench {
     /// how this panel opens.
     pub(super) fn render_plugin_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plugin_id = self.plugin_panel.clone()?;
-        if self.plugin_panel_mode(&plugin_id, cx) != PanelMode::Push {
+        if !self.plugin_panel_docked_here(&plugin_id, cx) {
             return None;
         }
         let width = self.plugin_panel_width(cx);
@@ -284,7 +342,7 @@ impl Workbench {
     pub(super) fn render_plugin_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plugin_id = self.plugin_panel.clone()?;
         let mode = self.plugin_panel_mode(&plugin_id, cx);
-        if matches!(mode, PanelMode::Push | PanelMode::Window) {
+        if matches!(mode, PanelMode::Push | PanelMode::Window | PanelMode::Workspace) {
             return None;
         }
         let contents = self.render_plugin_panel_contents(&plugin_id, cx)?;
@@ -329,6 +387,7 @@ impl Workbench {
                 PanelMode::Overlay => ("plugins.mode.overlay", "layout-panel-left"),
                 PanelMode::Window => ("plugins.mode.window", "app-window"),
                 PanelMode::Full => ("plugins.mode.full", "maximize-2"),
+                PanelMode::Workspace => ("plugins.mode.workspace", "square-terminal"),
             };
             let plugin = plugin_id.to_string();
             menu = menu.child(
@@ -448,7 +507,7 @@ impl Workbench {
                     .child(label.clone())
                     .into_any_element()
             }
-            Node::Input { id, .. } => match self.plugin_inputs.get(&(plugin.to_string(), id.clone())) {
+            Node::Input { id, .. } => match self.plugin_inputs.get(&(self.plugin_input_scope(plugin, cx), id.clone())) {
                 Some(field) => div()
                     .w_full()
                     .px_2()
@@ -471,7 +530,11 @@ impl Workbench {
                 for (index, item) in items.iter().enumerate() {
                     let (owner, element, item_id) = (plugin.to_string(), id.clone(), item.id.clone());
                     let group = SharedString::from(format!("plugin-row-{plugin}-{id}-{index}"));
-                    let mut actions = div().flex().items_center().gap_0p5().flex_shrink_0();
+                    // Shown over the right end of the row while it is hovered, so they take no room
+                    // (and leave no gap) the rest of the time.
+                    let mut actions =
+                        div().absolute().top_0().bottom_0().right(px(4.)).pl_2().flex().items_center().gap_0p5().bg(hex(Chrome::HOVER));
+                    let has_actions = !item.actions.is_empty();
                     for (action_index, action) in item.actions.iter().enumerate() {
                         let (owner, element, item_id, action_id) = (plugin.to_string(), id.clone(), item.id.clone(), action.id.clone());
                         let mut button = div()
@@ -510,6 +573,7 @@ impl Workbench {
                         div()
                             .id(SharedString::from(format!("plugin-row-{plugin}-{id}-{index}")))
                             .group(group.clone())
+                            .relative()
                             .px_2()
                             .py_1p5()
                             .flex()
@@ -540,12 +604,16 @@ impl Workbench {
                                     .child(div().t_small().text_color(hex(Chrome::BRIGHT)).truncate().child(item.title.clone()))
                                     .children(
                                         item.subtitle.clone().map(|s| div().t_caption().text_color(hex(Chrome::MUTED)).truncate().child(s)),
+                                    )
+                                    // The detail is a line of its own under them: beside them it took
+                                    // the width the title needs as soon as the panel is narrow.
+                                    .children(
+                                        item.detail
+                                            .clone()
+                                            .map(|d| div().t_caption().text_color(hex_alpha(Chrome::MUTED, 0.8)).truncate().child(d)),
                                     ),
                             )
-                            .children(
-                                item.detail.clone().map(|d| div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(d)),
-                            )
-                            .child(actions.invisible().group_hover(group, |s| s.visible())),
+                            .when(has_actions, |d| d.child(actions.invisible().group_hover(group, |s| s.visible()))),
                     );
                 }
                 list.into_any_element()
@@ -646,10 +714,10 @@ impl Workbench {
     }
 
     /// An icon on any of the three surfaces: opens or closes the panel, wherever that panel goes.
-    pub(super) fn toggle_plugin_surface(&mut self, plugin: &str, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toggle_plugin_surface(&mut self, plugin: &str, window: &mut Window, cx: &mut Context<Self>) {
         // The window the panel may need is opened by `reconcile_plugin_windows` on the next
         // render, the same as for every other way a panel opens.
-        self.toggle_plugin_panel(plugin, cx);
+        self.toggle_plugin(plugin, window, cx);
     }
 
     /// Tab-strip buttons of plugins that put their panel there (the default surface).

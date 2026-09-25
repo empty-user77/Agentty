@@ -34,7 +34,7 @@ impl Workbench {
     /// bar, the workspace list, the other panels) is counted first.
     pub(super) fn plugin_panel_width(&self, cx: &gpui::App) -> f32 {
         let Some(plugin) = self.plugin_panel.as_ref() else { return 0. };
-        if !self.plugin_panel_mode(plugin, cx).is_docked() {
+        if !self.plugin_panel_docked_here(plugin, cx) {
             return 0.;
         }
         self.plugin_panel_shown_width(cx).min(self.dockable_width(cx).max(MIN_WIDTH))
@@ -45,7 +45,11 @@ impl Workbench {
         let prefs = crate::settings::settings(cx);
         let sidebar = if self.sidebar_open { prefs.sidebar_width } else { 0. };
         let others = self.docker_panel_width(cx) + if self.docker.open { 5. } else { 0. };
-        self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - others - 5. - MIN_TERMINALS
+        // The browser and the files panel shrink to make room, but only down to their minimum:
+        // what they cannot give is not the plugin panel's to take.
+        let browser = if self.browser.is_some() { super::files_panel::MIN_BROWSER + 5. } else { 0. };
+        let files = if self.files_panel.is_some() { super::files_panel::MIN_WIDTH + 5. } else { 0. };
+        self.viewport_width - super::chrome::ACTIVITY_BAR_WIDTH - sidebar - others - browser - files - 5. - MIN_TERMINALS
     }
 
     /// Width of the Docker panel as shown (0 while it is closed).

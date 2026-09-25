@@ -122,6 +122,11 @@ pub struct BrowserTab {
     /// Address of the page this tab shows.
     url: String,
     net: Network,
+    /// The plugin page this tab shows (`browser/*`): the page is the plugin's, the tab only lends
+    /// it a place on screen, and closing the tab sends it back out of sight.
+    pub(super) owner: Option<u64>,
+    /// Name of the plugin driving it, shown on the tab.
+    owner_name: Option<String>,
 }
 
 impl BrowserTab {
@@ -136,7 +141,14 @@ impl BrowserTab {
             error: None,
             url,
             net: Network::default(),
+            owner: None,
+            owner_name: None,
         }
+    }
+
+    /// A tab showing a plugin's page (already loaded, owned by the plugin).
+    pub(super) fn for_plugin(webview: Rc<RefCell<Option<WebView>>>, url: String, owner: u64, plugin: String) -> Self {
+        Self { webview, pending: None, loading: false, owner: Some(owner), owner_name: Some(plugin), ..Self::new(url) }
     }
 
     /// The load just finished and the full bar is still shown.
@@ -150,6 +162,14 @@ impl BrowserTab {
 
     /// What the tab is called in the strip: the page title, else its host, else "New tab".
     fn label(&self, cx: &gpui::App) -> String {
+        let base = self.page_label(cx);
+        match &self.owner_name {
+            Some(plugin) => format!("{plugin} · {base}"),
+            None => base,
+        }
+    }
+
+    fn page_label(&self, cx: &gpui::App) -> String {
         if !self.title.is_empty() {
             return self.title.clone();
         }
@@ -190,7 +210,8 @@ pub struct BrowserPanel {
 impl BrowserPanel {
     /// Every tab's address (the one it is loading, if any), for the saved layout.
     pub(super) fn tab_urls(&self) -> Vec<String> {
-        self.tabs.iter().map(|tab| tab.pending.clone().unwrap_or_else(|| tab.url.clone())).collect()
+        // A plugin's page is the plugin's to open again, not the panel's.
+        self.tabs.iter().filter(|tab| tab.owner.is_none()).map(|tab| tab.pending.clone().unwrap_or_else(|| tab.url.clone())).collect()
     }
 
     fn tab(&self) -> &BrowserTab {
@@ -308,6 +329,12 @@ impl Workbench {
     /// Pages ask for new windows too, so the count is capped: a page in a loop must not fill the
     /// panel (and the memory of one web view per tab) without end.
     pub(super) fn open_browser_tab(&mut self, url: Option<String>, cx: &mut Context<Self>) {
+        // In a plugin's workspace the browser's "+" (and ⌘T) starts a new automation of the plugin.
+        if url.is_none() {
+            if let Some(plugin) = self.front_plugin_workspace(cx).filter(|_| self.page.is_none()) {
+                return self.new_plugin_instance(&plugin, cx);
+            }
+        }
         let Some(browser) = self.browser.as_mut() else { return self.open_browser(url, cx) };
         if browser.tabs.len() >= MAX_TABS {
             return;
@@ -367,6 +394,28 @@ impl Workbench {
                 }
                 _ => (vec![BrowserTab::new(url.clone())], 0),
             };
+            self.build_browser_panel(tabs, active, url, window, cx);
+        }
+        self.sync_plugin_instances(cx);
+        if let Some(tabs) = self.sync_plugin_browsers(cx) {
+            match self.browser.as_mut() {
+                Some(browser) => {
+                    browser.tabs.extend(tabs);
+                    browser.active = browser.tabs.len() - 1;
+                    self.show_address(cx);
+                }
+                None => {
+                    let url = tabs[0].url.clone();
+                    let active = tabs.len() - 1;
+                    self.build_browser_panel(tabs, active, url, window, cx);
+                }
+            }
+        }
+        self.place_browser_views(window, cx);
+    }
+
+    fn build_browser_panel(&mut self, tabs: Vec<BrowserTab>, active: usize, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        {
             let address = cx.new(|cx| TextInput::localized(url.clone(), "browser.address", window, cx));
             let subscription = cx.subscribe(&address, |this, input, event: &TextInputEvent, cx| {
                 if matches!(event, TextInputEvent::Confirmed) {
@@ -392,6 +441,9 @@ impl Workbench {
             });
             self.watch_browser(cx);
         }
+    }
+
+    fn place_browser_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Pages (settings, Git, …) take the whole area: close the browser rather than hide it.
         if self.page.is_some() && self.browser.take().is_some() {
             crate::webview::focus_gpui_view(window);
@@ -763,14 +815,21 @@ impl Workbench {
         Some(
             div()
                 .relative()
-                .w(px(self.docked_widths(cx).0))
-                .flex_shrink_0()
+                // In a plugin's workspace the browser fills its part of the layout.
+                .map(|d| {
+                    if self.front_plugin_workspace(cx).is_some() && self.page.is_none() {
+                        d.flex_1().min_w_0().w_full()
+                    } else {
+                        d.w(px(self.docked_widths(cx).0)).flex_shrink_0()
+                    }
+                })
                 .h_full()
                 .flex()
                 .flex_col()
                 .bg(hex(0xffffff))
                 .child(self.render_browser_tabs(browser, cx))
                 .child(self.render_browser_toolbar(browser, cx))
+                .children(self.render_sign_in_banner(tab.owner, cx))
                 .children(self.render_responsive_bar(&browser.responsive, cx))
                 .child(progress_bar(tab.loading || tab.finishing(), tab.progress))
                 .child(

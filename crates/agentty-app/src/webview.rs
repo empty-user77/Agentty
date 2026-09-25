@@ -4,6 +4,7 @@
 
 #![allow(unexpected_cfgs)] // objc 0.2 macros check a `cargo-clippy` cfg
 
+use block::Block;
 use cocoa::foundation::{NSPoint, NSRect, NSSize};
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
@@ -284,6 +285,46 @@ extern "C" fn create_web_view(_: &Object, _: Sel, view: Id, _config: Id, action:
     std::ptr::null_mut()
 }
 
+/// The content world called `name`, kept for the app's lifetime. WebKit drops a world nothing
+/// holds on to, and its scripts' state with it: a plugin's scripts must find, in the next call,
+/// what they left in the page in the last one.
+unsafe fn named_world(name: &str) -> Id {
+    static WORLDS: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
+    let mut worlds = WORLDS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, world)) = worlds.iter().find(|(n, _)| n == name) {
+        return *world as Id;
+    }
+    let world: Id = msg_send![class!(WKContentWorld), worldWithName: ns_string(name)];
+    let world: Id = msg_send![world, retain];
+    worlds.push((name.to_string(), world as usize));
+    world
+}
+
+/// Whether a page may go to `url` by itself (a link, a redirect, a script, a form): the web and
+/// what a page builds in memory. `file:`, `javascript:` and apps' own schemes (`zoommtg:`,
+/// `agentty:`, …) are refused outright rather than left to what WebKit happens to do with them.
+fn navigation_allowed(url: &str) -> bool {
+    let scheme = url.split(':').next().unwrap_or_default().to_ascii_lowercase();
+    matches!(scheme.as_str(), "http" | "https" | "about" | "data" | "blob")
+}
+
+/// `webView:decidePolicyForNavigationAction:decisionHandler:`.
+extern "C" fn decide_navigation(_: &Object, _: Sel, _view: Id, action: Id, handler: Id) {
+    let url = unsafe {
+        let request: Id = msg_send![action, request];
+        let url: Id = if request.is_null() { std::ptr::null_mut() } else { msg_send![request, URL] };
+        if url.is_null() {
+            None
+        } else {
+            rust_string(msg_send![url, absoluteString])
+        }
+    };
+    // WKNavigationActionPolicyCancel = 0, Allow = 1.
+    let policy: isize = if url.as_deref().is_some_and(navigation_allowed) { 1 } else { 0 };
+    let handler = handler as *mut Block<(isize,), ()>;
+    unsafe { (*handler).call((policy,)) };
+}
+
 /// `WKNavigationDelegate` + `WKUIDelegate`: records failed loads and requests for new windows.
 fn delegate_class() -> &'static Class {
     static REGISTER: Once = Once::new();
@@ -291,6 +332,10 @@ fn delegate_class() -> &'static Class {
         let mut decl = ClassDecl::new("AgenttyWebNavigation", class!(NSObject)).expect("AgenttyWebNavigation registered twice");
         unsafe {
             decl.add_method(sel!(webView:didStartProvisionalNavigation:), did_start as extern "C" fn(&Object, Sel, Id, Id));
+            decl.add_method(
+                sel!(webView:decidePolicyForNavigationAction:decisionHandler:),
+                decide_navigation as extern "C" fn(&Object, Sel, Id, Id, Id),
+            );
             decl.add_method(sel!(webView:didFailProvisionalNavigation:withError:), did_fail as extern "C" fn(&Object, Sel, Id, Id, Id));
             decl.add_method(sel!(webView:didFailNavigation:withError:), did_fail as extern "C" fn(&Object, Sel, Id, Id, Id));
             decl.add_method(
@@ -415,6 +460,193 @@ unsafe fn current_url_of(view: Id) -> Option<String> {
     rust_string(msg_send![url, absoluteString])
 }
 
+/// Size of a parked page: a laptop's window, so sites lay out their desktop version.
+const PARKED_WIDTH: f64 = 1280.;
+const PARKED_HEIGHT: f64 = 900.;
+
+/// `Version/<Safari's version> Safari/605.1.15`, read from the Safari on this Mac.
+fn safari_suffix() -> String {
+    static SUFFIX: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SUFFIX
+        .get_or_init(|| {
+            let version = unsafe {
+                let bundle: Id = msg_send![class!(NSBundle), bundleWithPath: ns_string("/Applications/Safari.app")];
+                if bundle.is_null() {
+                    None
+                } else {
+                    let value: Id = msg_send![bundle, objectForInfoDictionaryKey: ns_string("CFBundleShortVersionString")];
+                    rust_string(value)
+                }
+            };
+            let version = version.filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.'));
+            format!("Version/{} Safari/605.1.15", version.as_deref().unwrap_or("18.0"))
+        })
+        .clone()
+}
+
+/// One cookie of the in-app browser.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Cookie {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    /// Seconds since the Unix epoch; `None` for a cookie that ends with the browser session.
+    pub expires: Option<f64>,
+    pub secure: bool,
+    pub http_only: bool,
+    pub same_site: Option<String>,
+}
+
+/// Whether any web view exists. WebKit loads the saved cookies only once one does: before that
+/// the cookie store answers as if it were empty.
+pub fn any_view() -> bool {
+    !VIEWS.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+}
+
+/// A browser profile: a store of cookies and site data of its own (a second sign-in to the same
+/// site), named by a UUID. `None` is the in-app browser's own store.
+pub type Profile = Option<[u8; 16]>;
+
+/// Whether this macOS keeps stores apart by profile (`dataStoreForIdentifier:`, macOS 14).
+pub fn profiles_supported() -> bool {
+    unsafe {
+        let responds: BOOL = msg_send![class!(WKWebsiteDataStore), respondsToSelector: sel!(dataStoreForIdentifier:)];
+        responds == YES
+    }
+}
+
+unsafe fn ns_uuid(bytes: &[u8; 16]) -> Id {
+    let uuid: Id = msg_send![class!(NSUUID), alloc];
+    let uuid: Id = msg_send![uuid, initWithUUIDBytes: bytes.as_ptr()];
+    msg_send![uuid, autorelease]
+}
+
+/// The store `profile` keeps its cookies in (null when this macOS has none for profiles).
+unsafe fn data_store(profile: Profile) -> Id {
+    match profile {
+        None => msg_send![class!(WKWebsiteDataStore), defaultDataStore],
+        Some(_) if !profiles_supported() => std::ptr::null_mut(),
+        Some(bytes) => msg_send![class!(WKWebsiteDataStore), dataStoreForIdentifier: ns_uuid(&bytes)],
+    }
+}
+
+unsafe fn cookie_store() -> Id {
+    cookie_store_of(None)
+}
+
+unsafe fn cookie_store_of(profile: Profile) -> Id {
+    let store = data_store(profile);
+    if store.is_null() {
+        return std::ptr::null_mut();
+    }
+    msg_send![store, httpCookieStore]
+}
+
+/// Deletes a profile's store: its cookies, cache and site data (macOS 14).
+pub fn remove_profile(bytes: [u8; 16]) {
+    use block::ConcreteBlock;
+    if !profiles_supported() {
+        return;
+    }
+    unsafe {
+        let done = ConcreteBlock::new(|_error: Id| {}).copy();
+        let _: () = msg_send![class!(WKWebsiteDataStore), removeDataStoreForIdentifier: ns_uuid(&bytes) completionHandler: &*done];
+    }
+}
+
+/// The in-app browser's cookies whose domain `keep` accepts, delivered on the main thread.
+pub fn cookies(keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Cookie>) + 'static) {
+    cookies_of(None, keep, reply)
+}
+
+/// [`cookies`] of `profile`'s store.
+pub fn cookies_of(profile: Profile, keep: impl Fn(&str) -> bool + 'static, reply: impl FnOnce(Vec<Cookie>) + 'static) {
+    use block::ConcreteBlock;
+    unsafe {
+        let store = cookie_store_of(profile);
+        if store.is_null() {
+            return reply(Vec::new());
+        }
+        let reply = std::cell::RefCell::new(Some(reply));
+        let done = ConcreteBlock::new(move |list: Id| {
+            let Some(reply) = reply.borrow_mut().take() else { return };
+            let mut out = Vec::new();
+            let count: usize = if list.is_null() { 0 } else { msg_send![list, count] };
+            for index in 0..count {
+                let cookie: Id = msg_send![list, objectAtIndex: index];
+                let domain = rust_string(msg_send![cookie, domain]).unwrap_or_default();
+                if !keep(&domain) {
+                    continue;
+                }
+                let session: BOOL = msg_send![cookie, isSessionOnly];
+                let expires: Id = msg_send![cookie, expiresDate];
+                let expires = if session == YES || expires.is_null() {
+                    None
+                } else {
+                    let seconds: f64 = msg_send![expires, timeIntervalSince1970];
+                    Some(seconds)
+                };
+                let secure: BOOL = msg_send![cookie, isSecure];
+                let http_only: BOOL = msg_send![cookie, isHTTPOnly];
+                let has_policy: BOOL = msg_send![cookie, respondsToSelector: sel!(sameSitePolicy)];
+                let same_site = if has_policy == YES { rust_string(msg_send![cookie, sameSitePolicy]) } else { None };
+                out.push(Cookie {
+                    name: rust_string(msg_send![cookie, name]).unwrap_or_default(),
+                    value: rust_string(msg_send![cookie, value]).unwrap_or_default(),
+                    domain,
+                    path: rust_string(msg_send![cookie, path]).unwrap_or_else(|| "/".into()),
+                    expires,
+                    secure: secure == YES,
+                    http_only: http_only == YES,
+                    same_site,
+                });
+            }
+            reply(out);
+        })
+        .copy();
+        let _: () = msg_send![store, getAllCookies: &*done];
+    }
+}
+
+/// Puts cookies back into the in-app browser (a session carried over a restart).
+pub fn set_cookies(cookies: &[Cookie]) {
+    use block::ConcreteBlock;
+    unsafe {
+        let store = cookie_store();
+        for cookie in cookies {
+            let properties: Id = msg_send![class!(NSMutableDictionary), dictionary];
+            let put = |key: &str, value: Id| {
+                if !value.is_null() {
+                    let _: () = msg_send![properties, setObject: value forKey: ns_string(key)];
+                }
+            };
+            put("Name", ns_string(&cookie.name));
+            put("Value", ns_string(&cookie.value));
+            put("Domain", ns_string(&cookie.domain));
+            put("Path", ns_string(&cookie.path));
+            if cookie.secure {
+                put("Secure", ns_string("TRUE"));
+            }
+            if cookie.http_only {
+                put("HttpOnly", ns_string("TRUE"));
+            }
+            if let Some(policy) = &cookie.same_site {
+                put("SameSite", ns_string(policy));
+            }
+            if let Some(expires) = cookie.expires {
+                put("Expires", msg_send![class!(NSDate), dateWithTimeIntervalSince1970: expires]);
+            }
+            let made: Id = msg_send![class!(NSHTTPCookie), cookieWithProperties: properties];
+            if made.is_null() {
+                continue;
+            }
+            let done = ConcreteBlock::new(|| {}).copy();
+            let _: () = msg_send![store, setCookie: made completionHandler: &*done];
+        }
+    }
+}
+
 pub struct WebView {
     view: Id,
     parent: Id,
@@ -423,6 +655,10 @@ pub struct WebView {
     /// The navigation and UI delegate (WebKit holds it weakly, so it is owned here).
     delegate: Id,
     visible: bool,
+    /// Outside the window but shown: see [`WebView::park`].
+    parked: bool,
+    /// A plugin's page: taken out of sight it is parked, never hidden, so it keeps running.
+    keep_running: bool,
     /// Page zoom last set (the browser setting, or the responsive mode's scale).
     zoom: f64,
 }
@@ -430,6 +666,28 @@ pub struct WebView {
 impl WebView {
     /// Creates the web view inside `window`'s content view (hidden until `set_frame`).
     pub fn new(window: &gpui::Window, prefs: &crate::settings::BrowserSettings) -> Option<Self> {
+        Self::create(window, prefs, false, None)
+    }
+
+    /// A web view a plugin drives while nobody looks at it: parked outside the window, where it is
+    /// never drawn but still counts as shown, and never throttled for being out of sight — a page
+    /// that loads more as it is scrolled would otherwise stop halfway.
+    pub fn new_background(window: &gpui::Window, prefs: &crate::settings::BrowserSettings) -> Option<Self> {
+        Self::new_background_in(window, prefs, None)
+    }
+
+    /// [`new_background`] with `profile`'s cookies and site data (see [`Profile`]).
+    pub fn new_background_in(window: &gpui::Window, prefs: &crate::settings::BrowserSettings, profile: Profile) -> Option<Self> {
+        if profile.is_some() && !profiles_supported() {
+            return None;
+        }
+        let mut view = Self::create(window, prefs, true, profile)?;
+        view.keep_running = true;
+        view.park();
+        Some(view)
+    }
+
+    fn create(window: &gpui::Window, prefs: &crate::settings::BrowserSettings, background: bool, profile: Profile) -> Option<Self> {
         let ns_window = crate::native::ns_window(window)?;
         let gpui_view = crate::native::ns_view(window)?;
         unsafe {
@@ -441,6 +699,16 @@ impl WebView {
             let bool_of = |on: bool| if on { YES } else { NO };
             let preferences: Id = msg_send![config, preferences];
             let _: () = msg_send![preferences, setJavaScriptCanOpenWindowsAutomatically: bool_of(prefs.popups)];
+            // `WKInactiveSchedulingPolicyNone` (macOS 14): a page out of sight keeps its timers.
+            let unthrottled: BOOL = msg_send![preferences, respondsToSelector: sel!(setInactiveSchedulingPolicy:)];
+            if background && unthrottled == YES {
+                let _: () = msg_send![preferences, setInactiveSchedulingPolicy: 2isize];
+            }
+            // Safari's own tail on the user agent. Without it the page sees an app's embedded
+            // browser, and some sites refuse to sign anyone in there.
+            if !prefs.mobile {
+                let _: () = msg_send![config, setApplicationNameForUserAgent: ns_string(&safari_suffix())];
+            }
             let page_prefs: Id = msg_send![config, defaultWebpagePreferences];
             if !page_prefs.is_null() {
                 let _: () = msg_send![page_prefs, setAllowsContentJavaScript: bool_of(prefs.javascript)];
@@ -459,6 +727,12 @@ impl WebView {
             }
             if prefs.private_mode {
                 let store: Id = msg_send![class!(WKWebsiteDataStore), nonPersistentDataStore];
+                let _: () = msg_send![config, setWebsiteDataStore: store];
+            } else if profile.is_some() {
+                let store = data_store(profile);
+                if store.is_null() {
+                    return None;
+                }
                 let _: () = msg_send![config, setWebsiteDataStore: store];
             }
             let view: Id = msg_send![web_view_class(), alloc];
@@ -484,7 +758,16 @@ impl WebView {
             let _: () = msg_send![view, setHidden: YES];
             let _: () = msg_send![parent, addSubview: view];
             VIEWS.lock().unwrap_or_else(|e| e.into_inner()).push(view as usize);
-            Some(Self { view, parent, gpui_view, delegate, visible: false, zoom: prefs.zoom.clamp(0.3, 3.0) as f64 })
+            Some(Self {
+                view,
+                parent,
+                gpui_view,
+                delegate,
+                visible: false,
+                parked: false,
+                keep_running: false,
+                zoom: prefs.zoom.clamp(0.3, 3.0) as f64,
+            })
         }
     }
 
@@ -573,13 +856,22 @@ impl WebView {
     /// Runs `body` as the body of an async JavaScript function in the page (not subject to the
     /// page's CSP) with `args` as its variables; the returned value is sent as JSON.
     pub fn call_async(&self, body: &str, args: &[(&str, &str)], reply: Reply) {
+        self.call_in_world(body, args, None, reply)
+    }
+
+    /// [`call_async`] in a content world of its own (`Some(name)`): the page's scripts share the
+    /// DOM with it but cannot see or replace its variables and functions.
+    pub fn call_in_world(&self, body: &str, args: &[(&str, &str)], world: Option<&str>, reply: Reply) {
         use block::ConcreteBlock;
         unsafe {
             let dictionary: Id = msg_send![class!(NSMutableDictionary), dictionary];
             for (key, value) in args {
                 let _: () = msg_send![dictionary, setObject: ns_string(value) forKey: ns_string(key)];
             }
-            let world: Id = msg_send![class!(WKContentWorld), pageWorld];
+            let world: Id = match world {
+                Some(name) => named_world(name),
+                None => msg_send![class!(WKContentWorld), pageWorld],
+            };
             let reply = std::cell::RefCell::new(Some(reply));
             let completion = ConcreteBlock::new(move |result: Id, error: Id| {
                 let Some(reply) = reply.borrow_mut().take() else { return };
@@ -659,6 +951,7 @@ impl WebView {
             );
             let origin_y = if flipped == YES { y } else { parent_frame.size.height - y - h };
             let _: () = msg_send![self.view, setFrame: NSRect::new(NSPoint::new(x, origin_y), NSSize::new(w.max(1.), h.max(1.)))];
+            self.parked = false;
             if !self.visible {
                 let _: () = msg_send![self.view, setHidden: NO];
                 self.visible = true;
@@ -678,7 +971,31 @@ impl WebView {
         }
     }
 
+    /// Moves the view outside the window at a desktop size: never drawn, never in the way, but
+    /// not hidden either — WebKit suspends a hidden page, and a plugin reading one must not have it
+    /// stop while it scrolls.
+    pub fn park(&mut self) {
+        if self.parked {
+            return;
+        }
+        unsafe {
+            // Out of the window it can still hold the keyboard, and then every key only beeps.
+            self.release_keyboard();
+            let parent_frame: NSRect = msg_send![self.parent, frame];
+            let (w, h) = (PARKED_WIDTH, PARKED_HEIGHT);
+            let origin = NSPoint::new(-(w + parent_frame.size.width + 400.), -(h + parent_frame.size.height + 400.));
+            let _: () = msg_send![self.view, setFrame: NSRect::new(origin, NSSize::new(w, h))];
+            let _: () = msg_send![self.view, setHidden: NO];
+        }
+        self.visible = false;
+        self.parked = true;
+    }
+
     pub fn hide(&mut self) {
+        if self.keep_running {
+            // Hiding would suspend the page a plugin is working in: it goes out of the window.
+            return self.park();
+        }
         if self.visible {
             unsafe {
                 self.release_keyboard();

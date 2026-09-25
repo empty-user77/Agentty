@@ -3,10 +3,12 @@
 //!
 //! The protocol is documented in `docs/plugins/protocol.md`; the Node.js SDK lives in `sdk/node`.
 
+pub mod files;
 pub mod link;
 pub mod manifest;
 pub mod market;
 pub mod net;
+pub mod sites;
 pub mod storage;
 pub mod store;
 pub mod ui;
@@ -38,10 +40,42 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     // The plugin's own HTTP requests. Nothing of Agentty's travels with them: no cookies, no
     // stored credentials, only what the plugin puts in the request.
     ("net/fetch", Some("net.request")),
+    // A folder of the plugin's own to keep files in (`plugin-data/<id>/files`), and nothing
+    // outside it. `files/download` also needs `net.request`, checked where it is handled.
+    ("files/write", Some("files")),
+    ("files/read", Some("files")),
+    ("files/list", Some("files")),
+    ("files/stat", Some("files")),
+    ("files/remove", Some("files")),
+    ("files/rename", Some("files")),
+    ("files/copy", Some("files")),
+    ("files/download", Some("files")),
+    ("files/path", Some("files")),
+    ("files/reveal", Some("files")),
     ("prompt/inject", Some("prompt.inject")),
+    // Only a terminal `prompt/inject` opened for the plugin: what it opened, it may close.
+    ("terminal/close", Some("prompt.inject")),
     ("terminal/send", Some("terminal.write")),
     ("session/get", Some("session.read")),
     ("workspace/list", Some("workspace.read")),
+    // The in-app browser, signed in as the user: only on the sites the manifest names, and never
+    // its cookies.
+    // The plugin's own workspace: its automations (tabs) and what they are called.
+    ("workspace/instances", None),
+    ("workspace/setInstanceTitle", None),
+    ("workspace/closeInstance", None),
+    ("browser/sites", Some("browser.control")),
+    ("browser/open", Some("browser.control")),
+    ("browser/navigate", Some("browser.control")),
+    ("browser/eval", Some("browser.control")),
+    ("browser/wait", Some("browser.control")),
+    ("browser/info", Some("browser.control")),
+    ("browser/show", Some("browser.control")),
+    ("browser/hide", Some("browser.control")),
+    ("browser/close", Some("browser.control")),
+    ("browser/signIn", Some("browser.control")),
+    ("browser/profiles", Some("browser.control")),
+    ("browser/removeProfile", Some("browser.control")),
 ];
 
 /// `None` for unknown methods; `Some(None)` when no permission is needed.
@@ -123,6 +157,9 @@ pub enum PromptTarget {
     Pane,
     /// An idle agent in `workspaceId`, or a new agent tab there.
     Workspace,
+    /// A new tab in the plugin's own workspace (`mode: "workspace"`), made if it has none yet: one
+    /// tab per job, so a plugin can run several side by side.
+    Own,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,6 +175,10 @@ pub struct PromptRequest {
     pub pane_id: Option<u64>,
     #[serde(default)]
     pub workspace_id: Option<u64>,
+    /// With `target: "own"`: the automation (a tab of the plugin's workspace) the job belongs to;
+    /// it opens beside that tab's terminals instead of as a tab of its own.
+    #[serde(default)]
+    pub instance: Option<String>,
     /// `claude`, `codex` or `shell` for new sessions (default: Claude Code).
     #[serde(default)]
     pub agent: Option<String>,
@@ -146,6 +187,10 @@ pub struct PromptRequest {
     /// Press Enter after typing it (new agent sessions always start with it).
     #[serde(default = "default_submit")]
     pub submit: bool,
+    /// `"files"`: a new agent that only reads and writes files in `cwd` — no shell, no web, no MCP
+    /// tools. For text that is not the user's (web pages, posts, mail) handed to an agent.
+    #[serde(default)]
+    pub tools: Option<String>,
     /// Who asked, shown in the dialog (a plugin name or an app).
     #[serde(default)]
     pub source: Option<String>,
@@ -160,6 +205,13 @@ fn default_submit() -> bool {
     true
 }
 
+impl PromptRequest {
+    /// Whether the agent it starts gets files only (`tools: "files"`).
+    pub fn restricted(&self) -> bool {
+        self.tools.as_deref() == Some("files")
+    }
+}
+
 impl Default for PromptRequest {
     fn default() -> Self {
         Self {
@@ -168,9 +220,11 @@ impl Default for PromptRequest {
             target: PromptTarget::Ask,
             pane_id: None,
             workspace_id: None,
+            instance: None,
             agent: None,
             cwd: None,
             submit: true,
+            tools: None,
             source: None,
             plugin: None,
         }

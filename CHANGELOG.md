@@ -7,6 +7,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - macOS: install with Homebrew — `brew install --cask empty-user77/agentty/agentty`.
+- Plugins can work on websites for you in the in-app browser, on the sites they name, while you
+  stay signed in there yourself: read pages, click, type and post. Several sign-ins of one site can
+  be used side by side.
+- Plugin workspaces: a plugin can have a workspace of its own, where every tab is one automation
+  with its own panel, browser page and terminals.
+- Plugins can keep files (pictures, videos, drafts) in a folder of their own, and hand work to an
+  agent that only reads and writes files there.
+- A plugin installed from outside Agentty shows what it can do and waits for your OK the first time
+  it would start.
+- X Feed, the first plugin built on this, is available separately
+  ([agentty-social-manager](https://github.com/empty-user77/agentty-social-manager)).
 
 ### Changed
 - Agentty opens as you left it: the window's size and place (on a screen that is still connected),

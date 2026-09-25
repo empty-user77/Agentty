@@ -68,6 +68,7 @@ impl Workbench {
                     asleep_on_close: false,
                     closed_tabs: Vec::new(),
                     color: None,
+                    plugin: None,
                 });
                 self.workspaces.len() - 1
             }

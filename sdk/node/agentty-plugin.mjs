@@ -13,7 +13,7 @@
 import { createInterface } from 'node:readline';
 
 export const SDK_VERSION = '1.0.0';
-export const API_VERSION = 1;
+export const API_VERSION = 3;
 
 /** Builders for the panel UI tree. Every interactive element needs an `id` unique in the panel. */
 export const ui = {
@@ -24,7 +24,8 @@ export const ui = {
   text: (text, style = 'body') => ({ type: 'text', text: String(text ?? ''), style }),
   /** variant: primary | secondary | ghost | danger */
   button: (id, label, { icon, variant = 'secondary', disabled = false } = {}) => ({ type: 'button', id, label, icon, variant, disabled }),
-  input: (id, { placeholder = '', value = '' } = {}) => ({ type: 'input', id, placeholder, value }),
+  /** rows > 1: a text area that many lines tall (max 24), where Enter adds a line. */
+  input: (id, { placeholder = '', value = '', rows } = {}) => ({ type: 'input', id, placeholder, value, ...(rows ? { rows } : {}) }),
   /** items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }] — tone colors the icon */
   list: (id, items, { empty } = {}) => ({ type: 'list', id, items, empty }),
   /** options: [{ value, label }] */
@@ -57,7 +58,7 @@ export function createPlugin(streams = {}) {
   const commands = new Map();
   const events = new Map();
   const urls = new Map();
-  const listeners = { activate: [], panelOpen: [], panelClose: [], context: [], event: [], url: [], shutdown: [] };
+  const listeners = { activate: [], panelOpen: [], panelClose: [], context: [], event: [], url: [], shutdown: [], browserHidden: [], instanceOpen: [], instanceClose: [] };
   const pending = new Map();
   let nextId = 1;
   let started = false;
@@ -115,9 +116,34 @@ export function createPlugin(streams = {}) {
       return plugin;
     },
 
-    /** Replaces the panel's content. */
-    setPanel(tree) {
-      return call('ui/setPanel', { tree });
+    /**
+     * Replaces the panel's content. In a plugin workspace (`mode: "workspace"`) each automation
+     * (tab) has its own panel: pass its `instance`. UI events from it carry that `instance`.
+     */
+    setPanel(tree, { instance } = {}) {
+      return call('ui/setPanel', { tree, instance });
+    },
+    /** The automations (tabs) of the plugin's workspace → [{ instance, title, active }]. */
+    instances() {
+      return call('workspace/instances', {});
+    },
+    /** Names an automation's tab. */
+    setInstanceTitle(instance, title) {
+      return call('workspace/setInstanceTitle', { instance, title });
+    },
+    /** Closes one of the plugin's own automations (its tab), e.g. after the user deleted it. */
+    closeInstance(instance) {
+      return call('workspace/closeInstance', { instance });
+    },
+    /** A new automation (tab) in the plugin's workspace, or one that exists when the plugin starts: handler({ instance, title }). */
+    onInstanceOpen(handler) {
+      listeners.instanceOpen.push(handler);
+      return plugin;
+    },
+    /** The user closed an automation's tab: handler({ instance }). Its pages are closed already. */
+    onInstanceClose(handler) {
+      listeners.instanceClose.push(handler);
+      return plugin;
     },
     /** Opens (focuses) this plugin's panel. */
     showPanel() {
@@ -159,6 +185,76 @@ export function createPlugin(streams = {}) {
     revealPath(path) {
       return call('host/revealPath', { path });
     },
+    /**
+     * The in-app browser, signed in as the user, on the sites `browser.sites` names in the
+     * manifest. Needs `browser.control` (apiVersion 3). A plugin never sees a cookie: it hears
+     * whether a site is signed in and asks the user to sign in when it is not.
+     */
+    browser: {
+      /** [{ host, signedIn: true | false | null, expiresAt: ms | null }] in `profile` (default: the browser's own). */
+      sites({ profile } = {}) {
+        return call('browser/sites', { profile });
+      },
+      /**
+       * Opens a page of one of the plugin's sites → { tabId }. mode: auto | background | visible.
+       * profile: a sign-in of its own (made the first time a name is used; macOS 14+).
+       * instance: the automation (a tab of the plugin's workspace) the page belongs to.
+       */
+      open(url, { mode, profile, instance } = {}) {
+        return call('browser/open', { url, mode, profile, instance });
+      },
+      navigate(tabId, url) {
+        return call('browser/navigate', { tabId, url });
+      },
+      /**
+       * Runs `script` (a function, or the body of an async function) in the page with `args`, and
+       * resolves to what it returns (anything JSON can carry).
+       */
+      async eval(tabId, script, args = null, { timeoutMs } = {}) {
+        const body = typeof script === 'function' ? `return (${script.toString()})(args);` : String(script);
+        const { value } = await call('browser/eval', { tabId, script: body, args, timeoutMs });
+        return value;
+      },
+      /** Resolves once the page has finished loading → { url, title }. */
+      wait(tabId, { timeoutMs } = {}) {
+        return call('browser/wait', { tabId, timeoutMs });
+      },
+      /** { tabId, url, title, loading, visible, site } */
+      info(tabId) {
+        return call('browser/info', { tabId });
+      },
+      /** Shows the page as a tab of the browser panel, with a message for the user. */
+      show(tabId, message) {
+        return call('browser/show', { tabId, message });
+      },
+      hide(tabId) {
+        return call('browser/hide', { tabId });
+      },
+      close(tabId) {
+        return call('browser/close', { tabId });
+      },
+      /**
+       * Opens the site's sign-in page for the user and resolves once they are signed in, closed the
+       * tab or ten minutes passed → { signedIn, expiresAt?, reason? }.
+       */
+      signIn(host, { message, profile, instance } = {}) {
+        return call('browser/signIn', { host, message, profile, instance });
+      },
+      /** The profiles the plugin has made → { supported, profiles: [name] }. */
+      profiles() {
+        return call('browser/profiles', {});
+      },
+      /** Deletes a profile with everything signed in there → { removed }. */
+      removeProfile(profile) {
+        return call('browser/removeProfile', { profile });
+      },
+    },
+    /** The user took a plugin page out of the browser panel: handler({ tabId }). It still runs. */
+    onBrowserHidden(handler) {
+      listeners.browserHidden.push(handler);
+      return plugin;
+    },
+
     /** Writes to Agentty's log for this plugin (stderr). */
     log(...parts) {
       process.stderr.write(parts.map((p) => (typeof p === 'string' ? p : safeJson(p))).join(' ') + '\n');
@@ -267,6 +363,15 @@ export function createPlugin(streams = {}) {
         else await guarded(() => run(listeners.url, params));
         return;
       }
+      case 'browser/hidden':
+        await guarded(() => run(listeners.browserHidden, params));
+        return;
+      case 'instance/open':
+        await guarded(() => run(listeners.instanceOpen, params));
+        return;
+      case 'instance/close':
+        await guarded(() => run(listeners.instanceClose, params));
+        return;
       case 'shutdown':
         await shutdown(0);
         return;

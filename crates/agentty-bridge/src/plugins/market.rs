@@ -68,13 +68,20 @@ pub struct Entry {
     #[serde(default)]
     pub surface: Surface,
     #[serde(default)]
-    pub mode: PanelMode,
+    pub mode: Option<PanelMode>,
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// The sites `browser.control` works on, shown on the card before installing.
+    #[serde(default)]
+    pub browser: Option<super::sites::BrowserContribution>,
     /// The plugin protocol the module is built against. An entry that leaves it out is from
     /// before the field existed, which can only mean the first one.
     #[serde(default = "first_api_version")]
     pub api_version: u32,
+    /// `["onStartup"]`: the plugin starts with Agentty (an automation that runs on a schedule).
+    /// Nothing else is taken from a listing.
+    #[serde(default)]
+    pub activation_events: Vec<String>,
     pub module: Module,
 }
 
@@ -141,6 +148,9 @@ impl Entry {
         if !valid_id(&entry.id) {
             bail!("\"{}\" is not a plugin id", entry.id);
         }
+        if super::store::is_builtin_id(&entry.id) {
+            bail!("\"{}\" is the id of a plugin that comes with Agentty", entry.id);
+        }
         entry.name = plain(&entry.name, "name", MAX_NAME, true)?;
         entry.description = plain(&entry.description, "description", MAX_DESCRIPTION, false)?;
         entry.publisher = plain(&entry.publisher, "publisher", MAX_NAME, false)?;
@@ -160,6 +170,9 @@ impl Entry {
             if !PERMISSIONS.iter().any(|(name, _)| name == permission) {
                 bail!("unknown permission {permission}");
             }
+        }
+        if let Some(browser) = &entry.browser {
+            browser.validate()?;
         }
         let host = module_url_host(&entry.module.url)?;
         if !module_host_allowed(&host) {
@@ -197,7 +210,7 @@ impl Entry {
             main: format!("{}.wasm", self.id),
             runtime: super::manifest::Runtime::Wasm,
             api_version: self.api_version,
-            activation_events: Vec::new(),
+            activation_events: self.activation_events.iter().filter(|e| e.as_str() == "onStartup").cloned().collect(),
             contributes: super::manifest::Contributes {
                 commands: Vec::new(),
                 panel: Some(super::manifest::PanelContribution {
@@ -208,6 +221,7 @@ impl Entry {
                 }),
             },
             permissions: self.permissions.clone(),
+            browser: self.browser.clone(),
             detect: Vec::new(),
             keywords: self.keywords.clone(),
         }

@@ -102,7 +102,7 @@ impl Workbench {
         let moved = tab.active.clone();
         let ws = &mut self.workspaces[target_workspace];
         if !ws.tabs[target_tab].root.attach(target, tab.root, side.axis(), side.before()) {
-            self.restore_tab(Tab { root: super::panes::PaneNode::Leaf(moved.clone()), active: moved }, window, cx);
+            self.restore_tab(Tab { root: super::panes::PaneNode::Leaf(moved.clone()), active: moved, instance: None }, window, cx);
             return;
         }
         ws.active_tab = target_tab;
@@ -159,6 +159,7 @@ impl Workbench {
                     asleep_on_close: false,
                     closed_tabs: Vec::new(),
                     color: None,
+                    plugin: None,
                 });
                 self.active_workspace = self.workspaces.len() - 1;
             }

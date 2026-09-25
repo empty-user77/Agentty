@@ -283,6 +283,12 @@ fn command(plugin: &InstalledPlugin, language: &str) -> Result<Command, String> 
     agentty_bridge::process::hide_window(&mut command);
     let data = plugin_data_dir(&plugin.id);
     let _ = std::fs::create_dir_all(&data);
+    // What a plugin keeps (posts it read, drafts, logs) is the user's alone.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

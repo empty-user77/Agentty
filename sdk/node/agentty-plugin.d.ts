@@ -35,7 +35,7 @@ export const ui: {
   section(title: string, children: Child[]): UiNode;
   text(text: string, style?: TextStyle): UiNode;
   button(id: string, label: string, options?: { icon?: string; variant?: Variant; disabled?: boolean }): UiNode;
-  input(id: string, options?: { placeholder?: string; value?: string }): UiNode;
+  input(id: string, options?: { placeholder?: string; value?: string; rows?: number }): UiNode;
   list(id: string, items: ListItem[], options?: { empty?: string }): UiNode;
   choice(id: string, options: ChoiceOption[], value?: string): UiNode;
   toggle(id: string, label: string, value?: boolean): UiNode;
@@ -88,7 +88,7 @@ export interface UiEvent {
 
 export interface UrlOpen { path: string; query: Record<string, string>; url: string }
 
-export type PromptTarget = 'ask' | 'active' | 'newWorkspace' | 'newTab' | 'pane' | 'workspace';
+export type PromptTarget = 'ask' | 'active' | 'newWorkspace' | 'newTab' | 'split' | 'pane' | 'workspace' | 'own';
 
 export interface PromptRequest {
   text: string;
@@ -96,9 +96,17 @@ export interface PromptRequest {
   target?: PromptTarget;
   paneId?: number;
   workspaceId?: number;
+  /** With target 'own': the automation (tab) the job opens beside. */
+  instance?: string;
   agent?: 'claude' | 'codex' | 'shell';
   cwd?: string;
   submit?: boolean;
+  /**
+   * `"files"`: the new agent only reads and writes files in `cwd` (a folder of the plugin's own
+   * data) — no shell, no web, no MCP tools. Use it whenever the prompt carries text that is not
+   * the user's (web pages, posts, mail), so instructions hidden in it have nothing to reach with.
+   */
+  tools?: 'files';
 }
 
 export interface Session {
@@ -110,6 +118,41 @@ export interface Session {
   status: AgentStatus;
   turnCount: number;
   turns: { role: 'user' | 'assistant'; text: string }[];
+}
+
+export type BrowserMode = 'auto' | 'background' | 'visible';
+
+export interface SiteStatus {
+  host: string;
+  /** null when the site's manifest entry names no `signedInCookie`. */
+  signedIn: boolean | null;
+  /** When the sign-in ends (ms since the epoch); null for a session that ends with the browser. */
+  expiresAt: number | null;
+}
+
+export interface BrowserTabInfo {
+  tabId: number;
+  url: string | null;
+  title: string | null;
+  loading: boolean;
+  visible: boolean;
+  /** The plugin's site the page is on, or null when it is elsewhere (scripts are refused there). */
+  site: string | null;
+}
+
+export interface Browser {
+  sites(options?: { profile?: string }): Promise<SiteStatus[]>;
+  open(url: string, options?: { mode?: BrowserMode; profile?: string; instance?: string }): Promise<{ tabId: number }>;
+  navigate(tabId: number, url: string): Promise<void>;
+  eval<T = unknown, A = unknown>(tabId: number, script: string | ((args: A) => T | Promise<T>), args?: A, options?: { timeoutMs?: number }): Promise<T>;
+  wait(tabId: number, options?: { timeoutMs?: number }): Promise<{ url: string; title: string | null }>;
+  info(tabId: number): Promise<BrowserTabInfo>;
+  show(tabId: number, message?: string): Promise<void>;
+  hide(tabId: number): Promise<void>;
+  close(tabId: number): Promise<void>;
+  signIn(host: string, options?: { message?: string; profile?: string; instance?: string }): Promise<{ tabId: number; signedIn: boolean | null; expiresAt?: number | null; reason?: 'closed' | 'timeout' }>;
+  profiles(): Promise<{ supported: boolean; profiles: string[] }>;
+  removeProfile(profile: string): Promise<{ removed: boolean }>;
 }
 
 export class AgenttyError extends Error {
@@ -129,7 +172,13 @@ export interface Plugin {
   onPanelClose(handler: (context: Context) => unknown): Plugin;
   onContextChange(handler: (context: Context) => unknown): Plugin;
   onShutdown(handler: () => unknown): Plugin;
-  setPanel(tree: UiNode): Promise<void>;
+  setPanel(tree: UiNode, options?: { instance?: string }): Promise<void>;
+  instances(): Promise<{ instance: string; title: string | null; active: boolean }[]>;
+  setInstanceTitle(instance: string, title: string): Promise<void>;
+  /** Closes one of the plugin's own automations (its tab), e.g. after the user deleted it. */
+  closeInstance(instance: string): Promise<void>;
+  onInstanceOpen(handler: (event: { instance: string; title: string | null }) => unknown): Plugin;
+  onInstanceClose(handler: (event: { instance: string }) => unknown): Plugin;
   showPanel(): Promise<void>;
   notify(message: string, kind?: 'info' | 'success' | 'warning' | 'error'): Promise<void>;
   setBadge(text: string): Promise<void>;
@@ -140,6 +189,9 @@ export interface Plugin {
   listWorkspaces(): Promise<WorkspaceInfo[]>;
   openUrl(url: string): Promise<void>;
   revealPath(path: string): Promise<void>;
+  /** The in-app browser on the manifest's `browser.sites`. Needs `browser.control`. */
+  browser: Browser;
+  onBrowserHidden(handler: (event: { tabId: number }) => unknown): Plugin;
   log(...parts: unknown[]): void;
   start(): Plugin;
 }
