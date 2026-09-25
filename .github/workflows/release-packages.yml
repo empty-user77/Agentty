@@ -39,7 +39,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
       - name: Version matches the tag
@@ -76,7 +76,7 @@ jobs:
           }
       # A pull request only checks that the packages build; a tag or a run by hand keeps them for
       # scripts/fetch-release-packages.sh.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.event_name != 'pull_request'
         with:
           name: agentty-windows-x64
@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
       - name: Version matches the tag
@@ -107,7 +107,7 @@ jobs:
         run: scripts/build-linux-packages.sh --check
       # A pull request only checks that the packages build and install; a tag or a run by hand keeps them for
       # scripts/fetch-release-packages.sh.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.event_name != 'pull_request'
         with:
           name: agentty-linux-x86_64
