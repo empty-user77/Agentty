@@ -1,7 +1,7 @@
 # Building an Agentty plugin — instructions for the AI agent
 
-You are building a plugin for **Agentty**, a macOS terminal for AI coding agents (Claude Code,
-Codex). This folder is the plugin. Reply to the user in the language they write in.
+You are building a plugin for **Agentty**, a native terminal for AI coding agents (Claude Code,
+Codex) on macOS, Windows and Linux. This folder is the plugin. Reply to the user in the language they write in.
 
 ## What you have
 

@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://www.agentty.run">agentty.run</a> ·
-  <a href="https://www.agentty.run/docs">指南</a> ·
+  <a href="https://www.agentty.run/docs">文档</a> ·
   <a href="https://github.com/empty-user77/agentty-releases/releases">下载</a> ·
   <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
@@ -100,7 +100,9 @@ cargo run --release -p agentty-app
 ## 插件
 
 插件会填充终端旁边的面板，在智能体分屏上方添加按钮、在命令面板中添加条目，并可以发送提示词 — 发送到哪里，始终由你
-在"选择发送位置"对话框中决定。插件以独立进程运行，只能做清单中声明的事情，安装前可在插件页面看到这份清单。内置的
+在"选择发送位置"对话框中决定。插件请求的权限在安装前会显示在插件页面上，它们限制插件能请求 Agentty 做的事。WebAssembly 插件无法接触
+这些权限之外的任何东西。以 Node.js、Python 或原生程序运行的插件在 Agentty 之外拥有和你相同的文件与网络访问权限，
+所以只安装你信任的插件。插件通过 [Agentty Marketplace](https://github.com/empty-user77/Agentty-Marketplace) 发布。内置的
 **Cosmica** 插件会把 [Cosmica](https://www.cosmica.ink/) 笔记变成提示词，并把会话摘要写回去。
 
 详见 [docs/plugins](docs/plugins/README.md)。你也可以在插件页面新建一个插件，让 Claude Code 来实现它。

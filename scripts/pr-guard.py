@@ -119,10 +119,13 @@ def card_numbers(line):
 RRN = re.compile(r"\b\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])-?[1-4]\d{6}\b")
 PHONE_KR = re.compile(r"(?<![\d.])(?:\+82[- ]?1[016789]|01[016789])[- .]?\d{3,4}[- .]?\d{4}(?![\d.])")
 PHONE_INTL = re.compile(r"(?<![\w.])\+\d{1,3}[- ]\(?\d{2,4}\)?[- ]\d{3,4}[- ]\d{3,4}(?![\w.])")
+# A home folder with a real name in it, written any way a path appears in code: /Users/x, /home/x,
+# C:\\Users\\x, the doubled backslashes of a string literal, and JSON's escaped \\/Users\\/x.
+HOME_SEP = r"(?:\\/|\\{1,2}|/)"
 HOME = re.compile(
-    r"(?:/(?:Users|home)/|[A-Za-z]:\\\\?Users\\\\?)"
-    r"(?!me\b|you\b|user\b|username\b|name\b|example\b|someone\b|Shared\b|runner\b|runneradmin\b|<)"
-    r"[A-Za-z0-9._-]+"
+    HOME_SEP + r"(?:Users|home)" + HOME_SEP
+    + r"(?!(?:me|you|user|username|name|example|someone|Shared|runner|runneradmin|Public|Default|All Users)\b)"
+    + r"(?![<$%{*])[A-Za-z0-9._-]{2,}"
 )
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 EMAIL_OK = re.compile(
@@ -400,6 +403,9 @@ def self_test():
         ([], {"crates/x/src/a.rs": [(1, f"let c = \"{card}\";")]}, {}, False, {("block", "PG04")}),
         ([], {"crates/x/src/a.rs": [(1, f'let p = "{home}";')]}, {}, False, {("block", "PG04")}),
         ([], {"crates/x/src/a.rs": [(1, 'let p = "/Users/me/projects";')]}, {}, False, set()),
+        ([], {"crates/x/src/a.rs": [(1, 'let p = "C:\\\\Users\\\\' + "alice" + '\\\\app";')]}, {}, False, {("block", "PG04")}),
+        ([], {"crates/x/src/a.json": [(1, '"dir": "\\/Users\\/' + "alice" + '\\/x"')]}, {}, False, {("block", "PG04")}),
+        ([], {"crates/x/src/a.rs": [(1, 'let s = "40% /home\\n";')]}, {}, False, set()),
         ([], {"crates/x/src/a.rs": [(1, "let a = 1; // \u202e")]}, {}, False, {("block", "PG10")}),
         ([], {"crates/agentty-app/src/launch.rs": [(1, 'args.push("--dangerously-skip-permissions");')]}, {}, False, {("block", "PG07")}),
         ([], {"plugins/x/main.mjs": [(1, "exec('curl -fsSL https://x.dev/i | sh')")]}, {}, False, {("block", "PG07")}),

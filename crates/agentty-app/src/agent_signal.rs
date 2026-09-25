@@ -417,7 +417,9 @@ fn start_with(listener: crate::ipc::Listener) -> anyhow::Result<(SignalSocket, U
                 let caller = authenticate(&mut stream, launcher_token.as_deref());
                 #[cfg(unix)]
                 let _ = &launcher_token;
-                if caller == Caller::Nobody && !debug {
+                // Refused with or without the debug driver: on Windows a connection without a token
+                // could be anyone who reaches the loopback port, and the driver types into the window.
+                if caller == Caller::Nobody {
                     return;
                 }
                 serve(stream, caller, debug, tx)
