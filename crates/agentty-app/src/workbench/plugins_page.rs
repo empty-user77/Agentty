@@ -1400,7 +1400,19 @@ impl Workbench {
         let reads = ["session.read", "workspace.read"].iter().any(|p| manifest.has_permission(p));
         let combo = reads && manifest.has_permission("net.request");
         let browser = manifest.has_permission("browser.control").then(|| self.render_browser_access(manifest, cx));
-        div().pt_4().flex().flex_col().gap_3().child(list).children(browser).when(combo, |d| {
+        // A program plugin is limited by nothing but the user's own rights: the list above is what it
+        // may ask of Agentty, not a sandbox, and should not read as one.
+        let process = manifest.runtime.is_process().then(|| {
+            div()
+                .p_3()
+                .rounded_md()
+                .flex()
+                .gap_2()
+                .bg(hex_alpha(Chrome::WARNING, 0.12))
+                .child(icon("triangle-alert", 14., hex(Chrome::WARNING)))
+                .child(div().flex_1().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "plugins.perm.process_note")))
+        });
+        div().pt_4().flex().flex_col().gap_3().child(list).children(browser).children(process).when(combo, |d| {
             d.child(
                 div()
                     .p_3()

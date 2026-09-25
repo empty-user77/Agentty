@@ -83,7 +83,10 @@ jobs:
             }
             "{0}  {1}" -f $hash, $_.Name
           }
+      # A pull request only checks that the packages build and install; a tag or a run by hand keeps them for
+      # scripts/fetch-release-packages.sh. Stored artifacts count against the account's Actions storage.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name != 'pull_request'
         with:
           name: agentty-windows-x64
           path: |
@@ -91,7 +94,7 @@ jobs:
             dist/Agentty-*-windows-x64-setup.zip
             dist/agentty-*-windows-x86_64.zip
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
   # Runs on the Apple silicon Mac in an emulated x86_64 AlmaLinux 9 container (Docker Desktop must be running), so the
   # first build is slow; the toolchain, registry and target/ are kept in named volumes for the next one.
@@ -117,11 +120,14 @@ jobs:
         run: docker info --format '{{.ServerVersion}} {{.Architecture}}' || { echo "::error::Docker Desktop is not running on the runner"; exit 1; }
       - name: Build .deb and .rpm, install each in a clean container
         run: scripts/build-linux-packages.sh --check
+      # A pull request only checks that the packages build and install; a tag or a run by hand keeps them for
+      # scripts/fetch-release-packages.sh. Stored artifacts count against the account's Actions storage.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name != 'pull_request'
         with:
           name: agentty-linux-x86_64
           path: |
             dist/Agentty-*-linux-amd64.deb
             dist/Agentty-*-linux-x86_64.rpm
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
