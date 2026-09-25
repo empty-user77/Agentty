@@ -15,12 +15,12 @@ anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 url = "2.5.8"
-sha2 = "0.10"
+sha2 = "0.11"
 mysql = { version = "28", default-features = false, features = ["minimal-rust", "rustls-tls-ring"] }
 postgres = "0.19"
 tokio-postgres-rustls = { version = "0.14", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 mongodb = { version = "3.9", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver", "sync"] }
 oracle = "0.6"
