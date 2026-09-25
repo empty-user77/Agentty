@@ -43,13 +43,13 @@ Agentty는 **로그인 셸**의 `PATH`에서 찾을 수 있는 CLI만 제안합�
 
 SDK와 필요한 `node_modules`를 포함해 실행에 필요한 것을 모두 함께 넣으세요. Agentty는 `npm install`을 실행하지 않습니다. 폴더 이름은 매니페스트의 `id`와 같아야 합니다. 플러그인 카드의 **로그**에 실제 오류가 있습니다. [플러그인 배포하기](/docs/plugin-publishing)를 참고하세요.
 
-## Windows·Linux 빌드는 언제 받을 수 있나요?
+## Windows·Linux 빌드가 있나요?
 
-코드는 두 플랫폼에서 빌드되고 동작하며 패키지 배포도 예정되어 있습니다. 현재 공개된 다운로드는 macOS뿐입니다. [플랫폼](/docs/platforms)을 참고하세요.
+네. 모든 릴리스에 macOS 다운로드와 함께 Windows 설치 파일과 Linux `.deb` / `.rpm` 패키지가 있습니다. [설치](/docs/installation)와 [플랫폼](/docs/platforms)을 참고하세요.
 
 ## 소스는 공개되어 있나요?
 
-아직 아닙니다. 공개가 예정되어 있으며, 그때까지는 릴리스 페이지가 Agentty를 받는 방법입니다.
+네. Agentty는 Apache License 2.0 오픈소스이며, 소스는 [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty)에 있습니다.
 
 ## 그 밖의 문제
 

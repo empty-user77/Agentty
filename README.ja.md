@@ -53,17 +53,58 @@ Rust と [GPUI](https://gpui.rs)、`alacritty_terminal` で作られています
 
 ## インストール
 
-[Releases](https://github.com/empty-user77/Agentty/releases) からダウンロードしてください。
+### macOS（Apple シリコン、macOS 13 以降）
 
-| プラットフォーム | ファイル |
+いちばん簡単なのは [Homebrew](https://brew.sh) です。
+
+```sh
+brew install --cask empty-user77/agentty/agentty
+```
+
+これだけで Agentty がアプリケーションフォルダに入ります。Homebrew がまだなら、[brew.sh](https://brew.sh) の 1 行の
+コマンドで先にインストールしてから、上のコマンドを実行してください。
+
+| | コマンド |
 |---|---|
-| macOS 13+（Apple Silicon） | `Agentty-X.Y.Z-…-arm64.dmg` — 署名・公証済み |
-| Windows 10 1809+（x64） | `Agentty-X.Y.Z-windows-x64-setup.exe` — ユーザー単位、管理者権限不要 |
-| Debian 12+ / Ubuntu 22.04+ | `Agentty-X.Y.Z-linux-amd64.deb` — `sudo apt install ./Agentty-*.deb` |
-| RHEL 9+ / Fedora | `Agentty-X.Y.Z-linux-x86_64.rpm` — `sudo dnf install ./Agentty-*.rpm` |
+| アップデート | Agentty が自動で更新します。`brew upgrade --cask agentty` も使えます |
+| アンインストール | `brew uninstall --cask agentty` |
 
-更新は Agentty 自身が行います。macOS と Windows では新しいバージョンをインストールして再起動し、Linux では新しい
-パッケージを案内します。
+直接ダウンロードする場合は、[最新リリース](https://github.com/empty-user77/Agentty/releases/latest)から `Agentty-X.Y.Z-…-arm64.dmg` を取得して開き、**Agentty** を
+**アプリケーション**にドラッグします。Apple の署名と公証済みなので、警告なしで開きます。Intel Mac 向けのビルドはありません。
+
+### Windows（Windows 10 1809 以降、x64）
+
+1. [最新リリース](https://github.com/empty-user77/Agentty/releases/latest)から `Agentty-X.Y.Z-windows-x64-setup.exe` をダウンロードします。ブラウザが `.exe` を
+   ブロックする場合は `Agentty-X.Y.Z-windows-x64-setup.zip` を取得して展開してください。同じインストーラーが入っています。
+2. 実行します。ユーザー単位でインストールされ、管理者権限は不要です。
+3. インストーラーはまだコード署名されていません。SmartScreen が表示されたら **詳細情報 → 実行** を選んでください。
+
+アンインストール: 設定 → アプリ → Agentty → アンインストール。
+
+### Linux（x86_64）
+
+[最新リリース](https://github.com/empty-user77/Agentty/releases/latest)からディストリビューションに合うパッケージをダウンロードして:
+
+```sh
+# Debian 12+ / Ubuntu 22.04+
+sudo apt install ./Agentty-*-linux-amd64.deb
+
+# RHEL 9+ / Fedora
+sudo dnf install ./Agentty-*-linux-x86_64.rpm
+```
+
+アンインストール: `sudo apt remove agentty` または `sudo dnf remove agentty`。
+
+### アップデート
+
+Agentty は起動時と 1 時間ごとに新しいバージョンを確認します。macOS と Windows ではアップデートをダウンロードし、
+リリースのチェックサムで検証してからインストールして再起動します。Linux では新しいバージョンを知らせ、パッケージのページを案内します。
+
+### 始める前に
+
+Agentty はエージェントを動かしますが、エージェント自体は同梱していません。使う CLI をインストールし、`PATH` に
+あることを確認してください。例: [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（`claude`）、
+[Codex](https://github.com/openai/codex)（`codex`）。Agentty の 設定 → システム から足りないものをインストールすることもできます。
 
 ### ソースからビルド
 
@@ -73,9 +114,8 @@ cd Agentty
 cargo run --release -p agentty-app
 ```
 
-Rust 1.98（`rust-toolchain.toml` で固定）とプラットフォームのビルドツールが必要です。Windows と Linux については
-[docs/platforms.md](docs/platforms.md) を参照してください。`PATH` に `claude` や `codex` があるとエージェントタブが
-使えます。足りないツールは 設定 → システムチェック からインストールできます。
+Rust 1.98（`rust-toolchain.toml` で固定）と各プラットフォームのビルドツールが必要です。Windows と Linux は
+[docs/platforms.md](docs/platforms.md) を参照してください。
 
 ## ドキュメント
 

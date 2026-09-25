@@ -56,11 +56,11 @@ Secrets you give Agentty go into the operating system's credential store — Key
 
 ## Platforms
 
-Agentty is built for macOS, Windows and Linux, and macOS is the reference platform — the only one with a published download today. The other two share every feature that does not depend on AppKit or WebKit; the differences are listed in [Platforms](/docs/platforms).
+Agentty is built for macOS, Windows and Linux, and macOS is the reference platform. All three have a download on the releases page. The other two share every feature that does not depend on AppKit or WebKit; the differences are listed in [Platforms](/docs/platforms).
 
 ## License
 
-Agentty is free to use, with no account and no subscription. The source repository is not public yet; opening it is planned.
+Agentty is free to use, with no account and no subscription. It is open source under the Apache License 2.0, at [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty).
 
 ## Where to go next
 

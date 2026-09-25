@@ -48,16 +48,58 @@ Agentty 是一个原生、GPU 渲染的终端，让 **Claude Code**、**Codex** 
 
 ## 安装
 
-从 [Releases](https://github.com/empty-user77/Agentty/releases) 下载：
+### macOS（Apple 芯片，macOS 13 及以上）
 
-| 平台 | 文件 |
+最简单的方式是 [Homebrew](https://brew.sh)：
+
+```sh
+brew install --cask empty-user77/agentty/agentty
+```
+
+这样就完成了，Agentty 已在“应用程序”文件夹中。如果还没有 Homebrew，先用 [brew.sh](https://brew.sh) 上的一行命令
+安装，再运行上面的命令。
+
+| | 命令 |
 |---|---|
-| macOS 13+（Apple Silicon） | `Agentty-X.Y.Z-…-arm64.dmg` — 已签名并公证 |
-| Windows 10 1809+（x64） | `Agentty-X.Y.Z-windows-x64-setup.exe` — 按用户安装，无需管理员权限 |
-| Debian 12+ / Ubuntu 22.04+ | `Agentty-X.Y.Z-linux-amd64.deb` — `sudo apt install ./Agentty-*.deb` |
-| RHEL 9+ / Fedora | `Agentty-X.Y.Z-linux-x86_64.rpm` — `sudo dnf install ./Agentty-*.rpm` |
+| 更新 | Agentty 会自动更新；也可以用 `brew upgrade --cask agentty` |
+| 卸载 | `brew uninstall --cask agentty` |
 
-Agentty 会自行更新：在 macOS 和 Windows 上安装新版本并重启，在 Linux 上指向新的软件包。
+想直接下载？从[最新版本](https://github.com/empty-user77/Agentty/releases/latest)获取 `Agentty-X.Y.Z-…-arm64.dmg`，打开后把 **Agentty** 拖进**应用程序**。应用经过
+Apple 签名和公证，打开时不会出现警告。没有 Intel Mac 版本。
+
+### Windows（Windows 10 1809 及以上，x64）
+
+1. 从[最新版本](https://github.com/empty-user77/Agentty/releases/latest)下载 `Agentty-X.Y.Z-windows-x64-setup.exe`。如果浏览器拦截 `.exe`，请下载
+   `Agentty-X.Y.Z-windows-x64-setup.zip` 并解压，里面是同一个安装程序。
+2. 运行它。它只为当前用户安装，不需要管理员权限。
+3. 安装程序尚未进行代码签名。如果出现 SmartScreen，请选择**更多信息 → 仍要运行**。
+
+卸载：设置 → 应用 → Agentty → 卸载。
+
+### Linux（x86_64）
+
+从[最新版本](https://github.com/empty-user77/Agentty/releases/latest)下载适合你发行版的安装包，然后：
+
+```sh
+# Debian 12+ / Ubuntu 22.04+
+sudo apt install ./Agentty-*-linux-amd64.deb
+
+# RHEL 9+ / Fedora
+sudo dnf install ./Agentty-*-linux-x86_64.rpm
+```
+
+卸载：`sudo apt remove agentty` 或 `sudo dnf remove agentty`。
+
+### 更新
+
+Agentty 在启动时和每小时检查新版本。在 macOS 和 Windows 上，它会下载更新、用发布的校验和验证、安装并重启。在
+Linux 上，它会提示有新版本并引导到安装包页面。
+
+### 开始之前
+
+Agentty 负责运行智能体，但不自带智能体。请安装你要用的 CLI，并确认它们在 `PATH` 中，例如
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（`claude`）和
+[Codex](https://github.com/openai/codex)（`codex`）。也可以在 Agentty 的 设置 → 系统 中安装缺少的工具。
 
 ### 从源码构建
 
@@ -67,9 +109,8 @@ cd Agentty
 cargo run --release -p agentty-app
 ```
 
-需要 Rust 1.98（在 `rust-toolchain.toml` 中固定）和各平台的构建工具；Windows 与 Linux 请见
-[docs/platforms.md](docs/platforms.md)。`PATH` 中有 `claude` 或 `codex` 即可使用智能体标签页，缺少的工具可在
-设置 → 环境检查 中安装。
+需要 Rust 1.98（固定在 `rust-toolchain.toml` 中）以及对应平台的构建工具；Windows 和 Linux 请参见
+[docs/platforms.md](docs/platforms.md)。
 
 ## 文档
 

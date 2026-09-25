@@ -43,13 +43,13 @@ That is the agent's own permission system, not Agentty's. Configure it in the ag
 
 Bundle everything it needs, including the SDK and any `node_modules` — Agentty does not run `npm install`. The folder name must match the `id` in the manifest. **Logs** on the plugin card shows the actual error. See [Publishing a plugin](/docs/plugin-publishing).
 
-## When will there be a Windows or Linux build?
+## Is there a Windows or Linux build?
 
-The code builds and runs on both, and packaged installers are planned. Today the only published download is macOS. See [Platforms](/docs/platforms).
+Yes. Every release has a Windows installer and Linux `.deb` / `.rpm` packages next to the macOS download. See [Installation](/docs/installation) and [Platforms](/docs/platforms).
 
 ## Is the source available?
 
-Not yet — opening it is planned. Until then the release page is the way to get Agentty.
+Yes. Agentty is open source under the Apache License 2.0, at [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty).
 
 ## Something else is broken
 

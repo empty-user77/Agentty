@@ -14,6 +14,8 @@ Agentty は無料でアカウントも不要です。ダウンロードしてド
 > [!NOTE]
 > Intel Mac 向けのビルドはありません。macOS 版 Agentty は Apple シリコン専用です。
 
+[Homebrew](https://brew.sh) ならコマンド 1 つでインストールできます: `brew install --cask empty-user77/agentty/agentty`。削除は `brew uninstall --cask agentty` です。
+
 **Windows 10 1809 以降、x64** — `Agentty-X.Y.Z-windows-x64-setup.exe` を実行します。ユーザー単位でインストールされ、管理者権限は不要です。
 
 > [!IMPORTANT]
@@ -57,7 +59,15 @@ Agentty は起動時と 1 時間ごとに新しいバージョンを確認しま
 
 ## ソースからのビルド
 
-ソースリポジトリはまだ公開されていません。公開を予定しており、それまではリリースページのビルドが Agentty を動かす方法です。
+ソースは [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty) で Apache License 2.0 のもと公開されています。
+
+```sh
+git clone https://github.com/empty-user77/Agentty.git
+cd Agentty
+cargo run --release -p agentty-app
+```
+
+Rust 1.98（`rust-toolchain.toml` で固定）と各プラットフォームのビルドツールが必要です。Windows と Linux で必要なものは[プラットフォーム](/docs/platforms)にあります。
 
 ## Agentty がファイルを置く場所
 

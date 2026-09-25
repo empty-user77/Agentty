@@ -50,23 +50,62 @@ Written in Rust with [GPUI](https://gpui.rs) and `alacritty_terminal`. No Electr
 
 ## Install
 
-Download the latest release from [Releases](https://github.com/empty-user77/Agentty/releases):
+### macOS (Apple silicon, macOS 13+)
 
-| Platform | File |
-|---|---|
-| macOS 13+ (Apple silicon) | `Agentty-X.Y.Z-…-arm64.dmg`, signed and notarized |
-| Windows 10 1809+ (x64) | `Agentty-X.Y.Z-windows-x64-setup.exe`, installs per user without admin rights |
-| Debian 12+ / Ubuntu 22.04+ | `Agentty-X.Y.Z-linux-amd64.deb`: `sudo apt install ./Agentty-*.deb` |
-| RHEL 9+ / Fedora | `Agentty-X.Y.Z-linux-x86_64.rpm`: `sudo dnf install ./Agentty-*.rpm` |
-
-On macOS you can also use [Homebrew](https://brew.sh):
+The easiest way is [Homebrew](https://brew.sh):
 
 ```sh
 brew install --cask empty-user77/agentty/agentty
 ```
 
-Agentty keeps itself up to date. On macOS and Windows it installs the new version and restarts; on Linux it links to the
-new packages.
+That's it — Agentty is in your Applications folder. If you don't have Homebrew yet, install it first with the one-line
+command on [brew.sh](https://brew.sh), then run the command above.
+
+| | Command |
+|---|---|
+| Update | Agentty updates itself; `brew upgrade --cask agentty` also works |
+| Uninstall | `brew uninstall --cask agentty` |
+
+Prefer a download? Get `Agentty-X.Y.Z-…-arm64.dmg` from the
+[latest release](https://github.com/empty-user77/Agentty/releases/latest), open it and drag **Agentty** into
+**Applications**. The app is signed and notarized by Apple, so it opens without a warning. There is no Intel Mac build.
+
+### Windows (10 version 1809+, x64)
+
+1. Download `Agentty-X.Y.Z-windows-x64-setup.exe` from the
+   [latest release](https://github.com/empty-user77/Agentty/releases/latest). If your browser blocks the `.exe`, take
+   `Agentty-X.Y.Z-windows-x64-setup.zip` and unzip it: it holds the same installer.
+2. Run it. It installs for your user only and needs no administrator rights.
+3. The installer is not code-signed yet. If SmartScreen appears, choose **More info → Run anyway**.
+
+To uninstall: Settings → Apps → Agentty → Uninstall.
+
+### Linux (x86_64)
+
+Download the package for your distribution from the
+[latest release](https://github.com/empty-user77/Agentty/releases/latest), then:
+
+```sh
+# Debian 12+ / Ubuntu 22.04+
+sudo apt install ./Agentty-*-linux-amd64.deb
+
+# RHEL 9+ / Fedora
+sudo dnf install ./Agentty-*-linux-x86_64.rpm
+```
+
+To uninstall: `sudo apt remove agentty` or `sudo dnf remove agentty`.
+
+### Updates
+
+Agentty checks for new versions at launch and every hour. On macOS and Windows it downloads the update, checks it
+against the release checksums, installs it and restarts. On Linux it tells you a new version is out and links to the
+packages.
+
+### Before you start
+
+Agentty runs your agents; it doesn't bundle them. Install the CLIs you want to use, such as
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) and [Codex](https://github.com/openai/codex)
+(`codex`), and make sure they are on your `PATH`. Settings → System in Agentty can install what's missing.
 
 ### Build from source
 
@@ -77,8 +116,7 @@ cargo run --release -p agentty-app
 ```
 
 You need Rust 1.98 (pinned in `rust-toolchain.toml`) and your platform's build tools; see
-[docs/platforms.md](docs/platforms.md) for Windows and Linux. With `claude` or `codex` on your `PATH` you get agent tabs,
-and Settings → System installs whatever is missing.
+[docs/platforms.md](docs/platforms.md) for Windows and Linux.
 
 ## Documentation
 
