@@ -33,6 +33,7 @@ redacted values (`redact_args`, `redact_url`), and files with conversation data 
 | `.claude/skills/security-audit` | the review that needs judgment: logic and flow, GitHub / Vercel / Supabase integration safety, authorization on local interfaces (BOLA), leak paths, dev / prod separation, everything else |
 | `.claude/settings.json` | registers both hooks; denies reading `.env.agentty-prod` and `--no-verify` commits |
 | CI (`.github/workflows/ci.yml`) | `check-secrets.py --all` and `security-audit.py --all` on every pull request and every push to main |
+| PR guard (`.github/workflows/pr-guard.yml`) | every pull request, forks included, read and never run: gitleaks (`.gitleaks.toml`) over its commits, and `scripts/pr-guard.py` from the base branch — plugin modules (`.wasm` ships through the Marketplace only), binaries, scripts outside `scripts/` / `packaging/`, personal data, workflows asking for more than read access, changes to the guards, permission bypasses, dependencies from outside crates.io / npm |
 
 After cloning run `scripts/install-hooks.sh` once (sets `core.hooksPath=.githooks`).
 

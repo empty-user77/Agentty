@@ -819,7 +819,7 @@ mod tests {
         let short = middle_ellipsis("/a-very-long-single-folder-name-without-anything-else", 12);
         assert_eq!(short.chars().count(), 12);
         assert!(short.contains('…'));
-        assert_eq!(middle_ellipsis("C:\\Users\\ray\\projects\\app\\src\\deep", 24), "C:\\Users\\…\\src\\deep");
+        assert_eq!(middle_ellipsis("C:\\Users\\me\\projects\\app\\src\\deep", 24), "C:\\Users\\…\\src\\deep");
     }
 
     use super::*;

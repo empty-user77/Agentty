@@ -1,0 +1,45 @@
+# gitleaks configuration for the PR guard (.github/workflows/pr-guard.yml). gitleaks' own rules cover
+# the common key formats (cloud providers, AI APIs, GitHub, Slack, Stripe, private keys, JWTs, ...);
+# the rules below add what is specific to this project. The guard always reads this file from the
+# base branch, so a pull request cannot loosen it for itself.
+title = "Agentty"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "ga4-api-secret"
+description = "Google Analytics Measurement Protocol API secret (compiled into release builds only)"
+regex = '''(?i)(?:api[_-]?secret|ga[_-]?secret)[^\n]{0,30}?[:=]\s*["']?([A-Za-z0-9_-]{16,32})["'\s;,]'''
+secretGroup = 1
+keywords = ["api_secret", "apisecret", "api-secret", "ga_secret", "ga-secret"]
+
+[[rules]]
+id = "ga4-measurement-id"
+description = "Google Analytics measurement ID written into code (it enters release builds from the environment)"
+regex = '''(?i)measurement[_-]?id[^\n]{0,40}?\b(G-[A-Z0-9]{8,12})\b'''
+secretGroup = 1
+keywords = ["measurement"]
+
+[[rules]]
+id = "apple-app-specific-password"
+description = "Apple app-specific password (notarization)"
+regex = '''(?i)(?:apple|notary|password)[a-z_]*["']?\s*[:=]\s*["']?([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b'''
+secretGroup = 1
+keywords = ["apple", "notary", "password"]
+
+[[rules]]
+id = "apple-developer-identity"
+description = "Developer ID signing identity with its team ID"
+regex = '''Developer ID Application: [^"'\n()]{2,60}\(([A-Z0-9]{10})\)'''
+secretGroup = 1
+keywords = ["developer id application"]
+
+[[allowlists]]
+description = "Obviously fake values, as CLAUDE.md asks test fixtures to be"
+regexTarget = "line"
+regexes = ['''(?i)example|not[_-]?a[_-]?real|fake|dummy|placeholder|sample|redacted|xxxx|your[_-]|TEAMID1234''']
+
+[[allowlists]]
+description = "The rule tables themselves"
+paths = ['''^\.gitleaks\.toml$''', '''^scripts/check-secrets\.py$''', '''^scripts/pr-guard\.py$''', '''^scripts/test_pr_guard\.py$''']
