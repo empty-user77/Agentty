@@ -1,5 +1,20 @@
 # 2026-09-18 보안 · 로직 감사와 커밋/푸시 전 자동 검사
 
+> **Historical work log.** Written while the work was done (September 2026) and kept as a record; it describes the
+> code as it was then, and details may differ from the current app. For how Agentty works today, see the
+> [documentation](../../README.md#documentation).
+>
+> **작업 당시의 기록입니다.** 2026년 9월 작업 중에 쓴 문서로, 그때의 코드를 설명하며 현재 앱과 다를 수 있습니다.
+
+> **Status today (v0.1.21)** · **현재 상태**
+>
+> | # | Status |
+> |---|---|
+> | A · C · E | Fixed in **v0.1.10** (commit `7485d73`) / v0.1.10에서 수정 |
+> | B | By design: a plugin sees sessions only with the `session.read` permission the user granted / 사용자가 허락한 권한 범위의 동작 |
+> | D | Affects only the maintainer's release machine; no user build is exposed / 릴리스 빌드 머신에서만 해당, 사용자 영향 없음 |
+> | F | Low; open / 낮음, 미해결 |
+
 상태: ⬜ 대기 · 🔧 진행 중 · ✅ 완료 · ⚠️ 부분 완료/제약
 
 ## 요청 요약

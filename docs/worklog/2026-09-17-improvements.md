@@ -1,5 +1,11 @@
 # 2026-09-17 개선 작업 목록
 
+> **Historical work log.** Written while the work was done (September 2026) and kept as a record; it describes the
+> code as it was then, and details may differ from the current app. For how Agentty works today, see the
+> [documentation](../../README.md#documentation).
+>
+> **작업 당시의 기록입니다.** 2026년 9월 작업 중에 쓴 문서로, 그때의 코드를 설명하며 현재 앱과 다를 수 있습니다.
+
 상태: ⬜ 대기 · 🔧 진행 중 · ✅ 완료 · ⚠️ 부분 완료/제약
 
 | # | 분류 | 항목 | 상태 | 처리 내용 · 테스트 결과 |
