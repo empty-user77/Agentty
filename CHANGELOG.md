@@ -5,7 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-25
+
 ### Added
+- Agentty is open source under the Apache License 2.0. The source, the documentation and the
+  releases now live at [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty);
+  updates come from there from this version on.
+- In-app notifications have an X that closes them right away.
 - macOS: install with Homebrew — `brew install --cask empty-user77/agentty/agentty`.
 - Plugins can work on websites for you in the in-app browser, on the sites they name, while you
   stay signed in there yourself: read pages, click, type and post. Several sign-ins of one site can
@@ -20,6 +26,12 @@ All notable changes to this project are documented here. The format follows
   ([agentty-social-manager](https://github.com/empty-user77/agentty-social-manager)).
 
 ### Changed
+- The Plugins page reads the marketplace again when you open it and the last read is more than an
+  hour old.
+- The dialog that asks before an agent starts parallel sessions shows each session's whole prompt.
+- The Plugins page says plainly that a plugin running as a program has your own access outside
+  Agentty; its permissions limit what it can ask Agentty to do.
+- About and Help link to the documentation at agentty.run/docs.
 - Agentty opens as you left it: the window's size and place (on a screen that is still connected),
   the sidebar hidden or shown, the files panel, the in-app browser with its tabs, a plugin panel,
   the Docker and database panels, and a pane in focus view.
