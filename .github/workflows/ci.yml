@@ -102,14 +102,17 @@ jobs:
           ./scripts/package-windows.ps1
           $info = (Get-Item "$env:CARGO_TARGET_DIR\release\agentty.exe").VersionInfo
           if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
+      # Packages from main only, for a few days: every stored artifact counts against the
+      # account's Actions storage, self-hosted runner or not. Pull requests still package above.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name == 'push'
         with:
           name: agentty-windows-x86_64
           path: |
             dist/agentty-*-windows-*.zip
             dist/agentty-*-windows-*.zip.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
   # Linux has no runner of its own: this job runs on the Mac and builds inside an Ubuntu container
   # (Docker Desktop must be running). Apple silicon, so the build is linux-aarch64. Cargo's registry,
@@ -145,11 +148,14 @@ jobs:
               cargo test --workspace
               scripts/package-linux.sh
             '
+      # Packages from main only, for a few days: every stored artifact counts against the
+      # account's Actions storage, self-hosted runner or not. Pull requests still package above.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name == 'push'
         with:
           name: agentty-linux-aarch64
           path: |
             dist/agentty-*-linux-*.tar.gz
             dist/agentty-*-linux-*.tar.gz.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
