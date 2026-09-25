@@ -56,11 +56,11 @@ Agentty에 맡긴 비밀 값은 운영체제의 자격 증명 저장소에 들�
 
 ## 지원 플랫폼
 
-Agentty는 macOS, Windows, Linux를 위해 만들어졌으며, 기준 플랫폼은 macOS입니다. 현재 다운로드가 공개된 플랫폼도 macOS뿐입니다. 나머지 둘은 AppKit이나 WebKit에 의존하지 않는 모든 기능을 동일하게 제공하며, 차이는 [플랫폼](/docs/platforms)에 정리돼 있습니다.
+Agentty는 macOS, Windows, Linux를 위해 만들어졌으며, 기준 플랫폼은 macOS입니다. 세 플랫폼 모두 릴리스 페이지에서 내려받을 수 있습니다. 나머지 둘은 AppKit이나 WebKit에 의존하지 않는 모든 기능을 동일하게 제공하며, 차이는 [플랫폼](/docs/platforms)에 정리돼 있습니다.
 
 ## 라이선스
 
-Agentty는 계정도 구독도 없이 무료로 사용할 수 있습니다. 소스 저장소는 아직 공개되지 않았으며, 공개가 예정되어 있습니다.
+Agentty는 계정도 구독도 없이 무료로 사용할 수 있습니다. Apache License 2.0 오픈소스이며, 소스는 [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty)에 있습니다.
 
 ## 다음으로
 

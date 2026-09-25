@@ -56,11 +56,11 @@ Agentty 没有后端。会话列表、搜索、用量数字、费用估算和上
 
 ## 支持的平台
 
-Agentty 面向 macOS、Windows 和 Linux 构建，macOS 是基准平台，也是目前唯一提供下载的平台。另外两个平台具备所有不依赖 AppKit 或 WebKit 的功能，差异整理在[平台](/docs/platforms)中。
+Agentty 面向 macOS、Windows 和 Linux 构建，macOS 是基准平台。三个平台都可以在发布页面下载。另外两个平台具备所有不依赖 AppKit 或 WebKit 的功能，差异整理在[平台](/docs/platforms)中。
 
 ## 许可
 
-Agentty 免费使用，无需账号与订阅。源码仓库尚未公开，我们计划将其开源。
+Agentty 免费使用，无需账号与订阅。它以 Apache License 2.0 开源，源码位于 [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty)。
 
 ## 接下来
 

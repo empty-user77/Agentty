@@ -14,6 +14,8 @@ Agentty 免费且无需账号。下载、拖入、打开终端即可。
 > [!NOTE]
 > 没有 Intel Mac 版本。macOS 版 Agentty 仅支持 Apple 芯片。
 
+使用 [Homebrew](https://brew.sh) 只需一条命令：`brew install --cask empty-user77/agentty/agentty`。卸载用 `brew uninstall --cask agentty`。
+
 **Windows 10 1809 及以上，x64** —— 运行 `Agentty-X.Y.Z-windows-x64-setup.exe`。按用户安装，无需管理员权限。
 
 > [!IMPORTANT]
@@ -57,7 +59,15 @@ Agentty 在启动时和每小时检查一次新版本。
 
 ## 从源码构建
 
-源码仓库尚未公开。我们计划将其开源；在此之前，发布页面上的构建就是运行 Agentty 的方式。
+源码以 Apache License 2.0 公开在 [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty)。
+
+```sh
+git clone https://github.com/empty-user77/Agentty.git
+cd Agentty
+cargo run --release -p agentty-app
+```
+
+需要 Rust 1.98（固定在 `rust-toolchain.toml` 中）以及对应平台的构建工具；Windows 和 Linux 所需内容见[平台](/docs/platforms)。
 
 ## Agentty 的文件位置
 

@@ -43,13 +43,13 @@ Agentty 只提供能在你**登录 shell** 的 `PATH` 中找到的 CLI。如果�
 
 把运行所需的一切都打包进去，包括 SDK 和任何 `node_modules` —— Agentty 不会执行 `npm install`。文件夹名必须与清单中的 `id` 一致。插件卡片上的**日志**会显示真正的错误。参见[发布插件](/docs/plugin-publishing)。
 
-## Windows 或 Linux 版本什么时候能用？
+## 有 Windows 或 Linux 版本吗？
 
-代码在两个平台上都能构建和运行，安装包也在计划中。目前唯一公开下载的是 macOS 版。参见[平台](/docs/platforms)。
+有。每个版本都在 macOS 下载旁边提供 Windows 安装程序和 Linux `.deb` / `.rpm` 包。参见[安装](/docs/installation)和[平台](/docs/platforms)。
 
 ## 源码公开了吗？
 
-还没有，开源在计划中。在此之前，发布页面就是获取 Agentty 的方式。
+公开了。Agentty 以 Apache License 2.0 开源，源码位于 [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty)。
 
 ## 还有别的问题
 

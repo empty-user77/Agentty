@@ -56,11 +56,11 @@ Agentty に預けた秘密の値は OS の資格情報ストアに入ります�
 
 ## 対応プラットフォーム
 
-Agentty は macOS、Windows、Linux のために作られており、基準となるのは macOS です。現在ダウンロードが公開されているのも macOS のみです。他の 2 つは AppKit や WebKit に依存しないすべての機能を同じように備えており、違いは[プラットフォーム](/docs/platforms)にまとめてあります。
+Agentty は macOS、Windows、Linux のために作られており、基準となるのは macOS です。3 つともリリースページからダウンロードできます。他の 2 つは AppKit や WebKit に依存しないすべての機能を同じように備えており、違いは[プラットフォーム](/docs/platforms)にまとめてあります。
 
 ## ライセンス
 
-Agentty はアカウントもサブスクリプションもなく無料で利用できます。ソースリポジトリはまだ公開されていませんが、公開を予定しています。
+Agentty はアカウントもサブスクリプションもなく無料で利用できます。Apache License 2.0 のオープンソースで、ソースは [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty) にあります。
 
 ## 次に読むもの
 

@@ -14,6 +14,8 @@ Every release is published on the [releases page](https://github.com/empty-user7
 > [!NOTE]
 > There is no Intel Mac build: Agentty for macOS is Apple silicon only.
 
+With [Homebrew](https://brew.sh) it is one command: `brew install --cask empty-user77/agentty/agentty`. Remove it with `brew uninstall --cask agentty`.
+
 **Windows 10 version 1809 or later, x64** — `Agentty-X.Y.Z-windows-x64-setup.exe`. It installs for your user only and needs no administrator rights.
 
 > [!IMPORTANT]
@@ -57,7 +59,15 @@ Agentty checks for new versions at launch and hourly.
 
 ## Building from source
 
-The source repository is not public yet. Opening it is planned; until then, the builds on the releases page are the way to run Agentty.
+The source is public at [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty) under the Apache License 2.0.
+
+```sh
+git clone https://github.com/empty-user77/Agentty.git
+cd Agentty
+cargo run --release -p agentty-app
+```
+
+You need Rust 1.98 (pinned in `rust-toolchain.toml`) and your platform's build tools; [Platforms](/docs/platforms) lists what Windows and Linux need.
 
 ## Where Agentty keeps its files
 
@@ -73,7 +83,7 @@ The full list is in the [configuration reference](/docs/configuration-reference)
 
 ## Uninstalling
 
-- **macOS** — delete `Agentty.app` from Applications.
+- **macOS** — delete `Agentty.app` from Applications, or `brew uninstall --cask agentty` if you installed it with Homebrew.
 - **Windows** — Settings → Apps → Agentty → Uninstall.
 - **Linux** — `sudo apt remove agentty` or `sudo dnf remove agentty`.
 

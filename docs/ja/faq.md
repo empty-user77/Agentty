@@ -43,13 +43,13 @@ Agentty は**ログインシェル**の `PATH` で見つかる CLI だけを提�
 
 SDK と必要な `node_modules` を含め、動作に必要なものをすべて同梱してください。Agentty は `npm install` を実行しません。フォルダ名はマニフェストの `id` と一致している必要があります。プラグインカードの**ログ**に実際のエラーがあります。[プラグインを配布する](/docs/plugin-publishing)を参照してください。
 
-## Windows・Linux のビルドはいつ入手できますか？
+## Windows・Linux のビルドはありますか？
 
-コードは両方でビルドされ動作し、パッケージの配布も計画しています。現在公開されているダウンロードは macOS だけです。[プラットフォーム](/docs/platforms)を参照してください。
+はい。すべてのリリースに、macOS のダウンロードとあわせて Windows のインストーラーと Linux の `.deb` / `.rpm` パッケージがあります。[インストール](/docs/installation)と[プラットフォーム](/docs/platforms)を参照してください。
 
 ## ソースは公開されていますか？
 
-まだです。公開を予定しており、それまではリリースページが Agentty を入手する方法です。
+はい。Agentty は Apache License 2.0 のオープンソースで、ソースは [github.com/empty-user77/Agentty](https://github.com/empty-user77/Agentty) にあります。
 
 ## それ以外の問題
 
