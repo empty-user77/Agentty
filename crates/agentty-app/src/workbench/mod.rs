@@ -333,6 +333,8 @@ pub struct Workbench {
     pub groups: Vec<Group>,
     /// The "ungrouped" section folds away like any group does.
     pub ungrouped_collapsed: bool,
+    /// See `LayoutState::plugins_grouped`.
+    plugins_grouped: bool,
     panel: SidePanel,
     sidebar_open: bool,
     page: Option<Page>,
@@ -480,8 +482,11 @@ pub struct Workbench {
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
-    /// The workspace the user was in before going to a plugin's (its icon, pressed again, goes back).
+    /// The workspace the user was in before going to a plugin's: where leaving it goes back to.
     before_plugin_workspace: Option<u64>,
+    /// The keyboard goes to the workspace in front at the next render: set where the workspace
+    /// changed without a window at hand (leaving a plugin's workspace).
+    refocus: bool,
     /// The plugin whose workspace is in front and whose panel it brought up.
     plugin_workspace_shown: Option<String>,
     /// The user's own browser, set aside while a plugin's workspace (whose browser shows its
@@ -633,6 +638,7 @@ impl Workbench {
             active_workspace: 0,
             groups: Vec::new(),
             ungrouped_collapsed: false,
+            plugins_grouped: false,
             panel: SidePanel::Workspaces,
             sidebar_open: true,
             page: None,
@@ -733,6 +739,7 @@ impl Workbench {
             browser_request: None,
             plugin_browsers: Vec::new(),
             before_plugin_workspace: None,
+            refocus: false,
             plugin_workspace_shown: None,
             stashed_browser: None,
             instance_shown: None,
@@ -1132,7 +1139,10 @@ impl Workbench {
 
     /// Shows the start page again (from the sidebar), with the workspaces left as they are.
     pub(super) fn open_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The home tab is another place: a plugin's workspace steps aside (and runs on).
+        self.leave_plugin_workspace(cx);
         self.welcome = true;
+        self.sync_plugin_workspace(cx);
         self.page = None;
         self.session_viewer = None;
         self.hide_editor();
@@ -1253,8 +1263,17 @@ impl Workbench {
     }
 
     pub fn activate_workspace(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.select_workspace(index, cx) {
+            self.focus_active(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// Everything of making workspace `index` current but the keyboard (see `activate_workspace`,
+    /// and `refocus` for callers without a window). False when there is no such workspace.
+    pub(super) fn select_workspace(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
         if index >= self.workspaces.len() {
-            return;
+            return false;
         }
         self.welcome = false;
         self.active_workspace = index;
@@ -1269,8 +1288,7 @@ impl Workbench {
             self.revive(index, snapshot, cx);
         }
         self.sync_plugin_workspace(cx);
-        self.focus_active(window, cx);
-        cx.notify();
+        true
     }
 
     /// A pane's process ended. It closes a moment later, with any others that end meanwhile.
@@ -2601,6 +2619,7 @@ impl Workbench {
             workspaces,
             active_workspace: self.active_workspace,
             ungrouped_collapsed: self.ungrouped_collapsed,
+            plugins_grouped: self.plugins_grouped,
             window: self.window_state,
             panels: self.panel_state(),
         };
@@ -2620,6 +2639,7 @@ impl Workbench {
             .map(|g| Group { id: g.id, name: g.name.clone(), collapsed: g.collapsed, color: stored_color(g.color_value, g.color) })
             .collect();
         self.ungrouped_collapsed = state.ungrouped_collapsed;
+        self.plugins_grouped = state.plugins_grouped;
         for snapshot in state.workspaces {
             self.next_id = self.next_id.max(snapshot.id + 1);
             self.workspaces.push(Workspace {
@@ -2638,6 +2658,9 @@ impl Workbench {
         }
         for group in &self.groups {
             self.next_id = self.next_id.max(group.id + 1);
+        }
+        if !std::mem::replace(&mut self.plugins_grouped, true) {
+            self.group_plugin_workspaces(cx);
         }
         if !self.workspaces.is_empty() {
             // Only the active workspace starts processes; the rest wake up when opened.
@@ -2784,6 +2807,12 @@ impl Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
+        // workspace shows or steps aside to match; nothing happens when it already does.
+        self.sync_plugin_workspace(cx);
+        if std::mem::take(&mut self.refocus) && self.page.is_none() && !self.welcome {
+            self.focus_active(window, cx);
+        }
         let activated = window.is_window_active() && !self.window_active;
         self.window_active = window.is_window_active();
         if activated {
@@ -2856,9 +2885,12 @@ impl Render for Workbench {
                 }
             }
         };
-        let mut main = Some(main);
         // A plugin's own workspace in front, drawn in its own layout.
         let plugin_workspace = self.front_plugin_workspace(cx).filter(|_| self.page.is_none());
+        // With every automation closed its terminal area stays empty: the start page drawn there
+        // read as if Agentty itself had gone. The panel says what to do.
+        let no_automation = plugin_workspace.is_some() && self.workspaces.get(self.active_workspace).is_some_and(|ws| ws.tabs.is_empty());
+        let mut main = (!no_automation).then_some(main);
 
         div()
             .id("workbench")
@@ -3282,6 +3314,8 @@ impl Workbench {
 
     /// Shows a side panel. The activity icons only open panels; the sidebar's own button closes it.
     fn show_panel(&mut self, panel: SidePanel, cx: &mut Context<Self>) {
+        // Another item of the activity bar: a plugin's workspace steps aside (and runs on).
+        self.leave_plugin_workspace(cx);
         // Leaving a page returns to the terminals with this panel shown.
         self.page = None;
         self.panel = panel;

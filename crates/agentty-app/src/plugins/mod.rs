@@ -355,7 +355,7 @@ fn touch(cx: &mut App) {
 
 /// Context for calls not tied to a window (language only).
 pub fn default_context(cx: &App) -> Value {
-    json!({ "workspace": null, "pane": null, "language": crate::settings::settings(cx).language.code() })
+    json!({ "workspace": null, "pane": null, "language": crate::settings::settings(cx).language.resolved().code() })
 }
 
 /// The user's time zone right now, as minutes east of UTC.

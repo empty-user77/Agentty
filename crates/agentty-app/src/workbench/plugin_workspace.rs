@@ -4,8 +4,13 @@
 //! browser, having an agent write the drafts. Pressing such a plugin's icon switches to its
 //! workspace — the agents it started as tabs, the browser with its pages beside them, its panel
 //! (what it is doing) docked right of those. Each job it runs is a tab (`prompt/inject` with
-//! `target: "own"`), so several run side by side. Leaving the workspace puts the window back as it
-//! was; pressing the icon again goes back to where the user came from.
+//! `target: "own"`), so several run side by side.
+//!
+//! Its icon is a place like every other item of the activity bar, and only one is lit at a time.
+//! The workspace is on screen while it is the current workspace with no page and no start page over
+//! it; whatever else is chosen (the workspace list, the sessions, a page, the home tab, the panel's
+//! ✕) takes its place, and the window goes back to how it was. Out of sight the plugin and its
+//! automations keep running. Pressing the icon again stays.
 
 use super::persist::TabInstance;
 use super::Workbench;
@@ -24,8 +29,13 @@ impl Workbench {
         self.workspaces.iter().position(|ws| ws.plugin.as_deref() == Some(plugin))
     }
 
-    /// The plugin that owns the workspace in front, if it still works that way.
+    /// The plugin that owns the current workspace, if it still works that way. The start page (the
+    /// home tab) shown over it is not the plugin's workspace. A page over it is (see
+    /// `plugin_workspace_on_screen`): closing the page brings it back.
     pub(super) fn front_plugin_workspace(&self, cx: &gpui::App) -> Option<String> {
+        if self.welcome {
+            return None;
+        }
         let plugin = self.workspaces.get(self.active_workspace)?.plugin.clone()?;
         let active = crate::plugins::plugin(cx, &plugin).is_some_and(|p| p.active());
         (active && self.wants_workspace(&plugin, cx)).then_some(plugin)
@@ -61,14 +71,10 @@ impl Workbench {
         }
     }
 
-    /// The plugin's icon was pressed: go to its workspace (made the first time), or — already
-    /// there — back to the workspace the user came from.
+    /// The plugin's icon was pressed: go to its workspace (made the first time). Already there, it
+    /// stays: leaving is choosing somewhere else, not pressing it twice.
     pub(super) fn open_plugin_workspace(&mut self, plugin: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.front_plugin_workspace(cx).as_deref() == Some(plugin) && self.page.is_none() {
-            let back = self.before_plugin_workspace.and_then(|id| self.workspaces.iter().position(|ws| ws.id == id));
-            if let Some(index) = back {
-                self.activate_workspace(index, window, cx);
-            }
             return;
         }
         let current = self.workspaces.get(self.active_workspace).filter(|ws| ws.plugin.is_none()).map(|ws| ws.id);
@@ -78,6 +84,55 @@ impl Workbench {
         match self.plugin_workspace(plugin) {
             Some(index) => self.activate_workspace(index, window, cx),
             None => self.create_plugin_workspace(plugin, window, cx),
+        }
+    }
+
+    /// Another place was chosen while a plugin's workspace is current (behind a page or not): back to
+    /// the workspace the user came from, any of theirs, or — with none — the start page. The plugin
+    /// is not told to stop: its automations go on out of sight.
+    pub(super) fn leave_plugin_workspace(&mut self, cx: &mut Context<Self>) {
+        if self.front_plugin_workspace(cx).is_none() {
+            return;
+        }
+        let back = self
+            .before_plugin_workspace
+            .and_then(|id| self.workspaces.iter().position(|ws| ws.id == id && ws.plugin.is_none()))
+            .or_else(|| self.workspaces.iter().position(|ws| ws.plugin.is_none()));
+        match back {
+            Some(index) => {
+                self.select_workspace(index, cx);
+            }
+            None => self.welcome = true,
+        }
+        self.sync_plugin_workspace(cx);
+        self.refocus = true;
+        cx.notify();
+    }
+
+    /// The group plugins' workspaces go in, made on first use. Found by its name in any language:
+    /// a renamed group is the user's own, and the next plugin workspace starts a new one (a group
+    /// the user named "Plugins" is taken for it).
+    fn plugin_group(&mut self, cx: &gpui::App) -> u64 {
+        use crate::settings::Language;
+        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh].map(|l| crate::i18n::tr(l, "group.plugins"));
+        if let Some(group) = self.groups.iter().find(|g| names.contains(&g.name.as_str())) {
+            return group.id;
+        }
+        let id = self.next_id();
+        let name = crate::i18n::t(cx, "group.plugins").to_string();
+        self.groups.push(super::Group { id, name, collapsed: false, color: None });
+        id
+    }
+
+    /// Plugins' workspaces in no group (made before there was one) join the plugins group. Run once
+    /// (`LayoutState::plugins_grouped`): where the user moves them afterwards stays.
+    pub(super) fn group_plugin_workspaces(&mut self, cx: &gpui::App) {
+        if !self.workspaces.iter().any(|ws| ws.plugin.is_some() && ws.group.is_none()) {
+            return;
+        }
+        let group = self.plugin_group(cx);
+        for ws in self.workspaces.iter_mut().filter(|ws| ws.plugin.is_some() && ws.group.is_none()) {
+            ws.group = Some(group);
         }
     }
 
@@ -91,9 +146,11 @@ impl Workbench {
         spec.title = name.clone();
         self.create_workspace(spec, window, cx);
         let first = self.new_instance();
+        let group = self.plugin_group(cx);
         if let Some(ws) = self.workspaces.last_mut() {
             ws.name = Some(name);
             ws.plugin = Some(plugin.to_string());
+            ws.group = Some(group);
             // Its first tab is its first automation.
             if let Some(tab) = ws.tabs.first_mut() {
                 tab.instance = Some(first);
@@ -104,10 +161,17 @@ impl Workbench {
         self.persist(cx);
     }
 
-    /// After the workspace in front changed: a plugin's workspace brings up its panel, its pages
-    /// and the browser; leaving it puts the window back the way it was.
+    /// The plugin whose workspace is on screen: current, with no page over it.
+    fn plugin_workspace_on_screen(&self, cx: &gpui::App) -> Option<String> {
+        self.front_plugin_workspace(cx).filter(|_| self.page.is_none())
+    }
+
+    /// Brings the window in line with what is in front (run on every render, so every way of
+    /// getting somewhere — a tab, the home tab, a page, a workspace card — ends the same): a
+    /// plugin's workspace brings up its panel, its pages and the browser; anything else puts the
+    /// window back the way it was.
     pub(super) fn sync_plugin_workspace(&mut self, cx: &mut Context<Self>) {
-        let front = self.front_plugin_workspace(cx);
+        let front = self.plugin_workspace_on_screen(cx);
         if front == self.plugin_workspace_shown {
             return;
         }
@@ -257,6 +321,9 @@ impl Workbench {
     /// A new automation: a tab of the plugin's workspace (in front), which the plugin hears about.
     pub(super) fn new_plugin_instance(&mut self, plugin: &str, cx: &mut Context<Self>) {
         let Some(index) = self.plugin_workspace(plugin) else { return };
+        // Asleep on its last closed tab: awake first, or the new tab would sit beside a snapshot
+        // that replaces it the next time the workspace opens.
+        self.wake_for_new_tab(index, cx);
         let cwd = self.workspaces[index].cwd.clone();
         let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, cwd), cx);
         let instance = self.new_instance();
@@ -366,19 +433,21 @@ impl Workbench {
                 self.known_instances.insert(plugin.clone(), (generation, now.into_iter().map(|(id, _)| id).collect()));
             }
         }
-        let front = self.front_plugin_workspace(cx).and_then(|plugin| self.active_instance(&plugin, cx).map(|i| (plugin, i)));
-        if front == self.instance_shown {
-            return;
-        }
-        let Some((plugin, instance)) = front.clone() else {
+        let Some(plugin) = self.front_plugin_workspace(cx) else {
             self.instance_shown = None;
             return;
         };
+        // No automation in front (every tab closed): none of their pages shows either.
+        let instance = self.active_instance(&plugin, cx);
+        let front = instance.clone().map(|i| (plugin.clone(), i));
+        if front.is_some() && front == self.instance_shown {
+            return;
+        }
         let pages: Vec<(u64, bool, bool)> = self
             .plugin_browsers
             .iter()
             .filter(|p| p.plugin == plugin)
-            .map(|p| (p.id, p.shown, p.instance.as_deref().is_none_or(|i| i == instance)))
+            .map(|p| (p.id, p.shown, p.instance.as_deref().is_none_or(|i| instance.as_deref() == Some(i))))
             .collect();
         for (id, shown, mine) in pages {
             if mine && !shown {

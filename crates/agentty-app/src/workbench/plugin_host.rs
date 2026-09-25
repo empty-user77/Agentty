@@ -144,7 +144,7 @@ impl Workbench {
         json!({
             "workspace": index.map(|i| self.workspace_json(i, false, scope, cx)),
             "pane": pane.map(|p| pane_json(&p, scope, cx)),
-            "language": crate::settings::settings(cx).language.code(),
+            "language": crate::settings::settings(cx).language.resolved().code(),
         })
     }
 

@@ -771,7 +771,9 @@ impl Workbench {
             (_, Some(version)) => Some((tf(cx, "plugins.update_to", &[("version", &version)]), Chrome::ORANGE)),
             (Origin::Builtin, _) => Some((t(cx, "plugins.builtin").to_string(), Chrome::BLUE)),
             (Origin::Market, _) => Some((t(cx, "plugins.market").to_string(), Chrome::PURPLE)),
-            (Origin::Installed, _) => None,
+            (Origin::Installed, _) => plugins::plugin(cx, &row.id)
+                .filter(|plugin| is_manual(plugin.source))
+                .map(|_| (t(cx, "plugins.manual").to_string(), Chrome::ORANGE)),
         };
         div()
             .id(SharedString::from(format!("plugin-row-{}", row.id)))
@@ -1111,7 +1113,10 @@ impl Workbench {
         };
         let source_key = source_key(plugin.source);
         let (state_text, state_color) = self.plugin_state(&plugin.id, cx);
-        let badges = vec![(t(cx, source_key).to_string(), Chrome::BLUE), (state_text, state_color)];
+        let mut badges = vec![(t(cx, source_key).to_string(), Chrome::BLUE), (state_text, state_color)];
+        if is_manual(plugin.source) {
+            badges.insert(0, (t(cx, "plugins.manual").to_string(), Chrome::ORANGE));
+        }
         let failure = match plugins::runtime(cx, &plugin.id).map(|r| r.state.clone()) {
             Some(RunState::Failed(error)) if plugin.enabled => Some(div().t_small().text_color(hex(Chrome::ERROR)).child(error)),
             _ => None,
@@ -1658,6 +1663,12 @@ impl Row {
             origin: Origin::Builtin,
         }
     }
+}
+
+/// Put in by the user (a folder, a Git link, a development link, made here) rather than shipped
+/// with Agentty or taken from the marketplace: labelled, so it is never mistaken for an official one.
+fn is_manual(source: Source) -> bool {
+    !matches!(source, Source::Builtin | Source::Market)
 }
 
 fn source_key(source: Source) -> &'static str {
