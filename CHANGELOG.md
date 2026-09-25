@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-25
+
 ### Added
 - The file editor shows Markdown rendered the way VS Code's preview does (Preview button, ⇧⌘V;
   macOS).
@@ -15,6 +17,11 @@ All notable changes to this project are documented here. The format follows
   `agentty --help`) started a second Agentty, with another menu bar icon. Agentty now runs once per
   user: a second launch brings the running one forward, and extra copies already running are
   closed when Agentty starts.
+- Plugin workspaces are easier to use: they sit in a "Plugins" group with the plugin's logo, and
+  the workspace list, sessions, the home tab and the panel's close button always lead back out of
+  them while the plugin keeps running. With every automation closed, the panel offers a new one.
+- Plugins receive the language Agentty resolved, so "System" no longer reaches them as English.
+- Plugins installed from a folder, Git or a dev link are labelled "Installed manually".
 
 ## [0.2.0] - 2026-09-25
 
