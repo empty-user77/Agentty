@@ -49,7 +49,8 @@ if gh auth status >/dev/null 2>&1; then
   done
   ci="$(gh run list --repo "$SOURCE_REPO" --workflow ci.yml --branch main --event push --limit 1 --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null)"
   [[ "$ci" == "completed success" ]] && pass "latest CI on main is green" || fail "latest CI on main: ${ci:-unknown}"
-  latest="$(gh api "repos/$RELEASE_REPO/releases/latest" --jq .tag_name 2>/dev/null || echo "none")"
+  # A repository without a release answers 404 with a JSON body on stdout: that is "none", not a version.
+  latest="$(gh api "repos/$RELEASE_REPO/releases/latest" --jq .tag_name 2>/dev/null)" || latest="none"
   newer="$(python3 -c 'import sys
 p=lambda s: tuple(int(x) for x in s.lstrip("v").split("."))
 print(sys.argv[2]=="none" or p(sys.argv[1])>p(sys.argv[2]))' "$VERSION" "$latest")"

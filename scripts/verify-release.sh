@@ -97,7 +97,7 @@ else
     [[ "$draft" == "false" ]] && pass "release is published" || fail "release is still a draft"
     [[ "$(jq -r .isPrerelease <<<"$json")" == "false" ]] && pass "release is not a pre-release" \
       || fail "release is marked pre-release (the update feed ignores it)"
-    latest="$(gh api "repos/$RELEASE_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
+    latest="$(gh api "repos/$RELEASE_REPO/releases/latest" --jq .tag_name 2>/dev/null)" || latest=""
     [[ "$latest" == v* ]] || latest=""
     [[ "$latest" == "v$VERSION" ]] && pass "update feed serves v$VERSION" || fail "update feed serves '${latest:-nothing}'"
     tmp="$(mktemp -d)"
