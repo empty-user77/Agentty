@@ -72,6 +72,8 @@ impl WebView {
 
     pub fn load(&self, _url: &str) {}
 
+    pub fn load_html(&self, _html: &str) {}
+
     pub fn back(&self) {}
 
     pub fn forward(&self) {}

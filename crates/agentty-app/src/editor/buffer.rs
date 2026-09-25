@@ -90,6 +90,8 @@ pub struct Buffer {
     saved_at: u64,
     /// First line changed since [`Buffer::take_changed_from`] was last asked.
     changed_from: Option<usize>,
+    /// Counts every change to the text, for views that redraw from it (the markdown preview).
+    revision: u64,
     /// One indentation step: a tab or some spaces, guessed from the file.
     indent: String,
     /// Text an input method is still composing (Hangul, kana, pinyin…).
@@ -121,6 +123,7 @@ impl Buffer {
             next_id: 1,
             saved_at: 0,
             changed_from: None,
+            revision: 0,
             indent,
             composition: None,
         }
@@ -167,6 +170,11 @@ impl Buffer {
     /// The first line whose text changed since the last call (for the highlighter's cache).
     pub fn take_changed_from(&mut self) -> Option<usize> {
         self.changed_from.take()
+    }
+
+    /// Goes up with every change to the text.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn cursor(&self) -> Pos {
@@ -272,6 +280,7 @@ impl Buffer {
         new_lines[last].push_str(&tail);
         self.lines.splice(start.line..=end.line, new_lines);
         self.changed_from = Some(self.changed_from.map_or(start.line, |line| line.min(start.line)));
+        self.revision += 1;
         end_pos
     }
 
@@ -473,6 +482,7 @@ impl Buffer {
             edit.sealed = true;
         }
         self.changed_from = Some(0);
+        self.revision += 1;
     }
 
     // -- input methods ----------------------------------------------------------------------

@@ -69,7 +69,7 @@ Every panel docked beside the terminals — files, browser, plugin, Docker — c
 
 Press **⇧⌘G** for the git page: switch repository and branch, fetch, pull, push, review the diff file by file, stage what you want and commit, browse history, and merge branches. Clicking the branch name in any pane header switches branches, pulls, pushes or copies the name.
 
-Click a file in the files panel to open it in the editor next to your terminals — syntax colors, undo/redo, **⌘S** to save, **⇧⌥F** to format with the formatter you have installed. Files an agent changes reload by themselves.
+Click a file in the files panel to open it in the editor next to your terminals — syntax colors, undo/redo, **⌘S** to save, **⇧⌥F** to format with the formatter you have installed. Files an agent changes reload by themselves. A Markdown file has a **Preview** button (**⇧⌘V**) that shows it rendered the way VS Code's preview does; links in it open in the browser or, for files, in the editor. The preview is macOS-only for now.
 
 ## 7. See what it cost
 

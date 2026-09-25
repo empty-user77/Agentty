@@ -11,18 +11,21 @@ pub mod file;
 pub mod format;
 pub mod highlight;
 pub mod language;
+mod preview;
 
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, IconSize, Tooltip, TypeScale};
 use buffer::{Buffer, Pos, Selection};
 use file::{Opened, ReadOnly, Stamp};
+use futures::StreamExt;
 use gpui::{
     actions, div, prelude::*, px, App, ClickEvent, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Pixels, Point,
     Window,
 };
 use highlight::Highlights;
 use language::{Formatter, Language};
+use preview::{PageReply, Preview};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -68,12 +71,15 @@ actions!(
         Save,
         Format,
         CloseFile,
+        TogglePreview,
     ]
 );
 
 pub const CONTEXT: &str = "CodeEditor";
 /// How often open files are checked for changes made by others (agents, git, other editors).
 const DISK_CHECK: Duration = Duration::from_secs(2);
+/// How often the markdown preview catches up with edits and looks for clicked links.
+const PREVIEW_TICK: Duration = Duration::from_millis(150);
 
 pub fn bind_keys(cx: &mut App) {
     use crate::key;
@@ -111,6 +117,8 @@ pub fn bind_keys(cx: &mut App) {
         key("cmd-s", Save, c),
         key("cmd-w", CloseFile, c),
         key("shift-alt-f", Format, c),
+        // VS Code's "Open Preview".
+        key("cmd-shift-v", TogglePreview, c),
     ]);
     // Moving by word and to the ends of lines and of the file: macOS and PC conventions differ.
     if cfg!(target_os = "macos") {
@@ -156,6 +164,10 @@ pub enum EditorEvent {
     Proceed(AfterDiscard),
     /// The user kept the app or window open after all.
     StayOpen,
+    /// A web link clicked in the markdown preview.
+    OpenUrl(String),
+    /// A file linked from the markdown preview: open it (the path, and the project it belongs to).
+    OpenFile(PathBuf, PathBuf),
 }
 
 /// What waits for "discard unsaved changes?".
@@ -228,6 +240,8 @@ pub(crate) struct Document {
     disk_changed: bool,
     /// Checking the disk is under way.
     checking: bool,
+    /// Markdown shown rendered instead of as text.
+    preview: bool,
 }
 
 impl Document {
@@ -242,6 +256,15 @@ impl Document {
 
     fn is_dirty(&self) -> bool {
         self.buffer.is_dirty()
+    }
+
+    /// Markdown text, which the preview can show rendered (on platforms with a web view).
+    fn can_preview(&self) -> bool {
+        self.language == Language::Markdown && matches!(self.content, Content::Text) && crate::platform::HAS_WEBVIEW
+    }
+
+    fn previewing(&self) -> bool {
+        self.preview && self.can_preview()
     }
 
     /// Keeps the highlighter's cache in step with edits.
@@ -306,6 +329,12 @@ pub struct CodeEditor {
     scrollbar_drag: Option<(f32, f32)>,
     /// What the tab strip last showed (names and unsaved marks), to tell it only about changes.
     shown_tabs: Vec<(PathBuf, bool)>,
+    /// The markdown preview's web view (one, for whichever file is in front).
+    preview: Preview,
+    /// A markdown file a link in the preview asked for: it opens as a preview too, as in VS Code.
+    preview_next: Option<PathBuf>,
+    /// Where the preview's page answers arrive.
+    preview_replies: futures::channel::mpsc::UnboundedSender<PageReply>,
 }
 
 impl EventEmitter<EditorEvent> for CodeEditor {}
@@ -339,6 +368,22 @@ impl CodeEditor {
             }
         })
         .detach();
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(PREVIEW_TICK).await;
+            if this.update(cx, |this, cx| this.preview_tick(cx)).is_err() {
+                break;
+            }
+        })
+        .detach();
+        let (preview_replies, mut replies) = futures::channel::mpsc::unbounded();
+        cx.spawn(async move |this, cx| {
+            while let Some(reply) = replies.next().await {
+                if this.update(cx, |this, cx| this.preview_reply(reply, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self {
             focus_handle: cx.focus_handle(),
             docs: Vec::new(),
@@ -348,6 +393,9 @@ impl CodeEditor {
             drag: None,
             scrollbar_drag: None,
             shown_tabs: Vec::new(),
+            preview: Preview::new(),
+            preview_next: None,
+            preview_replies,
         }
     }
 
@@ -359,6 +407,9 @@ impl CodeEditor {
     pub fn open(&mut self, path: &Path, project: &Path, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(index) = self.docs.iter().position(|d| d.path == path) {
             self.active = index;
+            if self.preview_next.take().as_deref() == Some(path) {
+                self.docs[index].preview = true;
+            }
             window.focus(&self.focus_handle);
             self.tabs_changed(cx);
             return cx.notify();
@@ -377,6 +428,9 @@ impl CodeEditor {
                             this.docs.push(document(&path, &project, opened));
                             this.active = this.docs.len() - 1;
                         }
+                    }
+                    if this.preview_next.take().as_deref() == Some(path.as_path()) {
+                        this.docs[this.active].preview = true;
                     }
                     window.focus(&this.focus_handle);
                     this.tabs_changed(cx);
@@ -500,7 +554,8 @@ impl CodeEditor {
     /// the tab strip up to date.
     fn edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Buffer)) {
         let Some(doc) = self.docs.get_mut(self.active) else { return };
-        if !doc.editable() {
+        // The text is out of sight while the preview shows: keys must not change it unseen.
+        if !doc.editable() || doc.previewing() {
             return;
         }
         let was_dirty = doc.is_dirty();
@@ -866,6 +921,137 @@ impl CodeEditor {
         cx.notify();
     }
 
+    // -- markdown preview -------------------------------------------------------------------
+
+    /// Shows the file in front rendered, or back as text (markdown files only).
+    fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(doc) = self.docs.get_mut(self.active).filter(|d| d.can_preview()) else { return };
+        doc.buffer.unmark();
+        doc.preview = !doc.preview;
+        if doc.preview {
+            crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "markdown_preview" }));
+        } else {
+            doc.autoscroll = true;
+            self.preview.hide();
+            // The page may have had the keyboard: the text takes it back.
+            crate::webview::focus_gpui_view(window);
+            window.focus(&self.focus_handle);
+        }
+        cx.notify();
+    }
+
+    /// The workbench says whether something of its own is drawn over the editor, or the editor is
+    /// not on screen at all: the preview's native view would sit on top of it (or linger there).
+    pub fn set_preview_covered(&mut self, covered: bool) {
+        if covered {
+            self.preview.hide();
+        }
+        self.preview.covered = covered;
+    }
+
+    /// Brings the page up to date with the text, and picks up links clicked in it.
+    fn preview_tick(&mut self, cx: &mut Context<Self>) {
+        let Some(doc) = self.docs.get(self.active).filter(|d| d.previewing()) else { return };
+        if self.preview.covered || self.confirm.is_some() {
+            return;
+        }
+        let view = self.preview.view.clone();
+        let view = view.borrow();
+        let Some(view) = view.as_ref() else { return };
+        if view.is_loading() {
+            return;
+        }
+        // ⌘W in the page closes the file, as it does from the text.
+        let close = crate::webview::take_key_commands(&[view.id()]).iter().any(|(_, key)| *key == crate::webview::BrowserKey::CloseTab);
+        let wanted = (doc.path.clone(), doc.buffer.revision());
+        if self.preview.shown.as_ref() != Some(&wanted) && !self.preview.rendering {
+            self.preview.rendering = true;
+            let replies = self.preview_replies.clone();
+            let (path, revision) = wanted;
+            view.call_async(
+                "return window.agenttyRender ? window.agenttyRender(text) : null;",
+                &[("text", &doc.buffer.text())],
+                Box::new(move |result| {
+                    let reply = match result {
+                        Ok(json) if json != "null" => {
+                            PageReply::Rendered { path, revision, images: serde_json::from_str(&json).unwrap_or_default() }
+                        }
+                        _ => PageReply::NotRendered,
+                    };
+                    let _ = replies.unbounded_send(reply);
+                }),
+            );
+        }
+        if !self.preview.asking {
+            self.preview.asking = true;
+            let replies = self.preview_replies.clone();
+            view.call_async(
+                "return window.agenttyTakeLinks ? window.agenttyTakeLinks() : '[]';",
+                &[],
+                Box::new(move |result| {
+                    let links = result.ok().and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
+                    let _ = replies.unbounded_send(PageReply::Links(links));
+                }),
+            );
+        }
+        if close {
+            let active = self.active;
+            self.request_close(active, cx);
+        }
+    }
+
+    fn preview_reply(&mut self, reply: PageReply, cx: &mut Context<Self>) {
+        match reply {
+            PageReply::NotRendered => self.preview.rendering = false,
+            PageReply::Rendered { path, revision, images } => {
+                self.preview.rendering = false;
+                self.preview.shown = Some((path.clone(), revision));
+                let Some(doc) = self.docs.iter().find(|d| d.path == path) else { return };
+                if images.is_empty() {
+                    return;
+                }
+                // Read off the UI thread, then handed to the page.
+                let project = doc.project.clone();
+                let read = cx.background_spawn(async move {
+                    let found: serde_json::Map<String, serde_json::Value> = images
+                        .into_iter()
+                        .filter_map(|src| {
+                            let file = preview::local_target(&src, &path, &project)?;
+                            let url = preview::image_data_url(&file, &path, &project)?;
+                            Some((src, serde_json::Value::String(url)))
+                        })
+                        .collect();
+                    serde_json::Value::Object(found).to_string()
+                });
+                let view = self.preview.view.clone();
+                cx.spawn(async move |_, _| {
+                    let json = read.await;
+                    if let Some(view) = view.borrow().as_ref() {
+                        view.call_async("return window.agenttyImages(json);", &[("json", &json)], Box::new(|_| {}));
+                    }
+                })
+                .detach();
+            }
+            PageReply::Links(links) => {
+                self.preview.asking = false;
+                let Some(doc) = self.docs.get(self.active) else { return };
+                for link in links {
+                    if preview::has_scheme(&link) {
+                        let scheme = link.split(':').next().unwrap_or_default().to_ascii_lowercase();
+                        if matches!(scheme.as_str(), "http" | "https" | "mailto") {
+                            cx.emit(EditorEvent::OpenUrl(link));
+                        }
+                    } else if let Some(file) = preview::local_target(&link, &doc.path, &doc.project).filter(|f| f.is_file()) {
+                        if Language::detect(&file) == Language::Markdown {
+                            self.preview_next = Some(file.clone());
+                        }
+                        cx.emit(EditorEvent::OpenFile(file, doc.project.clone()));
+                    }
+                }
+            }
+        }
+    }
+
     // -- rendering --------------------------------------------------------------------------
 
     fn render_toolbar(&self, doc: &Document, cx: &mut Context<Self>) -> impl IntoElement {
@@ -933,6 +1119,22 @@ impl CodeEditor {
                         )
                     }),
             )
+            .when(doc.can_preview(), |d| {
+                // Rendered as VS Code's preview renders it, or back to the text.
+                let (glyph, label) = if doc.preview { ("pencil", t(cx, "editor.edit_text")) } else { ("eye", t(cx, "editor.preview")) };
+                d.child(
+                    button("editor-preview", glyph, label.to_string(), true)
+                        .when(doc.preview, |d| d.bg(hex(Chrome::SELECTED)))
+                        .tooltip(Tooltip::text(
+                            with_shortcut(
+                                t(cx, if doc.preview { "editor.edit_text_tip" } else { "editor.preview_tip" }).to_string(),
+                                "⇧⌘V",
+                            ),
+                            None,
+                        ))
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_preview(window, cx))),
+                )
+            })
             .when(doc.language.formatter().is_some() && matches!(doc.content, Content::Text), |d| {
                 d.child(
                     button(
@@ -1300,9 +1502,15 @@ impl CodeEditor {
                 "lines": d.buffer.line_count(),
                 "cursor": [d.buffer.cursor().line, d.buffer.cursor().col],
                 "notice": d.notice.as_ref().map(|n| n.text.clone()),
+                "preview": d.previewing(),
             })).collect::<Vec<_>>(),
             "active": self.active,
             "confirm": self.confirm.is_some(),
+            "preview": {
+                "view": self.preview.view.borrow().is_some(),
+                "covered": self.preview.covered,
+                "shownRevision": self.preview.shown.as_ref().map(|(_, r)| *r),
+            },
         })
     }
 
@@ -1331,6 +1539,7 @@ impl CodeEditor {
                 self.save(false, cx);
             }
             "format" => self.format(cx),
+            "preview" => self.toggle_preview(window, cx),
             "undo" => self.edit(cx, |b| {
                 b.undo();
             }),
@@ -1394,6 +1603,7 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
         formatting: false,
         disk_changed: false,
         checking: false,
+        preview: false,
     };
     match opened {
         Opened::Text(file) => {
@@ -1508,11 +1718,51 @@ impl gpui::EntityInputHandler for CodeEditor {
 }
 
 impl Render for CodeEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let previewing = self.docs.get(self.active).is_some_and(Document::previewing);
+        if !previewing {
+            self.preview.hide();
+        } else if self.preview.view.borrow().is_none() {
+            let view = crate::webview::WebView::new(window, &preview::view_settings());
+            if let Some(view) = view.as_ref() {
+                view.load_html(&preview::page_html());
+            }
+            *self.preview.view.borrow_mut() = view;
+            self.preview.shown = None;
+            self.preview.rendering = false;
+            self.preview.asking = false;
+        }
         let Some(doc) = self.docs.get(self.active) else {
             return div().id("code-editor").size_full().bg(hex(Chrome::EDITOR));
         };
-        let body = if matches!(doc.content, Content::Text) {
+        let body = if previewing {
+            // The native page is laid over this element once its place is known. A question
+            // (unsaved changes, overwrite?) is drawn over it: the page stays out of sight meanwhile.
+            let covered = self.preview.covered || self.confirm.is_some();
+            if covered {
+                self.preview.hide();
+            }
+            let view = self.preview.view.clone();
+            div()
+                .id("editor-preview")
+                .flex_1()
+                .min_h_0()
+                .bg(hex(Chrome::EDITOR))
+                .child(
+                    gpui::canvas(
+                        |_, _, _| {},
+                        move |bounds, _, _, _| {
+                            if !covered {
+                                if let Some(view) = view.borrow_mut().as_mut() {
+                                    view.set_frame(bounds);
+                                }
+                            }
+                        },
+                    )
+                    .size_full(),
+                )
+                .into_any_element()
+        } else if matches!(doc.content, Content::Text) {
             div()
                 .id("editor-text")
                 .flex_1()
@@ -1619,6 +1869,7 @@ impl Render for CodeEditor {
             }))
             .on_action(cx.listener(|this, _: &Format, _, cx| this.format(cx)))
             .on_action(cx.listener(|this, _: &CloseFile, _, cx| this.request_close(this.active, cx)))
+            .on_action(cx.listener(|this, _: &TogglePreview, window, cx| this.toggle_preview(window, cx)))
             .child(self.render_toolbar(doc, cx))
             .children(self.render_notice(doc, cx))
             .child(body)

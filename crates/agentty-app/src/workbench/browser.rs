@@ -719,7 +719,7 @@ impl Workbench {
     }
 
     /// Whether something drawn by GPUI would sit on top of the native web view.
-    fn overlay_open(&self) -> bool {
+    pub(super) fn overlay_open(&self) -> bool {
         self.page.is_some()
             || self.launcher_open
             || self.notices_open
