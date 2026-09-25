@@ -710,11 +710,7 @@ impl Workbench {
                             .child(crate::ui::action_button_with_icon("about-x", "x-twitter", "@agentty_run", |_, _, cx| {
                                 cx.open_url(super::update::X_URL)
                             }))
-                            .child(link(
-                                "about-releases",
-                                t(cx, "update.notes").into(),
-                                "https://github.com/empty-user77/agentty-releases/releases",
-                            ))
+                            .child(link("about-releases", t(cx, "update.notes").into(), "https://github.com/empty-user77/Agentty/releases"))
                             .child(link("about-license", "Apache-2.0".into(), "https://www.apache.org/licenses/LICENSE-2.0"))
                             .child(link("about-privacy", t(cx, "legal.privacy").into(), super::update::PRIVACY_URL))
                             .child(link("about-terms", t(cx, "legal.terms").into(), super::update::TERMS_URL))

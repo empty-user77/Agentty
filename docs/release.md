@@ -3,7 +3,7 @@
 ```sh
 ./scripts/build-dmg.sh           # dev: local signature, no notarization → dist/Agentty-<ver>-arm64.dmg
 ./scripts/build-dmg.sh prod      # Developer ID signature + notarization + stapling + Gatekeeper check
-./scripts/build-dmg.sh publish   # prod + draft release on empty-user77/agentty-releases
+./scripts/build-dmg.sh publish   # prod + draft release on empty-user77/Agentty
 ./scripts/bump-version.sh patch  # 0.1.0 → 0.1.1 (minor | major | x.y.z)
 ./scripts/release-preflight.sh 0.1.3        # before bumping/tagging: repo, gh, CI, credentials, certificate, tools
 ./scripts/verify-release.sh 0.1.3           # after the build: signature, notarization, checksums, GA, draft assets
@@ -32,7 +32,7 @@ Each release also carries, built by the **Release packages** workflow (`.github/
   Apple silicon Mac); named volumes keep the toolchain and `target/` between local runs. AlmaLinux 9's glibc 2.34 makes the binary run on RHEL 9, Debian 12, Ubuntu 22.04 and newer. nfpm is
   downloaded at a pinned version and checked against a pinned SHA-256. `--check` installs each package with `apt` /
   `dnf` in a clean container and fails when a shared library is missing.
-- The workflow uploads the files as run artifacts only; it holds no token for `agentty-releases`.
+- The workflow uploads the files as run artifacts only; it holds no write token.
   `scripts/fetch-release-packages.sh X.Y.Z` downloads them into `dist/`, and `build-dmg.sh publish` puts them into
   `SHA256SUMS.txt` and the draft release. `publish` stops before building if one is missing, unless
   `AGENTTY_MAC_ONLY=1` (a macOS-only release, only with the maintainer's OK).
@@ -74,7 +74,7 @@ security find-identity -v -p codesigning | grep "Developer ID Application"
 ## Publishing
 
 `publish` requires an authenticated `gh` CLI. It creates (or refreshes) a **draft** release `v<version>` on
-`empty-user77/agentty-releases` with the DMG, zip, Windows and Linux files and checksums. `AGENTTY_RELEASE_NOTES=<file.md>` sets the release
+`empty-user77/Agentty` with the DMG, zip, Windows and Linux files and checksums. `AGENTTY_RELEASE_NOTES=<file.md>` sets the release
 notes. Review the draft on GitHub, then publish.
 
 After publishing, `./scripts/update-homebrew-cask.sh <version>` points the Homebrew cask (`Casks/agentty.rb` in
@@ -105,7 +105,9 @@ cp /tmp/agentty-icons/logo-256.png /tmp/agentty-icons/menubar@2x.png crates/agen
 
 ## Auto-update
 
-Agentty checks `https://api.github.com/repos/empty-user77/agentty-releases/releases/latest` at launch and every hour.
+Agentty checks `https://api.github.com/repos/empty-user77/Agentty/releases/latest` at launch and every hour. Apps up to
+v0.1.21 check `empty-user77/agentty-releases`, where v0.2.0 is the last release: it moves them to this repository
+(`scripts/mirror-release-to-legacy.sh 0.2.0`).
 Drafts and pre-releases are ignored, so **publishing the draft created by `build-dmg.sh publish` is what ships an
 update** (the release tag must be `vX.Y.Z` and higher than the running version).
 

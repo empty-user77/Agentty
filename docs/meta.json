@@ -1,0 +1,351 @@
+{
+  "groups": [
+    {
+      "title": {
+        "en": "Getting started",
+        "ko": "시작하기",
+        "ja": "はじめに",
+        "zh": "开始使用"
+      },
+      "pages": [
+        {
+          "slug": "introduction",
+          "title": {
+            "en": "Introduction",
+            "ko": "소개",
+            "ja": "概要",
+            "zh": "简介"
+          }
+        },
+        {
+          "slug": "installation",
+          "title": {
+            "en": "Installation",
+            "ko": "설치",
+            "ja": "インストール",
+            "zh": "安装"
+          }
+        },
+        {
+          "slug": "quick-start",
+          "title": {
+            "en": "Quick start",
+            "ko": "빠른 시작",
+            "ja": "クイックスタート",
+            "zh": "快速开始"
+          }
+        }
+      ]
+    },
+    {
+      "title": {
+        "en": "Using Agentty",
+        "ko": "Agentty 사용하기",
+        "ja": "Agentty を使う",
+        "zh": "使用 Agentty"
+      },
+      "pages": [
+        {
+          "slug": "workspaces-tabs-panes",
+          "title": {
+            "en": "Workspaces, tabs and panes",
+            "ko": "워크스페이스·탭·페인",
+            "ja": "ワークスペース・タブ・ペイン",
+            "zh": "工作区、标签页与窗格"
+          }
+        },
+        {
+          "slug": "agent-status",
+          "title": {
+            "en": "Agent status",
+            "ko": "에이전트 상태",
+            "ja": "エージェントの状態",
+            "zh": "智能体状态"
+          }
+        },
+        {
+          "slug": "advisor",
+          "title": {
+            "en": "Claude advisor",
+            "ko": "Claude Advisor",
+            "ja": "Claude Advisor",
+            "zh": "Claude Advisor"
+          }
+        },
+        {
+          "slug": "sessions",
+          "title": {
+            "en": "Sessions",
+            "ko": "세션",
+            "ja": "セッション",
+            "zh": "会话"
+          }
+        },
+        {
+          "slug": "session-flow",
+          "title": {
+            "en": "Session Flow",
+            "ko": "Session Flow",
+            "ja": "Session Flow",
+            "zh": "Session Flow"
+          }
+        },
+        {
+          "slug": "agent-git",
+          "title": {
+            "en": "Git and working trees",
+            "ko": "Git과 워크트리",
+            "ja": "Git とワークツリー",
+            "zh": "Git 与工作树"
+          }
+        },
+        {
+          "slug": "in-app-browser",
+          "title": {
+            "en": "In-app browser",
+            "ko": "인앱 브라우저",
+            "ja": "アプリ内ブラウザ",
+            "zh": "内置浏览器"
+          }
+        },
+        {
+          "slug": "monitoring",
+          "title": {
+            "en": "Monitoring",
+            "ko": "모니터링",
+            "ja": "モニタリング",
+            "zh": "监控"
+          }
+        },
+        {
+          "slug": "databases",
+          "title": {
+            "en": "Databases",
+            "ko": "데이터베이스",
+            "ja": "データベース",
+            "zh": "数据库"
+          }
+        },
+        {
+          "slug": "docker",
+          "title": {
+            "en": "Docker",
+            "ko": "Docker",
+            "ja": "Docker",
+            "zh": "Docker"
+          }
+        },
+        {
+          "slug": "build-my-idea",
+          "title": {
+            "en": "Build my idea",
+            "ko": "아이디어로 시작하기",
+            "ja": "アイデアから作る",
+            "zh": "从想法开始"
+          }
+        },
+        {
+          "slug": "launch",
+          "title": {
+            "en": "Launch",
+            "ko": "Launch 배포",
+            "ja": "Launch で公開",
+            "zh": "Launch 发布"
+          }
+        }
+      ]
+    },
+    {
+      "title": {
+        "en": "Configuration",
+        "ko": "설정",
+        "ja": "設定",
+        "zh": "配置"
+      },
+      "pages": [
+        {
+          "slug": "settings",
+          "title": {
+            "en": "Settings",
+            "ko": "설정 화면",
+            "ja": "設定画面",
+            "zh": "设置界面"
+          }
+        },
+        {
+          "slug": "keyboard-shortcuts",
+          "title": {
+            "en": "Keyboard shortcuts",
+            "ko": "키보드 단축키",
+            "ja": "キーボードショートカット",
+            "zh": "键盘快捷键"
+          }
+        },
+        {
+          "slug": "mcp-and-connectors",
+          "title": {
+            "en": "Extensions, MCP and connectors",
+            "ko": "확장·MCP·커넥터",
+            "ja": "拡張・MCP・コネクタ",
+            "zh": "扩展、MCP 与连接器"
+          }
+        },
+        {
+          "slug": "themes",
+          "title": {
+            "en": "Themes and fonts",
+            "ko": "테마와 글꼴",
+            "ja": "テーマとフォント",
+            "zh": "主题与字体"
+          }
+        }
+      ]
+    },
+    {
+      "title": {
+        "en": "Plugins",
+        "ko": "플러그인",
+        "ja": "プラグイン",
+        "zh": "插件"
+      },
+      "pages": [
+        {
+          "slug": "plugins-overview",
+          "title": {
+            "en": "Using plugins",
+            "ko": "플러그인 사용하기",
+            "ja": "プラグインを使う",
+            "zh": "使用插件"
+          }
+        },
+        {
+          "slug": "plugin-quickstart",
+          "title": {
+            "en": "Plugin quick start",
+            "ko": "플러그인 빠른 시작",
+            "ja": "プラグイン クイックスタート",
+            "zh": "插件快速开始"
+          }
+        },
+        {
+          "slug": "plugin-manifest",
+          "title": {
+            "en": "Manifest reference",
+            "ko": "매니페스트 레퍼런스",
+            "ja": "マニフェスト リファレンス",
+            "zh": "清单参考"
+          }
+        },
+        {
+          "slug": "plugin-rust",
+          "title": {
+            "en": "Rust and WebAssembly",
+            "ko": "Rust와 WebAssembly",
+            "ja": "Rust と WebAssembly",
+            "zh": "Rust 与 WebAssembly"
+          }
+        },
+        {
+          "slug": "plugin-sdk",
+          "title": {
+            "en": "Node.js SDK",
+            "ko": "Node.js SDK",
+            "ja": "Node.js SDK",
+            "zh": "Node.js SDK"
+          }
+        },
+        {
+          "slug": "plugin-agentos",
+          "title": {
+            "en": "AgentOS plugins",
+            "ko": "AgentOS 플러그인",
+            "ja": "AgentOS プラグイン",
+            "zh": "AgentOS 插件"
+          }
+        },
+        {
+          "slug": "plugin-protocol",
+          "title": {
+            "en": "Plugin protocol",
+            "ko": "플러그인 프로토콜",
+            "ja": "プラグイン プロトコル",
+            "zh": "插件协议"
+          }
+        },
+        {
+          "slug": "plugin-permissions",
+          "title": {
+            "en": "Permissions",
+            "ko": "권한",
+            "ja": "権限",
+            "zh": "权限"
+          }
+        },
+        {
+          "slug": "plugin-publishing",
+          "title": {
+            "en": "Publishing",
+            "ko": "배포하기",
+            "ja": "配布する",
+            "zh": "发布"
+          }
+        }
+      ]
+    },
+    {
+      "title": {
+        "en": "Reference",
+        "ko": "레퍼런스",
+        "ja": "リファレンス",
+        "zh": "参考"
+      },
+      "pages": [
+        {
+          "slug": "configuration-reference",
+          "title": {
+            "en": "Configuration reference",
+            "ko": "설정 레퍼런스",
+            "ja": "設定リファレンス",
+            "zh": "配置参考"
+          }
+        },
+        {
+          "slug": "platforms",
+          "title": {
+            "en": "Platforms",
+            "ko": "플랫폼",
+            "ja": "プラットフォーム",
+            "zh": "平台"
+          }
+        },
+        {
+          "slug": "telemetry",
+          "title": {
+            "en": "Usage statistics",
+            "ko": "사용 통계",
+            "ja": "使用統計",
+            "zh": "使用统计"
+          }
+        },
+        {
+          "slug": "troubleshooting",
+          "title": {
+            "en": "Troubleshooting",
+            "ko": "문제 해결",
+            "ja": "トラブルシューティング",
+            "zh": "故障排查"
+          }
+        },
+        {
+          "slug": "faq",
+          "title": {
+            "en": "FAQ",
+            "ko": "자주 묻는 질문",
+            "ja": "よくある質問",
+            "zh": "常见问题"
+          }
+        }
+      ]
+    }
+  ]
+}

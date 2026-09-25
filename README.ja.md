@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.agentty.run">agentty.run</a> ·
   <a href="https://www.agentty.run/docs">ドキュメント</a> ·
-  <a href="https://github.com/empty-user77/agentty-releases/releases">ダウンロード</a> ·
+  <a href="https://github.com/empty-user77/Agentty/releases">ダウンロード</a> ·
   <a href="https://x.com/agentty_run">@agentty_run</a>
 </p>
 
@@ -53,7 +53,7 @@ Rust と [GPUI](https://gpui.rs)、`alacritty_terminal` で作られています
 
 ## インストール
 
-[agentty-releases](https://github.com/empty-user77/agentty-releases/releases) からダウンロードしてください。
+[Releases](https://github.com/empty-user77/Agentty/releases) からダウンロードしてください。
 
 | プラットフォーム | ファイル |
 |---|---|

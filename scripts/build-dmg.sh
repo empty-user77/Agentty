@@ -28,7 +28,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 MODE="${1:-dev}"
-RELEASE_REPO="${AGENTTY_RELEASE_REPO:-empty-user77/agentty-releases}"
+RELEASE_REPO="${AGENTTY_RELEASE_REPO:-empty-user77/Agentty}"
 APP_NAME="Agentty"
 DIST="$ROOT/dist"
 ARCH="$(uname -m)"

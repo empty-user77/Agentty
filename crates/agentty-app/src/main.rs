@@ -97,7 +97,7 @@ pub fn guide_url(language: &str, page: &str) -> String {
 }
 
 /// Where to report a problem or ask for help.
-const SUPPORT_URL: &str = "https://github.com/empty-user77/agentty-releases/issues";
+const SUPPORT_URL: &str = "https://github.com/empty-user77/Agentty/issues";
 
 const FONTS: &[&[u8]] = &[
     include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),

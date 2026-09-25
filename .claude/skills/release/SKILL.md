@@ -1,13 +1,18 @@
 ---
 name: release
-description: Release a new Agentty version to github.com/empty-user77/agentty-releases — preflight, version bump, changelog, CI checks, tag, Windows installer and Linux packages from the release-packages workflow, signed/notarized DMG, English release notes, draft release, independent verification, publish and update-feed check. Use when the user asks to release, ship, publish or cut a version.
+description: Release a new Agentty version on github.com/empty-user77/Agentty — preflight, version bump, changelog, CI checks, tag, Windows installer and Linux packages from the release-packages workflow, signed/notarized DMG, English release notes, draft release, independent verification, publish and update-feed check. Use when the user asks to release, ship, publish or cut a version.
 ---
 
 # Releasing Agentty
 
-Agentty's source lives in `empty-user77/Agentty`; binaries and the auto-update feed live in
-`empty-user77/agentty-releases`. Installed apps poll `releases/latest` of that repo, so **publishing a release ships an
-update to every user** (macOS and Windows install it in place; Linux users are pointed to the release page).
+Since v0.2.0 the source, the user documentation (`docs/{en,ko,ja,zh}` and `docs/meta.json`, which agentty.run/docs
+renders) and the releases with the auto-update feed all live in `empty-user77/Agentty`. Installed apps poll
+`releases/latest` of that repo, so **publishing a release ships an update to every user** (macOS and Windows install it
+in place; Linux users are pointed to the release page).
+
+Apps up to v0.1.21 poll the old channel, `empty-user77/agentty-releases`. **v0.2.0 is the bridge**: it is published in
+both places (step 8c), moves those apps to the new channel, and stays the old channel's latest release for good.
+Nothing after v0.2.0 goes to `agentty-releases`.
 
 A release holds: the notarized DMG and app zip (built here), the Windows installer
 `Agentty-X.Y.Z-windows-x64-setup.exe` and the same installer in `Agentty-X.Y.Z-windows-x64-setup.zip` (Chrome blocks
@@ -15,7 +20,7 @@ unsigned `.exe` downloads), `Agentty-X.Y.Z-linux-amd64.deb`, `Agentty-X.Y.Z-linu
 `Agentty-X.Y.Z-SHA256SUMS.txt` over all of them. After publishing, the Homebrew cask in the tap
 `empty-user77/homebrew-agentty` is pointed at the new app zip (`brew install --cask empty-user77/agentty/agentty`). The Windows and Linux files are built by the **Release packages**
 workflow (`.github/workflows/release-packages.yml`) that the tag push starts on GitHub's hosted runners; the
-workflow has no token for `agentty-releases`, so they are downloaded here and uploaded with the DMG.
+workflow holds no write token, so they are downloaded here and uploaded with the DMG.
 
 ## Rules
 
@@ -80,9 +85,8 @@ Common fixes:
 Uncommitted feature work is only a warning: commit it (conventional message, with the Co-Authored-By trailer) before
 step 2 so the release commit contains only the bump and changelog.
 
-If `agentty-releases` has no commits yet (first release), it needs one before a tag can exist: add a short English
-`README.md` (what Agentty is, download link to the latest release, link to the source repo) with
-`gh api -X PUT repos/empty-user77/agentty-releases/contents/README.md -f message="docs: add README" -f content="$(base64 < README.md)"`.
+User-facing changes also update the user documentation in `docs/{en,ko,ja,zh}` (all four languages, `docs/meta.json`
+for new pages) in the release commit or before it; agentty.run/docs picks it up on its next deploy.
 
 ### 2. Version and changelog
 - Pick the version with the user (`scripts/bump-version.sh patch|minor|major|x.y.z`).
@@ -172,8 +176,8 @@ SHA256SUMS. Report the result as the checklist from rule 8, then ask the user to
 
 ### 8. Publish (only after the user says so)
 ```sh
-gh release edit vX.Y.Z -R empty-user77/agentty-releases --draft=false --prerelease=false
-gh release edit vX.Y.Z -R empty-user77/agentty-releases --latest
+gh release edit vX.Y.Z -R empty-user77/Agentty --draft=false --prerelease=false
+gh release edit vX.Y.Z -R empty-user77/Agentty --latest
 ```
 Two separate calls: combining `--draft=false --latest` fails with HTTP 422 ("Latest release cannot be draft or
 prerelease") and has left the release published as a **pre-release**, which the update feed ignores. Always check with
@@ -186,6 +190,18 @@ scripts/update-homebrew-cask.sh X.Y.Z
 Commits `Casks/agentty.rb` to `empty-user77/homebrew-agentty` with the new version and the zip's sha256 from the
 published `SHA256SUMS`. It refuses a draft or pre-release, so it only runs after step 8. Skip it for a release that
 went out without its macOS files.
+
+### 8c. v0.2.0 only: the bridge on the old channel
+```sh
+scripts/mirror-release-to-legacy.sh 0.2.0
+AGENTTY_RELEASE_REPO=empty-user77/agentty-releases scripts/verify-release.sh 0.2.0
+```
+Copies the published v0.2.0 files, checked against its SHA256SUMS, to a **draft** on `empty-user77/agentty-releases`,
+with a note that releases have moved. Publishing that draft ships v0.2.0 to every v0.1.x user, so ask the user first,
+then publish it with the same two calls as step 8 on `-R empty-user77/agentty-releases`, and run
+`AGENTTY_RELEASE_REPO=empty-user77/agentty-releases scripts/verify-release.sh 0.2.0 --published`. Afterwards update
+that repository's README to point to `empty-user77/Agentty` (ask first; it is the user's public page) and never
+publish another release there.
 
 ### 9. Verify the update feed
 ```sh

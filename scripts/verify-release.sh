@@ -15,7 +15,7 @@ cd "$ROOT"
 VERSION="${1:-}"
 PUBLISHED="false"
 [[ "${2:-}" == "--published" ]] && PUBLISHED="true"
-RELEASE_REPO="${AGENTTY_RELEASE_REPO:-empty-user77/agentty-releases}"
+RELEASE_REPO="${AGENTTY_RELEASE_REPO:-empty-user77/Agentty}"
 DIST="$ROOT/dist"
 APP="$DIST/Agentty.app"
 FAILED=0
