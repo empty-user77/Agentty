@@ -348,6 +348,55 @@ fn split_command_line(line: &str) -> Vec<String> {
     args
 }
 
+/// Environment of a process of this user, as `KEY=value` strings (empty when it cannot be read).
+#[cfg(target_os = "macos")]
+pub fn process_env(pid: u32) -> Vec<String> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    let mut size: libc::size_t = 0;
+    // SAFETY: as in `process_args`.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0) } != 0 || size == 0 {
+        return Vec::new();
+    }
+    let mut buffer = vec![0u8; size];
+    // SAFETY: `buffer` is `size` bytes long, as reported by the previous call.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buffer.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0 {
+        return Vec::new();
+    }
+    parse_procargs_env(&buffer[..size.min(buffer.len())])
+}
+
+#[cfg(target_os = "linux")]
+pub fn process_env(pid: u32) -> Vec<String> {
+    let Ok(raw) = std::fs::read(format!("/proc/{pid}/environ")) else { return Vec::new() };
+    raw.split(|b| *b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).to_string()).collect()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[allow(dead_code)]
+pub fn process_env(_pid: u32) -> Vec<String> {
+    Vec::new()
+}
+
+/// The environment in a `KERN_PROCARGS2` buffer: the strings after the `argc` arguments.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn parse_procargs_env(buffer: &[u8]) -> Vec<String> {
+    if buffer.len() < 4 {
+        return Vec::new();
+    }
+    let argc = i32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]).max(0) as usize;
+    let mut rest = &buffer[4..];
+    let path_end = rest.iter().position(|b| *b == 0).unwrap_or(rest.len());
+    rest = &rest[path_end..];
+    let start = rest.iter().position(|b| *b != 0).unwrap_or(rest.len());
+    rest = &rest[start..];
+    rest.split(|b| *b == 0)
+        .skip(argc)
+        .take_while(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).to_string())
+        .filter(|entry| entry.contains('='))
+        .collect()
+}
+
 /// `argc` (i32), the executable path, NUL padding, then `argc` NUL-terminated arguments.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn parse_procargs(buffer: &[u8]) -> Vec<String> {

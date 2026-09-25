@@ -44,6 +44,7 @@ mod procinfo;
 mod settings;
 mod setup_check;
 mod shell_integration;
+mod single_instance;
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/status_item.rs")]
 mod status_item;
 mod statusline;
@@ -562,6 +563,23 @@ fn main() {
         return;
     }
 
+    // Anything else asked of the executable must not start a second app (see `single_instance`).
+    match single_instance::launch_kind(&args[1..]) {
+        single_instance::Launch::App => {}
+        single_instance::Launch::Help => {
+            print!("{}", single_instance::help());
+            return;
+        }
+        single_instance::Launch::Version => {
+            println!("Agentty {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        single_instance::Launch::Unknown(command) => {
+            eprint!("agentty: unknown command '{command}'\n\n{}", single_instance::help());
+            std::process::exit(2);
+        }
+    }
+
     sanitize_environment();
     // Windows / Linux hand links (`agentty://…`, registered by the installer / .desktop file) and
     // folders ("Open with Agentty") over as arguments; macOS sends them as open events below.
@@ -571,6 +589,21 @@ fn main() {
             return;
         }
         queue_launch_arguments(&args[1..]);
+    }
+    // One Agentty per data folder: a second launch brings the running one forward and exits, and
+    // the one that runs closes any others left from before this lock existed.
+    match single_instance::acquire() {
+        single_instance::Lock::Acquired(file) => {
+            // Held until the process ends (the OS releases it on exit or crash).
+            std::mem::forget(file);
+            single_instance::close_strays();
+        }
+        single_instance::Lock::Held => {
+            eprintln!("agentty: Agentty is already running; bringing it forward");
+            single_instance::bring_running_forward();
+            return;
+        }
+        single_instance::Lock::Unavailable => {}
     }
 
     // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
