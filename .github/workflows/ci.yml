@@ -106,6 +106,9 @@ jobs:
       # account's Actions storage, self-hosted runner or not. Pull requests still package above.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'push'
+        # A full Actions storage quota must not turn a green build red: the checks above are what
+        # CI is for, and the package is a convenience.
+        continue-on-error: true
         with:
           name: agentty-windows-x86_64
           path: |
@@ -152,6 +155,9 @@ jobs:
       # account's Actions storage, self-hosted runner or not. Pull requests still package above.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'push'
+        # A full Actions storage quota must not turn a green build red: the checks above are what
+        # CI is for, and the package is a convenience.
+        continue-on-error: true
         with:
           name: agentty-linux-aarch64
           path: |
