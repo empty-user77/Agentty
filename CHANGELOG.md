@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- The file editor shows Markdown rendered the way VS Code's preview does (Preview button, ⇧⌘V;
+  macOS).
+- `agentty --help` and `agentty --version`.
+
+### Fixed
+- macOS: running `agentty` with a command it doesn't know (for example an agent trying
+  `agentty --help`) started a second Agentty, with another menu bar icon. Agentty now runs once per
+  user: a second launch brings the running one forward, and extra copies already running are
+  closed when Agentty starts.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added
