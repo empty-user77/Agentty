@@ -38,7 +38,7 @@ BEGIN
       VALUE "FileDescription", "Agentty"
       VALUE "FileVersion", "{version}"
       VALUE "InternalName", "agentty"
-      VALUE "LegalCopyright", "GPL-3.0-or-later"
+      VALUE "LegalCopyright", "Apache-2.0"
       VALUE "OriginalFilename", "agentty.exe"
       VALUE "ProductName", "Agentty"
       VALUE "ProductVersion", "{version}"

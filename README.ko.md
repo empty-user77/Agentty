@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
   <img alt="Rust 1.98" src="https://img.shields.io/badge/rust-1.98-orange.svg">
   <img alt="Platform: macOS | Windows | Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg">
 </p>
@@ -128,8 +128,23 @@ Code에게 구현을 맡길 수도 있습니다.
 
 ## 라이선스
 
-Agentty는 자유 소프트웨어입니다. [GNU General Public License](LICENSE) 버전 3 또는 그 이후 버전의 조건에 따라
-재배포하거나 수정할 수 있습니다.
+```
+Copyright 2026 LEE YONGBEOM
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+전문은 [LICENSE](LICENSE)에 있습니다.
 
 내장 글꼴과 서드파티 구성요소는 각자의 라이선스를 따릅니다 — [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를
 보세요.

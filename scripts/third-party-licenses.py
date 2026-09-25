@@ -72,7 +72,7 @@ def main():
             groups.setdefault(text, []).append(f"{name} {version}")
 
     out = ["Agentty third-party licenses", "=" * 28, "",
-           "Agentty is licensed under GPL-3.0-or-later (see LICENSE.txt). It includes the components below.", ""]
+           "Agentty is licensed under Apache-2.0 (see LICENSE.txt). It includes the components below.", ""]
     for title, path in ASSETS:
         out += ["-" * 100, title, "-" * 100, (ROOT / path).read_text().strip(), ""]
     out += ["-" * 100, f"Rust crates ({len(crates)})", "-" * 100, *crates, ""]

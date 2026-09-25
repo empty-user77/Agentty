@@ -809,7 +809,7 @@ strings! {
     "settings.shortcuts" => ["Keyboard Shortcuts", "단축키", "キーボードショートカット", "快捷键"],
     "settings.about" => ["About Agentty", "Agentty 정보", "Agentty について", "关于 Agentty"],
     "settings.about_links" => ["Links", "링크", "リンク", "链接"],
-    "settings.about_notice" => ["Free software under the GNU GPL v3 or later. Bundled fonts (JetBrains Mono, Nerd Fonts) are licensed under the SIL Open Font License 1.1.", "GNU GPL v3 이상으로 배포되는 자유 소프트웨어입니다. 내장 글꼴(JetBrains Mono, Nerd Fonts)은 SIL Open Font License 1.1을 따릅니다.", "GNU GPL v3 以降で配布されるフリーソフトウェアです。同梱フォント（JetBrains Mono、Nerd Fonts）は SIL Open Font License 1.1 です。", "基于 GNU GPL v3 或更高版本的自由软件。内置字体（JetBrains Mono、Nerd Fonts）采用 SIL Open Font License 1.1。"],
+    "settings.about_notice" => ["Open source under the Apache License 2.0. Bundled fonts (JetBrains Mono, Nerd Fonts) are licensed under the SIL Open Font License 1.1.", "Apache License 2.0으로 배포되는 오픈소스 소프트웨어입니다. 내장 글꼴(JetBrains Mono, Nerd Fonts)은 SIL Open Font License 1.1을 따릅니다.", "Apache License 2.0 で配布されるオープンソースソフトウェアです。同梱フォント（JetBrains Mono、Nerd Fonts）は SIL Open Font License 1.1 です。", "基于 Apache License 2.0 发布的开源软件。内置字体（JetBrains Mono、Nerd Fonts）采用 SIL Open Font License 1.1。"],
     "shortcuts.group.launch" => ["New", "새로 만들기", "新規", "新建"],
     "shortcuts.group.navigate" => ["Navigate", "이동", "移動", "导航"],
     "shortcuts.group.views" => ["Views", "화면", "ビュー", "视图"],

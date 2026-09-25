@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
   <img alt="Rust 1.98" src="https://img.shields.io/badge/rust-1.98-orange.svg">
   <img alt="Platform: macOS | Windows | Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg">
 </p>
@@ -135,8 +135,23 @@ Contributions are welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md) and
 
 ## License
 
-Agentty is free software: you can redistribute it and/or modify it under the terms of the
-[GNU General Public License](LICENSE), version 3 or (at your option) any later version.
+```
+Copyright 2026 LEE YONGBEOM
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+The full text is in [LICENSE](LICENSE).
 
 Bundled fonts and third-party components keep their own licenses; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

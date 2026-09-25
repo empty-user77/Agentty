@@ -23,6 +23,9 @@ const AI_PROMPT_ASK: &str = "We are building the Agentty plugin \"{name}\" in th
 
 /// Width of the list beside the details.
 const LIST_WIDTH: f32 = 290.;
+/// Entering the plugins page reads the marketplace and the installed plugins again when the last
+/// read is older than this; within it the page shows what it has, and Refresh is always there.
+const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 /// How much of the description a list row shows.
 const SUMMARY_CHARS: usize = 46;
 
@@ -81,6 +84,10 @@ pub struct PluginsPage {
     installing: Option<String>,
     /// Plugins waiting their turn while "update everything" works through them.
     update_queue: Vec<String>,
+    /// The page was on screen last frame, so being on it now is not a new visit.
+    shown: bool,
+    /// When the page last read the marketplace and the installed plugins.
+    refreshed_at: Option<std::time::Instant>,
 }
 
 struct Inputs {
@@ -118,10 +125,17 @@ struct Row {
 
 impl Workbench {
     pub(super) fn prepare_plugins_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.page != Some(Page::Plugins) || self.plugins_page.inputs.is_some() {
+        if self.page != Some(Page::Plugins) {
+            self.plugins_page.shown = false;
             return;
         }
-        self.fetch_market(cx);
+        let entered = !std::mem::replace(&mut self.plugins_page.shown, true);
+        if entered && self.plugins_page.refreshed_at.is_none_or(|at| at.elapsed() >= REFRESH_EVERY) {
+            self.refresh_plugins(cx);
+        }
+        if self.plugins_page.inputs.is_some() {
+            return;
+        }
         self.plugins_page.inputs = Some(Inputs {
             search: cx.new(|cx| TextInput::localized("", "plugins.search", window, cx)),
             git_url: cx.new(|cx| TextInput::localized("", "plugins.git_placeholder", window, cx)),
@@ -130,7 +144,15 @@ impl Workbench {
         });
     }
 
-    /// Reads the marketplace list in the background. Called when the page opens and on Refresh.
+    /// Reads the marketplace list and the installed plugins again (Refresh, and entering the page
+    /// once the last read is older than [`REFRESH_EVERY`]).
+    fn refresh_plugins(&mut self, cx: &mut Context<Self>) {
+        self.plugins_page.refreshed_at = Some(std::time::Instant::now());
+        self.fetch_market(cx);
+        plugins::reload(cx);
+    }
+
+    /// Reads the marketplace list in the background (see [`Self::refresh_plugins`]).
     fn fetch_market(&mut self, cx: &mut Context<Self>) {
         if matches!(self.plugins_page.market, Market::Loading) {
             return;
@@ -549,8 +571,7 @@ impl Workbench {
                 t(cx, "usage.refresh"),
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.plugins_page.message = None;
-                    this.fetch_market(cx);
-                    plugins::reload(cx);
+                    this.refresh_plugins(cx);
                 }),
             ))
             .child(action_button(
