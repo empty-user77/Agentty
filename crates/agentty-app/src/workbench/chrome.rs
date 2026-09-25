@@ -247,7 +247,8 @@ impl Workbench {
                     .when(target == Some(id), |d| d.relative().child(crate::ui::pulse_ring(id, false)))
             };
         // One active item at a time: an open page wins over the side panel's item.
-        let sidebar = |panel| self.page.is_none() && self.sidebar_open && self.panel == panel;
+        let in_plugin = self.front_plugin_workspace(cx).is_some();
+        let sidebar = |panel| self.page.is_none() && !in_plugin && self.sidebar_open && self.panel == panel;
         div()
             .w(px(ACTIVITY_BAR_WIDTH))
             .flex_shrink_0()
@@ -888,6 +889,7 @@ impl Workbench {
         // starts at the edge, and the lines under it follow — nothing is left indented under a
         // logo that is not there. Whether a card is working still shows, since that differs.
         let show_logo = self.installed.as_ref().map_or(2, crate::agents::Installed::agent_count) > 1;
+        // A plugin's workspace carries the plugin's own mark, not the terminal it runs in.
         let mut plugin_mark = ws.plugin.as_deref().and_then(|id| crate::plugins::plugin(cx, id)).map(|plugin| {
             let manifest = plugin.manifest.as_ref();
             let glyph = crate::ui::icon_named(
@@ -985,8 +987,7 @@ impl Workbench {
                     // breathes while a turn is running.
                     .map(|d| {
                         if let Some(mark) = plugin_mark.take().filter(|_| show_logo) {
-                            // A plugin's workspace carries the plugin's own mark, not the terminal it
-                            // runs in; a turn running in it still shows beside the mark.
+                            // A turn running in there still shows, beside the mark.
                             d.child(mark)
                                 .when(working, |d| d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(ink, 0.9))))
                         } else if show_logo {

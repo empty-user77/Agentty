@@ -857,5 +857,17 @@ impl Workbench {
 }
 
 fn icon_only_close(cx: &mut Context<Workbench>) -> impl IntoElement {
-    crate::ui::icon_only("plugin-panel-close", "x", cx.listener(|this, _: &ClickEvent, _, cx| this.close_plugin_panel(cx)))
+    crate::ui::icon_only(
+        "plugin-panel-close",
+        "x",
+        cx.listener(|this, _: &ClickEvent, _, cx| {
+            // In a plugin's workspace the panel is the workspace's: closing it leaves the workspace
+            // (the plugin runs on), or it would come straight back.
+            if this.front_plugin_workspace(cx).is_some() {
+                this.leave_plugin_workspace(cx);
+            } else {
+                this.close_plugin_panel(cx);
+            }
+        }),
+    )
 }

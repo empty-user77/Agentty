@@ -352,9 +352,11 @@ switches to the plugin's workspace (made the first time, in the plugin's data fo
 restarts, and placed in the sidebar's Plugins group): the panel docked at the right, the browser with the plugin's pages (they open
 visible there unless the plugin asks otherwise), and the terminals as tabs. `prompt/inject` with
 `target: "own"` opens a new tab there for each job, so several run side by side. The icon is a
-place like the other items of the activity bar: pressed again it stays, and choosing any other item
-leaves the workspace and puts the window back as it was. Leaving only hides it: the plugin and its
-automations keep running. With every tab closed, the panel offers a new automation.
+place like the other items of the activity bar, and only one is lit at a time: pressed again it
+stays, and anything else (the workspace list, a page, the home tab, the panel's ✕) takes its place
+and puts the window back as it was — the start page when the user has no workspace of their own.
+Out of sight the plugin and its automations keep running. With every tab closed, the panel offers a
+new automation.
 
 In that workspace **a tab is an automation**. Each has its own panel (`ui/setPanel` with its
 `instance`; UI events from it carry the same `instance`), its own browser pages (`browser/open`
