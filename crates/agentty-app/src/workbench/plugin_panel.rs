@@ -191,6 +191,9 @@ impl Workbench {
         let runtime = plugins::runtime(cx, &plugin_id);
         let state = runtime.map(|r| r.state.clone()).unwrap_or(RunState::Stopped);
         let tree = self.plugin_tree(&plugin_id, cx).cloned();
+        // Its workspace in front with every tab closed: no automation to show a panel for.
+        let no_automation = self.front_plugin_workspace(cx).as_deref() == Some(plugin_id.as_str())
+            && self.workspaces.get(self.active_workspace).is_some_and(|ws| ws.tabs.is_empty());
         let log_tail: Vec<String> = runtime.map(|r| r.logs.iter().rev().take(12).rev().cloned().collect()).unwrap_or_default();
         let panel_title = manifest.contributes.panel.as_ref().map_or(manifest.name.clone(), |p| p.title.clone());
         let panel_icon = icon_named(manifest.contributes.panel.as_ref().and_then(|p| p.icon.as_deref()).or(manifest.icon.as_deref()));
@@ -292,6 +295,29 @@ impl Workbench {
                         .child(log_tail.join("\n")),
                 )
                 .into_any_element(),
+            // What the plugin drew for no automation (if anything) would wait for one forever:
+            // say what happened and offer the way out.
+            _ if no_automation => {
+                let owner = plugin_id.clone();
+                div()
+                    .p_3()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "plugins.no_automation")))
+                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.no_automation.hint")))
+                    .child(crate::ui::action_button(
+                        "plugin-new-automation",
+                        t(cx, "plugins.new_automation"),
+                        cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                            // A double click is one automation, not two.
+                            if this.workspaces.get(this.active_workspace).is_some_and(|ws| ws.tabs.is_empty()) {
+                                this.new_plugin_instance(&owner, cx);
+                            }
+                        }),
+                    ))
+                    .into_any_element()
+            }
             (Some(tree), _) => {
                 let mut path = Vec::new();
                 div().p_3().child(self.render_plugin_node(&plugin_id, &tree, &mut path, cx)).into_any_element()

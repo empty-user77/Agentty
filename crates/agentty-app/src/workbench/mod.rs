@@ -333,6 +333,8 @@ pub struct Workbench {
     pub groups: Vec<Group>,
     /// The "ungrouped" section folds away like any group does.
     pub ungrouped_collapsed: bool,
+    /// See `LayoutState::plugins_grouped`.
+    plugins_grouped: bool,
     panel: SidePanel,
     sidebar_open: bool,
     page: Option<Page>,
@@ -480,8 +482,13 @@ pub struct Workbench {
     inventory: status_menus::AgentInventory,
     browser: Option<browser::BrowserPanel>,
     browser_request: Option<String>,
-    /// The workspace the user was in before going to a plugin's (its icon, pressed again, goes back).
+    /// The workspace the user was in before going to a plugin's: where leaving it goes back to.
     before_plugin_workspace: Option<u64>,
+    /// The plugin whose workspace a page was opened from: closing the page goes back there.
+    page_left_plugin: Option<String>,
+    /// The keyboard goes to the workspace in front at the next render: set where the workspace
+    /// changed without a window at hand (leaving a plugin's workspace for a panel or a page).
+    refocus: bool,
     /// The plugin whose workspace is in front and whose panel it brought up.
     plugin_workspace_shown: Option<String>,
     /// The user's own browser, set aside while a plugin's workspace (whose browser shows its
@@ -633,6 +640,7 @@ impl Workbench {
             active_workspace: 0,
             groups: Vec::new(),
             ungrouped_collapsed: false,
+            plugins_grouped: false,
             panel: SidePanel::Workspaces,
             sidebar_open: true,
             page: None,
@@ -733,6 +741,8 @@ impl Workbench {
             browser_request: None,
             plugin_browsers: Vec::new(),
             before_plugin_workspace: None,
+            page_left_plugin: None,
+            refocus: false,
             plugin_workspace_shown: None,
             stashed_browser: None,
             instance_shown: None,
@@ -1253,9 +1263,19 @@ impl Workbench {
     }
 
     pub fn activate_workspace(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index >= self.workspaces.len() {
-            return;
+        if self.select_workspace(index, cx) {
+            self.focus_active(window, cx);
+            cx.notify();
         }
+    }
+
+    /// Everything of making workspace `index` current except the keyboard (see `activate_workspace`,
+    /// and `refocus` for callers without a window). False when there is no such workspace.
+    pub(super) fn select_workspace(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        if index >= self.workspaces.len() {
+            return false;
+        }
+        self.page_left_plugin = None;
         self.welcome = false;
         self.active_workspace = index;
         crate::native::note_recent_folder(&self.workspaces[index].cwd);
@@ -1269,8 +1289,7 @@ impl Workbench {
             self.revive(index, snapshot, cx);
         }
         self.sync_plugin_workspace(cx);
-        self.focus_active(window, cx);
-        cx.notify();
+        true
     }
 
     /// A pane's process ended. It closes a moment later, with any others that end meanwhile.
@@ -1326,6 +1345,8 @@ impl Workbench {
             return;
         }
         self.active_workspace = index;
+        // Picked while the page stays: closing the page shows this one, not a plugin left before.
+        self.page_left_plugin = None;
         if let Some(snapshot) = self.workspaces[index].dormant.take() {
             self.revive(index, snapshot, cx);
         }
@@ -2601,6 +2622,7 @@ impl Workbench {
             workspaces,
             active_workspace: self.active_workspace,
             ungrouped_collapsed: self.ungrouped_collapsed,
+            plugins_grouped: self.plugins_grouped,
             window: self.window_state,
             panels: self.panel_state(),
         };
@@ -2620,6 +2642,7 @@ impl Workbench {
             .map(|g| Group { id: g.id, name: g.name.clone(), collapsed: g.collapsed, color: stored_color(g.color_value, g.color) })
             .collect();
         self.ungrouped_collapsed = state.ungrouped_collapsed;
+        self.plugins_grouped = state.plugins_grouped;
         for snapshot in state.workspaces {
             self.next_id = self.next_id.max(snapshot.id + 1);
             self.workspaces.push(Workspace {
@@ -2638,6 +2661,9 @@ impl Workbench {
         }
         for group in &self.groups {
             self.next_id = self.next_id.max(group.id + 1);
+        }
+        if !std::mem::replace(&mut self.plugins_grouped, true) {
+            self.group_plugin_workspaces(cx);
         }
         if !self.workspaces.is_empty() {
             // Only the active workspace starts processes; the rest wake up when opened.
@@ -2784,6 +2810,9 @@ impl Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.refocus) && self.page.is_none() {
+            self.focus_active(window, cx);
+        }
         let activated = window.is_window_active() && !self.window_active;
         self.window_active = window.is_window_active();
         if activated {
@@ -3281,8 +3310,13 @@ impl Workbench {
 
     /// Shows a side panel. The activity icons only open panels; the sidebar's own button closes it.
     fn show_panel(&mut self, panel: SidePanel, cx: &mut Context<Self>) {
+        // Another item of the activity bar: a plugin's workspace in front steps aside (and runs on).
+        self.leave_plugin_workspace(cx);
+        self.page_left_plugin = None;
         // Leaving a page returns to the terminals with this panel shown.
-        self.page = None;
+        if self.page.take().is_some() {
+            self.refocus = true;
+        }
         self.panel = panel;
         self.sidebar_open = true;
         if panel == SidePanel::Sessions && self.sessions.is_empty() {
@@ -3312,7 +3346,27 @@ impl Workbench {
             Page::Database => "database",
         };
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
-        self.page = if self.page == Some(page) { None } else { Some(page) };
+        if self.page == Some(page) {
+            self.page = None;
+            // Back to where the page was opened from: a plugin's workspace, or the terminals.
+            match self.page_left_plugin.take() {
+                Some(plugin) => self.return_to_plugin_workspace(&plugin, cx),
+                None => self.refocus = true,
+            }
+            // A workspace picked while the page was up (a plugin's among them) shows as it works.
+            self.sync_plugin_workspace(cx);
+        } else {
+            // Only one item of the activity bar is lit: a plugin's workspace steps aside (and runs
+            // on). Leaving clears any page, so this comes first. From one page to the next the
+            // plugin it was opened from is kept; opened from anywhere else it is what was left (or
+            // nothing), whatever closed the page before.
+            let was_on_page = self.page.is_some();
+            let left = self.leave_plugin_workspace(cx);
+            if !was_on_page || left.is_some() {
+                self.page_left_plugin = left;
+            }
+            self.page = Some(page);
+        }
         if self.page == Some(Page::Plugins) {
             // Pick up plugins copied into the folder by hand.
             crate::plugins::reload(cx);

@@ -348,11 +348,13 @@ A docked panel never takes so much room that the rest of the window is squeezed:
 can be docked, it becomes an overlay.
 
 **`workspace`** is for plugins whose work runs in agents and pages the user watches. Its icon
-switches to the plugin's workspace (made the first time, in the plugin's data folder, and kept
-across restarts): the panel docked at the right, the browser with the plugin's pages (they open
+switches to the plugin's workspace (made the first time, in the plugin's data folder, kept across
+restarts, and placed in the sidebar's Plugins group): the panel docked at the right, the browser with the plugin's pages (they open
 visible there unless the plugin asks otherwise), and the terminals as tabs. `prompt/inject` with
-`target: "own"` opens a new tab there for each job, so several run side by side. Leaving the
-workspace puts the window back as it was; the icon, pressed again, goes back to where the user was.
+`target: "own"` opens a new tab there for each job, so several run side by side. The icon is a
+place like the other items of the activity bar: pressed again it stays, and choosing any other item
+leaves the workspace and puts the window back as it was. Leaving only hides it: the plugin and its
+automations keep running. With every tab closed, the panel offers a new automation.
 
 In that workspace **a tab is an automation**. Each has its own panel (`ui/setPanel` with its
 `instance`; UI events from it carry the same `instance`), its own browser pages (`browser/open`

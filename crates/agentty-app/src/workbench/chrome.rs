@@ -888,6 +888,13 @@ impl Workbench {
         // starts at the edge, and the lines under it follow — nothing is left indented under a
         // logo that is not there. Whether a card is working still shows, since that differs.
         let show_logo = self.installed.as_ref().map_or(2, crate::agents::Installed::agent_count) > 1;
+        let mut plugin_mark = ws.plugin.as_deref().and_then(|id| crate::plugins::plugin(cx, id)).map(|plugin| {
+            let manifest = plugin.manifest.as_ref();
+            let glyph = crate::ui::icon_named(
+                manifest.and_then(|m| m.contributes.panel.as_ref().and_then(|p| p.icon.as_deref()).or(m.icon.as_deref())),
+            );
+            crate::ui::plugin_mark(agentty_bridge::plugins::store::logo_file(plugin), glyph, 16., hex(ink))
+        });
         let indent = px(if show_logo { 24. } else { 2. });
         let compact = settings(cx).compact_workspaces;
 
@@ -977,7 +984,12 @@ impl Workbench {
                     // One logo: which agent it is, without a pile of icons down the sidebar. It
                     // breathes while a turn is running.
                     .map(|d| {
-                        if show_logo {
+                        if let Some(mark) = plugin_mark.take().filter(|_| show_logo) {
+                            // A plugin's workspace carries the plugin's own mark, not the terminal it
+                            // runs in; a turn running in it still shows beside the mark.
+                            d.child(mark)
+                                .when(working, |d| d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(ink, 0.9))))
+                        } else if show_logo {
                             d.child(crate::brand::avatar_working(tools.first().map_or("shell", String::as_str), 16., working, id, ink))
                         } else if working {
                             d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(ink, 0.9)))

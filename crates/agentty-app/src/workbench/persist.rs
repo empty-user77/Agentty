@@ -196,6 +196,10 @@ pub struct LayoutState {
     pub active_workspace: usize,
     #[serde(default)]
     pub ungrouped_collapsed: bool,
+    /// Plugins' workspaces made before the Plugins group were moved into it (once: where the user
+    /// puts them afterwards stays theirs).
+    #[serde(default)]
+    pub plugins_grouped: bool,
     /// The window's place and size at the last save.
     #[serde(default)]
     pub window: Option<WindowState>,
@@ -253,6 +257,7 @@ impl LayoutState {
             workspaces,
             active_workspace: serde_json::from_value(field(&value, "activeWorkspace")).unwrap_or_default(),
             ungrouped_collapsed: serde_json::from_value(field(&value, "ungroupedCollapsed")).unwrap_or_default(),
+            plugins_grouped: serde_json::from_value(field(&value, "pluginsGrouped")).unwrap_or_default(),
             window: serde_json::from_value(field(&value, "window")).unwrap_or_default(),
             panels: serde_json::from_value(field(&value, "panels")).unwrap_or_default(),
         };
