@@ -35,25 +35,10 @@ pub fn forward(arguments: &[String]) -> bool {
 pub fn register(socket: &crate::agent_signal::SignalSocket) {
     let instance = Instance { pid: std::process::id(), address: socket.address.clone(), token: socket.token.clone() };
     let Ok(json) = serde_json::to_vec(&instance) else { return };
-    let path = path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let tmp = path.with_extension("json.tmp");
-    let _ = std::fs::remove_file(&tmp);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600); // holds the socket token on Windows; kept private everywhere
-    }
-    if let Ok(mut file) = options.open(&tmp) {
-        if file.write_all(&json).is_ok() {
-            drop(file);
-            let _ = std::fs::rename(&tmp, &path);
-        }
-    }
+    // Holds the socket token, which on Windows is all a connection has to show. `0600` on Unix; on
+    // Windows the file inherits the data folder's permissions, which only the user (and the system
+    // and administrators) can read.
+    let _ = agentty_bridge::fsutil::write_private(&path(), &json);
 }
 
 /// Forgets this process as the running instance (at quit).
