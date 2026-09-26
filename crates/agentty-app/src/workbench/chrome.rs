@@ -1744,6 +1744,15 @@ impl Workbench {
                 let ids: Vec<u64> = leaves.iter().map(|p| p.read(cx).pane_id).collect();
                 let linked =
                     self.flow.edges().iter().filter(|e| ids.contains(&e.from) || ids.contains(&e.to)).map(|e| e.live).reduce(|a, b| a || b);
+                // An automation at work (`workspace/setInstanceStatus`): the tab turns and says
+                // what it is doing, the whole line on hover.
+                let plugin_work = match (&ws.plugin, &tab.instance) {
+                    (Some(plugin), Some(instance)) => crate::plugins::instance_status(cx, plugin, &instance.id)
+                        .filter(|status| status.state == crate::plugins::InstanceState::Working)
+                        .map(|status| status.text.unwrap_or_default()),
+                    _ => None,
+                };
+                let working = view.status.in_turn() || plugin_work.is_some();
                 tabs = tabs.child(
                     div()
                         .id(("tab", index))
@@ -1754,7 +1763,7 @@ impl Workbench {
                         .gap_2()
                         .pl_3()
                         .pr_1()
-                        .max_w(px(240.))
+                        .max_w(px(if plugin_work.as_ref().is_some_and(|t| !t.is_empty()) { 360. } else { 240. }))
                         .flex_shrink_0()
                         .cursor_pointer()
                         .border_r_1()
@@ -1807,7 +1816,7 @@ impl Workbench {
                         // No logo here: the tab strip sits right under the workspace card that
                         // already says which agent this is, and a row of them only drew the eye.
                         // What is left is the one thing a tab alone can say — it is working.
-                        .when(view.status.in_turn(), |d| {
+                        .when(working, |d| {
                             d.child(crate::ui::dot_spinner(("tab-working", view.pane_id as usize), 12., hex_alpha(Chrome::BRIGHT, 0.9)))
                         })
                         .child(
@@ -1823,6 +1832,10 @@ impl Workbench {
                                 },
                             ),
                         )
+                        .when_some(plugin_work.filter(|text| !text.is_empty()), |d, text| {
+                            d.child(div().min_w(px(40.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(text.clone()))
+                                .tooltip(crate::ui::Tooltip::text(text, None))
+                        })
                         .when(leaves.len() > 1, |d| {
                             d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("⊞{}", leaves.len())))
                         })
