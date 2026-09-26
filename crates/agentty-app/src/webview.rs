@@ -696,7 +696,12 @@ pub struct WebView {
     /// first time it is locked, a subview of the page so it follows its frame.
     shield: Id,
     locked: bool,
+    /// Asks sites for their phone pages (an iPhone's user agent) rather than the desktop ones.
+    mobile: bool,
 }
+
+/// What a page asking for sites' phone pages says it is.
+const MOBILE_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 
 impl WebView {
     /// Creates the web view inside `window`'s content view (hidden until `set_frame`).
@@ -809,8 +814,7 @@ impl WebView {
             }
             let _: () = msg_send![view, setPageZoom: prefs.zoom.clamp(0.3, 3.0) as f64];
             if prefs.mobile {
-                let agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
-                let _: () = msg_send![view, setCustomUserAgent: ns_string(agent)];
+                let _: () = msg_send![view, setCustomUserAgent: ns_string(MOBILE_AGENT)];
             }
             let delegate: Id = msg_send![delegate_class(), new];
             let _: () = msg_send![view, setNavigationDelegate: delegate];
@@ -829,6 +833,7 @@ impl WebView {
                 zoom: prefs.zoom.clamp(0.3, 3.0) as f64,
                 shield: std::ptr::null_mut(),
                 locked: false,
+                mobile: prefs.mobile,
             })
         }
     }
@@ -1038,6 +1043,25 @@ impl WebView {
             unsafe {
                 let _: () = msg_send![self.view, setPageZoom: zoom];
             }
+        }
+    }
+
+    /// Asks sites for their phone pages (`true`) or their desktop ones. A site decides by the user
+    /// agent, not the width, so a narrow window alone gets a squeezed desktop page — Instagram's
+    /// has no comment box, and its comment button then does nothing. A page already open is loaded
+    /// again to be asked anew.
+    pub fn set_mobile(&mut self, mobile: bool) {
+        if mobile == self.mobile {
+            return;
+        }
+        self.mobile = mobile;
+        unsafe {
+            // No custom agent: WebKit's own, with the Safari tail the configuration adds.
+            let agent: Id = if mobile { ns_string(MOBILE_AGENT) } else { std::ptr::null_mut() };
+            let _: () = msg_send![self.view, setCustomUserAgent: agent];
+        }
+        if self.current_url().is_some_and(|url| url.starts_with("http")) {
+            self.reload();
         }
     }
 

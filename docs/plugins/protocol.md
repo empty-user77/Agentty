@@ -206,10 +206,19 @@ site sets only while the user is signed in: Agentty checks that it is there — 
 to say whether the site is signed in and until when. At most 8 sites; the permission and the list
 come together.
 
+A page's layout, as responsive mode sets it for the user, but for that page only: `width` (CSS
+pixels, 320–2560) lays it out exactly that wide, drawn smaller or larger to fit the panel;
+`minWidth` lays it out at least that wide (in a narrower panel it is drawn smaller rather than
+switching to a narrow layout); `mobile: true` asks sites for their phone pages (an iPhone's user
+agent), `false` for desktop ones, and the page loads again when that changes. A site picks its pages
+by the user agent, not the width: in a narrow window a desktop browser gets a squeezed desktop page,
+which may lack what the plugin needs (Instagram's has no comment box).
+
 | Method | `params` | Result |
 |---|---|---|
 | `browser/sites` | `{ profile? }` | `[{ host, signedIn: true \| false \| null, expiresAt: ms \| null }]` |
-| `browser/open` | `{ url, mode?: "auto" \| "background" \| "visible", profile?, instance? }` | `{ tabId }` |
+| `browser/open` | `{ url, mode?: "auto" \| "background" \| "visible", profile?, instance?, width?, minWidth?, mobile? }` | `{ tabId }` |
+| `browser/viewport` | `{ tabId, width?, minWidth?, mobile? }` (a key left out stays, `null` clears it) | `{ width, minWidth, mobile }` |
 | `browser/navigate` | `{ tabId, url }` | `null` |
 | `browser/eval` | `{ tabId, script, args?, timeoutMs? }` | `{ value }` |
 | `browser/wait` | `{ tabId, timeoutMs? }` | `{ url, title }` once the page has loaded |

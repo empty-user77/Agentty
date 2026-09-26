@@ -821,17 +821,28 @@ impl Workbench {
             Some(_) => browser.responsive.scale() as f64,
             None => settings(cx).browser.zoom as f64,
         };
+        // A plugin's page laid out as it asked (outside responsive mode, which sets the size
+        // itself); a phone picked in responsive mode asks sites for their phone pages.
+        let layout = match browser.responsive.viewport {
+            Some(_) => super::plugin_browser::PageLayout::default(),
+            None => {
+                tab.owner.and_then(|id| self.plugin_browsers.iter().find(|page| page.id == id)).map(|page| page.layout).unwrap_or_default()
+            }
+        };
+        let mobile =
+            layout.mobile.unwrap_or_else(|| browser.responsive.viewport.is_some_and(|v| v.is_phone()) || settings(cx).browser.mobile);
         let content = gpui::canvas(
             |_, _, _| {},
             move |bounds, _, _, _| {
                 if let Some(view) = placeholder.borrow_mut().as_mut() {
                     view.set_locked(locked);
+                    view.set_mobile(mobile);
                     if !covered {
                         let mut bounds = bounds;
                         let room = px(make_room).min(bounds.size.width - px(200.)).max(px(0.));
                         bounds.origin.x += room;
                         bounds.size.width -= room;
-                        view.set_zoom(zoom);
+                        view.set_zoom(layout.zoom(zoom, f32::from(bounds.size.width)));
                         view.set_frame(bounds);
                     }
                 }

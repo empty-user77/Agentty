@@ -87,6 +87,7 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("browser/signIn", Some("browser.control")),
     ("browser/profiles", Some("browser.control")),
     ("browser/removeProfile", Some("browser.control")),
+    ("browser/viewport", Some("browser.control")),
 ];
 
 /// `None` for unknown methods; `Some(None)` when no permission is needed.
