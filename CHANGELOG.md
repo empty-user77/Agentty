@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-27
+
+### Added
+- Plugins can lay out their browser pages the way a site needs: a set width, a minimum width, or a
+  phone's page instead of a squeezed desktop one (macOS).
+
+### Changed
+- Picking a phone in the in-app browser's responsive mode now also asks sites for their phone
+  pages, as a phone would (the page reloads when that changes). Tablets and typed-in sizes keep
+  the desktop page, as iPad Safari does.
+
 ## [0.2.2] - 2026-09-27
 
 ### Added
