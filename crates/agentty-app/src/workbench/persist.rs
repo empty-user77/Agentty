@@ -5,7 +5,7 @@ use super::panes::{Axis, PaneNode};
 use crate::launch::{home_dir, LaunchSpec, PaneKind};
 use agentty_bridge::model::Agent;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -396,12 +396,34 @@ impl ClosedWindows {
     }
 }
 
+/// An agent a plugin set to one job in its own files (`plugin-data/<id>/…`: a draft, a batch of
+/// replies). Its work was read or given up on when Agentty closed, so it is not brought back —
+/// otherwise every restart revived one idle session per job. The plugin's own shells stay.
+pub fn plugin_job(pane: &PaneSnapshot, plugin_data: &Path) -> bool {
+    pane.kind != PaneKind::Shell && pane.cwd.starts_with(plugin_data)
+}
+
 impl NodeSnapshot {
     pub fn from_tree(tree: &PaneNode<PaneSnapshot>) -> Self {
         match tree {
             PaneNode::Leaf(pane) => NodeSnapshot::Pane(pane.clone()),
             PaneNode::Split { axis, children, sizes } => {
                 NodeSnapshot::Split { axis: *axis, sizes: sizes.clone(), children: children.iter().map(Self::from_tree).collect() }
+            }
+        }
+    }
+
+    /// The layout without the panes `drop` picks; `None` when nothing is left.
+    pub fn without(&self, drop: &impl Fn(&PaneSnapshot) -> bool) -> Option<NodeSnapshot> {
+        match self {
+            NodeSnapshot::Pane(pane) => (!drop(pane)).then(|| self.clone()),
+            NodeSnapshot::Split { axis, sizes, children } => {
+                let (children, sizes): (Vec<_>, Vec<_>) = children
+                    .iter()
+                    .zip(sizes.iter().chain(std::iter::repeat(&0.)))
+                    .filter_map(|(c, s)| Some((c.without(drop)?, *s)))
+                    .unzip();
+                (!children.is_empty()).then_some(NodeSnapshot::Split { axis: *axis, sizes, children })
             }
         }
     }
@@ -635,6 +657,28 @@ mod tests {
         assert_eq!(pane.tool.as_deref(), Some("claude"));
         // A plugin workspace's tab stays the same automation across a restart.
         assert_eq!(back.tabs[0].instance.as_ref().map(|i| i.id.as_str()), Some("a1"));
+    }
+
+    #[test]
+    fn a_plugin_s_finished_jobs_are_not_brought_back() {
+        let pane = |kind: PaneKind, cwd: &str| PaneSnapshot { kind, cwd: cwd.into(), title: cwd.into(), session_id: None, tool: None };
+        let data = Path::new("/data/plugin-data");
+        let mut tree = PaneNode::Leaf(pane(PaneKind::Shell, "/data/plugin-data/x-feed"));
+        tree.split(
+            &pane(PaneKind::Shell, "/data/plugin-data/x-feed"),
+            pane(PaneKind::Claude, "/data/plugin-data/x-feed/files/drafts/d1"),
+            Axis::Vertical,
+        );
+        tree.split(
+            &pane(PaneKind::Claude, "/data/plugin-data/x-feed/files/drafts/d1"),
+            pane(PaneKind::Claude, "/work/app"),
+            Axis::Vertical,
+        );
+        let kept = NodeSnapshot::from_tree(&tree).without(&|p| plugin_job(p, data)).and_then(|l| l.to_tree()).unwrap();
+        let titles: Vec<_> = kept.leaves().into_iter().map(|p| p.title).collect();
+        assert_eq!(titles, ["/data/plugin-data/x-feed", "/work/app"], "the plugin's shell and the user's agent stay");
+        let only_job = NodeSnapshot::Pane(pane(PaneKind::Claude, "/data/plugin-data/x-feed/files/engage/r1"));
+        assert!(only_job.without(&|p| plugin_job(p, data)).is_none());
     }
 
     #[test]

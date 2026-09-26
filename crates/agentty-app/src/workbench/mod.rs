@@ -2682,8 +2682,11 @@ impl Workbench {
 
     fn revive(&mut self, index: usize, snapshot: WorkspaceSnapshot, cx: &mut Context<Self>) {
         let mut tabs = Vec::new();
+        let plugin_data = agentty_bridge::fsutil::data_dir().join("plugin-data");
         for tab in &snapshot.tabs {
-            let Some(tree) = tab.layout.to_tree() else { continue };
+            let Some(tree) = tab.layout.without(&|pane| persist::plugin_job(pane, &plugin_data)).and_then(|layout| layout.to_tree()) else {
+                continue;
+            };
             let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(pane.launch_spec(), cx));
             let leaves = root.leaves();
             let active = leaves.get(tab.active_pane).unwrap_or(&leaves[0]).clone();
