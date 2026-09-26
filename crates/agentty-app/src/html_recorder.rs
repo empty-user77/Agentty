@@ -9,6 +9,7 @@
 #![allow(unexpected_cfgs)] // objc 0.2 macros check a `cargo-clippy` cfg
 
 /// Put in before the page's own scripts: the virtual clock and the error list.
+#[cfg(target_os = "macos")]
 pub const CLOCK_JS: &str = r#"(() => {
   const errors = [];
   window.__agenttyErrors = errors;
@@ -53,6 +54,7 @@ pub const CLOCK_JS: &str = r#"(() => {
 })();"#;
 
 /// Put first in the page: nothing is fetched from anywhere, whatever the page asks for.
+#[cfg(target_os = "macos")]
 pub const NO_NETWORK: &str = r#"<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' data:; script-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:">"#;
 
 #[cfg(target_os = "macos")]

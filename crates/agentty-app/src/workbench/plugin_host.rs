@@ -942,7 +942,6 @@ impl Workbench {
                 Ok(json!({ "width": width, "height": height, "seconds": seconds, "frames": count, "size": size }))
             }
             .await;
-            drop(recorder);
             eprintln!("html-video: {}", result.as_ref().map(Value::to_string).unwrap_or_else(|e| e.clone()));
             let _ = cx.update(|cx| call.reply(result.map_err(|e| (codes::INVALID_PARAMS, e)), cx));
         })
