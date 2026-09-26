@@ -92,7 +92,59 @@ pub struct PluginBrowser {
     pub(super) profile: Option<String>,
     /// The automation (a tab of the plugin's workspace) the page belongs to.
     pub(super) instance: Option<String>,
+    /// How the plugin asked the page to be laid out (`browser/open`, `browser/viewport`).
+    pub(super) layout: PageLayout,
 }
+
+/// A plugin's page laid out as a site needs it, the way responsive mode does for the user: at a
+/// width in CSS pixels drawn smaller (or larger) to fit the panel, and as a phone or a desktop
+/// browser. A site decides which pages to send by the user agent, not the width: a narrow desktop
+/// window gets a squeezed desktop page — Instagram's has no comment box.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageLayout {
+    /// Laid out exactly this wide.
+    pub width: Option<f32>,
+    /// Laid out at least this wide (a wider panel lays it out wider).
+    pub min_width: Option<f32>,
+    /// Asks sites for their phone pages (`true`) or desktop ones; `None`: as the browser does.
+    pub mobile: Option<bool>,
+}
+
+impl PageLayout {
+    /// The layout `params` ask for, on top of `self`: a key left out keeps its value, `null`
+    /// clears it.
+    fn with(mut self, params: &Value) -> Self {
+        let width = |key: &str| params[key].as_f64().map(|w| w.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1) as f32);
+        if params.get("width").is_some() {
+            self.width = width("width");
+        }
+        if params.get("minWidth").is_some() {
+            self.min_width = width("minWidth");
+        }
+        if params.get("mobile").is_some() {
+            self.mobile = params["mobile"].as_bool();
+        }
+        self
+    }
+
+    fn to_json(self) -> Value {
+        json!({ "width": self.width, "minWidth": self.min_width, "mobile": self.mobile })
+    }
+
+    /// The page zoom that lays the page out as asked in a panel `panel` points wide, from the
+    /// user's own `zoom`.
+    pub(super) fn zoom(self, zoom: f64, panel: f32) -> f64 {
+        let panel = panel as f64;
+        match (self.width, self.min_width) {
+            (Some(width), _) if panel > 0. => panel / width as f64,
+            (None, Some(min)) if panel > 0. && panel / zoom < min as f64 => panel / min as f64,
+            _ => zoom,
+        }
+    }
+}
+
+/// The widths a plugin may ask its page to be laid out at.
+const WIDTH_RANGE: (f64, f64) = (320., 2560.);
 
 /// What the plugin named, read fresh on every call: an update may have changed it.
 fn sites_of(plugin: &str, cx: &gpui::App) -> BrowserContribution {
@@ -246,6 +298,24 @@ impl Workbench {
                 });
                 call.reply(result, cx);
             }
+            "browser/viewport" => {
+                let result = match self
+                    .plugin_browsers
+                    .iter_mut()
+                    .find(|page| Some(page.id) == call.params["tabId"].as_u64() && page.plugin == call.plugin)
+                {
+                    Some(page) => {
+                        page.layout = page.layout.with(&call.params);
+                        if let (Some(mobile), Some(view)) = (page.layout.mobile, page.webview.borrow_mut().as_mut()) {
+                            view.set_mobile(mobile);
+                        }
+                        Ok(page.layout.to_json())
+                    }
+                    None => Err((codes::INVALID_PARAMS, "no such browser tab".to_string())),
+                };
+                cx.notify();
+                call.reply(result, cx);
+            }
             "browser/eval" => self.plugin_browser_eval(call, cx),
             "browser/wait" => self.plugin_browser_wait(call, cx),
             "browser/info" => {
@@ -387,9 +457,14 @@ impl Workbench {
         let profile_name = call.params["profile"].as_str().map(str::to_string).filter(|name| name != crate::browser_profiles::DEFAULT);
         let profile =
             crate::browser_profiles::resolve(&call.plugin, profile_name.as_deref(), true).map_err(|e| (codes::INVALID_PARAMS, e))?;
-        let Some(view) = WebView::new_background_in(window, &prefs, profile) else {
+        let Some(mut view) = WebView::new_background_in(window, &prefs, profile) else {
             return Err((codes::UNAVAILABLE, "the in-app browser is not available".into()));
         };
+        let layout = PageLayout::default().with(&call.params);
+        // Before the first load: the site sees the browser it is to see from the start.
+        if let Some(mobile) = layout.mobile {
+            view.set_mobile(mobile);
+        }
         view.load(&url);
         let id = NEXT_PAGE.fetch_add(1, Ordering::Relaxed);
         self.plugin_browsers.push(PluginBrowser {
@@ -402,6 +477,7 @@ impl Workbench {
             sign_in: None,
             profile: profile_name,
             instance: call.params["instance"].as_str().map(str::to_string),
+            layout,
         });
         let requested = call.params["mode"].as_str().and_then(BrowserMode::from_id).unwrap_or(BrowserMode::Auto);
         let visible = match BrowserMode::chosen(&call.plugin, cx) {
@@ -780,6 +856,24 @@ impl Workbench {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_is_laid_out_as_the_plugin_asks() {
+        let min = PageLayout::default().with(&json!({ "minWidth": 1024 }));
+        // Wide enough: the user's zoom stays.
+        assert_eq!(min.zoom(1.0, 1400.), 1.0);
+        assert_eq!(PageLayout::default().zoom(1.25, 700.), 1.25);
+        // Narrower: smaller, so the page still gets its 1024 CSS pixels.
+        assert!((min.zoom(1.0, 700.) * 1024. - 700.).abs() < 1e-3);
+        assert!((min.zoom(1.25, 1000.) * 1024. - 1000.).abs() < 1e-3);
+        // A fixed width: always that wide, larger in a wider panel.
+        let fixed = min.with(&json!({ "width": 390, "mobile": true }));
+        assert!((fixed.zoom(1.0, 780.) - 2.0).abs() < 1e-6);
+        assert_eq!((fixed.min_width, fixed.mobile), (Some(1024.), Some(true)), "what is not named stays");
+        // `null` clears; sizes out of range are brought in.
+        let cleared = fixed.with(&json!({ "width": null, "mobile": null, "minWidth": 99999 }));
+        assert_eq!(cleared, PageLayout { width: None, min_width: Some(2560.), mobile: None });
+    }
 
     #[test]
     fn modes_round_trip_and_unknown_ones_are_auto() {
