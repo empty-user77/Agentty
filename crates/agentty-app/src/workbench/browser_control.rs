@@ -59,6 +59,7 @@ const CONSOLE: &str =
 impl Workbench {
     pub fn browser_command(&mut self, request: BrowserRequest, window: &mut Window, cx: &mut Context<Self>) {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "browser_api" }));
+        self.browser_agent_at = Some(std::time::Instant::now());
         self.run_browser_command(request, 0, window, cx);
     }
 

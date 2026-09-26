@@ -42,6 +42,7 @@ pub const ICONS: &[&str] = &[
     "git-fork",
     "file",
     "lock",
+    "lock-open",
     "graduation-cap",
     "x-twitter",
     "circle-dot",

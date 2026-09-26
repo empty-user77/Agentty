@@ -11,7 +11,7 @@ use super::Workbench;
 use crate::i18n::{t, tf};
 use crate::settings::{settings, LinkOpener};
 use crate::text_input::{TextInput, TextInputEvent};
-use crate::theme::{hex, Chrome};
+use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_only, icon_only_sized, Tooltip, TypeScale};
 use crate::webview::{normalize_url_with, BrowserKey, LoadError, WebView, NET_DETAIL, NET_ENTRIES, NET_TOTALS};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, FontWeight, SharedString, Subscription, Window};
@@ -190,6 +190,9 @@ impl BrowserTab {
     }
 }
 
+/// How long a page counts as the AI's after an agent's last browser command.
+const AGENT_DRIVES_FOR: std::time::Duration = std::time::Duration::from_secs(120);
+
 pub struct BrowserPanel {
     pub(super) tabs: Vec<BrowserTab>,
     pub(super) active: usize,
@@ -204,6 +207,8 @@ pub struct BrowserPanel {
     detail_scroll: gpui::ScrollHandle,
     /// Responsive mode: the page at a device's size.
     pub(super) responsive: super::responsive::Responsive,
+    /// The user unlocked a page an AI drives, to use it themselves (it starts locked).
+    pub(super) unlocked: bool,
     _subscription: Subscription,
 }
 
@@ -285,7 +290,17 @@ impl Workbench {
         }
     }
 
+    /// Whether an AI drives the page in front: a plugin's page, or one an agent sent a command to
+    /// in the last couple of minutes. Such a page cannot be closed, and is locked until unlocked.
+    pub(super) fn browser_driven(&self, browser: &BrowserPanel) -> bool {
+        browser.tab().owner.is_some() || self.browser_agent_at.is_some_and(|at| at.elapsed() < AGENT_DRIVES_FOR)
+    }
+
     pub(super) fn toggle_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // An AI at work in it: the panel stays (closing it would cut the AI off mid-step).
+        if self.browser.as_ref().is_some_and(|browser| self.browser_driven(browser)) {
+            return;
+        }
         if self.browser.take().is_some() {
             crate::webview::focus_gpui_view(window);
             self.focus_active(window, cx);
@@ -439,6 +454,7 @@ impl Workbench {
                 calls_scroll: gpui::ScrollHandle::new(),
                 detail_scroll: gpui::ScrollHandle::new(),
                 responsive: super::responsive::Responsive::new(window, cx),
+                unlocked: false,
                 _subscription: subscription,
             });
             self.watch_browser(cx);
@@ -735,7 +751,6 @@ impl Workbench {
             || self.resume_menu.is_some()
             || self.close_confirm.is_some()
             || self.agent_panel.is_some()
-            || self.plugin_popover_open
             || self.prompt_dialog.is_some()
             || self.harness_dialog.is_some()
             || self.onboarding.as_ref().is_some_and(|o| o.is_modal())
@@ -793,6 +808,12 @@ impl Workbench {
                 view.hide();
             }
         }
+        // An AI drives it: locked against the user's clicks until they unlock it.
+        let driven = self.browser_driven(browser);
+        let locked = driven && !browser.unlocked;
+        // A plugin's settings card beside its panel: the page steps right to leave it room and
+        // stays in sight (hiding it would look like the AI stopped).
+        let make_room = if self.plugin_popover_open { super::plugin_panel::POPOVER_WIDTH + 16. } else { 0. };
         // The native view is positioned over this element after layout. In responsive mode the
         // element is the device-sized frame and the page zoom lays it out at the device's width.
         let placeholder = webview.clone();
@@ -804,7 +825,12 @@ impl Workbench {
             |_, _, _| {},
             move |bounds, _, _, _| {
                 if let Some(view) = placeholder.borrow_mut().as_mut() {
+                    view.set_locked(locked);
                     if !covered {
+                        let mut bounds = bounds;
+                        let room = px(make_room).min(bounds.size.width - px(200.)).max(px(0.));
+                        bounds.origin.x += room;
+                        bounds.size.width -= room;
                         view.set_zoom(zoom);
                         view.set_frame(bounds);
                     }
@@ -829,9 +855,12 @@ impl Workbench {
                 .h_full()
                 .flex()
                 .flex_col()
-                .bg(hex(0xffffff))
+                // White behind a page (no dark flash as it loads); the app's own colour where the
+                // page stepped aside for a plugin's settings card.
+                .bg(hex(if make_room > 0. { Chrome::EDITOR } else { 0xffffff }))
                 .child(self.render_browser_tabs(browser, cx))
                 .child(self.render_browser_toolbar(browser, cx))
+                .children(locked.then(|| self.render_lock_bar(cx)))
                 .children(self.render_sign_in_banner(tab.owner, cx))
                 .children(self.render_responsive_bar(&browser.responsive, cx))
                 .child(progress_bar(tab.loading || tab.finishing(), tab.progress))
@@ -1023,7 +1052,62 @@ impl Workbench {
                     cx.notify();
                 }),
             ))
-            .child(icon_only("browser-close", "x", cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx))))
+            // An AI at work in it: no closing, a lock instead (locked: the user's clicks are held
+            // off; unlocked: the page is theirs, as usual).
+            .child(if self.browser_driven(browser) {
+                let unlocked = browser.unlocked;
+                icon_only(
+                    "browser-lock",
+                    if unlocked { "lock-open" } else { "lock" },
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if let Some(browser) = this.browser.as_mut() {
+                            browser.unlocked = !unlocked;
+                        }
+                        cx.notify();
+                    }),
+                )
+                .tooltip(Tooltip::text(t(cx, if unlocked { "browser.lock" } else { "browser.unlock" }), None))
+                .into_any_element()
+            } else {
+                icon_only("browser-close", "x", cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)))
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
+
+    /// The line under the toolbar while an AI drives the page and it is locked: the same banner as
+    /// the plugin sign-in one (`render_sign_in_banner`), in the accent colour.
+    fn render_lock_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            // Solid and dark: the page area under it is white, and a tint would wash out.
+            .bg(hex(Chrome::EDITOR))
+            .border_b_2()
+            .border_color(hex(Chrome::ACCENT))
+            .child(icon("lock", 14., hex(Chrome::ACCENT)))
+            .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::BRIGHT)).child(t(cx, "browser.locked_notice")))
+            .child(
+                div()
+                    .id("browser-unlock")
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .t_small()
+                    .text_color(hex(Chrome::FOREGROUND))
+                    .hover(|d| d.bg(hex_alpha(Chrome::FOREGROUND, 0.1)))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if let Some(browser) = this.browser.as_mut() {
+                            browser.unlocked = true;
+                        }
+                        cx.notify();
+                    }))
+                    .child(t(cx, "browser.unlock")),
+            )
             .into_any_element()
     }
 }

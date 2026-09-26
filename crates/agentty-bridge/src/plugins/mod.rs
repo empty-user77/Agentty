@@ -56,6 +56,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("files/pick", Some("files")),
     // An SVG of the plugin's folder drawn into a PNG beside it (an image an agent wrote as code).
     ("media/svgToPng", Some("files")),
+    // SVG scenes of the plugin's folder made into a short MP4 beside them.
+    ("media/svgsToVideo", Some("files")),
     ("prompt/inject", Some("prompt.inject")),
     // Only a terminal `prompt/inject` opened for the plugin: what it opened, it may close.
     ("terminal/close", Some("prompt.inject")),

@@ -43,7 +43,7 @@ fn gap(gap: Gap) -> gpui::Pixels {
 }
 
 /// A popover's card: wide enough for a step's settings, and scrolling past this height.
-const POPOVER_WIDTH: f32 = 380.;
+pub(super) const POPOVER_WIDTH: f32 = 380.;
 const POPOVER_MAX_HEIGHT: f32 = 640.;
 
 /// A `flow` step's icon box, and where the line joining the steps runs: under its middle.
