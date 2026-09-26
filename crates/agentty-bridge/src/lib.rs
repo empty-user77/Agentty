@@ -31,6 +31,7 @@ pub mod process;
 pub mod protobuf;
 pub mod secret_store;
 pub mod service_status;
+pub mod sync;
 pub mod update;
 pub mod usage;
 pub mod worktree;
@@ -147,6 +148,17 @@ fn transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
 /// one stops growing. Reading it forever freezes the model, the context meter and the subagent count
 /// at whatever they were when the fork happened. Whichever transcript was written most recently is
 /// the live one.
+/// The newest session of `agent` in `cwd` written after `since_ms`, from its files.
+pub fn find_recent(agent: Agent, cwd: &std::path::Path, since_ms: u64) -> Option<String> {
+    match agent {
+        Agent::Claude => claude::find_recent(cwd, since_ms),
+        Agent::Codex => codex::find_recent(cwd, since_ms),
+        Agent::Gemini => gemini::find_recent(cwd, since_ms),
+        Agent::Kimi => kimi::find_recent(cwd, since_ms),
+        Agent::Agy | Agent::Amp => None,
+    }
+}
+
 pub fn live_session_id(agent: Agent, pinned: Option<String>, recent: Option<String>) -> Option<String> {
     pick_live(pinned, recent, |id| transcript_path(agent, id).map(|p| fsutil::mtime_ms(&p)).unwrap_or(0))
 }

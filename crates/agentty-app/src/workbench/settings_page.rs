@@ -45,17 +45,20 @@ pub enum SettingsSection {
     Shortcuts,
     /// Desktop notifications and messages to chat services.
     Notifications,
+    /// Workspaces and sessions synced through a private git repository.
+    Sync,
     /// Helper tools on Windows / Linux (hidden on macOS).
     System,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 11] = [
         Self::General,
         Self::Project,
         Self::Accounts,
         Self::Notifications,
+        Self::Sync,
         Self::Appearance,
         Self::Browser,
         Self::Aliases,
@@ -82,6 +85,7 @@ impl SettingsSection {
             Self::Aliases => "settings.aliases",
             Self::Shortcuts => "settings.shortcuts",
             Self::Notifications => "settings.notifications",
+            Self::Sync => "settings.sync",
             Self::System => "settings.system",
             Self::About => "settings.about",
         }
@@ -97,6 +101,7 @@ impl SettingsSection {
             Self::Aliases => "tag",
             Self::Shortcuts => "command",
             Self::Notifications => "bell",
+            Self::Sync => "cloud",
             Self::System => "wrench",
             Self::About => "sparkles",
         }
@@ -1530,6 +1535,7 @@ impl Workbench {
             SettingsSection::Aliases => aliases.into_any_element(),
             SettingsSection::Shortcuts => render_shortcuts(cx).into_any_element(),
             SettingsSection::Notifications => self.render_notification_settings(window, cx).into_any_element(),
+            SettingsSection::Sync => self.render_sync_settings(window, cx).into_any_element(),
             SettingsSection::System => self.render_system_check(cx).into_any_element(),
             SettingsSection::Browser => self.render_browser_settings(window, cx).into_any_element(),
             SettingsSection::About => self.render_about(cx).into_any_element(),

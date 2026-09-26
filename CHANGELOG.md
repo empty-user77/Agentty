@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Session sync: workspaces and their agent sessions follow you between computers through a private
+  git repository you own, connected with the GitHub CLI or plain git (Settings → Sync). A workspace
+  syncs when its agents are idle — after a turn, when a tab closes, every five minutes when nothing
+  happens, or on demand — and the sync icon next to the notifications shows its sessions from every
+  computer. Continue one here, bring back sessions this computer does not have (Session history →
+  Synced), see branches when two computers went on separately, and hand a session's context to the
+  agent in front. Sync stops if the repository becomes public.
+
 ### Fixed
 - Longer translations and narrow windows no longer push buttons, labels and links past the edge of
   their panel or over the one beside it: the plugin list, the Monitoring, Usage and Plugins headers,
