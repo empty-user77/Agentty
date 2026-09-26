@@ -472,9 +472,11 @@ impl Workbench {
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        // At least 30px tall; a label that doesn't fit the tour card wraps and the button grows with it.
         div()
             .id(id)
-            .h(px(30.))
+            .min_w_0()
+            .min_h(px(30.))
             .px_4()
             .flex()
             .items_center()

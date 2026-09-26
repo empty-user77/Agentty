@@ -101,6 +101,7 @@ impl Workbench {
             .child(
                 div()
                     .id("file-diff-open")
+                    .flex_shrink_0()
                     .px_2()
                     .py_0p5()
                     .rounded_sm()
@@ -117,6 +118,7 @@ impl Workbench {
             .child(
                 div()
                     .id("file-diff-close")
+                    .flex_shrink_0()
                     .px_1()
                     .rounded_sm()
                     .cursor_pointer()

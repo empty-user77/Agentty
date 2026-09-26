@@ -495,8 +495,16 @@ impl Workbench {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(crate::brand::avatar(crate::brand::kind_id(picker.choice.kind()), 16.))
-                            .child(div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title)),
+                            .child(div().flex_shrink_0().child(crate::brand::avatar(crate::brand::kind_id(picker.choice.kind()), 16.)))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .t_title()
+                                    .font_weight(crate::theme::EMPHASIS)
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .child(title),
+                            ),
                     )
                     .child(
                         div()

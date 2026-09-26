@@ -747,7 +747,7 @@ impl Workbench {
             });
         }
         if panes.is_empty() && !demo {
-            area = area.child(div().absolute().top(px(40.)).left(px(40.)).child(hint(t(cx, "flow.empty"))));
+            area = area.child(div().absolute().top(px(40.)).left(px(40.)).right(px(40.)).child(hint(t(cx, "flow.empty"))));
         }
 
         div()
@@ -764,8 +764,15 @@ impl Workbench {
                     .gap_3()
                     .border_b_1()
                     .border_color(hex(Chrome::BORDER))
-                    .child(div().t_large().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.flow")))
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "flow.hint"))),
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .t_large()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(t(cx, "page.flow")),
+                    )
+                    .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "flow.hint"))),
             )
             .child(area)
     }
@@ -891,7 +898,7 @@ impl Workbench {
                                 .gap_1p5()
                                 .min_w_0()
                                 .child(div().flex_shrink_0().size(px(8.)).rounded_sm().bg(hex(color)))
-                                .child(div().truncate().text_color(hex(Chrome::FOREGROUND)).child(label)),
+                                .child(div().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(label)),
                         )
                     })
                     .child(div().truncate().text_color(hex(Chrome::MUTED)).child(tilde(&view.display_cwd()))),

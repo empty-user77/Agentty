@@ -223,6 +223,7 @@ impl Workbench {
         let field = |input: &Entity<TextInput>| {
             div()
                 .w(px(52.))
+                .flex_shrink_0()
                 .px_1p5()
                 .py_0p5()
                 .rounded_sm()
@@ -244,6 +245,7 @@ impl Workbench {
                 .justify_center()
                 .gap_2()
                 .px_2()
+                .overflow_hidden()
                 .border_b_1()
                 .border_color(hex(Chrome::BORDER))
                 .bg(hex(Chrome::SIDE_BAR))
@@ -252,6 +254,7 @@ impl Workbench {
                 .child(
                     div()
                         .id("browser-device-menu")
+                        .min_w_0()
                         .flex()
                         .items_center()
                         .gap_1()
@@ -260,7 +263,8 @@ impl Workbench {
                         .rounded_sm()
                         .cursor_pointer()
                         .hover(|s| s.bg(hex(Chrome::HOVER)))
-                        .child(device)
+                        // In a narrow browser panel the device name and the scale give way, not the fields.
+                        .child(div().min_w_0().truncate().child(device))
                         .child(icon("chevron-down", crate::ui::IconSize::INLINE, hex(Chrome::MUTED)))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             if let Some(browser) = this.browser.as_mut() {
@@ -282,7 +286,11 @@ impl Workbench {
                     )
                     .tooltip(crate::ui::Tooltip::text(t(cx, "browser.responsive_rotate"), None)),
                 )
-                .child(div().text_color(hex(Chrome::MUTED)).child(tf(cx, "browser.responsive_scale", &[("n", &scale.to_string())])))
+                .child(div().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(tf(
+                    cx,
+                    "browser.responsive_scale",
+                    &[("n", &scale.to_string())],
+                )))
                 .into_any_element(),
         )
     }

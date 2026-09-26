@@ -12,6 +12,7 @@ use crate::theme::{hex, hex_alpha, themes_dir, Chrome, TerminalTheme};
 use crate::ui::TypeScale;
 use crate::ui::{action_button, chip};
 use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, PathPromptOptions, SharedString, Subscription, Window};
+use std::cell::Cell;
 
 /// Input for adding a harness pattern.
 pub struct HarnessPatternForm {
@@ -341,10 +342,8 @@ fn prevent_sleep_duration(hours: u32, cx: &mut Context<Workbench>) -> Div {
         }
     };
     let timed = hours > 0;
-    div()
-        .flex()
+    chip_row()
         .items_center()
-        .gap_1()
         .child(chip("prevent-sleep-always", t(cx, "settings.prevent_sleep_always"), !timed, set(0)))
         .child(chip("prevent-sleep-timed", t(cx, "settings.prevent_sleep_timed"), timed, set(if timed { hours } else { 1 })))
         .when(timed, |d| {
@@ -371,34 +370,81 @@ fn hours_minutes(seconds: u64, cx: &gpui::App) -> String {
     }
 }
 
+thread_local! {
+    /// Width of the settings column on the last frame, and whether this frame lays rows out stacked.
+    static COLUMN_WIDTH: Cell<f32> = const { Cell::new(0.) };
+    static NARROW: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Below this column width a row stacks its label and control: side by side, a long translation or a wide chip
+/// row either squeezes the label to a word per line or runs past the page's edge.
+const NARROW_BELOW: f32 = 560.;
+
+/// Decides the layout of the rows about to be built, from the column's width on the last frame.
+fn start_settings_frame() {
+    let width = COLUMN_WIDTH.with(Cell::get);
+    NARROW.with(|narrow| narrow.set(width > 0. && width < NARROW_BELOW));
+}
+
+/// Records the column's width; a change that flips the layout draws the page again.
+fn measure_settings_column() -> impl IntoElement {
+    gpui::canvas(
+        |bounds, window, _| {
+            // The column's box includes its padding (`px_8`): the rows get what is inside it.
+            let width = f32::from(bounds.size.width) - 64.;
+            let before = COLUMN_WIDTH.with(|w| w.replace(width));
+            if (before > 0. && before < NARROW_BELOW) != (width < NARROW_BELOW) {
+                window.refresh();
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+}
+
+fn narrow() -> bool {
+    NARROW.with(Cell::get)
+}
+
+/// A row of chips. In the narrow layout it wraps onto more lines (it then sits in a column of its own width).
+fn chip_row() -> Div {
+    div().flex().gap_1().when(narrow(), |d| d.flex_wrap().justify_end())
+}
+
+/// Label above, control below and right-aligned: the narrow layout of a settings row.
+fn stacked_row(label: impl IntoElement, control: impl IntoElement) -> Div {
+    div().flex().flex_col().gap_1p5().child(label).child(div().flex().justify_end().child(control))
+}
+
 fn row(label: &str, control: impl IntoElement) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_4()
-        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string()))
-        .child(control)
+    let label = div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string());
+    if narrow() {
+        return stacked_row(label, control);
+    }
+    div().flex().items_center().justify_between().gap_4().child(label).child(control)
 }
 
 /// A row whose label has a second, muted line explaining it.
 pub(super) fn row_with_hint(label: &str, hint: &str, control: impl IntoElement) -> Div {
+    let text = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap_0p5()
+        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string()))
+        .child(div().t_small().text_color(hex(Chrome::MUTED)).child(hint.to_string()));
+    if narrow() {
+        return stacked_row(text, control);
+    }
     div()
         .flex()
         .items_center()
         .justify_between()
         .gap_4()
         // A long hint wraps inside its column: the control stays in line with those of the other rows.
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string()))
-                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(hint.to_string())),
-        )
+        .child(text)
         .child(div().flex_shrink_0().child(control))
 }
 
@@ -512,7 +558,7 @@ impl Workbench {
         use crate::settings::{LinkOpener, SearchEngine};
         let prefs = settings(cx).clone();
         let b = prefs.browser.clone();
-        let mut engines = div().flex().gap_1();
+        let mut engines = chip_row();
         for engine in SearchEngine::ALL {
             engines = engines.child(chip(
                 SharedString::from(format!("engine-{engine:?}")),
@@ -538,11 +584,12 @@ impl Workbench {
                     .child(row_with_hint(
                         t(cx, "settings.link_opener"),
                         t(cx, "settings.link_inapp_hint"),
-                        div()
-                            .flex()
-                            .gap_1()
-                            .child(opener("link-external", "settings.link_external", LinkOpener::External, cx))
-                            .child(opener("link-inapp", "settings.link_inapp", LinkOpener::InApp, cx)),
+                        chip_row().child(opener("link-external", "settings.link_external", LinkOpener::External, cx)).child(opener(
+                            "link-inapp",
+                            "settings.link_inapp",
+                            LinkOpener::InApp,
+                            cx,
+                        )),
                     ))
                     .child(row(t(cx, "settings.search_engine"), engines))
                     .child(row(
@@ -701,6 +748,7 @@ impl Workbench {
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .gap_2()
                             .child(link("about-website", "agentty.run".into(), super::update::WEBSITE))
                             .child(action_button("about-docs", t(cx, "about.guide"), move |_, _, cx| {
@@ -760,7 +808,7 @@ impl Workbench {
         let form = self.harness_pattern_form(window, cx);
         let (input, invalid) = (form.input.clone(), form.invalid);
 
-        let mut agents = div().flex().gap_1();
+        let mut agents = chip_row();
         for (choice, label) in [
             (HarnessAgent::Auto, t(cx, "settings.harness_agent_auto")),
             (HarnessAgent::Claude, "Claude Code"),
@@ -1059,11 +1107,12 @@ impl Workbench {
     }
 
     pub(super) fn render_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        start_settings_frame();
         let aliases = self.render_aliases(window, cx);
         let prefs = settings(cx).clone();
         let themes = cx.global::<SettingsStore>().themes.clone();
 
-        let mut languages = div().flex().gap_1();
+        let mut languages = chip_row();
         for language in Language::ALL {
             languages = languages.child(chip(
                 SharedString::from(format!("lang-{language:?}")),
@@ -1086,7 +1135,7 @@ impl Workbench {
             theme_grid = theme_grid.child(row);
         }
 
-        let mut fonts = div().flex().gap_1().justify_end();
+        let mut fonts = chip_row().justify_end();
         // Enumerating system fonts is slow; do it once per app run.
         let installed = self.installed_fonts.get_or_insert_with(|| installed_font_families(cx.text_system().all_font_names())).clone();
         // Nothing picked: the default (on macOS in Korean, D2Coding when installed).
@@ -1183,7 +1232,7 @@ impl Workbench {
             list
         });
 
-        let mut advisors = div().flex().gap_1();
+        let mut advisors = chip_row();
         for choice in crate::settings::AdvisorChoice::ALL {
             advisors = advisors.child(chip(
                 SharedString::from(format!("advisor-{choice:?}")),
@@ -1193,7 +1242,7 @@ impl Workbench {
             ));
         }
 
-        let mut bar_positions = div().flex().gap_1();
+        let mut bar_positions = chip_row();
         for (position, key) in
             [(crate::hud::HudPosition::Top, "settings.position_top"), (crate::hud::HudPosition::Bottom, "settings.position_bottom")]
         {
@@ -1205,7 +1254,7 @@ impl Workbench {
             ));
         }
 
-        let mut cursors = div().flex().gap_1();
+        let mut cursors = chip_row();
         for (shape, key) in [
             (CursorShapeSetting::Block, "settings.cursor.block"),
             (CursorShapeSetting::Beam, "settings.cursor.beam"),
@@ -1517,7 +1566,7 @@ impl Workbench {
                         crate::ui::IconSize::INLINE,
                         hex(if active { Chrome::BRIGHT } else { Chrome::MUTED }),
                     ))
-                    .child(t(cx, section.label()))
+                    .child(div().flex_1().min_w_0().truncate().child(t(cx, section.label())))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.settings_section = section;
                         this.settings_scroll = gpui::ScrollHandle::new();
@@ -1531,11 +1580,13 @@ impl Workbench {
             div().relative().group(crate::ui::SCROLL_GROUP).flex_1().min_w_0().h_full().child(crate::ui::scrollbar(scroll.clone())).child(
                 div().id("settings-page").size_full().overflow_y_scroll().track_scroll(&scroll).child(
                     div()
+                        .relative()
                         .max_w(px(820.))
                         .px_8()
                         .py_6()
                         .flex()
                         .flex_col()
+                        .child(measure_settings_column())
                         .child(
                             div()
                                 .t_heading()

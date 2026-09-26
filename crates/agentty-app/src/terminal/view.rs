@@ -203,6 +203,7 @@ pub fn classify_screen(lines: &[String]) -> ScreenState {
 struct Layout {
     /// Top-left of the element (the text origin adds padding).
     bounds_origin: Point<Pixels>,
+    bounds_width: Pixels,
     bounds_height: Pixels,
     origin: Point<Pixels>,
     cell_width: Pixels,
@@ -1704,11 +1705,15 @@ impl TerminalView {
             LinkTarget::Path(path) if path.is_dir() => crate::i18n::t(cx, "terminal.open_folder"),
             LinkTarget::Path(_) => crate::i18n::t(cx, "terminal.open_file"),
         };
+        // Kept inside the pane when the link sits near its right edge (a narrow split, a long translation).
+        let width = px(label.chars().map(|c| if c.is_ascii() { 6.5 } else { 12. }).sum::<f32>() + 20.);
+        let x = x.min(layout.bounds_width - width - px(4.)).max(px(4.));
         Some(
             div()
                 .absolute()
-                .left(x.max(px(4.)))
+                .left(x)
                 .top(y.max(px(0.)))
+                .whitespace_nowrap()
                 .px_2()
                 .py(px(3.))
                 .rounded_md()
@@ -2229,6 +2234,7 @@ impl Element for TerminalElement {
         view.update(cx, |view, _| {
             view.layout = Some(Layout {
                 bounds_origin: bounds.origin,
+                bounds_width: bounds.size.width,
                 bounds_height: bounds.size.height,
                 origin,
                 cell_width,

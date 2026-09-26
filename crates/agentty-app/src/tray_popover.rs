@@ -204,11 +204,12 @@ impl TrayPopover {
                             .gap_1p5()
                             .t_caption()
                             .text_color(hex(Chrome::MUTED))
-                            .when(working > 0, |d| d.child(div().size(px(6.)).rounded_full().bg(hex(Chrome::ORANGE))))
-                            .child(summary)
+                            .when(working > 0, |d| d.child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(Chrome::ORANGE))))
+                            .child(div().min_w_0().truncate().child(summary))
                             .when(waiting > 0, |d| {
                                 d.child(
                                     div()
+                                        .flex_shrink_0()
                                         .px_1p5()
                                         .rounded_sm()
                                         .bg(hex_alpha(Chrome::ATTENTION, 0.18))

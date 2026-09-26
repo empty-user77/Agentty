@@ -454,6 +454,7 @@ impl Workbench {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(action_button(
                         "claude-auth-save",
@@ -531,6 +532,7 @@ impl Workbench {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(action_button(
                         "codex-auth-save",

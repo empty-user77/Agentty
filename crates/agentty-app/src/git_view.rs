@@ -877,12 +877,18 @@ impl GitView {
     fn render_branch_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.snapshot.status.branch.clone().unwrap_or_default();
         let Some((picker, _)) = &self.branch_picker else { return div().into_any_element() };
-        let tabs =
-            div().flex().border_b_1().border_color(hex(Chrome::BORDER)).child(
-                div().px_3().py_2().t_body().text_color(hex(Chrome::BRIGHT)).border_b_2().border_color(hex(Chrome::ACCENT)).child(
-                    if self.merge_mode { tf(cx, "git.merge_into", &[("branch", &current)]) } else { t(cx, "git.branches").to_string() },
-                ),
-            );
+        let tabs = div().flex().border_b_1().border_color(hex(Chrome::BORDER)).child(
+            div()
+                .min_w_0()
+                .truncate()
+                .px_3()
+                .py_2()
+                .t_body()
+                .text_color(hex(Chrome::BRIGHT))
+                .border_b_2()
+                .border_color(hex(Chrome::ACCENT))
+                .child(if self.merge_mode { tf(cx, "git.merge_into", &[("branch", &current)]) } else { t(cx, "git.branches").to_string() }),
+        );
         let footer = div().p_2().border_t_1().border_color(hex(Chrome::BORDER)).child(
             div()
                 .id("git-merge-toggle")
@@ -896,11 +902,12 @@ impl GitView {
                 .bg(hex(if self.merge_mode { Chrome::ACCENT } else { 0x2d2d30 }))
                 .text_color(hex(Chrome::BRIGHT))
                 .hover(|s| s.bg(hex(Chrome::ACCENT)))
-                .child(if self.merge_mode {
+                // A long branch name is cut short inside the menu's fixed width.
+                .child(div().min_w_0().truncate().child(if self.merge_mode {
                     t(cx, "git.cancel_merge").to_string()
                 } else {
                     tf(cx, "git.choose_merge", &[("branch", &current)])
-                })
+                }))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.merge_mode = !this.merge_mode;
                     cx.notify();

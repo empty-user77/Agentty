@@ -360,10 +360,10 @@ impl Workbench {
             .gap_2()
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
-            .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title))
-            .children(sub.map(|s| div().t_small().text_color(hex(Chrome::MUTED)).child(s)))
-            .child(div().flex_1())
-            .children(right)
+            .child(div().flex_shrink_0().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title))
+            // The explanation gives way to the button when the page is narrow or the button's label long.
+            .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::MUTED)).children(sub))
+            .children(right.map(|right| div().flex_shrink_0().child(right)))
     }
 
     /// Build output and caches, one row per project (its folders listed when opened).

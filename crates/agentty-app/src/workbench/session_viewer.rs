@@ -73,7 +73,8 @@ impl Workbench {
         let button = |id: &'static str, label: String, primary: bool| {
             div()
                 .id(id)
-                .flex_shrink_0()
+                .min_w_0()
+                .truncate()
                 .flex()
                 .items_center()
                 .gap_1p5()
@@ -87,6 +88,8 @@ impl Workbench {
                 .hover(|s| s.opacity(0.85))
                 .child(label)
         };
+        // In a narrow pane (or with a long translation) the buttons' labels are cut short instead of running past
+        // its edge, and the title keeps a readable start. Nothing changes while it fits.
         let header = div()
             .flex_shrink_0()
             .px_5()
@@ -100,7 +103,7 @@ impl Workbench {
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(120.))
                     .flex()
                     .flex_col()
                     .gap_0p5()
@@ -122,7 +125,10 @@ impl Workbench {
                             .child("·")
                             .child(relative_time(now, session.updated_at))
                             .children(
-                                session.cwd.as_ref().map(|c| div().truncate().child(format!("· {}", tilde(std::path::Path::new(c))))),
+                                session
+                                    .cwd
+                                    .as_ref()
+                                    .map(|c| div().min_w_0().truncate().child(format!("· {}", tilde(std::path::Path::new(c))))),
                             ),
                     ),
             )

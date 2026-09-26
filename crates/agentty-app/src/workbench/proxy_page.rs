@@ -198,7 +198,9 @@ impl Workbench {
         let recording_heads = capture::records_heads();
         let heads = div()
             .id("proxy-heads")
-            .flex_shrink_0()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
             .h(px(28.))
             .px_3()
             .flex()
@@ -227,7 +229,9 @@ impl Workbench {
         let system = crate::platform::system_proxy::supported().then(|| {
             div()
                 .id("proxy-system")
-                .flex_shrink_0()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
                 .h(px(28.))
                 .px_3()
                 .flex()
@@ -256,6 +260,8 @@ impl Workbench {
             (false, Some(_)) => t(cx, "proxy.state_paused").to_string(),
             _ => t(cx, "proxy.state_off").to_string(),
         };
+        // When the row doesn't fit (a narrow window, a long translation) the state gives way first, then the
+        // buttons' labels are cut short; the start/stop button stays whole. Nothing changes while it fits.
         let header = div()
             .flex()
             .items_center()
@@ -270,33 +276,48 @@ impl Workbench {
                     .text_color(hex(if recording { Chrome::SUCCESS } else { Chrome::MUTED }))
                     .child(state),
             )
-            .child(action_button(
-                "proxy-new-tab",
-                t(cx, "proxy.new_tab"),
-                cx.listener(|this, _: &ClickEvent, window, cx| {
-                    // A tab gets the proxy when it starts: make sure capture is on before it does.
-                    if !capture::is_recording() {
-                        this.proxy.error = capture::start().err().map(|err| err.to_string());
-                    }
-                    this.request_launch(crate::launch::PaneKind::Shell, super::LaunchTarget::NewTab, window, cx);
-                }),
-            ))
+            .child(
+                action_button(
+                    "proxy-new-tab",
+                    t(cx, "proxy.new_tab"),
+                    cx.listener(|this, _: &ClickEvent, window, cx| {
+                        // A tab gets the proxy when it starts: make sure capture is on before it does.
+                        if !capture::is_recording() {
+                            this.proxy.error = capture::start().err().map(|err| err.to_string());
+                        }
+                        this.request_launch(crate::launch::PaneKind::Shell, super::LaunchTarget::NewTab, window, cx);
+                    }),
+                )
+                .flex_shrink()
+                .min_w_0()
+                .truncate(),
+            )
             // Panes that were already open keep the environment they started with; typing the
             // variables into their shell is the one way to route them without restarting them.
-            .child(action_button(
-                "proxy-apply-open",
-                t(cx, "proxy.apply_open"),
-                cx.listener(|this, _: &ClickEvent, _, cx| this.apply_capture_to_open_panes(cx)),
-            ))
-            .child(action_button(
-                "proxy-clear",
-                t(cx, "proxy.clear"),
-                cx.listener(|this, _: &ClickEvent, _, cx| {
-                    capture::clear();
-                    this.proxy.endpoint = None;
-                    cx.notify();
-                }),
-            ))
+            .child(
+                action_button(
+                    "proxy-apply-open",
+                    t(cx, "proxy.apply_open"),
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.apply_capture_to_open_panes(cx)),
+                )
+                .flex_shrink()
+                .min_w_0()
+                .truncate(),
+            )
+            .child(
+                action_button(
+                    "proxy-clear",
+                    t(cx, "proxy.clear"),
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        capture::clear();
+                        this.proxy.endpoint = None;
+                        cx.notify();
+                    }),
+                )
+                .flex_shrink()
+                .min_w_0()
+                .truncate(),
+            )
             .child(heads)
             .children(system)
             .child(toggle);
@@ -391,9 +412,9 @@ impl Workbench {
             .font_weight(crate::theme::EMPHASIS)
             .text_color(hex(Chrome::MUTED))
             .child(div().w(px(64.)).flex_shrink_0().child(t(cx, "proxy.col_time")))
-            .child(div().w(px(130.)).flex_shrink_0().child(t(cx, "proxy.col_tab")))
-            .child(div().w(px(70.)).flex_shrink_0().child(t(cx, "proxy.col_method")))
-            .child(div().flex_1().min_w_0().child(t(cx, "proxy.col_endpoint")))
+            .child(div().w(px(130.)).min_w(px(48.)).truncate().child(t(cx, "proxy.col_tab")))
+            .child(div().w(px(70.)).flex_shrink_0().truncate().child(t(cx, "proxy.col_method")))
+            .child(div().flex_1().min_w(px(72.)).truncate().child(t(cx, "proxy.col_endpoint")))
             .child(div().w(px(52.)).flex_shrink_0().child(t(cx, "proxy.col_status")))
             .child(div().w(px(76.)).flex_shrink_0().text_right().child(format!("↑ {}", bytes(sent))))
             .child(div().w(px(76.)).flex_shrink_0().text_right().child(format!("↓ {}", bytes(received))))
@@ -680,13 +701,13 @@ impl Workbench {
             }))
             .when_some(record.error.clone(), |d, error| d.tooltip(crate::ui::Tooltip::text(error, None)))
             .child(div().w(px(64.)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(clock(record.started_ms)))
-            .child(div().w(px(130.)).flex_shrink_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(self.pane_title(record.pane, cx)))
+            .child(div().w(px(130.)).min_w(px(48.)).truncate().text_color(hex(Chrome::FOREGROUND)).child(self.pane_title(record.pane, cx)))
             .child(div().w(px(70.)).flex_shrink_0().text_color(hex(method_color)).child(record.method.clone()))
             .child(
                 div()
                     .id(("proxy-row-endpoint", index))
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(72.))
                     .flex()
                     .gap_1()
                     .cursor_pointer()

@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Longer translations and narrow windows no longer push buttons, labels and links past the edge of
+  their panel or over the one beside it: the plugin list, the Monitoring, Usage and Plugins headers,
+  Settings rows and links, the session list, dialogs, the start page footer and more. Wide windows
+  look as before.
+
 ## [0.2.1] - 2026-09-25
 
 ### Added

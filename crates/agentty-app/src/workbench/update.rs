@@ -484,6 +484,7 @@ impl Workbench {
                     tf(cx, body_key, &[("current", CURRENT_VERSION), ("version", &release.version)]),
                     div()
                         .flex()
+                        .flex_wrap()
                         .gap_2()
                         .child(button("update-notes", t(cx, "update.notes").into(), false).on_click(move |_, _, cx| cx.open_url(&page)))
                         .child(button("update-later", t(cx, "update.later").into(), false).on_click(later))
