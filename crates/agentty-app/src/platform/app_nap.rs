@@ -1,5 +1,3 @@
-#![allow(unexpected_cfgs)] // objc 0.2 macros check a `cargo-clippy` cfg
-
 //! Keeps plugin work going while nobody looks: out of sight (a locked screen, a covered or minimized
 //! window) macOS puts an app into App Nap and stretches its timers from seconds into minutes, and a
 //! plugin's automation waiting on one of them stops for as long as the screen stays locked.
@@ -7,6 +5,8 @@
 //! Held as an `NSProcessInfo` activity, in one of two strengths: while a plugin runs, App Nap is
 //! off (the machine may still sleep on its own schedule); while an automation reports it is working,
 //! idle system sleep waits for it too. Other platforms have no App Nap: nothing to do there.
+
+#![allow(unexpected_cfgs)] // objc 0.2 macros check a `cargo-clippy` cfg
 
 /// How much of the system's saving is held off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
