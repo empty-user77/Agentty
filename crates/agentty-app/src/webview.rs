@@ -704,6 +704,22 @@ impl WebView {
             if background && unthrottled == YES {
                 let _: () = msg_send![preferences, setInactiveSchedulingPolicy: 2isize];
             }
+            // A plugin's page works while nobody looks — a locked screen included, where the
+            // policy above is not enough: hidden-page timer throttling and the web process's own
+            // App Nap ("process suppression") are turned off too. WebKit's own switches, asked
+            // for only where this WebKit has them.
+            if background {
+                for switch in [
+                    sel!(_setHiddenPageDOMTimerThrottlingEnabled:),
+                    sel!(_setHiddenPageDOMTimerThrottlingAutoIncreases:),
+                    sel!(_setPageVisibilityBasedProcessSuppressionEnabled:),
+                ] {
+                    let has: BOOL = msg_send![preferences, respondsToSelector: switch];
+                    if has == YES {
+                        let _: () = objc::__send_message(preferences, switch, (NO,)).unwrap_or(());
+                    }
+                }
+            }
             // Safari's own tail on the user agent. Without it the page sees an app's embedded
             // browser, and some sites refuse to sign anyone in there.
             if !prefs.mobile {
@@ -743,6 +759,15 @@ impl WebView {
                 return None;
             }
             let _: () = msg_send![view, setAllowsBackForwardNavigationGestures: YES];
+            // Out of sight is not "hidden" for a plugin's page: a covered window or a locked screen
+            // would otherwise make WebKit stop drawing it, and a site that loads more as it is
+            // drawn (an endless timeline) then never loads the next posts.
+            if background {
+                let has: BOOL = msg_send![view, respondsToSelector: sel!(_setWindowOcclusionDetectionEnabled:)];
+                if has == YES {
+                    let _: () = msg_send![view, _setWindowOcclusionDetectionEnabled: NO];
+                }
+            }
             let responds: BOOL = msg_send![view, respondsToSelector: sel!(setInspectable:)];
             if responds == YES {
                 let _: () = msg_send![view, setInspectable: bool_of(prefs.inspectable)];

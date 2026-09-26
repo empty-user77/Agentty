@@ -153,6 +153,7 @@ pub fn next_free_window_slot() -> usize {
 }
 
 pub use account_usage::AccountUsage;
+pub(crate) use layout::format_elapsed;
 pub use persist::ClosedWindows;
 
 /// The place and size window `slot` had at the last save.
@@ -3930,6 +3931,17 @@ impl Workbench {
                 if let Some((plugin, mode)) = argument.split_once(' ') {
                     if let Some(mode) = agentty_bridge::plugins::manifest::PanelMode::from_id(mode.trim()) {
                         self.set_plugin_panel_mode(plugin, mode, window, cx);
+                    }
+                }
+            }
+            // `plugin-status <plugin> <instance|-> working|idle|error [text...]`: as if the plugin
+            // called `workspace/setInstanceStatus` — `-` is its panel outside a workspace.
+            "plugin-status" => {
+                let mut parts = argument.splitn(4, ' ');
+                if let (Some(plugin), Some(instance), Some(state)) = (parts.next(), parts.next(), parts.next()) {
+                    let text = parts.next().map(str::to_string);
+                    if let Err(err) = crate::plugins::debug_set_instance_status(plugin, instance, state, text, cx) {
+                        eprintln!("plugin-status: {err}");
                     }
                 }
             }

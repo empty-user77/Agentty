@@ -65,6 +65,22 @@ impl AgentSummary {
     }
 }
 
+/// One automation of a plugin's workspace that has reported `workspace/setInstanceStatus`, as the
+/// tray popover shows it.
+#[derive(Clone, Debug)]
+pub struct PluginActivitySummary {
+    pub plugin: String,
+    pub instance: String,
+    /// The plugin's own name and this automation's tab title (or a generic one without it).
+    pub title: String,
+    pub logo: Option<std::path::PathBuf>,
+    pub glyph: &'static str,
+    pub state: crate::plugins::InstanceState,
+    pub text: Option<String>,
+    /// Seconds since the automation last became `working`.
+    pub elapsed: Option<u64>,
+}
+
 #[derive(Clone)]
 struct Bubble {
     pane_id: u64,
@@ -490,10 +506,65 @@ impl Workbench {
         out
     }
 
+    /// Every automation of every plugin workspace here that has reported
+    /// `workspace/setInstanceStatus`, for the menu bar popover.
+    pub fn plugin_activity_summaries(&self, cx: &App) -> Vec<PluginActivitySummary> {
+        let mut out = Vec::new();
+        for ws in &self.workspaces {
+            let Some(plugin_id) = ws.plugin.as_deref() else { continue };
+            let Some(plugin) = crate::plugins::plugin(cx, plugin_id) else { continue };
+            for (instance, instance_title, _) in self.instances_of(plugin_id) {
+                let Some(status) = crate::plugins::instance_status(cx, plugin_id, &instance) else { continue };
+                let elapsed = status
+                    .working_since_ms
+                    .filter(|_| status.state == crate::plugins::InstanceState::Working)
+                    .map(|since| crate::ui::now_ms().saturating_sub(since) / 1000);
+                let manifest = plugin.manifest.as_ref();
+                let glyph = crate::ui::icon_named(
+                    manifest.and_then(|m| m.contributes.panel.as_ref().and_then(|p| p.icon.as_deref()).or(m.icon.as_deref())),
+                );
+                let title = match instance_title {
+                    Some(instance_title) => format!("{} · {instance_title}", plugin.name()),
+                    None => plugin.name().to_string(),
+                };
+                out.push(PluginActivitySummary {
+                    plugin: plugin_id.to_string(),
+                    instance,
+                    title,
+                    logo: agentty_bridge::plugins::store::logo_file(plugin),
+                    glyph,
+                    state: status.state,
+                    text: status.text.clone(),
+                    elapsed,
+                });
+            }
+        }
+        out
+    }
+
+    /// Whether `plugin` has a workspace of its own here, for the tray popover to find the window
+    /// to focus when one of its automation rows is clicked.
+    pub fn has_plugin_workspace(&self, plugin: &str) -> bool {
+        self.plugin_workspace(plugin).is_some()
+    }
+
+    /// A plugin automation row in the tray popover was clicked: brings up the plugin's workspace
+    /// with that automation's tab in front.
+    pub fn focus_plugin_instance(&mut self, plugin: &str, instance: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_plugin_workspace(plugin, window, cx);
+        if let Some(index) = self.plugin_workspace(plugin) {
+            if let Some(tab) = self.workspaces[index].tabs.iter().position(|t| t.instance.as_ref().is_some_and(|i| i.id == instance)) {
+                self.activate_tab(tab, window, cx);
+            }
+        }
+    }
+
     pub fn tray_state(&self, cx: &App) -> crate::status_item::TrayState {
         let agents = self.agent_summaries(cx);
+        let plugins = self.plugin_activity_summaries(cx);
         crate::status_item::TrayState {
-            working: agents.iter().filter(|a| a.working).count(),
+            working: agents.iter().filter(|a| a.working).count()
+                + plugins.iter().filter(|p| p.state == crate::plugins::InstanceState::Working).count(),
             asking: agents.iter().filter(|a| a.needs_user).count(),
             done: agents.iter().filter(|a| a.waiting && !a.working && !a.needs_user).count(),
         }
@@ -507,10 +578,8 @@ impl Workbench {
     pub fn handle_tray(&mut self, action: crate::status_item::TrayAction, window: &mut Window, cx: &mut Context<Self>) {
         use crate::status_item::TrayAction;
         match action {
-            TrayAction::Show | TrayAction::Focus(_) if self.mini.is_some() => {
-                let focus = if let TrayAction::Focus(id) = action { Some(id) } else { None };
-                self.exit_mini(focus, window, cx);
-            }
+            TrayAction::Show if self.mini.is_some() => self.exit_mini(None, window, cx),
+            TrayAction::Focus(id) if self.mini.is_some() => self.exit_mini(Some(id), window, cx),
             TrayAction::Show => {
                 window.activate_window();
                 cx.activate(true);
@@ -519,6 +588,11 @@ impl Workbench {
                 window.activate_window();
                 cx.activate(true);
                 self.jump_to_pane_id(id, window, cx);
+            }
+            TrayAction::FocusPlugin { plugin, instance } => {
+                window.activate_window();
+                cx.activate(true);
+                self.focus_plugin_instance(&plugin, &instance, window, cx);
             }
             TrayAction::ToggleMini => self.toggle_mini(window, cx),
             TrayAction::OpenUsage => {

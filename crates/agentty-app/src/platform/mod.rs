@@ -5,6 +5,7 @@
 //! names from `platform/fallback/`, with the same API, so call sites need no `cfg`. The pieces
 //! that never depended on AppKit live here and are shared by both.
 
+pub mod app_nap;
 pub mod drops;
 pub mod frame;
 pub mod system_proxy;
