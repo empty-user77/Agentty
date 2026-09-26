@@ -172,8 +172,10 @@ impl Workbench {
                         .h_full()
                         .flex()
                         .items_center()
+                        .gap_1()
                         // The bell must not start a window move.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(self.render_sync_button(cx))
                         .child(self.render_notices_button(cx)),
                 )
             })
@@ -190,6 +192,7 @@ impl Workbench {
                         .gap_1()
                         // Buttons must not start a window move.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(self.render_sync_button(cx))
                         .child(icon_only("window-minimize", "minus", |_, window, _| window.minimize_window()))
                         .child(icon_only("window-zoom", "square", |_, window, _| window.zoom_window()))
                         .child(icon_only(
@@ -1402,6 +1405,7 @@ impl Workbench {
             .filter(|&i| match self.session_filter {
                 SessionFilter::All => true,
                 SessionFilter::Only(agent) => self.sessions[i].agent == agent,
+                SessionFilter::Synced => false,
             })
             .filter(|&i| {
                 let session = &self.sessions[i];
@@ -1425,6 +1429,9 @@ impl Workbench {
                 self.session_filter == filter,
                 cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.session_filter = filter;
+                    if filter == SessionFilter::Synced {
+                        this.refresh_synced_local(cx);
+                    }
                     cx.notify();
                 }),
             )
@@ -1443,7 +1450,11 @@ impl Workbench {
                     .into_iter()
                     .filter(|a| self.sessions.iter().any(|s| s.agent == *a))
                     .map(|agent| filter_chip(agent.id(), agent.short_name(), SessionFilter::Only(agent), cx)),
-            );
+            )
+            // Sessions other computers synced that are not here (or were deleted here).
+            .when(self.sync_connected(), |d| {
+                d.child(filter_chip("filter-synced", t(cx, "sync.sessions_filter"), SessionFilter::Synced, cx))
+            });
         let searching = self.session_content_hits.as_ref().is_none_or(|(q, _)| *q != self.session_query(cx))
             && self.session_query(cx).chars().count() >= 2;
         let search = div()
@@ -1471,7 +1482,9 @@ impl Workbench {
             );
 
         let visible = self.visible_sessions(cx);
-        let body: AnyElement = if self.sessions_loading && self.sessions.is_empty() {
+        let body: AnyElement = if self.session_filter == SessionFilter::Synced {
+            self.render_synced_sessions(cx).into_any_element()
+        } else if self.sessions_loading && self.sessions.is_empty() {
             hint(t(cx, "sessions.scanning")).into_any_element()
         } else if visible.is_empty() {
             hint(t(cx, "sessions.empty")).into_any_element()

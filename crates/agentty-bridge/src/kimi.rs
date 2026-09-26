@@ -39,6 +39,40 @@ fn work_dirs() -> HashMap<String, String> {
         .collect()
 }
 
+/// The session folder Kimi CLI keeps for a work dir (the md5 of its path).
+pub fn work_dir_folder(cwd: &Path) -> String {
+    md5_hex(cwd.to_string_lossy().as_bytes())
+}
+
+/// Whether Kimi CLI knows `cwd` as a work dir (listed in `kimi.json`).
+pub fn knows_work_dir(cwd: &Path) -> bool {
+    work_dirs().values().any(|p| Path::new(p) == cwd)
+}
+
+/// Id of the newest session in `cwd` written after `since_ms` (Kimi runs as a command in a pane,
+/// so its session is found from its files).
+pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
+    find_recent_in(&share_dir().join("sessions").join(work_dir_folder(cwd)), since_ms)
+}
+
+fn find_recent_in(folder: &Path, since_ms: u64) -> Option<String> {
+    let mut found: Vec<(u64, String)> = std::fs::read_dir(folder)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (id, file) = match name.strip_suffix(".jsonl") {
+                Some(id) => (id.to_string(), entry.path()),
+                None => (name, entry.path().join("context.jsonl")),
+            };
+            let at = fsutil::mtime_ms(&file);
+            (file.is_file() && at >= since_ms).then_some((at, id))
+        })
+        .collect();
+    found.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    found.into_iter().next().map(|(_, id)| id)
+}
+
 /// (session id, context file) for every session.
 fn sessions() -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
@@ -191,5 +225,22 @@ mod tests {
     fn reads_string_and_part_contents() {
         assert_eq!(text_of(&serde_json::json!("hi")).as_deref(), Some("hi"));
         assert_eq!(text_of(&serde_json::json!([{ "type": "text", "text": "yo" }])).as_deref(), Some("yo"));
+    }
+}
+
+#[cfg(test)]
+mod find_recent_tests {
+    use super::*;
+
+    #[test]
+    fn the_newest_session_of_the_work_dir_is_the_panes() {
+        let folder = std::env::temp_dir().join(format!("agentty-kimi-recent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(folder.join("s-new")).unwrap();
+        std::fs::write(folder.join("s-new").join("context.jsonl"), "{}\n").unwrap();
+        assert_eq!(find_recent_in(&folder, 0).as_deref(), Some("s-new"));
+        assert_eq!(find_recent_in(&folder, u64::MAX), None);
+        assert_eq!(work_dir_folder(Path::new("/work/app")).len(), 32);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }

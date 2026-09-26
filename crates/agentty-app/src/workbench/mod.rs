@@ -49,6 +49,7 @@ mod session_viewer;
 mod settings_page;
 pub mod side_panels;
 mod status_menus;
+mod sync;
 mod system_page;
 mod tab_menu;
 mod tasks;
@@ -293,6 +294,8 @@ pub enum LaunchTarget {
 pub enum SessionFilter {
     All,
     Only(Agent),
+    /// Sessions in the sync repository that this computer does not have.
+    Synced,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -393,6 +396,7 @@ pub struct Workbench {
     viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
     chat_notify: notify_settings::ChatNotifyState,
+    sync: sync::SyncUi,
     split_drag: Option<layout::SplitDrag>,
     split_bounds: Rc<RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>>,
     /// Last laid-out bounds of each pane (responsive headers, file drops).
@@ -680,6 +684,7 @@ impl Workbench {
             viewport_width: 1400.,
             browser_home_input: None,
             chat_notify: Default::default(),
+            sync: Default::default(),
             split_drag: None,
             split_bounds: Rc::default(),
             pane_bounds: Rc::default(),
@@ -827,6 +832,7 @@ impl Workbench {
         this.start_service_status_checks(cx);
         this.start_account_usage(cx);
         this.start_server_watch(cx);
+        this.start_sync(cx);
         // New sessions (for the resume bar and the sessions list) show up without a manual refresh.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(std::time::Duration::from_secs(120)).await;
@@ -962,6 +968,7 @@ impl Workbench {
                 if *kind == crate::terminal::NoticeKind::Finished {
                     let pane_id = pane.read(cx).pane_id;
                     this.flow_agent_finished(pane_id, cx);
+                    this.sync_after_turn(pane_id, cx);
                 }
             }
             // A `cd` moves where the pane works, and that is part of the saved layout. Saving it
@@ -1379,6 +1386,8 @@ impl Workbench {
     fn close_workspace(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.workspaces.iter().position(|w| w.id == id) else { return };
         let panes: Vec<Pane> = self.workspaces[index].tabs.iter().flat_map(|t| t.root.leaves()).collect();
+        // Its final state goes to the sync repository before the workspace is gone.
+        self.sync_workspace_removed(id, false, cx);
         self.workspaces[index].dormant = None;
         self.removing_workspace = Some(id);
         for pane in panes {
@@ -1894,6 +1903,10 @@ impl Workbench {
     fn resume_session(&mut self, session: &SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
         if self.jump_to_session(&session.id, window, cx) {
             self.show_resumed_terminal(cx);
+            return;
+        }
+        // Another computer went further with it: ask which copy to continue.
+        if self.ask_newer_elsewhere(session, cx) {
             return;
         }
         let nearly_full = agentty_bridge::session_stats(session.agent, &session.id)
@@ -3174,6 +3187,16 @@ impl Render for Workbench {
                                 )
                             })
                             .when(self.launcher_open, |d| d.child(self.render_launcher(cx)))
+                            // Opens under the sync icon, left of the bell.
+                            .when(self.sync.popover_open, |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(4.))
+                                        .right(px(36.))
+                                        .child(gpui::deferred(self.render_sync_popover(cx)).with_priority(3)),
+                                )
+                            })
                             // Opens under the bell, at the right end of the title bar.
                             .when(self.notices_open, |d| {
                                 d.child(
@@ -3612,6 +3635,7 @@ impl Workbench {
                         "docker": self.docker.debug_state(),
                         "db": self.db.debug_state(),
                         "chatNotify": self.chat_notify.debug_state(),
+                        "sync": self.sync.debug_state(),
                         "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
                         "plugins": {
@@ -3646,6 +3670,7 @@ impl Workbench {
             "docker" => self.debug_docker(argument, window, cx),
             "db" => self.debug_db(argument, window, cx),
             "chat-notify" => self.debug_chat_notify(argument, cx),
+            "sync" => self.debug_sync(argument, window, cx),
             "files" => match argument {
                 "" => self.toggle_files_panel(cx),
                 path => self.open_files_panel(Some(PathBuf::from(path)), cx),
@@ -3834,6 +3859,7 @@ impl Workbench {
                     "browser" => settings_page::SettingsSection::Browser,
                     "project" => settings_page::SettingsSection::Project,
                     "accounts" => settings_page::SettingsSection::Accounts,
+                    "sync" => settings_page::SettingsSection::Sync,
                     "system" => settings_page::SettingsSection::System,
                     "notifications" => settings_page::SettingsSection::Notifications,
                     _ => settings_page::SettingsSection::General,
@@ -4155,8 +4181,23 @@ impl Workbench {
             "close-confirm" => {
                 if let Some(confirm) = self.close_confirm.take() {
                     eprintln!("layout: confirming removes_workspace={}", confirm.removes_workspace);
+                    if let (confirm::CloseTarget::Workspace(id), true) = (&confirm.target, confirm.delete_sync) {
+                        self.sync_workspace_removed(*id, true, cx);
+                    }
                     self.perform_close(confirm.target, window, cx);
                 }
+            }
+            // Asks to remove the workspace at this place in the list, as its card's × does.
+            "close-workspace" => {
+                if let Some(id) = self.workspaces.get(argument.parse().unwrap_or(usize::MAX)).map(|w| w.id) {
+                    self.request_close(confirm::CloseTarget::Workspace(id), window, cx);
+                }
+            }
+            "close-confirm-sync" => {
+                if let Some(confirm) = self.close_confirm.as_mut() {
+                    confirm.delete_sync = !confirm.delete_sync;
+                }
+                cx.notify();
             }
             // Split sizes of the active tab, where each split sits on screen, and the zoomed pane.
             "splits" => {
