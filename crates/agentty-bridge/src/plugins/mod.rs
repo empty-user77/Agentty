@@ -58,6 +58,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("media/svgToPng", Some("files")),
     // SVG scenes of the plugin's folder made into a short MP4 beside them.
     ("media/svgsToVideo", Some("files")),
+    // An HTML animation of the plugin's folder recorded into an MP4 (a page of its own, no network).
+    ("media/htmlToVideo", Some("files")),
     ("prompt/inject", Some("prompt.inject")),
     // Only a terminal `prompt/inject` opened for the plugin: what it opened, it may close.
     ("terminal/close", Some("prompt.inject")),

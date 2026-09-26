@@ -462,6 +462,7 @@ impl Workbench {
                     .detach();
                 }
             },
+            "media/htmlToVideo" => self.plugin_html_video(call, window, cx),
             "session/get" => self.plugin_session(call, cx),
             "workspace/instances" => {
                 let list = self.plugin_instances(&call.plugin, cx);
@@ -850,6 +851,102 @@ fn type_into(pane: &Pane, text: String, submit: bool, allow_shell_enter: bool, c
             view.insert_text(&text);
         }
     });
+}
+
+/// Limits of `media/htmlToVideo`: seconds, frames a second, pixels a side, bytes of HTML.
+const HTML_VIDEO_SECONDS: f64 = 60.;
+const HTML_VIDEO_FPS: u32 = 30;
+const HTML_VIDEO_SIDE: u32 = 1920;
+const HTML_VIDEO_BYTES: usize = 2 * 1024 * 1024;
+
+impl Workbench {
+    /// `media/htmlToVideo` (`files`): `{ from, to, seconds, width?, height?, fps? }`. Loads the HTML
+    /// at `from` (the plugin's folder) in a page of its own with the virtual clock
+    /// ([`crate::html_recorder`]), and records `seconds` of it into the MP4 at `to`, a `__seek` and
+    /// a snapshot a frame. Fails on a script error, and if the page tries to go anywhere else.
+    pub(super) fn plugin_html_video(&mut self, call: PluginCall, window: &mut Window, cx: &mut Context<Self>) {
+        use agentty_bridge::plugins::files;
+        let bad = |message: String| (codes::INVALID_PARAMS, message);
+        let params = &call.params;
+        let resolve = |key: &str| files::resolve(&call.plugin, params[key].as_str().unwrap_or_default()).map_err(|e| bad(format!("{e:#}")));
+        let parsed = (|| {
+            let (from, to) = (resolve("from")?, resolve("to")?);
+            let html = std::fs::read_to_string(&from).map_err(|e| bad(format!("{}: {e}", from.display())))?;
+            if html.len() > HTML_VIDEO_BYTES {
+                return Err(bad("the page is larger than 2 MB".into()));
+            }
+            let seconds = params["seconds"].as_f64().unwrap_or(15.).clamp(1., HTML_VIDEO_SECONDS);
+            let side = |key: &str, default: u32| params[key].as_u64().map_or(default, |v| (v as u32).clamp(64, HTML_VIDEO_SIDE)) & !1;
+            let fps = params["fps"].as_u64().map_or(30, |v| (v as u32).clamp(10, HTML_VIDEO_FPS));
+            Ok((html, to, seconds, side("width", 1920), side("height", 1080), fps))
+        })();
+        let (html, to, seconds, width, height, fps) = match parsed {
+            Ok(parsed) => parsed,
+            Err(err) => return call.reply(Err(err), cx),
+        };
+        let Some(recorder) = crate::html_recorder::Recorder::start(window, width, height, &html) else {
+            return call.reply(Err((codes::UNAVAILABLE, "recording a page is not available here".into())), cx);
+        };
+        let count = (seconds * fps as f64).round() as usize;
+        cx.spawn(async move |_, cx| {
+            use futures::channel::oneshot;
+            let result: Result<Value, String> = async {
+                // Loaded (at most 20 s), and a moment for its fonts and first layout.
+                for _ in 0..200 {
+                    cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
+                    if !recorder.loading() {
+                        break;
+                    }
+                }
+                cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
+                let eval = |script: String| {
+                    let (send, answer) = oneshot::channel();
+                    recorder.eval(&script, move |result| {
+                        let _ = send.send(result);
+                    });
+                    answer
+                };
+                let mut writer = crate::platform::video::Mp4Writer::new(&to, width, height, fps).map_err(|e| format!("{e:#}"))?;
+                let (mut first, mut moved) = (None::<u64>, false);
+                for index in 0..count {
+                    let ms = index as f64 * 1000. / fps as f64;
+                    let errors = eval(format!("__seek({ms})")).await.map_err(|_| "the page stopped".to_string())??;
+                    if errors != "0" {
+                        let list =
+                            eval("JSON.stringify(__agenttyErrors.slice(0, 3))".into()).await.ok().and_then(Result::ok).unwrap_or_default();
+                        return Err(format!("the page has script errors: {list}"));
+                    }
+                    // It is the page it was given, or nothing is recorded.
+                    if index % 30 == 0 && !matches!(recorder.address().as_str(), "" | "about:blank") {
+                        return Err("the page tried to go to another address".into());
+                    }
+                    let (send, answer) = oneshot::channel();
+                    recorder.frame(move |pixels| {
+                        let _ = send.send(pixels);
+                    });
+                    let pixels = answer.await.ok().flatten().ok_or("a frame could not be taken")?;
+                    // Whether anything moves at all: a still page is not a video.
+                    let digest = pixels.iter().step_by(997).fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(*b as u64));
+                    match first {
+                        None => first = Some(digest),
+                        Some(d) if d != digest => moved = true,
+                        _ => {}
+                    }
+                    writer.append(&pixels).map_err(|e| format!("{e:#}"))?;
+                }
+                writer.finish().map_err(|e| format!("{e:#}"))?;
+                if !moved {
+                    return Err("nothing on the page moved".into());
+                }
+                let size = std::fs::metadata(&to).map(|m| m.len()).unwrap_or(0);
+                Ok(json!({ "width": width, "height": height, "seconds": seconds, "frames": count, "size": size }))
+            }
+            .await;
+            eprintln!("html-video: {}", result.as_ref().map(Value::to_string).unwrap_or_else(|e| e.clone()));
+            let _ = cx.update(|cx| call.reply(result.map_err(|e| (codes::INVALID_PARAMS, e)), cx));
+        })
+        .detach();
+    }
 }
 
 /// `agent/list`: the agents `prompt/inject` can start here, with the models each was seen using

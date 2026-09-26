@@ -4125,6 +4125,20 @@ impl Workbench {
             }
             "tray-popover" => crate::status_item::push_action(crate::status_item::TrayAction::TogglePopover),
             "tray-snapshot" => crate::tray_popover::debug_snapshot(PathBuf::from(argument), cx),
+            // `html-video <plugin> <from> <to> <seconds>`: `media/htmlToVideo` as that plugin asks it.
+            "html-video" => {
+                let parts: Vec<&str> = argument.split_whitespace().collect();
+                if let [plugin, from, to, seconds] = parts[..] {
+                    let call = crate::plugins::PluginCall {
+                        plugin: plugin.into(),
+                        plugin_name: plugin.into(),
+                        request_id: None,
+                        method: "media/htmlToVideo".into(),
+                        params: serde_json::json!({ "from": from, "to": to, "seconds": seconds.parse::<f64>().unwrap_or(5.) }),
+                    };
+                    self.plugin_html_video(call, window, cx);
+                }
+            }
             "hover" => {
                 if let Some(pane) = self.active_pane() {
                     eprintln!("hover: {:?}", pane.read(cx).debug_hover());
