@@ -358,6 +358,9 @@ impl Workbench {
         let beside = tab.active.clone();
         tab.root.split(&beside, pane.clone(), super::Axis::Horizontal);
         tab.active = pane.clone();
+        // The AI at work is what there is to watch: its pane takes most of the room (focus view)
+        // while it runs, and the tab goes back as it was when it closes.
+        self.zoomed = Some(pane.clone());
         self.persist(cx);
         Ok(pane)
     }
