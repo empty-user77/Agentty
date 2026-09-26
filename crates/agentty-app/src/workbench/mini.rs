@@ -53,6 +53,8 @@ pub struct AgentSummary {
     pub working: bool,
     pub waiting: bool,
     pub elapsed: Option<u64>,
+    /// Started by a plugin in its workspace (an agent writing for an automation), not by the user.
+    pub in_plugin: bool,
 }
 
 impl AgentSummary {
@@ -499,6 +501,7 @@ impl Workbench {
                         working: view.status.in_turn(),
                         waiting: view.attention,
                         elapsed: view.working_since.map(|t| t.elapsed().as_secs()),
+                        in_plugin: ws.plugin.is_some(),
                     });
                 }
             }
@@ -841,6 +844,7 @@ mod tests {
             working,
             waiting: false,
             elapsed: None,
+            in_plugin: false,
         };
         let agents = (1..=9).map(|i| agent(i, i == 7, i == 3, i * 10)).collect();
         let (shown, hidden) = MiniView::arrange(agents, false);

@@ -328,61 +328,34 @@ impl TrayPopover {
         )
     }
 
-    fn agents_section(agents: &[AgentSummary], plugins: &[crate::workbench::mini::PluginActivitySummary], cx: &App) -> impl IntoElement {
-        let mut rows = div().id("tray-agents").flex().flex_col().pb_1().max_h(px(AGENT_ROW * MAX_AGENT_ROWS as f32)).overflow_y_scroll();
+    /// The user's agents in one card; plugins' automations, with the agents they started, in another.
+    fn agent_sections(agents: &[AgentSummary], plugins: &[crate::workbench::mini::PluginActivitySummary], cx: &App) -> impl IntoElement {
+        let (from_plugins, own): (Vec<&AgentSummary>, Vec<&AgentSummary>) = agents.iter().partition(|a| a.in_plugin);
+        let has_plugins = !plugins.is_empty() || !from_plugins.is_empty();
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .when(!own.is_empty() || !has_plugins, |d| {
+                d.child(Self::agents_card(("tray-agents", "tray-agents-card"), t(cx, "tray.agents"), &own, &[], cx))
+            })
+            .when(has_plugins, |d| {
+                d.child(Self::agents_card(("tray-plugins", "tray-plugins-card"), t(cx, "tray.plugins"), &from_plugins, plugins, cx))
+            })
+    }
+
+    fn agents_card(
+        (id, card_id): (&'static str, &'static str),
+        title: &str,
+        agents: &[&AgentSummary],
+        plugins: &[crate::workbench::mini::PluginActivitySummary],
+        cx: &App,
+    ) -> impl IntoElement {
+        let mut rows = div().id(id).flex().flex_col().pb_1().max_h(px(AGENT_ROW * MAX_AGENT_ROWS as f32)).overflow_y_scroll();
         if agents.is_empty() && plugins.is_empty() {
             rows = rows.child(div().px_3().py_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "mini.empty_hint")));
         }
-        for agent in agents {
-            let pane_id = agent.pane_id;
-            rows = rows.child(
-                div()
-                    .id(("tray-agent", pane_id as usize))
-                    .h(px(AGENT_ROW))
-                    .mx_1()
-                    .px_2()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_2p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .on_click(Self::run(TrayAction::Focus(pane_id)))
-                    .child(div().relative().child(crate::brand::avatar(agent.tool, 24.)).when(agent.working || agent.needs_user, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .bottom(px(-1.))
-                                .right(px(-1.))
-                                .size(px(9.))
-                                .rounded_full()
-                                .border_2()
-                                .border_color(hex(Chrome::OVERLAY))
-                                .bg(hex(if agent.needs_user { Chrome::ATTENTION } else { Chrome::ORANGE })),
-                        )
-                    }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(div().t_small().truncate().text_color(hex(Chrome::BRIGHT)).child(agent.title.clone()))
-                            .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(agent.workspace.clone())),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .max_w(px(120.))
-                            .truncate()
-                            .t_caption()
-                            .text_color(hex(agent.color))
-                            .when(agent.needs_user, |d| d.px_1p5().rounded_sm().bg(hex_alpha(Chrome::ATTENTION, 0.18)))
-                            .child(agent.status_line()),
-                    ),
-            );
-        }
+        // A plugin's automations first, then the agents it started for them.
         for plugin in plugins {
             let (plugin_id, instance) = (plugin.plugin.clone(), plugin.instance.clone());
             let state_color = match plugin.state {
@@ -456,7 +429,57 @@ impl TrayPopover {
                     ),
             );
         }
-        Self::card("tray-agents-card", div().h(px(30.)).px_3().flex().items_center().child(t(cx, "tray.agents")), rows)
+        for agent in agents {
+            let pane_id = agent.pane_id;
+            rows = rows.child(
+                div()
+                    .id(("tray-agent", pane_id as usize))
+                    .h(px(AGENT_ROW))
+                    .mx_1()
+                    .px_2()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(Self::run(TrayAction::Focus(pane_id)))
+                    .child(div().relative().child(crate::brand::avatar(agent.tool, 24.)).when(agent.working || agent.needs_user, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .bottom(px(-1.))
+                                .right(px(-1.))
+                                .size(px(9.))
+                                .rounded_full()
+                                .border_2()
+                                .border_color(hex(Chrome::OVERLAY))
+                                .bg(hex(if agent.needs_user { Chrome::ATTENTION } else { Chrome::ORANGE })),
+                        )
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().t_small().truncate().text_color(hex(Chrome::BRIGHT)).child(agent.title.clone()))
+                            .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(agent.workspace.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .max_w(px(120.))
+                            .truncate()
+                            .t_caption()
+                            .text_color(hex(agent.color))
+                            .when(agent.needs_user, |d| d.px_1p5().rounded_sm().bg(hex_alpha(Chrome::ATTENTION, 0.18)))
+                            .child(agent.status_line()),
+                    ),
+            );
+        }
+        Self::card(card_id, div().h(px(30.)).px_3().flex().items_center().child(title.to_string()), rows)
     }
 
     /// A rounded section with a small title.
@@ -546,7 +569,7 @@ impl Render for TrayPopover {
             .child(measure)
             .child(self.header(&snapshot, cx))
             .when(!snapshot.usage.is_empty(), |d| d.child(Self::usage_section(&snapshot.usage, cx)))
-            .child(Self::agents_section(&snapshot.agents, &snapshot.plugins, cx))
+            .child(Self::agent_sections(&snapshot.agents, &snapshot.plugins, cx))
             .child(div().mx_2().h(px(1.)).bg(hex(Chrome::BORDER)))
             .child(Self::footer(cx));
 
