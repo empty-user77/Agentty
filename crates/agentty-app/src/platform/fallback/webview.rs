@@ -122,6 +122,8 @@ impl WebView {
 
     pub fn set_zoom(&mut self, _zoom: f64) {}
 
+    pub fn set_mobile(&mut self, _mobile: bool) {}
+
     pub fn hide(&mut self) {}
 
     pub fn set_locked(&mut self, _locked: bool) {}
