@@ -325,6 +325,37 @@ extern "C" fn decide_navigation(_: &Object, _: Sel, _view: Id, action: Id, handl
     unsafe { (*handler).call((policy,)) };
 }
 
+/// A clear view laid over a locked page: it takes every click, drag and scroll so none reaches the
+/// page (the page's own scripts, which an AI drives it with, are not touched).
+fn shield_class() -> &'static Class {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        let mut decl = ClassDecl::new("AgenttyBrowserShield", class!(NSView)).expect("AgenttyBrowserShield registered twice");
+        extern "C" fn swallow(_: &Object, _: Sel, _: Id) {}
+        extern "C" fn first_mouse(_: &Object, _: Sel, _: Id) -> BOOL {
+            YES
+        }
+        unsafe {
+            for event in [
+                sel!(mouseDown:),
+                sel!(mouseUp:),
+                sel!(mouseDragged:),
+                sel!(rightMouseDown:),
+                sel!(rightMouseUp:),
+                sel!(otherMouseDown:),
+                sel!(otherMouseUp:),
+                sel!(scrollWheel:),
+                sel!(magnifyWithEvent:),
+            ] {
+                decl.add_method(event, swallow as extern "C" fn(&Object, Sel, Id));
+            }
+            decl.add_method(sel!(acceptsFirstMouse:), first_mouse as extern "C" fn(&Object, Sel, Id) -> BOOL);
+        }
+        decl.register();
+    });
+    class!(AgenttyBrowserShield)
+}
+
 /// `WKNavigationDelegate` + `WKUIDelegate`: records failed loads and requests for new windows.
 fn delegate_class() -> &'static Class {
     static REGISTER: Once = Once::new();
@@ -661,6 +692,10 @@ pub struct WebView {
     keep_running: bool,
     /// Page zoom last set (the browser setting, or the responsive mode's scale).
     zoom: f64,
+    /// The clear view over the page while it is locked (see [`WebView::set_locked`]); made the
+    /// first time it is locked, a subview of the page so it follows its frame.
+    shield: Id,
+    locked: bool,
 }
 
 impl WebView {
@@ -792,6 +827,8 @@ impl WebView {
                 parked: false,
                 keep_running: false,
                 zoom: prefs.zoom.clamp(0.3, 3.0) as f64,
+                shield: std::ptr::null_mut(),
+                locked: false,
             })
         }
     }
@@ -1035,6 +1072,35 @@ impl WebView {
                 let _: () = msg_send![self.view, setHidden: YES];
             }
             self.visible = false;
+        }
+    }
+
+    /// Locked, the page takes no click, drag, scroll or key from the user: an AI is driving it and
+    /// a stray click would get in its way. Unlocked, it is an ordinary page again.
+    pub fn set_locked(&mut self, locked: bool) {
+        if locked == self.locked {
+            return;
+        }
+        self.locked = locked;
+        unsafe {
+            if locked && self.shield.is_null() {
+                let bounds: NSRect = msg_send![self.view, bounds];
+                let shield: Id = msg_send![shield_class(), alloc];
+                let shield: Id = msg_send![shield, initWithFrame: bounds];
+                // NSViewWidthSizable | NSViewHeightSizable: it keeps covering the page as it resizes.
+                let _: () = msg_send![shield, setAutoresizingMask: 2u64 | 16u64];
+                let _: () = msg_send![self.view, addSubview: shield];
+                // The page holds it from here on (and lets it go with itself).
+                let _: () = msg_send![shield, release];
+                self.shield = shield;
+            }
+            if !self.shield.is_null() {
+                let _: () = msg_send![self.shield, setHidden: if locked { NO } else { YES }];
+            }
+            if locked {
+                // Keys typed while it is locked go to Agentty, not into the page.
+                self.release_keyboard();
+            }
         }
     }
 

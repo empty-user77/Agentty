@@ -815,11 +815,17 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 "apiVersion": agentty_bridge::plugins::manifest::API_VERSION,
                 "language": crate::settings::settings(cx).language.resolved().code(),
                 "utcOffsetMinutes": utc_offset_minutes(),
+                // Panel elements newer than the first API version, for a plugin to fall back on
+                // older Agentty without guessing from the version number.
+                "uiFeatures": ["flow", "popover"],
             })),
             cx,
         ),
         "net/fetch" => fetch(plugin_id, request_id, params, cx),
         "files/download" => download(plugin_id, request_id, params, cx),
+        "files/pick" => pick_files(plugin_id, request_id, params, cx),
+        "media/svgToPng" => svg_to_png(plugin_id, request_id, params, cx),
+        "media/svgsToVideo" => svgs_to_video(plugin_id, request_id, params, cx),
         method if method.starts_with("files/") => {
             let result = files_call(plugin_id, method, &params, cx);
             reply(result, cx)
@@ -1043,6 +1049,262 @@ fn files_call(plugin_id: &str, method: &str, params: &Value, _cx: &mut App) -> R
     }
 }
 
+/// Largest side of a PNG `media/svgToPng` draws.
+const MAX_PNG_SIDE: u32 = 4096;
+
+/// `media/svgToPng`: draws the SVG at `from` into a PNG at `to` (both in the plugin's folder),
+/// `width` pixels wide (the SVG's own size when not given), with the system's fonts for its text.
+fn svg_to_png(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else { return };
+    let path = |key: &str| agentty_bridge::plugins::files::resolve(&id, params.get(key).and_then(Value::as_str).unwrap_or_default());
+    let (from, to) = match (path("from"), path("to")) {
+        (Ok(from), Ok(to)) => (from, to),
+        (Err(err), _) | (_, Err(err)) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("{err:#}"))), cx),
+    };
+    let width = params.get("width").and_then(Value::as_u64).map(|w| (w as u32).clamp(16, MAX_PNG_SIDE));
+    let task = cx.background_executor().spawn(async move { render_svg(&from, &to, width) });
+    cx.spawn(async move |cx| {
+        let result = task.await.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}")));
+        let _ = cx.update(|cx| respond(&id, &request_id, result, cx));
+    })
+    .detach();
+}
+
+/// `media/svgsToVideo` limits: scenes, seconds in all, frames a second, pixels a side.
+const MAX_SCENES: usize = 12;
+const MAX_VIDEO_SECONDS: f32 = 60.;
+const MAX_FPS: u32 = 30;
+const MAX_VIDEO_SIDE: u32 = 1920;
+
+/// `media/svgsToVideo`: `scenes` (`[{ path, seconds }]`, SVGs of the plugin's folder) drawn one
+/// after another, each easing slowly in and fading into the next, into an MP4 at `to`.
+fn svgs_to_video(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else { return };
+    let bad = |message: String| (codes::INVALID_PARAMS, message);
+    let parsed = (|| -> Result<_, (i64, String)> {
+        let resolve = |path: &str| agentty_bridge::plugins::files::resolve(&id, path).map_err(|e| bad(format!("{e:#}")));
+        let to = resolve(params.get("to").and_then(Value::as_str).unwrap_or_default())?;
+        let list = params.get("scenes").and_then(Value::as_array).ok_or_else(|| bad("scenes is a list".into()))?;
+        if list.is_empty() || list.len() > MAX_SCENES {
+            return Err(bad(format!("1 to {MAX_SCENES} scenes")));
+        }
+        let mut scenes = Vec::new();
+        for scene in list {
+            let path = resolve(scene.get("path").and_then(Value::as_str).unwrap_or_default())?;
+            let seconds = scene.get("seconds").and_then(Value::as_f64).unwrap_or(3.) as f32;
+            // How much it moves: `lively` (default), `gentle` or `still`, for the mood of the post.
+            let motion = match scene.get("motion").and_then(Value::as_str) {
+                Some("still") => 0.2,
+                Some("gentle") => 0.5,
+                _ => 1.,
+            };
+            scenes.push((path, seconds.clamp(0.5, 20.), motion));
+        }
+        if scenes.iter().map(|(_, s, _)| s).sum::<f32>() > MAX_VIDEO_SECONDS {
+            return Err(bad(format!("at most {MAX_VIDEO_SECONDS} seconds in all")));
+        }
+        let side = |key: &str, default: u32| {
+            params.get(key).and_then(Value::as_u64).map_or(default, |v| (v as u32).clamp(64, MAX_VIDEO_SIDE)) & !1
+        };
+        let fps = params.get("fps").and_then(Value::as_u64).map_or(30, |v| (v as u32).clamp(10, MAX_FPS));
+        Ok((scenes, to, side("width", 1280), side("height", 720), fps))
+    })();
+    let (scenes, to, width, height, fps) = match parsed {
+        Ok(parsed) => parsed,
+        Err(err) => return respond(&id, &request_id, Err(err), cx),
+    };
+    let task = cx.background_executor().spawn(async move { render_video(&scenes, &to, width, height, fps) });
+    cx.spawn(async move |cx| {
+        let result = task.await.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}")));
+        let _ = cx.update(|cx| respond(&id, &request_id, result, cx));
+    })
+    .detach();
+}
+
+/// Seconds a scene takes to cross into the next.
+const FADE_SECONDS: f32 = 0.35;
+/// How much a scene's size changes while it is on, and how far it drifts (share of the width).
+const PUSH_IN: f32 = 0.12;
+const DRIFT: f32 = 0.04;
+
+fn render_video(
+    scenes: &[(std::path::PathBuf, f32, f32)],
+    to: &std::path::Path,
+    width: u32,
+    height: u32,
+    fps: u32,
+) -> anyhow::Result<Value> {
+    use anyhow::Context as _;
+    use resvg::tiny_skia;
+    // Each scene drawn once, filling the frame; the frames move and blend these.
+    let mut drawn = Vec::new();
+    for (path, _, _) in scenes {
+        drawn.push(render_svg_into(path, width, height).with_context(|| format!("{}", path.display()))?);
+    }
+    if let Some(folder) = to.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    let starts: Vec<f32> = scenes
+        .iter()
+        .scan(0., |at, (_, seconds, _)| {
+            let start = *at;
+            *at += seconds;
+            Some(start)
+        })
+        .collect();
+    let total: f32 = scenes.iter().map(|(_, s, _)| s).sum();
+    let count = (total * fps as f32).round() as usize;
+    let mut canvas = tiny_skia::Pixmap::new(width, height).context("no room to draw")?;
+    // Each scene moves its own way, so the cut feels alive: push in, pull out while drifting, push
+    // in while drifting the other way; eased, fast at first and settling.
+    let place = |canvas: &mut tiny_skia::Pixmap, scene: usize, t: f32, opacity: f32| {
+        let (_, seconds, motion) = scenes[scene];
+        let p = (t / seconds).clamp(0., 1.);
+        let eased = 1. - (1. - p).powi(3);
+        let (push, drift_by) = (PUSH_IN * motion, DRIFT * motion);
+        let (grow, drift) = match scene % 3 {
+            0 => (1. + push * eased, 0.),
+            1 => (1. + push * (1. - eased), drift_by * (1. - eased)),
+            _ => (1. + push * 0.5 + push * 0.5 * eased, -drift_by * (1. - eased)),
+        };
+        let (cx, cy) = (width as f32 / 2., height as f32 / 2.);
+        let transform = tiny_skia::Transform::from_translate(cx + drift * width as f32, cy).pre_scale(grow, grow).pre_translate(-cx, -cy);
+        let paint = tiny_skia::PixmapPaint { opacity, quality: tiny_skia::FilterQuality::Bilinear, ..Default::default() };
+        canvas.draw_pixmap(0, 0, drawn[scene].as_ref(), &paint, transform, None);
+    };
+    crate::platform::video::encode_mp4(to, width, height, fps, count, |index, out| {
+        let at = index as f32 / fps as f32;
+        let scene = starts.iter().rposition(|start| *start <= at).unwrap_or(0);
+        let t = at - starts[scene];
+        canvas.fill(tiny_skia::Color::BLACK);
+        place(&mut canvas, scene, t, 1.);
+        // Into the next scene over the end of this one: quick when lively, slower when calm.
+        let fade = FADE_SECONDS / scenes[scene].2.max(0.4);
+        let left = scenes[scene].1 - t;
+        if scene + 1 < scenes.len() && left < fade {
+            place(&mut canvas, scene + 1, 0., 1. - left / fade);
+        }
+        // tiny-skia is RGBA (opaque here), the encoder takes BGRA.
+        for (pixel, rgba) in out.as_chunks_mut::<4>().0.iter_mut().zip(canvas.data().as_chunks::<4>().0) {
+            *pixel = [rgba[2], rgba[1], rgba[0], 255];
+        }
+    })?;
+    let size = std::fs::metadata(to).map(|m| m.len()).unwrap_or(0);
+    Ok(json!({ "width": width, "height": height, "seconds": total, "frames": count, "size": size }))
+}
+
+/// Draws an SVG to fill `width`×`height` (its own aspect kept, centred on black).
+fn render_svg_into(from: &std::path::Path, width: u32, height: u32) -> anyhow::Result<resvg::tiny_skia::Pixmap> {
+    use anyhow::Context as _;
+    use resvg::tiny_skia;
+    let tree = svg_tree(from)?;
+    let size = tree.size();
+    let scale = (width as f32 / size.width()).min(height as f32 / size.height());
+    let (dx, dy) = ((width as f32 - size.width() * scale) / 2., (height as f32 - size.height() * scale) / 2.);
+    let mut pixmap = tiny_skia::Pixmap::new(width, height).context("no room to draw")?;
+    pixmap.fill(tiny_skia::Color::BLACK);
+    resvg::render(&tree, tiny_skia::Transform::from_translate(dx, dy).pre_scale(scale, scale), &mut pixmap.as_mut());
+    Ok(pixmap)
+}
+
+/// An SVG of the plugin's folder parsed with the system's fonts, and images only from inside it.
+fn svg_tree(from: &std::path::Path) -> anyhow::Result<resvg::usvg::Tree> {
+    use anyhow::Context as _;
+    use resvg::usvg;
+    // The system's fonts, read once: loading them takes longer than drawing.
+    static FONTS: std::sync::OnceLock<std::sync::Arc<usvg::fontdb::Database>> = std::sync::OnceLock::new();
+    let fonts = FONTS.get_or_init(|| {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        std::sync::Arc::new(db)
+    });
+    let data = std::fs::read(from).with_context(|| format!("{} is not there", from.display()))?;
+    let options = usvg::Options {
+        fontdb: fonts.clone(),
+        resources_dir: None,
+        // Images inside the SVG only (data: URLs). A path or a file: link would read a file of the
+        // computer into the picture, which the plugin then reads back.
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..Default::default()
+    };
+    usvg::Tree::from_data(&data, &options).context("not an SVG Agentty can draw")
+}
+
+fn render_svg(from: &std::path::Path, to: &std::path::Path, width: Option<u32>) -> anyhow::Result<Value> {
+    use anyhow::Context as _;
+    use resvg::tiny_skia;
+    let tree = svg_tree(from)?;
+    let size = tree.size();
+    let scale = width.map_or(1., |w| w as f32 / size.width());
+    let (w, h) = ((size.width() * scale).round() as u32, (size.height() * scale).round() as u32);
+    if w == 0 || h == 0 || w > MAX_PNG_SIDE || h > MAX_PNG_SIDE {
+        anyhow::bail!("{w}×{h} is not a size to draw (at most {MAX_PNG_SIDE} a side)");
+    }
+    let mut pixmap = tiny_skia::Pixmap::new(w, h).context("no room to draw")?;
+    resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    let png = pixmap.encode_png().context("could not write the PNG")?;
+    if let Some(folder) = to.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    std::fs::write(to, &png)?;
+    Ok(json!({ "width": w, "height": h, "size": png.len() }))
+}
+
+/// `files/pick`: the system's open panel; what the user picks is copied into `into` (a folder of
+/// the plugin's own), never handed over by its own path. `[]` when the user cancels.
+fn pick_files(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else { return };
+    let into = params.get("into").and_then(Value::as_str).unwrap_or("picked").to_string();
+    let folder = match agentty_bridge::plugins::files::resolve(&id, &into) {
+        Ok(folder) => folder,
+        Err(err) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("{err:#}"))), cx),
+    };
+    let multiple = params.get("multiple").and_then(Value::as_bool).unwrap_or(true);
+    let paths = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple, prompt: None });
+    cx.spawn(async move |cx| {
+        let picked = match paths.await {
+            Ok(Ok(Some(paths))) => paths,
+            _ => Vec::new(),
+        };
+        let copied = copy_picked(&picked, &folder, &into);
+        let _ = cx.update(|cx| respond(&id, &request_id, copied.map_err(|err| (codes::INTERNAL, format!("{err:#}"))), cx));
+    })
+    .detach();
+}
+
+/// Copies picked files into `folder` under names not taken yet: `[{ path, name, size }]`, `path`
+/// relative to the plugin's folder.
+fn copy_picked(picked: &[std::path::PathBuf], folder: &std::path::Path, into: &str) -> anyhow::Result<Value> {
+    std::fs::create_dir_all(folder)?;
+    let mut out = Vec::new();
+    for source in picked.iter().filter(|p| p.is_file()) {
+        let size = std::fs::metadata(source)?.len();
+        if size > agentty_bridge::plugins::files::MAX_FILE {
+            anyhow::bail!("{} is larger than 1 GB", source.display());
+        }
+        let name = source.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
+        let (stem, ext) = match name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+            _ => (name.clone(), String::new()),
+        };
+        let mut target_name = name.clone();
+        let mut n = 2;
+        while folder.join(&target_name).exists() {
+            target_name = format!("{stem}-{n}{ext}");
+            n += 1;
+        }
+        std::fs::copy(source, folder.join(&target_name))?;
+        out.push(json!({ "path": format!("{}/{target_name}", into.trim_end_matches('/')), "name": name, "size": size }));
+    }
+    Ok(Value::Array(out))
+}
+
 /// `files/download`: a GET streamed into a file of the plugin's folder. Needs `net.request` too:
 /// it reaches the network the same way `net/fetch` does.
 fn download(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
@@ -1184,6 +1446,54 @@ impl PluginCall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn svg_scenes_become_an_mp4() {
+        let dir = std::env::temp_dir().join(format!("agentty-video-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let scene = |name: &str, color: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="{color}"/><text x="100" y="450" font-size="120" fill="#fff">Scene</text></svg>"##)).unwrap();
+            (path, 1.0, 1.0)
+        };
+        let to = dir.join("out/v.mp4");
+        let made = render_video(&[scene("a.svg", "#123"), scene("b.svg", "#812")], &to, 320, 180, 10).unwrap();
+        assert_eq!(made["frames"].as_u64(), Some(20));
+        let bytes = std::fs::read(&to).unwrap();
+        assert_eq!(&bytes[4..8], b"ftyp", "an MP4 file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_svg_is_drawn_into_a_png_of_the_asked_width() {
+        let dir = std::env::temp_dir().join(format!("agentty-svg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let from = dir.join("a.svg");
+        std::fs::write(&from, r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#123"/><text x="10" y="50" font-family="Helvetica, Arial, sans-serif" font-size="24" fill="#fff">Hi</text></svg>"##).unwrap();
+        let to = dir.join("out/a.png");
+        let drawn = render_svg(&from, &to, Some(320)).unwrap();
+        assert_eq!((drawn["width"].as_u64(), drawn["height"].as_u64()), (Some(320), Some(180)));
+        assert!(std::fs::read(&to).unwrap().starts_with(b"\x89PNG"));
+        // A picture elsewhere on the computer is not drawn in: the PNG stays the plain background.
+        let secret = dir.join("secret.png");
+        std::fs::copy(&to, &secret).unwrap();
+        let path = secret.display();
+        std::fs::write(&from, format!(r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="160" height="90"><rect width="160" height="90" fill="#000"/><image href="file://{path}" width="160" height="90"/><image xlink:href="{path}" width="160" height="90"/></svg>"##)).unwrap();
+        let plain = dir.join("plain.png");
+        render_svg(&from, &plain, None).unwrap();
+        std::fs::write(
+            &from,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#000"/></svg>"##,
+        )
+        .unwrap();
+        let black = dir.join("black.png");
+        render_svg(&from, &black, None).unwrap();
+        assert_eq!(std::fs::read(&plain).unwrap(), std::fs::read(&black).unwrap(), "a file of the computer was drawn in");
+        std::fs::write(&from, "not svg").unwrap();
+        assert!(render_svg(&from, &to, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn logs_are_capped_by_size_as_well_as_count() {

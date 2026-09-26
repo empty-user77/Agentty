@@ -124,6 +124,8 @@ impl WebView {
 
     pub fn hide(&mut self) {}
 
+    pub fn set_locked(&mut self, _locked: bool) {}
+
     pub fn park(&mut self) {}
 }
 

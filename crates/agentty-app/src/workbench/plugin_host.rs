@@ -443,6 +443,25 @@ impl Workbench {
                     None => call.reply(Err((codes::INVALID_PARAMS, "no such pane".into())), cx),
                 }
             }
+            // The agents `prompt/inject` can start on this computer (installed), for a plugin to
+            // offer the choice, or to take the only one.
+            "agent/list" => match self.installed.clone() {
+                Some(installed) => call.reply(Ok(agent_list(&installed)), cx),
+                // Asked before the first look at what is installed ended (right after Agentty
+                // started): look now and answer then, not with a guess.
+                None => {
+                    let task = cx.background_spawn(async { crate::agents::detect() });
+                    cx.spawn(async move |this, cx| {
+                        let installed = task.await;
+                        let _ = this.update(cx, |this, cx| {
+                            call.reply(Ok(agent_list(&installed)), cx);
+                            this.installed = Some(installed);
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                }
+            },
             "session/get" => self.plugin_session(call, cx),
             "workspace/instances" => {
                 let list = self.plugin_instances(&call.plugin, cx);
@@ -560,6 +579,7 @@ impl Workbench {
         }
         let kind = kind_named(request.agent.as_deref());
         let restricted = request.restricted();
+        let model = request.model();
         if restricted {
             // Files only means the plugin's own files: a folder elsewhere (the home folder, say)
             // would put everything in it within the agent's reach.
@@ -595,12 +615,12 @@ impl Workbench {
                     PromptTarget::Split => LaunchTarget::SplitRight,
                     _ => LaunchTarget::NewWorkspace,
                 };
-                self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, restricted, target, window, cx)?
+                self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, (restricted, model), target, window, cx)?
             }
             PromptTarget::Own if request.instance.is_some() => {
                 let plugin = request.plugin.clone().ok_or("only a plugin has a workspace of its own")?;
                 let instance = request.instance.clone().unwrap_or_default();
-                let (spec, later) = self.prompt_spec(kind, text, request.cwd.clone(), request.submit, restricted, cx);
+                let (spec, later) = self.prompt_spec(kind, text, request.cwd.clone(), request.submit, (restricted, model), cx);
                 let pane = self.open_in_instance(&plugin, &instance, spec, cx)?;
                 type_later(&pane, later, cx);
                 // The job opens beside the automation's terminals; the user stays where they are.
@@ -628,7 +648,7 @@ impl Workbench {
                     request.title.clone(),
                     cwd,
                     request.submit,
-                    restricted,
+                    (restricted, model),
                     LaunchTarget::NewTab,
                     window,
                     cx,
@@ -659,7 +679,7 @@ impl Workbench {
                             request.title.clone(),
                             cwd,
                             request.submit,
-                            restricted,
+                            (restricted, model),
                             LaunchTarget::NewTab,
                             window,
                             cx,
@@ -683,7 +703,7 @@ impl Workbench {
         text: String,
         cwd: Option<PathBuf>,
         submit: bool,
-        restricted: bool,
+        (restricted, model): (bool, Option<String>),
         cx: &mut Context<Self>,
     ) -> (LaunchSpec, Option<(String, u64)>) {
         let cwd = cwd.filter(|p| p.is_dir()).unwrap_or_else(|| self.default_cwd(cx));
@@ -696,6 +716,7 @@ impl Workbench {
             (agent, _) => (LaunchSpec::new(kind, cwd), Some((text, if agent.is_some() { 4000 } else { 1200 }))),
         };
         spec.restricted = restricted;
+        spec.model = model.filter(|_| kind.agent().is_some());
         (spec, later)
     }
 
@@ -707,7 +728,7 @@ impl Workbench {
         title: Option<String>,
         cwd: PathBuf,
         submit: bool,
-        restricted: bool,
+        (restricted, model): (bool, Option<String>),
         target: LaunchTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -727,6 +748,7 @@ impl Workbench {
         };
         let mut spec = spec;
         spec.restricted = restricted;
+        spec.model = model.filter(|_| kind.agent().is_some());
         match target {
             LaunchTarget::NewWorkspace => {
                 self.create_workspace(spec, window, cx);
@@ -828,6 +850,24 @@ fn type_into(pane: &Pane, text: String, submit: bool, allow_shell_enter: bool, c
             view.insert_text(&text);
         }
     });
+}
+
+/// `agent/list`: the agents `prompt/inject` can start here, with the models each was seen using
+/// (its default first).
+fn agent_list(installed: &crate::agents::Installed) -> Value {
+    let models = |id: &str| -> Vec<Value> {
+        match id {
+            "claude" => installed.claude_models.iter().map(|(m, label)| json!({ "id": m, "label": label })).collect(),
+            _ => installed.codex_models.iter().map(|m| json!({ "id": m, "label": agentty_bridge::pretty_model(m) })).collect(),
+        }
+    };
+    Value::Array(
+        [("claude", "Claude Code"), ("codex", "Codex")]
+            .iter()
+            .filter(|(binary, _)| installed.has(binary))
+            .map(|(id, name)| json!({ "id": id, "name": name, "version": installed.version(id), "models": models(id) }))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

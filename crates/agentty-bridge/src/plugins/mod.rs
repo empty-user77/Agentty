@@ -52,9 +52,17 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("files/download", Some("files")),
     ("files/path", Some("files")),
     ("files/reveal", Some("files")),
+    // The user picks files in the system's open panel; copies land in the plugin's folder.
+    ("files/pick", Some("files")),
+    // An SVG of the plugin's folder drawn into a PNG beside it (an image an agent wrote as code).
+    ("media/svgToPng", Some("files")),
+    // SVG scenes of the plugin's folder made into a short MP4 beside them.
+    ("media/svgsToVideo", Some("files")),
     ("prompt/inject", Some("prompt.inject")),
     // Only a terminal `prompt/inject` opened for the plugin: what it opened, it may close.
     ("terminal/close", Some("prompt.inject")),
+    // Which agents `prompt/inject` can start here, so a plugin offers only those.
+    ("agent/list", Some("prompt.inject")),
     ("terminal/send", Some("terminal.write")),
     ("session/get", Some("session.read")),
     ("workspace/list", Some("workspace.read")),
@@ -192,6 +200,9 @@ pub struct PromptRequest {
     /// tools. For text that is not the user's (web pages, posts, mail) handed to an agent.
     #[serde(default)]
     pub tools: Option<String>,
+    /// The model the new agent runs on (`claude --model`, `codex -m`); one `agent/list` named.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Who asked, shown in the dialog (a plugin name or an app).
     #[serde(default)]
     pub source: Option<String>,
@@ -211,6 +222,14 @@ impl PromptRequest {
     pub fn restricted(&self) -> bool {
         self.tools.as_deref() == Some("files")
     }
+
+    /// The model asked for, when it reads like a model name (letters, digits, `.-_:/[]`, at most
+    /// 80 characters): it becomes an argument of the agent's command line.
+    pub fn model(&self) -> Option<String> {
+        self.model.clone().filter(|m| {
+            !m.is_empty() && m.len() <= 80 && !m.starts_with('-') && m.chars().all(|c| c.is_ascii_alphanumeric() || ".-_:/[]".contains(c))
+        })
+    }
 }
 
 impl Default for PromptRequest {
@@ -226,6 +245,7 @@ impl Default for PromptRequest {
             cwd: None,
             submit: true,
             tools: None,
+            model: None,
             source: None,
             plugin: None,
         }
@@ -258,6 +278,16 @@ pub fn spill_long_prompt(text: &str, title: Option<&str>) -> std::io::Result<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_is_taken_only_when_it_reads_like_one() {
+        let with = |model: &str| PromptRequest { model: Some(model.into()), ..PromptRequest::default() }.model();
+        assert_eq!(with("claude-opus-5-5[1m]").as_deref(), Some("claude-opus-5-5[1m]"));
+        assert_eq!(with("gpt-6-astra").as_deref(), Some("gpt-6-astra"));
+        assert_eq!(with("--dangerously-skip-permissions"), None);
+        assert_eq!(with("opus; rm -rf ~"), None);
+        assert_eq!(with(""), None);
+    }
     use serde_json::json;
 
     #[test]
