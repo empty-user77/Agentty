@@ -428,6 +428,11 @@ fn keep_plugins_awake(cx: &App) {
     crate::platform::app_nap::hold(crate::platform::app_nap::level_for(working, running));
 }
 
+/// Whether any plugin runs now (its automations may be working in pages of a window).
+pub fn any_running(cx: &App) -> bool {
+    host(cx).runtimes.values().any(|r| r.state == RunState::Running)
+}
+
 pub fn plugin_working(cx: &App, plugin: &str) -> bool {
     host(cx).runtimes.get(plugin).is_some_and(|r| r.statuses.values().any(|s| s.state == InstanceState::Working))
 }

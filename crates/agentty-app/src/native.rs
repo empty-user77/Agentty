@@ -76,6 +76,23 @@ pub fn fade(window: Id, alpha: f64, duration: f64) {
     }
 }
 
+/// "Closes" the window while keeping it drawn: fully transparent, letting clicks through, behind
+/// the others, and Agentty no longer the active app (the keyboard goes back to the app before).
+/// A hidden window stops the pages in it — a plugin's automation could not open X's compose
+/// window while nobody looked — so while plugins work this stands in for `order_out`.
+/// `ghost(window, false)` brings it back.
+pub fn ghost(window: Id, on: bool) {
+    unsafe {
+        let _: () = msg_send![window, setAlphaValue: if on { 0.0f64 } else { 1.0f64 }];
+        let _: () = msg_send![window, setIgnoresMouseEvents: if on { YES } else { NO }];
+        if on {
+            let _: () = msg_send![window, orderBack: std::ptr::null_mut::<Object>()];
+            let app: Id = msg_send![objc::class!(NSApplication), sharedApplication];
+            let _: () = msg_send![app, deactivate];
+        }
+    }
+}
+
 /// Hides the window without closing it (no Dock minimize animation).
 pub fn order_out(window: Id) {
     unsafe {
