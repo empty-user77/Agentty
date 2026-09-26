@@ -411,6 +411,8 @@ impl Workbench {
                 }
             }
         }
+        self.plugin_popover_open =
+            self.plugin_panel.clone().is_some_and(|id| self.plugin_tree(&id, cx).is_some_and(|tree| tree.popover().is_some()));
         self.place_browser_views(window, cx);
     }
 
@@ -733,6 +735,7 @@ impl Workbench {
             || self.resume_menu.is_some()
             || self.close_confirm.is_some()
             || self.agent_panel.is_some()
+            || self.plugin_popover_open
             || self.prompt_dialog.is_some()
             || self.harness_dialog.is_some()
             || self.onboarding.as_ref().is_some_and(|o| o.is_modal())

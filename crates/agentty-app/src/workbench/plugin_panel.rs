@@ -8,7 +8,7 @@ use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
 use agentty_bridge::plugins::manifest::{PanelMode, Surface};
-use agentty_bridge::plugins::ui::{Gap, Node, TextStyle, Tone, UiEvent, Variant};
+use agentty_bridge::plugins::ui::{FlowState, Gap, Node, TextStyle, Tone, UiEvent, Variant};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, SharedString, Subscription, Window};
 use std::time::Duration;
 
@@ -41,6 +41,15 @@ fn gap(gap: Gap) -> gpui::Pixels {
         Gap::Large => 14.,
     })
 }
+
+/// A popover's card: wide enough for a step's settings, and scrolling past this height.
+const POPOVER_WIDTH: f32 = 380.;
+const POPOVER_MAX_HEIGHT: f32 = 640.;
+
+/// A `flow` step's icon box, and where the line joining the steps runs: under its middle.
+const FLOW_ICON: f32 = 26.;
+const FLOW_LINE_LEFT: f32 = 8. + FLOW_ICON / 2. - 1.;
+const FLOW_SIDE_INDENT: f32 = 28.;
 
 fn tone_color(tone: Tone) -> u32 {
     match tone {
@@ -291,6 +300,11 @@ impl Workbench {
             .child(close);
 
         let mode_menu = self.plugin_mode_menu.then(|| self.render_panel_mode_menu(&plugin_id, cx));
+        let popover = match (&tree, &state) {
+            (Some(tree), RunState::Running) if !no_automation => tree.popover().cloned(),
+            _ => None,
+        }
+        .map(|popover| self.render_plugin_popover(&plugin_id, &popover, cx));
 
         let body: AnyElement = match (tree, state) {
             (_, RunState::NeedsConsent) => {
@@ -382,6 +396,7 @@ impl Workbench {
                 )
                 // Last, so it paints over the panel's body instead of under it.
                 .children(mode_menu)
+                .children(popover)
                 .into_any_element(),
         )
     }
@@ -752,7 +767,166 @@ impl Workbench {
                 .into_any_element(),
             Node::Spinner { text } => crate::ui::loading_row(text.clone()).into_any_element(),
             Node::Divider => div().h(px(1.)).w_full().bg(hex(Chrome::BORDER)).into_any_element(),
+            // Drawn beside the panel (`render_plugin_popover`), not in its flow.
+            Node::Popover { .. } => div().into_any_element(),
+            Node::Flow { id, steps } => {
+                // Cards top to bottom, each joined to the next by a short line under its icon: the
+                // line is faint where the step it leads to is off.
+                let mut flow = div().flex().flex_col().min_w_0();
+                for (index, step) in steps.iter().enumerate() {
+                    if index > 0 {
+                        let lit = step.state != FlowState::Off && steps[index - 1].state != FlowState::Off;
+                        flow = flow.child(div().ml(px(FLOW_LINE_LEFT)).w(px(2.)).h(px(12.)).bg(if lit {
+                            hex_alpha(Chrome::SUCCESS, 0.55)
+                        } else {
+                            hex(Chrome::BORDER)
+                        }));
+                    }
+                    let color = match step.state {
+                        FlowState::Off => Chrome::MUTED,
+                        FlowState::On => Chrome::BLUE,
+                        FlowState::Active => Chrome::ORANGE,
+                        FlowState::Done => Chrome::SUCCESS,
+                        FlowState::Error => Chrome::ERROR,
+                    };
+                    let (owner, element, item_id) = (plugin.to_string(), id.clone(), step.id.clone());
+                    let border = if step.selected {
+                        hex(Chrome::ACCENT)
+                    } else if step.state == FlowState::Active {
+                        hex_alpha(Chrome::ORANGE, 0.6)
+                    } else {
+                        hex(Chrome::BORDER)
+                    };
+                    flow = flow.child(
+                        div()
+                            .id(SharedString::from(format!("plugin-flow-{plugin}-{id}-{index}")))
+                            // An optional step branches off the main line.
+                            .when(step.side, |d| d.ml(px(FLOW_SIDE_INDENT)))
+                            .px_2()
+                            .py_1p5()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(border)
+                            .bg(hex(if step.selected { Chrome::SELECTED } else { Chrome::OVERLAY }))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                            .when(step.state == FlowState::Off, |d| d.opacity(0.55))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.flush_plugin_inputs(&owner, cx);
+                                let event = UiEvent {
+                                    element: element.clone(),
+                                    event: "select".into(),
+                                    value: None,
+                                    item: Some(item_id.clone()),
+                                    action: None,
+                                };
+                                this.send_plugin_event(&owner, event, cx);
+                            }))
+                            .child(
+                                div()
+                                    .size(px(FLOW_ICON))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_md()
+                                    .bg(hex_alpha(color, 0.18))
+                                    .child(icon(icon_named(step.icon.as_deref()), IconSize::INLINE, hex(color))),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(div().t_small().text_color(hex(Chrome::BRIGHT)).truncate().child(step.title.clone()))
+                                    .children(
+                                        step.subtitle.clone().map(|s| div().t_caption().text_color(hex(Chrome::MUTED)).truncate().child(s)),
+                                    ),
+                            )
+                            .map(|d| match step.state {
+                                FlowState::Active => d.child(crate::ui::dot_spinner(
+                                    SharedString::from(format!("plugin-flow-spin-{plugin}-{id}-{index}")),
+                                    12.,
+                                    hex(Chrome::ORANGE),
+                                )),
+                                FlowState::Error => d.child(icon("circle-x", IconSize::INLINE, hex(Chrome::ERROR))),
+                                _ => d.child(icon("chevron-right", IconSize::INLINE, hex(Chrome::MUTED))),
+                            }),
+                    );
+                }
+                flow.into_any_element()
+            }
         }
+    }
+
+    /// A popover of the panel: a card at the panel's right edge, over the page beside it (which is
+    /// hidden meanwhile, see `overlay_open`).
+    fn render_plugin_popover(&self, plugin: &str, node: &Node, cx: &mut Context<Self>) -> AnyElement {
+        let Node::Popover { id, title, children } = node else { return div().into_any_element() };
+        let (owner, element) = (plugin.to_string(), id.clone());
+        // Full width: a text field inside takes the card's width, not its own (none).
+        let mut body = div().w_full().flex().flex_col().gap_2().min_w_0();
+        let mut path = vec![usize::MAX];
+        for (index, child) in children.iter().enumerate() {
+            path.push(index);
+            body = body.child(self.render_plugin_node(plugin, child, &mut path, cx));
+            path.pop();
+        }
+        let card = div()
+            .ml_2()
+            .w(px(POPOVER_WIDTH))
+            .flex()
+            .flex_col()
+            .rounded_lg()
+            .border_1()
+            .border_color(hex(Chrome::OVERLAY_BORDER))
+            .bg(hex(Chrome::PANEL))
+            .shadow_lg()
+            .occlude()
+            .child(
+                div()
+                    .h(px(36.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .t_body()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(title.clone()),
+                    )
+                    .child(crate::ui::icon_only(
+                        SharedString::from(format!("plugin-popover-close-{plugin}-{id}")),
+                        "x",
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.flush_plugin_inputs(&owner, cx);
+                            let event = UiEvent { element: element.clone(), event: "close".into(), value: None, item: None, action: None };
+                            this.send_plugin_event(&owner, event, cx);
+                        }),
+                    )),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("plugin-popover-body-{plugin}-{id}")))
+                    .w_full()
+                    .max_h(px(POPOVER_MAX_HEIGHT))
+                    .overflow_y_scroll()
+                    .p_3()
+                    .child(body),
+            );
+        let anchored = gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(card);
+        div().absolute().top(px(44.)).right_0().child(gpui::deferred(anchored).with_priority(2)).into_any_element()
     }
 
     /// Enabled plugins whose panel sits on `surface`: (id, title, icon, badge).

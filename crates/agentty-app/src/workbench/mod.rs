@@ -559,6 +559,9 @@ pub struct Workbench {
     plugin_panel: Option<String>,
     /// The panel's layout menu is open.
     plugin_mode_menu: bool,
+    /// The panel's plugin shows a popover: it sits over the page beside the panel, so the page
+    /// steps aside while it is open.
+    plugin_popover_open: bool,
     /// Plugin panels that have a window of their own, by plugin id.
     plugin_windows: HashMap<String, gpui::WindowHandle<plugin_window::PluginWindow>>,
     /// Panes a plugin started, and the status each was last told about: how a plugin hears that
@@ -784,6 +787,7 @@ impl Workbench {
             harness_pattern_form: None,
             plugin_panel: None,
             plugin_mode_menu: false,
+            plugin_popover_open: false,
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
             plugin_launched: HashMap::new(),

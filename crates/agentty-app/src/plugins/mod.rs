@@ -815,11 +815,16 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 "apiVersion": agentty_bridge::plugins::manifest::API_VERSION,
                 "language": crate::settings::settings(cx).language.resolved().code(),
                 "utcOffsetMinutes": utc_offset_minutes(),
+                // Panel elements newer than the first API version, for a plugin to fall back on
+                // older Agentty without guessing from the version number.
+                "uiFeatures": ["flow", "popover"],
             })),
             cx,
         ),
         "net/fetch" => fetch(plugin_id, request_id, params, cx),
         "files/download" => download(plugin_id, request_id, params, cx),
+        "files/pick" => pick_files(plugin_id, request_id, params, cx),
+        "media/svgToPng" => svg_to_png(plugin_id, request_id, params, cx),
         method if method.starts_with("files/") => {
             let result = files_call(plugin_id, method, &params, cx);
             reply(result, cx)
@@ -1043,6 +1048,117 @@ fn files_call(plugin_id: &str, method: &str, params: &Value, _cx: &mut App) -> R
     }
 }
 
+/// Largest side of a PNG `media/svgToPng` draws.
+const MAX_PNG_SIDE: u32 = 4096;
+
+/// `media/svgToPng`: draws the SVG at `from` into a PNG at `to` (both in the plugin's folder),
+/// `width` pixels wide (the SVG's own size when not given), with the system's fonts for its text.
+fn svg_to_png(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else { return };
+    let path = |key: &str| agentty_bridge::plugins::files::resolve(&id, params.get(key).and_then(Value::as_str).unwrap_or_default());
+    let (from, to) = match (path("from"), path("to")) {
+        (Ok(from), Ok(to)) => (from, to),
+        (Err(err), _) | (_, Err(err)) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("{err:#}"))), cx),
+    };
+    let width = params.get("width").and_then(Value::as_u64).map(|w| (w as u32).clamp(16, MAX_PNG_SIDE));
+    let task = cx.background_executor().spawn(async move { render_svg(&from, &to, width) });
+    cx.spawn(async move |cx| {
+        let result = task.await.map_err(|err| (codes::INVALID_PARAMS, format!("{err:#}")));
+        let _ = cx.update(|cx| respond(&id, &request_id, result, cx));
+    })
+    .detach();
+}
+
+fn render_svg(from: &std::path::Path, to: &std::path::Path, width: Option<u32>) -> anyhow::Result<Value> {
+    use anyhow::Context as _;
+    use resvg::{tiny_skia, usvg};
+    // The system's fonts, read once: loading them takes longer than drawing.
+    static FONTS: std::sync::OnceLock<std::sync::Arc<usvg::fontdb::Database>> = std::sync::OnceLock::new();
+    let fonts = FONTS.get_or_init(|| {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        std::sync::Arc::new(db)
+    });
+    let data = std::fs::read(from).with_context(|| format!("{} is not there", from.display()))?;
+    let options = usvg::Options {
+        fontdb: fonts.clone(),
+        resources_dir: None,
+        // Images inside the SVG only (data: URLs). A path or a file: link would read a file of the
+        // computer into the PNG, which the plugin then reads back.
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..Default::default()
+    };
+    let tree = usvg::Tree::from_data(&data, &options).context("not an SVG Agentty can draw")?;
+    let size = tree.size();
+    let scale = width.map_or(1., |w| w as f32 / size.width());
+    let (w, h) = ((size.width() * scale).round() as u32, (size.height() * scale).round() as u32);
+    if w == 0 || h == 0 || w > MAX_PNG_SIDE || h > MAX_PNG_SIDE {
+        anyhow::bail!("{w}×{h} is not a size to draw (at most {MAX_PNG_SIDE} a side)");
+    }
+    let mut pixmap = tiny_skia::Pixmap::new(w, h).context("no room to draw")?;
+    resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    let png = pixmap.encode_png().context("could not write the PNG")?;
+    if let Some(folder) = to.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    std::fs::write(to, &png)?;
+    Ok(json!({ "width": w, "height": h, "size": png.len() }))
+}
+
+/// `files/pick`: the system's open panel; what the user picks is copied into `into` (a folder of
+/// the plugin's own), never handed over by its own path. `[]` when the user cancels.
+fn pick_files(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
+    let id = plugin_id.to_string();
+    let Some(request_id) = request_id else { return };
+    let into = params.get("into").and_then(Value::as_str).unwrap_or("picked").to_string();
+    let folder = match agentty_bridge::plugins::files::resolve(&id, &into) {
+        Ok(folder) => folder,
+        Err(err) => return respond(&id, &request_id, Err((codes::INVALID_PARAMS, format!("{err:#}"))), cx),
+    };
+    let multiple = params.get("multiple").and_then(Value::as_bool).unwrap_or(true);
+    let paths = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple, prompt: None });
+    cx.spawn(async move |cx| {
+        let picked = match paths.await {
+            Ok(Ok(Some(paths))) => paths,
+            _ => Vec::new(),
+        };
+        let copied = copy_picked(&picked, &folder, &into);
+        let _ = cx.update(|cx| respond(&id, &request_id, copied.map_err(|err| (codes::INTERNAL, format!("{err:#}"))), cx));
+    })
+    .detach();
+}
+
+/// Copies picked files into `folder` under names not taken yet: `[{ path, name, size }]`, `path`
+/// relative to the plugin's folder.
+fn copy_picked(picked: &[std::path::PathBuf], folder: &std::path::Path, into: &str) -> anyhow::Result<Value> {
+    std::fs::create_dir_all(folder)?;
+    let mut out = Vec::new();
+    for source in picked.iter().filter(|p| p.is_file()) {
+        let size = std::fs::metadata(source)?.len();
+        if size > agentty_bridge::plugins::files::MAX_FILE {
+            anyhow::bail!("{} is larger than 1 GB", source.display());
+        }
+        let name = source.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
+        let (stem, ext) = match name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+            _ => (name.clone(), String::new()),
+        };
+        let mut target_name = name.clone();
+        let mut n = 2;
+        while folder.join(&target_name).exists() {
+            target_name = format!("{stem}-{n}{ext}");
+            n += 1;
+        }
+        std::fs::copy(source, folder.join(&target_name))?;
+        out.push(json!({ "path": format!("{}/{target_name}", into.trim_end_matches('/')), "name": name, "size": size }));
+    }
+    Ok(Value::Array(out))
+}
+
 /// `files/download`: a GET streamed into a file of the plugin's folder. Needs `net.request` too:
 /// it reaches the network the same way `net/fetch` does.
 fn download(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mut App) {
@@ -1184,6 +1300,36 @@ impl PluginCall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_svg_is_drawn_into_a_png_of_the_asked_width() {
+        let dir = std::env::temp_dir().join(format!("agentty-svg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let from = dir.join("a.svg");
+        std::fs::write(&from, r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#123"/><text x="10" y="50" font-family="Helvetica, Arial, sans-serif" font-size="24" fill="#fff">Hi</text></svg>"##).unwrap();
+        let to = dir.join("out/a.png");
+        let drawn = render_svg(&from, &to, Some(320)).unwrap();
+        assert_eq!((drawn["width"].as_u64(), drawn["height"].as_u64()), (Some(320), Some(180)));
+        assert!(std::fs::read(&to).unwrap().starts_with(b"\x89PNG"));
+        // A picture elsewhere on the computer is not drawn in: the PNG stays the plain background.
+        let secret = dir.join("secret.png");
+        std::fs::copy(&to, &secret).unwrap();
+        let path = secret.display();
+        std::fs::write(&from, format!(r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="160" height="90"><rect width="160" height="90" fill="#000"/><image href="file://{path}" width="160" height="90"/><image xlink:href="{path}" width="160" height="90"/></svg>"##)).unwrap();
+        let plain = dir.join("plain.png");
+        render_svg(&from, &plain, None).unwrap();
+        std::fs::write(
+            &from,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#000"/></svg>"##,
+        )
+        .unwrap();
+        let black = dir.join("black.png");
+        render_svg(&from, &black, None).unwrap();
+        assert_eq!(std::fs::read(&plain).unwrap(), std::fs::read(&black).unwrap(), "a file of the computer was drawn in");
+        std::fs::write(&from, "not svg").unwrap();
+        assert!(render_svg(&from, &to, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn logs_are_capped_by_size_as_well_as_count() {

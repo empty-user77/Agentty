@@ -277,13 +277,25 @@ impl LaunchSpec {
                 args.extend(["--settings".into(), inline_or_file("claude-settings.json", claude_hook_settings())]);
             }
             PaneKind::Codex => {
-                args.extend(["codex".into(), "-c".into(), codex_notify_override()]);
+                // A files-only job with its prompt runs as `codex exec`: it does the one job and
+                // ends, and never stops at the interactive screen's questions (whether to trust a
+                // new folder), which nobody is there to answer.
+                let job = self.restricted && matches!(self.start, Start::Prompt(_));
+                args.push("codex".into());
+                if job {
+                    args.extend(["exec".into(), "--skip-git-repo-check".into()]);
+                }
+                args.extend(["-c".into(), codex_notify_override()]);
                 if let Some(guide) = crate::agent_guide::codex_override() {
                     args.extend(["-c".into(), guide]);
                 }
                 if self.restricted {
-                    // Its folder only, no network, never asking (it works unattended).
-                    args.extend(["--sandbox".into(), "workspace-write".into(), "--ask-for-approval".into(), "never".into()]);
+                    // Its folder only, no network, never asking (it works unattended; `exec` does
+                    // not ask anyway and takes no approval option).
+                    args.extend(["--sandbox".into(), "workspace-write".into()]);
+                    if !job {
+                        args.extend(["--ask-for-approval".into(), "never".into()]);
+                    }
                     args.extend(["-c".into(), "sandbox_workspace_write.network_access=false".into()]);
                 } else if crate::settings::browser_tools_enabled() {
                     args.extend(["-c".into(), codex_browser_mcp_override()]);
@@ -938,6 +950,11 @@ pub(crate) mod tests {
         let args = codex.command().unwrap();
         assert!(args.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "workspace-write"));
         assert!(args.iter().any(|a| a == "sandbox_workspace_write.network_access=false"));
+        // One job, run to its end: `codex exec`, which asks nothing (no trust screen) and takes
+        // no approval option.
+        assert_eq!(&args[..3], ["codex", "exec", "--skip-git-repo-check"]);
+        assert!(!args.iter().any(|a| a == "--ask-for-approval"));
+        assert_eq!(args.last().map(String::as_str), Some("x"));
 
         let open = LaunchSpec::with_prompt(Agent::Claude, "x".into(), String::new(), std::env::temp_dir());
         assert!(!open.command().unwrap().iter().any(|a| a == "--disallowedTools"), "other agents are left as they were");
