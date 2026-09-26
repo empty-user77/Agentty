@@ -116,16 +116,18 @@ pub fn debug_snapshot(path: std::path::PathBuf, cx: &mut App) {
 /// Everything the popover shows, gathered from all Agentty windows.
 struct Snapshot {
     agents: Vec<AgentSummary>,
+    plugins: Vec<crate::workbench::mini::PluginActivitySummary>,
     usage: Vec<AccountUsage>,
     mini: bool,
 }
 
 impl Snapshot {
     fn gather(cx: &App) -> Self {
-        let mut snapshot = Snapshot { agents: Vec::new(), usage: Vec::new(), mini: false };
+        let mut snapshot = Snapshot { agents: Vec::new(), plugins: Vec::new(), usage: Vec::new(), mini: false };
         for window in crate::workbenches(cx) {
             let Ok(workbench) = window.read(cx) else { continue };
             snapshot.agents.extend(workbench.agent_summaries(cx));
+            snapshot.plugins.extend(workbench.plugin_activity_summaries(cx));
             if snapshot.usage.is_empty() {
                 snapshot.usage = workbench.account_usage().to_vec();
             }
@@ -133,6 +135,8 @@ impl Snapshot {
         }
         // Agents that need the user first, then working ones, then the most recently active.
         snapshot.agents.sort_by_key(|a| (!a.needs_user, !a.working, std::cmp::Reverse(a.last_activity_ms)));
+        // Working automations first, then the rest in the order their windows reported them.
+        snapshot.plugins.sort_by_key(|p| p.state != crate::plugins::InstanceState::Working);
         snapshot
     }
 }
@@ -167,14 +171,15 @@ impl TrayPopover {
     fn run(action: TrayAction) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
         move |_, _, _| {
             push_action(TrayAction::ClosePopover);
-            push_action(action);
+            push_action(action.clone());
         }
     }
 
     fn header(&self, snapshot: &Snapshot, cx: &App) -> impl IntoElement {
-        let working = snapshot.agents.iter().filter(|a| a.working).count();
+        let working = snapshot.agents.iter().filter(|a| a.working).count()
+            + snapshot.plugins.iter().filter(|p| p.state == crate::plugins::InstanceState::Working).count();
         let waiting = snapshot.agents.iter().filter(|a| a.needs_user).count();
-        let summary = if snapshot.agents.is_empty() {
+        let summary = if snapshot.agents.is_empty() && snapshot.plugins.is_empty() {
             t(cx, "mini.no_agents").to_string()
         } else if working > 0 {
             tf(cx, "mini.working", &[("n", &working.to_string())])
@@ -323,9 +328,9 @@ impl TrayPopover {
         )
     }
 
-    fn agents_section(agents: &[AgentSummary], cx: &App) -> impl IntoElement {
+    fn agents_section(agents: &[AgentSummary], plugins: &[crate::workbench::mini::PluginActivitySummary], cx: &App) -> impl IntoElement {
         let mut rows = div().id("tray-agents").flex().flex_col().pb_1().max_h(px(AGENT_ROW * MAX_AGENT_ROWS as f32)).overflow_y_scroll();
-        if agents.is_empty() {
+        if agents.is_empty() && plugins.is_empty() {
             rows = rows.child(div().px_3().py_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "mini.empty_hint")));
         }
         for agent in agents {
@@ -375,6 +380,79 @@ impl TrayPopover {
                             .text_color(hex(agent.color))
                             .when(agent.needs_user, |d| d.px_1p5().rounded_sm().bg(hex_alpha(Chrome::ATTENTION, 0.18)))
                             .child(agent.status_line()),
+                    ),
+            );
+        }
+        for plugin in plugins {
+            let (plugin_id, instance) = (plugin.plugin.clone(), plugin.instance.clone());
+            let state_color = match plugin.state {
+                crate::plugins::InstanceState::Working => Chrome::ORANGE,
+                crate::plugins::InstanceState::Error => Chrome::ATTENTION,
+                crate::plugins::InstanceState::Idle => Chrome::MUTED,
+            };
+            let status_key = match plugin.state {
+                crate::plugins::InstanceState::Working => "plugins.activity.working",
+                crate::plugins::InstanceState::Idle => "plugins.activity.idle",
+                crate::plugins::InstanceState::Error => "plugins.activity.error",
+            };
+            let status = match plugin.elapsed {
+                Some(seconds) => format!("{} · {}", t(cx, status_key), crate::workbench::format_elapsed(seconds)),
+                None => t(cx, status_key).to_string(),
+            };
+            rows = rows.child(
+                div()
+                    .id(SharedString::from(format!("tray-plugin-{plugin_id}-{instance}")))
+                    .h(px(AGENT_ROW))
+                    .mx_1()
+                    .px_2()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(Self::run(TrayAction::FocusPlugin { plugin: plugin_id.clone(), instance: instance.clone() }))
+                    .child(
+                        div().relative().child(crate::ui::plugin_mark(plugin.logo.clone(), plugin.glyph, 24., hex(Chrome::BRIGHT))).when(
+                            plugin.state != crate::plugins::InstanceState::Idle,
+                            |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .bottom(px(-1.))
+                                        .right(px(-1.))
+                                        .size(px(9.))
+                                        .rounded_full()
+                                        .border_2()
+                                        .border_color(hex(Chrome::OVERLAY))
+                                        .bg(hex(state_color)),
+                                )
+                            },
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().t_small().truncate().text_color(hex(Chrome::BRIGHT)).child(plugin.title.clone()))
+                            .children(
+                                plugin.text.clone().map(|text| div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(text)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .max_w(px(120.))
+                            .truncate()
+                            .t_caption()
+                            .text_color(hex(state_color))
+                            .when(plugin.state == crate::plugins::InstanceState::Error, |d| {
+                                d.px_1p5().rounded_sm().bg(hex_alpha(Chrome::ATTENTION, 0.18))
+                            })
+                            .child(status),
                     ),
             );
         }
@@ -468,7 +546,7 @@ impl Render for TrayPopover {
             .child(measure)
             .child(self.header(&snapshot, cx))
             .when(!snapshot.usage.is_empty(), |d| d.child(Self::usage_section(&snapshot.usage, cx)))
-            .child(Self::agents_section(&snapshot.agents, cx))
+            .child(Self::agents_section(&snapshot.agents, &snapshot.plugins, cx))
             .child(div().mx_2().h(px(1.)).bg(hex(Chrome::BORDER)))
             .child(Self::footer(cx));
 

@@ -855,10 +855,13 @@ impl Workbench {
             Some(dormant) => dormant.cwd.clone(),
             None => ws.tabs.get(ws.active_tab).map(|t| t.active.read(cx).display_cwd()).unwrap_or_else(|| ws.cwd.clone()),
         };
-        // A plugin's workspace works in the plugin's own folder: say whose it is instead.
-        let path = match &ws.plugin {
-            Some(_) => t(cx, "workspace.plugin_card").to_string(),
-            None => tilde(&cwd),
+        // A plugin's workspace works in the plugin's own folder: say whose it is instead, or what
+        // one of its automations is doing right now while it works.
+        let plugin_working_text = ws.plugin.as_deref().and_then(|id| crate::plugins::plugin_working_text(cx, id));
+        let path = match (&ws.plugin, &plugin_working_text) {
+            (Some(_), Some(text)) => text.clone(),
+            (Some(_), None) => t(cx, "workspace.plugin_card").to_string(),
+            (None, _) => tilde(&cwd),
         };
         // The path is shortened on its own; the counts are short and go after it whole, so a cut
         // never lands in the middle of "탭 2개".
@@ -884,7 +887,11 @@ impl Workbench {
             .as_ref()
             .and_then(|branch| Some((self.repo_root_of(&cwd)?.to_path_buf(), branch.clone())))
             .and_then(|(repo, branch)| self.pull_request_of(&repo, &branch).cloned());
-        let working = panes.iter().any(|p| p.read(cx).status.in_turn());
+        // A pane running a turn, or — for a plugin's workspace — any of its automations reporting
+        // `working` (it may be doing something out of sight, in the browser or over the network,
+        // with no pane of its own running).
+        let working = panes.iter().any(|p| p.read(cx).status.in_turn())
+            || ws.plugin.as_deref().is_some_and(|id| crate::plugins::plugin_working(cx, id));
         // The logo is only worth the room when there is more than one kind of agent to tell apart:
         // with a single CLI on the machine every card carried the same mark. Without it the name
         // starts at the edge, and the lines under it follow — nothing is left indented under a

@@ -478,7 +478,7 @@ fn configured_model_label(installed: Option<&crate::agents::Installed>, kind: cr
     Some(ModelLabel { name, window: (kind == crate::launch::PaneKind::Claude).then_some(window) })
 }
 
-pub(super) fn format_elapsed(seconds: u64) -> String {
+pub(crate) fn format_elapsed(seconds: u64) -> String {
     match seconds {
         0..=59 => format!("{seconds}s"),
         60..=3599 => format!("{}m {:02}s", seconds / 60, seconds % 60),

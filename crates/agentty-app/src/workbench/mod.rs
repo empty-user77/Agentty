@@ -153,6 +153,7 @@ pub fn next_free_window_slot() -> usize {
 }
 
 pub use account_usage::AccountUsage;
+pub(crate) use layout::format_elapsed;
 pub use persist::ClosedWindows;
 
 /// The place and size window `slot` had at the last save.
@@ -484,6 +485,9 @@ pub struct Workbench {
     browser_request: Option<String>,
     /// The workspace the user was in before going to a plugin's: where leaving it goes back to.
     before_plugin_workspace: Option<u64>,
+    /// The main window was "closed" while plugins ran: kept drawn but invisible (`native::ghost`)
+    /// until it is brought back.
+    ghosted: bool,
     /// The keyboard goes to the workspace in front at the next render: set where the workspace
     /// changed without a window at hand (leaving a plugin's workspace).
     refocus: bool,
@@ -740,6 +744,7 @@ impl Workbench {
             plugin_browsers: Vec::new(),
             before_plugin_workspace: None,
             refocus: false,
+            ghosted: false,
             plugin_workspace_shown: None,
             stashed_browser: None,
             instance_shown: None,
@@ -868,7 +873,13 @@ impl Workbench {
                 return true;
             }
             if let Some(ns) = crate::native::ns_window(window) {
-                crate::native::order_out(ns);
+                // A running plugin works in pages of this window: they must stay drawn.
+                if crate::plugins::any_running(cx) {
+                    crate::native::ghost(ns, true);
+                    let _ = entity.update(cx, |this, _| this.ghosted = true);
+                } else {
+                    crate::native::order_out(ns);
+                }
             }
             false
         });
@@ -2815,6 +2826,12 @@ impl Render for Workbench {
         }
         let activated = window.is_window_active() && !self.window_active;
         self.window_active = window.is_window_active();
+        // "Closed" while plugins worked, now brought back (the Dock, the menu bar, Cmd-Tab).
+        if activated && std::mem::take(&mut self.ghosted) {
+            if let Some(ns) = crate::native::ns_window(window) {
+                crate::native::ghost(ns, false);
+            }
+        }
         if activated {
             self.docker_window_activated();
         }
@@ -3936,6 +3953,17 @@ impl Workbench {
                 if let Some((plugin, mode)) = argument.split_once(' ') {
                     if let Some(mode) = agentty_bridge::plugins::manifest::PanelMode::from_id(mode.trim()) {
                         self.set_plugin_panel_mode(plugin, mode, window, cx);
+                    }
+                }
+            }
+            // `plugin-status <plugin> <instance|-> working|idle|error [text...]`: as if the plugin
+            // called `workspace/setInstanceStatus` — `-` is its panel outside a workspace.
+            "plugin-status" => {
+                let mut parts = argument.splitn(4, ' ');
+                if let (Some(plugin), Some(instance), Some(state)) = (parts.next(), parts.next(), parts.next()) {
+                    let text = parts.next().map(str::to_string);
+                    if let Err(err) = crate::plugins::debug_set_instance_status(plugin, instance, state, text, cx) {
+                        eprintln!("plugin-status: {err}");
                     }
                 }
             }

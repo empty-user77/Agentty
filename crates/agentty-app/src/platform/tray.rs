@@ -3,11 +3,17 @@
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use std::sync::Mutex;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayAction {
     Show,
     ToggleMini,
     Focus(u64),
+    /// A plugin automation row was clicked: brings up that plugin's workspace with this
+    /// automation's tab in front.
+    FocusPlugin {
+        plugin: String,
+        instance: String,
+    },
     OpenUsage,
     /// Read spend and plan limits again now.
     RefreshUsage,

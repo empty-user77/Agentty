@@ -1060,13 +1060,17 @@ fn run_tray_actions(cx: &mut App) {
     }
     let windows = workbenches(cx);
     for action in actions {
-        if tray_popover::handle(action, cx) {
+        if tray_popover::handle(action.clone(), cx) {
             continue;
         }
-        // Focus goes to the window holding that pane; everything else to the main window.
-        let target = match action {
+        // Focus goes to the window holding that pane (or that plugin's workspace); everything
+        // else to the main window.
+        let target = match &action {
             status_item::TrayAction::Focus(pane) => {
-                windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(pane, cx))).or(windows.first()).copied()
+                windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(*pane, cx))).or(windows.first()).copied()
+            }
+            status_item::TrayAction::FocusPlugin { plugin, .. } => {
+                windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_plugin_workspace(plugin))).or(windows.first()).copied()
             }
             _ => windows.first().copied(),
         };

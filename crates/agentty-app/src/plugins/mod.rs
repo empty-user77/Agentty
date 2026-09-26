@@ -50,11 +50,67 @@ pub enum RunState {
     NeedsConsent,
 }
 
+/// `workspace/setInstanceStatus`: what one of a plugin's automations (or, with no instance, the
+/// plugin's panel outside any workspace) is doing right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceState {
+    Working,
+    Idle,
+    Error,
+}
+
+impl InstanceState {
+    fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "working" => Some(Self::Working),
+            "idle" => Some(Self::Idle),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
+/// Characters of `workspace/setInstanceStatus`'s `text` kept — a short line beside the automation.
+const MAX_STATUS_CHARS: usize = 120;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceStatus {
+    pub state: InstanceState,
+    pub text: Option<String>,
+    /// `now_ms` the last time `state` became `Working`, for the elapsed time shown beside it.
+    /// Cleared as soon as the state moves off `Working`, so it is never stale once it comes back.
+    pub working_since_ms: Option<u64>,
+}
+
+/// Folds a new report into what is kept for one automation: `working_since_ms` carries over while
+/// `state` stays `Working` (so restating the same text does not reset the clock) and is set fresh
+/// the moment it becomes `Working`; any other state clears it.
+fn apply_status(previous: Option<&InstanceStatus>, state: InstanceState, text: Option<String>, now_ms: u64) -> InstanceStatus {
+    let working_since_ms = match (state, previous) {
+        (InstanceState::Working, Some(previous)) if previous.state == InstanceState::Working => previous.working_since_ms,
+        (InstanceState::Working, _) => Some(now_ms),
+        _ => None,
+    };
+    InstanceStatus { state, text, working_since_ms }
+}
+
+/// One line, at most `MAX_STATUS_CHARS` characters: what `workspace/setInstanceStatus.text` is cut
+/// down to (newlines and other control characters become spaces — this is a status line, not a log).
+fn sanitize_status_text(text: &str) -> Option<String> {
+    let cleaned: String =
+        text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed: String = cleaned.chars().take(MAX_STATUS_CHARS).collect();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 pub struct Runtime {
     pub state: RunState,
     pub panel: Option<Node>,
     /// Panels of the plugin's automations (tabs of its workspace), by automation id.
     pub panels: HashMap<String, Node>,
+    /// `workspace/setInstanceStatus`, by automation id — `""` for the plugin's panel outside a
+    /// workspace.
+    pub statuses: HashMap<String, InstanceStatus>,
     pub badge: String,
     pub logs: VecDeque<String>,
     process: Option<PluginProcess>,
@@ -63,6 +119,9 @@ pub struct Runtime {
     stopping: bool,
     /// Messages seen in the current second, for the flood limit.
     rate_window: Option<(Instant, u32)>,
+    /// What those messages were (method, or "log" / "answer"), said when the plugin is stopped
+    /// for flooding so its author knows what to look at.
+    rate_kinds: HashMap<String, u32>,
     /// When this plugin last showed a notification.
     notified_at: Option<Instant>,
     /// When this plugin last had a URL opened in the browser.
@@ -81,12 +140,14 @@ impl Runtime {
             state: RunState::Stopped,
             panel: None,
             panels: HashMap::new(),
+            statuses: HashMap::new(),
             badge: String::new(),
             logs: VecDeque::new(),
             process: None,
             generation: 0,
             stopping: false,
             rate_window: None,
+            rate_kinds: HashMap::new(),
             notified_at: None,
             opened_url_at: None,
             log_bytes: 0,
@@ -108,19 +169,28 @@ impl Runtime {
         }
     }
 
-    /// Counts a message and reports whether the plugin is flooding Agentty.
-    fn over_rate_limit(&mut self) -> bool {
-        let now = Instant::now();
+    /// Counts a message sent at `at` and reports whether the plugin is flooding Agentty: more than
+    /// so many sent within one second of each other, however late they are handled.
+    fn over_rate_limit(&mut self, at: Instant) -> bool {
+        let now = at;
         match self.rate_window {
-            Some((start, count)) if start.elapsed() < Duration::from_secs(1) => {
+            Some((start, count)) if at.saturating_duration_since(start) < Duration::from_secs(1) => {
                 self.rate_window = Some((start, count + 1));
                 count + 1 > MAX_MESSAGES_PER_SECOND
             }
             _ => {
                 self.rate_window = Some((now, 1));
+                self.rate_kinds.clear();
                 false
             }
         }
+    }
+
+    /// The kinds of messages in the flooding second, the most frequent first: `browser/eval ×180`.
+    fn flood_summary(&self) -> String {
+        let mut kinds: Vec<(&String, &u32)> = self.rate_kinds.iter().collect();
+        kinds.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        kinds.iter().take(6).map(|(kind, n)| format!("{kind} ×{n}")).collect::<Vec<_>>().join(", ")
     }
 
     /// The process this runtime had is going, and whatever it still sends belongs to a plugin
@@ -158,6 +228,10 @@ pub struct Envelope {
     plugin: String,
     generation: u64,
     event: ProcessEvent,
+    /// When the plugin sent it — not when the main thread got to it. A main thread held up for a
+    /// while (busy, or slowed down while the screen is locked) handles a backlog in one go, and
+    /// counting that backlog as one second's messages stopped plugins that never flooded.
+    sent_at: Instant,
 }
 
 pub struct PluginHost {
@@ -326,9 +400,85 @@ pub fn runtime<'a>(cx: &'a App, id: &str) -> Option<&'a Runtime> {
     host(cx).runtimes.get(id)
 }
 
+/// Appends a line to `plugin`'s log (shown in the Plugins page), for something Agentty's own host
+/// code did about a call — a request that timed out on this side rather than being answered by the
+/// plugin or the page it drives — so it shows up next to the plugin's own log lines.
+pub fn log(plugin: &str, line: impl Into<String>, cx: &mut App) {
+    if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin) {
+        runtime.log(line);
+    }
+    touch(cx);
+}
+
+/// `plugin`'s last `workspace/setInstanceStatus` for `instance` (`""` for its panel outside a
+/// workspace), if it has reported one.
+pub fn instance_status(cx: &App, plugin: &str, instance: &str) -> Option<InstanceStatus> {
+    host(cx).runtimes.get(plugin)?.statuses.get(instance).cloned()
+}
+
+/// Whether any automation of `plugin` (or its panel outside a workspace) currently reports
+/// `working` — what makes its workspace card spin.
+/// Holds off App Nap while a plugin runs, and idle sleep while one of its automations works: out
+/// of sight (a locked screen above all) their timers would otherwise stretch to minutes and the
+/// automation would stop until someone looked (see `platform::app_nap`).
+fn keep_plugins_awake(cx: &App) {
+    let runtimes = &host(cx).runtimes;
+    let running = runtimes.values().any(|r| r.state == RunState::Running);
+    let working = runtimes.values().any(|r| r.statuses.values().any(|s| s.state == InstanceState::Working));
+    crate::platform::app_nap::hold(crate::platform::app_nap::level_for(working, running));
+}
+
+/// Whether any plugin runs now (its automations may be working in pages of a window).
+pub fn any_running(cx: &App) -> bool {
+    host(cx).runtimes.values().any(|r| r.state == RunState::Running)
+}
+
+pub fn plugin_working(cx: &App, plugin: &str) -> bool {
+    host(cx).runtimes.get(plugin).is_some_and(|r| r.statuses.values().any(|s| s.state == InstanceState::Working))
+}
+
+/// The `text` of a working automation of `plugin`, for its workspace card's second line, if one
+/// reported both `working` and a line to show.
+pub fn plugin_working_text(cx: &App, plugin: &str) -> Option<String> {
+    host(cx).runtimes.get(plugin)?.statuses.values().find_map(|s| (s.state == InstanceState::Working).then(|| s.text.clone()).flatten())
+}
+
+/// Clears the status of one automation — its tab closed, so nothing more is owed to it.
+pub fn clear_instance_status(plugin: &str, instance: &str, cx: &mut App) {
+    if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin) {
+        runtime.statuses.remove(instance);
+    }
+    touch(cx);
+}
+
+/// `workspace/setInstanceStatus`'s handling, shared with the `plugin-status` debug command: parses
+/// `state`, folds it into what is kept for `instance` and marks the window for a repaint.
+fn set_instance_status(plugin_id: &str, instance: &str, state: &str, text: Option<String>, cx: &mut App) -> Result<(), String> {
+    let Some(state) = InstanceState::from_id(state) else {
+        return Err("state must be \"working\", \"idle\" or \"error\"".into());
+    };
+    let now = crate::ui::now_ms();
+    if let Some(runtime) = host_mut(cx).runtimes.get_mut(plugin_id) {
+        let previous = runtime.statuses.get(instance);
+        let status = apply_status(previous, state, text, now);
+        runtime.statuses.insert(instance.to_string(), status);
+    }
+    touch(cx);
+    Ok(())
+}
+
+/// `plugin-status <plugin> <instance> working|idle|error [text...]` — sets a status without a real
+/// plugin process, for development and tests. `instance` may be `-` for the plugin's panel outside
+/// a workspace.
+pub fn debug_set_instance_status(plugin: &str, instance: &str, state: &str, text: Option<String>, cx: &mut App) -> Result<(), String> {
+    let instance = if instance == "-" { "" } else { instance };
+    set_instance_status(plugin, instance, state, text, cx)
+}
+
 /// Marks plugin state as changed. Repaints are spaced out, so a plugin that sends thousands of
 /// updates a second can't keep the window busy redrawing.
 fn touch(cx: &mut App) {
+    keep_plugins_awake(cx);
     let host = host_mut(cx);
     host.revision += 1;
     let due = host.refreshed_at.is_none_or(|at| at.elapsed() >= REFRESH_INTERVAL);
@@ -397,7 +547,7 @@ fn ensure_started(id: &str, context: &Value, cx: &mut App) -> bool {
     let generation = runtime.generation;
     let plugin_id = id.to_string();
     let process = PluginProcess::start(&plugin, &language, move |event| {
-        let _ = tx.unbounded_send(Envelope { plugin: plugin_id.clone(), generation, event });
+        let _ = tx.unbounded_send(Envelope { plugin: plugin_id.clone(), generation, event, sent_at: Instant::now() });
     });
     let manifest = plugin.manifest.as_ref();
     let initialize = json!({
@@ -486,6 +636,7 @@ pub fn stop(id: &str, cx: &mut App) {
         runtime.state = RunState::Stopped;
         runtime.panel = None;
         runtime.panels.clear();
+        runtime.statuses.clear();
         runtime.badge.clear();
     }
     touch(cx);
@@ -520,17 +671,27 @@ pub fn respond(id: &str, request_id: &Value, result: Result<Value, (i64, String)
 
 /// Handles one event from a plugin process (on the app's main thread).
 pub fn handle(envelope: Envelope, cx: &mut App) {
-    let Envelope { plugin: id, generation, event } = envelope;
+    let Envelope { plugin: id, generation, event, sent_at } = envelope;
     let current = host(cx).runtimes.get(&id).is_some_and(|r| r.generation == generation);
     if !current {
         return;
     }
     // A plugin that floods Agentty is stopped rather than allowed to freeze the window.
     if matches!(event, ProcessEvent::Message(_) | ProcessEvent::Log(_)) {
-        let flooding = host_mut(cx).runtimes.get_mut(&id).is_some_and(Runtime::over_rate_limit);
+        let kind = match &event {
+            ProcessEvent::Message(Incoming::Request { method, .. } | Incoming::Notification { method, .. }) => method.clone(),
+            ProcessEvent::Message(Incoming::Response { .. }) => "answer".into(),
+            _ => "log".into(),
+        };
+        let flooding = host_mut(cx).runtimes.get_mut(&id).is_some_and(|runtime| {
+            let over = runtime.over_rate_limit(sent_at);
+            *runtime.rate_kinds.entry(kind).or_default() += 1;
+            over
+        });
         if flooding {
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
-                runtime.log(format!("— stopped: more than {MAX_MESSAGES_PER_SECOND} messages a second —"));
+                let summary = runtime.flood_summary();
+                runtime.log(format!("— stopped: more than {MAX_MESSAGES_PER_SECOND} messages a second ({summary}) —"));
             }
             stop(&id, cx);
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
@@ -640,6 +801,13 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             }
             touch(cx);
             reply(Ok(Value::Null), cx)
+        }
+        "workspace/setInstanceStatus" => {
+            let instance = params.get("instance").and_then(Value::as_str).unwrap_or_default().to_string();
+            let state = params.get("state").and_then(Value::as_str).unwrap_or_default().to_string();
+            let text = params.get("text").and_then(Value::as_str).and_then(sanitize_status_text);
+            let result = set_instance_status(plugin_id, &instance, &state, text, cx);
+            reply(result.map(|()| Value::Null).map_err(|e| (codes::INVALID_PARAMS, e)), cx)
         }
         "host/info" => reply(
             Ok(json!({
@@ -1035,13 +1203,22 @@ mod tests {
     #[test]
     fn floods_are_caught_and_notifications_spaced_out() {
         let mut runtime = Runtime::new();
+        let start = Instant::now();
         for _ in 0..MAX_MESSAGES_PER_SECOND {
-            assert!(!runtime.over_rate_limit());
+            assert!(!runtime.over_rate_limit(start));
         }
-        assert!(runtime.over_rate_limit(), "the next message is over the limit");
+        assert!(runtime.over_rate_limit(start), "the next message is over the limit");
         // A new second starts over.
         runtime.rate_window = Some((Instant::now() - Duration::from_secs(2), MAX_MESSAGES_PER_SECOND + 10));
-        assert!(!runtime.over_rate_limit());
+        assert!(!runtime.over_rate_limit(Instant::now()));
+
+        // Sent a few a second over three seconds, handled all at once: not a flood.
+        let mut spread = Runtime::new();
+        let base = Instant::now();
+        for i in 0..(MAX_MESSAGES_PER_SECOND * 3) {
+            let at = base + Duration::from_millis(u64::from(i) * 3000 / u64::from(MAX_MESSAGES_PER_SECOND * 3));
+            assert!(!spread.over_rate_limit(at), "message {i} was sent at a steady pace");
+        }
 
         assert!(runtime.may_notify());
         assert!(!runtime.may_notify(), "the second notification is dropped");
@@ -1093,5 +1270,40 @@ mod tests {
         // Only the user pressing Restart, which is the one place that removes it.
         tainted.remove("plugin");
         assert!(!tainted.contains("plugin"));
+    }
+
+    #[test]
+    fn working_since_starts_when_work_begins_and_survives_the_same_text_again() {
+        let started = apply_status(None, InstanceState::Working, Some("collecting".into()), 1_000);
+        assert_eq!(started.working_since_ms, Some(1_000));
+        // Restating the same state (a new count in the text) does not reset the clock.
+        let restated = apply_status(Some(&started), InstanceState::Working, Some("collecting (3/6)".into()), 1_500);
+        assert_eq!(restated.working_since_ms, Some(1_000));
+        assert_eq!(restated.text.as_deref(), Some("collecting (3/6)"));
+    }
+
+    #[test]
+    fn working_since_is_cleared_off_working_and_set_fresh_next_time() {
+        let working = apply_status(None, InstanceState::Working, None, 1_000);
+        let idle = apply_status(Some(&working), InstanceState::Idle, None, 2_000);
+        assert_eq!(idle.working_since_ms, None);
+        // Working again later gets its own start time, not the first one.
+        let working_again = apply_status(Some(&idle), InstanceState::Working, None, 3_000);
+        assert_eq!(working_again.working_since_ms, Some(3_000));
+    }
+
+    #[test]
+    fn status_text_is_one_line_capped_and_trimmed() {
+        assert_eq!(sanitize_status_text("  Collecting @sama (3/6)  "), Some("Collecting @sama (3/6)".to_string()));
+        assert_eq!(sanitize_status_text("line one\nline two"), Some("line one line two".to_string()));
+        assert_eq!(sanitize_status_text("   "), None, "a blank status is no status");
+        let long = "x".repeat(200);
+        assert_eq!(sanitize_status_text(&long).unwrap().chars().count(), MAX_STATUS_CHARS);
+    }
+
+    #[test]
+    fn set_instance_status_rejects_an_unknown_state() {
+        assert_eq!(InstanceState::from_id("done"), None);
+        assert_eq!(InstanceState::from_id("working"), Some(InstanceState::Working));
     }
 }

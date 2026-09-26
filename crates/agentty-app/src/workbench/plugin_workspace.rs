@@ -249,7 +249,7 @@ impl Workbench {
     }
 
     /// Every automation of `plugin`'s workspace, awake or not: `(id, title, in front)`.
-    fn instances_of(&self, plugin: &str) -> Vec<(String, Option<String>, bool)> {
+    pub(super) fn instances_of(&self, plugin: &str) -> Vec<(String, Option<String>, bool)> {
         let Some(index) = self.plugin_workspace(plugin) else { return Vec::new() };
         let ws = &self.workspaces[index];
         if let Some(dormant) = &ws.dormant {
@@ -419,6 +419,7 @@ impl Workbench {
             }
             for id in known.iter().filter(|id| !now.iter().any(|(n, _)| n == *id)) {
                 crate::plugins::send_if_running(&plugin, "instance/close", serde_json::json!({ "instance": id }), cx);
+                crate::plugins::clear_instance_status(&plugin, id, cx);
                 let pages: Vec<u64> = self
                     .plugin_browsers
                     .iter()

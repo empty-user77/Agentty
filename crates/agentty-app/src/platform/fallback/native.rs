@@ -25,6 +25,8 @@ pub fn set_alpha(_window: Id, _alpha: f64) {}
 
 pub fn fade(_window: Id, _alpha: f64, _duration: f64) {}
 
+pub fn ghost(_window: Id, _on: bool) {}
+
 pub fn order_out(_window: Id) {}
 
 pub fn is_visible(_window: Id) -> bool {

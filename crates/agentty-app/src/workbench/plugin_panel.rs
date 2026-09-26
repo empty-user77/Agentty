@@ -52,6 +52,18 @@ fn tone_color(tone: Tone) -> u32 {
     }
 }
 
+/// Whether a value the plugin sent for an input should replace what is on screen.
+///
+/// While the field is focused and the user is still typing ahead of it, an echo of an older value
+/// must not undo keystrokes — unless it is empty right after a submit (Enter) or a flushed control
+/// event (a button, list action, choice or toggle), which is the plugin clearing the field it just
+/// read the text from, not a stale echo.
+fn should_apply(typed: &str, value: &str, focused: bool, submitted: bool) -> bool {
+    let clears_after_submit = submitted && value.is_empty();
+    let stale_echo = focused && typed.starts_with(value) && !clears_after_submit;
+    typed != value && !stale_echo
+}
+
 impl Workbench {
     /// Creates and syncs the panel's text fields; called from render before drawing.
     /// Whose fields the panel shows: an automation's are its own (the same id in another tab is
@@ -102,12 +114,9 @@ impl Workbench {
                     existing.applied = value.clone();
                     let input = existing.input.clone();
                     let typed = input.read(cx).text().to_string();
-                    // A plugin echoing an older value while the user keeps typing must not undo
-                    // keystrokes. Right after Enter, though, an empty value is the plugin clearing
-                    // the field it just took the text from.
-                    let clears_after_submit = std::mem::take(&mut existing.submitted) && value.is_empty();
-                    let stale_echo = input.focus_handle(cx).is_focused(window) && typed.starts_with(&value) && !clears_after_submit;
-                    if typed != value && !stale_echo {
+                    let submitted = std::mem::take(&mut existing.submitted);
+                    let focused = input.focus_handle(cx).is_focused(window);
+                    if should_apply(&typed, &value, focused, submitted) {
                         input.update(cx, |i, cx| i.set_text(value, cx));
                     }
                 }
@@ -179,6 +188,32 @@ impl Workbench {
             });
             self.plugin_inputs
                 .insert(key, PluginInput { input, applied: value, generation: 0, submitted: false, _subscription: subscription });
+        }
+    }
+
+    /// Sends the plugin any typing it has not seen yet, right before a button, list action,
+    /// choice or toggle of the same panel reaches it — so it acts on what is on screen rather
+    /// than on a debounced `change` that has not gone out yet (typing pauses 250ms before it
+    /// sends). Every input of the panel is marked `submitted` regardless, so an empty value the
+    /// plugin answers with right after is applied as a clear rather than held back as a stale
+    /// echo of what the user is still typing.
+    fn flush_plugin_inputs(&mut self, plugin: &str, cx: &mut Context<Self>) {
+        let scope = self.plugin_input_scope(plugin, cx);
+        let keys: Vec<(String, String)> = self.plugin_inputs.keys().filter(|(owner, _)| *owner == scope).cloned().collect();
+        let mut to_send = Vec::new();
+        for key in &keys {
+            let Some(field) = self.plugin_inputs.get_mut(key) else { continue };
+            let text = field.input.read(cx).text().to_string();
+            field.submitted = true;
+            if field.applied != text {
+                field.generation += 1;
+                field.applied = text.clone();
+                to_send.push((key.1.clone(), text));
+            }
+        }
+        for (element, text) in to_send {
+            let event = UiEvent { element, event: "change".into(), value: Some(text.into()), item: None, action: None };
+            self.send_plugin_event(plugin, event, cx);
         }
     }
 
@@ -525,6 +560,7 @@ impl Workbench {
                     .when(*disabled, |d| d.opacity(0.45))
                     .when(!*disabled, |d| {
                         d.cursor_pointer().hover(|s| s.opacity(0.85)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.flush_plugin_inputs(&owner, cx);
                             let event = UiEvent { element: element.clone(), event: "click".into(), value: None, item: None, action: None };
                             this.send_plugin_event(&owner, event, cx);
                         }))
@@ -577,6 +613,7 @@ impl Workbench {
                             .hover(|s| s.bg(hex(Chrome::SELECTED)))
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
+                                this.flush_plugin_inputs(&owner, cx);
                                 let event = UiEvent {
                                     element: element.clone(),
                                     event: "action".into(),
@@ -609,6 +646,7 @@ impl Workbench {
                             .cursor_pointer()
                             .hover(|s| s.bg(hex(Chrome::HOVER)))
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.flush_plugin_inputs(&owner, cx);
                                 let event = UiEvent {
                                     element: element.clone(),
                                     event: "select".into(),
@@ -653,6 +691,7 @@ impl Workbench {
                         option.label.clone(),
                         *value == option.value,
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.flush_plugin_inputs(&owner, cx);
                             let event = UiEvent {
                                 element: element.clone(),
                                 event: "change".into(),
@@ -677,6 +716,7 @@ impl Workbench {
                     .t_small()
                     .text_color(hex(Chrome::FOREGROUND))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.flush_plugin_inputs(&owner, cx);
                         let event = UiEvent {
                             element: element.clone(),
                             event: "change".into(),
@@ -870,4 +910,42 @@ fn icon_only_close(cx: &mut Context<Workbench>) -> impl IntoElement {
             }
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_apply;
+
+    #[test]
+    fn a_field_not_focused_always_takes_the_plugins_value() {
+        assert!(should_apply("kim", "", false, false));
+        assert!(should_apply("kim", "lee", false, false));
+    }
+
+    #[test]
+    fn typing_ahead_of_an_empty_echo_is_not_undone() {
+        // The user typed "kim" and the plugin has not read it yet (still empty from before).
+        assert!(!should_apply("kim", "", true, false));
+    }
+
+    #[test]
+    fn an_empty_value_right_after_a_submit_or_flush_is_the_plugins_clear() {
+        // Enter, or a button click that flushed the field first: the plugin read what was typed
+        // and answered with an empty value — that is the field being cleared, not a stale echo.
+        assert!(should_apply("kim", "", true, true));
+    }
+
+    #[test]
+    fn a_non_empty_echo_while_focused_is_still_stale() {
+        // Even marked submitted, a non-empty value that is a prefix match of what's typed now is
+        // an old echo catching up, not something the plugin means to set.
+        assert!(!should_apply("kim", "ki", true, true));
+    }
+
+    #[test]
+    fn a_value_that_does_not_match_what_is_typed_is_applied() {
+        // The plugin changed the field to something the user did not type (not a prefix at all):
+        // an update of its own, not an echo.
+        assert!(should_apply("kim", "lee", true, false));
+    }
 }

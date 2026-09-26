@@ -63,6 +63,7 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     // The plugin's own workspace: its automations (tabs) and what they are called.
     ("workspace/instances", None),
     ("workspace/setInstanceTitle", None),
+    ("workspace/setInstanceStatus", None),
     ("workspace/closeInstance", None),
     ("browser/sites", Some("browser.control")),
     ("browser/open", Some("browser.control")),

@@ -36,6 +36,10 @@ const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 const MAX_RESULT_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_TIMEOUT: Duration = Duration::from_secs(60);
+/// Added to `browser/eval`'s own timeout for the host-side one: the page's `eval_body` is asked to
+/// give up first (and say so in its error), so this only fires when the page itself is stuck and
+/// never gets to run its own `setTimeout` at all.
+const HOST_TIMEOUT_GRACE: Duration = Duration::from_secs(5);
 /// How long a sign-in waits for the user.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// The content world plugin scripts run in.
@@ -159,6 +163,22 @@ fn domains(sites: &BrowserContribution) -> Vec<String> {
 
 fn timeout_of(params: &Value) -> Duration {
     params["timeoutMs"].as_u64().map(Duration::from_millis).unwrap_or(DEFAULT_TIMEOUT).clamp(Duration::from_millis(100), MAX_TIMEOUT)
+}
+
+/// `browser/eval`'s answer from what the page sent back (`Some`, as `call_in_world`'s callback
+/// hands it over), or `None` when the host-side timer won the race — the page never answered at
+/// all, not even with the "did not finish in time" error `eval_body`'s own timer would have given.
+fn eval_answer(received: Option<Result<String, String>>) -> Result<Value, (i64, String)> {
+    match received {
+        Some(Ok(text)) if text.len() > MAX_RESULT_BYTES => {
+            Err((codes::INVALID_PARAMS, format!("the result is over {MAX_RESULT_BYTES} bytes")))
+        }
+        Some(Ok(text)) => serde_json::from_str::<Value>(&text)
+            .map(|value| json!({ "value": value }))
+            .map_err(|_| (codes::INTERNAL, "the result could not be read".to_string())),
+        Some(Err(error)) => Err((codes::INVALID_PARAMS, error.chars().take(2000).collect())),
+        None => Err((codes::UNAVAILABLE, "the page did not answer in time".into())),
+    }
 }
 
 /// Whether `site` is signed in (by its `signedInCookie`) and until when, in ms since the epoch.
@@ -479,10 +499,11 @@ impl Workbench {
         if sites.site_for_url(&url).is_none() {
             return call.reply(Err((codes::INVALID_PARAMS, "the page is not on one of the plugin's sites".into())), cx);
         }
+        let timeout = timeout_of(&call.params);
         let input = json!({
             "domains": domains(&sites),
             "args": call.params.get("args").cloned().unwrap_or(Value::Null),
-            "timeout": timeout_of(&call.params).as_millis() as u64,
+            "timeout": timeout.as_millis() as u64,
         })
         .to_string();
         let body = eval_body(script);
@@ -492,16 +513,24 @@ impl Workbench {
             let Some(view) = borrowed.as_ref() else { return call.reply(Err((codes::UNAVAILABLE, "the page is gone".into())), cx) };
             view.call_in_world(&body, &[("__agenttyInput", &input)], Some(WORLD), Box::new(move |result| drop(sender.send(result))));
         }
+        let plugin = call.plugin.clone();
         cx.spawn(async move |_, cx| {
-            let answer = match receiver.await.unwrap_or_else(|_| Err("the page is gone".into())) {
-                Ok(text) if text.len() > MAX_RESULT_BYTES => {
-                    Err((codes::INVALID_PARAMS, format!("the result is over {MAX_RESULT_BYTES} bytes")))
-                }
-                Ok(text) => serde_json::from_str::<Value>(&text)
-                    .map(|value| json!({ "value": value }))
-                    .map_err(|_| (codes::INTERNAL, "the result could not be read".to_string())),
-                Err(error) => Err((codes::INVALID_PARAMS, error.chars().take(2000).collect())),
+            // The page is asked to give up after `timeout` and say so; this is only a backstop for
+            // when it never gets that far (its own JS suspended, the webview stuck) and the
+            // callback above would otherwise never fire — the request must still get an answer.
+            let give_up = cx.background_executor().timer(timeout + HOST_TIMEOUT_GRACE);
+            let received = match futures::future::select(receiver, give_up).await {
+                futures::future::Either::Left((result, _)) => Some(result.unwrap_or_else(|_| Err("the page is gone".into()))),
+                // The receiver is dropped with the race: a late answer from the page finds nobody
+                // listening and is dropped where `call_in_world`'s callback sends it, quietly.
+                futures::future::Either::Right(_) => None,
             };
+            if received.is_none() {
+                let _ = cx.update(|cx| {
+                    crate::plugins::log(&plugin, format!("browser/eval did not answer within {:?}", timeout + HOST_TIMEOUT_GRACE), cx)
+                });
+            }
+            let answer = eval_answer(received);
             let _ = cx.update(|cx| call.reply(answer, cx));
         })
         .detach();
@@ -792,5 +821,23 @@ mod tests {
         assert_eq!(timeout_of(&json!({})), DEFAULT_TIMEOUT);
         assert_eq!(timeout_of(&json!({ "timeoutMs": 10 })), Duration::from_millis(100));
         assert_eq!(timeout_of(&json!({ "timeoutMs": 9_999_999 })), MAX_TIMEOUT);
+    }
+
+    #[test]
+    fn a_host_side_timeout_with_no_answer_at_all_is_still_a_reply() {
+        // The race's timer won: the page never got back to `call_in_world`'s callback, not even
+        // with the "did not finish in time" error its own `setTimeout` would have sent.
+        assert_eq!(eval_answer(None), Err((codes::UNAVAILABLE, "the page did not answer in time".to_string())));
+    }
+
+    #[test]
+    fn a_late_answer_from_the_page_still_reads_normally() {
+        assert_eq!(eval_answer(Some(Ok("null".into()))), Ok(json!({ "value": Value::Null })));
+        assert_eq!(eval_answer(Some(Ok(r#"{"n":1}"#.into()))), Ok(json!({ "value": { "n": 1 } })));
+        assert!(eval_answer(Some(Ok("not json".into()))).is_err(), "unreadable text is an error, not a panic");
+        assert_eq!(
+            eval_answer(Some(Err("the script did not finish in time".into()))),
+            Err((codes::INVALID_PARAMS, "the script did not finish in time".to_string()))
+        );
     }
 }

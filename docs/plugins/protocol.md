@@ -62,6 +62,7 @@ when you don't care.
 | `ui/setPanel` | | `{ tree, instance? }` — with `instance`, the panel of that automation | `null` |
 | `workspace/instances` | | `{}` | `[{ instance, title, active }]` — the automations of the plugin's workspace |
 | `workspace/setInstanceTitle` | | `{ instance, title }` | `null` — what the automation's tab is called |
+| `workspace/setInstanceStatus` | | `{ instance?, state: "working" \| "idle" \| "error", text? }` — `instance` omitted or empty is the plugin's panel outside a workspace; `text` is a short one-line status (max 120 characters), e.g. `"Collecting @sama (3/6)"` | `null` — what the automation (or the plugin, with no workspace) is doing, shown next to its workspace card and in the menu bar popover without opening it |
 | `workspace/closeInstance` | | `{ instance }` | `null` — closes that automation's tab (one of the plugin's own, open); it is not offered among the recently closed tabs |
 | `ui/showPanel` | | `{}` | `null` |
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
@@ -366,6 +367,14 @@ beside that tab's terminals without bringing it to the front). The tab strip's "
 browser's "+" make a new automation: the plugin hears `instance/open` and sets it up; closing the
 tab sends `instance/close`. Five tabs are five automations running side by side. Nothing of this
 is specific to a site: a plugin for any site gets it by declaring `mode: "workspace"`.
+
+Since automations keep running out of sight, `workspace/setInstanceStatus` is how a plugin says
+what one of them is doing without the user opening its workspace: `working` while it does
+something, `idle` between runs, `error` when it stopped on one. Agentty shows this on the
+workspace's sidebar card (spinning while any automation is `working`, with the working one's
+`text` as the card's second line) and as a row in the menu bar popover, with an elapsed time next
+to `working`. A status is kept until it changes, the plugin stops or restarts, or that
+automation's tab closes.
 
 ## UI tree
 
