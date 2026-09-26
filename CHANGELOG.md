@@ -5,7 +5,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-27
+
+### Added
+- Plugin automations say what they are doing: their tab and sidebar card spin with a status line,
+  and the menu bar list shows them under Plugins, with how long they have been running.
+- Plugins can make videos (from SVG scenes or HTML animations; macOS), turn SVG into PNG, let you
+  pick files, choose which agent and model does a job, and show their steps as a flow with a
+  settings popover beside the panel.
+- While an AI works a page in the in-app browser, the page is locked against stray clicks, with an
+  Unlock button.
+- An AI job a plugin opens beside an automation's terminal takes the tab's focus view while it runs.
+
+### Changed
+- Plugin automations keep running unattended: App Nap and idle sleep are held off while they work,
+  their pages keep loading behind a locked screen, and closing the window while a plugin runs keeps
+  its pages working.
+- Agents a plugin started for a single, finished job are no longer reopened when Agentty starts.
+
 ### Fixed
+- Typing in a plugin panel's field and pressing a button right away no longer loses the text.
 - Longer translations and narrow windows no longer push buttons, labels and links past the edge of
   their panel or over the one beside it: the plugin list, the Monitoring, Usage and Plugins headers,
   Settings rows and links, the session list, dialogs, the start page footer and more. Wide windows

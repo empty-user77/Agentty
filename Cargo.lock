@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "agentty-app"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "agentty-bridge",
  "agentty-db",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "agentty-bridge"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "agentty-db"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "agentty-bridge",
  "anyhow",
