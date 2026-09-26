@@ -419,12 +419,14 @@ impl Workbench {
                                 .flex()
                                 .items_center()
                                 .gap_3()
-                                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "prompt.agent")))
-                                .child(agents)
+                                .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "prompt.agent")))
+                                .child(div().flex_shrink_0().child(agents))
                                 .child(div().flex_1())
+                                // A long label wraps onto two lines instead of pushing past the dialog.
                                 .child(
                                     div()
                                         .id("harness-submit")
+                                        .min_w_0()
                                         .flex()
                                         .items_center()
                                         .gap_2()
@@ -439,6 +441,7 @@ impl Workbench {
                                         }))
                                         .child(
                                             div()
+                                                .flex_shrink_0()
                                                 .size(px(14.))
                                                 .rounded_sm()
                                                 .border_1()
@@ -449,7 +452,7 @@ impl Workbench {
                                                 .justify_center()
                                                 .when(submit, |d| d.child(icon("check", 11., hex(Chrome::BRIGHT)))),
                                         )
-                                        .child(t(cx, "prompt.submit")),
+                                        .child(div().min_w_0().child(t(cx, "prompt.submit"))),
                                 ),
                         )
                         .children(dialog.error.clone().map(|e| div().t_small().text_color(hex(Chrome::ERROR)).child(e)))

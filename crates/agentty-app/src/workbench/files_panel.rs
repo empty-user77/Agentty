@@ -1115,10 +1115,11 @@ impl Workbench {
             .font_weight(crate::theme::EMPHASIS)
             .text_color(hex(Chrome::MUTED))
             .child(icon(if folded { "chevron-right" } else { "chevron-down" }, 12., hex(Chrome::MUTED)))
-            .child(t(cx, "files.worktrees").to_uppercase())
+            .child(div().min_w_0().truncate().child(t(cx, "files.worktrees").to_uppercase()))
             .when(demo, |d| {
                 d.child(
                     div()
+                        .flex_shrink_0()
                         .ml_1()
                         .px_1()
                         .rounded_sm()
@@ -1129,7 +1130,11 @@ impl Workbench {
                 )
             })
             .child(div().flex_1())
-            .child(div().font_weight(FontWeight::NORMAL).child(tf(cx, "files.worktree_count", &[("n", &linked.to_string())])))
+            .child(div().flex_shrink_0().font_weight(FontWeight::NORMAL).child(tf(
+                cx,
+                "files.worktree_count",
+                &[("n", &linked.to_string())],
+            )))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 if let Some(panel) = this.files_panel.as_mut() {
                     panel.trees_folded = !panel.trees_folded;
@@ -1260,25 +1265,36 @@ impl Workbench {
                                     }),
                             )
                             .child(
+                                // One line in a fixed-height row: the name gives way, the counts stay whole.
                                 div()
+                                    .min_w_0()
+                                    .overflow_hidden()
                                     .flex()
                                     .items_center()
                                     .gap_1p5()
                                     .t_caption()
                                     .text_color(hex(Chrome::MUTED))
-                                    .child(if tree.main { t(cx, "files.main_tree").to_string() } else { tree.name() })
+                                    .child(div().min_w_0().truncate().child(if tree.main {
+                                        t(cx, "files.main_tree").to_string()
+                                    } else {
+                                        tree.name()
+                                    }))
                                     .when(info.changes > 0, |d| {
-                                        d.child(div().text_color(hex(Chrome::WARNING)).child(tf(
+                                        d.child(div().flex_shrink_0().text_color(hex(Chrome::WARNING)).child(tf(
                                             cx,
                                             "files.n_changed",
                                             &[("n", &info.changes.to_string())],
                                         )))
                                     })
                                     .when(info.ahead > 0, |d| {
-                                        d.child(div().text_color(hex(Chrome::BLUE)).child(format!("↑{}", info.ahead)))
+                                        d.child(div().flex_shrink_0().text_color(hex(Chrome::BLUE)).child(format!("↑{}", info.ahead)))
                                     })
-                                    .when(gone, |d| d.child(div().text_color(hex(Chrome::WARNING)).child(t(cx, "files.tree_gone"))))
-                                    .when(info.changes == 0 && info.ahead == 0 && !tree.main && !gone, |d| d.child(t(cx, "files.clean"))),
+                                    .when(gone, |d| {
+                                        d.child(div().flex_shrink_0().text_color(hex(Chrome::WARNING)).child(t(cx, "files.tree_gone")))
+                                    })
+                                    .when(info.changes == 0 && info.ahead == 0 && !tree.main && !gone, |d| {
+                                        d.child(div().flex_shrink_0().child(t(cx, "files.clean")))
+                                    }),
                             ),
                     )
                     .child(avatars)

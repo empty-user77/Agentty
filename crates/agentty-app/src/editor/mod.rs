@@ -1349,6 +1349,7 @@ impl CodeEditor {
             (name, _) => name.to_string(),
         };
         let item = |text: String| div().flex_shrink_0().child(text);
+        // A narrow pane cuts the bar short at its edge instead of painting over the pane beside it.
         div()
             .h(px(24.))
             .flex_shrink_0()
@@ -1356,6 +1357,7 @@ impl CodeEditor {
             .flex()
             .items_center()
             .gap_4()
+            .overflow_hidden()
             .border_t_1()
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::EDITOR))
@@ -1370,7 +1372,7 @@ impl CodeEditor {
                 d.child(item(indent))
                     .child(item(if doc.format.bom { "UTF-8 BOM".into() } else { "UTF-8".into() }))
                     .child(item(if doc.format.crlf { "CRLF".into() } else { "LF".into() }))
-                    .child(item(language))
+                    .child(div().min_w_0().truncate().child(language))
             })
     }
 
@@ -1406,11 +1408,13 @@ impl CodeEditor {
                 ],
             ),
         };
-        let mut row = div().flex().justify_end().gap_2();
+        // Buttons that don't fit the dialog side by side (long translations) move to a second line, whole.
+        let mut row = div().flex().flex_wrap().justify_end().gap_2();
         for (index, (id, label, choice)) in buttons.into_iter().enumerate() {
             row = row.child(
                 div()
                     .id(id)
+                    .flex_shrink_0()
                     .px_3()
                     .py_1p5()
                     .rounded_md()

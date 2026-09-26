@@ -1067,9 +1067,16 @@ impl Workbench {
             .border_r_1()
             .border_color(hex(Chrome::BORDER));
         connections = connections.child(
-            div().flex().items_center().pr_2().child(div().flex_1().child(heading(t(cx, "db.connections").to_string()))).child(
-                action_button("db-add", t(cx, "db.add"), cx.listener(|this, _: &ClickEvent, window, cx| this.open_db_form(window, cx))),
-            ),
+            div()
+                .flex()
+                .items_center()
+                .pr_2()
+                .child(div().flex_1().min_w_0().truncate().child(heading(t(cx, "db.connections").to_string())))
+                .child(action_button(
+                    "db-add",
+                    t(cx, "db.add"),
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.open_db_form(window, cx)),
+                )),
         );
         if let Some(root) = &db.root {
             connections = connections.child(div().px_3().pb_2().t_caption().text_color(hex(Chrome::MUTED)).truncate().child(tilde(root)));

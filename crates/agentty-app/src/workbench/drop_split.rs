@@ -286,7 +286,8 @@ impl Workbench {
                     this.move_pane_beside(dragged.pane_id, &target, side, window, cx);
                 }))
                 .child(icon(glyph, crate::ui::IconSize::BUTTON, hex(Chrome::BRIGHT)))
-                .child(t(cx, label).to_string())
+                // Wraps inside the zone instead of running past it: a side zone is only 28% of a narrow pane.
+                .child(div().min_w_0().child(t(cx, label).to_string()))
         };
         div()
             .absolute()
@@ -387,6 +388,7 @@ impl Workbench {
                 }))
                 .child(
                     div()
+                        .max_w(relative(0.9))
                         .px_3()
                         .py_2()
                         .rounded_lg()
@@ -396,9 +398,11 @@ impl Workbench {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(crate::brand::avatar(tool, 16.))
+                        .child(div().flex_shrink_0().child(crate::brand::avatar(tool, 16.)))
                         .child(
                             div()
+                                .min_w_0()
+                                .truncate()
                                 .t_body()
                                 .font_weight(crate::theme::EMPHASIS)
                                 .text_color(hex(if connectable { Chrome::BRIGHT } else { Chrome::MUTED }))

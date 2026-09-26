@@ -334,7 +334,7 @@ impl Render for BranchPicker {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(tf(
+                .child(div().min_w_0().truncate().t_small().text_color(hex(Chrome::MUTED)).child(tf(
                     cx,
                     "git.new_branch_from",
                     &[("branch", self.current.as_deref().unwrap_or("HEAD"))],

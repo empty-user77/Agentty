@@ -538,15 +538,18 @@ impl Workbench {
     }
 
     fn render_plugins_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // When the row doesn't fit (a narrow window, a long translation) the subtitle and the buttons' labels are
+        // cut short instead of running past the page. Nothing changes while it fits.
+        let shrink = |button: gpui::Stateful<gpui::Div>| button.flex_shrink().min_w_0().truncate();
         div()
             .flex()
             .items_center()
             .gap_3()
             .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.plugins")))
-            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.subtitle")))
+            .child(div().min_w_0().truncate().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.subtitle")))
             .child(div().flex_1())
             .children(self.render_update_all(cx))
-            .child(action_button(
+            .child(shrink(action_button(
                 "plugins-guide",
                 t(cx, "plugins.guide"),
                 // Read inside Agentty (the panel next to the terminals), not in another app.
@@ -557,24 +560,24 @@ impl Workbench {
                     }
                     Err(err) => this.plugins_message(err.to_string(), true, cx),
                 }),
-            ))
-            .child(action_button(
+            )))
+            .child(shrink(action_button(
                 "plugins-copy-prompt",
                 t(cx, "plugins.copy_prompt"),
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(store::AI_PROMPT.to_string()));
                     this.show_toast(t(cx, "plugins.prompt_copied"), cx);
                 }),
-            ))
-            .child(action_button(
+            )))
+            .child(shrink(action_button(
                 "plugins-refresh",
                 t(cx, "usage.refresh"),
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.plugins_page.message = None;
                     this.refresh_plugins(cx);
                 }),
-            ))
-            .child(action_button(
+            )))
+            .child(shrink(action_button(
                 "plugins-open-folder",
                 t(cx, "plugins.open_folder"),
                 cx.listener(|_, _: &ClickEvent, _, _| {
@@ -582,7 +585,7 @@ impl Workbench {
                     let _ = std::fs::create_dir_all(&dir);
                     crate::platform::open_folder(&dir);
                 }),
-            ))
+            )))
     }
 
     /// "3 updates" and the button that takes them all, when the marketplace has newer versions.
@@ -742,6 +745,7 @@ impl Workbench {
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .gap_1p5()
                             .child(action_button(
                                 "plugins-folder",

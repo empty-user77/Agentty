@@ -1066,14 +1066,16 @@ impl ExtensionsView {
                                     .gap_2()
                                     .child(
                                         div()
+                                            .min_w_0()
+                                            .truncate()
                                             .font_family(crate::settings::BUNDLED_FONT)
                                             .t_body()
                                             .font_weight(crate::theme::EMPHASIS)
                                             .text_color(hex(Chrome::BRIGHT))
                                             .child(connector.server_name()),
                                     )
-                                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(auth_text))
-                                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(tf(
+                                    .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(auth_text))
+                                    .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(tf(
                                         cx,
                                         "ext.conn_tools",
                                         &[("n", &(connector.endpoints.len() + connector.allow_any_path as usize).to_string())],

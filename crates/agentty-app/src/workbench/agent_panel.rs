@@ -493,10 +493,10 @@ impl Workbench {
                             .items_center()
                             .gap_2()
                             .t_small()
-                            .child(div().size(px(6.)).rounded_full().bg(hex(color)))
-                            .child(div().text_color(hex(color)).truncate().child(status))
-                            .child(div().text_color(hex(Chrome::MUTED)).child("·"))
-                            .child(div().text_color(hex(peer_color)).truncate().child(peer_status))
+                            .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(color)))
+                            .child(div().min_w_0().text_color(hex(color)).truncate().child(status))
+                            .child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child("·"))
+                            .child(div().min_w_0().text_color(hex(peer_color)).truncate().child(peer_status))
                             .when(pending > 0, |d| {
                                 d.child(div().text_color(hex(Chrome::ORANGE)).child(tf(
                                     cx,

@@ -431,8 +431,8 @@ impl Workbench {
                                 .gap_1()
                                 .t_small()
                                 .text_color(hex(color))
-                                .child(div().size(px(7.)).rounded_full().bg(hex(color)))
-                                .child(label),
+                                .child(div().flex_shrink_0().size(px(7.)).rounded_full().bg(hex(color)))
+                                .child(div().min_w_0().truncate().child(label)),
                         ),
                     )
                     .child(div().w(px(64.)).flex().justify_end().t_body().child(format!("{:.1}%", process.cpu)))

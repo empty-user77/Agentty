@@ -3267,38 +3267,44 @@ impl Workbench {
         let (text, id) = self.toast.clone()?;
         let docked = self.overlay_right_inset(cx);
         Some(
-            div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).right(px(16. + docked)).child(crate::ui::fade_in(
-                SharedString::from(format!("toast-{id}")),
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(hex(Chrome::OVERLAY))
-                    .border_1()
-                    .border_color(hex(Chrome::OVERLAY_BORDER))
-                    .shadow_lg()
-                    .text_size(px(crate::ui::Type::BODY))
-                    .text_color(hex(Chrome::BRIGHT))
-                    .child(crate::ui::icon("circle-check", crate::ui::IconSize::INLINE, hex(Chrome::SUCCESS)))
-                    .child(text)
-                    // Closes it now instead of waiting out its timer.
-                    .child(
-                        div()
-                            .id("toast-close")
-                            .px_1()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(hex(Chrome::HOVER)))
-                            .child(crate::ui::icon("x", crate::ui::IconSize::INLINE, hex(Chrome::MUTED)))
-                            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                                this.toast = None;
-                                cx.notify();
-                            })),
-                    ),
-            )),
+            // Spans the window so a long message wraps at its left edge instead of running off it; a short one
+            // keeps its own width, right-aligned as before.
+            div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).left(px(16.)).right(px(16. + docked)).flex().justify_end().child(
+                crate::ui::fade_in(
+                    SharedString::from(format!("toast-{id}")),
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(hex(Chrome::OVERLAY))
+                        .border_1()
+                        .border_color(hex(Chrome::OVERLAY_BORDER))
+                        .shadow_lg()
+                        .text_size(px(crate::ui::Type::BODY))
+                        .text_color(hex(Chrome::BRIGHT))
+                        .child(crate::ui::icon("circle-check", crate::ui::IconSize::INLINE, hex(Chrome::SUCCESS)))
+                        // A long message (a translation, a path) wraps instead of running off the window.
+                        .child(div().min_w_0().child(text))
+                        // Closes it now instead of waiting out its timer.
+                        .child(
+                            div()
+                                .id("toast-close")
+                                .px_1()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                                .child(crate::ui::icon("x", crate::ui::IconSize::INLINE, hex(Chrome::MUTED)))
+                                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                                    this.toast = None;
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+            ),
         )
     }
 

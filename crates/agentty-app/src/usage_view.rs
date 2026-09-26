@@ -180,14 +180,24 @@ impl Render for UsageView {
             ));
         }
 
+        // When the row doesn't fit (a narrow window, a long translation) the folder and the refresh label are cut
+        // short instead of pushing the period chips past the page. Nothing changes while it fits.
         let header = div()
             .flex()
             .items_center()
             .gap_3()
-            .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.usage")))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .t_heading()
+                    .font_weight(crate::theme::EMPHASIS)
+                    .text_color(hex(Chrome::BRIGHT))
+                    .child(t(cx, "page.usage")),
+            )
             .child(
                 div()
                     .relative()
+                    .flex_shrink_0()
                     .child(action_button(
                         "agent-select",
                         format!("{agent_label} ▾"),
@@ -233,6 +243,8 @@ impl Render for UsageView {
             )
             .child(
                 div()
+                    .min_w_0()
+                    .truncate()
                     .px_1p5()
                     .py_0p5()
                     .rounded_sm()
@@ -241,7 +253,12 @@ impl Render for UsageView {
                     .text_color(hex(Chrome::MUTED))
                     .child(crate::ui::tilde(&root_dir(self.agent))),
             )
-            .child(action_button("usage-refresh", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.load(cx))))
+            .child(
+                action_button("usage-refresh", t(cx, "usage.refresh"), cx.listener(|this, _: &ClickEvent, _, cx| this.load(cx)))
+                    .flex_shrink()
+                    .min_w_0()
+                    .truncate(),
+            )
             .when(self.loading, |d| d.child(crate::ui::spinner(crate::ui::IconSize::INLINE, hex(Chrome::MUTED))))
             .child(div().flex_1())
             .child(periods);
@@ -283,6 +300,7 @@ impl UsageView {
 
         let kpis = div()
             .flex()
+            .flex_wrap()
             .gap_3()
             .child(kpi(t(cx, "usage.total_cost"), if priced { money(totals.cost) } else { "—".into() }, period, Chrome::PURPLE))
             .child(kpi(t(cx, "usage.calls"), compact_number(totals.calls), String::new(), Chrome::BLUE))

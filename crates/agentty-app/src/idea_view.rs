@@ -455,7 +455,8 @@ impl IdeaView {
 
     fn render_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let label = |key: &'static str, cx: &mut Context<Self>| {
-            div().w(px(96.)).flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, key))
+            // At least the column width, so the controls line up; a longer translation widens its own row.
+            div().min_w(px(96.)).flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, key))
         };
         let (claude, codex) = self.available;
         let mut agents = div().flex().gap_1();

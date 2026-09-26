@@ -457,10 +457,11 @@ impl Workbench {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap_2()
                     .t_small()
                     .text_color(hex(Chrome::MUTED))
-                    .child(title)
-                    .child(actions),
+                    .child(div().flex_1().min_w_0().truncate().child(title))
+                    .child(div().flex_shrink_0().child(actions)),
             )
             .children(workspace_search)
             .child(match self.panel {
@@ -1128,7 +1129,7 @@ impl Workbench {
                         }
                     }))
                     .child(icon("git-pull-request", 10., color))
-                    .child(div().truncate().child(label))
+                    .child(div().min_w_0().truncate().child(label))
             }))
             .children((!compact).then(|| self.render_port_chips(ws, fill, active, indent, cx)).flatten());
 
@@ -1564,6 +1565,7 @@ impl Workbench {
                     .flex()
                     .gap_1()
                     .items_center()
+                    .overflow_hidden()
                     .child(action_button(
                         ("session-resume", index),
                         if open_here { t(cx, "sessions.go_to") } else { t(cx, "sessions.resume") },
@@ -1577,6 +1579,8 @@ impl Workbench {
                     .child(
                         div()
                             .id(("session-migrate", index))
+                            .min_w_0()
+                            .overflow_hidden()
                             .flex()
                             .items_center()
                             .gap_1()
@@ -1600,6 +1604,7 @@ impl Workbench {
                     .children((!open_here).then(|| {
                         div()
                             .id(("session-delete", index))
+                            .flex_shrink_0()
                             .size(px(24.))
                             .flex()
                             .items_center()
@@ -2075,6 +2080,7 @@ impl Workbench {
                     div()
                         .id(id)
                         .flex_1()
+                        .min_w_0()
                         .h(px(26.))
                         .flex()
                         .items_center()
@@ -2087,7 +2093,7 @@ impl Workbench {
                         .when(active, |d| d.bg(hex(Chrome::SELECTED)))
                         .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
                         .child(icon(glyph, 12., hex(if active { Chrome::BRIGHT } else { Chrome::MUTED })))
-                        .child(t(cx, label))
+                        .child(div().min_w_0().truncate().child(t(cx, label)))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.launcher_target = value;
                             cx.notify();
@@ -2670,10 +2676,15 @@ impl Workbench {
             .right_0()
             .h(px(FOOTER_HEIGHT))
             .bg(hex(Chrome::EDITOR))
+            // Too narrow for one line (a docked panel beside it): it continues on a second line, and whatever
+            // still doesn't fit is cut off instead of running out on both sides.
             .flex()
+            .flex_wrap()
             .items_center()
+            .content_center()
             .justify_center()
-            .gap_3()
+            .gap_x_3()
+            .overflow_hidden()
             .t_caption()
             .text_color(hex(Chrome::MUTED))
             .child(link("welcome-about", t(cx, "welcome.about").to_string(), super::update::WEBSITE))
