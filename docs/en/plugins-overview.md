@@ -5,6 +5,8 @@ description: What plugins add to Agentty, installing them from the marketplace o
 
 Plugins connect Agentty with other apps and add tools to your terminals. A plugin can put a **panel** next to your terminals, add **buttons** above agent panes, add entries to the **command palette**, and hand text to an agent as a **prompt**. Where that prompt goes is the plugin's choice unless it asks you, so the permissions on its card are worth reading.
 
+Plugins are also where Agentty is headed: like a Forward Deployed Engineer (FDE) building for the place they work in, a plugin fits an agent to one environment — a team, a customer, a situation — and Agentty runs all of them in one consistent place. See [Introduction](/docs/introduction).
+
 Writing one? Start with the [plugin quick start](/docs/plugin-quickstart).
 
 ## The Plugins page
