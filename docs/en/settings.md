@@ -44,6 +44,16 @@ The full list, in your platform's notation. See [Keyboard shortcuts](/docs/keybo
 
 System notifications, whether to notify while Agentty is in front, and chat notifications to Slack, Discord or Telegram. See [Agent status](/docs/agent-status).
 
+## Sync
+
+Workspaces and agent sessions follow you between computers through a private Git repository you own (GitHub through `gh`, or any SSH URL). Turn on **Sync settings** to keep your settings, custom commands, connectors and imported themes in step too: the newest change wins, and a computer that joins takes the settings already there. Secrets (API keys, tokens, passwords) are never synced — enter them once on each computer. The repository keeps every version, so it also works as a backup.
+
+## Backup
+
+**Export configuration** saves your whole setup to one `.agenttyconfig` file: settings, custom commands, connectors, database connections, how agents sign in, imported themes and the list of installed plugins. Panel sizes, recent folders and other things that belong to one computer stay out. Turn on **Include secrets** to add the API keys, tokens and passwords from the credential store, encrypted with a password you choose (PBKDF2 + AES-256-GCM); Agentty does not keep that password.
+
+**Import configuration** puts a file's configuration in place of this computer's: settings from the file win, while this computer's panel sizes and recent folders stay; commands, connectors and the other files are replaced as a whole. Leave the password empty to import everything except the secrets. Missing plugins can be installed from the marketplace or their Git repository. The configuration from before each import is kept in `~/.agentty/backups/`.
+
 ## Browser
 
 Whether links open in the in-app browser or your default one, whether dev servers open by themselves, and the search engine.

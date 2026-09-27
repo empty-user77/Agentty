@@ -7,7 +7,7 @@
 //! - "Sync now";
 //! - a tab closed or the workspace removed (its final state is recorded).
 
-use super::settings_page::{row_with_hint, section};
+use super::settings_page::{row_with_hint, section, switch};
 use super::{PaneKind, Workbench, Workspace};
 use crate::i18n::{t, tf};
 use crate::launch::LaunchSpec;
@@ -81,6 +81,9 @@ pub(super) struct SyncUi {
     started: bool,
     /// Synced sessions that have a transcript on this computer (`None` until looked up).
     local_ids: Option<HashSet<String>>,
+    /// Another computer's settings are being put in place: no sync until they are, or this
+    /// computer would send its old ones as a change of its own.
+    applying_settings: bool,
 }
 
 impl Default for SyncUi {
@@ -117,6 +120,7 @@ impl Default for SyncUi {
             message: None,
             started: false,
             local_ids: None,
+            applying_settings: false,
         }
     }
 }
@@ -398,7 +402,7 @@ impl Workbench {
         if !self.sync.config.connected() || self.sync.config.paused {
             return;
         }
-        if self.sync.running {
+        if self.sync.running || self.sync.applying_settings {
             self.sync.again = Some(match self.sync.again.take() {
                 Some(previous) => previous.merge(scope),
                 None => scope,
@@ -421,6 +425,9 @@ impl Workbench {
                 this.sync.running = false;
                 match result {
                     Ok(outcome) => {
+                        if let Some(incoming) = outcome.settings {
+                            this.apply_synced_settings(incoming, cx);
+                        }
                         this.sync.overview = outcome.overview;
                         // With the ids handed out in this pass.
                         this.sync.config = bridge::load_config();
@@ -442,6 +449,65 @@ impl Workbench {
                         };
                     }
                 }
+                if !this.sync.applying_settings {
+                    if let Some(scope) = this.sync.again.take() {
+                        this.run_sync(scope, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Whether settings travel with the sync.
+    pub(super) fn sync_settings_on(&self) -> bool {
+        self.sync.config.connected() && self.sync.config.settings
+    }
+
+    fn set_sync_settings(&mut self, on: bool, cx: &mut Context<Self>) {
+        let _ = bridge::update_config(|c| c.settings = on);
+        self.sync.config.settings = on;
+        if on {
+            self.sync_now(cx);
+        }
+        cx.notify();
+    }
+
+    /// Puts another computer's newer settings in place, then records them as this computer's.
+    fn apply_synced_settings(&mut self, incoming: bridge::settings::Incoming, cx: &mut Context<Self>) {
+        self.sync.applying_settings = true;
+        cx.spawn(async move |this, cx| {
+            let bundle = incoming.bundle;
+            let written = cx.background_spawn(async move { agentty_bridge::backup::import_synced(&bundle) }).await;
+            let applied = this
+                .update(cx, |this, cx| {
+                    let applied = written.and_then(|report| match report.settings {
+                        Some(settings) => crate::settings::replace_settings(cx, settings),
+                        None => {
+                            crate::settings::reload_themes(cx);
+                            Ok(())
+                        }
+                    });
+                    match &applied {
+                        Ok(()) => {
+                            let text = tf(cx, "sync.settings_applied", &[("device", &incoming.device_name)]);
+                            this.show_toast(text, cx);
+                        }
+                        Err(err) => this.sync.status = Status::Error(format!("{err:#}")),
+                    }
+                    applied.is_ok()
+                })
+                .unwrap_or(false);
+            // Only what was put in place is recorded as this computer's: a failed apply is tried
+            // again on the next sync instead of being taken for done.
+            if applied {
+                let changed_at = incoming.changed_at;
+                let _ = cx.background_spawn(async move { bridge::settings::applied(&changed_at, env!("CARGO_PKG_VERSION")) }).await;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.sync.applying_settings = false;
+                this.sync.config = bridge::load_config();
                 if let Some(scope) = this.sync.again.take() {
                     this.run_sync(scope, cx);
                 }
@@ -1301,11 +1367,18 @@ impl Workbench {
                 Remote::Git { .. } => div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.via_git_url")),
             };
             let repository = repository.child(row_with_hint(t(cx, "sync.transport"), t(cx, "sync.transport_hint"), transport));
-            let this_device = section(t(cx, "sync.device")).child(row_with_hint(
-                t(cx, "sync.device_name"),
-                t(cx, "sync.device_name_hint"),
-                div().w(px(220.)).child(field(device)),
-            ));
+            let settings_on = self.sync.config.settings;
+            let this_device = section(t(cx, "sync.device"))
+                .child(row_with_hint(t(cx, "sync.device_name"), t(cx, "sync.device_name_hint"), div().w(px(220.)).child(field(device))))
+                .child(row_with_hint(
+                    t(cx, "sync.sync_settings"),
+                    t(cx, "sync.sync_settings_hint"),
+                    switch(
+                        "sync-settings-toggle",
+                        settings_on,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.set_sync_settings(!settings_on, cx)),
+                    ),
+                ));
             let rules = section(t(cx, "sync.when"))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.when_body")))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.privacy_body")));
@@ -1455,6 +1528,7 @@ impl Workbench {
             // `owner/name`, as picked from the gh list.
             "connect-gh" => self.connect_github(rest.trim().to_string(), cx),
             "transport" => self.set_transport(rest.trim() == "ssh", cx),
+            "settings" => self.set_sync_settings(rest.trim() == "on", cx),
             "now" => self.sync_now(cx),
             "popover" => {
                 self.sync.popover_open = !self.sync.popover_open;

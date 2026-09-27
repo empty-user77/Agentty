@@ -4,6 +4,7 @@ mod account_usage;
 mod accounts_page;
 mod agent_panel;
 mod ask;
+mod backup;
 mod browser;
 mod browser_control;
 mod chrome;
@@ -397,6 +398,7 @@ pub struct Workbench {
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
     chat_notify: notify_settings::ChatNotifyState,
     sync: sync::SyncUi,
+    backup: backup::BackupUi,
     split_drag: Option<layout::SplitDrag>,
     split_bounds: Rc<RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>>,
     /// Last laid-out bounds of each pane (responsive headers, file drops).
@@ -685,6 +687,7 @@ impl Workbench {
             browser_home_input: None,
             chat_notify: Default::default(),
             sync: Default::default(),
+            backup: Default::default(),
             split_drag: None,
             split_bounds: Rc::default(),
             pane_bounds: Rc::default(),
@@ -3671,6 +3674,7 @@ impl Workbench {
             "db" => self.debug_db(argument, window, cx),
             "chat-notify" => self.debug_chat_notify(argument, cx),
             "sync" => self.debug_sync(argument, window, cx),
+            "backup" => self.debug_backup(argument, window, cx),
             "files" => match argument {
                 "" => self.toggle_files_panel(cx),
                 path => self.open_files_panel(Some(PathBuf::from(path)), cx),
@@ -3860,6 +3864,7 @@ impl Workbench {
                     "project" => settings_page::SettingsSection::Project,
                     "accounts" => settings_page::SettingsSection::Accounts,
                     "sync" => settings_page::SettingsSection::Sync,
+                    "backup" => settings_page::SettingsSection::Backup,
                     "system" => settings_page::SettingsSection::System,
                     "notifications" => settings_page::SettingsSection::Notifications,
                     _ => settings_page::SettingsSection::General,

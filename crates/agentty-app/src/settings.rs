@@ -864,6 +864,27 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     cx.refresh_windows();
 }
 
+/// Puts settings from elsewhere in place of the ones in use (an imported configuration, or another
+/// computer's through sync): migrated like a file read at start, saved, and every window repainted.
+/// Imported themes are read again first, so a theme that came with them can be the chosen one.
+pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Result<()> {
+    let settings = serde_json::from_value::<Settings>(value)?.migrate();
+    cx.update_global::<SettingsStore, _>(|store, _| {
+        let aliases_before = store.settings.aliases.clone();
+        store.settings = settings;
+        store.themes = load_themes();
+        store.composed = SettingsStore::compose(&store.settings, &store.themes);
+        store.revision += 1;
+        let _ = store.save();
+        if store.settings.aliases != aliases_before {
+            let _ = crate::shell_integration::write_files(&store.settings.aliases);
+        }
+        crate::platform::wakelock::set(store.settings.prevent_sleep);
+    });
+    cx.refresh_windows();
+    Ok(())
+}
+
 pub fn reload_themes(cx: &mut App) {
     cx.update_global::<SettingsStore, _>(|store, _| {
         store.themes = load_themes();
@@ -965,5 +986,16 @@ mod browser_settings_tests {
         assert_eq!((parsed.search_engine, parsed.zoom), (SearchEngine::Google, 1.2));
         let parsed: BrowserSettings = serde_json::from_str(r#"{"searchEngine":"bing"}"#).unwrap();
         assert_eq!(parsed.search_engine, SearchEngine::Bing);
+    }
+
+    /// Every key the configuration export treats as this computer's own is a real settings key,
+    /// so renaming a field cannot quietly start exporting (or overwriting) it.
+    #[test]
+    fn device_settings_name_real_fields() {
+        let value = serde_json::to_value(Settings::default()).unwrap();
+        let map = value.as_object().unwrap();
+        for key in agentty_bridge::backup::DEVICE_SETTINGS {
+            assert!(map.contains_key(*key), "{key} is not a settings field");
+        }
     }
 }

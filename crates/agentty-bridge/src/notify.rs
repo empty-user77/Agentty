@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const KEYCHAIN_SERVICE: &str = "run.agentty.notify";
+pub const KEYCHAIN_SERVICE: &str = "run.agentty.notify";
 /// Longest message sent (chat services cut or refuse longer ones; a notification needs less).
 const MAX_TEXT: usize = 1500;
 
@@ -61,6 +61,8 @@ pub enum Transport {
 }
 
 impl Transport {
+    pub const ALL: [Transport; 2] = [Transport::Webhook, Transport::Bot];
+
     /// The credential store account for this channel and transport. The webhook keeps the plain
     /// channel id, so credentials saved before bots existed are still found.
     fn account(self, channel: Channel) -> String {
@@ -215,6 +217,16 @@ fn secret(channel: Channel, transport: Transport) -> Option<String> {
         .entry((channel, transport))
         .or_insert_with(|| crate::secret_store::load(&keychain_service(), &account).ok().filter(|s| !s.is_empty()))
         .clone()
+}
+
+/// The credential store account of a channel's transport (for the configuration export).
+pub fn account(channel: Channel, transport: Transport) -> String {
+    transport.account(channel)
+}
+
+/// Forgets the credentials read this run, after an import replaced them in the store.
+pub fn forget_cached_secrets() {
+    cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 /// Whether a credential is saved for this channel and transport.

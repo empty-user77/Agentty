@@ -548,3 +548,44 @@ fn gemini_and_kimi_sessions_come_back_only_into_the_same_folder() {
     assert!(!home_b.join("gemini").exists());
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn settings_travel_between_computers_without_secrets() {
+    let root = temp("settings");
+    let url = bare(&root.join("remote.git"));
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let mut a = SyncConfig { settings: true, ..device("dev-a", "Office", &url) };
+    let mut b = SyncConfig { settings: true, ..device("dev-b", "Home", &url) };
+    let repo_a = Repo::new(root.join("clone-a"), a.remote.clone().unwrap(), "main");
+    let repo_b = Repo::new(root.join("clone-b"), b.remote.clone().unwrap(), "main");
+    repo_a.ensure_clone().unwrap();
+    repo_b.ensure_clone().unwrap();
+    let with = |theme: &str| SyncRequest {
+        settings: Some(crate::backup::Bundle {
+            kind: crate::backup::KIND.into(),
+            version: 1,
+            settings: Some(serde_json::json!({ "theme": theme })),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let first = run(&repo_a, &mut a, &with("Nord"), &locate(&home)).unwrap();
+    assert!(first.pushed);
+    assert!(first.settings.is_none());
+    assert!(repo_a.dir.join("settings/dev-a.json").is_file());
+    assert!(repo_a.dir.join("settings/README.md").is_file());
+
+    // B joins with its own untouched settings and gets A's.
+    let second = run(&repo_b, &mut b, &with("Default"), &locate(&home)).unwrap();
+    let incoming = second.settings.expect("b takes a's settings");
+    assert_eq!(incoming.device_name, "Office");
+    assert_eq!(incoming.bundle.settings.unwrap()["theme"], "Nord");
+    assert!(incoming.bundle.secrets.is_none());
+
+    // Nothing new on A: nothing comes back to it.
+    let third = run(&repo_a, &mut a, &with("Nord"), &locate(&home)).unwrap();
+    assert!(third.settings.is_none());
+    let _ = fs::remove_dir_all(root);
+}
