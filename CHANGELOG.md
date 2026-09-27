@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The in-app browser gives each terminal a tab of its own. An agent's `agentty browser` commands
+  and browser tools only reach its terminal's tab — never another terminal's page, a tab you opened,
+  or a plugin's page — so agents in several terminals can test at the same time. Tabs keep working
+  out of sight at a fixed layout width (scaled to fit the panel when shown), selecting a terminal
+  brings its tab forward, and closing the terminal closes it. Cookies stay shared; Settings →
+  Browser can give each terminal its own (macOS 14 or later).
+
+### Fixed
+- Opening a page from one terminal no longer replaces the page another terminal or a plugin was
+  working in.
+- A page opened over the window (Settings and the like) or a plugin's workspace no longer discards
+  browser tabs that were still at work.
+
 ## [0.2.3] - 2026-09-27
 
 ### Added

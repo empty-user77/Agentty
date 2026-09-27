@@ -52,6 +52,7 @@ mod status_menus;
 mod system_page;
 mod tab_menu;
 mod tasks;
+mod terminal_browser;
 mod tree_manager;
 pub mod update;
 pub mod worktrees;
@@ -496,6 +497,10 @@ pub struct Workbench {
     /// The user's own browser, set aside while a plugin's workspace (whose browser shows its
     /// automation's pages) is in front.
     stashed_browser: Option<browser::BrowserPanel>,
+    /// Terminals' browser tabs with no panel to be in yet (see `terminal_browser`).
+    backstage_tabs: Vec<browser::BrowserTab>,
+    /// The terminal in front when the browser last looked: selecting another shows its tab.
+    browser_front_pane: Option<u64>,
     /// The plugin and automation whose pages the browser shows now.
     instance_shown: Option<(String, String)>,
     /// Automations each plugin has been told about, and the run it was told in.
@@ -562,9 +567,6 @@ pub struct Workbench {
     /// The panel's plugin shows a popover beside the panel: the page moves right to leave it room
     /// while it is open.
     plugin_popover_open: bool,
-    /// When an agent last sent the in-app browser a command (`agentty browser …`): the page is
-    /// the AI's for a while after, and locked against stray clicks (see `browser_driven`).
-    browser_agent_at: Option<std::time::Instant>,
     /// Plugin panels that have a window of their own, by plugin id.
     plugin_windows: HashMap<String, gpui::WindowHandle<plugin_window::PluginWindow>>,
     /// Panes a plugin started, and the status each was last told about: how a plugin hears that
@@ -753,6 +755,8 @@ impl Workbench {
             ghosted: false,
             plugin_workspace_shown: None,
             stashed_browser: None,
+            backstage_tabs: Vec::new(),
+            browser_front_pane: None,
             instance_shown: None,
             known_instances: HashMap::new(),
             plugin_workspace_sidebar: None,
@@ -791,7 +795,6 @@ impl Workbench {
             plugin_panel: None,
             plugin_mode_menu: false,
             plugin_popover_open: false,
-            browser_agent_at: None,
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
             plugin_launched: HashMap::new(),
@@ -3865,6 +3868,13 @@ impl Workbench {
                 }
             }
             "browser-reload" => self.reload_browser(argument == "hard", cx),
+            "browser-tabs" => self.debug_browser_tabs(),
+            // `workspace-at <n>`: the n-th workspace in front, as its card does.
+            "workspace-at" => {
+                if let Some(index) = argument.trim().parse::<usize>().ok().filter(|i| *i < self.workspaces.len()) {
+                    self.activate_workspace(index, window, cx);
+                }
+            }
             // `browser-js <body>`: runs an async function body in the tab in front, prints the result.
             "browser-js" => {
                 let view = self.browser.as_ref().map(|browser| browser.webview());

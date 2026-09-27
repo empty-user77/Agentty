@@ -698,6 +698,9 @@ pub struct WebView {
     locked: bool,
     /// Asks sites for their phone pages (an iPhone's user agent) rather than the desktop ones.
     mobile: bool,
+    /// Size a terminal's page is laid out at while parked, at zoom 1 (see [`WebView::park_as`]).
+    /// `None`: a plugin's page, parked at the default size with its zoom kept.
+    parked_layout: Option<(f64, f64)>,
 }
 
 /// What a page asking for sites' phone pages says it is.
@@ -834,6 +837,7 @@ impl WebView {
                 shield: std::ptr::null_mut(),
                 locked: false,
                 mobile: prefs.mobile,
+                parked_layout: None,
             })
         }
     }
@@ -1076,13 +1080,34 @@ impl WebView {
             // Out of the window it can still hold the keyboard, and then every key only beeps.
             self.release_keyboard();
             let parent_frame: NSRect = msg_send![self.parent, frame];
-            let (w, h) = (PARKED_WIDTH, PARKED_HEIGHT);
+            let (w, h) = self.parked_layout.unwrap_or((PARKED_WIDTH, PARKED_HEIGHT));
             let origin = NSPoint::new(-(w + parent_frame.size.width + 400.), -(h + parent_frame.size.height + 400.));
             let _: () = msg_send![self.view, setFrame: NSRect::new(origin, NSSize::new(w, h))];
             let _: () = msg_send![self.view, setHidden: NO];
         }
         self.visible = false;
         self.parked = true;
+        // A terminal's page keeps the width it is laid out at, on screen or off: zoom 1 at that
+        // size is what the panel's fitted zoom showed.
+        if self.parked_layout.is_some() {
+            self.set_zoom(1.0);
+        }
+    }
+
+    /// Lays a terminal's page out at `width` × `height` whenever it is out of sight (parked
+    /// again now if it is), so an agent working behind other tabs sees the page it would see on
+    /// screen. `None`: the default desktop size.
+    pub fn park_as(&mut self, size: Option<(f64, f64)>) {
+        self.parked_layout = Some(size.unwrap_or((PARKED_WIDTH, PARKED_HEIGHT)));
+        if self.parked {
+            self.parked = false;
+            self.park();
+        }
+    }
+
+    /// Width a terminal's page is laid out at on screen: the desktop size, or the one it was given.
+    pub fn layout_width(&self) -> f64 {
+        self.parked_layout.map_or(PARKED_WIDTH, |(width, _)| width)
     }
 
     pub fn hide(&mut self) {

@@ -31,7 +31,7 @@ The tools an agent gets are:
 
 | Tool | What it does |
 |---|---|
-| `browser_open` | Show the panel, optionally loading a URL |
+| `browser_open` | Open this terminal's tab (made the first time), optionally loading a URL |
 | `browser_navigate` | Load a URL, `host:port`, or search words |
 | `browser_status` | Current URL, title, and whether the page is still loading |
 | `browser_wait_load` | Wait until loading finishes |
@@ -39,9 +39,18 @@ The tools an agent gets are:
 | `browser_console` | Read the page's console output |
 | `browser_screenshot` | Capture the page |
 | `browser_viewport` | Lay the page out at a device size, `WxH`, or `off` |
-| `browser_close` | Close the panel |
+| `browser_close` | Close this terminal's tab |
 
 They are registered with the agent when Agentty starts it, so there is nothing to install or configure. A typical loop is: the agent starts the dev server, opens the page, clicks through the change it just made, reads the console for errors, and fixes what it finds.
+
+### One tab per terminal
+
+Each terminal gets a browser tab of its own the first time its agent opens a page, labelled with the terminal's folder and number (`app #3`). Everything that agent does goes to that tab only: it never changes another terminal's page, a tab you opened yourself, or a plugin's page. So agents in several terminals can test different apps at the same time.
+
+- **Selecting a terminal shows its tab.** An agent in a terminal you are not looking at never changes what is on screen: its tab is added behind the others.
+- **Out of sight, it keeps working.** A tab that is not in front keeps loading, running scripts and taking screenshots. Its page is laid out at 1280 px (or the size set with `browser_viewport`), whether it is on screen or not, and scaled to fit the panel when it is — so what an agent checks does not depend on how wide your panel is. Each tab keeps its own responsive size.
+- **Closing a terminal closes its tab.**
+- **Cookies and sign-ins are shared** by all tabs, so you sign in to a site once. To give every terminal's tab cookies of its own, turn on **Settings → Browser → Separate cookies and sign-ins for each terminal** (macOS 14 or later); they are removed when the terminal closes.
 
 > [!IMPORTANT]
 > The browser keeps the sessions you are signed into. An agent driving it acts inside those sessions. Enable it when you want that, and be aware of which tabs are open.

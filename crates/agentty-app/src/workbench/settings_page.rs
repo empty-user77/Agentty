@@ -629,6 +629,16 @@ impl Workbench {
                         toggle("browser-agent-tools", b.agent_tools, |s| s.browser.agent_tools = !s.browser.agent_tools, cx),
                     ))
                     .child(row_with_hint(
+                        t(cx, "settings.browser_separate_sessions"),
+                        t(cx, "settings.browser_separate_sessions_hint"),
+                        toggle(
+                            "browser-separate-sessions",
+                            b.separate_sessions,
+                            |s| s.browser.separate_sessions = !s.browser.separate_sessions,
+                            cx,
+                        ),
+                    ))
+                    .child(row_with_hint(
                         t(cx, "settings.browser_auto_open"),
                         t(cx, "settings.browser_auto_open_hint"),
                         toggle(

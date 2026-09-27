@@ -1057,6 +1057,8 @@ strings! {
     "collab.disconnect_all" => ["Disconnect all", "모두 연결 해제", "すべて解除", "全部断开"],
     "collab.linked_group" => ["Linked · {n}", "세션 연결 · {n}", "セッション連携 · {n}", "会话连接 · {n}"],
     "collab.open_flow" => ["Open session flow", "세션연결 화면 열기", "セッションフローを開く", "打开会话流"],
+    "settings.browser_separate_sessions" => ["Separate cookies and sign-ins for each terminal", "터미널마다 쿠키·로그인 세션 분리", "ターミナルごとに Cookie とサインインを分ける", "每个终端使用独立的 Cookie 和登录状态"],
+    "settings.browser_separate_sessions_hint" => ["Each terminal's browser tab keeps its own cookies and sign-ins, removed when the terminal closes. Off: every tab shares them, so a site signed in once stays signed in for every terminal. Applies to tabs opened from now on.", "터미널마다 브라우저 탭이 자기 쿠키와 로그인 상태를 따로 갖고, 터미널을 닫으면 지워집니다. 끄면 모든 탭이 공유해서 한 번 로그인한 사이트는 모든 터미널에서 로그인된 상태입니다. 이후 새로 여는 탭부터 적용됩니다.", "ターミナルごとのブラウザタブが自分の Cookie とサインイン状態を持ち、ターミナルを閉じると消えます。オフでは全タブで共有し、一度サインインしたサイトはどのターミナルでもサインイン済みです。これから開くタブに適用されます。", "每个终端的浏览器标签页拥有自己的 Cookie 和登录状态，终端关闭时清除。关闭此项时所有标签页共享，登录过一次的网站在所有终端都保持登录。对之后新打开的标签页生效。"],
     "settings.browser_agent_tools" => ["Let Claude Code / Codex control this browser (new AI sessions)", "Claude Code / Codex가 이 브라우저를 제어하도록 허용 (새 AI 세션부터)", "Claude Code / Codex がこのブラウザを操作できるようにする（新しいセッションから）", "允许 Claude Code / Codex 控制此浏览器（新会话生效）"],
     "tooltip.find_prev" => ["Previous match", "이전 결과", "前の一致", "上一个"],
     "tooltip.find_next" => ["Next match", "다음 결과", "次の一致", "下一个"],

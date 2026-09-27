@@ -25,7 +25,7 @@ const TAB_STRIP: f32 = 28.;
 const TOOLBAR: f32 = 36.;
 const STATUS_BAR: f32 = 24.;
 /// Most pages the panel keeps open at once (each one is a native web view of its own).
-const MAX_TABS: usize = 16;
+pub(super) const MAX_TABS: usize = 16;
 /// How often the page is asked for its network summary (and, while open, its calls).
 const NET_INTERVAL: Duration = Duration::from_millis(900);
 const NET_INTERVAL_OPEN: Duration = Duration::from_millis(400);
@@ -127,10 +127,19 @@ pub struct BrowserTab {
     pub(super) owner: Option<u64>,
     /// Name of the plugin driving it, shown on the tab.
     owner_name: Option<String>,
+    /// The terminal pane whose agent opened this tab (`agentty browser`, the browser MCP tools).
+    /// Only that pane's commands reach it, and no other pane's reach any other tab.
+    pub(super) pane: Option<u64>,
+    /// When that agent last sent it a command: locked against the user's clicks meanwhile.
+    pub(super) driven_at: Option<Instant>,
+    /// Its responsive size, kept with the tab (the panel shows the one of the tab in front).
+    pub(super) viewport: Option<super::responsive::Viewport>,
+    /// Cookies and site data of its own ("separate sessions per terminal"), removed with the tab.
+    pub(super) profile: Option<[u8; 16]>,
 }
 
 impl BrowserTab {
-    fn new(url: String) -> Self {
+    pub(super) fn new(url: String) -> Self {
         Self {
             webview: Rc::new(RefCell::new(None)),
             pending: Some(url.clone()),
@@ -143,7 +152,55 @@ impl BrowserTab {
             net: Network::default(),
             owner: None,
             owner_name: None,
+            pane: None,
+            driven_at: None,
+            viewport: None,
+            profile: None,
         }
+    }
+
+    /// A terminal's tab: its view already made (a background one, which keeps running out of
+    /// sight) and loading `url`.
+    pub(super) fn for_terminal(
+        webview: Rc<RefCell<Option<WebView>>>,
+        url: String,
+        pane: u64,
+        name: String,
+        profile: Option<[u8; 16]>,
+    ) -> Self {
+        Self { webview, pending: None, pane: Some(pane), owner_name: Some(name), profile, ..Self::new(url) }
+    }
+
+    /// Loads `url` in this tab's view now (a terminal's tab may be out of sight, where nothing
+    /// renders to pick up `pending`).
+    pub(super) fn load_now(&mut self, url: String) {
+        let loaded = match self.webview.borrow().as_ref() {
+            Some(view) => {
+                view.load(&url);
+                true
+            }
+            None => false,
+        };
+        if !loaded {
+            self.pending = Some(url);
+            return;
+        }
+        self.loading = true;
+        self.progress = 0.;
+        self.finished_at = None;
+        self.error = None;
+        self.url = url;
+        self.net = Network::default();
+    }
+
+    /// Where the tab is or is going.
+    pub(super) fn address(&self) -> String {
+        self.pending.clone().unwrap_or_else(|| self.url.clone())
+    }
+
+    /// Someone else's page: a plugin's, or a terminal's.
+    pub(super) fn claimed(&self) -> bool {
+        self.owner.is_some() || self.pane.is_some()
     }
 
     /// A tab showing a plugin's page (already loaded, owned by the plugin).
@@ -164,7 +221,7 @@ impl BrowserTab {
     fn label(&self, cx: &gpui::App) -> String {
         let base = self.page_label(cx);
         match &self.owner_name {
-            Some(plugin) => format!("{plugin} · {base}"),
+            Some(owner) => format!("{owner} · {base}"),
             None => base,
         }
     }
@@ -207,6 +264,8 @@ pub struct BrowserPanel {
     detail_scroll: gpui::ScrollHandle,
     /// Responsive mode: the page at a device's size.
     pub(super) responsive: super::responsive::Responsive,
+    /// The tab (its view's id) whose responsive size `responsive` shows: each tab keeps its own.
+    pub(super) viewport_tab: Option<usize>,
     /// The user unlocked a page an AI drives, to use it themselves (it starts locked).
     pub(super) unlocked: bool,
     _subscription: Subscription,
@@ -215,8 +274,9 @@ pub struct BrowserPanel {
 impl BrowserPanel {
     /// Every tab's address (the one it is loading, if any), for the saved layout.
     pub(super) fn tab_urls(&self) -> Vec<String> {
-        // A plugin's page is the plugin's to open again, not the panel's.
-        self.tabs.iter().filter(|tab| tab.owner.is_none()).map(|tab| tab.pending.clone().unwrap_or_else(|| tab.url.clone())).collect()
+        // A plugin's page is the plugin's to open again, not the panel's; a terminal's goes with
+        // its terminal.
+        self.tabs.iter().filter(|tab| !tab.claimed()).map(|tab| tab.pending.clone().unwrap_or_else(|| tab.url.clone())).collect()
     }
 
     fn tab(&self) -> &BrowserTab {
@@ -231,12 +291,6 @@ impl BrowserPanel {
     /// The native view of the tab in front, for the agent commands and the toolbar buttons.
     pub(super) fn webview(&self) -> Rc<RefCell<Option<WebView>>> {
         self.tab().webview.clone()
-    }
-
-    /// Whether the tab in front is ready for a command (its view exists, nothing queued).
-    pub(super) fn ready(&self) -> bool {
-        let tab = self.tab();
-        tab.webview.borrow().is_some() && tab.pending.is_none()
     }
 
     /// What the debug driver reports about the panel: its tabs and the network it recorded.
@@ -293,7 +347,8 @@ impl Workbench {
     /// Whether an AI drives the page in front: a plugin's page, or one an agent sent a command to
     /// in the last couple of minutes. Such a page cannot be closed, and is locked until unlocked.
     pub(super) fn browser_driven(&self, browser: &BrowserPanel) -> bool {
-        browser.tab().owner.is_some() || self.browser_agent_at.is_some_and(|at| at.elapsed() < AGENT_DRIVES_FOR)
+        let tab = browser.tab();
+        tab.owner.is_some() || tab.driven_at.is_some_and(|at| at.elapsed() < AGENT_DRIVES_FOR)
     }
 
     pub(super) fn toggle_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -301,7 +356,9 @@ impl Workbench {
         if self.browser.as_ref().is_some_and(|browser| self.browser_driven(browser)) {
             return;
         }
-        if self.browser.take().is_some() {
+        if let Some(browser) = self.browser.take() {
+            // Terminals' tabs go on working out of sight, and come back when the panel opens.
+            self.keep_terminal_tabs(browser.tabs);
             crate::webview::focus_gpui_view(window);
             self.focus_active(window, cx);
             return cx.notify();
@@ -319,7 +376,24 @@ impl Workbench {
         match self.browser.as_mut() {
             Some(browser) => {
                 if let Some(url) = url {
-                    browser.tab_mut().pending = Some(url);
+                    // A plugin's or a terminal's page is not the user's to send elsewhere: the
+                    // user's own tab takes it, or a new one.
+                    if browser.tab().claimed() {
+                        match browser.tabs.iter().rposition(|tab| !tab.claimed()) {
+                            Some(index) => {
+                                browser.active = index;
+                                browser.tab_mut().pending = Some(url);
+                            }
+                            None if browser.tabs.len() < MAX_TABS => {
+                                browser.tabs.push(BrowserTab::new(url));
+                                browser.active = browser.tabs.len() - 1;
+                            }
+                            None => {}
+                        }
+                        self.show_address(cx);
+                    } else {
+                        browser.tab_mut().pending = Some(url);
+                    }
                 }
             }
             None => self.browser_request = Some(url.unwrap_or_else(|| browser_url(&settings(cx).browser.home, cx))),
@@ -390,7 +464,7 @@ impl Workbench {
     }
 
     /// Puts the tab in front's address into the address bar.
-    fn show_address(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn show_address(&mut self, cx: &mut Context<Self>) {
         let Some(browser) = self.browser.as_mut() else { return };
         let url = browser.tab().pending.clone().unwrap_or_else(|| browser.tab().url.clone());
         browser.synced_url = url.clone();
@@ -412,6 +486,7 @@ impl Workbench {
             self.build_browser_panel(tabs, active, url, window, cx);
         }
         self.sync_plugin_instances(cx);
+        self.sync_terminal_tabs(window, cx);
         if let Some(tabs) = self.sync_plugin_browsers(cx) {
             match self.browser.as_mut() {
                 Some(browser) => {
@@ -431,7 +506,14 @@ impl Workbench {
         self.place_browser_views(window, cx);
     }
 
-    fn build_browser_panel(&mut self, tabs: Vec<BrowserTab>, active: usize, url: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn build_browser_panel(
+        &mut self,
+        tabs: Vec<BrowserTab>,
+        active: usize,
+        url: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         {
             let address = cx.new(|cx| TextInput::localized(url.clone(), "browser.address", window, cx));
             let subscription = cx.subscribe(&address, |this, input, event: &TextInputEvent, cx| {
@@ -454,6 +536,7 @@ impl Workbench {
                 calls_scroll: gpui::ScrollHandle::new(),
                 detail_scroll: gpui::ScrollHandle::new(),
                 responsive: super::responsive::Responsive::new(window, cx),
+                viewport_tab: None,
                 unlocked: false,
                 _subscription: subscription,
             });
@@ -462,9 +545,24 @@ impl Workbench {
     }
 
     fn place_browser_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Pages (settings, Git, …) take the whole area: close the browser rather than hide it.
-        if self.page.is_some() && self.browser.take().is_some() {
-            crate::webview::focus_gpui_view(window);
+        // Pages (settings, Git, …) take the whole area: close the browser rather than hide it —
+        // unless a terminal's agent works in it, whose pages keep running out of sight.
+        if self.page.is_some() {
+            match self.browser.as_ref() {
+                Some(browser) if browser.tabs.iter().any(|tab| tab.pane.is_some()) => {
+                    for tab in &browser.tabs {
+                        if let Some(view) = tab.webview.borrow_mut().as_mut() {
+                            view.hide();
+                        }
+                    }
+                    return;
+                }
+                Some(_) => {
+                    self.browser = None;
+                    crate::webview::focus_gpui_view(window);
+                }
+                None => {}
+            }
         }
         self.apply_browser_keys(window, cx);
         // Menus and popups sit on top of it: hide the native views meanwhile.
@@ -825,6 +923,12 @@ impl Workbench {
         // itself); a phone picked in responsive mode asks sites for their phone pages.
         let layout = match browser.responsive.viewport {
             Some(_) => super::plugin_browser::PageLayout::default(),
+            // A terminal's page is laid out on screen as it is off screen, zoomed to fit the panel,
+            // so what its agent checks does not change with the panel's width.
+            None if tab.pane.is_some() => super::plugin_browser::PageLayout {
+                width: webview.borrow().as_ref().map(|view| view.layout_width() as f32),
+                ..Default::default()
+            },
             None => {
                 tab.owner.and_then(|id| self.plugin_browsers.iter().find(|page| page.id == id)).map(|page| page.layout).unwrap_or_default()
             }

@@ -4,7 +4,7 @@
 use super::Workbench;
 use crate::agent_signal::{browser_reply, BrowserRequest};
 use gpui::{Context, Window};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TEXT: &str = "const el = selector ? document.querySelector(selector) : document.body;
 if (!el) throw new Error('no element matches ' + selector);
@@ -56,43 +56,43 @@ throw new Error('timed out waiting for ' + selector);";
 const CONSOLE: &str =
     "const logs = window.__agenttyConsole || []; const out = logs.slice(); if (clear === '1') logs.length = 0; return JSON.stringify(out);";
 
+/// What a terminal hears when it has no tab yet.
+const NO_TAB: &str = "this terminal has no browser tab — run `agentty browser open [url]` first";
+
 impl Workbench {
     pub fn browser_command(&mut self, request: BrowserRequest, window: &mut Window, cx: &mut Context<Self>) {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "browser_api" }));
-        self.browser_agent_at = Some(std::time::Instant::now());
-        self.run_browser_command(request, 0, window, cx);
+        self.run_browser_command(request, window, cx);
     }
 
-    fn run_browser_command(&mut self, request: BrowserRequest, attempt: u32, window: &mut Window, cx: &mut Context<Self>) {
+    /// Runs one command of a terminal's agent, in that terminal's own tab (see `terminal_browser`)
+    /// and nowhere else: not another terminal's tab, the user's, or a plugin's.
+    fn run_browser_command(&mut self, request: BrowserRequest, window: &mut Window, cx: &mut Context<Self>) {
         let reply = request.reply.clone();
         let send = move |result: Result<String, String>| {
             let _ = reply.send(browser_reply(result));
         };
         let arg = |i: usize| request.args.get(i).cloned();
         let json = |value: serde_json::Value| Ok(value.to_string());
+        // Only a pane's connection is heard for the browser (`agent_signal::serve`), and it speaks
+        // for that pane only.
+        let Some(pane) = request.pane else { return send(Err("run it inside an Agentty terminal".into())) };
         match request.command.as_str() {
             "open" | "navigate" => {
                 if request.command == "navigate" && arg(0).is_none() {
                     return send(Err("usage: agentty browser navigate <url>".into()));
                 }
                 let url = arg(0).map(|a| super::browser::browser_url(&a, cx));
-                self.open_browser(url.clone(), cx);
-                // Create the web view now rather than on the next frame (which may not come soon,
-                // e.g. while the window is covered).
-                self.prepare_browser(window, cx);
+                let result = self.open_terminal_tab(pane, url, window, cx);
                 window.refresh();
-                return send(json(serde_json::json!({ "opened": true, "url": url })));
+                return send(result.and_then(|url| json(serde_json::json!({ "opened": true, "url": url }))));
             }
             // `viewport` alone reports the size; `WxH` or a device id sets it; `off` ends it.
             "viewport" => {
-                if self.browser_request.is_some() {
-                    self.prepare_browser(window, cx);
-                }
-                if self.browser.is_none() {
-                    return send(Err("the browser is not open — run `agentty browser open [url]` first".into()));
-                }
+                let Some(tab) = self.terminal_tab_mut(pane) else { return send(Err(NO_TAB.into())) };
+                tab.driven_at = Some(Instant::now());
                 let next = match arg(0).as_deref() {
-                    None => self.browser.as_ref().and_then(|b| b.responsive.viewport),
+                    None => tab.viewport,
                     Some("off" | "none") => None,
                     Some(size) => match super::responsive::Viewport::parse(size) {
                         Some(viewport) => Some(viewport),
@@ -102,43 +102,27 @@ impl Workbench {
                         }
                     },
                 };
-                self.set_viewport(next, cx);
-                window.refresh();
+                if arg(0).is_some() {
+                    self.set_terminal_viewport(pane, next, cx);
+                    window.refresh();
+                }
                 return send(json(match next {
                     Some(v) => serde_json::json!({ "responsive": true, "width": v.width, "height": v.height, "device": v.device() }),
                     None => serde_json::json!({ "responsive": false }),
                 }));
             }
+            // Closes this terminal's tab only.
             "close" => {
-                self.browser = None;
-                crate::webview::focus_gpui_view(window);
-                cx.notify();
+                self.close_terminal_tab(pane, window, cx);
                 return send(json(serde_json::json!(true)));
             }
             _ => {}
         }
-        // Everything else needs the web view, which appears on the next frame after `open`.
-        let ready = self.browser.as_ref().is_some_and(|b| b.ready()) && self.browser_request.is_none();
-        if !ready {
-            if self.browser.is_none() && self.browser_request.is_none() {
-                return send(Err("the browser is not open — run `agentty browser open [url]` first".into()));
-            }
-            if attempt >= 25 {
-                return send(Err("the browser did not start (is the Agentty window visible?)".into()));
-            }
-            self.prepare_browser(window, cx);
-            window.refresh();
-            cx.spawn_in(window, async move |this, cx| {
-                cx.background_executor().timer(Duration::from_millis(200)).await;
-                let _ = this.update_in(cx, |this, window, cx| this.run_browser_command(request, attempt + 1, window, cx));
-            })
-            .detach();
-            return;
-        }
-        let Some(browser) = self.browser.as_ref() else { return };
-        let webview = browser.webview();
+        let Some(tab) = self.terminal_tab_mut(pane) else { return send(Err(NO_TAB.into())) };
+        tab.driven_at = Some(Instant::now());
+        let webview = tab.webview.clone();
         let borrowed = webview.borrow();
-        let Some(view) = borrowed.as_ref() else { return };
+        let Some(view) = borrowed.as_ref() else { return send(Err("this terminal's browser tab is not ready yet; try again".into())) };
         let js = |body: &str, args: &[(&str, &str)]| view.call_async(body, args, Box::new(send.clone()));
         let selector = arg(0).unwrap_or_default();
         match request.command.as_str() {
