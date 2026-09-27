@@ -19,6 +19,11 @@
   Run Claude Code, Codex and a dozen other agents side by side — see at a glance who is working, who is done and who needs you.
 </p>
 
+<p align="center">
+  <b>Where it is headed:</b> plugins that fit an agent to each environment, and one Agentty that runs them all —<br/>
+  a single, consistent place to build many kinds of agents, the way a Forward Deployed Engineer (FDE) works.
+</p>
+
 <h3 align="center"><a href="https://github.com/empty-user77/Agentty/releases/latest"><ins>Download Agentty</ins></a> · <a href="https://www.agentty.run/docs"><ins>Documentation</ins></a></h3>
 
 <p align="center">
@@ -27,6 +32,32 @@
 
 A native, GPU-rendered terminal written in Rust with [GPUI](https://gpui.rs) and `alacritty_terminal`. No Electron.
 It gives every agent what the work needs: the project's files, its Git history, its containers and its databases.
+
+## Where it is headed: forward-deployed agents
+
+A **Forward Deployed Engineer (FDE)** works inside a customer's environment and builds what that environment needs —
+its tools, its data, its rules — instead of handing over one generic product. Agentty is growing in that direction for
+AI agents.
+
+No single agent fits every team, stack and situation. So Agentty splits the job in two:
+
+| | |
+|---|---|
+| **Plugins fit the agent to its environment** | The skills and rules of a trade ([AgentOS](https://www.agentty.run/docs/plugin-agentos)), the tools and sites it works with, the steps it follows and what counts as done, and the permissions it is given — packaged once for a team, a customer or a situation. |
+| **Agentty is where every agent runs** | The same terminal, sessions, git worktrees, in-app browser, databases, containers, credential store, usage numbers and notifications, whichever agent a plugin puts to work. |
+
+What that gives:
+
+- **Build for each environment, run every agent the same way.** An agent made for one customer's stack and one that
+  runs a marketing week work side by side, in the same window, in the same way.
+- **Every agent stays visible and in your hands.** Each step is a real agent session you can read, interrupt and take
+  over, and every plugin says up front what it may do.
+- **What an engineer builds on site stays usable.** It ships as a plugin — through the [Marketplace](https://github.com/empty-user77/Agentty-Marketplace) or a
+  Git repository — and runs in any Agentty.
+
+Today, plugins already add panels and automation workspaces, drive the in-app browser on the sites they declare, and run
+work through agent sessions as AgentOS plugins. The plugin API keeps growing in this direction.
+[Plugins →](https://www.agentty.run/docs/plugins-overview)
 
 ## Features
 
@@ -253,6 +284,10 @@ for before you install it; they limit what it can ask Agentty to do. A WebAssemb
 them. A plugin that runs as a Node.js, Python or native program also has your own access to files and the network
 outside Agentty, so install only the ones you trust. Plugins are published through the
 [Agentty Marketplace](https://github.com/empty-user77/Agentty-Marketplace).
+
+Plugins are the base of Agentty's [forward-deployed direction](#where-it-is-headed-forward-deployed-agents): a
+plugin fits an agent to one environment — a team, a customer, a situation — and Agentty runs all of them in one
+consistent place.
 
 The built-in **Cosmica** plugin turns [Cosmica](https://www.cosmica.ink/) notes into prompts and saves session summaries
 back into it. To write your own, see [docs/plugins](docs/plugins/README.md); the Plugins page can also create one and

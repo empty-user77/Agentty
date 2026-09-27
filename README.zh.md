@@ -19,6 +19,11 @@
   让 Claude Code、Codex 和十几个其他智能体并排运行 — 一眼看清谁在工作、谁已完成、谁在等你回答。
 </p>
 
+<p align="center">
+  <b>发展方向：</b>用插件打造适合各种环境与场景的智能体，并在同一个 Agentty 中运行它们。<br/>
+  像 FDE（Forward Deployed Engineer）那样 —— 在一致的统一环境中构建多样的智能体。
+</p>
+
 <h3 align="center"><a href="https://github.com/empty-user77/Agentty/releases/latest"><ins>下载 Agentty</ins></a> · <a href="https://www.agentty.run/docs"><ins>文档</ins></a></h3>
 
 <p align="center">
@@ -27,6 +32,28 @@
 
 一个原生、GPU 渲染的终端，使用 Rust 编写，搭配 [GPUI](https://gpui.rs) 和 `alacritty_terminal`。不含 Electron。
 它为每个智能体提供工作所需的一切：项目的文件、Git 历史、容器和数据库。
+
+## 发展方向：FDE 视角的智能体平台
+
+**FDE**（Forward Deployed Engineer，前线部署工程师）深入客户现场，为那个环境打造它所需要的东西 —— 那里的工具、数据和
+规则 —— 而不是交付一个通用产品。Agentty 正朝这个方向扩展 AI 智能体。
+
+没有一个智能体能适合所有团队、所有技术栈和所有场景。因此 Agentty 把工作分成两部分：
+
+| | |
+|---|---|
+| **插件 —— 打造适合环境与场景的智能体** | 某个行业的技能与规则（[AgentOS](https://www.agentty.run/docs/plugin-agentos)）、它使用的工具和网站、它遵循的步骤与完成标准、它被授予的权限，按团队、客户或场景打包一次。 |
+| **Agentty —— 在统一一致的环境中运行所有智能体** | 无论哪个插件驱动哪个智能体，都运行在同一套终端、会话、git 工作树、应用内浏览器、数据库、容器、凭据存储、用量统计和通知之上。 |
+
+由此带来：
+
+- **按环境构建，用同一种方式运行所有智能体。** 为某个客户技术栈打造的智能体，和负责一周营销工作的智能体，在同一个窗口里
+  以同样的方式并排运行。
+- **每个智能体都看得见、握在你手里。** 每一步都是可以阅读、打断和接管的真实智能体会话，每个插件在安装前就说明它能做什么。
+- **在现场做出的东西可以直接复用。** 它以插件的形式发布 —— 通过[插件市场](https://github.com/empty-user77/Agentty-Marketplace)或 Git 仓库 —— 在任何 Agentty 中运行。
+
+如今插件已经可以添加面板和自动化工作区、在声明的网站上操作应用内浏览器，并以 AgentOS 插件的形式通过智能体会话推进工作。
+插件 API 会继续朝这个方向扩展。[插件 →](https://www.agentty.run/docs/plugins-overview)
 
 ## 功能
 
@@ -234,6 +261,9 @@ Ctrl+Alt+Shift，⌥⌘ 变为 Ctrl+Alt，这样 Ctrl+字母 还是给 shell。
 
 插件填充终端旁边的面板，在智能体分屏上方添加按钮和命令面板条目，并可以发送提示词 — 发送到哪里始终由你在"发送到…"对话框中选择。插件页面在安装前显示它申请的权限；这些限制了它能请求 Agentty 做的事。WebAssembly 插件无法接触这些权限以外的任何东西。以 Node.js、Python 或原生程序运行的插件在 Agentty 外拥有和你相同的文件和网络访问权限，所以只安装你信任的。插件通过
 [Agentty Marketplace](https://github.com/empty-user77/Agentty-Marketplace) 发布。
+
+插件是 Agentty 朝 FDE 视角扩展的基础（参见上文“发展方向”）：用插件为每个团队、客户或场景打造合适的智能体，
+并在同一个 Agentty 中一致地运行它们。
 
 内置的 **Cosmica** 插件把 [Cosmica](https://www.cosmica.ink/) 笔记变成提示词并把会话摘要写回。要编写自己的，参见 [docs/plugins](docs/plugins/README.md)；插件页面也能创建一个并让 Claude Code 构建。
 
