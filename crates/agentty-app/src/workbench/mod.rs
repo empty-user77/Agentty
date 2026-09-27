@@ -512,7 +512,7 @@ pub struct Workbench {
     browsers_page_refreshing: bool,
     /// Its small pictures of the pages, the ones being taken, and those just finished.
     browser_previews: browsers_page::Previews,
-    previews_taking: std::collections::HashSet<String>,
+    previews_taking: HashMap<String, std::time::Instant>,
     previews_taking_done: Rc<RefCell<Vec<String>>>,
     /// The plugin and automation whose pages the browser shows now.
     instance_shown: Option<(String, String)>,
@@ -773,7 +773,7 @@ impl Workbench {
             terminal_links: Vec::new(),
             browsers_page_refreshing: false,
             browser_previews: Default::default(),
-            previews_taking: std::collections::HashSet::new(),
+            previews_taking: HashMap::new(),
             previews_taking_done: Default::default(),
             instance_shown: None,
             known_instances: HashMap::new(),

@@ -147,6 +147,9 @@ impl Workbench {
                         tab.driven_at = driven;
                     }
                     let unloaded = tab.webview.borrow().is_none();
+                    // A server the terminal starts does not move the page its agent is working in.
+                    let at_work = tab.driven_at.is_some_and(|at| at.elapsed() < super::browser::AGENT_DRIVES_FOR);
+                    let url = url.filter(|_| !(opener == Opener::Server && at_work));
                     let address = match url {
                         // An unloaded page comes back where it is sent.
                         Some(url) if unloaded => {
@@ -220,6 +223,12 @@ impl Workbench {
         let apart = prefs.separate_sessions && !prefs.private_mode && crate::webview::profiles_supported();
         let profile = apart.then(|| *uuid::Uuid::new_v4().as_bytes());
         let mut view = WebView::new_background_in(window, &prefs, profile).ok_or("the in-app browser is not available here")?;
+        // Only now: WebKit crashes removing a store before it made its first view (its main run
+        // loop is not set up yet).
+        remove_left_profiles_once();
+        if let Some(bytes) = profile {
+            record_profile(bytes);
+        }
         view.park_as(None);
         view.load(&url);
         let mut tab = BrowserTab::for_terminal(Rc::new(RefCell::new(Some(view))), url.clone(), pane, self.terminal_name(pane, cx), profile);
@@ -257,15 +266,36 @@ impl Workbench {
                 self.browser = Some(browser);
             }
         }
+        self.merge_kept_browser();
         cx.notify();
+    }
+
+    /// A terminal has one browser. The panel can become a terminal's while a browser is kept for
+    /// it (its agent opened one before, and the panel was the start screen's or a plugin's): the
+    /// kept one's tabs join the panel, so the agent keeps finding its tab.
+    fn merge_kept_browser(&mut self) {
+        if self.plugin_workspace_shown.is_some() {
+            return;
+        }
+        let Some(owner) = self.browser_owner else { return };
+        let Some(browser) = self.browser.as_mut() else { return };
+        if let Some(kept) = self.pane_browsers.remove(&owner) {
+            browser.tabs.extend(kept.tabs);
+        }
     }
 
     /// Keeps the browser on screen for its terminal (out of sight, still running). A plugin's pages
     /// among its tabs go back to the plugin, which keeps them running too.
+    /// With no terminal to keep it for (the browser opened on the start screen) it stays where it
+    /// is, for the terminal that takes the panel next.
     fn put_browser_away(&mut self) {
-        let Some(mut browser) = self.browser.take() else { return };
         let Some(owner) = self.browser_owner else { return };
+        let Some(mut browser) = self.browser.take() else { return };
         browser.tabs.retain(|tab| tab.owner.is_none());
+        if let Some(kept) = self.pane_browsers.remove(&owner) {
+            // Never two browsers for one terminal: the one kept for it joins this one.
+            browser.tabs.extend(kept.tabs);
+        }
         if browser.tabs.is_empty() {
             return;
         }
@@ -404,7 +434,9 @@ impl Workbench {
                 cx.notify();
             }
         }
+        self.merge_kept_browser();
         self.close_orphaned_terminal_browsers(window, cx);
+        remove_closed_profiles();
         self.sync_tab_viewports(cx);
     }
 
@@ -527,12 +559,69 @@ impl Workbench {
 }
 
 /// A terminal's tab going away: its page, and its own cookies when it had some.
-fn drop_terminal_tab(tab: BrowserTab) {
+pub(super) fn drop_terminal_tab(tab: BrowserTab) {
     let profile = tab.profile;
     drop(tab);
     if let Some(bytes) = profile {
+        // WebKit keeps a store it still uses (the page it just let go of): removed a little later.
+        PROFILES_TO_REMOVE.with(|list| list.borrow_mut().push((bytes, Instant::now())));
+    }
+}
+
+thread_local! {
+    static PROFILES_TO_REMOVE: RefCell<Vec<([u8; 16], Instant)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// How long after its tab closed a terminal's own store is removed.
+const REMOVE_PROFILE_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Removes the stores of tabs closed long enough ago (each frame and each budget check).
+pub(super) fn remove_closed_profiles() {
+    let due: Vec<[u8; 16]> = PROFILES_TO_REMOVE.with(|list| {
+        let mut list = list.borrow_mut();
+        let (due, wait): (Vec<_>, Vec<_>) = list.drain(..).partition(|(_, at)| at.elapsed() >= REMOVE_PROFILE_AFTER);
+        *list = wait;
+        due.into_iter().map(|(bytes, _)| bytes).collect()
+    });
+    for bytes in due {
         crate::webview::remove_profile(bytes);
     }
+}
+
+/// The terminals' own cookie stores ("Separate cookies and sign-ins for each terminal"), one UUID
+/// a line. A store is removed when its tab closes; one that could not be (the app quit with the
+/// tab open, or WebKit still held it) is removed at the next start.
+fn profiles_file() -> std::path::PathBuf {
+    agentty_bridge::fsutil::data_dir().join("browser-terminal-profiles")
+}
+
+fn record_profile(bytes: [u8; 16]) {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(mut file) = options.open(profiles_file()) {
+        let _ = writeln!(file, "{}", uuid::Uuid::from_bytes(bytes));
+    }
+}
+
+/// The stores left by the last run go when the first terminal page of this run is made: not
+/// earlier (WebKit must be up), and once (a second window's pages use this run's stores).
+pub(super) fn remove_left_profiles_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(text) = std::fs::read_to_string(profiles_file()) else { return };
+        for line in text.lines() {
+            if let Ok(id) = uuid::Uuid::parse_str(line.trim()) {
+                crate::webview::remove_profile(*id.as_bytes());
+            }
+        }
+        let _ = std::fs::remove_file(profiles_file());
+    });
 }
 
 #[cfg(test)]

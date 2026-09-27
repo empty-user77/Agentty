@@ -274,7 +274,7 @@ impl BrowserTab {
 }
 
 /// How long a page counts as the AI's after an agent's last browser command.
-const AGENT_DRIVES_FOR: std::time::Duration = std::time::Duration::from_secs(120);
+pub(super) const AGENT_DRIVES_FOR: std::time::Duration = std::time::Duration::from_secs(120);
 
 pub struct BrowserPanel {
     pub(super) tabs: Vec<BrowserTab>,
@@ -486,7 +486,10 @@ impl Workbench {
             self.focus_active(window, cx);
             return cx.notify();
         }
-        browser.tabs.remove(index);
+        let tab = browser.tabs.remove(index);
+        if tab.pane.is_some() {
+            super::terminal_browser::drop_terminal_tab(tab);
+        }
         if browser.active > index {
             browser.active -= 1;
         }

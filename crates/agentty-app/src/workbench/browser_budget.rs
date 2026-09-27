@@ -9,8 +9,9 @@
 //!   oldest first, until the estimate is under the limit.
 //!
 //! Unloading keeps where each page was: the page loads again when its terminal is selected, or
-//! when its agent sends a command. The browser on screen is never unloaded, and a browser whose
-//! agent worked in the last two minutes goes after all the idle ones.
+//! when its agent sends a command. Neither the browser on screen nor one whose agent sent a
+//! command in the last two minutes is unloaded (that agent would lose the page it is testing, and
+//! load it again with its next command).
 
 use super::browser::BrowserPanel;
 use super::Workbench;
@@ -20,7 +21,7 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 const CHECK_EVERY: Duration = Duration::from_secs(15);
-/// An agent that sent a command this recently is at work: its browser is unloaded last.
+/// An agent that sent a command this recently is at work: its browser is not unloaded.
 const AT_WORK: Duration = Duration::from_secs(120);
 
 /// What one check found and did.
@@ -45,23 +46,27 @@ impl Workbench {
     /// Unloads the browsers out of sight that are over the limits, oldest first.
     pub(super) fn enforce_browser_budget(&mut self, cx: &mut Context<Self>) -> BudgetReport {
         let prefs = settings(cx).browser.clone();
-        // Idle ones before those whose agent is at work, and among each the one seen longest ago.
-        let mut candidates: Vec<(bool, Instant, u64)> =
-            self.pane_browsers.iter().filter(|(_, b)| !b.unloaded).map(|(pane, b)| (at_work(b), b.last_shown, *pane)).collect();
+        // All running out of sight count; only the idle ones are unloaded, the one seen longest ago first.
+        let running = self.pane_browsers.values().filter(|b| !b.unloaded).count();
+        let mut candidates: Vec<(Instant, u64)> =
+            self.pane_browsers.iter().filter(|(_, b)| !b.unloaded && !at_work(b)).map(|(pane, b)| (b.last_shown, *pane)).collect();
         candidates.sort();
         let mut report = BudgetReport { total_memory: system_memory(), ..Default::default() };
         let limit = prefs.background_limit.max(1) as usize;
-        while candidates.len() > limit {
-            let (_, _, pane) = candidates.remove(0);
+        let mut over = running.saturating_sub(limit);
+        while over > 0 && !candidates.is_empty() {
+            over -= 1;
+            let (_, pane) = candidates.remove(0);
             self.unload_terminal_browser(pane);
             report.unloaded.push(pane);
         }
         report.browser_memory = self.browser_memory_total();
+        super::terminal_browser::remove_closed_profiles();
         if prefs.memory_limit > 0 && report.total_memory > 0 {
             let cap = report.total_memory / 100 * u64::from(prefs.memory_limit.min(100));
             let mut used = report.browser_memory;
             while used > cap && !candidates.is_empty() {
-                let (_, _, pane) = candidates.remove(0);
+                let (_, pane) = candidates.remove(0);
                 let freed = self.pane_browsers.get(&pane).map_or(0, |b| memory_of(views_of(b)));
                 self.unload_terminal_browser(pane);
                 report.unloaded.push(pane);

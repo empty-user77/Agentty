@@ -140,3 +140,38 @@ then a refused restart left the old app running) — reported as such and redone
   the browser; its web process exited) were clicked in the dev build.
 - Branch brought up to date with `main` by a merge (no force-push). Debug: `close-workspace <n>`.
 - Monitoring (activity bar, menu, ⌥⌘U, palette) opens on In-app browsers, its first tab; the welcome screen's usage row and the tray's usage card still open AI usage.
+
+## Audit before merge (same day)
+
+Bug, security and docs audits over the whole branch; fixed:
+
+- **Two browsers for one terminal**: the panel could become a terminal's (start screen, or a plugin page opening a
+  panel) while a browser its agent had made was kept for it; the agent then got `NO_TAB`, and putting the panel away
+  overwrote the kept one. Now the kept browser's tabs join the panel (`merge_kept_browser`, each frame and when shown),
+  and `put_browser_away` merges instead of replacing.
+- **The start screen's browser was dropped** when a port chip or link gave the panel to a terminal: with no owner,
+  `put_browser_away` now leaves it for that terminal (as `sync_terminal_tabs` already did).
+- **Separate-cookie stores outlived their tab**: checked on disk (`~/Library/WebKit/<app>/WebsiteDataStore/<uuid>`),
+  removing a store right after its page was released left the folder there (WebKit keeps a store it still uses), and a
+  store was never removed when the app quit with its tab open. Now the removal runs 5 s after the tab closed (each frame
+  and each budget check), every store is recorded in `data_dir()/browser-terminal-profiles` (0600), and the ones a
+  run left are removed when the next run makes its first terminal page. Closing an agent tab by its X removes its store
+  too. Verified on disk: a workspace deleted → its store gone within 10 s; a quit with the tab open → gone after the
+  next run's first page.
+- **Crash found while testing this (never shipped)**: removing the left stores in `Workbench::new`, before WebKit had
+  made any view, crashed on `WebsiteDataStoreIO` (`RunLoop::dispatch` on a null main run loop) — about one start in
+  two. The sweep now runs right after the first terminal web view is created; five restarts in a row with left stores
+  started cleanly.
+- **The budget no longer unloads a browser whose agent sent a command in the last two minutes** (it used to go last;
+  with more agents at work than the limit, or plugin pages alone over the memory cap, a working agent lost its page
+  every 15 s). The count limit counts every browser running out of sight but unloads only idle ones. Docs changed.
+- **A server starting no longer navigates the agent's tab while the agent is at work.**
+- Previews: files 0600; a snapshot WebKit never finishes is retried after 30 s; a second window no longer clears the
+  first one's pictures (cleared once per process). The ja docs' bold next to `）` fixed.
+
+After the fixes, on the final build: the budget (limit 1) kept the at-work agent's browser and unloaded the
+idle ones; a tab close (confirmed) and a workspace delete closed their browsers and their web processes exited;
+Monitoring showed all four states with previews.
+
+Security audit found no new exposure: the agent's pane still comes from the connection, every lookup is by that pane,
+debug commands stay behind `AGENTTY_DEBUG=1`, preview names cannot leave their folder.

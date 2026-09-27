@@ -27,6 +27,8 @@ const REFRESH: Duration = Duration::from_secs(2);
 /// How long a picture is used before a new one is taken.
 const PREVIEW_FOR: Duration = Duration::from_secs(5 * 60);
 const PREVIEW_WIDTH: f64 = 240.;
+/// A picture not taken in this long is given up, and tried again.
+const PREVIEW_GIVE_UP: Duration = Duration::from_secs(30);
 
 /// The latest picture of each row (`t<pane>` for a terminal's browser, `p<plugin>` for a plugin's
 /// pages) and when it was taken, shared with the snapshot callbacks.
@@ -178,10 +180,12 @@ impl Workbench {
         for key in self.previews_taking_done.borrow_mut().drain(..) {
             self.previews_taking.remove(&key);
         }
+        // A picture WebKit never finished is tried again.
+        self.previews_taking.retain(|_, since| since.elapsed() < PREVIEW_GIVE_UP);
         let stamp = crate::ui::now_ms();
         for row in self.browser_rows(cx) {
             let fresh = self.browser_previews.borrow().get(&row.key).is_some_and(|(_, at)| at.elapsed() < PREVIEW_FOR);
-            if fresh || self.previews_taking.contains(&row.key) {
+            if fresh || self.previews_taking.contains_key(&row.key) {
                 continue;
             }
             let Some(view) = row.view else { continue };
@@ -189,7 +193,7 @@ impl Workbench {
             let Some(page) = borrowed.as_ref() else { continue };
             let path = dir.join(format!("{}-{stamp}.png", file_safe(&row.key)));
             let (previews, key, taken) = (self.browser_previews.clone(), row.key.clone(), path.clone());
-            self.previews_taking.insert(row.key.clone());
+            self.previews_taking.insert(row.key.clone(), Instant::now());
             let taking = self.previews_taking_done.clone();
             page.snapshot_png_sized(
                 path,
@@ -197,6 +201,12 @@ impl Workbench {
                 Box::new(move |result| {
                     match result {
                         Ok(_) => {
+                            // A picture of a signed-in page is as private as the page.
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                let _ = std::fs::set_permissions(&taken, std::fs::Permissions::from_mode(0o600));
+                            }
                             if let Some((before, _)) = previews.borrow_mut().insert(key.clone(), (taken, Instant::now())) {
                                 let _ = std::fs::remove_file(before);
                             }
@@ -391,9 +401,13 @@ fn file_safe(key: &str) -> String {
     key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect()
 }
 
-/// Pictures left by an earlier run: they go when the app starts.
+/// Pictures left by an earlier run: they go when the app starts (once: a second window shares
+/// the folder with the first).
 pub(super) fn clear_previews() {
-    let _ = std::fs::remove_dir_all(previews_dir());
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = std::fs::remove_dir_all(previews_dir());
+    });
 }
 
 /// A folder's name, from a title that is a path (a shell workspace is titled by its folder).
