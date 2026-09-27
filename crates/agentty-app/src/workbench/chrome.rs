@@ -303,9 +303,12 @@ impl Workbench {
                     .child(item(
                         "activity-usage",
                         "chart-column",
-                        matches!(self.page, Some(Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk)),
+                        matches!(
+                            self.page,
+                            Some(Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Browsers)
+                        ),
                         "page.monitoring",
-                        Box::new(|this, cx| this.open_page(Page::Usage, cx)),
+                        Box::new(|this, cx| this.open_page(Page::Browsers, cx)),
                         cx,
                     ))
                     // Extensions has no icon here any more: it is reached from the command palette
@@ -1670,6 +1673,7 @@ impl Workbench {
             let category = self.extensions_category(cx);
             let monitoring = || {
                 let mut tabs = vec![
+                    (Page::Browsers, None, t(cx, "page.browsers")),
                     (Page::Usage, None, t(cx, "page.usage")),
                     (Page::Processes, None, t(cx, "page.processes")),
                     (Page::Proxy, None, t(cx, "page.proxy")),
@@ -1687,7 +1691,9 @@ impl Workbench {
                 tabs
             };
             let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
-                Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Extensions => monitoring(),
+                Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Browsers | Page::Extensions => {
+                    monitoring()
+                }
                 Page::Git => vec![(page, None, t(cx, "page.git"))],
                 Page::Flow => vec![(page, None, t(cx, "page.flow"))],
                 Page::Settings => vec![(page, None, t(cx, "page.settings"))],

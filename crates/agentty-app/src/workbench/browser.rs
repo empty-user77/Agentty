@@ -244,7 +244,7 @@ impl BrowserTab {
     }
 
     /// What the tab is called in the strip: the page title, else its host, else "New tab".
-    fn label(&self, cx: &gpui::App) -> String {
+    pub(super) fn label(&self, cx: &gpui::App) -> String {
         let base = self.page_label(cx);
         match &self.owner_name {
             Some(owner) => format!("{owner} · {base}"),

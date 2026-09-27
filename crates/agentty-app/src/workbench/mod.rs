@@ -7,6 +7,7 @@ mod ask;
 mod browser;
 mod browser_budget;
 mod browser_control;
+mod browsers_page;
 mod chrome;
 mod confirm;
 mod context_menu;
@@ -272,6 +273,8 @@ pub enum Page {
     Worktrees,
     /// Monitoring → what fills the disk, and clearing build output and caches.
     Disk,
+    /// Monitoring → every in-app browser open: whose, its state, its memory.
+    Browsers,
     Settings,
     Extensions,
     Plugins,
@@ -505,6 +508,12 @@ pub struct Workbench {
     browser_owner: Option<u64>,
     /// Pages to open in terminals' tabs before the next frame (see `open_link_for_terminal`).
     terminal_links: Vec<(u64, String, terminal_browser::Opener)>,
+    /// Monitoring → In-app browsers repaints itself while open.
+    browsers_page_refreshing: bool,
+    /// Its small pictures of the pages, the ones being taken, and those just finished.
+    browser_previews: browsers_page::Previews,
+    previews_taking: std::collections::HashSet<String>,
+    previews_taking_done: Rc<RefCell<Vec<String>>>,
     /// The plugin and automation whose pages the browser shows now.
     instance_shown: Option<(String, String)>,
     /// Automations each plugin has been told about, and the run it was told in.
@@ -762,6 +771,10 @@ impl Workbench {
             pane_browsers: HashMap::new(),
             browser_owner: None,
             terminal_links: Vec::new(),
+            browsers_page_refreshing: false,
+            browser_previews: Default::default(),
+            previews_taking: std::collections::HashSet::new(),
+            previews_taking_done: Default::default(),
             instance_shown: None,
             known_instances: HashMap::new(),
             plugin_workspace_sidebar: None,
@@ -844,6 +857,7 @@ impl Workbench {
         this.start_account_usage(cx);
         this.start_server_watch(cx);
         this.start_browser_budget(cx);
+        browsers_page::clear_previews();
         // New sessions (for the resume bar and the sessions list) show up without a manual refresh.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(std::time::Duration::from_secs(120)).await;
@@ -2903,6 +2917,7 @@ impl Render for Workbench {
             Some(Page::Proxy) => self.render_proxy_page(cx).into_any_element(),
             Some(Page::Worktrees) => self.render_tree_manager(cx).into_any_element(),
             Some(Page::Disk) => self.render_disk_page(cx).into_any_element(),
+            Some(Page::Browsers) => self.render_browsers_page(cx).into_any_element(),
             Some(Page::Settings) => self.render_settings(window, cx).into_any_element(),
             Some(Page::Extensions) => gpui::AnyView::from(self.extensions_view(window, cx))
                 .cached(gpui::StyleRefinement::default().size_full())
@@ -3012,7 +3027,7 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &ShowWorkspaces, _, cx| this.show_panel(SidePanel::Workspaces, cx)))
             .on_action(cx.listener(|this, _: &ShowSessions, _, cx| this.show_panel(SidePanel::Sessions, cx)))
             .on_action(cx.listener(|this, _: &OpenFlow, _, cx| this.open_page(Page::Flow, cx)))
-            .on_action(cx.listener(|this, _: &OpenUsage, _, cx| this.open_page(Page::Usage, cx)))
+            .on_action(cx.listener(|this, _: &OpenUsage, _, cx| this.open_page(Page::Browsers, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_page(Page::Settings, cx)))
             .on_action(cx.listener(|this, _: &OpenExtensions, _, cx| this.open_page(Page::Extensions, cx)))
             .on_action(cx.listener(|this, _: &OpenGit, _, cx| this.open_page(Page::Git, cx)))
@@ -3387,6 +3402,7 @@ impl Workbench {
             Page::Proxy => "proxy",
             Page::Worktrees => "worktrees",
             Page::Disk => "disk",
+            Page::Browsers => "browsers",
             Page::Settings => "settings",
             Page::Extensions => "extensions",
             Page::Plugins => "plugins",
@@ -3679,6 +3695,7 @@ impl Workbench {
                     "proxy" => Some(Page::Proxy),
                     "worktrees" => Some(Page::Worktrees),
                     "disk" => Some(Page::Disk),
+                    "browsers" => Some(Page::Browsers),
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
                     "plugins" => Some(Page::Plugins),
@@ -3884,6 +3901,12 @@ impl Workbench {
                 None => self.debug_browser_budget(cx),
             },
             // `workspace-at <n>`: the n-th workspace in front, as its card does.
+            // `close-workspace <n>`: removes the n-th workspace, as its confirmed "Delete" does.
+            "close-workspace" => {
+                if let Some(id) = argument.trim().parse::<usize>().ok().and_then(|i| self.workspaces.get(i)).map(|ws| ws.id) {
+                    self.close_workspace(id, window, cx);
+                }
+            }
             "workspace-at" => {
                 if let Some(index) = argument.trim().parse::<usize>().ok().filter(|i| *i < self.workspaces.len()) {
                     self.activate_workspace(index, window, cx);

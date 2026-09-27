@@ -114,6 +114,10 @@ impl WebView {
         reply(Err(UNSUPPORTED.into()));
     }
 
+    pub fn snapshot_png_sized(&self, _path: std::path::PathBuf, _width: f64, reply: Reply) {
+        reply(Err(UNSUPPORTED.into()));
+    }
+
     pub fn is_loading(&self) -> bool {
         false
     }

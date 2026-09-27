@@ -121,3 +121,22 @@ Tested (fresh data folders, `debug browser-budget` / `browser-tabs`):
 
 The first two attempts at the revive case did not test it (the test design picked a browser the rules rightly kept;
 then a refused restart left the old app running) — reported as such and redone.
+
+## Update: real Claude Code, cleanup, and Monitoring → In-app browsers (same day)
+
+- **Two real Claude Code sessions** (v2.1.283, launched by Agentty so they get the browser MCP tools; the two scratch
+  project folders allow `mcp__agentty-browser` in `.claude/settings.local.json`) were told at the same time to open their
+  own project page, click its button, read the result, check the URL four times and take a screenshot. Each reported
+  its own page and click result and a URL that never changed; the debug dump agreed (A on :38551, B on :38552 for the
+  whole run). They noticed the MCP screenshot tool has no path argument (it saves to the temp folder) — unrelated.
+- **Cleanup verified with process ids**: closing a tab (after its confirm dialog) and deleting a workspace closed their
+  terminals' browsers, and those pages' web processes exited (`ps`); the other terminal's stayed.
+- **Monitoring → In-app browsers** (`workbench/browsers_page.rs`, first tab of Monitoring): one row per terminal browser
+  and per plugin — workspace · terminal #n, what runs there, a 240-pt preview (a five-minute cache: taken while the page is open
+  for a browser without one or with an older one — every 10 s made the page flicker, the owner asked for this —
+  in `data_dir()/cache/browser-previews` (0700), replaced each time, removed with the browser, cleared at start), state
+  (on screen / out of sight / closed (kept) / unloaded), memory, last seen; totals against the limits. **Go to
+  terminal** (selects its workspace and terminal, shows its browser, an unloaded one reloads) and **Close now** (drops
+  the browser; its web process exited) were clicked in the dev build.
+- Branch brought up to date with `main` by a merge (no force-push). Debug: `close-workspace <n>`.
+- Monitoring (activity bar, menu, ⌥⌘U, palette) opens on In-app browsers, its first tab; the welcome screen's usage row and the tray's usage card still open AI usage.

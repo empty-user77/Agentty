@@ -56,7 +56,7 @@ impl Workbench {
             self.unload_terminal_browser(pane);
             report.unloaded.push(pane);
         }
-        report.browser_memory = self.browser_memory();
+        report.browser_memory = self.browser_memory_total();
         if prefs.memory_limit > 0 && report.total_memory > 0 {
             let cap = report.total_memory / 100 * u64::from(prefs.memory_limit.min(100));
             let mut used = report.browser_memory;
@@ -86,7 +86,7 @@ impl Workbench {
     /// Memory of every in-app browser page: the browser on screen, the one set aside for a plugin
     /// workspace, the terminals' out of sight, and plugins' pages. A process two pages share is
     /// counted once.
-    fn browser_memory(&self) -> u64 {
+    pub(super) fn browser_memory_total(&self) -> u64 {
         let mut pids = HashSet::new();
         for browser in self.browser.iter().chain(self.stashed_browser.iter()).chain(self.pane_browsers.values()) {
             pids.extend(views_of(browser));
@@ -117,11 +117,13 @@ impl Workbench {
         let mut kept: Vec<_> = self.pane_browsers.iter().collect();
         kept.sort_by_key(|(pane, _)| **pane);
         for (pane, browser) in kept {
+            let pids = views_of(browser);
             lines.push(format!(
-                "browser-budget: terminal {pane}: {} MB, unloaded={}, at work={}",
-                memory_of(views_of(browser)) / 1_048_576,
+                "browser-budget: terminal {pane}: {} MB, unloaded={}, at work={}, processes={:?}",
+                memory_of(pids.clone()) / 1_048_576,
                 browser.unloaded,
-                at_work(browser)
+                at_work(browser),
+                pids
             ));
         }
         eprintln!("{}", lines.join("\n"));
@@ -139,6 +141,16 @@ fn views_of(browser: &BrowserPanel) -> HashSet<i32> {
 
 fn memory_of(pids: HashSet<i32>) -> u64 {
     pids.into_iter().map(footprint).sum()
+}
+
+/// What a browser's pages use (for the Monitoring page).
+pub(super) fn memory_of_browser(browser: &BrowserPanel) -> u64 {
+    memory_of(views_of(browser))
+}
+
+/// What these page processes use (for the Monitoring page).
+pub(super) fn memory_of_pids(pids: HashSet<i32>) -> u64 {
+    memory_of(pids)
 }
 
 /// Memory a process uses as the system counts it (Activity Monitor's "Memory").
@@ -161,7 +173,7 @@ fn footprint(_pid: i32) -> u64 {
 
 /// This computer's memory in bytes.
 #[cfg(target_os = "macos")]
-fn system_memory() -> u64 {
+pub(super) fn system_memory() -> u64 {
     let mut size: u64 = 0;
     let mut len = std::mem::size_of::<u64>();
     // SAFETY: `hw.memsize` is a 64-bit integer, and `size` / `len` describe a buffer of that size.
@@ -174,6 +186,6 @@ fn system_memory() -> u64 {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn system_memory() -> u64 {
+pub(super) fn system_memory() -> u64 {
     0
 }

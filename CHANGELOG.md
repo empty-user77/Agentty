@@ -20,6 +20,11 @@ All notable changes to this project are documented here. The format follows
   the browsers out of sight are unloaded, the one seen longest ago first; an unloaded page loads
   again when its terminal is selected or its agent sends a command.
 
+### Added
+- Monitoring → In-app browsers (the first tab, where Monitoring opens): every in-app browser open, with its workspace and
+  terminal (or plugin), a small picture of its page, its state and memory, and buttons to go to its
+  terminal or close it at once.
+
 ### Fixed
 - The in-app browser can always be closed. While an agent had sent it a command in the last two
   minutes, the panel's close button, the X of its last tab and the toolbar's browser button did

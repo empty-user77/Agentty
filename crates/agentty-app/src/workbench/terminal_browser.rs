@@ -228,7 +228,7 @@ impl Workbench {
     }
 
     /// Brings terminal `pane` to the front: its workspace, its tab, and the keyboard.
-    fn select_terminal(&mut self, pane: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn select_terminal(&mut self, pane: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane) else { return };
         let Some((workspace, _)) = self.locate(&pane) else { return };
         if workspace != self.active_workspace || self.welcome || self.page.is_some() {
@@ -240,7 +240,7 @@ impl Workbench {
 
     /// Puts `pane`'s browser on screen when its terminal is the one in front (or the user asked
     /// for it): a browser kept for it, or one the user had closed, comes back.
-    fn show_terminal_browser(&mut self, pane: u64, cx: &mut Context<Self>) {
+    pub(super) fn show_terminal_browser(&mut self, pane: u64, cx: &mut Context<Self>) {
         if self.plugin_workspace_shown.is_some() || self.page.is_some() {
             return;
         }
@@ -332,7 +332,7 @@ impl Workbench {
     }
 
     /// `pane`'s browser goes away (its terminal closed, or its last page did).
-    fn drop_terminal_browser(&mut self, pane: u64, window: &mut Window) {
+    pub(super) fn drop_terminal_browser(&mut self, pane: u64, window: &mut Window) {
         let browser = if self.browser_owner == Some(pane) && self.plugin_workspace_shown.is_none() && self.browser.is_some() {
             crate::webview::focus_gpui_view(window);
             self.browser.take()

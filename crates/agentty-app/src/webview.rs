@@ -990,6 +990,15 @@ impl WebView {
 
     /// Saves what the page shows as a PNG.
     pub fn snapshot_png(&self, path: std::path::PathBuf, reply: Reply) {
+        self.snapshot(path, None, reply);
+    }
+
+    /// A small picture of the page, `width` points wide (the Monitoring page's previews).
+    pub fn snapshot_png_sized(&self, path: std::path::PathBuf, width: f64, reply: Reply) {
+        self.snapshot(path, Some(width), reply);
+    }
+
+    fn snapshot(&self, path: std::path::PathBuf, width: Option<f64>, reply: Reply) {
         use block::ConcreteBlock;
         unsafe {
             let reply = std::cell::RefCell::new(Some(reply));
@@ -1016,7 +1025,19 @@ impl WebView {
                 })
             })
             .copy();
-            let _: () = msg_send![self.view, takeSnapshotWithConfiguration: std::ptr::null_mut::<Object>() completionHandler: &*completion];
+            let config: Id = match width {
+                Some(width) => {
+                    let config: Id = msg_send![class!(WKSnapshotConfiguration), new];
+                    let number: Id = msg_send![class!(NSNumber), numberWithDouble: width];
+                    let _: () = msg_send![config, setSnapshotWidth: number];
+                    config
+                }
+                None => std::ptr::null_mut(),
+            };
+            let _: () = msg_send![self.view, takeSnapshotWithConfiguration: config completionHandler: &*completion];
+            if !config.is_null() {
+                let _: () = msg_send![config, release];
+            }
         }
     }
 
