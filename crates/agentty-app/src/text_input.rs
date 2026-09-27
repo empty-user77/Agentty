@@ -818,6 +818,10 @@ impl TextElement {
                         hex_alpha(Chrome::ACCENT, 0.45),
                     ));
                 }
+            } else if index == 0 {
+                // An empty field still shows where typing goes, over its placeholder, as a
+                // one-line field does.
+                cursor_quad = Some(fill(Bounds::new(point(bounds.left(), top), size(px(1.5), line_height)), hex(Chrome::BLUE)));
             }
             lines.push((start, shaped));
         }
