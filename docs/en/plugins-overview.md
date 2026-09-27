@@ -7,6 +7,16 @@ Plugins connect Agentty with other apps and add tools to your terminals. A plugi
 
 Writing one? Start with the [plugin quick start](/docs/plugin-quickstart).
 
+## Many agents, one environment: the FDE direction
+
+A Forward Deployed Engineer (FDE) goes to where the work is — a customer's systems, accounts and way of doing things — and builds the agent that fits there. That is the direction Agentty is growing in: **plugins shape an agent for each environment and each situation, and Agentty is the one place all of them run.** However many different agents you build, they are built and run in the same, consistent environment.
+
+| | |
+|---|---|
+| **Shape the agent with a plugin** | A site, a team or a situation gets an agent of its own. The plugin carries its jobs, its panel, the sites it may work on and which agent and model takes each step ([AgentOS plugins](/docs/plugin-agentos)). |
+| **Run them all in Agentty** | Whatever the agent, it runs in the same terminals, with the same status, the same [permissions](/docs/plugin-permissions) and the same **Send to…** approvals — not a new setup for every customer. |
+| **Carry it to the next place** | An agent that worked in one environment travels to the next as a plugin, installed from a folder or Git, and is adapted there rather than started over. |
+
 ## The Plugins page
 
 Open it from the activity bar (the puzzle icon), **View → Plugins**, or the command palette (⇧⌘P → "Plugins").
