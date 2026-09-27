@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-28
+
 ### Changed
 - Every terminal has an in-app browser of its own. Selecting a terminal shows its browser as it
   left it (or none, if it never opened one), and pages of the terminals out of sight keep running.
@@ -17,8 +19,9 @@ All notable changes to this project are documented here. The format follows
   each agent's tab its own (macOS 14 or later).
 - The in-app browser stays within limits: at most 6 terminals' browsers run out of sight, and
   its pages together use at most 30% of the computer's memory (Settings → Browser). Beyond either,
-  the browsers out of sight are unloaded, the one seen longest ago first; an unloaded page loads
-  again when its terminal is selected or its agent sends a command.
+  the browsers out of sight are unloaded, the one seen longest ago first (never one whose agent
+  sent a command in the last two minutes); an unloaded page loads again when its terminal is
+  selected or its agent sends a command.
 
 ### Added
 - Monitoring → In-app browsers (the first tab, where Monitoring opens): every in-app browser open, with its workspace and
@@ -33,6 +36,7 @@ All notable changes to this project are documented here. The format follows
   working in.
 - A page opened over the window (Settings and the like) or a plugin's workspace no longer discards
   browser tabs that were still at work.
+- An empty text field of several lines shows its caret, as a one-line field does.
 
 ## [0.2.3] - 2026-09-27
 
