@@ -136,6 +136,8 @@ pub struct BrowserTab {
     pub(super) viewport: Option<super::responsive::Viewport>,
     /// Cookies and site data of its own ("separate sessions per terminal"), removed with the tab.
     pub(super) profile: Option<[u8; 16]>,
+    /// When its page was loaded again after being unloaded: an agent's commands wait for it.
+    pub(super) revived_at: Option<Instant>,
 }
 
 impl BrowserTab {
@@ -156,6 +158,7 @@ impl BrowserTab {
             driven_at: None,
             viewport: None,
             profile: None,
+            revived_at: None,
         }
     }
 
@@ -191,6 +194,29 @@ impl BrowserTab {
         self.error = None;
         self.url = url;
         self.net = Network::default();
+    }
+
+    /// Unloads the page to free its memory, keeping where it was: it loads again when the tab is
+    /// shown or its agent sends a command.
+    pub(super) fn unload(&mut self) {
+        let url = self.webview.borrow().as_ref().and_then(|view| view.current_url()).unwrap_or_else(|| self.address());
+        *self.webview.borrow_mut() = None;
+        self.pending = Some(url);
+    }
+
+    /// A terminal's tab whose page was unloaded: its view made again — a background one, with the
+    /// tab's own cookies and layout size — and its page loading.
+    pub(super) fn revive(&mut self, window: &Window, prefs: &crate::settings::BrowserSettings) -> bool {
+        if self.webview.borrow().is_some() {
+            return true;
+        }
+        let Some(mut view) = WebView::new_background_in(window, prefs, self.profile) else { return false };
+        view.park_as(self.viewport.map(|v| (v.width as f64, v.height as f64)));
+        *self.webview.borrow_mut() = Some(view);
+        let url = self.pending.take().unwrap_or_else(|| self.url.clone());
+        self.load_now(url);
+        self.revived_at = Some(Instant::now());
+        true
     }
 
     /// Where the tab is or is going.
@@ -268,6 +294,10 @@ pub struct BrowserPanel {
     pub(super) viewport_tab: Option<usize>,
     /// Closed by the user: kept for its terminal, not shown until opened again.
     pub(super) closed: bool,
+    /// When it last went out of sight: the browser seen longest ago is unloaded first.
+    pub(super) last_shown: Instant,
+    /// Its pages were unloaded to stay within the limits (they load again when it is shown).
+    pub(super) unloaded: bool,
     /// The user unlocked a page an AI drives, to use it themselves (it starts locked).
     pub(super) unlocked: bool,
     _subscription: Subscription,
@@ -550,6 +580,8 @@ impl Workbench {
                 responsive: super::responsive::Responsive::new(window, cx),
                 viewport_tab: None,
                 closed: false,
+                last_shown: Instant::now(),
+                unloaded: false,
                 unlocked: false,
                 _subscription: subscription,
             });
@@ -579,9 +611,14 @@ impl Workbench {
         let mut load_active = None;
         for (index, tab) in browser.tabs.iter_mut().enumerate() {
             if tab.webview.borrow().is_none() {
-                // A background view: when another terminal's browser is in front this one is
-                // parked, not hidden, and keeps working.
-                *tab.webview.borrow_mut() = WebView::new_background(window, &prefs);
+                if tab.pane.is_some() {
+                    // An agent's tab (made anew after being unloaded): its own cookies and size.
+                    tab.revive(window, &prefs);
+                } else {
+                    // A background view: when another terminal's browser is in front this one is
+                    // parked, not hidden, and keeps working.
+                    *tab.webview.borrow_mut() = WebView::new_background(window, &prefs);
+                }
             }
             // Only the tab in front is on screen; the others keep loading behind it.
             if index != active || hidden {

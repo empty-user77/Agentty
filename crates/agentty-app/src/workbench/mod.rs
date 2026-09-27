@@ -5,6 +5,7 @@ mod accounts_page;
 mod agent_panel;
 mod ask;
 mod browser;
+mod browser_budget;
 mod browser_control;
 mod chrome;
 mod confirm;
@@ -842,6 +843,7 @@ impl Workbench {
         this.start_service_status_checks(cx);
         this.start_account_usage(cx);
         this.start_server_watch(cx);
+        this.start_browser_budget(cx);
         // New sessions (for the resume bar and the sessions list) show up without a manual refresh.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(std::time::Duration::from_secs(120)).await;
@@ -3877,6 +3879,10 @@ impl Workbench {
             }
             "browser-reload" => self.reload_browser(argument == "hard", cx),
             "browser-tabs" => self.debug_browser_tabs(),
+            "browser-budget" => match argument.strip_prefix("unload ").and_then(|pane| pane.trim().parse().ok()) {
+                Some(pane) => self.debug_unload_browser(pane),
+                None => self.debug_browser_budget(cx),
+            },
             // `workspace-at <n>`: the n-th workspace in front, as its card does.
             "workspace-at" => {
                 if let Some(index) = argument.trim().parse::<usize>().ok().filter(|i| *i < self.workspaces.len()) {

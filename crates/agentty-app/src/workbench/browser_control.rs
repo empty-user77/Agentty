@@ -118,9 +118,30 @@ impl Workbench {
             }
             _ => {}
         }
-        let Some(tab) = self.terminal_tab_mut(pane) else { return send(Err(NO_TAB.into())) };
+        let Some(tab) = self.live_terminal_tab(pane, window, cx) else { return send(Err(NO_TAB.into())) };
         tab.driven_at = Some(Instant::now());
+        let about_the_page = !matches!(request.command.as_str(), "url" | "title" | "status" | "wait-load" | "back" | "forward" | "reload");
+        let revived = about_the_page && tab.revived_at.take_if(|at| at.elapsed() < Duration::from_secs(15)).is_some();
         let webview = tab.webview.clone();
+        // The page had been unloaded (to stay within the in-app browser's limits) and is loading
+        // again: a command that reads or acts on it runs once it has loaded, on the page the agent
+        // left rather than on a blank one.
+        if revived && about_the_page {
+            let loading = webview.clone();
+            cx.spawn_in(window, async move |this, cx| {
+                let started = Instant::now();
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(150)).await;
+                    let still = loading.borrow().as_ref().is_some_and(|view| view.is_loading());
+                    if !still || started.elapsed() > Duration::from_secs(15) {
+                        break;
+                    }
+                }
+                let _ = this.update_in(cx, |this, window, cx| this.run_browser_command(request, window, cx));
+            })
+            .detach();
+            return;
+        }
         let borrowed = webview.borrow();
         let Some(view) = borrowed.as_ref() else { return send(Err("this terminal's browser tab is not ready yet; try again".into())) };
         let js = |body: &str, args: &[(&str, &str)]| view.call_async(body, args, Box::new(send.clone()));

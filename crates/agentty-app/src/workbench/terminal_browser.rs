@@ -87,6 +87,21 @@ impl Workbench {
         self.terminal_browser_mut(pane)?.tabs.iter_mut().find(|tab| tab.pane == Some(pane))
     }
 
+    /// `pane`'s agent tab with its page loaded again if it had been unloaded (to stay within the
+    /// in-app browser's limits): what an agent's command runs in.
+    pub(super) fn live_terminal_tab(&mut self, pane: u64, window: &Window, cx: &gpui::App) -> Option<&mut BrowserTab> {
+        let prefs = settings(cx).browser.clone();
+        let browser = self.terminal_browser_mut(pane)?;
+        let tab = browser.tabs.iter_mut().find(|tab| tab.pane == Some(pane))?;
+        if tab.webview.borrow().is_none() {
+            tab.revive(window, &prefs);
+            browser.unloaded = false;
+            let browser = self.terminal_browser_mut(pane)?;
+            return browser.tabs.iter_mut().find(|tab| tab.pane == Some(pane));
+        }
+        self.terminal_browser_mut(pane)?.tabs.iter_mut().find(|tab| tab.pane == Some(pane))
+    }
+
     fn terminal_name(&self, pane: u64, cx: &gpui::App) -> String {
         // The terminal's folder (its title is whatever runs in it at the moment), and its number to
         // tell two terminals in the same folder apart.
@@ -124,17 +139,29 @@ impl Workbench {
         let address = if let Some((found, count)) = existing {
             match found {
                 Some(index) => {
+                    let prefs = settings(cx).browser.clone();
                     let browser = self.terminal_browser_mut(pane).expect("the terminal's browser is there");
+                    browser.unloaded = false;
                     let tab = &mut browser.tabs[index];
                     if driven.is_some() {
                         tab.driven_at = driven;
                     }
+                    let unloaded = tab.webview.borrow().is_none();
                     let address = match url {
+                        // An unloaded page comes back where it is sent.
+                        Some(url) if unloaded => {
+                            tab.pending = Some(url.clone());
+                            tab.revive(window, &prefs);
+                            url
+                        }
                         Some(url) => {
                             tab.load_now(url.clone());
                             url
                         }
-                        None => tab.address(),
+                        None => {
+                            tab.revive(window, &prefs);
+                            tab.address()
+                        }
                     };
                     if opener != Opener::Server {
                         browser.active = index;
@@ -226,6 +253,7 @@ impl Workbench {
         if self.browser.is_none() {
             if let Some(mut browser) = self.pane_browsers.remove(&pane) {
                 browser.closed = false;
+                browser.unloaded = false;
                 self.browser = Some(browser);
             }
         }
@@ -247,6 +275,7 @@ impl Workbench {
             }
         }
         browser.active = browser.active.min(browser.tabs.len() - 1);
+        browser.last_shown = Instant::now();
         self.pane_browsers.insert(owner, browser);
     }
 
@@ -275,6 +304,7 @@ impl Workbench {
         match self.pane_browsers.remove(&owner) {
             Some(mut browser) => {
                 browser.closed = false;
+                browser.unloaded = false;
                 self.browser = Some(browser);
                 true
             }
@@ -360,7 +390,7 @@ impl Workbench {
                         if browser.closed {
                             self.pane_browsers.insert(front, browser);
                         } else {
-                            browser.closed = false;
+                            browser.unloaded = false;
                             self.browser = Some(browser);
                         }
                     }
@@ -481,7 +511,15 @@ impl Workbench {
         let mut kept: Vec<_> = self.pane_browsers.iter().collect();
         kept.sort_by_key(|(pane, _)| **pane);
         for (pane, browser) in kept {
-            list(format!("kept(terminal {pane}{})", if browser.closed { ", closed" } else { "" }), browser, false);
+            list(
+                format!(
+                    "kept(terminal {pane}{}{})",
+                    if browser.closed { ", closed" } else { "" },
+                    if browser.unloaded { ", unloaded" } else { "" }
+                ),
+                browser,
+                false,
+            );
         }
         lines.push(format!("browser-tabs: panel of terminal {:?}", self.browser_owner));
         eprintln!("{}", lines.join("\n"));

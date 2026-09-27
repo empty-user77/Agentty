@@ -15,6 +15,10 @@ All notable changes to this project are documented here. The format follows
   and off (scaled to fit the panel). Closing the panel hides the terminal's browser until it is
   opened again; closing the terminal closes it. Cookies stay shared; Settings → Browser can give
   each agent's tab its own (macOS 14 or later).
+- The in-app browser stays within limits: at most 6 terminals' browsers run out of sight, and
+  its pages together use at most 30% of the computer's memory (Settings → Browser). Beyond either,
+  the browsers out of sight are unloaded, the one seen longest ago first; an unloaded page loads
+  again when its terminal is selected or its agent sends a command.
 
 ### Fixed
 - The in-app browser can always be closed. While an agent had sent it a command in the last two

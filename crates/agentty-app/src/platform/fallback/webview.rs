@@ -66,6 +66,10 @@ impl WebView {
         0
     }
 
+    pub fn web_process_id(&self) -> Option<i32> {
+        None
+    }
+
     pub fn has_keyboard(&self) -> bool {
         false
     }

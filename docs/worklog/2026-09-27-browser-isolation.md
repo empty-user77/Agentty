@@ -94,3 +94,30 @@ Tested on the final build from a fresh data folder (`debug browser-tabs` after e
 | B's port chip clicked while A is in front | B selected, B's server page in front |
 | ⌘-click on a link in B's output | B's tab, A untouched |
 | Plugin workspace in front, A's agent working behind | plugin page never moved (14 checks); A's agent worked in A's set-aside browser |
+
+## Update: limits on what runs out of sight (same day)
+
+Asked by the owner: cap how many terminals' browsers run in the background, and how much memory the in-app browser
+may use (e.g. 30% of the computer's), unloading the oldest first. `workbench/browser_budget.rs`, checked every 15 s:
+
+- **Count** (`browser.backgroundLimit`, default 6): beyond it, the browser out of sight seen longest ago is unloaded.
+- **Memory** (`browser.memoryLimit`, default 30%): the footprint of every page's web process (`_webProcessIdentifier`
+  → `proc_pid_rusage` `ri_phys_footprint`, a shared process counted once), plugins' pages included, against
+  `hw.memsize`; above it, browsers out of sight are unloaded oldest first until the estimate is under.
+- Order: idle browsers before those whose agent sent a command in the last 2 minutes; the browser on screen never.
+- Unloading drops the views and keeps each page's address; the browser loads again when shown, an agent tab when its
+  agent sends a command — page commands then wait for the load (up to 15 s) instead of running on a blank page.
+- Settings → Browser has both limits (steppers, 4 languages). Debug: `browser-budget`, `browser-budget unload <pane>`.
+
+Tested (fresh data folders, `debug browser-budget` / `browser-tabs`):
+
+| Case | Result |
+|---|---|
+| Limit 2, four workspaces each with a browser | the periodic check unloaded the oldest idle one; the older one whose agent was at work was left |
+| Unloaded browser's terminal selected | its page loaded again (counter from 0) |
+| Memory limit 1% (~368 MB here), four pages of ~190 MB | idle browsers out of sight unloaded oldest first, stopping once under (361 MB); the at-work agent's and the one on screen kept |
+| Agent tab unloaded, then its agent sends url / eval / navigate | url answered from the kept address; eval waited for the reload (0, not null); navigate worked; 189 MB again |
+| The whole per-terminal browser regression, on the final build | as before |
+
+The first two attempts at the revive case did not test it (the test design picked a browser the rules rightly kept;
+then a refused restart left the old app running) — reported as such and redone.

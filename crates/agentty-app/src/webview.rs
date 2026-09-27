@@ -847,6 +847,20 @@ impl WebView {
         self.view as usize
     }
 
+    /// The process WebKit runs this page's content in: what the in-app browser's memory limit
+    /// measures. `None` where this WebKit does not say (it is not public API, so it is asked for
+    /// only where it answers).
+    pub fn web_process_id(&self) -> Option<i32> {
+        unsafe {
+            let responds: BOOL = msg_send![self.view, respondsToSelector: sel!(_webProcessIdentifier)];
+            if responds != YES {
+                return None;
+            }
+            let pid: i32 = msg_send![self.view, _webProcessIdentifier];
+            (pid > 0).then_some(pid)
+        }
+    }
+
     /// Whether the keyboard is inside this page (it then gets the browser shortcuts).
     pub fn has_keyboard(&self) -> bool {
         unsafe { holds_keyboard(&*self.view) }
