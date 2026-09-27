@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format follows
   Browser can give each terminal its own (macOS 14 or later).
 
 ### Fixed
+- The in-app browser can always be closed. While an agent had sent it a command in the last two
+  minutes, the panel's close button, the X of its last tab and the toolbar's browser button did
+  nothing; now they close it, and the agent's tab goes on working out of sight.
 - Opening a page from one terminal no longer replaces the page another terminal or a plugin was
   working in.
 - A page opened over the window (Settings and the like) or a plugin's workspace no longer discards

@@ -351,11 +351,9 @@ impl Workbench {
         tab.owner.is_some() || tab.driven_at.is_some_and(|at| at.elapsed() < AGENT_DRIVES_FOR)
     }
 
+    /// Closes the panel, or opens it. The user's close always closes: nothing at work is cut off by
+    /// it — terminals' tabs go on out of sight (`keep_terminal_tabs`) and plugins' pages are parked.
     pub(super) fn toggle_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // An AI at work in it: the panel stays (closing it would cut the AI off mid-step).
-        if self.browser.as_ref().is_some_and(|browser| self.browser_driven(browser)) {
-            return;
-        }
         if let Some(browser) = self.browser.take() {
             // Terminals' tabs go on working out of sight, and come back when the panel opens.
             self.keep_terminal_tabs(browser.tabs);
@@ -1167,9 +1165,9 @@ impl Workbench {
                     cx.notify();
                 }),
             ))
-            // An AI at work in it: no closing, a lock instead (locked: the user's clicks are held
-            // off; unlocked: the page is theirs, as usual).
-            .child(if self.browser_driven(browser) {
+            // An AI at work in it: a lock too (locked: the user's clicks are held off; unlocked: the
+            // page is theirs, as usual). Closing stays the user's: the work goes on out of sight.
+            .children(self.browser_driven(browser).then(|| {
                 let unlocked = browser.unlocked;
                 icon_only(
                     "browser-lock",
@@ -1182,11 +1180,8 @@ impl Workbench {
                     }),
                 )
                 .tooltip(Tooltip::text(t(cx, if unlocked { "browser.lock" } else { "browser.unlock" }), None))
-                .into_any_element()
-            } else {
-                icon_only("browser-close", "x", cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx)))
-                    .into_any_element()
-            })
+            }))
+            .child(icon_only("browser-close", "x", cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_browser(window, cx))))
             .into_any_element()
     }
 
