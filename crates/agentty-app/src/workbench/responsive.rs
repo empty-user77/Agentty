@@ -64,6 +64,12 @@ impl Viewport {
             .map(|(_, name, ..)| *name)
     }
 
+    /// A phone of the list: sites are asked for their phone pages, as the phone's browser would.
+    /// (A tablet's Safari asks for desktop pages, and a size typed in is only a size.)
+    pub fn is_phone(self) -> bool {
+        self.device().is_some() && self.width.min(self.height) < 600
+    }
+
     fn rotated(self) -> Self {
         Self { width: self.height, height: self.width }
     }

@@ -11,6 +11,7 @@ pub mod frame;
 pub mod system_proxy;
 pub mod tray;
 pub mod url;
+pub mod video;
 pub mod wakelock;
 
 use std::path::Path;

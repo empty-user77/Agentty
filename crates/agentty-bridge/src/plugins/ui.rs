@@ -95,6 +95,53 @@ pub enum Node {
         text: String,
     },
     Divider,
+    /// Steps drawn as cards joined top to bottom, for what an automation does in order. Clicking
+    /// a step sends `select` with its id.
+    Flow {
+        id: String,
+        #[serde(default)]
+        steps: Vec<FlowStep>,
+    },
+    /// Settings shown in a card beside the panel (over the page next to it) instead of in it:
+    /// the one found in the tree is open, none is closed. Its close button sends `close`.
+    Popover {
+        id: String,
+        title: String,
+        #[serde(default)]
+        children: Vec<Node>,
+    },
+}
+
+/// One card of a `flow`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowStep {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub state: FlowState,
+    /// Picked by the user: drawn highlighted (its settings are usually shown beside the flow).
+    #[serde(default)]
+    pub selected: bool,
+    /// An optional step off the main line: drawn indented, branching from the step above it.
+    #[serde(default)]
+    pub side: bool,
+}
+
+/// How a `flow` step is drawn: `off` dimmed and joined by a faint line, `active` with a spinner.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowState {
+    Off,
+    #[default]
+    On,
+    Active,
+    Done,
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -235,7 +282,7 @@ impl Node {
                     child.check(depth + 1, count)?;
                 }
             }
-            Node::Section { title, children } => {
+            Node::Section { title, children } | Node::Popover { title, children, .. } => {
                 cut(title);
                 for child in children {
                     child.check(depth + 1, count)?;
@@ -278,17 +325,38 @@ impl Node {
                 }
             }
             Node::Toggle { label, .. } => cut(label),
+            Node::Flow { steps, .. } => {
+                more(count, steps.len())?;
+                for step in steps {
+                    cut(&mut step.title);
+                    for text in [step.subtitle.as_mut(), step.icon.as_mut()].into_iter().flatten() {
+                        cut(text);
+                    }
+                }
+            }
             Node::Divider => {}
         }
         Ok(())
     }
 
+    /// The popover the tree holds, if any (the first one: there is room for one beside a panel).
+    pub fn popover(&self) -> Option<&Node> {
+        match self {
+            Node::Popover { .. } => Some(self),
+            Node::Column { children, .. } | Node::Row { children, .. } | Node::Section { children, .. } => {
+                children.iter().find_map(Node::popover)
+            }
+            _ => None,
+        }
+    }
+
     /// Every input's id and plugin-provided value, for syncing text fields.
     pub fn inputs(&self, out: &mut Vec<InputField>) {
         match self {
-            Node::Column { children, .. } | Node::Row { children, .. } | Node::Section { children, .. } => {
-                children.iter().for_each(|c| c.inputs(out))
-            }
+            Node::Column { children, .. }
+            | Node::Row { children, .. }
+            | Node::Section { children, .. }
+            | Node::Popover { children, .. } => children.iter().for_each(|c| c.inputs(out)),
             Node::Input { id, placeholder, value, rows } => {
                 out.push(InputField { id: id.clone(), placeholder: placeholder.clone(), value: value.clone(), rows: (*rows).min(MAX_ROWS) })
             }
@@ -397,6 +465,24 @@ mod tests {
     #[test]
     fn enforces_limits() {
         assert!(Node::from_value(json!({ "type": "canvas" })).is_err());
+        let flow = Node::from_value(json!({ "type": "flow", "id": "f", "steps": [
+            { "id": "a", "title": "Collect" },
+            { "id": "b", "title": "Post", "state": "active", "selected": true },
+        ] }))
+        .unwrap();
+        let Node::Flow { steps, .. } = flow else { panic!("a flow") };
+        assert_eq!((steps[0].state, steps[1].state, steps[1].selected), (FlowState::On, FlowState::Active, true));
+        let tree = Node::from_value(json!({ "type": "column", "children": [
+            { "type": "text", "text": "x" },
+            { "type": "popover", "id": "p", "title": "Settings", "children": [{ "type": "input", "id": "i" }] },
+        ] }))
+        .unwrap();
+        assert!(matches!(tree.popover(), Some(Node::Popover { id, .. }) if id == "p"));
+        let mut fields = Vec::new();
+        tree.inputs(&mut fields);
+        assert_eq!(fields.len(), 1, "an input in the popover is synced like any other");
+        let many: Vec<_> = (0..MAX_NODES + 1).map(|i| json!({ "id": i.to_string(), "title": "t" })).collect();
+        assert!(Node::from_value(json!({ "type": "flow", "id": "f", "steps": many })).is_err());
         let mut deep = json!({ "type": "text", "text": "x" });
         for _ in 0..=MAX_DEPTH {
             deep = json!({ "type": "column", "children": [deep] });

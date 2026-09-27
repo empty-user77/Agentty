@@ -14,7 +14,70 @@ All notable changes to this project are documented here. The format follows
   Synced), see branches when two computers went on separately, and hand a session's context to the
   agent in front. Sync stops if the repository becomes public.
 
+## [0.2.4] - 2026-09-28
+
+### Changed
+- Every terminal has an in-app browser of its own. Selecting a terminal shows its browser as it
+  left it (or none, if it never opened one), and pages of the terminals out of sight keep running.
+  Links clicked in a terminal, its servers' port chips and servers that open by themselves go to
+  that terminal's browser. An agent's `agentty browser` commands and browser tools work in a tab of
+  its own there and never reach another terminal's page, a page you opened, or a plugin's page, so
+  agents in several terminals can test at the same time; its page keeps one layout width on screen
+  and off (scaled to fit the panel). Closing the panel hides the terminal's browser until it is
+  opened again; closing the terminal closes it. Cookies stay shared; Settings → Browser can give
+  each agent's tab its own (macOS 14 or later).
+- The in-app browser stays within limits: at most 6 terminals' browsers run out of sight, and
+  its pages together use at most 30% of the computer's memory (Settings → Browser). Beyond either,
+  the browsers out of sight are unloaded, the one seen longest ago first (never one whose agent
+  sent a command in the last two minutes); an unloaded page loads again when its terminal is
+  selected or its agent sends a command.
+
+### Added
+- Monitoring → In-app browsers (the first tab, where Monitoring opens): every in-app browser open, with its workspace and
+  terminal (or plugin), a small picture of its page, its state and memory, and buttons to go to its
+  terminal or close it at once.
+
 ### Fixed
+- The in-app browser can always be closed. While an agent had sent it a command in the last two
+  minutes, the panel's close button, the X of its last tab and the toolbar's browser button did
+  nothing; now they close it, and the agent's tab goes on working out of sight.
+- Opening a page from one terminal no longer replaces the page another terminal or a plugin was
+  working in.
+- A page opened over the window (Settings and the like) or a plugin's workspace no longer discards
+  browser tabs that were still at work.
+- An empty text field of several lines shows its caret, as a one-line field does.
+
+## [0.2.3] - 2026-09-27
+
+### Added
+- Plugins can lay out their browser pages the way a site needs: a set width, a minimum width, or a
+  phone's page instead of a squeezed desktop one (macOS).
+
+### Changed
+- Picking a phone in the in-app browser's responsive mode now also asks sites for their phone
+  pages, as a phone would (the page reloads when that changes). Tablets and typed-in sizes keep
+  the desktop page, as iPad Safari does.
+
+## [0.2.2] - 2026-09-27
+
+### Added
+- Plugin automations say what they are doing: their tab and sidebar card spin with a status line,
+  and the menu bar list shows them under Plugins, with how long they have been running.
+- Plugins can make videos (from SVG scenes or HTML animations; macOS), turn SVG into PNG, let you
+  pick files, choose which agent and model does a job, and show their steps as a flow with a
+  settings popover beside the panel.
+- While an AI works a page in the in-app browser, the page is locked against stray clicks, with an
+  Unlock button.
+- An AI job a plugin opens beside an automation's terminal takes the tab's focus view while it runs.
+
+### Changed
+- Plugin automations keep running unattended: App Nap and idle sleep are held off while they work,
+  their pages keep loading behind a locked screen, and closing the window while a plugin runs keeps
+  its pages working.
+- Agents a plugin started for a single, finished job are no longer reopened when Agentty starts.
+
+### Fixed
+- Typing in a plugin panel's field and pressing a button right away no longer loses the text.
 - Longer translations and narrow windows no longer push buttons, labels and links past the edge of
   their panel or over the one beside it: the plugin list, the Monitoring, Usage and Plugins headers,
   Settings rows and links, the session list, dialogs, the start page footer and more. Wide windows

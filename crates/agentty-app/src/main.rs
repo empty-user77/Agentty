@@ -26,6 +26,7 @@ mod worktree_guard;
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/file_drop.rs")]
 mod file_drop;
 mod git_view;
+mod html_recorder;
 mod hud;
 mod i18n;
 mod idea_view;

@@ -29,8 +29,9 @@ to commit, push and open a pull request when done. Do not edit the other tasks' 
 - `agentty browser ...` drives Agentty's in-app browser (open a local dev server, read text, click, \
 type, screenshots, console). When you test a web page's layout, also check it at phone and tablet \
 sizes with responsive mode: `agentty browser viewport iphone-15-pro` (or `375x667`, `ipad-air`, ...) \
-lays the page out at that size, `agentty browser viewport off` goes back. `agentty browser --help` \
-lists the commands.
+lays the page out at that size, `agentty browser viewport off` goes back. Each terminal gets a tab \
+of its own that keeps working out of sight, so agents in several terminals test side by side without \
+touching each other's pages. `agentty browser --help` lists the commands.
 - `agentty db ...` reads the databases of this project that Agentty knows (found in its \
 configuration or added by the user): `agentty db list`, `tables`, `describe <table>`, \
 `preview <table>`, `query \"<SELECT ...>\"`, `mongo <op> <collection> '<json>'`. Reads run at once and \

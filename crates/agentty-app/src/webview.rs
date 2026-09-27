@@ -325,6 +325,37 @@ extern "C" fn decide_navigation(_: &Object, _: Sel, _view: Id, action: Id, handl
     unsafe { (*handler).call((policy,)) };
 }
 
+/// A clear view laid over a locked page: it takes every click, drag and scroll so none reaches the
+/// page (the page's own scripts, which an AI drives it with, are not touched).
+fn shield_class() -> &'static Class {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        let mut decl = ClassDecl::new("AgenttyBrowserShield", class!(NSView)).expect("AgenttyBrowserShield registered twice");
+        extern "C" fn swallow(_: &Object, _: Sel, _: Id) {}
+        extern "C" fn first_mouse(_: &Object, _: Sel, _: Id) -> BOOL {
+            YES
+        }
+        unsafe {
+            for event in [
+                sel!(mouseDown:),
+                sel!(mouseUp:),
+                sel!(mouseDragged:),
+                sel!(rightMouseDown:),
+                sel!(rightMouseUp:),
+                sel!(otherMouseDown:),
+                sel!(otherMouseUp:),
+                sel!(scrollWheel:),
+                sel!(magnifyWithEvent:),
+            ] {
+                decl.add_method(event, swallow as extern "C" fn(&Object, Sel, Id));
+            }
+            decl.add_method(sel!(acceptsFirstMouse:), first_mouse as extern "C" fn(&Object, Sel, Id) -> BOOL);
+        }
+        decl.register();
+    });
+    class!(AgenttyBrowserShield)
+}
+
 /// `WKNavigationDelegate` + `WKUIDelegate`: records failed loads and requests for new windows.
 fn delegate_class() -> &'static Class {
     static REGISTER: Once = Once::new();
@@ -661,7 +692,19 @@ pub struct WebView {
     keep_running: bool,
     /// Page zoom last set (the browser setting, or the responsive mode's scale).
     zoom: f64,
+    /// The clear view over the page while it is locked (see [`WebView::set_locked`]); made the
+    /// first time it is locked, a subview of the page so it follows its frame.
+    shield: Id,
+    locked: bool,
+    /// Asks sites for their phone pages (an iPhone's user agent) rather than the desktop ones.
+    mobile: bool,
+    /// Size a terminal's page is laid out at while parked, at zoom 1 (see [`WebView::park_as`]).
+    /// `None`: a plugin's page, parked at the default size with its zoom kept.
+    parked_layout: Option<(f64, f64)>,
 }
+
+/// What a page asking for sites' phone pages says it is.
+const MOBILE_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 
 impl WebView {
     /// Creates the web view inside `window`'s content view (hidden until `set_frame`).
@@ -774,8 +817,7 @@ impl WebView {
             }
             let _: () = msg_send![view, setPageZoom: prefs.zoom.clamp(0.3, 3.0) as f64];
             if prefs.mobile {
-                let agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
-                let _: () = msg_send![view, setCustomUserAgent: ns_string(agent)];
+                let _: () = msg_send![view, setCustomUserAgent: ns_string(MOBILE_AGENT)];
             }
             let delegate: Id = msg_send![delegate_class(), new];
             let _: () = msg_send![view, setNavigationDelegate: delegate];
@@ -792,6 +834,10 @@ impl WebView {
                 parked: false,
                 keep_running: false,
                 zoom: prefs.zoom.clamp(0.3, 3.0) as f64,
+                shield: std::ptr::null_mut(),
+                locked: false,
+                mobile: prefs.mobile,
+                parked_layout: None,
             })
         }
     }
@@ -799,6 +845,20 @@ impl WebView {
     /// Identifies this view in [`take_key_commands`].
     pub fn id(&self) -> usize {
         self.view as usize
+    }
+
+    /// The process WebKit runs this page's content in: what the in-app browser's memory limit
+    /// measures. `None` where this WebKit does not say (it is not public API, so it is asked for
+    /// only where it answers).
+    pub fn web_process_id(&self) -> Option<i32> {
+        unsafe {
+            let responds: BOOL = msg_send![self.view, respondsToSelector: sel!(_webProcessIdentifier)];
+            if responds != YES {
+                return None;
+            }
+            let pid: i32 = msg_send![self.view, _webProcessIdentifier];
+            (pid > 0).then_some(pid)
+        }
     }
 
     /// Whether the keyboard is inside this page (it then gets the browser shortcuts).
@@ -930,6 +990,15 @@ impl WebView {
 
     /// Saves what the page shows as a PNG.
     pub fn snapshot_png(&self, path: std::path::PathBuf, reply: Reply) {
+        self.snapshot(path, None, reply);
+    }
+
+    /// A small picture of the page, `width` points wide (the Monitoring page's previews).
+    pub fn snapshot_png_sized(&self, path: std::path::PathBuf, width: f64, reply: Reply) {
+        self.snapshot(path, Some(width), reply);
+    }
+
+    fn snapshot(&self, path: std::path::PathBuf, width: Option<f64>, reply: Reply) {
         use block::ConcreteBlock;
         unsafe {
             let reply = std::cell::RefCell::new(Some(reply));
@@ -956,7 +1025,19 @@ impl WebView {
                 })
             })
             .copy();
-            let _: () = msg_send![self.view, takeSnapshotWithConfiguration: std::ptr::null_mut::<Object>() completionHandler: &*completion];
+            let config: Id = match width {
+                Some(width) => {
+                    let config: Id = msg_send![class!(WKSnapshotConfiguration), new];
+                    let number: Id = msg_send![class!(NSNumber), numberWithDouble: width];
+                    let _: () = msg_send![config, setSnapshotWidth: number];
+                    config
+                }
+                None => std::ptr::null_mut(),
+            };
+            let _: () = msg_send![self.view, takeSnapshotWithConfiguration: config completionHandler: &*completion];
+            if !config.is_null() {
+                let _: () = msg_send![config, release];
+            }
         }
     }
 
@@ -1004,6 +1085,25 @@ impl WebView {
         }
     }
 
+    /// Asks sites for their phone pages (`true`) or their desktop ones. A site decides by the user
+    /// agent, not the width, so a narrow window alone gets a squeezed desktop page — Instagram's
+    /// has no comment box, and its comment button then does nothing. A page already open is loaded
+    /// again to be asked anew.
+    pub fn set_mobile(&mut self, mobile: bool) {
+        if mobile == self.mobile {
+            return;
+        }
+        self.mobile = mobile;
+        unsafe {
+            // No custom agent: WebKit's own, with the Safari tail the configuration adds.
+            let agent: Id = if mobile { ns_string(MOBILE_AGENT) } else { std::ptr::null_mut() };
+            let _: () = msg_send![self.view, setCustomUserAgent: agent];
+        }
+        if self.current_url().is_some_and(|url| url.starts_with("http")) {
+            self.reload();
+        }
+    }
+
     /// Moves the view outside the window at a desktop size: never drawn, never in the way, but
     /// not hidden either — WebKit suspends a hidden page, and a plugin reading one must not have it
     /// stop while it scrolls.
@@ -1015,13 +1115,34 @@ impl WebView {
             // Out of the window it can still hold the keyboard, and then every key only beeps.
             self.release_keyboard();
             let parent_frame: NSRect = msg_send![self.parent, frame];
-            let (w, h) = (PARKED_WIDTH, PARKED_HEIGHT);
+            let (w, h) = self.parked_layout.unwrap_or((PARKED_WIDTH, PARKED_HEIGHT));
             let origin = NSPoint::new(-(w + parent_frame.size.width + 400.), -(h + parent_frame.size.height + 400.));
             let _: () = msg_send![self.view, setFrame: NSRect::new(origin, NSSize::new(w, h))];
             let _: () = msg_send![self.view, setHidden: NO];
         }
         self.visible = false;
         self.parked = true;
+        // A terminal's page keeps the width it is laid out at, on screen or off: zoom 1 at that
+        // size is what the panel's fitted zoom showed.
+        if self.parked_layout.is_some() {
+            self.set_zoom(1.0);
+        }
+    }
+
+    /// Lays a terminal's page out at `width` × `height` whenever it is out of sight (parked
+    /// again now if it is), so an agent working behind other tabs sees the page it would see on
+    /// screen. `None`: the default desktop size.
+    pub fn park_as(&mut self, size: Option<(f64, f64)>) {
+        self.parked_layout = Some(size.unwrap_or((PARKED_WIDTH, PARKED_HEIGHT)));
+        if self.parked {
+            self.parked = false;
+            self.park();
+        }
+    }
+
+    /// Width a terminal's page is laid out at on screen: the desktop size, or the one it was given.
+    pub fn layout_width(&self) -> f64 {
+        self.parked_layout.map_or(PARKED_WIDTH, |(width, _)| width)
     }
 
     pub fn hide(&mut self) {
@@ -1035,6 +1156,35 @@ impl WebView {
                 let _: () = msg_send![self.view, setHidden: YES];
             }
             self.visible = false;
+        }
+    }
+
+    /// Locked, the page takes no click, drag, scroll or key from the user: an AI is driving it and
+    /// a stray click would get in its way. Unlocked, it is an ordinary page again.
+    pub fn set_locked(&mut self, locked: bool) {
+        if locked == self.locked {
+            return;
+        }
+        self.locked = locked;
+        unsafe {
+            if locked && self.shield.is_null() {
+                let bounds: NSRect = msg_send![self.view, bounds];
+                let shield: Id = msg_send![shield_class(), alloc];
+                let shield: Id = msg_send![shield, initWithFrame: bounds];
+                // NSViewWidthSizable | NSViewHeightSizable: it keeps covering the page as it resizes.
+                let _: () = msg_send![shield, setAutoresizingMask: 2u64 | 16u64];
+                let _: () = msg_send![self.view, addSubview: shield];
+                // The page holds it from here on (and lets it go with itself).
+                let _: () = msg_send![shield, release];
+                self.shield = shield;
+            }
+            if !self.shield.is_null() {
+                let _: () = msg_send![self.shield, setHidden: if locked { NO } else { YES }];
+            }
+            if locked {
+                // Keys typed while it is locked go to Agentty, not into the page.
+                self.release_keyboard();
+            }
         }
     }
 

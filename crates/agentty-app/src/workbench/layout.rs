@@ -509,7 +509,8 @@ enum SyncKind {
 impl Workbench {
     /// `:3000` chips for the local servers this pane started; a click opens them.
     fn port_chips(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let ports = self.ports_of(std::iter::once(pane.read(cx).pane_id));
+        let pane_id = pane.read(cx).pane_id;
+        let ports = self.ports_of(std::iter::once(pane_id));
         if ports.is_empty() {
             return None;
         }
@@ -528,7 +529,8 @@ impl Workbench {
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        this.open_link(format!("http://localhost:{port}"), cx);
+                        let url = format!("http://localhost:{port}");
+                        this.open_link_for_terminal(pane_id, url, super::terminal_browser::Opener::User, cx);
                     })),
             );
         }

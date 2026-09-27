@@ -17,6 +17,8 @@ Agentty is built for that second situation:
 - **Agents stay out of each other's way.** A second session in the same project starts in its own git worktree on its own branch, so two agents never edit the same files.
 - **Your work stays visible.** A GitHub Desktop–style git page, a files panel with every working tree, and a usage dashboard built from the transcripts already on your disk.
 
+Agentty is also growing toward the way a Forward Deployed Engineer (FDE) works: [plugins](/docs/plugins-overview#many-agents-one-environment-the-fde-direction) shape an agent for each environment and situation, and Agentty is the one consistent place every one of them runs.
+
 ## Core ideas
 
 ### Workspaces → tabs → splits
@@ -39,6 +41,19 @@ Secrets you give Agentty go into the operating system's credential store — Key
 
 > [!NOTE]
 > The agent CLIs you run talk to their own providers — Anthropic for Claude Code, OpenAI for Codex — directly from your computer under your own account with them, exactly as in any other terminal. Agentty does not sit in the middle of that: it neither relays nor receives what they send, and that exchange is governed by each provider's own terms and privacy policy. What Agentty itself sends is described in [Telemetry](/docs/telemetry).
+
+## Where it is headed
+
+A **Forward Deployed Engineer (FDE)** works inside a customer's environment and builds what that environment needs — its tools, its data, its rules — instead of handing over one generic product. Agentty is growing in that direction for AI agents.
+
+No single agent fits every team, stack and situation, so the job is split in two:
+
+- **Plugins fit an agent to its environment.** The skills and rules of a trade ([AgentOS](/docs/plugin-agentos)), the tools and sites it works with, the steps it follows and what counts as done, and the permissions it is given — packaged once for a team, a customer or a situation.
+- **Agentty is where every agent runs.** Whichever agent a plugin puts to work, it runs on the same terminal, sessions, git worktrees, in-app browser, databases, containers, credential store, usage numbers and notifications.
+
+So agents built for very different environments run side by side in one consistent place: each step a real agent session you can read and take over, each plugin saying up front what it may do, and what an engineer builds on site shipped as a plugin that runs in any Agentty.
+
+Today, plugins already add panels and automation workspaces, drive the in-app browser on the sites they declare, and run work through agent sessions as AgentOS plugins. The plugin API keeps growing in this direction — see [Plugins](/docs/plugins-overview).
 
 ## What you get
 

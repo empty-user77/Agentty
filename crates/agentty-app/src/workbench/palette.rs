@@ -201,11 +201,13 @@ impl Workbench {
         );
         for (page, key, shortcut) in [
             (Page::Flow, "page.flow", "⇧⌘F"),
-            (Page::Usage, "page.monitoring", "⌥⌘U"),
+            (Page::Browsers, "page.monitoring", "⌥⌘U"),
+            (Page::Usage, "page.usage", ""),
             (Page::Processes, "page.processes", ""),
             (Page::Proxy, "page.proxy", ""),
             (Page::Worktrees, "page.worktrees", ""),
             (Page::Disk, "page.disk", ""),
+            (Page::Browsers, "page.browsers", ""),
             (Page::Extensions, "page.extensions", "⇧⌘X"),
             (Page::Plugins, "page.plugins", ""),
             (Page::Idea, "page.idea", ""),

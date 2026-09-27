@@ -5,11 +5,11 @@ use std::io::{BufRead, BufReader, Write};
 
 pub const HELP: &str = "agentty browser — control Agentty's in-app browser
 
-  agentty browser open [url]            show the browser (and load url)
+  agentty browser open [url]            this terminal's tab (made the first time; load url)
   agentty browser navigate <url>        load a URL (localhost:3000, https://…, search words)
   agentty browser wait-load [ms]        wait until the page finished loading
   agentty browser url | title | status  current page
-  agentty browser back | forward | reload | close
+  agentty browser back | forward | reload | close   (close: this terminal's tab)
   agentty browser text [selector]       visible text of the page or an element
   agentty browser html [selector]       HTML of the page or an element
   agentty browser elements              clickable / input elements with selectors
@@ -24,6 +24,10 @@ pub const HELP: &str = "agentty browser — control Agentty's in-app browser
                                         responsive mode: lay the page out at a size
                                         (375x667, iphone-se, ipad-air, …); no argument
                                         prints the current size
+
+Each terminal has a browser tab of its own: its commands only reach that tab, never another
+terminal's, the user's or a plugin's, and the tab keeps working while it is out of sight (it is
+laid out at 1280x900 unless a viewport is set). Several terminals can test at once.
 
 Results are JSON on stdout; errors go to stderr with exit status 1.
 Works in terminals opened by Agentty (uses $AGENTTY_SOCKET).";

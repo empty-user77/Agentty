@@ -634,6 +634,38 @@ impl Workbench {
                         toggle("browser-agent-tools", b.agent_tools, |s| s.browser.agent_tools = !s.browser.agent_tools, cx),
                     ))
                     .child(row_with_hint(
+                        t(cx, "settings.browser_background_limit"),
+                        t(cx, "settings.browser_background_limit_hint"),
+                        stepper(
+                            "browser-background-limit",
+                            b.background_limit.max(1).to_string(),
+                            |s, step| s.browser.background_limit = (s.browser.background_limit as f32 + step).clamp(1., 30.) as u32,
+                            1.,
+                            cx,
+                        ),
+                    ))
+                    .child(row_with_hint(
+                        t(cx, "settings.browser_memory_limit"),
+                        t(cx, "settings.browser_memory_limit_hint"),
+                        stepper(
+                            "browser-memory-limit",
+                            format!("{}%", b.memory_limit),
+                            |s, step| s.browser.memory_limit = (s.browser.memory_limit as f32 + step).clamp(10., 80.) as u32,
+                            5.,
+                            cx,
+                        ),
+                    ))
+                    .child(row_with_hint(
+                        t(cx, "settings.browser_separate_sessions"),
+                        t(cx, "settings.browser_separate_sessions_hint"),
+                        toggle(
+                            "browser-separate-sessions",
+                            b.separate_sessions,
+                            |s| s.browser.separate_sessions = !s.browser.separate_sessions,
+                            cx,
+                        ),
+                    ))
+                    .child(row_with_hint(
                         t(cx, "settings.browser_auto_open"),
                         t(cx, "settings.browser_auto_open_hint"),
                         toggle(

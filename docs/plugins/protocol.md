@@ -68,13 +68,14 @@ when you don't care.
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
 | `context/get` | | `{}` | context |
-| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them |
+| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`), missing on older Agentty |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
 | `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
-| `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit?, tools? }` — `target`: `ask` · `active` · `newWorkspace` · `newTab` · `split` · `pane` · `workspace` · `own` (a new tab in the plugin's own workspace) | `{ status: "asked" }` or `{ status: "sent", paneId }` |
+| `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, model?, cwd?, submit?, tools? }` — `model`: one `agent/list` named for that agent — `target`: `ask` · `active` · `newWorkspace` · `newTab` · `split` · `pane` · `workspace` · `own` (a new tab in the plugin's own workspace) | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
+| `agent/list` | `prompt.inject` | `{}` | `[{ id, name, version?, models: [{ id, label }] }]` — the agents `prompt/inject` can start here (installed): `claude`, `codex`, with the models each was seen using (its default first) |
 | `terminal/close` | `prompt.inject` | `{ paneId }` — a terminal `prompt/inject` opened for this plugin (`newTab`, `newWorkspace`, `split`, `own`); any other is refused with `-32001` | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
@@ -90,6 +91,10 @@ when you don't care.
 | `files/rename` · `files/copy` | `files` | `{ from, to }` | `null` · `{ size }` |
 | `files/path` | `files` | `{ path }` | `{ path }` — where it is on disk (for `prompt/inject`'s `cwd`) |
 | `files/reveal` | `files` | `{ path }` | `null` — shows it in Finder / Explorer |
+| `media/svgToPng` | `files` | `{ from, to, width? }` | `{ width, height, size }` — draws the SVG `from` into the PNG `to` (both in the plugin's folder), `width` pixels wide (at most 4096 a side), text in the system's fonts |
+| `media/svgsToVideo` | `files` | `{ scenes: [{ path, seconds, motion? }], to, width?, height?, fps? }` (`motion`: `lively` · `gentle` · `still`) | `{ width, height, seconds, frames, size }` — SVG scenes (1–12, at most 60 s in all) drawn one after another, each moving its own way (pushing in, pulling out, drifting) and crossing quickly into the next, into an H.264 MP4 at `to` (default 1280×720, 30 fps); macOS only for now |
+| `media/htmlToVideo` | `files` | `{ from, to, seconds, width?, height?, fps? }` | `{ width, height, seconds, frames, size }` — records the HTML page `from` (the plugin's folder, at most 2 MB) into an H.264 MP4 at `to` (default 1920×1080, 30 fps, at most 60 s). The page loads out of sight with no network (a CSP allows only inline code and `data:`), no cookies and a virtual clock put in before its scripts: `requestAnimationFrame`, timers, `Date`, `performance.now` and `Math.random` follow it, and each frame sets CSS / Web Animations and SVG animations to that moment. Fails on a script error, if the page goes to another address, or if nothing moves; macOS only for now |
+| `files/pick` | `files` | `{ into?, multiple? }` | `[{ path, name, size }]` — the system's open panel; what the user picks is copied into the folder `into` (default `picked`) of the plugin's own; `[]` when cancelled |
 | `files/download` | `files` + `net.request` | `{ url, path, maxBytes?, headers?, timeoutMs?, proxy? }` | `{ status, url, contentType, bytes, durationMs }` |
 
 **Files-only agents.** `tools: "files"` starts the agent with nothing but reading and writing
@@ -201,10 +206,19 @@ site sets only while the user is signed in: Agentty checks that it is there — 
 to say whether the site is signed in and until when. At most 8 sites; the permission and the list
 come together.
 
+A page's layout, as responsive mode sets it for the user, but for that page only: `width` (CSS
+pixels, 320–2560) lays it out exactly that wide, drawn smaller or larger to fit the panel;
+`minWidth` lays it out at least that wide (in a narrower panel it is drawn smaller rather than
+switching to a narrow layout); `mobile: true` asks sites for their phone pages (an iPhone's user
+agent), `false` for desktop ones, and the page loads again when that changes. A site picks its pages
+by the user agent, not the width: in a narrow window a desktop browser gets a squeezed desktop page,
+which may lack what the plugin needs (Instagram's has no comment box).
+
 | Method | `params` | Result |
 |---|---|---|
 | `browser/sites` | `{ profile? }` | `[{ host, signedIn: true \| false \| null, expiresAt: ms \| null }]` |
-| `browser/open` | `{ url, mode?: "auto" \| "background" \| "visible", profile?, instance? }` | `{ tabId }` |
+| `browser/open` | `{ url, mode?: "auto" \| "background" \| "visible", profile?, instance?, width?, minWidth?, mobile? }` | `{ tabId }` |
+| `browser/viewport` | `{ tabId, width?, minWidth?, mobile? }` (a key left out stays, `null` clears it) | `{ width, minWidth, mobile }` |
 | `browser/navigate` | `{ tabId, url }` | `null` |
 | `browser/eval` | `{ tabId, script, args?, timeoutMs? }` | `{ value }` |
 | `browser/wait` | `{ tabId, timeoutMs? }` | `{ url, title }` once the page has loaded |
@@ -396,8 +410,16 @@ toggle   { id, label, value? }
 badge    { text, tone? }                    tone: neutral | info | success | warning | error
 spinner  { text? }
 divider  {}
+flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }] }
+                                            cards joined top to bottom, for what an automation does
+                                            in order; state: off (dimmed) | on | active (spinner) |
+                                            done | error; selected draws it highlighted; side draws
+                                            an optional step indented, off the main line
+popover  { id, title, children }            a card beside the panel, over the page next to it
+                                            (hidden while it is open); the first one in the tree
+                                            is shown, none: closed
 ```
 
 Events: `button` → `click`; `input` → `change` / `submit` with `value`; `list` → `select` with
 `item`, row buttons → `action` with `item` and `action`; `choice` → `change` with the option value;
-`toggle` → `change` with the new boolean.
+`toggle` → `change` with the new boolean; `flow` → `select` with the step's id as `item`; `popover` → `close` from its close button.
