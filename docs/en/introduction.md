@@ -17,6 +17,8 @@ Agentty is built for that second situation:
 - **Agents stay out of each other's way.** A second session in the same project starts in its own git worktree on its own branch, so two agents never edit the same files.
 - **Your work stays visible.** A GitHub Desktop–style git page, a files panel with every working tree, and a usage dashboard built from the transcripts already on your disk.
 
+Agentty is also growing toward the way a Forward Deployed Engineer (FDE) works: [plugins](/docs/plugins-overview#many-agents-one-environment-the-fde-direction) shape an agent for each environment and situation, and Agentty is the one consistent place every one of them runs.
+
 ## Core ideas
 
 ### Workspaces → tabs → splits
