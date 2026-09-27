@@ -1,21 +1,25 @@
-//! The in-app browser, one tab per terminal.
+//! The in-app browser, one per terminal.
 //!
-//! An agent in a terminal (`agentty browser …`, the browser MCP tools) works in a tab of its own:
-//! the first `open` makes it, every later command of that terminal goes to it, and no command of
-//! that terminal reaches any other tab — another terminal's, the user's own, or a plugin's. Agents
-//! in several terminals test side by side.
+//! Every terminal (pane) has a browser of its own — its tabs, its pages, where each one is. The
+//! panel shows the browser of the terminal in front; selecting another terminal shows that one's
+//! (or none, when it never opened one), and the first comes back as it was when its terminal is
+//! selected again. Pages of the terminals out of sight keep running: every page is a background
+//! view, parked outside the window rather than hidden, so nothing that works in one stops.
 //!
-//! - A terminal's tab never stops for being out of sight: its view is a background one, parked
-//!   outside the window when another tab is in front, laid out at the same size on screen and off
-//!   (fitted to the panel by zoom), so what an agent checks does not depend on what the user looks at.
-//! - Selecting a terminal brings its tab to the front. An agent in a terminal that is not on screen
-//!   never changes what the user looks at: its tab is added behind the others, or — with no panel
-//!   open — kept backstage until its terminal is selected.
-//! - Closing the terminal closes its tab.
-//! - Cookies and sign-ins are shared with the rest of the browser, unless "Separate sessions per
-//!   terminal" gives each tab a store of its own.
+//! - The user's own pages (the browser button, the address bar, a link) belong to the terminal in
+//!   front when they are opened.
+//! - An agent in a terminal (`agentty browser …`, the browser MCP tools) works in a tab of its own
+//!   in that terminal's browser: the first `open` makes it, every later command of that terminal
+//!   goes to it, and no command of that terminal reaches any other page — another terminal's, the
+//!   user's, or a plugin's. Links clicked in a terminal and servers it starts open in that tab too.
+//! - An agent's tab is laid out at the same size on screen and off (fitted to the panel by zoom),
+//!   so what an agent checks does not depend on what the user looks at.
+//! - Closing the panel hides the terminal's browser (it comes back when opened again); closing a
+//!   terminal closes its browser.
+//! - Cookies and sign-ins are shared by every page, unless "Separate cookies and sign-ins for each
+//!   terminal" gives each agent tab a store of its own.
 
-use super::browser::{BrowserTab, MAX_TABS};
+use super::browser::{BrowserPanel, BrowserTab, MAX_TABS};
 use super::Workbench;
 use crate::settings::settings;
 use crate::webview::WebView;
@@ -25,54 +29,62 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::Instant;
 
-/// Where a terminal's tab is.
+/// Who opens a page in a terminal's tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Place {
-    /// The browser panel of this window.
-    Front,
-    /// The user's browser, set aside while a plugin's workspace is in front.
-    Stashed,
-    /// No panel for it yet: waiting, running, for its terminal to be selected.
-    Backstage,
+pub(super) enum Opener {
+    /// Its agent (`agentty browser`, the browser tools): the page is locked while it works.
+    Agent,
+    /// The user, with a click (a link in the terminal, a port chip): shown now.
+    User,
+    /// A server the terminal started, opened by itself.
+    Server,
 }
 
 impl Workbench {
-    fn terminal_tab_place(&self, pane: u64) -> Option<(Place, usize)> {
-        let find = |tabs: &[BrowserTab]| tabs.iter().position(|tab| tab.pane == Some(pane));
-        if let Some(index) = self.browser.as_ref().and_then(|b| find(&b.tabs)) {
-            return Some((Place::Front, index));
-        }
-        if let Some(index) = self.stashed_browser.as_ref().and_then(|b| find(&b.tabs)) {
-            return Some((Place::Stashed, index));
-        }
-        find(&self.backstage_tabs).map(|index| (Place::Backstage, index))
-    }
-
-    fn tabs_at(&mut self, place: Place) -> Option<&mut Vec<BrowserTab>> {
-        match place {
-            Place::Front => self.browser.as_mut().map(|b| &mut b.tabs),
-            Place::Stashed => self.stashed_browser.as_mut().map(|b| &mut b.tabs),
-            Place::Backstage => Some(&mut self.backstage_tabs),
-        }
-    }
-
-    /// `pane`'s tab, wherever it is.
-    pub(super) fn terminal_tab_mut(&mut self, pane: u64) -> Option<&mut BrowserTab> {
-        let (place, index) = self.terminal_tab_place(pane)?;
-        self.tabs_at(place)?.get_mut(index)
-    }
-
-    /// Whether `pane` is the terminal the user looks at: in the tab in front of the workspace in
-    /// front, with no page, start screen or plugin workspace over it.
-    fn pane_on_screen(&self, pane: u64, cx: &gpui::App) -> bool {
-        self.front_pane_id(cx) == Some(pane)
-    }
-
+    /// The terminal in front: in the tab in front of the workspace in front, with no page, start
+    /// screen or plugin workspace over it.
     fn front_pane_id(&self, cx: &gpui::App) -> Option<u64> {
         if self.page.is_some() || self.welcome || self.plugin_workspace_shown.is_some() {
             return None;
         }
         self.active_pane().map(|pane| pane.read(cx).pane_id)
+    }
+
+    fn pane_on_screen(&self, pane: u64, cx: &gpui::App) -> bool {
+        self.front_pane_id(cx) == Some(pane)
+    }
+
+    /// `pane`'s browser, wherever it is: the panel on screen, the one set aside while a plugin's
+    /// workspace is in front, or kept for when its terminal is selected again.
+    fn terminal_browser_mut(&mut self, pane: u64) -> Option<&mut BrowserPanel> {
+        if self.browser_owner == Some(pane) {
+            if self.plugin_workspace_shown.is_some() {
+                if self.stashed_browser.is_some() {
+                    return self.stashed_browser.as_mut();
+                }
+            } else if self.browser.is_some() {
+                return self.browser.as_mut();
+            }
+        }
+        self.pane_browsers.get_mut(&pane)
+    }
+
+    fn terminal_browser(&self, pane: u64) -> Option<&BrowserPanel> {
+        if self.browser_owner == Some(pane) {
+            if self.plugin_workspace_shown.is_some() {
+                if self.stashed_browser.is_some() {
+                    return self.stashed_browser.as_ref();
+                }
+            } else if self.browser.is_some() {
+                return self.browser.as_ref();
+            }
+        }
+        self.pane_browsers.get(&pane)
+    }
+
+    /// `pane`'s agent tab, wherever it is.
+    pub(super) fn terminal_tab_mut(&mut self, pane: u64) -> Option<&mut BrowserTab> {
+        self.terminal_browser_mut(pane)?.tabs.iter_mut().find(|tab| tab.pane == Some(pane))
     }
 
     fn terminal_name(&self, pane: u64, cx: &gpui::App) -> String {
@@ -92,47 +104,90 @@ impl Workbench {
         }
     }
 
-    /// Opens `url` in `pane`'s tab — the one it has, else a new one. Without `url` a new tab
-    /// opens the home page and an existing one stays where it is. Returns the tab's address.
+    /// Opens `url` in `pane`'s agent tab — the one it has, else a new one in the terminal's
+    /// browser. Without `url` a new tab opens the home page and an existing one stays where it is.
+    /// Returns the tab's address.
     pub(super) fn open_terminal_tab(
         &mut self,
         pane: u64,
         url: Option<String>,
+        opener: Opener,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<String, String> {
-        let on_screen = self.pane_on_screen(pane, cx);
-        if let Some(tab) = self.terminal_tab_mut(pane) {
-            tab.driven_at = Some(Instant::now());
-            let address = match url {
-                Some(url) => {
-                    tab.load_now(url.clone());
+        if opener == Opener::User {
+            // A click is the user asking to see it: a page over the window steps aside.
+            self.page = None;
+        }
+        let driven = (opener == Opener::Agent).then(Instant::now);
+        let existing = self.terminal_browser(pane).map(|b| (b.tabs.iter().position(|tab| tab.pane == Some(pane)), b.tabs.len()));
+        let address = if let Some((found, count)) = existing {
+            match found {
+                Some(index) => {
+                    let browser = self.terminal_browser_mut(pane).expect("the terminal's browser is there");
+                    let tab = &mut browser.tabs[index];
+                    if driven.is_some() {
+                        tab.driven_at = driven;
+                    }
+                    let address = match url {
+                        Some(url) => {
+                            tab.load_now(url.clone());
+                            url
+                        }
+                        None => tab.address(),
+                    };
+                    if opener != Opener::Server {
+                        browser.active = index;
+                    }
+                    address
+                }
+                None => {
+                    if count >= MAX_TABS {
+                        return Err(format!("the in-app browser already has {MAX_TABS} tabs open; close some first"));
+                    }
+                    let (tab, url) = self.new_terminal_tab(pane, url, driven, window, cx)?;
+                    let browser = self.terminal_browser_mut(pane).expect("the terminal's browser is still there");
+                    browser.tabs.push(tab);
+                    browser.active = browser.tabs.len() - 1;
                     url
                 }
-                None => tab.address(),
-            };
-            if on_screen {
-                self.bring_terminal_tab(pane, window, cx);
             }
-            cx.notify();
-            return Ok(address);
-        }
-        let url = url.unwrap_or_else(|| super::browser::browser_url(&settings(cx).browser.home, cx));
-        let place = if self.plugin_workspace_shown.is_some() {
-            if self.stashed_browser.is_some() {
-                Place::Stashed
-            } else {
-                Place::Backstage
-            }
-        } else if self.browser.is_some() || on_screen {
-            Place::Front
         } else {
-            Place::Backstage
+            // The terminal's first page: a browser of its own.
+            let (tab, url) = self.new_terminal_tab(pane, url, driven, window, cx)?;
+            let shown = self.browser.take();
+            self.build_browser_panel(vec![tab], 0, url.clone(), window, cx);
+            let made = self.browser.take();
+            self.browser = shown;
+            if let Some(made) = made {
+                self.pane_browsers.insert(pane, made);
+            }
+            url
         };
-        let open = self.tabs_at(place).map_or(0, |tabs| tabs.len());
-        if open >= MAX_TABS {
-            return Err(format!("the in-app browser already has {MAX_TABS} tabs open; close some first"));
+        if opener == Opener::User && !self.pane_on_screen(pane, cx) {
+            // The user asked for another terminal's page (a port chip on its workspace's card):
+            // that terminal is selected, and its browser comes with it.
+            self.select_terminal(pane, window, cx);
         }
+        if self.pane_on_screen(pane, cx) || opener == Opener::User {
+            self.show_terminal_browser(pane, cx);
+        }
+        if self.browser_owner == Some(pane) {
+            self.show_address(cx);
+        }
+        cx.notify();
+        Ok(address)
+    }
+
+    fn new_terminal_tab(
+        &self,
+        pane: u64,
+        url: Option<String>,
+        driven: Option<Instant>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(BrowserTab, String), String> {
+        let url = url.unwrap_or_else(|| super::browser::browser_url(&settings(cx).browser.home, cx));
         let prefs = settings(cx).browser.clone();
         // Private mode already gives every view a store of its own that is never kept.
         let apart = prefs.separate_sessions && !prefs.private_mode && crate::webview::profiles_supported();
@@ -141,149 +196,208 @@ impl Workbench {
         view.park_as(None);
         view.load(&url);
         let mut tab = BrowserTab::for_terminal(Rc::new(RefCell::new(Some(view))), url.clone(), pane, self.terminal_name(pane, cx), profile);
-        tab.driven_at = Some(Instant::now());
-        match place {
-            Place::Front => match self.browser.as_mut() {
-                Some(browser) => {
-                    browser.tabs.push(tab);
-                    if on_screen {
-                        browser.active = browser.tabs.len() - 1;
-                        self.show_address(cx);
-                    }
-                }
-                None => {
-                    self.page = None;
-                    self.build_browser_panel(vec![tab], 0, url.clone(), window, cx);
-                }
-            },
-            Place::Stashed => {
-                if let Some(browser) = self.stashed_browser.as_mut() {
-                    browser.tabs.push(tab);
-                }
-            }
-            Place::Backstage => self.backstage_tabs.push(tab),
-        }
-        cx.notify();
-        Ok(url)
+        tab.driven_at = driven;
+        Ok((tab, url))
     }
 
-    /// Puts `pane`'s tab in front of the panel (opening the panel for one kept backstage).
-    fn bring_terminal_tab(&mut self, pane: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// Brings terminal `pane` to the front: its workspace, its tab, and the keyboard.
+    fn select_terminal(&mut self, pane: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane) else { return };
+        let Some((workspace, _)) = self.locate(&pane) else { return };
+        if workspace != self.active_workspace || self.welcome || self.page.is_some() {
+            self.activate_workspace(workspace, window, cx);
+        }
+        self.mark_active(&pane, cx);
+        self.focus_pane(&pane, window, cx);
+    }
+
+    /// Puts `pane`'s browser on screen when its terminal is the one in front (or the user asked
+    /// for it): a browser kept for it, or one the user had closed, comes back.
+    fn show_terminal_browser(&mut self, pane: u64, cx: &mut Context<Self>) {
         if self.plugin_workspace_shown.is_some() || self.page.is_some() {
             return;
         }
-        match self.terminal_tab_place(pane) {
-            Some((Place::Front, index)) => self.select_browser_tab(index, cx),
-            Some((Place::Backstage, index)) => {
-                let tab = self.backstage_tabs.remove(index);
-                match self.browser.as_mut() {
-                    Some(browser) => {
-                        browser.tabs.push(tab);
-                        browser.active = browser.tabs.len() - 1;
-                        self.show_address(cx);
-                    }
-                    None => {
-                        let url = tab.address();
-                        self.build_browser_panel(vec![tab], 0, url, window, cx);
-                    }
-                }
-                cx.notify();
+        if self.browser_owner != Some(pane) {
+            // The user asked for another terminal's page (a port chip on its workspace's card):
+            // that terminal's browser comes forward in place of the one on screen.
+            self.put_browser_away();
+            self.browser_owner = Some(pane);
+        }
+        if self.browser.is_none() {
+            if let Some(mut browser) = self.pane_browsers.remove(&pane) {
+                browser.closed = false;
+                self.browser = Some(browser);
             }
-            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// Keeps the browser on screen for its terminal (out of sight, still running). A plugin's pages
+    /// among its tabs go back to the plugin, which keeps them running too.
+    fn put_browser_away(&mut self) {
+        let Some(mut browser) = self.browser.take() else { return };
+        let Some(owner) = self.browser_owner else { return };
+        browser.tabs.retain(|tab| tab.owner.is_none());
+        if browser.tabs.is_empty() {
+            return;
+        }
+        for tab in &browser.tabs {
+            if let Some(view) = tab.webview.borrow_mut().as_mut() {
+                view.hide();
+            }
+        }
+        browser.active = browser.active.min(browser.tabs.len() - 1);
+        self.pane_browsers.insert(owner, browser);
+    }
+
+    /// The user closed the panel: the terminal's browser is kept, hidden, until it is opened again.
+    /// Returns false when there is no terminal to keep it for (the caller drops it then).
+    pub(super) fn close_terminal_browser(&mut self, window: &mut Window) -> bool {
+        if self.plugin_workspace_shown.is_some() || self.browser_owner.is_none() || self.browser.is_none() {
+            return false;
+        }
+        self.put_browser_away();
+        if let Some(owner) = self.browser_owner {
+            if let Some(browser) = self.pane_browsers.get_mut(&owner) {
+                browser.closed = true;
+            }
+        }
+        crate::webview::focus_gpui_view(window);
+        true
+    }
+
+    /// The browser the user closed for the terminal in front, back on screen.
+    pub(super) fn reopen_terminal_browser(&mut self) -> bool {
+        if self.browser.is_some() || self.plugin_workspace_shown.is_some() {
+            return false;
+        }
+        let Some(owner) = self.browser_owner else { return false };
+        match self.pane_browsers.remove(&owner) {
+            Some(mut browser) => {
+                browser.closed = false;
+                self.browser = Some(browser);
+                true
+            }
+            None => false,
         }
     }
 
-    /// Closes `pane`'s tab. Returns whether it had one.
+    /// Closes `pane`'s agent tab. Returns whether it had one.
     pub(super) fn close_terminal_tab(&mut self, pane: u64, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some((place, index)) = self.terminal_tab_place(pane) else { return false };
-        let Some(tabs) = self.tabs_at(place) else { return false };
-        let tab = tabs.remove(index);
-        let now_empty = tabs.is_empty();
+        let Some(browser) = self.terminal_browser_mut(pane) else { return false };
+        let Some(index) = browser.tabs.iter().position(|tab| tab.pane == Some(pane)) else { return false };
+        let tab = browser.tabs.remove(index);
+        let now_empty = browser.tabs.is_empty();
+        if !now_empty && (index < browser.active || browser.active >= browser.tabs.len()) {
+            browser.active = browser.active.saturating_sub(1);
+        }
         drop_terminal_tab(tab);
-        match place {
-            Place::Front => {
-                if now_empty {
-                    self.browser = None;
-                    crate::webview::focus_gpui_view(window);
-                } else if let Some(browser) = self.browser.as_mut() {
-                    if index < browser.active || browser.active >= browser.tabs.len() {
-                        browser.active = browser.active.saturating_sub(1);
-                    }
-                    self.show_address(cx);
-                }
-            }
-            Place::Stashed if now_empty => self.stashed_browser = None,
-            _ => {}
+        if now_empty {
+            self.drop_terminal_browser(pane, window);
+        } else if self.browser_owner == Some(pane) {
+            self.show_address(cx);
         }
         cx.notify();
         true
     }
 
-    /// Keeps the terminals' tabs among `tabs` (a panel going away): out of sight, still running,
-    /// until a panel opens again.
-    pub(super) fn keep_terminal_tabs(&mut self, tabs: Vec<BrowserTab>) {
-        for tab in tabs.into_iter().filter(|tab| tab.pane.is_some()) {
-            if let Some(view) = tab.webview.borrow_mut().as_mut() {
-                view.hide();
+    /// `pane`'s browser goes away (its terminal closed, or its last page did).
+    fn drop_terminal_browser(&mut self, pane: u64, window: &mut Window) {
+        let browser = if self.browser_owner == Some(pane) && self.plugin_workspace_shown.is_none() && self.browser.is_some() {
+            crate::webview::focus_gpui_view(window);
+            self.browser.take()
+        } else if self.browser_owner == Some(pane) && self.plugin_workspace_shown.is_some() && self.stashed_browser.is_some() {
+            self.stashed_browser.take()
+        } else {
+            self.pane_browsers.remove(&pane)
+        };
+        if let Some(browser) = browser {
+            for tab in browser.tabs {
+                drop_terminal_tab(tab);
             }
-            self.backstage_tabs.push(tab);
         }
     }
 
-    /// Kept in step with the window before each frame: tabs waiting backstage join a panel that
-    /// opened, the selected terminal's tab comes to the front, the tabs of closed terminals close,
-    /// and each tab keeps its own responsive size.
+    /// Opens `url` for terminal `pane` — in its own tab of the in-app browser when links open there
+    /// and it is a local address, else in the default browser (as any link). Done before the next
+    /// frame (a web view needs the window).
+    pub(super) fn open_link_for_terminal(&mut self, pane: u64, url: String, opener: Opener, cx: &mut Context<Self>) {
+        let in_app = settings(cx).link_opener == crate::settings::LinkOpener::InApp
+            && super::browser::is_local_url(&url)
+            && crate::platform::HAS_WEBVIEW;
+        if !in_app {
+            return self.open_link(url, cx);
+        }
+        self.terminal_links.push((pane, url, opener));
+        cx.notify();
+    }
+
+    /// The terminal whose server listens on `port`, among `panes`.
+    pub(super) fn terminal_of_port(&self, port: u16, panes: impl Iterator<Item = u64>) -> Option<u64> {
+        panes.into_iter().find(|pane| self.servers.listeners.get(pane).is_some_and(|found| found.iter().any(|l| l.port == port)))
+    }
+
+    /// Where `pane`'s agent tab is or is going, if it has one.
+    pub(super) fn terminal_tab_address(&self, pane: u64) -> Option<String> {
+        let tab = self.terminal_browser(pane)?.tabs.iter().find(|tab| tab.pane == Some(pane))?;
+        Some(tab.webview.borrow().as_ref().and_then(|view| view.current_url()).unwrap_or_else(|| tab.address()))
+    }
+
+    /// Kept in step with the window before each frame: pages asked for where no window was at
+    /// hand open, the panel shows the browser of the terminal in front, the browsers of closed
+    /// terminals close, and each tab keeps its own responsive size.
     pub(super) fn sync_terminal_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.backstage_tabs.is_empty() {
-            let waiting = std::mem::take(&mut self.backstage_tabs);
-            let front = self.front_pane_id(cx);
-            let in_plugin_workspace = self.plugin_workspace_shown.is_some();
-            let panel = if in_plugin_workspace { self.stashed_browser.as_mut() } else { self.browser.as_mut() };
-            match panel {
-                Some(browser) => {
-                    // The panel just opened again: the selected terminal's tab is the one in front.
-                    let selected = front.and_then(|pane| waiting.iter().position(|tab| tab.pane == Some(pane)));
-                    let base = browser.tabs.len();
-                    browser.tabs.extend(waiting);
-                    if let Some(index) = selected.filter(|_| !in_plugin_workspace) {
-                        browser.active = base + index;
-                        self.show_address(cx);
+        for (pane, url, opener) in std::mem::take(&mut self.terminal_links) {
+            if let Err(err) = self.open_terminal_tab(pane, Some(url), opener, window, cx) {
+                eprintln!("agentty: could not open a page for terminal {pane}: {err}");
+            }
+        }
+        if let Some(front) = self.front_pane_id(cx) {
+            if self.browser_owner != Some(front) {
+                if self.browser_owner.is_some() {
+                    self.put_browser_away();
+                    if let Some(mut browser) = self.pane_browsers.remove(&front) {
+                        if browser.closed {
+                            self.pane_browsers.insert(front, browser);
+                        } else {
+                            browser.closed = false;
+                            self.browser = Some(browser);
+                        }
+                    }
+                    if self.browser.is_none() {
+                        crate::webview::focus_gpui_view(window);
                     }
                 }
-                None => self.backstage_tabs = waiting,
+                // With no terminal before (the browser opened on the start screen) it becomes
+                // this terminal's.
+                self.browser_owner = Some(front);
+                cx.notify();
             }
         }
-        // Selecting a terminal shows its tab (only when the terminal in front changes: a tab the
-        // user picked stays while they type).
-        let front = self.front_pane_id(cx);
-        if front != self.browser_front_pane {
-            self.browser_front_pane = front;
-            if let Some(pane) = front.filter(|pane| self.terminal_tab_place(*pane).is_some()) {
-                self.bring_terminal_tab(pane, window, cx);
-            }
-        }
-        self.close_orphaned_terminal_tabs(window, cx);
+        self.close_orphaned_terminal_browsers(window, cx);
         self.sync_tab_viewports(cx);
     }
 
-    fn close_orphaned_terminal_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let claimed = |tabs: &[BrowserTab]| tabs.iter().filter_map(|tab| tab.pane).collect::<Vec<_>>();
-        let mut panes = claimed(&self.backstage_tabs);
-        panes.extend(self.browser.as_ref().map(|b| claimed(&b.tabs)).unwrap_or_default());
-        panes.extend(self.stashed_browser.as_ref().map(|b| claimed(&b.tabs)).unwrap_or_default());
+    fn close_orphaned_terminal_browsers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut panes: Vec<u64> = self.pane_browsers.keys().copied().collect();
+        panes.extend(self.browser_owner);
         if panes.is_empty() {
             return;
         }
         let live: HashSet<u64> = self.all_panes().iter().map(|p| p.read(cx).pane_id).collect();
         for pane in panes {
             if !live.contains(&pane) {
-                self.close_terminal_tab(pane, window, cx);
+                self.drop_terminal_browser(pane, window);
+                if self.browser_owner == Some(pane) {
+                    self.browser_owner = None;
+                }
+                cx.notify();
             }
         }
     }
 
-    /// The panel shows the responsive size of the tab in front; each tab keeps its own, and a
-    /// terminal's tab is laid out at it out of sight too.
+    /// The panel shows the responsive size of the tab in front; each tab keeps its own, and an
+    /// agent's tab is laid out at it out of sight too.
     fn sync_tab_viewports(&mut self, cx: &mut Context<Self>) {
         let switched = {
             let Some(browser) = self.browser.as_mut() else { return };
@@ -318,13 +432,15 @@ impl Workbench {
         }
     }
 
-    /// Sets the responsive size of `pane`'s tab (`None`: off). The panel follows when the tab is in
-    /// front; out of sight the page is laid out at it and asks for phone pages at a phone's size.
+    /// Sets the responsive size of `pane`'s agent tab (`None`: off). The panel follows when the tab
+    /// is in front; out of sight the page is laid out at it and asks for phone pages at a phone's size.
     pub(super) fn set_terminal_viewport(&mut self, pane: u64, viewport: Option<super::responsive::Viewport>, cx: &mut Context<Self>) {
-        let in_front = match (self.terminal_tab_place(pane), self.browser.as_ref()) {
-            (Some((Place::Front, index)), Some(browser)) => browser.active.min(browser.tabs.len().saturating_sub(1)) == index,
-            _ => false,
-        };
+        let in_front = self.browser_owner == Some(pane)
+            && self.plugin_workspace_shown.is_none()
+            && self
+                .browser
+                .as_ref()
+                .is_some_and(|b| b.tabs.get(b.active.min(b.tabs.len().saturating_sub(1))).is_some_and(|t| t.pane == Some(pane)));
         if in_front {
             self.set_viewport(viewport, cx);
         }
@@ -341,15 +457,15 @@ impl Workbench {
 }
 
 impl Workbench {
-    /// `debug browser-tabs`: every tab, where it is, whose it is and what its page shows.
+    /// `debug browser-tabs`: every browser, whose it is, and each tab's page.
     pub(super) fn debug_browser_tabs(&self) {
         let mut lines = Vec::new();
-        let mut list = |place: &str, tabs: &[BrowserTab], active: Option<usize>| {
-            for (index, tab) in tabs.iter().enumerate() {
+        let mut list = |place: String, browser: &BrowserPanel, active: bool| {
+            for (index, tab) in browser.tabs.iter().enumerate() {
                 let url = tab.webview.borrow().as_ref().and_then(|view| view.current_url());
                 lines.push(format!(
-                    "browser-tabs: {place}[{index}]{} pane={:?} plugin={:?} url={:?}",
-                    if Some(index) == active { "*" } else { "" },
+                    "browser-tabs: {place}[{index}]{} agent={:?} plugin={:?} url={:?}",
+                    if active && index == browser.active { "*" } else { "" },
                     tab.pane,
                     tab.owner,
                     url.unwrap_or_else(|| tab.address()),
@@ -357,13 +473,17 @@ impl Workbench {
             }
         };
         if let Some(browser) = &self.browser {
-            list("front", &browser.tabs, Some(browser.active));
+            list(format!("shown(terminal {:?})", self.browser_owner), browser, true);
         }
         if let Some(browser) = &self.stashed_browser {
-            list("stashed", &browser.tabs, None);
+            list(format!("set-aside(terminal {:?})", self.browser_owner), browser, false);
         }
-        list("backstage", &self.backstage_tabs, None);
-        lines.push(format!("browser-tabs: front pane {:?}", self.browser_front_pane));
+        let mut kept: Vec<_> = self.pane_browsers.iter().collect();
+        kept.sort_by_key(|(pane, _)| **pane);
+        for (pane, browser) in kept {
+            list(format!("kept(terminal {pane}{})", if browser.closed { ", closed" } else { "" }), browser, false);
+        }
+        lines.push(format!("browser-tabs: panel of terminal {:?}", self.browser_owner));
         eprintln!("{}", lines.join("\n"));
     }
 }

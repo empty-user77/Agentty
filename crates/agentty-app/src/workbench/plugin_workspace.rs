@@ -186,9 +186,8 @@ impl Workbench {
             // Anything in there that is not the plugin's (a terminal's page opened meanwhile) stays.
             if let Some(leaving) = leaving {
                 let kept: Vec<_> = leaving.tabs.into_iter().filter(|tab| tab.owner.is_none()).collect();
-                match self.browser.as_mut() {
-                    Some(browser) => browser.tabs.extend(kept),
-                    None => self.backstage_tabs.extend(kept),
+                if let Some(browser) = self.browser.as_mut() {
+                    browser.tabs.extend(kept);
                 }
             }
             self.instance_shown = None;

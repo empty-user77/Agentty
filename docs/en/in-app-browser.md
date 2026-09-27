@@ -43,14 +43,14 @@ The tools an agent gets are:
 
 They are registered with the agent when Agentty starts it, so there is nothing to install or configure. A typical loop is: the agent starts the dev server, opens the page, clicks through the change it just made, reads the console for errors, and fixes what it finds.
 
-### One tab per terminal
+### One browser per terminal
 
-Each terminal gets a browser tab of its own the first time its agent opens a page, labelled with the terminal's folder and number (`app #3`). Everything that agent does goes to that tab only: it never changes another terminal's page, a tab you opened yourself, or a plugin's page. So agents in several terminals can test different apps at the same time.
+Every terminal has a browser of its own. Open the browser in one terminal and go to a site, open it in another and go to another: selecting a terminal shows its browser, as it left it, and a terminal that never opened one shows none. Pages of the terminals out of sight keep running — loading, scripts, screenshots — so work in one never waits for you to look at it.
 
-- **Selecting a terminal shows its tab.** An agent in a terminal you are not looking at never changes what is on screen: its tab is added behind the others.
-- **Out of sight, it keeps working.** A tab that is not in front keeps loading, running scripts and taking screenshots. Its page is laid out at 1280 px (or the size set with `browser_viewport`), whether it is on screen or not, and scaled to fit the panel when it is — so what an agent checks does not depend on how wide your panel is. Each tab keeps its own responsive size.
-- **Closing a terminal closes its tab.**
-- **Cookies and sign-ins are shared** by all tabs, so you sign in to a site once. To give every terminal's tab cookies of its own, turn on **Settings → Browser → Separate cookies and sign-ins for each terminal** (macOS 14 or later); they are removed when the terminal closes.
+- **Links and servers go to their terminal.** A link clicked in a terminal, the port chip of a server it started, and a server that opens by itself all open in that terminal's browser. A port chip on another workspace's card selects that terminal.
+- **An agent works in a tab of its own** in its terminal's browser, made on its first `browser_open` and labelled with the terminal's folder and number (`app #3`). Everything that agent does goes to that tab only: it never changes another terminal's page, a page you opened, or a plugin's page. Its page is laid out at 1280 px (or the size set with `browser_viewport`) whether it is on screen or not, and scaled to fit the panel when it is, so what it checks does not depend on how wide your panel is.
+- **Closing the panel hides the terminal's browser**; it comes back as it was when you open it again. **Closing a terminal closes its browser.**
+- **Cookies and sign-ins are shared**, so you sign in to a site once. To give each agent's tab cookies of its own, turn on **Settings → Browser → Separate cookies and sign-ins for each terminal** (macOS 14 or later); they are removed when the terminal closes.
 
 > [!IMPORTANT]
 > The browser keeps the sessions you are signed into. An agent driving it acts inside those sessions. Enable it when you want that, and be aware of which tabs are open.

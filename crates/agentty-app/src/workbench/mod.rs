@@ -497,10 +497,13 @@ pub struct Workbench {
     /// The user's own browser, set aside while a plugin's workspace (whose browser shows its
     /// automation's pages) is in front.
     stashed_browser: Option<browser::BrowserPanel>,
-    /// Terminals' browser tabs with no panel to be in yet (see `terminal_browser`).
-    backstage_tabs: Vec<browser::BrowserTab>,
-    /// The terminal in front when the browser last looked: selecting another shows its tab.
-    browser_front_pane: Option<u64>,
+    /// The browsers of the terminals not in front, kept as they were (see `terminal_browser`).
+    pane_browsers: HashMap<u64, browser::BrowserPanel>,
+    /// The terminal whose browser `browser` is (and `stashed_browser`, while a plugin's workspace
+    /// is in front).
+    browser_owner: Option<u64>,
+    /// Pages to open in terminals' tabs before the next frame (see `open_link_for_terminal`).
+    terminal_links: Vec<(u64, String, terminal_browser::Opener)>,
     /// The plugin and automation whose pages the browser shows now.
     instance_shown: Option<(String, String)>,
     /// Automations each plugin has been told about, and the run it was told in.
@@ -755,8 +758,9 @@ impl Workbench {
             ghosted: false,
             plugin_workspace_shown: None,
             stashed_browser: None,
-            backstage_tabs: Vec::new(),
-            browser_front_pane: None,
+            pane_browsers: HashMap::new(),
+            browser_owner: None,
+            terminal_links: Vec::new(),
             instance_shown: None,
             known_instances: HashMap::new(),
             plugin_workspace_sidebar: None,
@@ -996,7 +1000,11 @@ impl Workbench {
                 this.warn_about_shared_tree(&pane, cx);
                 cx.notify();
             }
-            TerminalEvent::OpenLink(url) => this.open_link(url.clone(), cx),
+            // A link in a terminal opens in that terminal's tab.
+            TerminalEvent::OpenLink(url) => {
+                let pane_id = pane.read(cx).pane_id;
+                this.open_link_for_terminal(pane_id, url.clone(), terminal_browser::Opener::User, cx);
+            }
             // A file the agent named: open it right here. Folders still go to the file manager.
             TerminalEvent::RevealPath(path) => {
                 if path.is_dir() {

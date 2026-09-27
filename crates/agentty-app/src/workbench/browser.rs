@@ -266,6 +266,8 @@ pub struct BrowserPanel {
     pub(super) responsive: super::responsive::Responsive,
     /// The tab (its view's id) whose responsive size `responsive` shows: each tab keeps its own.
     pub(super) viewport_tab: Option<usize>,
+    /// Closed by the user: kept for its terminal, not shown until opened again.
+    pub(super) closed: bool,
     /// The user unlocked a page an AI drives, to use it themselves (it starts locked).
     pub(super) unlocked: bool,
     _subscription: Subscription,
@@ -351,13 +353,15 @@ impl Workbench {
         tab.owner.is_some() || tab.driven_at.is_some_and(|at| at.elapsed() < AGENT_DRIVES_FOR)
     }
 
-    /// Closes the panel, or opens it. The user's close always closes: nothing at work is cut off by
-    /// it — terminals' tabs go on out of sight (`keep_terminal_tabs`) and plugins' pages are parked.
+    /// Closes the panel, or opens it. The user's close always closes, and cuts nothing off: the
+    /// terminal's browser is kept, hidden and still running, and comes back as it was when opened
+    /// again (see `terminal_browser`); plugins' pages are parked.
     pub(super) fn toggle_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(browser) = self.browser.take() {
-            // Terminals' tabs go on working out of sight, and come back when the panel opens.
-            self.keep_terminal_tabs(browser.tabs);
-            crate::webview::focus_gpui_view(window);
+        if self.browser.is_some() {
+            if !self.close_terminal_browser(window) {
+                self.browser = None;
+                crate::webview::focus_gpui_view(window);
+            }
             self.focus_active(window, cx);
             return cx.notify();
         }
@@ -371,6 +375,8 @@ impl Workbench {
             return cx.open_url(&url.unwrap_or_else(|| browser_url(&settings(cx).browser.home, cx)));
         }
         self.page = None;
+        // The terminal in front had one, closed: it comes back, pages and all.
+        self.reopen_terminal_browser();
         match self.browser.as_mut() {
             Some(browser) => {
                 if let Some(url) = url {
@@ -440,7 +446,15 @@ impl Workbench {
             return;
         }
         if browser.tabs.len() == 1 {
-            return self.toggle_browser(window, cx);
+            // The last page closed: an agent's goes on out of sight (the browser is hidden, as by
+            // the close button); anything else goes, and the browser with it.
+            if browser.tabs[0].pane.is_some() {
+                return self.toggle_browser(window, cx);
+            }
+            self.browser = None;
+            crate::webview::focus_gpui_view(window);
+            self.focus_active(window, cx);
+            return cx.notify();
         }
         browser.tabs.remove(index);
         if browser.active > index {
@@ -535,6 +549,7 @@ impl Workbench {
                 detail_scroll: gpui::ScrollHandle::new(),
                 responsive: super::responsive::Responsive::new(window, cx),
                 viewport_tab: None,
+                closed: false,
                 unlocked: false,
                 _subscription: subscription,
             });
@@ -543,24 +558,17 @@ impl Workbench {
     }
 
     fn place_browser_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Pages (settings, Git, …) take the whole area: close the browser rather than hide it —
-        // unless a terminal's agent works in it, whose pages keep running out of sight.
+        // Pages (settings, Git, …) take the whole area: the terminal's browser steps out of sight,
+        // still running, and is back as it was when the page closes.
         if self.page.is_some() {
-            match self.browser.as_ref() {
-                Some(browser) if browser.tabs.iter().any(|tab| tab.pane.is_some()) => {
-                    for tab in &browser.tabs {
-                        if let Some(view) = tab.webview.borrow_mut().as_mut() {
-                            view.hide();
-                        }
+            if let Some(browser) = self.browser.as_ref() {
+                for tab in &browser.tabs {
+                    if let Some(view) = tab.webview.borrow_mut().as_mut() {
+                        view.hide();
                     }
-                    return;
                 }
-                Some(_) => {
-                    self.browser = None;
-                    crate::webview::focus_gpui_view(window);
-                }
-                None => {}
             }
+            return;
         }
         self.apply_browser_keys(window, cx);
         // Menus and popups sit on top of it: hide the native views meanwhile.
@@ -571,7 +579,9 @@ impl Workbench {
         let mut load_active = None;
         for (index, tab) in browser.tabs.iter_mut().enumerate() {
             if tab.webview.borrow().is_none() {
-                *tab.webview.borrow_mut() = WebView::new(window, &prefs);
+                // A background view: when another terminal's browser is in front this one is
+                // parked, not hidden, and keeps working.
+                *tab.webview.borrow_mut() = WebView::new_background(window, &prefs);
             }
             // Only the tab in front is on screen; the others keep loading behind it.
             if index != active || hidden {

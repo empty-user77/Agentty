@@ -1180,13 +1180,15 @@ impl Workbench {
         indent: gpui::Pixels,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let ports = self.ports_of(ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id));
+        let panes: Vec<u64> = ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id).collect();
+        let ports = self.ports_of(panes.iter().copied());
         if ports.is_empty() {
             return None;
         }
         // A chip has its own padding, so it lines up with the text above it a touch further in.
         let mut row = div().pl(indent + px(4.)).pt_0p5().flex().flex_wrap().gap_1();
         for port in ports.into_iter().take(6) {
+            let panes = panes.clone();
             row = row.child(
                 div()
                     .id(SharedString::from(format!("port-{}-{port}", ws.id)))
@@ -1204,7 +1206,11 @@ impl Workbench {
                     .child(format!(":{port}"))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        this.open_link(format!("http://localhost:{port}"), cx);
+                        let url = format!("http://localhost:{port}");
+                        match this.terminal_of_port(port, panes.iter().copied()) {
+                            Some(pane) => this.open_link_for_terminal(pane, url, super::terminal_browser::Opener::User, cx),
+                            None => this.open_link(url, cx),
+                        }
                     })),
             );
         }

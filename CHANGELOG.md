@@ -6,12 +6,15 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
-- The in-app browser gives each terminal a tab of its own. An agent's `agentty browser` commands
-  and browser tools only reach its terminal's tab — never another terminal's page, a tab you opened,
-  or a plugin's page — so agents in several terminals can test at the same time. Tabs keep working
-  out of sight at a fixed layout width (scaled to fit the panel when shown), selecting a terminal
-  brings its tab forward, and closing the terminal closes it. Cookies stay shared; Settings →
-  Browser can give each terminal its own (macOS 14 or later).
+- Every terminal has an in-app browser of its own. Selecting a terminal shows its browser as it
+  left it (or none, if it never opened one), and pages of the terminals out of sight keep running.
+  Links clicked in a terminal, its servers' port chips and servers that open by themselves go to
+  that terminal's browser. An agent's `agentty browser` commands and browser tools work in a tab of
+  its own there and never reach another terminal's page, a page you opened, or a plugin's page, so
+  agents in several terminals can test at the same time; its page keeps one layout width on screen
+  and off (scaled to fit the panel). Closing the panel hides the terminal's browser until it is
+  opened again; closing the terminal closes it. Cookies stay shared; Settings → Browser can give
+  each agent's tab its own (macOS 14 or later).
 
 ### Fixed
 - The in-app browser can always be closed. While an agent had sent it a command in the last two

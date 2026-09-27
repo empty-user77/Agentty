@@ -63,3 +63,34 @@ is called); Windows / Linux (no in-app browser there).
 
 Known limitation: with separate cookies on, a terminal tab still open when Agentty quits leaves its store on disk (it
 is removed only when the tab closes).
+
+## Update: one browser per terminal (same day)
+
+The first version only routed the **agent's** commands to a per-terminal tab. The owner tried the debug build and found
+that what people do themselves still shared one browser: the browser button and address bar, links clicked in a
+terminal, port chips and servers opening by themselves. That path had not been designed or tested — the testing had
+used `agentty browser` only. The owner's rule, verbatim in spirit: open Google from workspace A's terminal and Naver
+from another terminal; switching must show each one as it was.
+
+So every terminal now has a **browser of its own** (`Workbench::pane_browsers`, `browser_owner`): the panel shows the
+browser of the terminal in front, the others are kept (their pages parked and running), a terminal that never opened
+one shows none. Links, port chips and servers open in their terminal's browser (a port chip of another workspace
+selects that terminal). The agent keeps its own tab inside its terminal's browser. Closing the panel hides the
+terminal's browser (restored when opened again); closing the terminal closes it. Every page is a background web view,
+so a terminal's pages keep working behind another's.
+
+Tested on the final build from a fresh data folder (`debug browser-tabs` after each step):
+
+| Case | Result |
+|---|---|
+| A opens its browser → page-a; B opens its own → page-b; switch A↔B several times | each shows its own page every time; B had none before opening |
+| The page of the terminal out of sight | its counter kept rising (121 → 158 in ~7 s) |
+| The owner's example with real sites: Google in A, Naver in B | kept apart across switches (screenshots) |
+| A split in workspace A | no browser at first; its agent's open/navigate changed only its own |
+| Browser button closes, then opens again | hidden (kept, "closed"), then back as it was |
+| Settings over the window and back | browser kept |
+| Terminal closed | its browser gone, the others untouched |
+| Server started in B opens by itself | in B's browser, next to B's own page; A untouched |
+| B's port chip clicked while A is in front | B selected, B's server page in front |
+| ⌘-click on a link in B's output | B's tab, A untouched |
+| Plugin workspace in front, A's agent working behind | plugin page never moved (14 checks); A's agent worked in A's set-aside browser |

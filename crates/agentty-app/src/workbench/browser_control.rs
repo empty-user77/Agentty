@@ -83,7 +83,7 @@ impl Workbench {
                     return send(Err("usage: agentty browser navigate <url>".into()));
                 }
                 let url = arg(0).map(|a| super::browser::browser_url(&a, cx));
-                let result = self.open_terminal_tab(pane, url, window, cx);
+                let result = self.open_terminal_tab(pane, url, super::terminal_browser::Opener::Agent, window, cx);
                 window.refresh();
                 return send(result.and_then(|url| json(serde_json::json!({ "opened": true, "url": url }))));
             }
