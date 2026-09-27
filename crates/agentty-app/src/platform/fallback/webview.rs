@@ -129,6 +129,12 @@ impl WebView {
     pub fn set_locked(&mut self, _locked: bool) {}
 
     pub fn park(&mut self) {}
+
+    pub fn park_as(&mut self, _size: Option<(f64, f64)>) {}
+
+    pub fn layout_width(&self) -> f64 {
+        1280.
+    }
 }
 
 /// One cookie of the in-app browser (there is none on this platform).
