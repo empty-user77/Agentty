@@ -698,6 +698,9 @@ pub struct WebView {
     locked: bool,
     /// Asks sites for their phone pages (an iPhone's user agent) rather than the desktop ones.
     mobile: bool,
+    /// Size a terminal's page is laid out at while parked, at zoom 1 (see [`WebView::park_as`]).
+    /// `None`: a plugin's page, parked at the default size with its zoom kept.
+    parked_layout: Option<(f64, f64)>,
 }
 
 /// What a page asking for sites' phone pages says it is.
@@ -834,6 +837,7 @@ impl WebView {
                 shield: std::ptr::null_mut(),
                 locked: false,
                 mobile: prefs.mobile,
+                parked_layout: None,
             })
         }
     }
@@ -841,6 +845,20 @@ impl WebView {
     /// Identifies this view in [`take_key_commands`].
     pub fn id(&self) -> usize {
         self.view as usize
+    }
+
+    /// The process WebKit runs this page's content in: what the in-app browser's memory limit
+    /// measures. `None` where this WebKit does not say (it is not public API, so it is asked for
+    /// only where it answers).
+    pub fn web_process_id(&self) -> Option<i32> {
+        unsafe {
+            let responds: BOOL = msg_send![self.view, respondsToSelector: sel!(_webProcessIdentifier)];
+            if responds != YES {
+                return None;
+            }
+            let pid: i32 = msg_send![self.view, _webProcessIdentifier];
+            (pid > 0).then_some(pid)
+        }
     }
 
     /// Whether the keyboard is inside this page (it then gets the browser shortcuts).
@@ -972,6 +990,15 @@ impl WebView {
 
     /// Saves what the page shows as a PNG.
     pub fn snapshot_png(&self, path: std::path::PathBuf, reply: Reply) {
+        self.snapshot(path, None, reply);
+    }
+
+    /// A small picture of the page, `width` points wide (the Monitoring page's previews).
+    pub fn snapshot_png_sized(&self, path: std::path::PathBuf, width: f64, reply: Reply) {
+        self.snapshot(path, Some(width), reply);
+    }
+
+    fn snapshot(&self, path: std::path::PathBuf, width: Option<f64>, reply: Reply) {
         use block::ConcreteBlock;
         unsafe {
             let reply = std::cell::RefCell::new(Some(reply));
@@ -998,7 +1025,19 @@ impl WebView {
                 })
             })
             .copy();
-            let _: () = msg_send![self.view, takeSnapshotWithConfiguration: std::ptr::null_mut::<Object>() completionHandler: &*completion];
+            let config: Id = match width {
+                Some(width) => {
+                    let config: Id = msg_send![class!(WKSnapshotConfiguration), new];
+                    let number: Id = msg_send![class!(NSNumber), numberWithDouble: width];
+                    let _: () = msg_send![config, setSnapshotWidth: number];
+                    config
+                }
+                None => std::ptr::null_mut(),
+            };
+            let _: () = msg_send![self.view, takeSnapshotWithConfiguration: config completionHandler: &*completion];
+            if !config.is_null() {
+                let _: () = msg_send![config, release];
+            }
         }
     }
 
@@ -1076,13 +1115,34 @@ impl WebView {
             // Out of the window it can still hold the keyboard, and then every key only beeps.
             self.release_keyboard();
             let parent_frame: NSRect = msg_send![self.parent, frame];
-            let (w, h) = (PARKED_WIDTH, PARKED_HEIGHT);
+            let (w, h) = self.parked_layout.unwrap_or((PARKED_WIDTH, PARKED_HEIGHT));
             let origin = NSPoint::new(-(w + parent_frame.size.width + 400.), -(h + parent_frame.size.height + 400.));
             let _: () = msg_send![self.view, setFrame: NSRect::new(origin, NSSize::new(w, h))];
             let _: () = msg_send![self.view, setHidden: NO];
         }
         self.visible = false;
         self.parked = true;
+        // A terminal's page keeps the width it is laid out at, on screen or off: zoom 1 at that
+        // size is what the panel's fitted zoom showed.
+        if self.parked_layout.is_some() {
+            self.set_zoom(1.0);
+        }
+    }
+
+    /// Lays a terminal's page out at `width` × `height` whenever it is out of sight (parked
+    /// again now if it is), so an agent working behind other tabs sees the page it would see on
+    /// screen. `None`: the default desktop size.
+    pub fn park_as(&mut self, size: Option<(f64, f64)>) {
+        self.parked_layout = Some(size.unwrap_or((PARKED_WIDTH, PARKED_HEIGHT)));
+        if self.parked {
+            self.parked = false;
+            self.park();
+        }
+    }
+
+    /// Width a terminal's page is laid out at on screen: the desktop size, or the one it was given.
+    pub fn layout_width(&self) -> f64 {
+        self.parked_layout.map_or(PARKED_WIDTH, |(width, _)| width)
     }
 
     pub fn hide(&mut self) {

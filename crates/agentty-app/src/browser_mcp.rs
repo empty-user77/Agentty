@@ -16,7 +16,7 @@ fn tools() -> Vec<Value> {
     vec![
         tool(
             "browser_open",
-            "Show Agentty's in-app browser next to the terminal, optionally loading a URL (localhost:3000, https://…).",
+            "Open this terminal's own tab of Agentty's in-app browser (made the first time), optionally loading a URL (localhost:3000, https://…). Other terminals' tabs are never touched, and this one keeps working out of sight.",
             json!({ "url": s("URL to load") }),
             &[],
         ),
@@ -80,7 +80,7 @@ fn tools() -> Vec<Value> {
             json!({ "size": s("WIDTHxHEIGHT, a device id, or off") }),
             &[],
         ),
-        tool("browser_close", "Close the in-app browser.", json!({}), &[]),
+        tool("browser_close", "Close this terminal's tab of the in-app browser.", json!({}), &[]),
     ]
 }
 

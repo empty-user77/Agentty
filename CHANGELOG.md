@@ -5,6 +5,35 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Every terminal has an in-app browser of its own. Selecting a terminal shows its browser as it
+  left it (or none, if it never opened one), and pages of the terminals out of sight keep running.
+  Links clicked in a terminal, its servers' port chips and servers that open by themselves go to
+  that terminal's browser. An agent's `agentty browser` commands and browser tools work in a tab of
+  its own there and never reach another terminal's page, a page you opened, or a plugin's page, so
+  agents in several terminals can test at the same time; its page keeps one layout width on screen
+  and off (scaled to fit the panel). Closing the panel hides the terminal's browser until it is
+  opened again; closing the terminal closes it. Cookies stay shared; Settings → Browser can give
+  each agent's tab its own (macOS 14 or later).
+- The in-app browser stays within limits: at most 6 terminals' browsers run out of sight, and
+  its pages together use at most 30% of the computer's memory (Settings → Browser). Beyond either,
+  the browsers out of sight are unloaded, the one seen longest ago first; an unloaded page loads
+  again when its terminal is selected or its agent sends a command.
+
+### Added
+- Monitoring → In-app browsers (the first tab, where Monitoring opens): every in-app browser open, with its workspace and
+  terminal (or plugin), a small picture of its page, its state and memory, and buttons to go to its
+  terminal or close it at once.
+
+### Fixed
+- The in-app browser can always be closed. While an agent had sent it a command in the last two
+  minutes, the panel's close button, the X of its last tab and the toolbar's browser button did
+  nothing; now they close it, and the agent's tab goes on working out of sight.
+- Opening a page from one terminal no longer replaces the page another terminal or a plugin was
+  working in.
+- A page opened over the window (Settings and the like) or a plugin's workspace no longer discards
+  browser tabs that were still at work.
+
 ## [0.2.3] - 2026-09-27
 
 ### Added

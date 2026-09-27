@@ -5,6 +5,15 @@ description: What your AI work costs, which AI processes are running, what your 
 
 **⌥⌘U** opens Monitoring. Everything here is computed on your machine; nothing is uploaded.
 
+## In-app browsers
+
+Every in-app browser open in the window, one row each: the workspace and terminal it belongs to (or the plugin), what runs in that terminal, a small picture of its page, whether it is on screen, running out of sight, closed but kept, or unloaded, and the memory its pages use. At the top, the memory of all in-app browser pages against the limit in Settings → Browser, how many run, and how many were unloaded.
+
+- **Go to terminal** selects that workspace and terminal and shows its browser (an unloaded one loads again).
+- **Close now** closes that terminal's browser and frees its memory.
+
+Monitoring opens on this page. The pictures are a cache: taken while the page is open for a browser without one or with one over five minutes old, and kept in a private folder of Agentty's data; a browser that closes takes its picture with it.
+
 ## AI usage
 
 Cost, calls, cache hit rate and tokens, broken down by model, project and tool. The numbers come from the transcript files the agent CLIs already wrote on your disk.

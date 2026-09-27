@@ -549,6 +549,15 @@ pub struct BrowserSettings {
     pub agent_tools: bool,
     /// A local server started in a tab opens here by itself (only while links open in-app).
     pub auto_open_servers: bool,
+    /// Each terminal's tab keeps cookies and sign-ins of its own instead of sharing the browser's.
+    #[serde(default)]
+    pub separate_sessions: bool,
+    /// Terminals' browsers kept running out of sight; beyond it the one seen longest ago is
+    /// unloaded (and loads again when its terminal is selected).
+    pub background_limit: u32,
+    /// Share of this computer's memory (percent) the in-app browser's pages may use; above it the
+    /// browsers out of sight are unloaded, oldest first.
+    pub memory_limit: u32,
 }
 
 impl Default for BrowserSettings {
@@ -566,6 +575,9 @@ impl Default for BrowserSettings {
             inspectable: false,
             agent_tools: true,
             auto_open_servers: true,
+            separate_sessions: false,
+            background_limit: 6,
+            memory_limit: 30,
         }
     }
 }

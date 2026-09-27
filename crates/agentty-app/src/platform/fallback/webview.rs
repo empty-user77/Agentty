@@ -66,6 +66,10 @@ impl WebView {
         0
     }
 
+    pub fn web_process_id(&self) -> Option<i32> {
+        None
+    }
+
     pub fn has_keyboard(&self) -> bool {
         false
     }
@@ -110,6 +114,10 @@ impl WebView {
         reply(Err(UNSUPPORTED.into()));
     }
 
+    pub fn snapshot_png_sized(&self, _path: std::path::PathBuf, _width: f64, reply: Reply) {
+        reply(Err(UNSUPPORTED.into()));
+    }
+
     pub fn is_loading(&self) -> bool {
         false
     }
@@ -129,6 +137,12 @@ impl WebView {
     pub fn set_locked(&mut self, _locked: bool) {}
 
     pub fn park(&mut self) {}
+
+    pub fn park_as(&mut self, _size: Option<(f64, f64)>) {}
+
+    pub fn layout_width(&self) -> f64 {
+        1280.
+    }
 }
 
 /// One cookie of the in-app browser (there is none on this platform).

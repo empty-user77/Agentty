@@ -95,8 +95,8 @@ impl Workbench {
             .unwrap_or_default();
         let Some(index) = self.servers.pending.iter().position(|(pane, _, _)| visible.contains(pane)) else { return };
         let (pane, port, attempts) = self.servers.pending.remove(index);
-        // The agent may have opened it already (browser tools): don't reload its page.
-        let shown = self.browser.as_ref().and_then(|b| b.current_url()).unwrap_or_default();
+        // Its terminal's tab may show it already (its agent opened it): don't reload that page.
+        let shown = self.terminal_tab_address(pane).unwrap_or_default();
         if [format!("://localhost:{port}"), format!("://127.0.0.1:{port}")].iter().any(|origin| shown.contains(origin.as_str())) {
             return;
         }
@@ -106,7 +106,10 @@ impl Workbench {
             let _ = this.update(cx, |this, cx| {
                 this.servers.probing = false;
                 match serves_page {
-                    Some(true) if this.page.is_none() => this.open_browser(Some(format!("http://localhost:{port}")), cx),
+                    Some(true) if this.page.is_none() => {
+                        let url = format!("http://localhost:{port}");
+                        this.open_link_for_terminal(pane, url, super::terminal_browser::Opener::Server, cx);
+                    }
                     // Not a web page (an API, a debugger, a database): nothing to show.
                     Some(_) => {}
                     // Nothing answered yet: the first build may still be running.

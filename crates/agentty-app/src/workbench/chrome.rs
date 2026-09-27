@@ -303,9 +303,12 @@ impl Workbench {
                     .child(item(
                         "activity-usage",
                         "chart-column",
-                        matches!(self.page, Some(Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk)),
+                        matches!(
+                            self.page,
+                            Some(Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Browsers)
+                        ),
                         "page.monitoring",
-                        Box::new(|this, cx| this.open_page(Page::Usage, cx)),
+                        Box::new(|this, cx| this.open_page(Page::Browsers, cx)),
                         cx,
                     ))
                     // Extensions has no icon here any more: it is reached from the command palette
@@ -1180,13 +1183,15 @@ impl Workbench {
         indent: gpui::Pixels,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let ports = self.ports_of(ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id));
+        let panes: Vec<u64> = ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id).collect();
+        let ports = self.ports_of(panes.iter().copied());
         if ports.is_empty() {
             return None;
         }
         // A chip has its own padding, so it lines up with the text above it a touch further in.
         let mut row = div().pl(indent + px(4.)).pt_0p5().flex().flex_wrap().gap_1();
         for port in ports.into_iter().take(6) {
+            let panes = panes.clone();
             row = row.child(
                 div()
                     .id(SharedString::from(format!("port-{}-{port}", ws.id)))
@@ -1204,7 +1209,11 @@ impl Workbench {
                     .child(format!(":{port}"))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        this.open_link(format!("http://localhost:{port}"), cx);
+                        let url = format!("http://localhost:{port}");
+                        match this.terminal_of_port(port, panes.iter().copied()) {
+                            Some(pane) => this.open_link_for_terminal(pane, url, super::terminal_browser::Opener::User, cx),
+                            None => this.open_link(url, cx),
+                        }
                     })),
             );
         }
@@ -1664,6 +1673,7 @@ impl Workbench {
             let category = self.extensions_category(cx);
             let monitoring = || {
                 let mut tabs = vec![
+                    (Page::Browsers, None, t(cx, "page.browsers")),
                     (Page::Usage, None, t(cx, "page.usage")),
                     (Page::Processes, None, t(cx, "page.processes")),
                     (Page::Proxy, None, t(cx, "page.proxy")),
@@ -1681,7 +1691,9 @@ impl Workbench {
                 tabs
             };
             let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
-                Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Extensions => monitoring(),
+                Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Browsers | Page::Extensions => {
+                    monitoring()
+                }
                 Page::Git => vec![(page, None, t(cx, "page.git"))],
                 Page::Flow => vec![(page, None, t(cx, "page.flow"))],
                 Page::Settings => vec![(page, None, t(cx, "page.settings"))],

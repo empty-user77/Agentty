@@ -181,8 +181,15 @@ impl Workbench {
             }
             // Its pages go back out of sight with it (and keep running there); the browser the user
             // had before comes back as it was.
-            self.browser = None;
+            let leaving = self.browser.take();
             self.browser = self.stashed_browser.take();
+            // Anything in there that is not the plugin's (a terminal's page opened meanwhile) stays.
+            if let Some(leaving) = leaving {
+                let kept: Vec<_> = leaving.tabs.into_iter().filter(|tab| tab.owner.is_none()).collect();
+                if let Some(browser) = self.browser.as_mut() {
+                    browser.tabs.extend(kept);
+                }
+            }
             self.instance_shown = None;
             if let Some(open) = self.plugin_workspace_sidebar.take() {
                 self.sidebar_open = open;
@@ -207,8 +214,11 @@ impl Workbench {
                     }
                 }
             }
-            if self.stashed_browser.is_none() {
-                self.stashed_browser = Some(browser);
+            // Joins a browser already set aside rather than replacing it: the tabs in it — the
+            // user's, and terminals' pages still at work — would otherwise be gone.
+            match self.stashed_browser.as_mut() {
+                Some(stashed) => stashed.tabs.extend(browser.tabs.into_iter().filter(|tab| tab.owner.is_none())),
+                None => self.stashed_browser = Some(browser),
             }
         }
         self.instance_shown = None;
@@ -386,10 +396,16 @@ impl Workbench {
                             view.hide();
                         }
                     }
-                    if self.stashed_browser.is_none() && !own.is_empty() {
-                        browser.tabs = own;
-                        browser.active = 0;
-                        self.stashed_browser = Some(browser);
+                    // With the browser already set aside, they join it (never dropped: a terminal's
+                    // page among them is an agent's work in progress).
+                    match self.stashed_browser.as_mut() {
+                        Some(stashed) => stashed.tabs.extend(own),
+                        None if !own.is_empty() => {
+                            browser.tabs = own;
+                            browser.active = 0;
+                            self.stashed_browser = Some(browser);
+                        }
+                        None => {}
                     }
                     // Its pages come back as tabs of a browser of their own.
                     for tab in plugin_tabs {
