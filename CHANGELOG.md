@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Settings → Sync found the GitHub CLI only when Agentty was started from a terminal: opened from
+  the Dock or Finder, it said `gh` was missing or signed out. Sync now looks where your shell and
+  the usual installers put `gh` and `git`.
+- A long repository URL in Settings → Sync stays inside its field instead of running over the
+  Connect button.
+
 ## [0.2.5] - 2026-09-28
 
 ### Added
