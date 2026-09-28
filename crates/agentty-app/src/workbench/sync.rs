@@ -284,12 +284,20 @@ impl Workbench {
     /// Sessions of a workspace: from its panes, or from its saved layout while it sleeps.
     fn sync_sessions(&self, ws: &Workspace, open: bool, cx: &gpui::App) -> Vec<SessionInput> {
         let panes: Vec<super::Pane> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
-        let mut snapshots: Vec<super::persist::PaneSnapshot> = panes.iter().map(|pane| Self::snapshot_pane(pane, cx)).collect();
+        // A pane keeps its session after the agent quit (to offer resuming it), but the session is
+        // closed then, and the pane's title is the shell's: the session keeps the title it had.
+        let mut snapshots: Vec<(super::persist::PaneSnapshot, bool)> = panes
+            .iter()
+            .map(|pane| {
+                let running = pane.read(cx).agent_kind().is_some_and(|kind| kind != PaneKind::Shell);
+                (Self::snapshot_pane(pane, cx), running)
+            })
+            .collect();
         if let Some(dormant) = &ws.dormant {
-            snapshots.extend(dormant.tabs.iter().flat_map(|t| super::snapshot_panes(&t.layout)).cloned());
+            snapshots.extend(dormant.tabs.iter().flat_map(|t| super::snapshot_panes(&t.layout)).map(|p| (p.clone(), true)));
         }
         let mut sessions: Vec<SessionInput> = Vec::new();
-        for pane in snapshots {
+        for (pane, running) in snapshots {
             let agent = match pane.kind {
                 PaneKind::Claude => Agent::Claude,
                 PaneKind::Codex => Agent::Codex,
@@ -299,15 +307,19 @@ impl Workbench {
             if sessions.iter().any(|s| s.id == id) {
                 continue;
             }
-            sessions.push(SessionInput { agent, id, title: pane.title, open, cwd: Some(pane.cwd), parent: None, started_ms: None });
+            let title = if running { pane.title } else { String::new() };
+            sessions.push(SessionInput { agent, id, title, open: open && running, cwd: Some(pane.cwd), parent: None, started_ms: None });
         }
-        // Gemini CLI and Kimi CLI run as commands in a shell pane: their session is found in their
-        // files when the sync runs (the newest one in the pane's folder since it started).
+        // Agents run as commands in a shell pane (Gemini CLI, Kimi CLI, Antigravity CLI, Amp):
+        // their session is found in their files when the sync runs (the newest one in the pane's
+        // folder since it started).
         for pane in &panes {
             let view = pane.read(cx);
             let agent = match view.tool_id() {
                 "gemini" => Agent::Gemini,
                 "kimi" => Agent::Kimi,
+                "agy" => Agent::Agy,
+                "amp" => Agent::Amp,
                 _ => continue,
             };
             sessions.push(SessionInput {
@@ -360,7 +372,24 @@ impl Workbench {
 
     /// Whether a workspace has data in the sync repository (the delete dialog asks about it).
     pub(super) fn workspace_synced(&self, id: u64) -> bool {
-        self.sync.config.connected() && self.sync.config.workspaces.contains_key(&self.sync_key(id))
+        self.sync.config.connected() && self.sync.config.workspaces.contains_key(&self.sync_key(id)) && !self.sync_removed_elsewhere(id)
+    }
+
+    /// Whether another computer deleted this workspace's data from the repository: it is not
+    /// synced from here any more until the user syncs it again (as a new workspace there).
+    fn sync_removed_elsewhere(&self, id: u64) -> bool {
+        self.sync.config.workspaces.get(&self.sync_key(id)).is_some_and(|sync_id| self.sync.overview.removed.contains(sync_id))
+    }
+
+    /// Syncs a workspace deleted elsewhere again, under a new id in the repository.
+    fn sync_again(&mut self, id: u64, cx: &mut Context<Self>) {
+        let key = self.sync_key(id);
+        let _ = bridge::update_config(|c| {
+            c.workspaces.remove(&key);
+        });
+        self.sync.config.workspaces.remove(&key);
+        self.sync_soon(Scope::Some(HashSet::from([id])), cx);
+        cx.notify();
     }
 
     fn build_request(&mut self, scope: &Scope, cx: &gpui::App) -> SyncRequest {
@@ -854,7 +883,7 @@ impl Workbench {
             if let Some((ws, sync_id)) = self.front_sync_workspace() {
                 let title = tf(cx, "sync.this_workspace", &[("name", &self.workspace_title(ws, cx))]);
                 let mut list = div().flex().flex_col().gap_1();
-                let open_here: Vec<String> = self.sync_sessions(ws, true, cx).into_iter().map(|s| s.id).collect();
+                let open_here: Vec<String> = self.sync_sessions(ws, true, cx).into_iter().filter(|s| s.open).map(|s| s.id).collect();
                 let target = ws.id;
                 let flat = sync_id.as_deref().map(|id| self.synced_sessions(Some(id))).unwrap_or_default();
                 // Branches under the session they came from.
@@ -866,7 +895,33 @@ impl Workbench {
                     agentty_bridge::sync::model::tree_order(&nodes).into_iter().map(|(i, depth)| (flat[i].clone(), depth)).collect();
                 // A session running here that went further on another computer.
                 let newer: Option<SyncedSession> = open_here.iter().find_map(|id| self.newer_elsewhere(id));
-                if entries.is_empty() {
+                let removed = self.sync_removed_elsewhere(ws.id);
+                if removed {
+                    list = list.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1p5()
+                            .rounded_md()
+                            .bg(hex_alpha(Chrome::WARNING, 0.12))
+                            .child(icon("cloud-off", IconSize::INLINE, hex(Chrome::WARNING)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .t_caption()
+                                    .text_color(hex(Chrome::FOREGROUND))
+                                    .child(t(cx, "sync.removed_elsewhere")),
+                            )
+                            .child(action_button(
+                                "sync-again",
+                                t(cx, "sync.sync_again"),
+                                cx.listener(move |this, _: &ClickEvent, _, cx| this.sync_again(target, cx)),
+                            )),
+                    );
+                } else if entries.is_empty() {
                     list = list.child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.no_sessions")));
                 }
                 if let Some(newer) = newer {

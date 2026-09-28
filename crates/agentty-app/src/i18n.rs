@@ -1970,6 +1970,8 @@ strings! {
     "sync.context_failed" => ["Could not share the context: {reason}", "맥락을 넘기지 못했습니다: {reason}", "文脈を渡せませんでした: {reason}", "无法传入上下文：{reason}"],
     "sync.newer_here" => ["{device} went further with this session {ago}", "{device}에서 이 세션이 더 이어졌습니다 ({ago})", "{device} でこのセッションがさらに進んでいます（{ago}）", "{device} 上此会话有更新的进展（{ago}）"],
     "sync.get_latest" => ["Get latest", "최신 받기", "最新を取得", "获取最新"],
+    "sync.removed_elsewhere" => ["Another computer deleted this workspace's sync data, so it is no longer synced from here", "다른 컴퓨터에서 이 작업공간의 동기화 데이터를 삭제해서 여기서도 더 이상 동기화하지 않습니다", "別のコンピュータがこのワークスペースの同期データを削除したため、ここからも同期しません", "另一台电脑删除了此工作区的同步数据，因此这里也不再同步"],
+    "sync.sync_again" => ["Sync again", "다시 동기화", "再び同期", "重新同步"],
     "sync.newer_title" => ["A newer copy is on another computer", "다른 컴퓨터에 더 최신 대화가 있습니다", "別のコンピュータに新しい会話があります", "另一台电脑上有更新的对话"],
     "sync.newer_body" => ["{device} continued this session {ago}. Continue from there, or from this computer's copy?", "{device}에서 {ago} 이 세션을 더 이어갔습니다. 그쪽 대화에서 이어갈까요, 이 컴퓨터의 대화에서 이어갈까요?", "{device} で {ago} にこのセッションが続けられました。そちらから続けますか、それともこのコンピュータの会話から続けますか？", "{device} 在{ago}继续了此会话。从那里继续，还是从本机的版本继续？"],
     "sync.newer_use_latest" => ["Continue the newer one", "최신 대화로 이어하기", "新しい方で続ける", "从最新的继续"],

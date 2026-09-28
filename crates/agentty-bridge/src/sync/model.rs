@@ -20,6 +20,8 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const MARKER_FILE: &str = ".agentty-sync.json";
 pub const METADATA_FILE: &str = "sync_metadata.json";
 pub const MANIFEST_FILE: &str = "session.json";
+/// `removed/<workspace id>.json`: a workspace whose data was deleted from the repository.
+pub const REMOVED_DIR: &str = "removed";
 
 /// Marks a repository as an Agentty sync repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +35,19 @@ pub struct Marker {
 
 impl Marker {
     pub const KIND: &'static str = "agentty-sync";
+}
+
+/// `removed/<workspace id>.json`. Other computers that still have the workspace stop syncing it
+/// instead of writing it back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Removed {
+    pub sync_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    pub removed_at: String,
+    /// Device id of the computer that deleted it.
+    pub removed_by: String,
 }
 
 /// `devices/<id>.json`.

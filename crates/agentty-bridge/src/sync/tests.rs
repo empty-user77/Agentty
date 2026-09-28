@@ -216,6 +216,78 @@ fn purged_workspaces_leave_the_repository() {
 }
 
 #[test]
+fn a_workspace_deleted_elsewhere_is_not_written_back() {
+    let root = temp("purge-elsewhere");
+    let url = bare(&root.join("remote.git"));
+    let (home_a, home_b) = (root.join("home-a"), root.join("home-b"));
+    fs::create_dir_all(home_a.join("claude")).unwrap();
+    fs::create_dir_all(home_b.join("claude")).unwrap();
+    fs::write(home_a.join("claude/sa.jsonl"), "{\"n\":1}\n").unwrap();
+    fs::write(home_b.join("claude/sb.jsonl"), "{\"m\":1}\n").unwrap();
+    let (a, b) = (device("dev-a", "A", &url), device("dev-b", "B", &url));
+    let repo_a = Repo::new(root.join("clone-a"), a.remote.clone().unwrap(), "main");
+    let repo_b = Repo::new(root.join("clone-b"), b.remote.clone().unwrap(), "main");
+    repo_a.ensure_clone().unwrap();
+    repo_b.ensure_clone().unwrap();
+    let request_a = SyncRequest { workspaces: vec![workspace("ws", &root, &["sa"])], ..Default::default() };
+    run(&repo_a, &mut a.clone(), &request_a, &locate(&home_a)).unwrap();
+    run(
+        &repo_b,
+        &mut b.clone(),
+        &SyncRequest { workspaces: vec![workspace("ws", &root, &["sb"])], ..Default::default() },
+        &locate(&home_b),
+    )
+    .unwrap();
+
+    // B deletes the workspace with its sync data.
+    let purged =
+        run(&repo_b, &mut b.clone(), &SyncRequest { purge: vec![(None, "ws".into())], ..Default::default() }, &locate(&home_b)).unwrap();
+    assert_eq!(purged.overview.removed, vec!["ws".to_string()]);
+
+    // A still has it open and goes on working in it: nothing of it comes back.
+    fs::write(home_a.join("claude/sa.jsonl"), "{\"n\":1}\n{\"n\":2}\n").unwrap();
+    let after = run(&repo_a, &mut a.clone(), &request_a, &locate(&home_a)).unwrap();
+    assert!(!repo_a.dir.join("workspace/ws").exists());
+    assert!(after.overview.workspaces.is_empty());
+    assert_eq!(after.overview.removed, vec!["ws".to_string()]);
+    let marker: Removed = serde_json::from_str(&fs::read_to_string(repo_a.dir.join("removed/ws.json")).unwrap()).unwrap();
+    assert_eq!(marker.removed_by, "dev-b");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_session_without_a_title_keeps_the_one_it_had() {
+    let root = temp("title");
+    let url = bare(&root.join("remote.git"));
+    let home = root.join("home");
+    fs::create_dir_all(home.join("claude")).unwrap();
+    fs::write(home.join("claude/s.jsonl"), "{\"n\":1}\n").unwrap();
+    let a = device("dev-a", "A", &url);
+    let repo = Repo::new(root.join("clone"), a.remote.clone().unwrap(), "main");
+    repo.ensure_clone().unwrap();
+    run(&repo, &mut a.clone(), &SyncRequest { workspaces: vec![workspace("ws", &root, &["s"])], ..Default::default() }, &locate(&home))
+        .unwrap();
+    // The agent quit: the pane shows the shell now, so the session comes without a title, closed.
+    let mut quit = workspace("ws", &root, &["s"]);
+    quit.sessions[0].title = String::new();
+    quit.sessions[0].open = false;
+    fs::write(home.join("claude/s.jsonl"), "{\"n\":1}\n{\"n\":2}\n").unwrap();
+    let outcome = run(&repo, &mut a.clone(), &SyncRequest { workspaces: vec![quit], ..Default::default() }, &locate(&home)).unwrap();
+    let entry = &outcome.overview.workspaces[0].devices["dev-a"].sessions[0];
+    assert_eq!(entry.title, "session s");
+    assert!(!entry.open);
+    let manifest = session::read_manifest(&repo.dir.join("workspace/ws/devices/dev-a/claude/s")).unwrap();
+    assert_eq!(manifest.title, "session s");
+
+    // A title that carries a credential is masked like the transcript.
+    let mut leaky = workspace("ws", &root, &["s"]);
+    leaky.sessions[0].title = format!("deploy with {}", ["ghp_", &"Z".repeat(36)].concat());
+    let outcome = run(&repo, &mut a.clone(), &SyncRequest { workspaces: vec![leaky], ..Default::default() }, &locate(&home)).unwrap();
+    assert_eq!(outcome.overview.workspaces[0].devices["dev-a"].sessions[0].title, "deploy with ghp_***");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn closed_sessions_stay_listed() {
     let root = temp("closed");
     let url = bare(&root.join("remote.git"));

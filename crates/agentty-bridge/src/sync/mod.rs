@@ -186,6 +186,8 @@ pub struct SyncRequest {
 pub struct Overview {
     pub devices: Vec<DeviceInfo>,
     pub workspaces: Vec<WorkspaceMetadata>,
+    /// Ids of workspaces whose data was deleted from the repository ("Also delete sync data").
+    pub removed: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -435,7 +437,8 @@ syncing if it becomes public.\n\n\
 - `devices/` — the computers that sync here\n\
 - `workspace/<id>/sync_metadata.json` — each workspace, one section per computer\n\
 - `workspace/<id>/devices/<device>/<agent>/<session>/` — a session's transcript in chunks\n\
-- `plugin/<plugin>/<id>/` — the same for plugin workspaces\n";
+- `plugin/<plugin>/<id>/` — the same for plugin workspaces\n\
+- `removed/<id>.json` — workspaces whose data was deleted, so no computer writes them back\n";
 
 fn workspace_dir(root: &Path, plugin: Option<&str>, sync_id: &str) -> Option<PathBuf> {
     safe_segment(sync_id).then_some(())?;
@@ -446,6 +449,10 @@ fn workspace_dir(root: &Path, plugin: Option<&str>, sync_id: &str) -> Option<Pat
         }
         None => root.join("workspace").join(sync_id),
     })
+}
+
+fn removed_marker(root: &Path, sync_id: &str) -> Option<PathBuf> {
+    safe_segment(sync_id).then(|| root.join(REMOVED_DIR).join(format!("{sync_id}.json")))
 }
 
 fn safe_segment(name: &str) -> bool {
@@ -478,6 +485,10 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
                 id
             }
         };
+        // Deleted from the repository on another computer: never written back from here.
+        if removed_marker(root, &sync_id).is_some_and(|path| path.is_file()) {
+            continue;
+        }
         let Some(dir) = workspace_dir(root, input.plugin.as_deref(), &sync_id) else { continue };
         let metadata_path = dir.join(METADATA_FILE);
         let mut metadata: WorkspaceMetadata =
@@ -519,13 +530,28 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
                 continue;
             }
             seen.push((session.agent, session.id.clone()));
+            let session_dir = dir.join("devices").join(&config.device_id).join(session.agent.id()).join(&session.id);
+            // No title (its agent quit and the pane shows the shell's): the one it had before.
+            // Masked like transcripts: a title can be the first prompt (Amp).
+            let title = mask::mask(&if session.title.trim().is_empty() {
+                previous
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == session.id && s.agent == session.agent)
+                    .map(|s| s.title.clone())
+                    .or_else(|| safe_segment(&session.id).then(|| session::read_manifest(&session_dir).ok()).flatten().map(|m| m.title))
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| session.agent.display_name().to_string())
+            } else {
+                session.title.clone()
+            });
             if !syncs_files(session.agent) {
                 // Listed for the other computers; nothing to upload.
                 let old = previous.sessions.iter().find(|s| s.id == session.id && s.agent == session.agent);
                 sessions.push(SessionEntry {
                     agent: session.agent,
                     id: session.id.clone(),
-                    title: session.title.clone(),
+                    title: title.clone(),
                     updated_at: old.map(|o| o.updated_at.clone()).unwrap_or_else(|| now.clone()),
                     open: session.open,
                     closed_at: None,
@@ -540,7 +566,6 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
                 }
                 continue;
             };
-            let session_dir = dir.join("devices").join(&config.device_id).join(session.agent.id()).join(&session.id);
             if !safe_segment(&session.id) {
                 continue;
             }
@@ -553,7 +578,7 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
             let facts = session::SessionFacts {
                 agent: session.agent,
                 id: &session.id,
-                title: &session.title,
+                title: &title,
                 device: &config.device_id,
                 cwd: &session_cwd,
                 project: project_of(Path::new(&session_cwd)),
@@ -570,7 +595,7 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
             sessions.push(SessionEntry {
                 agent: session.agent,
                 id: session.id.clone(),
-                title: session.title.clone(),
+                title,
                 updated_at: stamp_ms(crate::fsutil::mtime_ms(&transcript)),
                 open: session.open,
                 closed_at,
@@ -605,6 +630,13 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
     for (plugin, sync_id) in &request.purge {
         if let Some(dir) = workspace_dir(root, plugin.as_deref(), sync_id).filter(|d| d.exists()) {
             fs::remove_dir_all(dir)?;
+            changed_any = true;
+        }
+        // Left behind so a computer that still has the workspace does not upload it again.
+        if let Some(path) = removed_marker(root, sync_id).filter(|p| !p.exists()) {
+            let removed =
+                Removed { sync_id: sync_id.clone(), plugin: plugin.clone(), removed_at: now.clone(), removed_by: config.device_id.clone() };
+            session::write_json(&path, &removed)?;
             changed_any = true;
         }
     }
@@ -670,6 +702,12 @@ fn read_overview(root: &Path) -> Overview {
                 folders.extend(entries.flatten().map(|e| e.path()));
             }
         }
+    }
+    if let Ok(entries) = fs::read_dir(root.join(REMOVED_DIR)) {
+        overview.removed.extend(entries.flatten().filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.strip_suffix(".json").filter(|id| safe_segment(id)).map(str::to_string)
+        }));
     }
     for folder in folders {
         if let Some(meta) =

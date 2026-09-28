@@ -155,8 +155,19 @@ pub fn find_recent(agent: Agent, cwd: &std::path::Path, since_ms: u64) -> Option
         Agent::Codex => codex::find_recent(cwd, since_ms),
         Agent::Gemini => gemini::find_recent(cwd, since_ms),
         Agent::Kimi => kimi::find_recent(cwd, since_ms),
-        Agent::Agy | Agent::Amp => None,
+        Agent::Agy => recent_in(agy::list(50), cwd, since_ms),
+        Agent::Amp => recent_in(amp::list(50), cwd, since_ms),
     }
+}
+
+/// The newest of `sessions` held in `cwd` and written after `since_ms`.
+fn recent_in(sessions: Vec<SessionInfo>, cwd: &std::path::Path, since_ms: u64) -> Option<String> {
+    let cwd = cwd.to_string_lossy();
+    sessions
+        .into_iter()
+        .filter(|s| s.updated_at + 1_000 >= since_ms && s.cwd.as_deref() == Some(&*cwd))
+        .max_by_key(|s| s.updated_at)
+        .map(|s| s.id)
 }
 
 pub fn live_session_id(agent: Agent, pinned: Option<String>, recent: Option<String>) -> Option<String> {
@@ -535,6 +546,27 @@ mod model_name_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_newest_session_in_a_folder_since_a_time_is_the_panes() {
+        let session = |id: &str, cwd: &str, at: u64| SessionInfo {
+            agent: Agent::Amp,
+            id: id.into(),
+            title: id.into(),
+            cwd: Some(cwd.into()),
+            updated_at: at,
+            path: PathBuf::from(id),
+            resume_args: Vec::new(),
+            last_prompt: None,
+            last_reply: None,
+        };
+        let here = std::path::Path::new("/work/app");
+        let sessions =
+            || vec![session("old", "/work/app", 1_000), session("other", "/work/api", 9_000), session("new", "/work/app", 5_000)];
+        assert_eq!(recent_in(sessions(), here, 4_000).as_deref(), Some("new"));
+        // Written before the pane started: another run's.
+        assert_eq!(recent_in(sessions(), here, 7_000), None);
+    }
 
     /// A path outside every agent's session folder is refused, whatever the SessionInfo claims.
     #[test]
