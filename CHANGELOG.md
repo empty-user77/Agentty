@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-28
+
 ### Fixed
 - Settings → Sync found the GitHub CLI only when Agentty was started from a terminal: opened from
   the Dock or Finder, it said `gh` was missing or signed out. Sync now looks where your shell and
