@@ -93,6 +93,7 @@ description: マーケットプレイスに登録するか、Git リポジトリ
 | `surface` | アイコンの位置: `sidebar`, `pane`（既定）, `status` |
 | `mode` | パネルの開き方: `push`（既定）, `overlay`, `window`, `full` |
 | `permissions` | 要求する権限。インストール前に示され、要求が増える更新でも再び示されます |
+| `agents` | 任意。動作する AI エージェント — `["claude"]`、`["codex"]` または `["claude", "codex"]`。省略すると Claude Code。カードに**利用できる AI**として表示されます |
 | `module.url` | `github.com`・`raw.githubusercontent.com`・`objects.githubusercontent.com` のいずれかの `https://`。パスにバージョンを入れておけばリリースを裏で差し替えられません — 検査項目ではなく慣習です |
 | `module.sha256` | チェックサム。一致しないダウンロードは拒否され、一致していても WebAssembly モジュールでないバイトは拒否されます |
 | `module.size` | バイト単位の正確な長さ。最大 8 MB。上限ではなく正確な値です — 長さが違うダウンロードは拒否されるので、ビルドのたびに変わります |

@@ -54,7 +54,9 @@ plugin can:
 1. Read `PLUGIN_GUIDE.md` and `agentty-plugin.d.ts`.
 2. If the goal is unclear, ask the user what the plugin should do and which app or service it
    connects to.
-3. Update `agentty-plugin.json` (name, description, icon, permissions, commands, panel).
+3. Update `agentty-plugin.json` (name, description, icon, permissions, commands, panel, and
+   `agents` — `["claude"]`, `["codex"]` or both — when the plugin is meant for particular AI
+   agents; left out, it is shown as Claude Code).
 4. Implement `main.mjs`. Split into modules if it grows (`import './lib.mjs'`).
 5. Check syntax with `node --check main.mjs` (and other files). Optionally test by piping messages:
    `printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"plugin":{"id":"x","dataDir":"/tmp"},"context":{}}}' '{"jsonrpc":"2.0","method":"panel/open","params":{"context":{}}}' | node main.mjs`

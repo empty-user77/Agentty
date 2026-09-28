@@ -7,7 +7,7 @@
 //! installed at all — a plugin that runs as a program of the user's is something they choose
 //! themselves, from a folder or a repository, not something a list on the internet hands them.
 
-use super::manifest::{valid_id, version_newer, Manifest, PanelMode, Surface, PERMISSIONS};
+use super::manifest::{valid_id, version_newer, Manifest, PanelMode, PluginAgent, Surface, PERMISSIONS};
 use super::store::{self, InstalledPlugin, Source};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,9 @@ pub struct Entry {
     /// Nothing else is taken from a listing.
     #[serde(default)]
     pub activation_events: Vec<String>,
+    /// The AI agents the plugin works with (left out: Claude Code), shown on the card.
+    #[serde(default)]
+    pub agents: Vec<PluginAgent>,
     pub module: Module,
 }
 
@@ -189,6 +192,8 @@ impl Entry {
         entry.icon = entry.icon.map(|icon| icon.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect());
         entry.keywords =
             entry.keywords.iter().filter_map(|word| plain(word, "keyword", 30, false).ok()).filter(|w| !w.is_empty()).take(10).collect();
+        let mut agents = std::collections::HashSet::new();
+        entry.agents.retain(|agent| agents.insert(*agent));
         Ok(entry)
     }
 
@@ -224,6 +229,7 @@ impl Entry {
             browser: self.browser.clone(),
             detect: Vec::new(),
             keywords: self.keywords.clone(),
+            agents: self.agents.clone(),
         }
     }
 

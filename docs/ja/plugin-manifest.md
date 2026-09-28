@@ -16,6 +16,7 @@ description: agentty-plugin.json のすべてのフィールド — 識別情報
   "description": "Turns the current folder into a prompt.",
   "publisher": "you",
   "homepage": "https://example.com/hello",
+  "agents": ["claude", "codex"],
   "permissions": ["prompt.inject"],
   "contributes": {
     "panel": { "title": "Hello", "icon": "sparkles" },
@@ -40,6 +41,7 @@ description: agentty-plugin.json のすべてのフィールド — 識別情報
 | `links` | | カードにボタンとして出る `{ "label", "url" }` を最大 6 件（プロジェクトサイト、ドキュメント、ソース） |
 | `icon` | | 下記一覧のアイコン名 |
 | `logo` | | プラグインフォルダ内の画像ファイル。`icon` の代わりに描画されます。モジュールはロゴをモジュール内に持ちます — [ロゴ](#ロゴ)を参照 |
+| `agents` | | プラグインが動作する AI エージェント: `["claude"]`、`["codex"]` または `["claude", "codex"]`。省略すると Claude Code。カードに**利用できる AI**として表示されます |
 
 ## 実行
 

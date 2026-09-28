@@ -93,6 +93,7 @@ description: 把插件登记到市场，或者自己以 Git 仓库、文件夹�
 | `surface` | 图标的位置：`sidebar`、`pane`（默认）或 `status` |
 | `mode` | 面板的打开方式：`push`（默认）、`overlay`、`window` 或 `full` |
 | `permissions` | 它申请的权限——安装前会展示，要求变多的更新会再展示一次 |
+| `agents` | 可选；适用的 AI 智能体 —— `["claude"]`、`["codex"]` 或 `["claude", "codex"]`。省略时为 Claude Code。在卡片上显示为**可用的 AI** |
 | `module.url` | `github.com`、`raw.githubusercontent.com` 或 `objects.githubusercontent.com` 上的 `https://` 地址。把版本放进路径，release 就无法被悄悄替换 —— 这是惯例，不是校验项 |
 | `module.sha256` | 校验和；不匹配的下载会被拒绝，即使匹配，不是 WebAssembly 模块的字节也会被拒绝 |
 | `module.size` | 以字节为单位的精确长度，最大 8 MB。它不是上限而是精确值 —— 长度不符的下载会被拒绝，所以每次构建都会变 |

@@ -65,6 +65,26 @@ pub struct Manifest {
     pub detect: Vec<String>,
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// The AI agents the plugin works with. Left out: Claude Code (see [`Manifest::agents`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<PluginAgent>,
+}
+
+/// An AI agent a plugin works with (`agents` in the manifest).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginAgent {
+    Claude,
+    Codex,
+}
+
+impl PluginAgent {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            PluginAgent::Claude => "Claude Code",
+            PluginAgent::Codex => "Codex",
+        }
+    }
 }
 
 /// A manifest that leaves `apiVersion` out is from before the field existed, which can only mean
@@ -299,7 +319,20 @@ impl Manifest {
         if self.has_permission("browser.control") && self.api_version < 3 {
             bail!("plugin \"{}\": browser.control needs apiVersion 3", self.id);
         }
+        let mut agents = std::collections::HashSet::new();
+        if !self.agents.iter().all(|agent| agents.insert(*agent)) {
+            bail!("plugin \"{}\": an agent is listed twice in \"agents\"", self.id);
+        }
         Ok(())
+    }
+
+    /// The AI agents this plugin works with: what it says, else Claude Code.
+    pub fn agents(&self) -> Vec<PluginAgent> {
+        if self.agents.is_empty() {
+            vec![PluginAgent::Claude]
+        } else {
+            self.agents.clone()
+        }
     }
 
     pub fn has_permission(&self, permission: &str) -> bool {
@@ -584,5 +617,27 @@ mod tests {
         assert!(version_newer("0.2.0", "0.1.9"));
         assert!(!version_newer("0.1.0", "0.1.0"));
         assert!(!version_newer("0.1.0-beta", "0.1.1"));
+    }
+
+    #[test]
+    fn agents_default_to_claude_code() {
+        let manifest = Manifest::parse(sample().to_string().as_bytes()).unwrap();
+        assert!(manifest.agents.is_empty());
+        assert_eq!(manifest.agents(), vec![PluginAgent::Claude]);
+        let mut both = sample();
+        both["agents"] = serde_json::json!(["claude", "codex"]);
+        assert_eq!(Manifest::parse(both.to_string().as_bytes()).unwrap().agents(), vec![PluginAgent::Claude, PluginAgent::Codex]);
+        let mut codex = sample();
+        codex["agents"] = serde_json::json!(["codex"]);
+        assert_eq!(Manifest::parse(codex.to_string().as_bytes()).unwrap().agents(), vec![PluginAgent::Codex]);
+    }
+
+    #[test]
+    fn agents_are_ones_agentty_knows_each_listed_once() {
+        for agents in [serde_json::json!(["gemini"]), serde_json::json!(["claude", "claude"]), serde_json::json!("claude")] {
+            let mut manifest = sample();
+            manifest["agents"] = agents.clone();
+            assert!(Manifest::parse(manifest.to_string().as_bytes()).is_err(), "{agents}");
+        }
     }
 }

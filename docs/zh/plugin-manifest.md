@@ -16,6 +16,7 @@ description: agentty-plugin.json 的所有字段 —— 标识信息、运行方
   "description": "Turns the current folder into a prompt.",
   "publisher": "you",
   "homepage": "https://example.com/hello",
+  "agents": ["claude", "codex"],
   "permissions": ["prompt.inject"],
   "contributes": {
     "panel": { "title": "Hello", "icon": "sparkles" },
@@ -40,6 +41,7 @@ description: agentty-plugin.json 的所有字段 —— 标识信息、运行方
 | `links` | | 最多 6 个 `{ "label", "url" }`，作为按钮显示在卡片上（项目主页、文档、源码） |
 | `icon` | | 下方列表中的图标名 |
 | `logo` | | 插件文件夹内的图片文件，代替 `icon` 绘制。模块则把徽标放在模块里 —— 见[徽标](#徽标) |
+| `agents` | | 插件适用的 AI 智能体：`["claude"]`、`["codex"]` 或 `["claude", "codex"]`。省略时为 Claude Code。在卡片上显示为**可用的 AI** |
 
 ## 运行
 

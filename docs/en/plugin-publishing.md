@@ -93,6 +93,7 @@ A plugin in the list is **a WebAssembly module with its source in the open**. Th
 | `surface` | where its icon sits: `sidebar`, `pane` (default) or `status` |
 | `mode` | how its panel opens: `push` (default), `overlay`, `window` or `full` |
 | `permissions` | what it asks for — shown before anyone installs it, and again on an update that asks for more |
+| `agents` | optional; the AI agents it works with — `["claude"]`, `["codex"]` or `["claude", "codex"]`. Left out, Claude Code. Shown on its card as **Available AI** |
 | `module.url` | `https://` on `github.com`, `raw.githubusercontent.com` or `objects.githubusercontent.com`. Put the version in the path so a release cannot be swapped underneath — a convention, not a check |
 | `module.sha256` | the checksum; Agentty refuses a download that does not match, and refuses bytes that are not a WebAssembly module even when it does |
 | `module.size` | its exact length in bytes, up to 8 MB. Not a ceiling: a download of any other length is refused, so this changes with every build |

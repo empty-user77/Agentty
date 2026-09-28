@@ -16,6 +16,7 @@ description: agentty-plugin.json의 모든 필드 — 식별 정보, 실행 방�
   "description": "Turns the current folder into a prompt.",
   "publisher": "you",
   "homepage": "https://example.com/hello",
+  "agents": ["claude", "codex"],
   "permissions": ["prompt.inject"],
   "contributes": {
     "panel": { "title": "Hello", "icon": "sparkles" },
@@ -40,6 +41,7 @@ description: agentty-plugin.json의 모든 필드 — 식별 정보, 실행 방�
 | `links` | | 카드에 버튼으로 표시되는 `{ "label", "url" }` 최대 6개 (프로젝트 사이트, 문서, 소스) |
 | `icon` | | 아래 목록의 아이콘 이름 |
 | `logo` | | 플러그인 폴더 안의 그림 파일. `icon` 대신 그려집니다. 모듈은 로고를 모듈 안에 담습니다 — [로고](#로고) 참고 |
+| `agents` | | 플러그인이 동작하는 AI 에이전트: `["claude"]`, `["codex"]` 또는 `["claude", "codex"]`. 생략하면 Claude Code. 카드에 **사용 가능한 AI**로 표시됩니다 |
 
 ## 실행
 
