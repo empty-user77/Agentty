@@ -31,6 +31,7 @@ fn device(id: &str, name: &str, url: &str) -> SyncConfig {
 /// Transcripts under `home/<agent>/`, as a test's agent folders.
 fn locate(home: &Path) -> Locate {
     let home = home.to_path_buf();
+    let data = home.join("data");
     let root = home.clone();
     Locate {
         transcript: Box::new(move |agent, id| {
@@ -46,6 +47,8 @@ fn locate(home: &Path) -> Locate {
         root: Box::new(move |agent| root.join(agent.id())),
         knows_folder: Box::new(|_, _, _| true),
         machine: "machine-test".into(),
+        data,
+        plugins: Vec::new(),
     }
 }
 
@@ -774,5 +777,34 @@ fn settings_travel_between_computers_without_secrets() {
     // Nothing new on A: nothing comes back to it.
     let third = run(&repo_a, &mut a, &with("Nord"), &locate(&home)).unwrap();
     assert!(third.settings.is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_lock_from_an_app_that_is_gone_is_stale() {
+    assert!(process_alive(std::process::id()));
+    let mut child = Command::new(if cfg!(windows) { "cmd" } else { "true" })
+        .args(if cfg!(windows) { &["/C", "exit"][..] } else { &[][..] })
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    assert!(!process_alive(pid));
+}
+
+#[test]
+fn readmes_from_an_earlier_version_are_brought_up_to_date() {
+    let root = temp("readmes");
+    fs::create_dir_all(root.join("plugin")).unwrap();
+    fs::create_dir_all(root.join("devices")).unwrap();
+    fs::write(root.join("plugin/README.md"), "# Plugin workspaces\n\nOld text.\n").unwrap();
+    fs::write(root.join("devices/README.md"), "# My own notes\n").unwrap();
+    fs::write(root.join("README.md"), "# Agentty session sync\n\nOld.\n").unwrap();
+    write_folder_readmes(&root).unwrap();
+    let plugin = fs::read_to_string(root.join("plugin/README.md")).unwrap();
+    assert!(plugin.starts_with("# Plugins") && plugin.contains("settings/<device id>.json"));
+    assert_eq!(fs::read_to_string(root.join("devices/README.md")).unwrap(), "# My own notes\n", "someone's own README stays");
+    assert!(fs::read_to_string(root.join("README.md")).unwrap().contains("plugin/<plugin>/settings/"));
+    assert!(root.join("workspace/README.md").is_file());
     let _ = fs::remove_dir_all(root);
 }

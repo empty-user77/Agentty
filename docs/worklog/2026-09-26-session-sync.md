@@ -167,6 +167,34 @@ uploaded, even while a computer still has it; every sync removes such sessions f
 (their folders and their entries in `sync_metadata.json`). Changed again, a session counts as recent and syncs. Seen
 in a dev build against the owner's repository: 90 days written to `retention.json`, then 365 again.
 
+**Regression test, 2026-09-28 (final build of the day, owner's test repositories):** two dev builds A (`gh`) and B
+(`git` over SSH) on one private repository, a third on a separate one for the public check; Claude Code and Codex
+signed in. Passed: connect (set up / join), sync by itself after a Claude Code and a Codex turn with a fake token
+masked, B joining A's workspace, a session missing on B brought back and resumed, the branch continued on A with its
+next chunk, Context (handoff `0600`, masked, latest turn), closed sessions keeping their titles, settings both ways
+(newest wins, settles without further commits), a part holding a credential kept here in both directions, an old
+session asked about and deleted only on Delete, not uploaded again, back once it changed, the period saved on one
+computer and followed by the other, two computers pushing at once, the five-minute idle sync, the repository made
+public (sync stops, nothing pushed) and private again, disconnect and reconnect keeping the device id, a workspace
+deleted with its data elsewhere (not written back, notice, Sync again under a new id). Fixed by it: (1) another
+computer's newer settings replaced a file this computer keeps to itself (a custom command holding a token) — such a
+part is now neither uploaded nor replaced; (2) a failed sync was not tried again until the next turn or five idle
+minutes — it now retries after 10 s, doubling up to 30 min; (3) a sync lock left by a crashed app blocked syncing for
+ten minutes — the lock holds the app's pid and goes at once when that app is gone; (4) restoring tabs resumed one
+session in two terminals (the tab a synced session was continued from and the continuation, or two Codex panes given
+the same newest rollout), two agents writing one transcript — a session now resumes in one terminal only. Not
+covered: Antigravity CLI, Amp, Gemini, Kimi (not usable here), plugin workspaces, Windows and Linux beyond CI. Both
+computers here shared one home folder, so each agent file existed once; a test on two real computers remains.
+
+**Plugin settings (owner's request, 2026-09-28):** a plugin's settings are its store (`storage/set`,
+`plugin-data/<id>/storage.json`); with Sync settings on they travel in `plugin/<plugin id>/settings/<device id>.json`,
+beside the plugin's workspaces, the newest change winning per plugin (`sync::plugin_settings`, marks in
+`SyncConfig::plugin_settings`). A store shaped like it holds a credential is neither uploaded nor replaced and is
+listed with the other held-back parts. Other files a plugin writes in its folder (caches, anything tied to one
+computer) stay out. The configuration export carries them too (`Bundle::plugin_settings`; one holding a credential
+only inside the sealed secrets). The READMEs Agentty wrote are brought up to date when their text changes
+(`plugin/README.md` now describes the settings), and one someone rewrote under another heading is left alone.
+
 **Decided while building:** a workspace synced for the first time joins the one another computer already synced
 for the same project (git remote and folder in it; the name when there is no remote), unless this computer
 already syncs that one under another of its workspaces. Ids are given out inside the sync pass, after the fetch,

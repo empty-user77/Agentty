@@ -171,3 +171,53 @@ fn the_fingerprint_ignores_key_order_and_what_is_not_synced() {
     let c = Bundle { settings: Some(json!({"a": 2, "b": {"x": 1, "y": 2}})), ..Default::default() };
     assert_ne!(fingerprint(&a), fingerprint(&c));
 }
+
+#[test]
+fn a_file_this_computer_keeps_to_itself_is_not_replaced_by_sync() {
+    let dir = temp_dir("held");
+    let token = ["ghp_", &"Z".repeat(36)].concat();
+    let mine = json!({ "commands": [{ "name": "deploy", "run": format!("curl -H 'Authorization: token {token}'") }] });
+    fs::write(dir.join("commands.json"), serde_json::to_vec(&mine).unwrap()).unwrap();
+    fs::write(dir.join("connectors.json"), b"[]").unwrap();
+    let mut incoming = Bundle { kind: KIND.into(), version: FORMAT_VERSION, ..Default::default() };
+    incoming.files.insert("commands.json".into(), json!({ "commands": [{ "name": "hello", "run": "echo hi" }] }));
+    incoming.files.insert("connectors.json".into(), json!([{ "name": "api" }]));
+    import_synced_to(&dir, &incoming).unwrap();
+    let commands: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("commands.json")).unwrap()).unwrap();
+    assert_eq!(commands, mine, "the command holding a credential stays");
+    let connectors: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("connectors.json")).unwrap()).unwrap();
+    assert_eq!(connectors, json!([{ "name": "api" }]), "the rest still follows");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn plugin_settings_go_in_the_file_and_secret_ones_only_sealed() {
+    let dir = temp_dir("plugin-settings");
+    let token = ["ghp_", &"Z".repeat(36)].concat();
+    for (id, value) in [("launch", json!({ "region": "eu" })), ("notes", json!({ "token": token })), ("../bad", json!({ "x": 1 }))] {
+        let folder = dir.join("plugin-data").join(id);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("storage.json"), value.to_string()).unwrap();
+    }
+    let plain = collect_from(&dir, Scope::Full, None, "0", &no_secrets).unwrap();
+    assert_eq!(plain.plugin_settings.keys().collect::<Vec<_>>(), ["launch"]);
+    assert!(!serde_json::to_string(&plain).unwrap().contains(&token), "without a password the secret one stays out");
+
+    let sealed = collect_from(&dir, Scope::Full, Some("correct horse battery"), "0", &no_secrets).unwrap();
+    assert!(!serde_json::to_string(&sealed).unwrap().contains(&token), "only sealed");
+    let opened: Vec<Secret> =
+        serde_json::from_slice(&crypto::open("correct horse battery", sealed.secrets.as_ref().unwrap()).unwrap()).unwrap();
+    assert!(opened.iter().any(|s| s.service == PLUGIN_SETTINGS_SERVICE && s.account == "notes"));
+
+    // Sync never carries them: its bundle leaves plugin settings to their own files.
+    assert!(collect_from(&dir, Scope::Sync, None, "0", &no_secrets).unwrap().plugin_settings.is_empty());
+
+    let target = temp_dir("plugin-settings-in");
+    let mut report = ImportReport::default();
+    apply_to(&target, &plain, &mut report).unwrap();
+    assert_eq!(report.plugin_settings, 1);
+    let restored: serde_json::Value = serde_json::from_slice(&fs::read(target.join("plugin-data/launch/storage.json")).unwrap()).unwrap();
+    assert_eq!(restored, json!({ "region": "eu" }));
+    let _ = fs::remove_dir_all(dir);
+    let _ = fs::remove_dir_all(target);
+}

@@ -192,6 +192,10 @@ impl Workbench {
             "backup.imported",
             &[("files", &report.files.to_string()), ("themes", &report.themes.to_string()), ("secrets", &report.secrets.to_string())],
         );
+        if report.plugin_settings > 0 {
+            text.push(' ');
+            text.push_str(&tf(cx, "backup.plugin_settings_imported", &[("n", &report.plugin_settings.to_string())]));
+        }
         if !report.plugins_installed.is_empty() {
             text.push(' ');
             text.push_str(&tf(cx, "backup.plugins_installed", &[("list", &report.plugins_installed.join(", "))]));
@@ -289,6 +293,9 @@ impl Workbench {
                 }
                 if !bundle.plugins.is_empty() {
                     items.push(tf(cx, "backup.item.plugins", &[("n", &bundle.plugins.len().to_string())]));
+                }
+                if !bundle.plugin_settings.is_empty() {
+                    items.push(tf(cx, "backup.item.plugin_settings", &[("n", &bundle.plugin_settings.len().to_string())]));
                 }
                 if bundle.secrets.is_some() {
                     items.push(t(cx, "backup.item.secrets").to_string());

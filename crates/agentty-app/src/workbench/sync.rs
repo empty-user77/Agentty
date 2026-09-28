@@ -92,6 +92,9 @@ pub(super) struct SyncUi {
     prune_later: Vec<bridge::PruneItem>,
     /// Parts of this computer's settings the last sync did not upload: they hold a credential.
     settings_held: Vec<String>,
+    /// Wait before retrying a sync that failed: 10 s, doubling up to 30 min; 0 after a success.
+    backoff_ms: u64,
+    retry: Option<Task<()>>,
     retention_input: Option<Entity<TextInput>>,
     new_repo_input: Option<Entity<TextInput>>,
     device_input: Option<(Entity<TextInput>, Subscription)>,
@@ -142,6 +145,8 @@ impl Default for SyncUi {
             prune_approved: Vec::new(),
             prune_later: Vec::new(),
             settings_held: Vec::new(),
+            backoff_ms: 0,
+            retry: None,
             retention_input: None,
             new_repo_input: None,
             device_input: None,
@@ -515,6 +520,12 @@ impl Workbench {
                         if let Some(incoming) = outcome.settings {
                             this.apply_synced_settings(incoming, cx);
                         }
+                        if !outcome.plugin_settings_applied.is_empty() {
+                            let plugins: Vec<String> = outcome.plugin_settings_applied.iter().map(|(id, _)| id.clone()).collect();
+                            let device = outcome.plugin_settings_applied[0].1.clone();
+                            let text = tf(cx, "sync.plugin_settings_applied", &[("plugins", &plugins.join(", ")), ("device", &device)]);
+                            this.show_toast_for(text, 6000, cx);
+                        }
                         if this.sync.retention == Some(outcome.overview.retention_days) {
                             this.sync.retention = None;
                         }
@@ -525,6 +536,8 @@ impl Workbench {
                         // With the ids handed out in this pass.
                         this.sync.config = bridge::load_config();
                         this.sync.status = Status::Synced;
+                        this.sync.backoff_ms = 0;
+                        this.sync.retry = None;
                         if this.session_filter == super::SessionFilter::Synced {
                             this.refresh_synced_local(cx);
                         }
@@ -534,12 +547,17 @@ impl Workbench {
                         let (removed, purge) = retry;
                         this.sync.removed.extend(removed);
                         this.sync.purge.extend(purge);
+                        let again = matches!(err, SyncError::Busy | SyncError::Failed(_));
                         this.sync.status = match err {
                             SyncError::Public => Status::Public,
                             SyncError::NotConnected => Status::Off,
                             SyncError::Busy => Status::Ready,
                             other => Status::Error(sync_error_text(&other, cx)),
                         };
+                        // Offline, a lost push race, another app syncing: tried again by itself.
+                        if again {
+                            this.schedule_sync_retry(cx);
+                        }
                     }
                 }
                 if !this.sync.applying_settings {
@@ -551,6 +569,24 @@ impl Workbench {
             });
         })
         .detach();
+    }
+
+    /// Runs the whole sync again after the backoff: 10 s, then twice as long each time it fails,
+    /// at most 30 minutes.
+    fn schedule_sync_retry(&mut self, cx: &mut Context<Self>) {
+        const FIRST_MS: u64 = 10_000;
+        const MAX_MS: u64 = 30 * 60 * 1000;
+        let wait = if self.sync.backoff_ms == 0 { FIRST_MS } else { (self.sync.backoff_ms * 2).min(MAX_MS) };
+        self.sync.backoff_ms = wait;
+        self.sync.retry = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(wait)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.sync.retry = None;
+                if this.sync.active() && !this.sync.running {
+                    this.run_sync(Scope::All, cx);
+                }
+            });
+        }));
     }
 
     /// Whether settings travel with the sync.
@@ -969,9 +1005,10 @@ impl Workbench {
                 "settings.json" => t(cx, "sync.part.settings").to_string(),
                 "commands.json" => t(cx, "sync.part.commands").to_string(),
                 "connectors.json" => t(cx, "sync.part.connectors").to_string(),
-                other => match other.strip_prefix("themes/") {
-                    Some(theme) => tf(cx, "sync.part.theme", &[("name", theme)]),
-                    None => other.to_string(),
+                other => match (other.strip_prefix("themes/"), other.strip_prefix("plugin:")) {
+                    (Some(theme), _) => tf(cx, "sync.part.theme", &[("name", theme)]),
+                    (_, Some(plugin)) => tf(cx, "sync.part.plugin", &[("name", plugin)]),
+                    _ => other.to_string(),
                 },
             })
             .collect();
@@ -997,11 +1034,18 @@ impl Workbench {
             let when = agentty_bridge::sync::model::stamp_to_ms(&item.updated_at)
                 .map(|ms| super::tree_manager::ago(cx, (ms / 1000) as i64))
                 .unwrap_or_default();
-            let place = if item.workspace_name.is_empty() {
-                item.device_name.clone()
-            } else {
-                format!("{} · {}", item.workspace_name, item.device_name)
-            };
+            // The workspace as this computer names it, when it has it; else as the repository does,
+            // shortened to its folder when that name is a path.
+            let local = self
+                .workspaces
+                .iter()
+                .find(|ws| self.sync.config.workspaces.get(&self.sync_key(ws.id)) == Some(&item.sync_id))
+                .map(|ws| self.workspace_title(ws, cx));
+            let workspace = local.unwrap_or_else(|| {
+                let name = item.workspace_name.trim_end_matches(['/', '\\']);
+                name.rsplit(['/', '\\']).next().unwrap_or(name).to_string()
+            });
+            let place = if workspace.is_empty() { item.device_name.clone() } else { format!("{workspace} · {}", item.device_name) };
             list = list.child(
                 div().flex().items_center().gap_2().child(crate::brand::avatar(item.agent.id(), 12.)).child(
                     div()
@@ -1115,6 +1159,27 @@ impl Workbench {
         // Deleting old sessions waits for an OK here.
         if connected && self.prune_waiting() {
             body = body.child(self.render_prune_request(cx));
+        } else if connected && !self.sync.prune_pending.is_empty() {
+            // Put off with Later: a line to bring the question back.
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().t_caption().text_color(hex(Chrome::MUTED)).child(tf(
+                        cx,
+                        "sync.prune_later_line",
+                        &[("n", &self.sync.prune_pending.len().to_string())],
+                    )))
+                    .child(action_button(
+                        "sync-prune-show",
+                        t(cx, "sync.prune_show"),
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.sync.prune_later.clear();
+                            cx.notify();
+                        }),
+                    )),
+            );
         }
 
         if connected {

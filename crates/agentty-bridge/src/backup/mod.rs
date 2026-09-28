@@ -97,6 +97,11 @@ pub struct Bundle {
     /// Theme file name → its text.
     pub themes: BTreeMap<String, String>,
     pub plugins: Vec<PluginEntry>,
+    /// Plugin id → its settings (what it keeps with `storage/set`). A plugin's settings holding
+    /// something shaped like a credential are not here but among the sealed secrets, or left out
+    /// without a password. Export only: sync keeps plugin settings in their own files.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_settings: BTreeMap<String, Value>,
     /// [`Secret`]s as JSON, sealed with the export password.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<crypto::Sealed>,
@@ -172,14 +177,53 @@ fn collect_from(dir: &Path, scope: Scope, password: Option<&str>, app_version: &
         }
     }
     bundle.themes = read_themes(&dir.join("themes"));
+    let mut sealed_plugins = Vec::new();
     if scope == Scope::Full {
         bundle.plugins = plugin_list(&StateFile::load());
+        for (id, value) in plugin_stores(dir) {
+            if crate::sync::plugin_settings::holds_no_secret(&value) {
+                bundle.plugin_settings.insert(id, value);
+            } else {
+                // Holding a credential: only sealed with the password, like the other secrets.
+                sealed_plugins.push(Secret { service: PLUGIN_SETTINGS_SERVICE.into(), account: id, value: value.to_string() });
+            }
+        }
     }
     if let Some(password) = password {
-        let secrets = secrets_of(&bundle, read_secret);
+        let mut secrets = secrets_of(&bundle, read_secret);
+        secrets.extend(sealed_plugins);
         bundle.secrets = Some(crypto::seal(password, &serde_json::to_vec(&secrets)?)?);
     }
     Ok(bundle)
+}
+
+/// Stands in a sealed [`Secret`] for a plugin's settings that hold a credential (not a keychain
+/// service: the value goes back into the plugin's `storage.json`).
+const PLUGIN_SETTINGS_SERVICE: &str = "agentty.plugin-settings";
+
+/// Each plugin's settings kept in `dir` (`plugin-data/<id>/storage.json`).
+fn plugin_stores(dir: &Path) -> Vec<(String, Value)> {
+    let mut stores = Vec::new();
+    for entry in fs::read_dir(dir.join("plugin-data")).into_iter().flatten().flatten() {
+        let id = entry.file_name().to_string_lossy().to_string();
+        if !crate::plugins::manifest::valid_id(&id) {
+            continue;
+        }
+        if let Some(value) = read_json(&entry.path().join("storage.json")).filter(Value::is_object) {
+            stores.push((id, value));
+        }
+    }
+    stores
+}
+
+/// Puts a plugin's settings in place (`0600`, in its `0700` folder).
+fn write_plugin_store(dir: &Path, id: &str, value: &Value) -> Result<()> {
+    anyhow::ensure!(crate::plugins::manifest::valid_id(id) && value.is_object(), "not a plugin's settings");
+    let folder = dir.join("plugin-data").join(id);
+    fs::create_dir_all(&folder)?;
+    crate::sync::repo::private_dir(&folder);
+    crate::fsutil::write_private(&folder.join("storage.json"), &serde_json::to_vec(value)?)?;
+    Ok(())
 }
 
 fn read_json(path: &Path) -> Option<Value> {
@@ -366,6 +410,8 @@ pub struct ImportReport {
     pub files: usize,
     pub themes: usize,
     pub secrets: usize,
+    /// Plugins whose settings were put in place.
+    pub plugin_settings: usize,
     pub plugins_installed: Vec<String>,
     /// Listed plugins that could not come back (a folder on the other computer, a failed download).
     pub plugins_skipped: Vec<String>,
@@ -398,6 +444,14 @@ pub fn import(bundle: &Bundle, options: &ImportOptions) -> Result<ImportReport, 
     }
     apply_to(&dir, bundle, &mut report)?;
     for secret in &secrets {
+        if secret.service == PLUGIN_SETTINGS_SERVICE {
+            if let Ok(value) = serde_json::from_str::<Value>(&secret.value) {
+                if write_plugin_store(&dir, &secret.account, &value).is_ok() {
+                    report.plugin_settings += 1;
+                }
+            }
+            continue;
+        }
         if !known_service(&secret.service) {
             continue;
         }
@@ -434,6 +488,11 @@ fn apply_to(dir: &Path, bundle: &Bundle, report: &mut ImportReport) -> Result<()
         }
         crate::fsutil::write_private(&dir.join(file.name), &serde_json::to_vec_pretty(&value)?)?;
         report.files += 1;
+    }
+    for (id, value) in &bundle.plugin_settings {
+        if write_plugin_store(dir, id, value).is_ok() {
+            report.plugin_settings += 1;
+        }
     }
     let themes = dir.join("themes");
     for (name, text) in &bundle.themes {
@@ -554,12 +613,35 @@ fn canonical(value: &Value, out: &mut String) {
 
 /// Applies the synced parts of a bundle another computer wrote (no secrets, no plugins).
 pub fn import_synced(bundle: &Bundle) -> Result<ImportReport> {
+    import_synced_to(&crate::fsutil::data_dir(), bundle)
+}
+
+fn import_synced_to(dir: &Path, bundle: &Bundle) -> Result<ImportReport> {
     let mut synced = bundle.clone();
     synced.files.retain(|name, _| FILES.iter().any(|f| f.name == name && f.synced));
     synced.plugins.clear();
+    // Plugins' settings travel in their own files (`sync::plugin_settings`).
+    synced.plugin_settings.clear();
     synced.secrets = None;
+    // A part this computer keeps to itself (it holds a credential, so it is never uploaded) is not
+    // replaced either: another computer's newer copy would drop the command holding it.
+    let local = collect_from(dir, Scope::Sync, None, "", &|_, _| None)?;
+    let (_, held) = crate::sync::settings::hold_back_secrets(&local);
+    for part in &held {
+        match part.as_str() {
+            "settings.json" => synced.settings = None,
+            name => match name.strip_prefix("themes/") {
+                Some(theme) => {
+                    synced.themes.remove(theme);
+                }
+                None => {
+                    synced.files.remove(name);
+                }
+            },
+        }
+    }
     let mut report = ImportReport::default();
-    apply_to(&crate::fsutil::data_dir(), &synced, &mut report)?;
+    apply_to(dir, &synced, &mut report)?;
     Ok(report)
 }
 

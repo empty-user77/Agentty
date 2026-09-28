@@ -55,7 +55,7 @@ Every call returns a promise.
 | `fetch(request)` — an HTTP request | `net.request` |
 | `log(...)` — writes to the plugin log (stderr) | |
 
-The protocol also has `storage/get`, `storage/set` and `storage/keys` — a JSON document in the plugin's own folder, no permission needed — and, from API version 2, `host/timer` and `pane/status`. A Node plugin can write its own files instead, but storage works the same for both kinds. See [the protocol](/docs/plugin-protocol).
+The protocol also has `storage/get`, `storage/set` and `storage/keys` — a JSON document in the plugin's own folder, no permission needed, and synced between the user's computers with their settings — and, from API version 2, `host/timer` and `pane/status`. A Node plugin can write its own files instead, but storage works the same for both kinds. See [the protocol](/docs/plugin-protocol).
 
 `plugin.info` holds the data from `initialize`; `plugin.context` is the latest context.
 

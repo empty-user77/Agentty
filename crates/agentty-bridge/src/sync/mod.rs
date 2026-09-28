@@ -7,6 +7,7 @@
 
 pub mod mask;
 pub mod model;
+pub mod plugin_settings;
 pub mod repo;
 pub mod restore;
 pub mod session;
@@ -42,6 +43,8 @@ pub struct SyncConfig {
     /// The synced configuration as last seen here, and when it last changed.
     pub settings_fingerprint: String,
     pub settings_changed_at: String,
+    /// Each plugin's settings as this computer last synced them (plugin id → state).
+    pub plugin_settings: BTreeMap<String, plugin_settings::Mark>,
 }
 
 impl SyncConfig {
@@ -244,8 +247,11 @@ pub struct SyncOutcome {
     pub settings: Option<settings::Incoming>,
     /// Sessions past the retention period, waiting for the user's OK before they are deleted.
     pub prune_pending: Vec<PruneItem>,
-    /// Parts of this computer's settings not uploaded because they hold a credential.
+    /// Parts of this computer's settings not uploaded because they hold a credential
+    /// (`plugin:<id>` for a plugin's).
     pub settings_held: Vec<String>,
+    /// Plugins whose settings were taken from another computer: (plugin id, its name).
+    pub plugin_settings_applied: Vec<(String, String)>,
 }
 
 /// A session past the retention period, as the popover lists it for the user's OK.
@@ -300,10 +306,12 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
     let outcome = outcome.map(|o| SyncOutcome { computer: stats_in(&repo.dir, &this_computer_devices(&o.overview, &config)), ..o });
     let at = outcome.as_ref().ok().map(|o| o.at.clone());
     let (fingerprint, changed_at) = (config.settings_fingerprint.clone(), config.settings_changed_at.clone());
+    let plugin_marks = config.plugin_settings.clone();
     let _ = update_config(|c| {
         if c.settings {
             c.settings_fingerprint = fingerprint;
             c.settings_changed_at = changed_at;
+            c.plugin_settings = plugin_marks;
         }
         for (key, id) in assigned {
             c.workspaces.entry(key).or_insert(id);
@@ -330,6 +338,10 @@ pub struct Locate {
     pub knows_folder: KnowsFolder,
     /// This computer's key (`machine_key`).
     pub machine: String,
+    /// The data folder, where plugins keep their settings.
+    pub data: PathBuf,
+    /// Installed plugins (their settings travel with "Sync settings").
+    pub plugins: Vec<String>,
 }
 
 impl Locate {
@@ -339,6 +351,8 @@ impl Locate {
             root: Box::new(agent_root),
             knows_folder: Box::new(agent_knows_folder),
             machine: machine_key(),
+            data: crate::fsutil::data_dir(),
+            plugins: crate::plugins::store::installed().into_iter().map(|p| p.id).collect(),
         }
     }
 }
@@ -416,6 +430,15 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
             }
             None => (None, Vec::new()),
         };
+        // Plugins' settings go with the rest of the settings.
+        let (plugins_applied, settings_held) = if request.settings.is_some() {
+            let plugins = plugin_settings::step(&repo.dir, &locate.data, config, &locate.plugins)?;
+            let mut held = settings_held;
+            held.extend(plugins.held.iter().map(|id| format!("plugin:{id}")));
+            (plugins.applied, held)
+        } else {
+            (Vec::new(), settings_held)
+        };
         let message = format!(
             "sync: {} ({} workspace{})",
             config.device_name,
@@ -430,6 +453,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                 at: now_stamp(),
                 settings: incoming,
                 settings_held: settings_held.clone(),
+                plugin_settings_applied: plugins_applied.clone(),
                 prune_pending: prune_pending.clone(),
                 ..Default::default()
             });
@@ -443,6 +467,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                     at: now_stamp(),
                     settings: incoming,
                     settings_held,
+                    plugin_settings_applied: plugins_applied,
                     prune_pending,
                     ..Default::default()
                 });
@@ -639,8 +664,12 @@ A workspace on another computer with the same project joins the same folder.\n",
     ),
     (
         "plugin",
-        "# Plugin workspaces\n\n\
-Workspaces of Agentty plugins, laid out like `workspace/`: `<plugin id>/<workspace id>/`.\n",
+        "# Plugins\n\n\
+One folder per plugin (`<plugin id>/`):\n\n\
+- `<workspace id>/` — the plugin's workspaces, laid out like `workspace/`\n\
+- `settings/<device id>.json` — the plugin's settings (what it keeps with `storage/set`) as each computer last \
+synced them, when that computer syncs its settings. The change made last is the one every computer takes. \
+Settings that hold something shaped like a credential stay on their computer and are not here.\n",
     ),
     (
         "settings",
@@ -651,15 +680,25 @@ Secrets (API keys, tokens, passwords) are never written here.\n",
     ),
 ];
 
-/// Writes the folder READMEs that are missing (a repository set up before they existed gets them
-/// on its next sync; ones already there are left as they are).
+/// Writes the READMEs: missing ones (a repository set up before they existed gets them on its next
+/// sync) and ones Agentty wrote in an earlier version (known by their heading), so they describe
+/// the layout as it is now. A README someone rewrote under another heading is left alone.
 fn write_folder_readmes(root: &Path) -> Result<()> {
+    let ours = |path: &Path, headings: &[&str]| {
+        fs::read_to_string(path).map_or(true, |text| headings.iter().any(|h| text.lines().next() == Some(h)))
+    };
     for (folder, text) in FOLDER_READMES {
         let path = root.join(folder).join("README.md");
-        if !path.exists() {
+        let heading = text.lines().next().unwrap_or_default();
+        // `plugin/` was headed "# Plugin workspaces" before plugin settings were kept there.
+        if ours(&path, &[heading, "# Plugin workspaces"]) && fs::read_to_string(&path).ok().as_deref() != Some(text) {
             fs::create_dir_all(root.join(folder))?;
             fs::write(path, text)?;
         }
+    }
+    let readme = root.join("README.md");
+    if readme.is_file() && ours(&readme, &["# Agentty session sync"]) && fs::read_to_string(&readme).ok().as_deref() != Some(README) {
+        fs::write(readme, README)?;
     }
     Ok(())
 }
@@ -671,8 +710,8 @@ syncing if it becomes public.\n\n\
 - `devices/` — the computers that sync here\n\
 - `workspace/<id>/sync_metadata.json` — each workspace, one section per computer\n\
 - `workspace/<id>/devices/<device>/<agent>/<session>/` — a session's transcript in chunks\n\
-- `plugin/<plugin>/<id>/` — the same for plugin workspaces\n\
-- `settings/<device>.json` — each computer's settings, when it syncs them\n\
+- `plugin/<plugin>/<id>/` — the same for plugin workspaces; `plugin/<plugin>/settings/` — the plugin's settings\n\
+- `settings/<device>.json` — each computer's settings (Agentty's own), when it syncs them\n\
 - `removed/<id>.json` — workspaces whose data was deleted, so no computer writes them back\n";
 
 fn workspace_dir(root: &Path, plugin: Option<&str>, sync_id: &str) -> Option<PathBuf> {
@@ -1105,13 +1144,20 @@ impl Lock {
         let _guard = IN_PROCESS.lock().map_err(|_| SyncError::Busy)?;
         fs::create_dir_all(sync_dir()).map_err(|e| SyncError::Failed(e.to_string()))?;
         let path = sync_dir().join("sync.lock");
-        // A lock left by a crash expires: no sync takes ten minutes.
-        let stale = crate::fsutil::mtime_ms(&path) + 10 * 60 * 1000 < now_ms();
+        // A lock left by a crash goes at once when the app that took it is gone (its pid is in
+        // the file), and in any case after ten minutes: no sync takes that long.
+        let holder = fs::read_to_string(&path).ok().and_then(|t| t.trim().parse::<u32>().ok());
+        let stale = crate::fsutil::mtime_ms(&path) + 10 * 60 * 1000 < now_ms()
+            || holder.is_some_and(|pid| pid != std::process::id() && !process_alive(pid));
         if stale {
             let _ = fs::remove_file(&path);
         }
         match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(_) => Ok(Lock(path)),
+            Ok(mut file) => {
+                use std::io::Write;
+                let _ = write!(file, "{}", std::process::id());
+                Ok(Lock(path))
+            }
             Err(_) => Err(SyncError::Busy),
         }
     }
@@ -1127,6 +1173,23 @@ impl Lock {
                 other => return other,
             }
         }
+    }
+}
+
+/// Whether a process with this id is running (a pid reused since only keeps a stale lock for its
+/// ten minutes).
+fn process_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        crate::process::command("kill").args(["-0", &pid.to_string()]).output().map(|o| o.status.success()).unwrap_or(true)
+    }
+    #[cfg(windows)]
+    {
+        crate::process::command("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().any(|w| w == pid.to_string()))
+            .unwrap_or(true)
     }
 }
 

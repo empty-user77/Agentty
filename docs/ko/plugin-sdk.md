@@ -55,7 +55,7 @@ plugin.start();
 | `fetch(request)` — HTTP 요청 | `net.request` |
 | `log(...)` — 플러그인 로그(stderr)에 기록 | |
 
-프로토콜에는 `storage/get`·`storage/set`·`storage/keys`(플러그인 자기 폴더의 JSON 문서. 권한 불필요)와, API 버전 2부터 `host/timer`·`pane/status`도 있습니다. Node 플러그인은 자기 파일을 써도 되지만 storage는 두 종류 모두에서 똑같이 동작합니다. [프로토콜](/docs/plugin-protocol)을 참고하세요.
+프로토콜에는 `storage/get`·`storage/set`·`storage/keys`(플러그인 자기 폴더의 JSON 문서. 권한 불필요. 설정 동기화를 켜면 사용자의 다른 컴퓨터로도 함께 동기화됨)와, API 버전 2부터 `host/timer`·`pane/status`도 있습니다. Node 플러그인은 자기 파일을 써도 되지만 storage는 두 종류 모두에서 똑같이 동작합니다. [프로토콜](/docs/plugin-protocol)을 참고하세요.
 
 `plugin.info`에는 `initialize` 데이터가, `plugin.context`에는 최신 컨텍스트가 들어 있습니다.
 

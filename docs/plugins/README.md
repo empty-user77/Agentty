@@ -389,6 +389,11 @@ be served from a release of a repository, or from the same host as the list itse
 `storage/get`, `storage/set` and `storage/keys` need no permission: they are the plugin's own
 folder (`<data dir>/plugin-data/<id>/storage.json`, `0600`), up to 64 keys and a megabyte. A
 WebAssembly plugin has no files of its own, so that is how it remembers anything.
+This store is the plugin's settings: with **Sync settings** on, it follows the user to their other
+computers (the newest change wins) and it goes into a configuration export. Keep settings there —
+choices, environments, saved requests — and nothing tied to one computer; a store holding something
+shaped like a credential is kept on its computer instead. Files a plugin writes itself in
+`AGENTTY_PLUGIN_DATA` are not synced or exported.
 
 The store shows these before installing, and an update that asks for more than the installed
 version had says so and takes a second press; "Update all" leaves those out rather than taking
