@@ -282,7 +282,9 @@ fn home_to_tilde(path: &str) -> Option<String> {
 
 fn tilde_to_home(path: &str) -> Option<String> {
     let rest = path.strip_prefix("~/")?;
-    Some(crate::fsutil::home().join(rest).to_string_lossy().to_string())
+    // Written with `/`: each part joined on its own, so Windows gets its own separator.
+    let full = rest.split('/').filter(|part| !part.is_empty()).fold(crate::fsutil::home(), |dir, part| dir.join(part));
+    Some(full.to_string_lossy().to_string())
 }
 
 // ---------------------------------------------------------------------------------------------
