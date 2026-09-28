@@ -437,13 +437,18 @@ fn row(label: &str, control: impl IntoElement) -> Div {
 
 /// A row whose label has a second, muted line explaining it.
 pub(super) fn row_with_hint(label: &str, hint: &str, control: impl IntoElement) -> Div {
+    row_with_hint_element(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string()), hint, control)
+}
+
+/// [`row_with_hint`] whose label is an element of its own (a link, say).
+pub(super) fn row_with_hint_element(label: impl IntoElement, hint: &str, control: impl IntoElement) -> Div {
     let text = div()
         .flex_1()
         .min_w_0()
         .flex()
         .flex_col()
         .gap_0p5()
-        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string()))
+        .child(label)
         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(hint.to_string()));
     if narrow() {
         return stacked_row(text, control);

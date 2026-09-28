@@ -37,6 +37,22 @@ impl Remote {
         }
     }
 
+    /// The repository's page, to open from the UI: GitHub's for a GitHub repository (either
+    /// program, HTTPS or SSH URL), else an `https://` URL without its credentials; `None` for
+    /// other remotes (a local path, a plain SSH host).
+    pub fn web_url(&self) -> Option<String> {
+        match self {
+            Remote::Github { repo, .. } => Some(format!("https://github.com/{repo}")),
+            Remote::Git { url } => match github_repo_of(url) {
+                Some(repo) => Some(format!("https://github.com/{repo}")),
+                None => {
+                    let clean = strip_credentials(url);
+                    clean.starts_with("https://").then(|| clean.trim_end_matches('/').trim_end_matches(".git").to_string())
+                }
+            },
+        }
+    }
+
     /// Short label for the UI: `owner/name`, or the URL without credentials.
     pub fn label(&self) -> String {
         match self {
@@ -546,6 +562,19 @@ mod tests {
         .join("\n");
         let names: Vec<String> = sync_candidates(&lines).unwrap().into_iter().map(|r| r.name_with_owner).collect();
         assert_eq!(names, ["me/sync", "me/new", "me/readme"]);
+    }
+
+    #[test]
+    fn a_remote_opens_its_repository_page() {
+        let github = |ssh| Remote::Github { repo: "me/sync".into(), ssh };
+        assert_eq!(github(false).web_url().as_deref(), Some("https://github.com/me/sync"));
+        assert_eq!(github(true).web_url().as_deref(), Some("https://github.com/me/sync"));
+        let git = |url: &str| Remote::Git { url: url.into() }.web_url();
+        assert_eq!(git("git@github.com:me/sync.git").as_deref(), Some("https://github.com/me/sync"));
+        assert_eq!(git("https://github.com/me/sync.git").as_deref(), Some("https://github.com/me/sync"));
+        assert_eq!(git("https://user:not_a_real_secret@git.example.com/me/sync.git").as_deref(), Some("https://git.example.com/me/sync"));
+        assert_eq!(git("git@git.example.com:me/sync.git"), None);
+        assert_eq!(git("/Volumes/backup/sync.git"), None);
     }
 
     #[test]
