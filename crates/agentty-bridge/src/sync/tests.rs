@@ -314,6 +314,61 @@ fn every_agentty_on_one_computer_counts_once() {
 }
 
 #[test]
+fn sessions_older_than_the_repositorys_period_are_dropped_everywhere() {
+    let root = temp("retention");
+    let url = bare(&root.join("remote.git"));
+    let (home_a, home_b) = (root.join("home-a"), root.join("home-b"));
+    fs::create_dir_all(home_a.join("claude")).unwrap();
+    fs::create_dir_all(home_b.join("claude")).unwrap();
+    fs::write(home_a.join("claude/old.jsonl"), "{\"n\":1}\n").unwrap();
+    fs::write(home_a.join("claude/new.jsonl"), "{\"n\":1}\n").unwrap();
+    fs::write(home_b.join("claude/b.jsonl"), "{\"m\":1}\n").unwrap();
+    // Last changed 40 days ago.
+    let forty_days = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 60 * 60);
+    fs::File::options().write(true).open(home_a.join("claude/old.jsonl")).unwrap().set_modified(forty_days).unwrap();
+    let (a, b) = (device("dev-a", "A", &url), device("dev-b", "B", &url));
+    let repo_a = Repo::new(root.join("clone-a"), a.remote.clone().unwrap(), "main");
+    let repo_b = Repo::new(root.join("clone-b"), b.remote.clone().unwrap(), "main");
+    repo_a.ensure_clone().unwrap();
+    repo_b.ensure_clone().unwrap();
+    let request_a = SyncRequest { workspaces: vec![workspace("ws", &root, &["old", "new"])], ..Default::default() };
+
+    // A year by default: both go up.
+    let first = run(&repo_a, &mut a.clone(), &request_a, &locate(&home_a)).unwrap();
+    assert_eq!(first.overview.retention_days, DEFAULT_RETENTION_DAYS);
+    assert!(repo_a.dir.join("workspace/ws/devices/dev-a/claude/old").is_dir());
+
+    // B chooses 30 days: A's old session is found but stays until the user agrees.
+    let request_b = SyncRequest { workspaces: vec![workspace("ws", &root, &["b"])], retention: Some(30), ..Default::default() };
+    let asked = run(&repo_b, &mut b.clone(), &request_b, &locate(&home_b)).unwrap();
+    assert_eq!(asked.overview.retention_days, 30);
+    let pending: Vec<(String, String)> = asked.prune_pending.iter().map(|p| (p.device.clone(), p.id.clone())).collect();
+    assert_eq!(pending, [("dev-a".to_string(), "old".to_string())]);
+    assert_eq!(asked.prune_pending[0].device_name, "A");
+    assert!(repo_b.dir.join("workspace/ws/devices/dev-a/claude/old").is_dir());
+
+    // Agreed: it leaves the repository, from B's pass.
+    let agreed = SyncRequest { prune: asked.prune_pending.clone(), ..request_b.clone() };
+    let second = run(&repo_b, &mut b.clone(), &agreed, &locate(&home_b)).unwrap();
+    assert!(second.prune_pending.is_empty());
+    assert!(!repo_b.dir.join("workspace/ws/devices/dev-a/claude/old").exists());
+    assert!(repo_b.dir.join("workspace/ws/devices/dev-a/claude/new").is_dir());
+    let listed: Vec<String> = second.overview.workspaces[0].devices["dev-a"].sessions.iter().map(|s| s.id.clone()).collect();
+    assert_eq!(listed, ["new"]);
+
+    // A still has it but does not upload it again.
+    let third = run(&repo_a, &mut a.clone(), &request_a, &locate(&home_a)).unwrap();
+    assert!(!repo_a.dir.join("workspace/ws/devices/dev-a/claude/old").exists());
+    assert!(third.overview.workspaces[0].devices["dev-a"].sessions.iter().all(|s| s.id != "old"));
+
+    // Changed again, it counts as recent and syncs.
+    fs::write(home_a.join("claude/old.jsonl"), "{\"n\":1}\n{\"n\":2}\n").unwrap();
+    run(&repo_a, &mut a.clone(), &request_a, &locate(&home_a)).unwrap();
+    assert!(repo_a.dir.join("workspace/ws/devices/dev-a/claude/old").is_dir());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn what_this_computer_keeps_is_counted() {
     let root = temp("stats");
     let url = bare(&root.join("remote.git"));

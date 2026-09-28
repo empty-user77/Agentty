@@ -182,6 +182,11 @@ pub fn syncs_files(agent: Agent) -> bool {
 #[derive(Debug, Clone, Default)]
 pub struct SyncRequest {
     pub workspaces: Vec<WorkspaceInput>,
+    /// A new retention period chosen here (days), written to the repository for every computer.
+    pub retention: Option<u32>,
+    /// Old sessions the user agreed to delete (from `SyncOutcome::prune_pending`). Only these
+    /// go, and only while they are still past the period.
+    pub prune: Vec<PruneItem>,
     /// Workspaces whose data is removed from the repository ("Also delete sync data").
     pub purge: Vec<(Option<String>, String)>,
     pub app_version: String,
@@ -198,6 +203,8 @@ pub struct Overview {
     pub workspaces: Vec<WorkspaceMetadata>,
     /// Ids of workspaces whose data was deleted from the repository ("Also delete sync data").
     pub removed: Vec<String>,
+    /// How long a session is kept after it last changed (`retention.json`).
+    pub retention_days: u32,
 }
 
 impl Overview {
@@ -235,6 +242,32 @@ pub struct SyncOutcome {
     pub computer: ComputerStats,
     /// Another computer's newer configuration, for the app to put in place.
     pub settings: Option<settings::Incoming>,
+    /// Sessions past the retention period, waiting for the user's OK before they are deleted.
+    pub prune_pending: Vec<PruneItem>,
+}
+
+/// A session past the retention period, as the popover lists it for the user's OK.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PruneItem {
+    pub plugin: Option<String>,
+    pub sync_id: String,
+    pub workspace_name: String,
+    pub device: String,
+    pub device_name: String,
+    pub agent: Agent,
+    pub id: String,
+    pub title: String,
+    pub updated_at: String,
+}
+
+impl PruneItem {
+    fn same(&self, other: &PruneItem) -> bool {
+        self.plugin == other.plugin
+            && self.sync_id == other.sync_id
+            && self.device == other.device
+            && self.agent == other.agent
+            && self.id == other.id
+    }
 }
 
 /// One sync pass: fetch, write this device's files, commit, push; again if another device pushed
@@ -362,7 +395,18 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
             initialize(&repo.dir, &config.device_id)?;
         }
         write_folder_readmes(&repo.dir)?;
+        if let Some(days) = request.retention.filter(|d| *d > 0) {
+            let retention = Retention { days, changed_at: now_stamp(), changed_by: config.device_id.clone() };
+            if read_retention(&repo.dir) != days {
+                session::write_json(&repo.dir.join(RETENTION_FILE), &retention)?;
+            }
+        }
         let uploaded = write_device_files(&repo.dir, config, request, locate)?;
+        // Deleting waits for the user's OK: only what they agreed to, and only while still old.
+        let old = old_sessions(&repo.dir, retention_cutoff(&repo.dir));
+        let (approved, prune_pending): (Vec<PruneItem>, Vec<PruneItem>) =
+            old.into_iter().partition(|item| request.prune.iter().any(|ok| ok.same(item)));
+        delete_sessions(&repo.dir, &approved)?;
         let incoming = match &request.settings {
             Some(local) => settings::step(&repo.dir, config, local)?,
             None => None,
@@ -380,6 +424,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                 overview: read_overview(&repo.dir),
                 at: now_stamp(),
                 settings: incoming,
+                prune_pending: prune_pending.clone(),
                 ..Default::default()
             });
         }
@@ -391,6 +436,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                     overview: read_overview(&repo.dir),
                     at: now_stamp(),
                     settings: incoming,
+                    prune_pending,
                     ..Default::default()
                 });
             }
@@ -646,7 +692,107 @@ fn safe_segment(name: &str) -> bool {
 }
 
 /// Writes this device's files into the clone. Returns how many sessions got new content.
+/// The repository's retention period in days.
+fn read_retention(root: &Path) -> u32 {
+    fs::read_to_string(root.join(RETENTION_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Retention>(&t).ok())
+        .map(|r| r.days)
+        .filter(|d| *d > 0)
+        .unwrap_or(DEFAULT_RETENTION_DAYS)
+}
+
+/// Sessions last changed before this (epoch ms) are not kept.
+fn retention_cutoff(root: &Path) -> u64 {
+    now_ms().saturating_sub(u64::from(read_retention(root)) * 24 * 60 * 60 * 1000)
+}
+
+/// Sessions that last changed before `cutoff`, from every computer: listed in a workspace's
+/// metadata with an old time, or a folder listed nowhere that was uploaded before it.
+fn old_sessions(root: &Path, cutoff: u64) -> Vec<PruneItem> {
+    let old = |stamp: &str| stamp_to_ms(stamp).is_some_and(|ms| ms < cutoff);
+    let mut items = Vec::new();
+    let mut folders: Vec<(Option<String>, PathBuf)> =
+        fs::read_dir(root.join("workspace")).into_iter().flatten().flatten().map(|e| (None, e.path())).collect();
+    for plugin in fs::read_dir(root.join("plugin")).into_iter().flatten().flatten() {
+        let name = plugin.file_name().to_string_lossy().to_string();
+        folders.extend(fs::read_dir(plugin.path()).into_iter().flatten().flatten().map(|e| (Some(name.clone()), e.path())));
+    }
+    let names: BTreeMap<String, String> = read_overview(root).devices.into_iter().map(|d| (d.id, d.name)).collect();
+    for (plugin, workspace) in folders {
+        let Some(metadata) =
+            fs::read_to_string(workspace.join(METADATA_FILE)).ok().and_then(|t| serde_json::from_str::<WorkspaceMetadata>(&t).ok())
+        else {
+            continue;
+        };
+        let workspace_name = metadata.latest().and_then(|(_, s)| s.name.clone()).unwrap_or_default();
+        let item = |device: &str, agent: Agent, id: &str, title: &str, updated_at: &str| PruneItem {
+            plugin: plugin.clone(),
+            sync_id: metadata.sync_id.clone(),
+            workspace_name: workspace_name.clone(),
+            device: device.to_string(),
+            device_name: names.get(device).cloned().unwrap_or_else(|| device.to_string()),
+            agent,
+            id: id.to_string(),
+            title: title.to_string(),
+            updated_at: updated_at.to_string(),
+        };
+        for (device, section) in &metadata.devices {
+            for entry in section.sessions.iter().filter(|e| old(&e.updated_at)) {
+                items.push(item(device, entry.agent, &entry.id, &entry.title, &entry.updated_at));
+            }
+        }
+        for device in fs::read_dir(workspace.join("devices")).into_iter().flatten().flatten() {
+            let device_id = device.file_name().to_string_lossy().to_string();
+            for agent in fs::read_dir(device.path()).into_iter().flatten().flatten() {
+                for folder in fs::read_dir(agent.path()).into_iter().flatten().flatten() {
+                    let id = folder.file_name().to_string_lossy().to_string();
+                    let listed = metadata.devices.get(&device_id).is_some_and(|s| s.sessions.iter().any(|e| e.id == id));
+                    let Ok(manifest) = session::read_manifest(&folder.path()) else { continue };
+                    if !listed && old(&manifest.updated_at) {
+                        items.push(item(&device_id, manifest.agent, &id, &manifest.title, &manifest.updated_at));
+                    }
+                }
+            }
+        }
+    }
+    items.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+    items
+}
+
+/// Deletes `items` from the repository: their folders and their entries in the metadata. A
+/// computer that still has one does not upload it again (`write_device_files` skips it) unless it
+/// changes.
+fn delete_sessions(root: &Path, items: &[PruneItem]) -> Result<bool> {
+    let mut changed = false;
+    for item in items {
+        let Some(workspace) = workspace_dir(root, item.plugin.as_deref(), &item.sync_id) else { continue };
+        if !safe_segment(&item.device) || !safe_segment(&item.id) {
+            continue;
+        }
+        let metadata_path = workspace.join(METADATA_FILE);
+        if let Some(mut metadata) = fs::read_to_string(&metadata_path).ok().and_then(|t| serde_json::from_str::<WorkspaceMetadata>(&t).ok())
+        {
+            if let Some(section) = metadata.devices.get_mut(&item.device) {
+                let before = section.sessions.len();
+                section.sessions.retain(|e| !(e.id == item.id && e.agent == item.agent));
+                if section.sessions.len() != before {
+                    session::write_json(&metadata_path, &metadata)?;
+                    changed = true;
+                }
+            }
+        }
+        let folder = workspace.join("devices").join(&item.device).join(item.agent.id()).join(&item.id);
+        if folder.is_dir() {
+            fs::remove_dir_all(folder)?;
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
 fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncRequest, locate: &Locate) -> Result<usize> {
+    let cutoff = retention_cutoff(root);
     // Asking git about a folder takes a few commands: once per folder per pass.
     let mut projects: BTreeMap<PathBuf, ProjectRef> = BTreeMap::new();
     let mut project_of = |cwd: &Path| projects.entry(cwd.to_path_buf()).or_insert_with(|| project_of(cwd)).clone();
@@ -748,6 +894,10 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
                 }
                 continue;
             };
+            // Unchanged for longer than the repository keeps sessions: not uploaded again.
+            if crate::fsutil::mtime_ms(&transcript) < cutoff {
+                continue;
+            }
             if !safe_segment(&session.id) {
                 continue;
             }
@@ -892,6 +1042,7 @@ fn read_overview(root: &Path) -> Overview {
             name.strip_suffix(".json").filter(|id| safe_segment(id)).map(str::to_string)
         }));
     }
+    overview.retention_days = read_retention(root);
     for folder in folders {
         if let Some(meta) =
             fs::read_to_string(folder.join(METADATA_FILE)).ok().and_then(|t| serde_json::from_str::<WorkspaceMetadata>(&t).ok())

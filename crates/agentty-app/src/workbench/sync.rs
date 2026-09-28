@@ -76,6 +76,21 @@ pub(super) struct SyncUi {
     repos: Vec<GithubRepo>,
     looking_up: bool,
     url_input: Option<Entity<TextInput>>,
+    /// A retention period chosen here, sent with the next sync (the repository keeps it).
+    retention: Option<u32>,
+    /// "Custom" is open, with its days field.
+    retention_custom: bool,
+    /// Picked in Settings but not saved yet.
+    retention_draft: Option<u32>,
+    /// The settings sync switch as flipped in Settings, not saved yet.
+    settings_draft: Option<bool>,
+    /// Old sessions the last sync found, waiting for the user's OK in the popover.
+    prune_pending: Vec<bridge::PruneItem>,
+    /// Agreed to: deleted by the next sync.
+    prune_approved: Vec<bridge::PruneItem>,
+    /// "Later" was chosen for exactly these; asked again when the list changes.
+    prune_later: Vec<bridge::PruneItem>,
+    retention_input: Option<Entity<TextInput>>,
     new_repo_input: Option<Entity<TextInput>>,
     device_input: Option<(Entity<TextInput>, Subscription)>,
     connecting: bool,
@@ -117,6 +132,14 @@ impl Default for SyncUi {
             repos: Vec::new(),
             looking_up: false,
             url_input: None,
+            retention: None,
+            retention_custom: false,
+            retention_draft: None,
+            settings_draft: None,
+            prune_pending: Vec::new(),
+            prune_approved: Vec::new(),
+            prune_later: Vec::new(),
+            retention_input: None,
             new_repo_input: None,
             device_input: None,
             connecting: false,
@@ -377,6 +400,33 @@ impl Workbench {
         self.sync_soon(Scope::Some(HashSet::new()), cx);
     }
 
+    /// The retention period in effect: the one chosen here while it is on its way, else the
+    /// repository's.
+    fn retention_days(&self) -> u32 {
+        self.sync.retention.unwrap_or(self.sync.overview.retention_days).max(1)
+    }
+
+    /// Old sessions wait for the user's OK (and were not put off for later).
+    fn prune_waiting(&self) -> bool {
+        !self.sync.prune_pending.is_empty() && self.sync.prune_pending != self.sync.prune_later
+    }
+
+    fn approve_prune(&mut self, cx: &mut Context<Self>) {
+        self.sync.prune_approved = std::mem::take(&mut self.sync.prune_pending);
+        self.sync.prune_later.clear();
+        self.run_sync(Scope::All, cx);
+        cx.notify();
+    }
+
+    fn set_retention(&mut self, days: u32, cx: &mut Context<Self>) {
+        if days == 0 {
+            return;
+        }
+        self.sync.retention = Some(days);
+        self.run_sync(Scope::All, cx);
+        cx.notify();
+    }
+
     /// Whether a workspace has data in the sync repository (the delete dialog asks about it).
     pub(super) fn workspace_synced(&self, id: u64) -> bool {
         self.sync.config.connected() && self.sync.config.workspaces.contains_key(&self.sync_key(id)) && !self.sync_removed_elsewhere(id)
@@ -427,6 +477,8 @@ impl Workbench {
         }
         request.workspaces.append(&mut self.sync.removed);
         request.purge.append(&mut self.sync.purge);
+        request.retention = self.sync.retention;
+        request.prune = std::mem::take(&mut self.sync.prune_approved);
         request
     }
 
@@ -460,8 +512,12 @@ impl Workbench {
                         if let Some(incoming) = outcome.settings {
                             this.apply_synced_settings(incoming, cx);
                         }
+                        if this.sync.retention == Some(outcome.overview.retention_days) {
+                            this.sync.retention = None;
+                        }
                         this.sync.overview = outcome.overview;
                         this.sync.computer = outcome.computer;
+                        this.sync.prune_pending = outcome.prune_pending;
                         // With the ids handed out in this pass.
                         this.sync.config = bridge::load_config();
                         this.sync.status = Status::Synced;
@@ -867,6 +923,7 @@ impl Workbench {
             Status::Syncing => ("cloud-upload", Chrome::ACCENT),
             Status::Public => ("cloud-alert", Chrome::ERROR),
             Status::Error(_) => ("cloud-alert", Chrome::WARNING),
+            Status::Ready | Status::Synced if self.prune_waiting() => ("cloud-alert", Chrome::WARNING),
             Status::Ready | Status::Synced if !self.sync.pending.is_empty() => ("cloud-upload", Chrome::WARNING),
             Status::Ready => ("cloud", Chrome::MUTED),
             Status::Synced => ("cloud-check", Chrome::MUTED),
@@ -896,6 +953,74 @@ impl Workbench {
     }
 
     /// The sync icon left of the notifications.
+    fn render_prune_request(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let items = &self.sync.prune_pending;
+        let mut list = div().flex().flex_col().gap_0p5();
+        for item in items.iter().take(5) {
+            let when = agentty_bridge::sync::model::stamp_to_ms(&item.updated_at)
+                .map(|ms| super::tree_manager::ago(cx, (ms / 1000) as i64))
+                .unwrap_or_default();
+            let place = if item.workspace_name.is_empty() {
+                item.device_name.clone()
+            } else {
+                format!("{} · {}", item.workspace_name, item.device_name)
+            };
+            list = list.child(
+                div().flex().items_center().gap_2().child(crate::brand::avatar(item.agent.id(), 12.)).child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().truncate().t_caption().text_color(hex(Chrome::FOREGROUND)).child(item.title.clone()))
+                        .child(div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(format!("{place} · {when}"))),
+                ),
+            );
+        }
+        if items.len() > 5 {
+            list = list.child(div().t_caption().text_color(hex(Chrome::MUTED)).child(tf(
+                cx,
+                "sync.prune_more",
+                &[("n", &(items.len() - 5).to_string())],
+            )));
+        }
+        let later = items.clone();
+        div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .p_2()
+            .rounded_md()
+            .bg(hex_alpha(Chrome::WARNING, 0.12))
+            .child(div().flex().items_center().gap_2().child(icon("cloud-alert", IconSize::INLINE, hex(Chrome::WARNING))).child(
+                div().flex_1().min_w_0().t_small().text_color(hex(Chrome::FOREGROUND)).child(tf(
+                    cx,
+                    "sync.prune_ask",
+                    &[("n", &items.len().to_string()), ("days", &self.sync.overview.retention_days.to_string())],
+                )),
+            ))
+            .child(list)
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_1()
+                    .child(action_button(
+                        "sync-prune-later",
+                        t(cx, "sync.prune_later"),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.sync.prune_later = later.clone();
+                            cx.notify();
+                        }),
+                    ))
+                    .child(action_button(
+                        "sync-prune-delete",
+                        t(cx, "sync.prune_delete"),
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.approve_prune(cx)),
+                    )),
+            )
+    }
+
     pub(super) fn render_sync_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (glyph, color) = self.sync_look();
         let tooltip = self.sync_status_text(cx);
@@ -946,6 +1071,10 @@ impl Workbench {
         body = body.child(div().t_small().text_color(hex(status_color)).child(self.sync_status_text(cx)));
         if self.sync.status == Status::Public {
             body = body.child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.public_hint")));
+        }
+        // Deleting old sessions waits for an OK here.
+        if connected && self.prune_waiting() {
+            body = body.child(self.render_prune_request(cx));
         }
 
         if connected {
@@ -1440,7 +1569,81 @@ impl Workbench {
                 Remote::Git { .. } => div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.via_git_url")),
             };
             let repository = repository.child(row_with_hint(t(cx, "sync.transport"), t(cx, "sync.transport_hint"), transport));
+            // Old sessions: one period for the whole repository. A choice here is only a draft
+            // until Save: deleting from every computer is too much to follow a stray click.
+            let saved = self.retention_days();
+            let draft = self.sync.retention_draft.unwrap_or(saved);
+            let custom = self.sync.retention_custom || !RETENTION_PRESETS.contains(&draft);
+            let mut presets = div().flex().flex_wrap().justify_end().gap_1();
+            for preset in RETENTION_PRESETS {
+                presets = presets.child(chip(
+                    SharedString::from(format!("sync-retention-{preset}")),
+                    tf(cx, "sync.retention_days", &[("n", &preset.to_string())]),
+                    !custom && draft == preset,
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.sync.retention_custom = false;
+                        this.sync.retention_draft = Some(preset);
+                        cx.notify();
+                    }),
+                ));
+            }
+            presets = presets.child(chip(
+                "sync-retention-custom",
+                t(cx, "sync.retention_custom"),
+                custom,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.sync.retention_custom = true;
+                    cx.notify();
+                }),
+            ));
+            let mut controls = div().flex().items_center().gap_1();
+            let custom_input = custom.then(|| {
+                let input = Self::sync_text_input(&mut self.sync.retention_input, "", window, cx);
+                if input.read(cx).text().is_empty() {
+                    input.update(cx, |input, cx| input.set_text(draft.to_string(), cx));
+                }
+                input
+            });
+            if let Some(input) = &custom_input {
+                controls = controls
+                    .child(div().w(px(80.)).child(field(input.clone())))
+                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.retention_days_unit")));
+            }
+            let typed = custom_input.as_ref().map(|input| input.read(cx).text().trim().parse::<u32>().unwrap_or(0));
+            let unsaved = typed.unwrap_or(draft) != saved;
+            controls = controls.child(
+                action_button(
+                    "sync-retention-save",
+                    t(cx, "sync.retention_save"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        let days = match &custom_input {
+                            Some(input) => input.read(cx).text().trim().parse::<u32>().unwrap_or(0),
+                            None => this.sync.retention_draft.unwrap_or(saved),
+                        };
+                        if days == 0 || days > 3650 {
+                            this.show_toast(t(cx, "sync.retention_invalid"), cx);
+                            return;
+                        }
+                        if days == saved {
+                            return;
+                        }
+                        this.sync.retention_draft = None;
+                        this.set_retention(days, cx);
+                        this.show_toast(tf(cx, "sync.retention_saved", &[("n", &days.to_string())]), cx);
+                    }),
+                )
+                .when(!unsaved, |b| b.opacity(0.5)),
+            );
+            let retention = div().flex().flex_col().items_end().gap_1().child(presets).child(controls);
+            let repository =
+                repository.child(row_with_hint(t(cx, "sync.retention"), t(cx, "sync.retention_hint"), retention)).when(unsaved, |d| {
+                    d.child(div().flex().justify_end().t_caption().text_color(hex(Chrome::WARNING)).child(t(cx, "sync.retention_unsaved")))
+                });
+            // Like the retention period, the switch is a draft until Save: turning it on takes another
+            // computer's newer settings in place of this one's.
             let settings_on = self.sync.config.settings;
+            let settings_draft = self.sync.settings_draft.unwrap_or(settings_on);
+            let settings_unsaved = settings_draft != settings_on;
             let computer_id = bridge::machine_key();
             let copy_id = computer_id.clone();
             let kept = &self.sync.computer;
@@ -1487,15 +1690,48 @@ impl Workbench {
                 .child(row_with_hint(
                     t(cx, "sync.sync_settings"),
                     t(cx, "sync.sync_settings_hint"),
-                    switch(
-                        "sync-settings-toggle",
-                        settings_on,
-                        cx.listener(move |this, _: &ClickEvent, _, cx| this.set_sync_settings(!settings_on, cx)),
-                    ),
-                ));
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(switch(
+                            "sync-settings-toggle",
+                            settings_draft,
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.sync.settings_draft = Some(!settings_draft);
+                                cx.notify();
+                            }),
+                        ))
+                        .child(
+                            action_button(
+                                "sync-settings-save",
+                                t(cx, "sync.retention_save"),
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    let Some(on) = this.sync.settings_draft.take() else { return };
+                                    if on != this.sync.config.settings {
+                                        this.set_sync_settings(on, cx);
+                                        this.show_toast(t(cx, if on { "sync.settings_saved_on" } else { "sync.settings_saved_off" }), cx);
+                                    }
+                                    cx.notify();
+                                }),
+                            )
+                            .when(!settings_unsaved, |b| b.opacity(0.5)),
+                        ),
+                ))
+                .when(settings_unsaved, |d| {
+                    d.child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .t_caption()
+                            .text_color(hex(Chrome::WARNING))
+                            .child(t(cx, if settings_draft { "sync.settings_unsaved_on" } else { "sync.settings_unsaved_off" })),
+                    )
+                });
             let rules = section(t(cx, "sync.when"))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.when_body")))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.privacy_body")))
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.storage_body")))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.computer_id_body")));
             return div().flex().flex_col().child(repository).child(this_device).child(rules);
         }
@@ -1623,6 +1859,7 @@ impl Workbench {
         let rules = section(t(cx, "sync.when"))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.when_body")))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.privacy_body")))
+            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.storage_body")))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.computer_id_body")));
         div().flex().flex_col().child(setup.children(message)).child(rules)
     }
@@ -1675,6 +1912,9 @@ impl Workbench {
         eprintln!("sync: {}", self.sync.debug_state());
     }
 }
+
+/// Retention periods offered in Settings → Sync (days); any other is "Custom".
+const RETENTION_PRESETS: [u32; 4] = [30, 90, 180, 365];
 
 /// `1.2 MB`, `640 KB`, `12 B`.
 fn human_size(bytes: u64) -> String {

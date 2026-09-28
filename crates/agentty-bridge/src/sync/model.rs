@@ -20,6 +20,11 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const MARKER_FILE: &str = ".agentty-sync.json";
 pub const METADATA_FILE: &str = "sync_metadata.json";
 pub const MANIFEST_FILE: &str = "session.json";
+/// `retention.json`: how long a session is kept after it last changed, for the whole repository.
+pub const RETENTION_FILE: &str = "retention.json";
+/// When no computer chose a period yet.
+pub const DEFAULT_RETENTION_DAYS: u32 = 365;
+
 /// `removed/<workspace id>.json`: a workspace whose data was deleted from the repository.
 pub const REMOVED_DIR: &str = "removed";
 
@@ -35,6 +40,17 @@ pub struct Marker {
 
 impl Marker {
     pub const KIND: &'static str = "agentty-sync";
+}
+
+/// `retention.json`. One period for every computer: with one each, a computer keeping 30 days
+/// would delete what another keeping a year uploads again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Retention {
+    pub days: u32,
+    pub changed_at: String,
+    /// Device id of the computer that chose it.
+    pub changed_by: String,
 }
 
 /// `removed/<workspace id>.json`. Other computers that still have the workspace stop syncing it
