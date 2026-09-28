@@ -61,9 +61,11 @@ name = "agentty-bridge"
 version = "0.2.4"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "dirs 7.0.0",
+ "ring",
  "rustls",
  "rustls-platform-verifier",
  "security-framework",

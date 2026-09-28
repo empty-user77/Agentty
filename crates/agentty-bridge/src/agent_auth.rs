@@ -39,6 +39,8 @@ pub mod account {
     pub const CLAUDE_OAUTH_TOKEN: &str = "claude.oauth_token";
     pub const CLAUDE_BEDROCK_TOKEN: &str = "claude.bedrock_token";
     pub const CODEX_API_KEY: &str = "codex.api_key";
+
+    pub const ALL: [&str; 5] = [CLAUDE_API_KEY, CLAUDE_AUTH_TOKEN, CLAUDE_OAUTH_TOKEN, CLAUDE_BEDROCK_TOKEN, CODEX_API_KEY];
 }
 
 /// Every variable an auth method may set, so a method can clear the others' (the most specific

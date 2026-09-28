@@ -29,6 +29,13 @@ pub fn repo_root(path: &Path) -> Option<PathBuf> {
     git(path, &["rev-parse", "--show-toplevel"]).ok().map(|s| PathBuf::from(s.trim())).filter(|p| p.is_dir())
 }
 
+/// The branch checked out (`None` when detached) and the commit at `HEAD`.
+pub fn head(repo: &Path) -> Option<(Option<String>, String)> {
+    let commit = git(repo, &["rev-parse", "--verify", "-q", "HEAD"]).ok()?.trim().to_string();
+    let branch = git(repo, &["symbolic-ref", "--short", "-q", "HEAD"]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    Some((branch, commit))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FileChange {
     pub path: String,

@@ -359,7 +359,7 @@ pub fn exists(id: &str) -> bool {
 
 /// Claude Code stores transcripts under a directory named after the working directory with
 /// every character other than ASCII letters and digits replaced by `-`.
-fn project_dir_for(cwd: &Path) -> PathBuf {
+pub fn project_dir_for(cwd: &Path) -> PathBuf {
     let encoded: String = cwd.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
     projects_dir().join(encoded)
 }

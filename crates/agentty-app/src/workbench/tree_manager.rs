@@ -153,7 +153,7 @@ fn now_secs() -> i64 {
 }
 
 /// `3d ago`-style, from seconds since the epoch.
-fn ago(cx: &gpui::App, secs: i64) -> String {
+pub(super) fn ago(cx: &gpui::App, secs: i64) -> String {
     if secs <= 0 {
         return "—".into();
     }

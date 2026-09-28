@@ -21,6 +21,8 @@ pub enum AskAction {
     NewTree(super::worktrees::TreeRequest),
     /// Start it in the working tree another agent already works in.
     SameTree(super::worktrees::TreeRequest),
+    /// Take a session's newer copy from another computer and continue it.
+    ContinueSynced(Box<super::sync::SyncedSession>),
 }
 
 #[derive(Clone)]
@@ -82,6 +84,7 @@ impl Workbench {
             AskAction::Resume { session, compact } => self.resume_session_compacting(&session, compact, window, cx),
             AskAction::NewTree(request) => self.start_in_new_tree(request, window, cx),
             AskAction::SameTree(request) => self.start_in_same_tree(request, window, cx),
+            AskAction::ContinueSynced(entry) => self.continue_synced(*entry, None, window, cx),
         }
         cx.notify();
     }

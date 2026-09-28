@@ -45,17 +45,23 @@ pub enum SettingsSection {
     Shortcuts,
     /// Desktop notifications and messages to chat services.
     Notifications,
+    /// Workspaces and sessions synced through a private git repository.
+    Sync,
+    /// The whole configuration exported to a file and imported from one.
+    Backup,
     /// Helper tools on Windows / Linux (hidden on macOS).
     System,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 12] = [
         Self::General,
         Self::Project,
         Self::Accounts,
         Self::Notifications,
+        Self::Sync,
+        Self::Backup,
         Self::Appearance,
         Self::Browser,
         Self::Aliases,
@@ -82,6 +88,8 @@ impl SettingsSection {
             Self::Aliases => "settings.aliases",
             Self::Shortcuts => "settings.shortcuts",
             Self::Notifications => "settings.notifications",
+            Self::Sync => "settings.sync",
+            Self::Backup => "settings.backup",
             Self::System => "settings.system",
             Self::About => "settings.about",
         }
@@ -97,6 +105,8 @@ impl SettingsSection {
             Self::Aliases => "tag",
             Self::Shortcuts => "command",
             Self::Notifications => "bell",
+            Self::Sync => "cloud",
+            Self::Backup => "history",
             Self::System => "wrench",
             Self::About => "sparkles",
         }
@@ -484,8 +494,24 @@ pub(super) fn toggle(
     on: bool,
     change: impl Fn(&mut Settings) + 'static,
     cx: &mut Context<Workbench>,
-) -> impl IntoElement {
+) -> gpui::Stateful<Div> {
     let change = std::rc::Rc::new(change);
+    switch(
+        id,
+        on,
+        cx.listener(move |_, _: &ClickEvent, _, cx| {
+            let change = change.clone();
+            update_settings(cx, move |s| change(s));
+        }),
+    )
+}
+
+/// The on/off switch of [`toggle`], for a choice kept somewhere other than the settings.
+pub(super) fn switch(
+    id: &'static str,
+    on: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .w(px(36.))
@@ -497,10 +523,7 @@ pub(super) fn toggle(
         .items_center()
         .when(on, |d| d.justify_end())
         .px_0p5()
-        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-            let change = change.clone();
-            update_settings(cx, move |s| change(s));
-        }))
+        .on_click(on_click)
         .child(div().size(px(16.)).rounded_full().bg(hex(Chrome::BRIGHT)))
 }
 
@@ -1562,6 +1585,8 @@ impl Workbench {
             SettingsSection::Aliases => aliases.into_any_element(),
             SettingsSection::Shortcuts => render_shortcuts(cx).into_any_element(),
             SettingsSection::Notifications => self.render_notification_settings(window, cx).into_any_element(),
+            SettingsSection::Sync => self.render_sync_settings(window, cx).into_any_element(),
+            SettingsSection::Backup => self.render_backup_settings(window, cx).into_any_element(),
             SettingsSection::System => self.render_system_check(cx).into_any_element(),
             SettingsSection::Browser => self.render_browser_settings(window, cx).into_any_element(),
             SettingsSection::About => self.render_about(cx).into_any_element(),

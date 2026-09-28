@@ -26,9 +26,40 @@ fn project_paths() -> HashMap<String, String> {
     json["projects"].as_object().into_iter().flatten().filter_map(|(path, slug)| Some((slug.as_str()?.to_string(), path.clone()))).collect()
 }
 
+/// The folder Gemini CLI registered under project folder name `slug`.
+pub fn project_path(slug: &str) -> Option<String> {
+    project_paths().get(slug).cloned()
+}
+
+/// Id of the newest chat in `cwd` written after `since_ms` (Gemini runs as a command in a pane,
+/// so its session is found from its files).
+pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
+    find_recent_in(&tmp_dir(), &project_paths(), cwd, since_ms)
+}
+
+fn find_recent_in(tmp: &Path, projects: &HashMap<String, String>, cwd: &Path, since_ms: u64) -> Option<String> {
+    let cwd = cwd.to_string_lossy();
+    let mut chats: Vec<(u64, PathBuf)> =
+        files_in(tmp).into_iter().map(|p| (fsutil::mtime_ms(&p), p)).filter(|(t, _)| *t >= since_ms).collect();
+    chats.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    chats.into_iter().find_map(|(_, path)| {
+        let (meta, _) = read(&path).ok()?;
+        if meta["kind"].as_str().is_some_and(|k| k != "main") {
+            return None;
+        }
+        let slug = path.parent().and_then(Path::parent).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+        let dir = meta["directories"][0].as_str().map(str::to_string).or_else(|| slug.and_then(|s| projects.get(&s).cloned()))?;
+        (dir == cwd).then(|| meta["sessionId"].as_str().map(str::to_string)).flatten()
+    })
+}
+
 fn files() -> Vec<PathBuf> {
+    files_in(&tmp_dir())
+}
+
+fn files_in(tmp: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(projects) = std::fs::read_dir(tmp_dir()) else { return out };
+    let Ok(projects) = std::fs::read_dir(tmp) else { return out };
     for project in projects.flatten() {
         let Ok(chats) = std::fs::read_dir(project.path().join("chats")) else { continue };
         out.extend(chats.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "jsonl" || e == "json")));
@@ -153,5 +184,27 @@ mod tests {
         assert_eq!((info.title.as_str(), info.cwd.as_deref(), info.last_prompt.as_deref()), ("Greeting", Some("/work/app"), Some("hi")));
         assert_eq!(transcript(&file).unwrap().1.len(), 2);
         std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod find_recent_tests {
+    use super::*;
+
+    #[test]
+    fn the_newest_main_chat_of_the_folder_is_the_panes() {
+        let tmp = std::env::temp_dir().join(format!("agentty-gemini-recent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let chats = tmp.join("app").join("chats");
+        std::fs::create_dir_all(&chats).unwrap();
+        std::fs::write(chats.join("session-1.jsonl"), "{\"sessionId\":\"one\",\"kind\":\"main\",\"directories\":[\"/work/app\"]}\n")
+            .unwrap();
+        std::fs::write(chats.join("session-2.jsonl"), "{\"sessionId\":\"sub\",\"kind\":\"subagent\",\"directories\":[\"/work/app\"]}\n")
+            .unwrap();
+        let projects = HashMap::new();
+        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/app"), 0).as_deref(), Some("one"));
+        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/other"), 0), None);
+        assert_eq!(find_recent_in(&tmp, &projects, Path::new("/work/app"), u64::MAX), None);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

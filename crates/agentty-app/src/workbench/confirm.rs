@@ -24,6 +24,10 @@ pub struct CloseConfirm {
     pub trees: Vec<std::path::PathBuf>,
     /// "Also remove these working trees and their branches" (off unless ticked).
     pub remove_trees: bool,
+    /// The workspace has data in the sync repository: the dialog offers to delete it too.
+    pub synced: bool,
+    /// "Also delete sync data" (off unless ticked).
+    pub delete_sync: bool,
 }
 
 impl Workbench {
@@ -64,11 +68,14 @@ impl Workbench {
     /// tree of their own always ask: that is where the tree can go with them.
     pub(super) fn request_close(&mut self, target: CloseTarget, window: &mut Window, cx: &mut Context<Self>) {
         let trees = if settings(cx).ask_remove_trees { self.trees_left_behind(&target, cx) } else { Vec::new() };
-        if !settings(cx).confirm_close && trees.is_empty() {
+        // Removing a synced workspace always asks: whether its sync data goes too.
+        let synced = matches!(target, CloseTarget::Workspace(id) if self.workspace_synced(id));
+        if !settings(cx).confirm_close && trees.is_empty() && !synced {
             return self.perform_close(target, window, cx);
         }
         let removes_workspace = !matches!(target, CloseTarget::Workspace(_)) && self.empties_workspace(&target);
-        self.close_confirm = Some(CloseConfirm { target, dont_ask: false, removes_workspace, trees, remove_trees: false });
+        self.close_confirm =
+            Some(CloseConfirm { target, dont_ask: false, removes_workspace, trees, remove_trees: false, synced, delete_sync: false });
         cx.notify();
     }
 
@@ -130,8 +137,14 @@ impl Workbench {
                 // A tab closing as a whole is remembered with its splits, so "recently closed tabs"
                 // can put it back the way it was. Closing one split of a tab is not a tab closing.
                 self.remember_closed_tabs(&panes, cx);
+                let mut workspaces: Vec<u64> = panes.iter().filter_map(|p| self.locate(p)).map(|(w, _)| self.workspaces[w].id).collect();
+                workspaces.dedup();
                 for pane in panes {
                     self.remove_pane(&pane, cx);
+                }
+                // The sync repository records which sessions were closed.
+                for id in workspaces {
+                    self.sync_after_close(id, cx);
                 }
                 self.focus_active(window, cx);
                 cx.notify();
@@ -245,35 +258,80 @@ impl Workbench {
                                     ),
                             )
                         })
-                        .child(
-                            div()
-                                .id("close-confirm-dont-ask")
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .cursor_pointer()
-                                .t_small()
-                                .text_color(hex(Chrome::FOREGROUND))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    if let Some(confirm) = this.close_confirm.as_mut() {
-                                        confirm.dont_ask = !confirm.dont_ask;
-                                    }
-                                    cx.notify();
-                                }))
-                                .child(
-                                    div()
-                                        .size(px(14.))
-                                        .rounded_sm()
-                                        .border_1()
-                                        .border_color(hex(if dont_ask { Chrome::ACCENT } else { Chrome::OVERLAY_BORDER }))
-                                        .bg(if dont_ask { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .when(dont_ask, |d| d.child(crate::ui::icon("check", 11., hex(Chrome::BRIGHT)))),
-                                )
-                                .child(t(cx, "confirm.dont_ask")),
-                        )
+                        .when(confirm.synced, |d| {
+                            let delete = confirm.delete_sync;
+                            d.child(
+                                div()
+                                    .id("close-confirm-delete-sync")
+                                    .flex()
+                                    .items_start()
+                                    .gap_2()
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        if let Some(confirm) = this.close_confirm.as_mut() {
+                                            confirm.delete_sync = !confirm.delete_sync;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .mt(px(2.))
+                                            .size(px(14.))
+                                            .flex_shrink_0()
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hex(if delete { Chrome::ACCENT } else { Chrome::OVERLAY_BORDER }))
+                                            .bg(if delete { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .when(delete, |d| d.child(crate::ui::icon("check", 11., hex(Chrome::BRIGHT)))),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "confirm.delete_sync")))
+                                            .child(
+                                                div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "confirm.delete_sync_hint")),
+                                            ),
+                                    ),
+                            )
+                        })
+                        // Asked only because the workspace is synced: there is no question to silence.
+                        .when(settings(cx).confirm_close || !confirm.trees.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .id("close-confirm-dont-ask")
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .cursor_pointer()
+                                    .t_small()
+                                    .text_color(hex(Chrome::FOREGROUND))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        if let Some(confirm) = this.close_confirm.as_mut() {
+                                            confirm.dont_ask = !confirm.dont_ask;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .size(px(14.))
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hex(if dont_ask { Chrome::ACCENT } else { Chrome::OVERLAY_BORDER }))
+                                            .bg(if dont_ask { hex(Chrome::ACCENT) } else { hex_alpha(0, 0.) })
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .when(dont_ask, |d| d.child(crate::ui::icon("check", 11., hex(Chrome::BRIGHT)))),
+                                    )
+                                    .child(t(cx, "confirm.dont_ask")),
+                            )
+                        })
                         .child(
                             div()
                                 .pt_1()
@@ -302,6 +360,9 @@ impl Workbench {
                                                     s.confirm_close = false;
                                                 }
                                             });
+                                        }
+                                        if let (CloseTarget::Workspace(id), true) = (&confirm.target, confirm.delete_sync) {
+                                            this.sync_workspace_removed(*id, true, cx);
                                         }
                                         this.perform_close(confirm.target, window, cx);
                                         if confirm.remove_trees && !confirm.trees.is_empty() {

@@ -55,7 +55,7 @@ plugin.start();
 | `fetch(request)` —— HTTP 请求 | `net.request` |
 | `log(...)` —— 写入插件日志（stderr） | |
 
-协议里还有 `storage/get`、`storage/set` 和 `storage/keys`（插件自己文件夹里的一个 JSON 文档，不需要权限），以及从 API 版本 2 起的 `host/timer` 和 `pane/status`。Node 插件也可以自己写文件，但 storage 对两种插件的行为是一样的。见[协议](/docs/plugin-protocol)。
+协议里还有 `storage/get`、`storage/set` 和 `storage/keys`（插件自己文件夹里的一个 JSON 文档，不需要权限；打开设置同步后会同步到用户的其他电脑），以及从 API 版本 2 起的 `host/timer` 和 `pane/status`。Node 插件也可以自己写文件，但 storage 对两种插件的行为是一样的。见[协议](/docs/plugin-protocol)。
 
 `plugin.info` 保存 `initialize` 的数据，`plugin.context` 是最新的上下文。
 

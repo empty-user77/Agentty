@@ -243,7 +243,7 @@ that sends more than 240 messages a second is stopped as a runaway.
 ### Icons
 
 Use these names for `icon` fields (anything else shows a puzzle piece):
-`app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bell bell-dot blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud code columns-2 command container copy database download ellipsis external-link eye file-input file-plus file-text fold-vertical folder folder-open folder-plus git-branch git-commit-horizontal git-pull-request globe grip-vertical hammer hash history house image info key-round layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question message-square minimize-2 minus network notebook notebook-pen package panel-left-close panel-left-open pencil picture-in-picture-2 play plug plus power puzzle refresh-cw rocket rotate-cw rows-2 save scroll-text search send settings shield-alert smartphone sparkles square square-plus square-terminal star sticky-note tag terminal trash-2 undo-2 unlink upload users wand-sparkles workflow wrench x zap git-fork file lock lock-open graduation-cap x-twitter`.
+`app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bell bell-dot blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud cloud-alert cloud-check cloud-off cloud-upload code columns-2 command container copy database download ellipsis external-link eye file-input file-plus file-text fold-vertical folder folder-open folder-plus git-branch git-commit-horizontal git-pull-request globe grip-vertical hammer hash history house image info key-round laptop layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question message-square minimize-2 minus monitor network notebook notebook-pen package panel-left-close panel-left-open pencil picture-in-picture-2 play plug plus power puzzle refresh-cw rocket rotate-cw rows-2 save scroll-text search send settings shield-alert smartphone sparkles square square-plus square-terminal star sticky-note tag terminal trash-2 undo-2 unlink upload users wand-sparkles workflow wrench x zap git-fork file lock lock-open graduation-cap x-twitter`.
 
 ## Context
 
@@ -390,6 +390,11 @@ be served from a release of a repository, or from the same host as the list itse
 `storage/get`, `storage/set` and `storage/keys` need no permission: they are the plugin's own
 folder (`<data dir>/plugin-data/<id>/storage.json`, `0600`), up to 64 keys and a megabyte. A
 WebAssembly plugin has no files of its own, so that is how it remembers anything.
+This store is the plugin's settings: with **Sync settings** on, it follows the user to their other
+computers (the newest change wins) and it goes into a configuration export. Keep settings there —
+choices, environments, saved requests — and nothing tied to one computer; a store holding something
+shaped like a credential is kept on its computer instead. Files a plugin writes itself in
+`AGENTTY_PLUGIN_DATA` are not synced or exported.
 
 The store shows these before installing, and an update that asks for more than the installed
 version had says so and takes a second press; "Update all" leaves those out rather than taking

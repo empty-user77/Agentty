@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Session sync: workspaces and their agent sessions follow you between computers through a private
+  git repository you own, connected with the GitHub CLI or plain git (Settings → Sync). A workspace
+  syncs when its agents are idle — after a turn, when a tab closes, every five minutes when nothing
+  happens, or on demand — and the sync icon next to the notifications shows its sessions from every
+  computer. Continue one here, bring back sessions this computer does not have (Session history →
+  Synced), see branches when two computers went on separately, and hand a session's context to the
+  agent in front. Sync stops if the repository becomes public.
+- Settings → Backup: export your whole configuration — settings, custom commands, connectors,
+  database connections, agent sign-in methods, imported themes and installed plugins — to one file,
+  and import it on another computer or after a reinstall. Secrets can go along, encrypted with a
+  password you choose. Each import keeps the configuration from before it.
+- Sync settings (Settings → Sync): your settings, custom commands, connectors and imported themes
+  follow you between computers through the sync repository; the newest change wins. Secrets are
+  never synced.
+
 ## [0.2.4] - 2026-09-28
 
 ### Changed

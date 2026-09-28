@@ -55,7 +55,7 @@ plugin.start();
 | `fetch(request)` — HTTP リクエスト | `net.request` |
 | `log(...)` — プラグインログ（stderr）に記録 | |
 
-プロトコルには `storage/get`・`storage/set`・`storage/keys`（プラグイン自身のフォルダにある JSON ドキュメント、権限不要）もあり、API バージョン 2 からは `host/timer`・`pane/status` もあります。Node のプラグインは自分でファイルを書いてもかまいませんが、storage はどちらの種類でも同じように動きます。[プロトコル](/docs/plugin-protocol)を参照してください。
+プロトコルには `storage/get`・`storage/set`・`storage/keys`（プラグイン自身のフォルダにある JSON ドキュメント、権限不要。設定の同期をオンにすると、ユーザーの他のコンピュータにも同期されます）もあり、API バージョン 2 からは `host/timer`・`pane/status` もあります。Node のプラグインは自分でファイルを書いてもかまいませんが、storage はどちらの種類でも同じように動きます。[プロトコル](/docs/plugin-protocol)を参照してください。
 
 `plugin.info` には `initialize` のデータが、`plugin.context` には最新のコンテキストが入っています。
 
