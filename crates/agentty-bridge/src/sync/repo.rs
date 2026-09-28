@@ -107,8 +107,47 @@ fn run(mut command: Command, timeout: Duration) -> Result<(bool, String, String)
     Ok((status.success(), stdout, stderr))
 }
 
+/// The `PATH` for the programs sync runs (`git`, `gh`, and what they start: credential helpers,
+/// `ssh`). An app opened from the Dock or Finder gets only the system's `PATH`, not the one the
+/// user's shell sets up, so `gh` from Homebrew or `~/.local/bin` would not be found: this adds the
+/// login shell's `PATH` (asked once) and the folders tools are usually installed in.
+pub fn tool_path() -> std::ffi::OsString {
+    static PATH: std::sync::OnceLock<std::ffi::OsString> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let mut extra: Vec<PathBuf> = login_shell_path().map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        if !cfg!(windows) {
+            extra.extend(["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].map(PathBuf::from));
+            let home = crate::fsutil::home();
+            extra.extend([home.join(".local/bin"), home.join("bin")]);
+        }
+        process::merge_paths(&process::current_path(), &extra)
+    })
+    .clone()
+}
+
+/// `PATH` of the user's login shell (interactive too: `.zshrc` is where many installs add
+/// themselves). Unix only; `None` when the shell does not answer in time.
+fn login_shell_path() -> Option<String> {
+    if cfg!(windows) {
+        return None;
+    }
+    const MARKER: &str = "__agentty_sync_path__";
+    let shell = std::env::var("SHELL").ok().filter(|s| s.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
+    let mut command = Command::new(shell);
+    command.args(["-l", "-i", "-c", &format!("echo {MARKER}; printenv PATH")]).stdin(std::process::Stdio::null());
+    let (_, stdout, _) = run(command, Duration::from_secs(5)).ok()?;
+    let mut lines = stdout.lines().skip_while(|line| line.trim() != MARKER);
+    lines.nth(1).map(|path| path.trim().to_string()).filter(|path| path.contains('/'))
+}
+
+/// `name` on [`tool_path`].
+fn find_tool(name: &str) -> Option<PathBuf> {
+    process::which_in(name, &tool_path())
+}
+
 fn gh_command() -> Command {
-    let mut command = process::command(process::which("gh").unwrap_or_else(|| PathBuf::from("gh")));
+    let mut command = process::command(find_tool("gh").unwrap_or_else(|| PathBuf::from("gh")));
+    command.env("PATH", tool_path());
     // Never wait on a login prompt, and keep the CLI from paging or colouring.
     command.env("GH_PROMPT_DISABLED", "1").env("GH_PAGER", "cat").env("NO_COLOR", "1");
     command
@@ -126,7 +165,7 @@ fn gh(args: &[&str]) -> Result<String> {
 
 /// The GitHub account `gh` is signed in to, if any.
 pub fn gh_login() -> Option<String> {
-    process::which("gh")?;
+    find_tool("gh")?;
     gh(&["api", "user", "--jq", ".login"]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
@@ -235,7 +274,7 @@ pub fn github_repo_of(url: &str) -> Option<String> {
 pub fn visibility(remote: &Remote) -> Visibility {
     if let Some(repo) = match remote {
         Remote::Github { repo, .. } => Some(repo.clone()),
-        Remote::Git { url } => github_repo_of(url).filter(|_| process::which("gh").is_some()),
+        Remote::Git { url } => github_repo_of(url).filter(|_| find_tool("gh").is_some()),
     } {
         return match gh(&["repo", "view", &repo, "--json", "visibility", "--jq", ".visibility"]) {
             Ok(v) if v.trim().eq_ignore_ascii_case("PRIVATE") => Visibility::Private,
@@ -248,7 +287,8 @@ pub fn visibility(remote: &Remote) -> Visibility {
         // A local path or file:// URL: nobody else reads it.
         return if is_local(&remote.url()) { Visibility::Private } else { Visibility::Unknown };
     };
-    let mut command = process::command("git");
+    let mut command = process::command(find_tool("git").unwrap_or_else(|| PathBuf::from("git")));
+    command.env("PATH", tool_path());
     // No user or system config at all: a credential helper configured for that host (the Keychain,
     // `gh auth setup-git`) would sign the read in and make a private repository look public.
     // Never a file in a shared temp folder: another user could put a config there that runs a program.
@@ -335,10 +375,11 @@ impl Repo {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = process::command("git");
+        let mut command = process::command(find_tool("git").unwrap_or_else(|| PathBuf::from("git")));
+        command.env("PATH", tool_path());
         if self.remote.uses_gh() {
             // The path goes into a shell snippet git runs: one with a quote in it is not used.
-            if let Some(gh) = process::which("gh").filter(|p| !p.to_string_lossy().contains(['\'', '\n'])) {
+            if let Some(gh) = find_tool("gh").filter(|p| !p.to_string_lossy().contains(['\'', '\n'])) {
                 // An empty helper first clears any configured ones for this command only.
                 let helper = format!("credential.https://github.com.helper=!'{}' auth git-credential", gh.display());
                 command.args(["-c", "credential.https://github.com.helper=", "-c", &helper]);

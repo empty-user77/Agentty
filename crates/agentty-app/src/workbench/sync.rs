@@ -1600,10 +1600,13 @@ impl Workbench {
     }
 
     pub(super) fn render_sync_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        // As wide as the box it is put in (not as wide as its text), clipped to it: a long URL
+        // stays in its field instead of running over the button beside it.
         let field = |input: Entity<TextInput>| {
             div()
-                .flex_1()
+                .w_full()
                 .min_w_0()
+                .overflow_hidden()
                 .px_2()
                 .py_1()
                 .rounded_md()
@@ -2005,6 +2008,13 @@ impl Workbench {
             "connect" => self.connect_sync(Remote::Git { url: rest.trim().to_string() }, cx),
             // `owner/name`, as picked from the gh list.
             "connect-gh" => self.connect_github(rest.trim().to_string(), cx),
+            // `url <text>`: the git URL setup with its field filled in, as typed.
+            "url" => {
+                self.sync.method = Method::Url;
+                let input = Self::sync_text_input(&mut self.sync.url_input, "git@github.com:you/agentty-sync.git", window, cx);
+                input.update(cx, |input, cx| input.set_text(rest.trim().to_string(), cx));
+                cx.notify();
+            }
             "transport" => self.set_transport(rest.trim() == "ssh", cx),
             "settings" => self.set_sync_settings(rest.trim() == "on", cx),
             "now" => self.sync_now(cx),
