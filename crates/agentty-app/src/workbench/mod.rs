@@ -4085,6 +4085,21 @@ impl Workbench {
                     }
                 }
             }
+            // `plugin-input <element> [text]`: the user in a field of the open plugin panel, with this
+            // on screen — as typing it would leave it (focused, `change` after the pause). Prints
+            // what each field of the panel shows.
+            "plugin-input" => {
+                let (element, text) = argument.split_once(' ').unwrap_or((argument, ""));
+                if let Some(field) = self.plugin_inputs.iter().find(|((_, id), _)| id == element).map(|(_, field)| field.input.clone()) {
+                    field.update(cx, |input, cx| {
+                        input.focus_and_select_all(window, cx);
+                        input.set_text(text.to_string(), cx);
+                    });
+                }
+                let shown: Vec<String> =
+                    self.plugin_inputs.iter().map(|((_, id), field)| format!("{id}={:?}", field.input.read(cx).text())).collect();
+                eprintln!("plugin-input: {}", shown.join(" "));
+            }
             // `plugin-event <plugin> <element> <event> [value]`: what a click or a keystroke in a
             // plugin's panel sends, without the mouse. `plugin-event <plugin> <list> action
             // <item>/<action>` presses a button on a list row.
