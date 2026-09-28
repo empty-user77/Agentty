@@ -184,10 +184,36 @@ pub struct SyncRequest {
 /// What the repository holds, for the sync popover. Read from the clone, no network.
 #[derive(Debug, Clone, Default)]
 pub struct Overview {
+    /// One per Agentty data folder that synced here, newest first. Several can share a computer
+    /// (a reinstall, a second app): `computers` counts those once.
     pub devices: Vec<DeviceInfo>,
     pub workspaces: Vec<WorkspaceMetadata>,
     /// Ids of workspaces whose data was deleted from the repository ("Also delete sync data").
     pub removed: Vec<String>,
+}
+
+impl Overview {
+    /// One device per computer (the one that synced last), newest first. A device written before
+    /// machine keys existed joins the computer of the same name that has one.
+    pub fn computers(&self) -> Vec<DeviceInfo> {
+        let keyed: BTreeMap<String, String> =
+            self.devices.iter().filter(|d| !d.machine.is_empty()).map(|d| (d.name.clone(), d.machine.clone())).collect();
+        let mut seen: Vec<String> = Vec::new();
+        let mut out = Vec::new();
+        // `devices` is newest first, so the first of each computer is its latest.
+        for device in &self.devices {
+            let key = if device.machine.is_empty() {
+                keyed.get(&device.name).cloned().unwrap_or_else(|| device.computer_key())
+            } else {
+                device.machine.clone()
+            };
+            if !seen.contains(&key) {
+                seen.push(key);
+                out.push(DeviceInfo { machine: device.machine.clone(), ..device.clone() });
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -197,6 +223,8 @@ pub struct SyncOutcome {
     pub sessions_uploaded: usize,
     pub overview: Overview,
     pub at: String,
+    /// What this computer keeps in the repository after the pass.
+    pub computer: ComputerStats,
 }
 
 /// One sync pass: fetch, write this device's files, commit, push; again if another device pushed
@@ -217,6 +245,7 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
     // Ids given out in this pass are kept even when the push failed: the next pass reuses them.
     let assigned: Vec<(String, String)> =
         request.workspaces.iter().filter_map(|w| config.workspaces.get(&w.local_key).map(|id| (w.local_key.clone(), id.clone()))).collect();
+    let outcome = outcome.map(|o| SyncOutcome { computer: stats_in(&repo.dir, &this_computer_devices(&o.overview, &config)), ..o });
     let at = outcome.as_ref().ok().map(|o| o.at.clone());
     let _ = update_config(|c| {
         for (key, id) in assigned {
@@ -242,11 +271,44 @@ pub struct Locate {
     /// Whether the agent already knows the project folder a restored transcript goes into
     /// (`relative` under its root, for work dir `cwd`).
     pub knows_folder: KnowsFolder,
+    /// This computer's key (`machine_key`).
+    pub machine: String,
 }
 
 impl Locate {
     pub fn agents() -> Self {
-        Self { transcript: Box::new(transcript_of), root: Box::new(agent_root), knows_folder: Box::new(agent_knows_folder) }
+        Self {
+            transcript: Box::new(transcript_of),
+            root: Box::new(agent_root),
+            knows_folder: Box::new(agent_knows_folder),
+            machine: machine_key(),
+        }
+    }
+}
+
+/// This computer, as the same key from every Agentty on it: a random id made on first use and
+/// kept in `~/.agentty/computer-id`. Deliberately outside the data folder (`AGENTTY_DATA_DIR`), so
+/// a dev build, a test copy or a second data folder on this computer counts as the same computer;
+/// nothing about the hardware is read. Deleting `~/.agentty` makes a new one (Settings → Sync says
+/// so). Empty when it can be neither read nor written.
+pub fn machine_key() -> String {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| computer_id_in(&crate::fsutil::home().join(".agentty"))).clone()
+}
+
+/// The id in `dir/computer-id`, made when missing.
+fn computer_id_in(dir: &Path) -> String {
+    let path = dir.join("computer-id");
+    if let Ok(text) = fs::read_to_string(&path) {
+        let id = text.trim();
+        if safe_segment(id) {
+            return id.to_string();
+        }
+    }
+    let id = new_id();
+    match crate::fsutil::write_private(&path, format!("{id}\n").as_bytes()) {
+        Ok(()) => id,
+        Err(_) => String::new(),
     }
 }
 
@@ -286,11 +348,23 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
             if request.workspaces.len() == 1 { "" } else { "s" }
         );
         if !repo.commit_all(&message, &author)? {
-            return Ok(SyncOutcome { pushed: false, sessions_uploaded: 0, overview: read_overview(&repo.dir), at: now_stamp() });
+            return Ok(SyncOutcome {
+                pushed: false,
+                sessions_uploaded: 0,
+                overview: read_overview(&repo.dir),
+                at: now_stamp(),
+                ..Default::default()
+            });
         }
         match repo.push() {
             Ok(Pushed::Done) => {
-                return Ok(SyncOutcome { pushed: true, sessions_uploaded: uploaded, overview: read_overview(&repo.dir), at: now_stamp() });
+                return Ok(SyncOutcome {
+                    pushed: true,
+                    sessions_uploaded: uploaded,
+                    overview: read_overview(&repo.dir),
+                    at: now_stamp(),
+                    ..Default::default()
+                });
             }
             Ok(Pushed::Rejected) => last_error = Some("another device kept pushing; try again".to_string()),
             Err(err) => return Err(err.into()),
@@ -302,6 +376,78 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
 /// What the clone holds now, without contacting the remote.
 pub fn overview() -> Overview {
     read_overview(&clone_dir())
+}
+
+/// What this computer keeps in the repository (every Agentty on it), for Settings → Sync.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComputerStats {
+    pub workspaces: usize,
+    pub sessions: usize,
+    /// Transcript chunks and side files.
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// Counted in the clone, no network.
+pub fn computer_stats() -> ComputerStats {
+    let root = clone_dir();
+    stats_in(&root, &this_computer_devices(&read_overview(&root), &load_config()))
+}
+
+/// This app's device and the others on this computer.
+fn this_computer_devices(overview: &Overview, config: &SyncConfig) -> Vec<String> {
+    let machine = machine_key();
+    let mut devices: Vec<String> =
+        overview.devices.iter().filter(|d| !machine.is_empty() && d.machine == machine).map(|d| d.id.clone()).collect();
+    if !devices.contains(&config.device_id) {
+        devices.push(config.device_id.clone());
+    }
+    devices
+}
+
+fn stats_in(root: &Path, devices: &[String]) -> ComputerStats {
+    let mut stats = ComputerStats::default();
+    let mut workspaces: Vec<PathBuf> = fs::read_dir(root.join("workspace")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+    for plugin in fs::read_dir(root.join("plugin")).into_iter().flatten().flatten() {
+        workspaces.extend(fs::read_dir(plugin.path()).into_iter().flatten().flatten().map(|e| e.path()));
+    }
+    for workspace in workspaces.iter().filter(|p| p.is_dir()) {
+        let mut here = false;
+        for device in devices.iter().filter(|d| safe_segment(d)) {
+            for agent in fs::read_dir(workspace.join("devices").join(device)).into_iter().flatten().flatten() {
+                for session in fs::read_dir(agent.path()).into_iter().flatten().flatten() {
+                    if !session.path().join(MANIFEST_FILE).is_file() {
+                        continue;
+                    }
+                    here = true;
+                    stats.sessions += 1;
+                    let mut files = Vec::new();
+                    all_files(&session.path(), 4, &mut files);
+                    for file in files.iter().filter(|f| f.file_name().is_some_and(|n| n != MANIFEST_FILE)) {
+                        stats.files += 1;
+                        stats.bytes += fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+                    }
+                }
+            }
+        }
+        if here {
+            stats.workspaces += 1;
+        }
+    }
+    stats
+}
+
+fn all_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth > 0 {
+                all_files(&path, depth - 1, out);
+            }
+        } else {
+            out.push(path);
+        }
+    }
 }
 
 /// Result of connecting to a repository.
@@ -332,7 +478,7 @@ pub fn connect(remote: Remote) -> Result<Connected, SyncError> {
     // Saved now, so the device id written into the repository is the one this computer keeps.
     let config = update_config(|c| c.clone())?;
     let outcome = if repo.dir.join(MARKER_FILE).is_file() {
-        Connected::Joined { devices: read_overview(&repo.dir).devices.len() }
+        Connected::Joined { devices: read_overview(&repo.dir).computers().len() }
     } else if repo.is_empty_or_readme_only() {
         repo.reset_to_remote()?;
         initialize(&repo.dir, &config.device_id)?;
@@ -647,6 +793,7 @@ fn write_device_files(root: &Path, config: &mut SyncConfig, request: &SyncReques
     let device = DeviceInfo {
         id: config.device_id.clone(),
         name: config.device_name.clone(),
+        machine: locate.machine.clone(),
         os: std::env::consts::OS.into(),
         app_version: request.app_version.clone(),
         last_sync_at: now,

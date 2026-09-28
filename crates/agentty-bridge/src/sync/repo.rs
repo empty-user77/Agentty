@@ -144,12 +144,63 @@ impl GithubRepo {
     }
 }
 
-/// The signed-in account's repositories, private ones first.
+/// The signed-in account's private repositories that sync can use: empty ones (nothing but a
+/// README, a license or git settings) and ones already set up as a sync repository. One GraphQL
+/// query per hundred repositories looks at each one's top folder.
 pub fn gh_repos() -> Result<Vec<GithubRepo>> {
-    let json = gh(&["repo", "list", "--limit", "200", "--json", "nameWithOwner,visibility"])?;
-    let mut repos: Vec<GithubRepo> = serde_json::from_str(&json).context("unexpected output from gh repo list")?;
-    repos.sort_by_key(|r| (!r.is_private(), r.name_with_owner.to_lowercase()));
+    let query = format!(
+        "query($endCursor: String) {{ viewer {{ repositories(first: 100, after: $endCursor, ownerAffiliations: [OWNER], privacy: PRIVATE) {{ \
+         nodes {{ nameWithOwner visibility isEmpty marker: object(expression: \"HEAD:{marker}\") {{ __typename }} \
+         root: object(expression: \"HEAD:\") {{ ... on Tree {{ entries {{ name }} }} }} }} \
+         pageInfo {{ hasNextPage endCursor }} }} }} }}",
+        marker = super::model::MARKER_FILE
+    );
+    let lines =
+        gh(&["api", "graphql", "--paginate", "-f", &format!("query={query}"), "--jq", ".data.viewer.repositories.nodes[] | tojson"])?;
+    let mut repos = sync_candidates(&lines)?;
+    repos.sort_by_key(|r| r.name_with_owner.to_lowercase());
     Ok(repos)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepoNode {
+    name_with_owner: String,
+    visibility: String,
+    is_empty: bool,
+    marker: Option<serde_json::Value>,
+    root: Option<RepoTree>,
+}
+
+#[derive(Deserialize)]
+struct RepoTree {
+    #[serde(default)]
+    entries: Vec<TreeEntry>,
+}
+
+#[derive(Deserialize)]
+struct TreeEntry {
+    name: String,
+}
+
+/// The repositories of `gh api graphql` output (one JSON object per line) that sync can use.
+fn sync_candidates(lines: &str) -> Result<Vec<GithubRepo>> {
+    let mut repos = Vec::new();
+    for line in lines.lines().filter(|l| !l.trim().is_empty()) {
+        let node: RepoNode = serde_json::from_str(line).context("unexpected output from gh api graphql")?;
+        let set_up = node.marker.is_some();
+        let empty = node.is_empty || node.root.is_some_and(|tree| tree.entries.iter().all(|e| setup_file(&e.name)));
+        if node.visibility.eq_ignore_ascii_case("PRIVATE") && (set_up || empty) {
+            repos.push(GithubRepo { name_with_owner: node.name_with_owner, visibility: node.visibility });
+        }
+    }
+    Ok(repos)
+}
+
+/// Files a new repository may start with that do not keep it from being used for sync.
+fn setup_file(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name.starts_with("readme") || name.starts_with("license") || name == ".gitignore" || name == ".gitattributes"
 }
 
 /// Creates a private repository for the sync and returns its `owner/name`.
@@ -421,8 +472,8 @@ impl Repo {
     pub fn is_empty_or_readme_only(&self) -> bool {
         let Ok(entries) = std::fs::read_dir(&self.dir) else { return true };
         entries.flatten().all(|e| {
-            let name = e.file_name().to_string_lossy().to_lowercase();
-            name == ".git" || name.starts_with("readme") || name.starts_with("license") || name == ".gitignore" || name == ".gitattributes"
+            let name = e.file_name().to_string_lossy().to_string();
+            name == ".git" || setup_file(&name)
         })
     }
 }
@@ -441,6 +492,20 @@ pub fn private_dir(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_empty_or_sync_repositories_are_offered() {
+        let lines = [
+            r#"{"nameWithOwner":"me/sync","visibility":"PRIVATE","isEmpty":false,"marker":{"__typename":"Blob"},"root":{"entries":[{"name":"devices"}]}}"#,
+            r#"{"nameWithOwner":"me/new","visibility":"PRIVATE","isEmpty":true,"marker":null,"root":null}"#,
+            r#"{"nameWithOwner":"me/readme","visibility":"PRIVATE","isEmpty":false,"marker":null,"root":{"entries":[{"name":"README.md"},{"name":"LICENSE"},{"name":".gitignore"}]}}"#,
+            r#"{"nameWithOwner":"me/app","visibility":"PRIVATE","isEmpty":false,"marker":null,"root":{"entries":[{"name":"README.md"},{"name":"src"}]}}"#,
+            r#"{"nameWithOwner":"me/open","visibility":"PUBLIC","isEmpty":true,"marker":null,"root":null}"#,
+        ]
+        .join("\n");
+        let names: Vec<String> = sync_candidates(&lines).unwrap().into_iter().map(|r| r.name_with_owner).collect();
+        assert_eq!(names, ["me/sync", "me/new", "me/readme"]);
+    }
 
     #[test]
     fn github_urls_name_their_repository() {

@@ -56,9 +56,24 @@ pub struct Removed {
 pub struct DeviceInfo {
     pub id: String,
     pub name: String,
+    /// The computer it runs on (`~/.agentty/computer-id`), the same for every Agentty and data
+    /// folder there. Empty from versions that did not write it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub machine: String,
     pub os: String,
     pub app_version: String,
     pub last_sync_at: String,
+}
+
+impl DeviceInfo {
+    /// What tells computers apart: the machine key, or the name for devices written before it.
+    pub fn computer_key(&self) -> String {
+        if self.machine.is_empty() {
+            format!("name:{}", self.name)
+        } else {
+            self.machine.clone()
+        }
+    }
 }
 
 /// What became of a workspace on a device.

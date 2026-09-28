@@ -45,6 +45,7 @@ fn locate(home: &Path) -> Locate {
         }),
         root: Box::new(move |agent| root.join(agent.id())),
         knows_folder: Box::new(|_, _, _| true),
+        machine: "machine-test".into(),
     }
 }
 
@@ -284,6 +285,65 @@ fn a_session_without_a_title_keeps_the_one_it_had() {
     leaky.sessions[0].title = format!("deploy with {}", ["ghp_", &"Z".repeat(36)].concat());
     let outcome = run(&repo, &mut a.clone(), &SyncRequest { workspaces: vec![leaky], ..Default::default() }, &locate(&home)).unwrap();
     assert_eq!(outcome.overview.workspaces[0].devices["dev-a"].sessions[0].title, "deploy with ghp_***");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn every_agentty_on_one_computer_counts_once() {
+    let device = |id: &str, name: &str, machine: &str, at: &str| DeviceInfo {
+        id: id.into(),
+        name: name.into(),
+        machine: machine.into(),
+        os: "macos".into(),
+        app_version: "0.2.4".into(),
+        last_sync_at: at.into(),
+    };
+    let overview = Overview {
+        devices: vec![
+            device("dev-new", "Office", "m-office", "2026-09-28T03:00:00.000Z"),
+            device("dev-test", "Office", "m-office", "2026-09-28T02:00:00.000Z"),
+            device("dev-home", "Home", "m-home", "2026-09-28T01:00:00.000Z"),
+            // Written before machine keys: joins the computer of the same name.
+            device("dev-old", "Office", "", "2026-09-27T01:00:00.000Z"),
+            device("dev-laptop", "Laptop", "", "2026-09-26T01:00:00.000Z"),
+        ],
+        ..Default::default()
+    };
+    let ids: Vec<String> = overview.computers().into_iter().map(|d| d.id).collect();
+    assert_eq!(ids, ["dev-new", "dev-home", "dev-laptop"]);
+}
+
+#[test]
+fn what_this_computer_keeps_is_counted() {
+    let root = temp("stats");
+    let url = bare(&root.join("remote.git"));
+    let home = root.join("home");
+    fs::create_dir_all(home.join("claude")).unwrap();
+    fs::write(home.join("claude/s1.jsonl"), "{\"n\":1}\n").unwrap();
+    fs::write(home.join("claude/s2.jsonl"), "{\"n\":1}\n").unwrap();
+    let a = device("dev-a", "A", &url);
+    let repo = Repo::new(root.join("clone"), a.remote.clone().unwrap(), "main");
+    repo.ensure_clone().unwrap();
+    let request = SyncRequest { workspaces: vec![workspace("ws", &root, &["s1", "s2"])], ..Default::default() };
+    run(&repo, &mut a.clone(), &request, &locate(&home)).unwrap();
+    fs::write(home.join("claude/s1.jsonl"), "{\"n\":1}\n{\"n\":2}\n").unwrap();
+    run(&repo, &mut a.clone(), &request, &locate(&home)).unwrap();
+    let stats = stats_in(&repo.dir, &["dev-a".to_string()]);
+    assert_eq!(stats, ComputerStats { workspaces: 1, sessions: 2, files: 3, bytes: 8 + 8 + 8 });
+    assert_eq!(stats_in(&repo.dir, &["dev-b".to_string()]), ComputerStats::default());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_computer_id_is_made_once_and_kept() {
+    let root = temp("computer-id");
+    let first = computer_id_in(&root);
+    assert!(!first.is_empty());
+    assert_eq!(computer_id_in(&root), first);
+    assert_eq!(fs::read_to_string(root.join("computer-id")).unwrap().trim(), first);
+    // Deleting the folder makes a new one.
+    fs::remove_dir_all(&root).unwrap();
+    assert_ne!(computer_id_in(&root), first);
     let _ = fs::remove_dir_all(root);
 }
 

@@ -13,7 +13,7 @@ use crate::i18n::{t, tf};
 use crate::launch::LaunchSpec;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::{action_button, chip, icon, now_ms, popover, IconSize, TypeScale};
+use crate::ui::{action_button, action_button_with_icon, chip, icon, now_ms, popover, IconSize, TypeScale};
 use agentty_bridge::model::Agent;
 use agentty_bridge::sync::model::{ParentRef, ProjectRef, TreeNode, WorkspaceState};
 use agentty_bridge::sync::repo::{GithubRepo, Remote};
@@ -61,6 +61,8 @@ pub(super) struct SyncUi {
     pending: HashSet<u64>,
     pub(super) popover_open: bool,
     overview: Overview,
+    /// What this computer keeps in the repository (Settings → Sync).
+    computer: bridge::ComputerStats,
     last_auto_ms: u64,
     debounce: Option<Task<()>>,
     /// Workspaces waiting to be synced by the debounced trigger (`None`: all).
@@ -95,6 +97,7 @@ impl Default for SyncUi {
         };
         Self {
             overview: if config.connected() { bridge::overview() } else { Overview::default() },
+            computer: if config.connected() { bridge::computer_stats() } else { Default::default() },
             config,
             status,
             running: false,
@@ -180,7 +183,7 @@ impl SyncUi {
             "pending": self.pending.len(),
             "connected": self.config.remote.as_ref().map(|r| r.label()),
             "workspaces": self.overview.workspaces.len(),
-            "devices": self.overview.devices.len(),
+            "devices": self.overview.computers().len(),
             "connecting": self.connecting,
             "message": self.message.as_ref().map(|(text, error)| serde_json::json!({ "text": text, "error": error })),
         })
@@ -451,6 +454,7 @@ impl Workbench {
                 match result {
                     Ok(outcome) => {
                         this.sync.overview = outcome.overview;
+                        this.sync.computer = outcome.computer;
                         // With the ids handed out in this pass.
                         this.sync.config = bridge::load_config();
                         this.sync.status = Status::Synced;
@@ -1027,10 +1031,13 @@ impl Workbench {
             }
 
             // Devices.
-            if !self.sync.overview.devices.is_empty() {
+            // One row per computer: every Agentty on this one (a reinstall, a dev build) is "this computer".
+            let computers = self.sync.overview.computers();
+            if !computers.is_empty() {
                 let mut devices = div().flex().flex_col().gap_0p5();
-                for device in &self.sync.overview.devices {
-                    let here = device.id == self.sync.config.device_id;
+                let this_machine = bridge::machine_key();
+                for device in &computers {
+                    let here = device.id == self.sync.config.device_id || (!this_machine.is_empty() && device.machine == this_machine);
                     let when = agentty_bridge::sync::model::stamp_to_ms(&device.last_sync_at)
                         .map(|ms| super::tree_manager::ago(cx, (ms / 1000) as i64))
                         .unwrap_or_default();
@@ -1118,10 +1125,20 @@ impl Workbench {
     // -- Settings → Sync -------------------------------------------------------------------------
 
     fn look_up_github(&mut self, cx: &mut Context<Self>) {
-        if self.sync.looking_up || self.sync.gh_login.is_some() {
+        if self.sync.gh_login.is_some() {
+            return;
+        }
+        self.refresh_github(cx);
+    }
+
+    /// Asks gh again for the account and its repositories (the refresh button); the list shown
+    /// stays until the new one arrives.
+    fn refresh_github(&mut self, cx: &mut Context<Self>) {
+        if self.sync.looking_up {
             return;
         }
         self.sync.looking_up = true;
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let (login, repos) = cx
                 .background_spawn(async move {
@@ -1241,6 +1258,7 @@ impl Workbench {
                     Ok(()) => {
                         this.sync.config = bridge::load_config();
                         this.sync.overview = Overview::default();
+                        this.sync.computer = Default::default();
                         this.sync.status = Status::Off;
                         this.sync.pending.clear();
                         this.sync.message = Some((t(cx, "sync.disconnected").to_string(), false));
@@ -1356,14 +1374,53 @@ impl Workbench {
                 Remote::Git { .. } => div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.via_git_url")),
             };
             let repository = repository.child(row_with_hint(t(cx, "sync.transport"), t(cx, "sync.transport_hint"), transport));
-            let this_device = section(t(cx, "sync.device")).child(row_with_hint(
-                t(cx, "sync.device_name"),
-                t(cx, "sync.device_name_hint"),
-                div().w(px(220.)).child(field(device)),
-            ));
+            let computer_id = bridge::machine_key();
+            let copy_id = computer_id.clone();
+            let kept = &self.sync.computer;
+            let kept_text = tf(
+                cx,
+                "sync.computer_kept_value",
+                &[
+                    ("workspaces", &kept.workspaces.to_string()),
+                    ("sessions", &kept.sessions.to_string()),
+                    ("files", &kept.files.to_string()),
+                    ("size", &human_size(kept.bytes)),
+                ],
+            );
+            let this_device = section(t(cx, "sync.device"))
+                .child(row_with_hint(t(cx, "sync.device_name"), t(cx, "sync.device_name_hint"), div().w(px(220.)).child(field(device))))
+                .child(row_with_hint(
+                    t(cx, "sync.computer_id"),
+                    t(cx, "sync.computer_id_hint"),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .t_small()
+                                .font_family(crate::settings::BUNDLED_FONT)
+                                .text_color(hex(Chrome::FOREGROUND))
+                                .child(computer_id),
+                        )
+                        .child(action_button(
+                            "sync-copy-computer-id",
+                            t(cx, "input.copy"),
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_id.clone()));
+                                this.show_toast(t(cx, "sync.computer_id_copied"), cx);
+                            }),
+                        )),
+                ))
+                .child(row_with_hint(
+                    t(cx, "sync.computer_kept"),
+                    t(cx, "sync.computer_kept_hint"),
+                    div().t_small().text_color(hex(Chrome::FOREGROUND)).child(kept_text),
+                ));
             let rules = section(t(cx, "sync.when"))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.when_body")))
-                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.privacy_body")));
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.privacy_body")))
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.computer_id_body")));
             return div().flex().flex_col().child(repository).child(this_device).child(rules);
         }
 
@@ -1414,7 +1471,27 @@ impl Workbench {
                         ),
                     ));
                     let private: Vec<GithubRepo> = self.sync.repos.iter().filter(|r| r.is_private()).cloned().collect();
-                    if !private.is_empty() {
+                    let refreshing = self.sync.looking_up;
+                    setup = setup.child(
+                        div()
+                            .pt_1()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.pick_repo")))
+                            .child(
+                                action_button_with_icon(
+                                    "sync-repos-refresh",
+                                    "refresh-cw",
+                                    t(cx, if refreshing { "sync.refreshing" } else { "sync.refresh_repos" }),
+                                    cx.listener(|this, _: &ClickEvent, _, cx| this.refresh_github(cx)),
+                                )
+                                .when(refreshing, |b| b.opacity(0.5)),
+                            ),
+                    );
+                    if private.is_empty() {
+                        setup = setup.child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.no_repos")));
+                    } else {
                         let mut list = div().flex().flex_col().gap_0p5().max_h(px(240.)).id("sync-repos").overflow_y_scroll();
                         for (index, repo) in private.into_iter().enumerate() {
                             let name = repo.name_with_owner.clone();
@@ -1437,8 +1514,7 @@ impl Workbench {
                                     })),
                             );
                         }
-                        setup =
-                            setup.child(div().pt_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.pick_repo"))).child(list);
+                        setup = setup.child(list);
                     }
                 }
             },
@@ -1470,7 +1546,8 @@ impl Workbench {
         }
         let rules = section(t(cx, "sync.when"))
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.when_body")))
-            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.privacy_body")));
+            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.privacy_body")))
+            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.computer_id_body")));
         div().flex().flex_col().child(setup.children(message)).child(rules)
     }
 
@@ -1519,6 +1596,22 @@ impl Workbench {
             _ => {}
         }
         eprintln!("sync: {}", self.sync.debug_state());
+    }
+}
+
+/// `1.2 MB`, `640 KB`, `12 B`.
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 

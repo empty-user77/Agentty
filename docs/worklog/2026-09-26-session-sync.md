@@ -53,6 +53,10 @@ removed/<ws-id>.json                       a workspace whose data was deleted ("
   (latest layout wins by timestamp, sessions are the union) is computed on read, so any computer rebuilds the same
   state from the repository alone.
 - Device id: random UUID in `data_dir()/sync/device.json`; the name defaults to the computer name and can be edited.
+  Each data folder is its own device (it writes only its own files), but devices also record a **computer id**, a
+  random id kept in `~/.agentty/computer-id` outside the data folder: the count and the list of computers group by
+  it, so a reinstall, a dev build or a second data folder on the same computer shows as one computer. Nothing about
+  the hardware is read (owner's choice, 2026-09-28); deleting `~/.agentty` makes a new id, which Settings → Sync says.
 
 ## Leak prevention
 
