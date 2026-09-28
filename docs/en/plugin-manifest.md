@@ -16,6 +16,7 @@ description: Every field of agentty-plugin.json — identity, runtime, permissio
   "description": "Turns the current folder into a prompt.",
   "publisher": "you",
   "homepage": "https://example.com/hello",
+  "agents": ["claude", "codex"],
   "permissions": ["prompt.inject"],
   "contributes": {
     "panel": { "title": "Hello", "icon": "sparkles" },
@@ -40,6 +41,7 @@ description: Every field of agentty-plugin.json — identity, runtime, permissio
 | `links` | | Up to 6 `{ "label", "url" }` (https) shown as buttons on the card — project site, docs, source |
 | `icon` | | An icon name from the list below |
 | `logo` | | A picture file inside the plugin folder, drawn instead of `icon`. A module carries its logo in the module — see [Logo](#logo) |
+| `agents` | | The AI agents the plugin works with: `["claude"]`, `["codex"]` or `["claude", "codex"]`. Left out, Claude Code. Shown on the card as **Available AI** |
 
 ## Running
 

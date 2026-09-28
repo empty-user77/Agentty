@@ -93,6 +93,7 @@ description: 마켓플레이스에 플러그인을 등록하거나, Git 저장�
 | `surface` | 아이콘 위치: `sidebar`, `pane`(기본), `status` |
 | `mode` | 패널이 열리는 방식: `push`(기본), `overlay`, `window`, `full` |
 | `permissions` | 요청하는 권한. 설치 전에 표시되고, 더 요구하는 업데이트에서 다시 표시됩니다 |
+| `agents` | 선택. 동작하는 AI 에이전트 — `["claude"]`, `["codex"]` 또는 `["claude", "codex"]`. 생략하면 Claude Code. 카드에 **사용 가능한 AI**로 표시됩니다 |
 | `module.url` | `github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` 중 하나의 `https://` 주소. 경로에 버전을 넣어 두면 릴리스를 몰래 바꿔치기할 수 없습니다 — 검사 항목이 아니라 관례입니다 |
 | `module.sha256` | 체크섬. 일치하지 않는 다운로드는 거부되고, 일치하더라도 WebAssembly 모듈이 아닌 바이트는 거부됩니다 |
 | `module.size` | 바이트 단위의 정확한 길이. 최대 8MB. 상한이 아니라 정확한 값입니다 — 길이가 다른 다운로드는 거부되므로, 빌드할 때마다 바뀝니다 |

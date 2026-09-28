@@ -1698,6 +1698,7 @@ strings! {
     "plugins.perm.process_note" => ["These permissions only cover what it asks Agentty to do. It runs as a program of yours, so outside Agentty it can do anything you can on this computer.", "이 권한은 Agentty에 요청하는 일에만 적용됩니다. 사용자 권한으로 실행되는 프로그램이라, Agentty 밖에서는 이 컴퓨터에서 사용자가 할 수 있는 모든 일을 할 수 있습니다.", "これらの権限は Agentty に頼む操作にだけ適用されます。あなたの権限で動くプログラムなので、Agentty の外ではこのパソコンであなたができることは何でもできます。", "这些权限只限制它请求 Agentty 做的事。它以你的权限作为程序运行，在 Agentty 之外能做你在这台电脑上能做的任何事。"],
     "plugins.runtime.process_note" => ["It runs as a program of yours, with everything you can reach on this computer.", "사용자 권한으로 실행되는 프로그램이라, 이 컴퓨터에서 사용자가 할 수 있는 모든 것에 접근할 수 있습니다.", "あなたの権限で動くプログラムなので、このパソコンであなたができることはすべてできます。", "它以你的权限作为程序运行，能访问你在这台电脑上能访问的一切。"],
     "plugins.surface" => ["Panel", "패널", "パネル", "面板"],
+    "plugins.info.agents" => ["Available AI", "사용 가능한 AI", "利用できる AI", "可用的 AI"],
     "plugins.surface.sidebar" => ["{name} — icon in the activity bar", "{name} — 왼쪽 사이드 메뉴 아이콘", "{name} — アクティビティバーのアイコン", "{name} — 活动栏图标"],
     "plugins.surface.pane" => ["{name} — icon above the terminals", "{name} — 터미널 위쪽 아이콘", "{name} — ターミナル上部のアイコン", "{name} — 终端上方图标"],
     "plugins.surface.status" => ["{name} — icon in the status bar", "{name} — 하단 상태바 아이콘", "{name} — ステータスバーのアイコン", "{name} — 状态栏图标"],

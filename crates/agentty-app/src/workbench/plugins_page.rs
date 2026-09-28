@@ -1310,8 +1310,33 @@ impl Workbench {
                     .gap_1p5()
                     .child(detail_heading(t(cx, "plugins.info").to_string()))
                     .child(self.render_info_grid(info))
+                    .child(self.render_agents_row(manifest, cx))
                     .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, runtime_note))),
             )
+    }
+
+    /// "Available AI: [Claude Code] [Codex]" — the agents the plugin works with (Claude Code when
+    /// its manifest says nothing), laid out like a row of the info grid.
+    fn render_agents_row(&self, manifest: &Manifest, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut chips = div().flex_1().min_w_0().flex().flex_wrap().gap_1();
+        for agent in manifest.agents() {
+            chips = chips.child(
+                div()
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .bg(hex_alpha(Chrome::BLUE, 0.18))
+                    .t_caption()
+                    .text_color(hex(Chrome::BLUE))
+                    .child(agent.display_name()),
+            );
+        }
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(div().w(px(130.)).flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.info.agents")))
+            .child(chips)
     }
 
     fn render_info_grid(&self, rows: Vec<(String, String)>) -> impl IntoElement {
