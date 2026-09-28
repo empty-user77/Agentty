@@ -5,21 +5,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-28
+
 ### Added
 - Session sync: workspaces and their agent sessions follow you between computers through a private
-  git repository you own, connected with the GitHub CLI or plain git (Settings → Sync). A workspace
-  syncs when its agents are idle — after a turn, when a tab closes, every five minutes when nothing
-  happens, or on demand — and the sync icon next to the notifications shows its sessions from every
-  computer. Continue one here, bring back sessions this computer does not have (Session history →
-  Synced), see branches when two computers went on separately, and hand a session's context to the
-  agent in front. Sync stops if the repository becomes public.
+  git repository you own, connected with the GitHub CLI or plain git (Settings → Sync, which offers
+  your empty private repositories and the ones already used for sync). A workspace syncs when its
+  agents are idle — after a turn, when a tab closes, every five minutes when nothing happens, or on
+  demand — and a sync that fails is tried again by itself. The sync icon next to the notifications
+  shows the sessions of the workspace in front from every computer: continue one here, bring back
+  sessions this computer does not have (Session history → Synced), see branches when two computers
+  went on separately, and hand a session's context to the agent in front. Tokens and keys in
+  conversations are masked before they are uploaded, and sync stops if the repository becomes public.
+- Old sessions: sessions unchanged for 30, 90, 180 or 365 days (or a number you choose) are no longer
+  synced, and the sync popover asks before deleting them from the repository. The period is saved
+  with the repository, so every computer uses the same one.
+- Settings → Sync shows this computer's id and what it keeps in the repository. Every Agentty on a
+  computer counts as one computer; deleting a workspace with "Also delete sync data" removes it for
+  every computer.
+- Sync settings (Settings → Sync): your settings, custom commands, connectors, imported themes and
+  plugins' settings follow you between computers through the sync repository; the newest change
+  wins. Secrets are never synced, and a part of the settings that looks like it holds one stays on
+  its computer, with a note saying which.
 - Settings → Backup: export your whole configuration — settings, custom commands, connectors,
-  database connections, agent sign-in methods, imported themes and installed plugins — to one file,
-  and import it on another computer or after a reinstall. Secrets can go along, encrypted with a
-  password you choose. Each import keeps the configuration from before it.
-- Sync settings (Settings → Sync): your settings, custom commands, connectors and imported themes
-  follow you between computers through the sync repository; the newest change wins. Secrets are
-  never synced.
+  database connections, agent sign-in methods, imported themes, installed plugins and their
+  settings — to one file, and import it on another computer or after a reinstall. Secrets can go
+  along, encrypted with a password you choose. Each import keeps the configuration from before it.
+- Plugins can say which AI agents they work with (`agents` in `agentty-plugin.json` or their
+  marketplace entry); the Plugins page lists them under "Available AI".
+
+### Fixed
+- After a restart, a session that was open in two tabs resumes in one of them only, so two agents
+  never write the same conversation.
 
 ## [0.2.4] - 2026-09-28
 
