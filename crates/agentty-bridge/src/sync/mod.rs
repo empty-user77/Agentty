@@ -244,6 +244,8 @@ pub struct SyncOutcome {
     pub settings: Option<settings::Incoming>,
     /// Sessions past the retention period, waiting for the user's OK before they are deleted.
     pub prune_pending: Vec<PruneItem>,
+    /// Parts of this computer's settings not uploaded because they hold a credential.
+    pub settings_held: Vec<String>,
 }
 
 /// A session past the retention period, as the popover lists it for the user's OK.
@@ -407,9 +409,12 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
         let (approved, prune_pending): (Vec<PruneItem>, Vec<PruneItem>) =
             old.into_iter().partition(|item| request.prune.iter().any(|ok| ok.same(item)));
         delete_sessions(&repo.dir, &approved)?;
-        let incoming = match &request.settings {
-            Some(local) => settings::step(&repo.dir, config, local)?,
-            None => None,
+        let (incoming, settings_held) = match &request.settings {
+            Some(local) => {
+                let step = settings::step(&repo.dir, config, local)?;
+                (step.incoming, step.held)
+            }
+            None => (None, Vec::new()),
         };
         let message = format!(
             "sync: {} ({} workspace{})",
@@ -424,6 +429,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                 overview: read_overview(&repo.dir),
                 at: now_stamp(),
                 settings: incoming,
+                settings_held: settings_held.clone(),
                 prune_pending: prune_pending.clone(),
                 ..Default::default()
             });
@@ -436,6 +442,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                     overview: read_overview(&repo.dir),
                     at: now_stamp(),
                     settings: incoming,
+                    settings_held,
                     prune_pending,
                     ..Default::default()
                 });

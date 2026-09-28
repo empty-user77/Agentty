@@ -90,6 +90,8 @@ pub(super) struct SyncUi {
     prune_approved: Vec<bridge::PruneItem>,
     /// "Later" was chosen for exactly these; asked again when the list changes.
     prune_later: Vec<bridge::PruneItem>,
+    /// Parts of this computer's settings the last sync did not upload: they hold a credential.
+    settings_held: Vec<String>,
     retention_input: Option<Entity<TextInput>>,
     new_repo_input: Option<Entity<TextInput>>,
     device_input: Option<(Entity<TextInput>, Subscription)>,
@@ -139,6 +141,7 @@ impl Default for SyncUi {
             prune_pending: Vec::new(),
             prune_approved: Vec::new(),
             prune_later: Vec::new(),
+            settings_held: Vec::new(),
             retention_input: None,
             new_repo_input: None,
             device_input: None,
@@ -518,6 +521,7 @@ impl Workbench {
                         this.sync.overview = outcome.overview;
                         this.sync.computer = outcome.computer;
                         this.sync.prune_pending = outcome.prune_pending;
+                        this.sync.settings_held = if this.sync.config.settings { outcome.settings_held } else { Vec::new() };
                         // With the ids handed out in this pass.
                         this.sync.config = bridge::load_config();
                         this.sync.status = Status::Synced;
@@ -923,7 +927,9 @@ impl Workbench {
             Status::Syncing => ("cloud-upload", Chrome::ACCENT),
             Status::Public => ("cloud-alert", Chrome::ERROR),
             Status::Error(_) => ("cloud-alert", Chrome::WARNING),
-            Status::Ready | Status::Synced if self.prune_waiting() => ("cloud-alert", Chrome::WARNING),
+            Status::Ready | Status::Synced if self.prune_waiting() || !self.sync.settings_held.is_empty() => {
+                ("cloud-alert", Chrome::WARNING)
+            }
             Status::Ready | Status::Synced if !self.sync.pending.is_empty() => ("cloud-upload", Chrome::WARNING),
             Status::Ready => ("cloud", Chrome::MUTED),
             Status::Synced => ("cloud-check", Chrome::MUTED),
@@ -953,6 +959,37 @@ impl Workbench {
     }
 
     /// The sync icon left of the notifications.
+    /// Which settings stayed on this computer because they hold something shaped like a credential.
+    fn settings_held_text(&self, cx: &gpui::App) -> String {
+        let parts: Vec<String> = self
+            .sync
+            .settings_held
+            .iter()
+            .map(|part| match part.as_str() {
+                "settings.json" => t(cx, "sync.part.settings").to_string(),
+                "commands.json" => t(cx, "sync.part.commands").to_string(),
+                "connectors.json" => t(cx, "sync.part.connectors").to_string(),
+                other => match other.strip_prefix("themes/") {
+                    Some(theme) => tf(cx, "sync.part.theme", &[("name", theme)]),
+                    None => other.to_string(),
+                },
+            })
+            .collect();
+        tf(cx, "sync.settings_held", &[("parts", &parts.join(", "))])
+    }
+
+    fn render_settings_held(&self, cx: &gpui::App) -> impl IntoElement {
+        div()
+            .flex()
+            .items_start()
+            .gap_2()
+            .p_2()
+            .rounded_md()
+            .bg(hex_alpha(Chrome::WARNING, 0.12))
+            .child(icon("shield-alert", IconSize::INLINE, hex(Chrome::WARNING)))
+            .child(div().flex_1().min_w_0().t_caption().text_color(hex(Chrome::FOREGROUND)).child(self.settings_held_text(cx)))
+    }
+
     fn render_prune_request(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let items = &self.sync.prune_pending;
         let mut list = div().flex().flex_col().gap_0p5();
@@ -1071,6 +1108,9 @@ impl Workbench {
         body = body.child(div().t_small().text_color(hex(status_color)).child(self.sync_status_text(cx)));
         if self.sync.status == Status::Public {
             body = body.child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.public_hint")));
+        }
+        if connected && !self.sync.settings_held.is_empty() {
+            body = body.child(self.render_settings_held(cx));
         }
         // Deleting old sessions waits for an OK here.
         if connected && self.prune_waiting() {
@@ -1718,6 +1758,7 @@ impl Workbench {
                             .when(!settings_unsaved, |b| b.opacity(0.5)),
                         ),
                 ))
+                .when(settings_on && !self.sync.settings_held.is_empty(), |d| d.child(self.render_settings_held(cx)))
                 .when(settings_unsaved, |d| {
                     d.child(
                         div()

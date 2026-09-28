@@ -154,7 +154,13 @@ Sync → "Remove old sessions" offers 30 / 90 / 180 / 365 days or a custom numbe
 only finds the sessions past the period (`SyncOutcome::prune_pending`); the popover lists them with Delete / Later
 and the sync icon turns amber; Delete sends exactly those (`SyncRequest::prune`) and the next sync removes them only
 if they are still past it. The Sync settings switch is saved the same way (it takes another computer's newer
-settings). Seen in a dev build with a local repository holding a session from 2025: asked, deleted on Delete. The
+settings). Seen in a dev build with a local repository holding a session from 2025: asked, deleted on Delete.
+
+**Secrets in synced settings (owner's choice, 2026-09-28):** a part of the settings that holds something shaped
+like a credential (the transcript masking patterns) is not uploaded at all — `settings.json`, a configuration file
+or a theme — and the popover, the sync icon and Settings → Sync say which part stayed here. Masking it instead would
+put `***` into the other computers' commands. Other computers keep their own copy of a part left out. Seen in a dev
+build: a custom command holding a made-up token was left out and the warning shown; removed, the warning went. The
 period is the repository's (`retention.json`), not each computer's: with one each, a computer keeping 30 days would
 delete what another keeping a year uploads again. A session whose transcript has not changed for longer is not
 uploaded, even while a computer still has it; every sync removes such sessions from the repository, every computer's

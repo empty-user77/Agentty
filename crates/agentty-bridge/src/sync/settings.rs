@@ -44,9 +44,48 @@ fn others(root: &Path, device_id: &str) -> Vec<SettingsFile> {
         .collect()
 }
 
-/// Records whether this computer's configuration changed, writes its file into the clone and
-/// returns another computer's configuration when that one is newer.
-pub(super) fn step(root: &Path, config: &mut SyncConfig, local: &Bundle) -> Result<Option<Incoming>> {
+/// What one pass did with the settings.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Step {
+    /// Another computer's configuration, newer than this one's.
+    pub incoming: Option<Incoming>,
+    /// Parts not uploaded because they hold something shaped like a credential (`settings.json`,
+    /// a configuration file's name, or `themes/<name>`). Other computers keep their own.
+    pub held: Vec<String>,
+}
+
+/// `local` without the parts that hold something shaped like a credential, and their names. The
+/// repository is private, but a token typed into a custom command should not travel at all; the
+/// user is told instead (Settings → Sync).
+pub fn hold_back_secrets(local: &Bundle) -> (Bundle, Vec<String>) {
+    let shaped = |text: &str| super::mask::mask(text) != text;
+    let mut clean = local.clone();
+    let mut held = Vec::new();
+    if clean.settings.as_ref().is_some_and(|v| shaped(&v.to_string())) {
+        clean.settings = None;
+        held.push("settings.json".to_string());
+    }
+    clean.files.retain(|name, value| {
+        let keep = !shaped(&value.to_string());
+        if !keep {
+            held.push(name.clone());
+        }
+        keep
+    });
+    clean.themes.retain(|name, text| {
+        let keep = !shaped(text);
+        if !keep {
+            held.push(format!("themes/{name}"));
+        }
+        keep
+    });
+    (clean, held)
+}
+
+/// Records whether this computer's configuration changed, writes its file into the clone (without
+/// the parts holding credentials) and returns another computer's configuration when that one is
+/// newer.
+pub(super) fn step(root: &Path, config: &mut SyncConfig, local: &Bundle) -> Result<Step> {
     let others = others(root, &config.device_id);
     let fingerprint = backup::fingerprint(local);
     if fingerprint != config.settings_fingerprint {
@@ -63,15 +102,17 @@ pub(super) fn step(root: &Path, config: &mut SyncConfig, local: &Bundle) -> Resu
         changed_at: f.changed_at,
         bundle: f.bundle,
     });
+    // The fingerprint stays the whole configuration's, so holding a part back is not a change.
+    let (clean, held) = hold_back_secrets(local);
     let file = SettingsFile {
         device_id: config.device_id.clone(),
         device_name: config.device_name.clone(),
         changed_at: config.settings_changed_at.clone(),
         fingerprint,
-        bundle: Bundle { created_at: String::new(), ..local.clone() },
+        bundle: Bundle { created_at: String::new(), ..clean },
     };
     super::session::write_json(&root.join(FOLDER).join(format!("{}.json", config.device_id)), &file)?;
-    Ok(incoming)
+    Ok(Step { incoming, held })
 }
 
 /// After the app put `incoming` in place: this computer's configuration is now the one changed
@@ -106,15 +147,37 @@ mod tests {
     }
 
     #[test]
+    fn parts_holding_credentials_stay_on_this_computer() {
+        let root = root();
+        let mut a = config("a");
+        let token = ["ghp_", &"Z".repeat(36)].concat();
+        let mut local = bundle("Nord");
+        local
+            .files
+            .insert("commands.json".into(), json!([{ "name": "deploy", "command": format!("curl -H 'Authorization: token {token}'") }]));
+        local.files.insert("connectors.json".into(), json!([{ "name": "api" }]));
+        let step = step(&root, &mut a, &local).unwrap();
+        assert_eq!(step.held, ["commands.json"]);
+        let written = fs::read_to_string(root.join(FOLDER).join("a.json")).unwrap();
+        assert!(!written.contains(&token));
+        assert!(written.contains("connectors.json"));
+        // Another computer taking it keeps its own commands (the file is not in the bundle).
+        let mut b = config("b");
+        let incoming = super::step(&root, &mut b, &bundle("Default")).unwrap().incoming.unwrap();
+        assert!(!incoming.bundle.files.contains_key("commands.json"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_computer_joining_takes_the_settings_already_there() {
         let root = root();
         let mut a = config("a");
-        assert_eq!(step(&root, &mut a, &bundle("Nord")).unwrap(), None);
+        assert_eq!(step(&root, &mut a, &bundle("Nord")).unwrap().incoming, None);
         let mut b = config("b");
-        let incoming = step(&root, &mut b, &bundle("Default")).unwrap().expect("b takes a's");
+        let incoming = step(&root, &mut b, &bundle("Default")).unwrap().incoming.expect("b takes a's");
         assert_eq!(incoming.bundle.settings.unwrap()["theme"], "Nord");
         // A does not take b's, which was never changed.
-        assert_eq!(step(&root, &mut a, &bundle("Nord")).unwrap(), None);
+        assert_eq!(step(&root, &mut a, &bundle("Nord")).unwrap().incoming, None);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -124,15 +187,15 @@ mod tests {
         let mut a = config("a");
         let mut b = config("b");
         step(&root, &mut a, &bundle("Nord")).unwrap();
-        step(&root, &mut b, &bundle("Default")).unwrap().unwrap();
+        step(&root, &mut b, &bundle("Default")).unwrap().incoming.unwrap();
         // B takes it: from now on b has a's configuration, changed when a changed it.
         b.settings_fingerprint = backup::fingerprint(&bundle("Nord"));
         b.settings_changed_at = a.settings_changed_at.clone();
-        assert_eq!(step(&root, &mut b, &bundle("Nord")).unwrap(), None);
+        assert_eq!(step(&root, &mut b, &bundle("Nord")).unwrap().incoming, None);
         std::thread::sleep(std::time::Duration::from_millis(5));
         // B changes its theme later: a takes it.
-        assert_eq!(step(&root, &mut b, &bundle("Dracula")).unwrap(), None);
-        let incoming = step(&root, &mut a, &bundle("Nord")).unwrap().expect("a takes b's change");
+        assert_eq!(step(&root, &mut b, &bundle("Dracula")).unwrap().incoming, None);
+        let incoming = step(&root, &mut a, &bundle("Nord")).unwrap().incoming.expect("a takes b's change");
         assert_eq!(incoming.bundle.settings.unwrap()["theme"], "Dracula");
         let _ = fs::remove_dir_all(root);
     }
@@ -143,7 +206,7 @@ mod tests {
         let mut a = config("a");
         let mut b = config("b");
         step(&root, &mut a, &bundle("Nord")).unwrap();
-        assert_eq!(step(&root, &mut b, &bundle("Nord")).unwrap(), None);
+        assert_eq!(step(&root, &mut b, &bundle("Nord")).unwrap().incoming, None);
         let _ = fs::remove_dir_all(root);
     }
 }
