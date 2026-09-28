@@ -10,6 +10,7 @@ pub mod model;
 pub mod repo;
 pub mod restore;
 pub mod session;
+pub mod settings;
 #[cfg(test)]
 mod tests;
 
@@ -36,6 +37,11 @@ pub struct SyncConfig {
     pub last_sync_at: Option<String>,
     /// Sessions continued here from another computer (`<agent>:<id>` → where they came from).
     pub origins: BTreeMap<String, ParentRef>,
+    /// Settings travel through the repository too (`settings/<device id>.json`).
+    pub settings: bool,
+    /// The synced configuration as last seen here, and when it last changed.
+    pub settings_fingerprint: String,
+    pub settings_changed_at: String,
 }
 
 impl SyncConfig {
@@ -179,6 +185,8 @@ pub struct SyncRequest {
     /// Workspaces whose data is removed from the repository ("Also delete sync data").
     pub purge: Vec<(Option<String>, String)>,
     pub app_version: String,
+    /// This computer's configuration; read by the sync itself when settings are synced.
+    pub settings: Option<crate::backup::Bundle>,
 }
 
 /// What the repository holds, for the sync popover. Read from the clone, no network.
@@ -225,6 +233,8 @@ pub struct SyncOutcome {
     pub at: String,
     /// What this computer keeps in the repository after the pass.
     pub computer: ComputerStats,
+    /// Another computer's newer configuration, for the app to put in place.
+    pub settings: Option<settings::Incoming>,
 }
 
 /// One sync pass: fetch, write this device's files, commit, push; again if another device pushed
@@ -241,13 +251,25 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
     if repo::visibility(&remote) == Visibility::Public {
         return Err(SyncError::Public);
     }
+    let with_settings;
+    let mut request = request;
+    if config.settings && request.settings.is_none() {
+        let settings = crate::backup::collect(crate::backup::Scope::Sync, None, &request.app_version).ok();
+        with_settings = SyncRequest { settings, ..request.clone() };
+        request = &with_settings;
+    }
     let outcome = run(&repo, &mut config, request, &Locate::agents());
     // Ids given out in this pass are kept even when the push failed: the next pass reuses them.
     let assigned: Vec<(String, String)> =
         request.workspaces.iter().filter_map(|w| config.workspaces.get(&w.local_key).map(|id| (w.local_key.clone(), id.clone()))).collect();
     let outcome = outcome.map(|o| SyncOutcome { computer: stats_in(&repo.dir, &this_computer_devices(&o.overview, &config)), ..o });
     let at = outcome.as_ref().ok().map(|o| o.at.clone());
+    let (fingerprint, changed_at) = (config.settings_fingerprint.clone(), config.settings_changed_at.clone());
     let _ = update_config(|c| {
+        if c.settings {
+            c.settings_fingerprint = fingerprint;
+            c.settings_changed_at = changed_at;
+        }
         for (key, id) in assigned {
             c.workspaces.entry(key).or_insert(id);
         }
@@ -341,6 +363,10 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
         }
         write_folder_readmes(&repo.dir)?;
         let uploaded = write_device_files(&repo.dir, config, request, locate)?;
+        let incoming = match &request.settings {
+            Some(local) => settings::step(&repo.dir, config, local)?,
+            None => None,
+        };
         let message = format!(
             "sync: {} ({} workspace{})",
             config.device_name,
@@ -353,6 +379,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                 sessions_uploaded: 0,
                 overview: read_overview(&repo.dir),
                 at: now_stamp(),
+                settings: incoming,
                 ..Default::default()
             });
         }
@@ -363,6 +390,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                     sessions_uploaded: uploaded,
                     overview: read_overview(&repo.dir),
                     at: now_stamp(),
+                    settings: incoming,
                     ..Default::default()
                 });
             }
@@ -561,6 +589,13 @@ A workspace on another computer with the same project joins the same folder.\n",
         "# Plugin workspaces\n\n\
 Workspaces of Agentty plugins, laid out like `workspace/`: `<plugin id>/<workspace id>/`.\n",
     ),
+    (
+        "settings",
+        "# Settings\n\n\
+One file per computer that syncs its settings (`<device id>.json`): its Agentty settings, custom commands, \
+connectors and imported themes, and when they last changed. The newest change is taken by the other computers. \
+Secrets (API keys, tokens, passwords) are never written here.\n",
+    ),
 ];
 
 /// Writes the folder READMEs that are missing (a repository set up before they existed gets them
@@ -584,6 +619,7 @@ syncing if it becomes public.\n\n\
 - `workspace/<id>/sync_metadata.json` — each workspace, one section per computer\n\
 - `workspace/<id>/devices/<device>/<agent>/<session>/` — a session's transcript in chunks\n\
 - `plugin/<plugin>/<id>/` — the same for plugin workspaces\n\
+- `settings/<device>.json` — each computer's settings, when it syncs them\n\
 - `removed/<id>.json` — workspaces whose data was deleted, so no computer writes them back\n";
 
 fn workspace_dir(root: &Path, plugin: Option<&str>, sync_id: &str) -> Option<PathBuf> {

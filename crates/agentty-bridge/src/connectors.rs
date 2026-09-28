@@ -19,7 +19,7 @@ use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-const KEYCHAIN_SERVICE: &str = "run.agentty.connector";
+pub const KEYCHAIN_SERVICE: &str = "run.agentty.connector";
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_TOOL_TEXT: usize = 100_000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

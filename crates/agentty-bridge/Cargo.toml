@@ -22,6 +22,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-platform-verifier = "0.7"
 webpki-roots = "1.0"
 sha2 = "0.11"
+ring = "0.17"
+base64 = "0.22"
 url = "2.5.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]

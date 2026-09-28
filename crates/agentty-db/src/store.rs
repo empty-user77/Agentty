@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-const KEYCHAIN_SERVICE: &str = "run.agentty.database";
+const KEYCHAIN_SERVICE: &str = agentty_bridge::backup::DATABASE_SERVICE;
 
 fn keychain_service() -> String {
     agentty_bridge::connectors::scoped_service(KEYCHAIN_SERVICE, std::env::var_os("AGENTTY_DATA_DIR").as_deref())
