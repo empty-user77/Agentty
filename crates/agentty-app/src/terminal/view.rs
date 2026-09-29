@@ -270,8 +270,9 @@ pub struct TerminalView {
     pub git_branch: Option<String>,
     /// Name of the linked git worktree the pane works in (`None` in a project's own folder).
     pub worktree: Option<String>,
-    /// The project folder the pane started in (the repository's main working tree, else the launch
-    /// folder): where it is shown to work when its own folder was removed (a working tree cleaned up).
+    /// The project folder the pane works in (the main working tree of the repository it last worked
+    /// in, else of the folder it started in): where it is shown to work when its own folder was
+    /// removed (a working tree cleaned up).
     project_dir: Option<PathBuf>,
     /// The folder the pane works in was gone at the last probe: [`Self::display_cwd`] falls back
     /// then. Kept here so that function (called many times a frame) asks the file system nothing.
@@ -523,6 +524,7 @@ impl TerminalView {
         }
         let mut changed = live_agent != self.live_agent || live_tool != self.live_tool;
         let gone = !cwd.as_ref().or(self.live_cwd.as_ref()).unwrap_or(&self.spec.cwd).is_dir();
+        let went = gone && !self.cwd_gone;
         if gone != self.cwd_gone {
             self.cwd_gone = gone;
             changed = true;
@@ -550,9 +552,10 @@ impl TerminalView {
         self.live_tool = live_tool;
         self.live_tool_pid = live.map(|(_, pid)| pid);
         // The folder the pane was in is gone (its worktree cleaned up) and nothing reports a new one
-        // yet: stop showing that tree and its branch; the pane is shown in the project folder.
-        if cwd.is_none() && self.live_cwd.as_ref().is_some_and(|dir| !dir.is_dir()) {
-            self.live_cwd = None;
+        // yet: stop showing that tree and its branch; the pane is shown in the project folder. The
+        // removed folder stays the live one until the shell moves: forgetting it would show the
+        // folder the pane was started in instead, which may be another tree on another branch.
+        if went && cwd.is_none() && self.live_cwd.as_ref().is_some_and(|dir| !dir.is_dir()) {
             let shown = self.display_cwd();
             self.git_branch = crate::procinfo::git_branch(&shown);
             self.worktree = crate::workbench::worktrees::linked_tree_name(&shown);
@@ -569,6 +572,10 @@ impl TerminalView {
                 let cwd = cwd.as_deref();
                 (cwd.and_then(crate::procinfo::git_branch), cwd.and_then(crate::workbench::worktrees::linked_tree_name))
             });
+            // The project of the folder it works in now: where it is shown should that folder go.
+            if let Some(project) = cwd.as_deref().and_then(agentty_bridge::worktree::main_tree) {
+                self.project_dir = Some(project);
+            }
             self.live_cwd = cwd;
             changed = true;
             if moved {
