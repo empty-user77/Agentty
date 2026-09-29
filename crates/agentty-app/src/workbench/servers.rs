@@ -10,8 +10,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// How often listening ports are sampled.
+/// How often listening ports are sampled (each time a `ps` and an `lsof`).
 const SAMPLE_EVERY: Duration = Duration::from_secs(3);
+/// The same while the window is in the background.
+const SAMPLE_EVERY_INACTIVE: Duration = Duration::from_secs(10);
 /// A new port gets this many chances to answer with a page (a dev server listens before its first
 /// build is done) before it is left alone.
 const PROBE_ATTEMPTS: u8 = 8;
@@ -46,22 +48,24 @@ impl Workbench {
                 break;
             };
             let pids: Vec<u32> = roots.iter().map(|(_, pid)| *pid).collect();
-            let found = cx.background_spawn(async move { crate::procinfo::listeners(&pids) }).await;
+            let found = if pids.is_empty() {
+                Default::default()
+            } else {
+                cx.background_spawn(async move { crate::procinfo::listeners(&pids) }).await
+            };
             let listeners: HashMap<u64, Vec<Listener>> =
                 roots.into_iter().filter_map(|(pane, pid)| Some((pane, found.get(&pid)?.clone()))).collect();
-            if this
-                .update(cx, |this, cx| {
-                    if this.servers.listeners != listeners {
-                        this.servers.listeners = listeners;
-                        cx.notify();
-                    }
-                    this.offer_new_servers(cx);
-                })
-                .is_err()
-            {
+            let Ok(active) = this.update(cx, |this, cx| {
+                if this.servers.listeners != listeners {
+                    this.servers.listeners = listeners;
+                    cx.notify();
+                }
+                this.offer_new_servers(cx);
+                this.window_active
+            }) else {
                 break;
-            }
-            cx.background_executor().timer(SAMPLE_EVERY).await;
+            };
+            cx.background_executor().timer(if active { SAMPLE_EVERY } else { SAMPLE_EVERY_INACTIVE }).await;
         })
         .detach();
     }

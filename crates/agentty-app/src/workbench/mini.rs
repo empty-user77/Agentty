@@ -184,7 +184,13 @@ impl MiniView {
         // Elapsed times tick while agents work.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
-            if this.update(cx, |_, cx| cx.notify()).is_err() {
+            let tick = this.update(cx, |this: &mut Self, cx| {
+                // Nothing ticks while nobody works.
+                if this.workbench.upgrade().is_some_and(|wb| wb.read(cx).tray_state(cx).working > 0) {
+                    cx.notify();
+                }
+            });
+            if tick.is_err() {
                 break;
             }
         })
@@ -562,15 +568,36 @@ impl Workbench {
         }
     }
 
+    /// The counts of [`Self::agent_summaries`] and [`Self::plugin_activity_summaries`], without
+    /// building them: the menu bar asks several times a second while an agent works.
     pub fn tray_state(&self, cx: &App) -> crate::status_item::TrayState {
-        let agents = self.agent_summaries(cx);
-        let plugins = self.plugin_activity_summaries(cx);
-        crate::status_item::TrayState {
-            working: agents.iter().filter(|a| a.working).count()
-                + plugins.iter().filter(|p| p.state == crate::plugins::InstanceState::Working).count(),
-            asking: agents.iter().filter(|a| a.needs_user).count(),
-            done: agents.iter().filter(|a| a.waiting && !a.working && !a.needs_user).count(),
+        let mut state = crate::status_item::TrayState::default();
+        for ws in &self.workspaces {
+            for tab in &ws.tabs {
+                for pane in tab.root.leaves() {
+                    let view = pane.read(cx);
+                    if view.tool_id() == "shell" || !view.is_running() {
+                        continue;
+                    }
+                    let (working, needs_user) = (view.status.in_turn(), view.status.needs_user());
+                    state.working += usize::from(working);
+                    state.asking += usize::from(needs_user);
+                    state.done += usize::from(view.attention && !working && !needs_user);
+                }
+            }
+            let Some(plugin_id) = ws.plugin.as_deref() else { continue };
+            if crate::plugins::plugin(cx, plugin_id).is_none() {
+                continue;
+            }
+            for (instance, _, _) in self.instances_of(plugin_id) {
+                if crate::plugins::instance_status(cx, plugin_id, &instance)
+                    .is_some_and(|status| status.state == crate::plugins::InstanceState::Working)
+                {
+                    state.working += 1;
+                }
+            }
         }
+        state
     }
 
     /// Spend and plan limits per agent account, for the menu bar popover.

@@ -306,7 +306,8 @@ impl Workbench {
                     cx.background_executor().timer(REFRESH_EVERY).await;
                     match this.update(cx, |this, cx| {
                         let open = this.files_panel.is_some();
-                        if open && this.page.is_none() {
+                        // In the background nobody looks at it; coming back refreshes it at once.
+                        if open && this.page.is_none() && this.window_active {
                             this.refresh_files_panel(cx);
                         }
                         open
@@ -323,6 +324,13 @@ impl Workbench {
     }
 
     /// Follows the active pane: another tab or a `cd` shows that project right away. Called on render.
+    /// The window came back to the front: files the agents changed meanwhile show at once.
+    pub(super) fn files_window_activated(&mut self) {
+        if let Some(panel) = self.files_panel.as_mut() {
+            panel.seen = None;
+        }
+    }
+
     pub(super) fn prepare_files_panel(&mut self, cx: &mut Context<Self>) {
         if self.files_panel.is_none() || self.page.is_some() {
             return;

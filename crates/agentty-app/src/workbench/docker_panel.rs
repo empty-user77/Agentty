@@ -114,7 +114,8 @@ impl Workbench {
             cx.background_executor().timer(REFRESH_EVERY).await;
             match this.update(cx, |this, cx| {
                 let open = this.docker.open && this.docker.open_generation == generation;
-                if open && this.page.is_none() {
+                // In the background nobody looks at it; coming back refreshes it (`docker_window_activated`).
+                if open && this.page.is_none() && this.window_active {
                     this.refresh_docker(cx);
                 }
                 open

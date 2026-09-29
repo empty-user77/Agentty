@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,10 +45,29 @@ pub struct FileUsage {
     pub tools: Vec<ToolRecord>,
 }
 
-/// Incremental scanner: files whose size and mtime are unchanged are not parsed again.
+/// Incremental scanner: files whose size and mtime are unchanged are not parsed again, and a Claude
+/// transcript that only grew (the live session, every turn) is read from where the last scan
+/// stopped instead of from the start.
 #[derive(Default)]
 pub struct UsageScanner {
-    cache: HashMap<PathBuf, (u64, u64, FileUsage)>,
+    cache: HashMap<PathBuf, Cached>,
+}
+
+struct Cached {
+    len: u64,
+    mtime: u64,
+    usage: FileUsage,
+    /// Where a Claude transcript's reading stopped, to go on from there when it grows.
+    claude: Option<ClaudeProgress>,
+}
+
+/// How far a Claude transcript was read: the end of its last complete line, and what the lines
+/// after it still depend on.
+#[derive(Default)]
+struct ClaudeProgress {
+    offset: u64,
+    seen: HashSet<String>,
+    project: Option<String>,
 }
 
 pub fn root_dir(agent: Agent) -> PathBuf {
@@ -69,19 +88,37 @@ impl UsageScanner {
         let mut merged = FileUsage::default();
         let mut seen_requests = HashSet::new();
         let mut seen_tools = HashSet::new();
-        for path in files {
-            let Ok(meta) = std::fs::metadata(&path) else { continue };
-            let stamp = (meta.len(), fsutil::mtime_ms(&path));
-            let fresh = !matches!(self.cache.get(&path), Some((len, mtime, _)) if (*len, *mtime) == stamp);
-            if fresh {
-                let usage = match agent {
-                    Agent::Claude => parse_claude(&path, &prices),
-                    Agent::Codex => parse_codex(&path, &prices),
-                    _ => FileUsage::default(),
-                };
-                self.cache.insert(path.clone(), (stamp.0, stamp.1, usage));
+        // Transcripts deleted since the last scan are dropped from the cache.
+        let listed: HashSet<&PathBuf> = files.iter().collect();
+        self.cache.retain(|path, _| listed.contains(path));
+        for path in &files {
+            let Ok(meta) = std::fs::metadata(path) else { continue };
+            let (len, mtime) = (meta.len(), fsutil::mtime_ms(path));
+            match self.cache.get_mut(path) {
+                Some(entry) if (entry.len, entry.mtime) == (len, mtime) => {}
+                // Grown: only the new lines are read.
+                Some(Cached { len: old_len, mtime: old_mtime, usage, claude: Some(progress) }) if len > *old_len => {
+                    parse_claude(path, &prices, progress, usage);
+                    (*old_len, *old_mtime) = (len, mtime);
+                }
+                _ => {
+                    let mut usage = FileUsage::default();
+                    let claude = match agent {
+                        Agent::Claude => {
+                            let mut progress = ClaudeProgress::default();
+                            parse_claude(path, &prices, &mut progress, &mut usage);
+                            Some(progress)
+                        }
+                        Agent::Codex => {
+                            usage = parse_codex(path, &prices);
+                            None
+                        }
+                        _ => None,
+                    };
+                    self.cache.insert(path.clone(), Cached { len, mtime, usage, claude });
+                }
             }
-            let (_, _, usage) = &self.cache[&path];
+            let usage = &self.cache[path].usage;
             // Resumed/forked sessions copy earlier lines into new files; count each response once.
             for r in &usage.requests {
                 if seen_requests.insert(r.key.clone()) {
@@ -102,20 +139,31 @@ fn parse_timestamp(value: &Value) -> Option<i64> {
     DateTime::parse_from_rfc3339(value.as_str()?).ok().map(|t| t.timestamp_millis())
 }
 
-fn parse_claude(path: &Path, prices: &PriceTable) -> FileUsage {
-    let mut usage = FileUsage::default();
-    let Ok(file) = File::open(path) else { return usage };
-    let mut seen = HashSet::new();
-    // Group by the directory the session started in; later lines follow the agent's `cd`s.
-    let mut project: Option<String> = None;
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
+/// Reads a Claude transcript from `progress.offset` on, adding to `usage`. A line still being
+/// written (no newline yet) is left for the next read.
+fn parse_claude(path: &Path, prices: &PriceTable, progress: &mut ClaudeProgress, usage: &mut FileUsage) {
+    let Ok(mut file) = File::open(path) else { return };
+    if progress.offset > 0 && file.seek(SeekFrom::Start(progress.offset)).is_err() {
+        return;
+    }
+    let ClaudeProgress { offset, seen, project } = progress;
+    let mut reader = BufReader::new(file);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        match reader.read_until(b'\n', &mut bytes) {
+            Ok(read) if read > 0 && bytes.ends_with(b"\n") => *offset += read as u64,
+            _ => break,
+        }
+        let Ok(line) = std::str::from_utf8(&bytes) else { continue };
+        // Group by the directory the session started in; later lines follow the agent's `cd`s.
         if project.is_none() && line.contains("\"cwd\":") {
-            project = serde_json::from_str::<Value>(&line).ok().and_then(|v| v["cwd"].as_str().map(str::to_string));
+            *project = serde_json::from_str::<Value>(line).ok().and_then(|v| v["cwd"].as_str().map(str::to_string));
         }
         if !line.contains("\"type\":\"assistant\"") {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         let message = &v["message"];
         let Some(timestamp_ms) = parse_timestamp(&v["timestamp"]) else { continue };
 
@@ -160,7 +208,6 @@ fn parse_claude(path: &Path, prices: &PriceTable) -> FileUsage {
             cost,
         });
     }
-    usage
 }
 
 fn parse_codex(path: &Path, prices: &PriceTable) -> FileUsage {
@@ -459,9 +506,37 @@ mod tests {
         let path = dir.join("s.jsonl");
         let line = r#"{"type":"assistant","timestamp":"2026-09-16T01:00:00Z","cwd":"/p","sessionId":"s","message":{"id":"m1","model":"claude-opus-5","usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{}}]}}"#;
         std::fs::write(&path, format!("{line}\n{line}\n")).unwrap();
-        let usage = parse_claude(&path, &PriceTable::empty());
+        let mut usage = FileUsage::default();
+        parse_claude(&path, &PriceTable::empty(), &mut ClaudeProgress::default(), &mut usage);
         assert_eq!(usage.requests.len(), 1);
         assert_eq!(usage.requests[0].cost, Some(5.0));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_growing_claude_transcript_is_read_from_where_it_stopped() {
+        let dir = std::env::temp_dir().join(format!("agentty-usage-grow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.jsonl");
+        let line = |id: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"2026-09-16T01:00:00Z","cwd":"/p","sessionId":"s","message":{{"id":"{id}","model":"m","usage":{{"input_tokens":1,"output_tokens":2}}}}}}"#
+            )
+        };
+        // The second line is still being written: no newline yet.
+        let (first, second) = (line("m1"), line("m2"));
+        std::fs::write(&path, format!("{first}\n{}", &second[..20])).unwrap();
+        let (mut progress, mut usage) = (ClaudeProgress::default(), FileUsage::default());
+        parse_claude(&path, &PriceTable::empty(), &mut progress, &mut usage);
+        assert_eq!(usage.requests.len(), 1);
+        assert_eq!(progress.offset, first.len() as u64 + 1);
+
+        // It is finished, and the first one repeated (a content block of the same response).
+        std::fs::write(&path, format!("{first}\n{second}\n{first}\n")).unwrap();
+        parse_claude(&path, &PriceTable::empty(), &mut progress, &mut usage);
+        let keys: Vec<&str> = usage.requests.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, ["claude:m1", "claude:m2"]);
+        assert_eq!(usage.requests[1].project, "/p");
         std::fs::remove_dir_all(dir).ok();
     }
 }

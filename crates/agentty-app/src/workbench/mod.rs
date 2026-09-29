@@ -2902,6 +2902,7 @@ impl Render for Workbench {
         }
         if activated {
             self.docker_window_activated();
+            self.files_window_activated();
         }
         self.viewport_width = f32::from(window.viewport_size().width);
         // Opening or closing a panel or the sidebar is part of the layout. The toggles are many
