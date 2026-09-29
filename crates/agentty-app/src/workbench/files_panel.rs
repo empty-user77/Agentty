@@ -19,16 +19,28 @@ pub const MIN_WIDTH: f32 = 220.;
 const MIN_TERMINALS: f32 = 440.;
 pub(super) const MIN_BROWSER: f32 = 320.;
 /// The working-tree list: one row at least, and by default no more than six and a half (the half row
-/// says "there is more"); the handle under it sets any height in between.
+/// says "there is more"); the handle under it sets any height (up to what the window leaves).
 const MIN_TREES_HEIGHT: f32 = TREE_ROW_HEIGHT;
 const DEFAULT_TREES_HEIGHT: f32 = TREE_ROW_HEIGHT * 6.5;
+/// A project's band in the list of a folder of projects, and the line (with its margins) between two.
+const PROJECT_BAND_HEIGHT: f32 = 40.;
+const PROJECT_GAP_HEIGHT: f32 = 11.;
+/// Room the window keeps for everything but the working-tree list while it is dragged taller.
+pub(super) const TREES_ROOM_LEFT: f32 = 260.;
 
-/// Height of the working-tree list: what the user dragged it to (`chosen`, 0 = never), never more
-/// than its rows need and never less than one row.
-pub(super) fn trees_height(rows: usize, chosen: f32) -> f32 {
-    let content = rows as f32 * TREE_ROW_HEIGHT + 4.;
-    let wanted = if chosen > 0. { chosen } else { DEFAULT_TREES_HEIGHT };
-    wanted.min(content).max(MIN_TREES_HEIGHT.min(content))
+/// Height of the working-tree list, whose content is `content` tall: what the user dragged it to
+/// (`chosen`, 0 = never; any height, at least one row), else all of it up to six and a half rows.
+pub(super) fn trees_height(content: f32, chosen: f32) -> f32 {
+    if chosen > 0. {
+        return chosen.max(MIN_TREES_HEIGHT);
+    }
+    DEFAULT_TREES_HEIGHT.min(content).max(MIN_TREES_HEIGHT.min(content))
+}
+
+/// How tall the list's content is: its tree rows, and in a folder of projects each project's band
+/// and the lines between them.
+fn trees_content_height(rows: usize, projects: usize) -> f32 {
+    rows as f32 * TREE_ROW_HEIGHT + projects as f32 * PROJECT_BAND_HEIGHT + projects.saturating_sub(1) as f32 * PROJECT_GAP_HEIGHT + 4.
 }
 
 /// Widths the browser and the files panel are shown at. Each has the width the user gave it — until
@@ -85,6 +97,8 @@ struct TreeInfo {
     /// The project it belongs to, in the list of a folder of projects (the home folder): the list
     /// is grouped by it. `None` in a repository's own list.
     repo: Option<PathBuf>,
+    /// When it was last worked on (seconds since the epoch; 0 unknown), as the Worktrees page says.
+    last_worked: i64,
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -227,13 +241,28 @@ fn demo_trees() -> Vec<(TreeInfo, (&'static str, u32))> {
         prunable: false,
     };
     vec![
-        (TreeInfo { tree: tree("/example/my-project", "main", true), changes: 1, ahead: 0, repo: None }, ("claude", Chrome::ORANGE)),
         (
-            TreeInfo { tree: tree("/example/claude-0919-1121", "agentty/claude-0919-1121", false), changes: 2, ahead: 1, repo: None },
+            TreeInfo { tree: tree("/example/my-project", "main", true), changes: 1, ahead: 0, repo: None, last_worked: 0 },
+            ("claude", Chrome::ORANGE),
+        ),
+        (
+            TreeInfo {
+                tree: tree("/example/claude-0919-1121", "agentty/claude-0919-1121", false),
+                changes: 2,
+                ahead: 1,
+                repo: None,
+                last_worked: 0,
+            },
             ("claude", Chrome::SUCCESS),
         ),
         (
-            TreeInfo { tree: tree("/example/codex-0919-1122", "agentty/codex-0919-1122", false), changes: 1, ahead: 0, repo: None },
+            TreeInfo {
+                tree: tree("/example/codex-0919-1122", "agentty/codex-0919-1122", false),
+                changes: 1,
+                ahead: 0,
+                repo: None,
+                last_worked: 0,
+            },
             ("codex", Chrome::ATTENTION),
         ),
     ]
@@ -269,15 +298,17 @@ fn load(root: PathBuf, expanded: Vec<PathBuf>) -> Snapshot {
         .take(24)
         .map(|tree| {
             if tree.prunable {
-                return TreeInfo { tree, changes: 0, ahead: 0, repo: None };
+                return TreeInfo { tree, changes: 0, ahead: 0, repo: None, last_worked: 0 };
             }
-            let changes = if tree.path == root {
-                snapshot.changes.len()
+            let files: Vec<String> = if tree.path == root {
+                snapshot.changes.iter().map(|f| f.path.clone()).collect()
             } else {
-                agentty_bridge::git::status(&tree.path).map(|s| s.files.len()).unwrap_or(0)
+                agentty_bridge::git::status(&tree.path).map(|s| s.files.into_iter().map(|f| f.path).collect()).unwrap_or_default()
             };
             let ahead = if tree.main { 0 } else { agentty_bridge::worktree::commits_ahead(&tree.path, &base) };
-            TreeInfo { tree, changes, ahead, repo: None }
+            let names: Vec<&str> = files.iter().map(String::as_str).collect();
+            let last_worked = agentty_bridge::inventory::last_worked_in(&tree.path, &names);
+            TreeInfo { tree, changes: files.len(), ahead, repo: None, last_worked }
         })
         .collect();
     snapshot
@@ -1236,6 +1267,7 @@ impl Workbench {
                         changes: found.dirty as usize,
                         ahead: if found.tree.main { 0 } else { found.ahead },
                         repo: Some(found.repo.clone()),
+                        last_worked: found.last_worked(),
                     })
                     .collect()
             })
@@ -1310,7 +1342,8 @@ impl Workbench {
         };
         // Folded projects keep their band and hide their trees.
         let hidden = trees.iter().filter(|t| t.repo.as_ref().is_some_and(|repo| panel.folded_projects.contains(repo))).count();
-        let height = trees_height(trees.len() - hidden + headers, crate::settings::settings(cx).files_panel_trees_height);
+        let height =
+            trees_height(trees_content_height(trees.len() - hidden, headers), crate::settings::settings(cx).files_panel_trees_height);
         // A project picked from the list of a folder of projects: the way back to that list.
         let back = active_tree
             .filter(|folder| demo_sessions.is_empty() && panel.pinned.is_some() && self.is_folder_of_projects_cached(folder))
@@ -1354,74 +1387,86 @@ impl Workbench {
             if let Some(repo) = info.repo.as_ref().filter(|repo| index == 0 || trees[index - 1].repo.as_ref() != Some(*repo)) {
                 let linked_here = trees.iter().filter(|t| t.repo.as_ref() == Some(repo) && !t.tree.main).count();
                 let project_folded = panel.folded_projects.contains(repo);
-                list = list.when(index > 0, |d| d.child(div().mx_2().mt_1p5().mb_1().h(px(1.)).bg(hex(Chrome::BORDER)))).child(
-                    div()
-                        .id(SharedString::from(format!("files-tree-project-{index}")))
-                        .mx_1()
-                        .px_1p5()
-                        .py_1()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded_md()
-                        .bg(hex_alpha(Chrome::BLUE, 0.08))
-                        .tooltip(Tooltip::text(tilde(repo), None))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(hex_alpha(Chrome::BLUE, 0.16)))
-                        .on_click({
-                            let repo = repo.clone();
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                if let Some(panel) = this.files_panel.as_mut() {
-                                    if !panel.folded_projects.remove(&repo) {
-                                        panel.folded_projects.insert(repo.clone());
-                                    }
-                                }
-                                cx.notify();
-                            })
-                        })
-                        .child(icon(if project_folded { "chevron-right" } else { "chevron-down" }, 12., hex(Chrome::MUTED)))
-                        .child(icon(if project_folded { "folder" } else { "folder-open" }, 14., hex(Chrome::BLUE)))
-                        .child(
-                            // Two lines: the folder's name in full, then where it is — cut in the
-                            // middle when narrow, so both its start and the folder itself stay.
+                // Fixed heights, so the list's height is known before it is drawn (`trees_content_height`).
+                list = list
+                    .when(index > 0, |d| {
+                        d.child(
                             div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .truncate()
-                                        .t_small()
-                                        .font_weight(crate::theme::EMPHASIS)
-                                        .text_color(hex(Chrome::BRIGHT))
-                                        .child(repo.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
-                                )
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .truncate()
-                                        .t_caption()
-                                        .text_color(hex(Chrome::FOREGROUND))
-                                        .child(crate::ui::middle_ellipsis(&tilde(repo), 34)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
+                                .h(px(PROJECT_GAP_HEIGHT))
                                 .flex()
                                 .items_center()
-                                .gap_0p5()
-                                .px_1()
-                                .rounded_sm()
-                                .t_caption()
-                                .bg(hex_alpha(Chrome::PURPLE, 0.18))
-                                .text_color(hex(Chrome::PURPLE))
-                                .child(icon("git-fork", 10., hex(Chrome::PURPLE)))
-                                .child(linked_here.to_string()),
-                        ),
-                );
+                                .child(div().mx_2().w_full().h(px(1.)).bg(hex(Chrome::BORDER))),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("files-tree-project-{index}")))
+                            .h(px(PROJECT_BAND_HEIGHT))
+                            .flex_shrink_0()
+                            .mx_1()
+                            .px_1p5()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded_md()
+                            .bg(hex_alpha(Chrome::BLUE, 0.08))
+                            .tooltip(Tooltip::text(tilde(repo), None))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hex_alpha(Chrome::BLUE, 0.16)))
+                            .on_click({
+                                let repo = repo.clone();
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    if let Some(panel) = this.files_panel.as_mut() {
+                                        if !panel.folded_projects.remove(&repo) {
+                                            panel.folded_projects.insert(repo.clone());
+                                        }
+                                    }
+                                    cx.notify();
+                                })
+                            })
+                            .child(icon(if project_folded { "chevron-right" } else { "chevron-down" }, 12., hex(Chrome::MUTED)))
+                            .child(icon(if project_folded { "folder" } else { "folder-open" }, 14., hex(Chrome::BLUE)))
+                            .child(
+                                // Two lines: the folder's name in full, then where it is — cut in the
+                                // middle when narrow, so both its start and the folder itself stay.
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .truncate()
+                                            .t_small()
+                                            .font_weight(crate::theme::EMPHASIS)
+                                            .text_color(hex(Chrome::BRIGHT))
+                                            .child(repo.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+                                    )
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .truncate()
+                                            .t_caption()
+                                            .text_color(hex(Chrome::FOREGROUND))
+                                            .child(crate::ui::middle_ellipsis(&tilde(repo), 34)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_0p5()
+                                    .px_1()
+                                    .rounded_sm()
+                                    .t_caption()
+                                    .bg(hex_alpha(Chrome::PURPLE, 0.18))
+                                    .text_color(hex(Chrome::PURPLE))
+                                    .child(icon("git-fork", 10., hex(Chrome::PURPLE)))
+                                    .child(linked_here.to_string()),
+                            ),
+                    );
             }
             if info.repo.as_ref().is_some_and(|repo| panel.folded_projects.contains(repo)) {
                 continue;
@@ -1628,6 +1673,16 @@ impl Workbench {
                                     }),
                             ),
                     )
+                    // When it was last worked on, as the Worktrees page says ("19 min ago").
+                    .when(info.last_worked > 0 && !demo, |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .t_caption()
+                                .text_color(hex(Chrome::MUTED))
+                                .child(super::tree_manager::ago(cx, info.last_worked)),
+                        )
+                    })
                     .child(avatars)
                     // Only trees Agentty made, and only when no session works in them.
                     .when(tree.managed && sessions.is_empty(), |d| {
@@ -1925,15 +1980,18 @@ mod tests {
     }
 
     #[test]
-    fn the_tree_list_is_as_tall_as_asked_within_its_rows() {
+    fn the_tree_list_is_as_tall_as_asked() {
+        let rows = |n: usize| trees_content_height(n, 0);
         // Never dragged: all rows up to six and a half, then it scrolls.
-        assert_eq!(trees_height(3, 0.), 3. * TREE_ROW_HEIGHT + 4.);
-        assert_eq!(trees_height(12, 0.), DEFAULT_TREES_HEIGHT);
-        // Dragged: that height, but never past the rows and never under one row.
-        assert_eq!(trees_height(12, 400.), 400.);
-        assert_eq!(trees_height(6, 400.), 6. * TREE_ROW_HEIGHT + 4.);
-        assert_eq!(trees_height(6, 10.), MIN_TREES_HEIGHT);
-        assert_eq!(trees_height(6, 90.), 90.);
+        assert_eq!(trees_height(rows(3), 0.), 3. * TREE_ROW_HEIGHT + 4.);
+        assert_eq!(trees_height(rows(12), 0.), DEFAULT_TREES_HEIGHT);
+        // Dragged: that height, taller or shorter than its rows, never under one row.
+        assert_eq!(trees_height(rows(12), 400.), 400.);
+        assert_eq!(trees_height(rows(6), 400.), 400.);
+        assert_eq!(trees_height(rows(6), 10.), MIN_TREES_HEIGHT);
+        assert_eq!(trees_height(rows(6), 90.), 90.);
+        // A folder of projects: bands and the lines between them count too.
+        assert_eq!(trees_content_height(2, 3), 2. * TREE_ROW_HEIGHT + 3. * PROJECT_BAND_HEIGHT + 2. * PROJECT_GAP_HEIGHT + 4.);
     }
 
     #[test]

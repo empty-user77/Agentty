@@ -2833,8 +2833,10 @@ impl Workbench {
             });
             cx.notify();
         } else if let Some((start_y, start_height)) = self.files_trees_drag {
-            // Down makes the working-tree list taller; `trees_height` keeps it within its rows.
-            let height = (start_height + f32::from(event.position.y) - start_y).max(40.);
+            // Down makes the working-tree list taller, up shorter: any height, leaving the rest of
+            // the window its room.
+            let most = (f32::from(window.viewport_size().height) - files_panel::TREES_ROOM_LEFT).max(40.);
+            let height = (start_height + f32::from(event.position.y) - start_y).clamp(40., most);
             gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
                 store.settings.files_panel_trees_height = height
             });

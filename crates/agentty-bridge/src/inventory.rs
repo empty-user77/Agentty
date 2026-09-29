@@ -201,6 +201,14 @@ fn tree_status(repo: &Path, tree: Worktree, base: &str) -> TreeStatus {
     status
 }
 
+/// When the working tree at `path` was last worked on, the way the Worktrees page says it: its last
+/// commit or the newest of its uncommitted files (`changed`, relative to `path`), whichever is later.
+pub fn last_worked_in(path: &Path, changed: &[&str]) -> i64 {
+    let change = changed.iter().take(500).map(|p| mtime_secs(&path.join(p))).max().unwrap_or(0);
+    let commit = git(path, &["log", "-1", "--format=%ct"]).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    commit.max(change)
+}
+
 /// Every tree of the repository at `repo` with its state (no pull requests yet: see
 /// [`attach_pull_requests`]).
 pub fn repo_trees(repo: &Path) -> Vec<TreeStatus> {

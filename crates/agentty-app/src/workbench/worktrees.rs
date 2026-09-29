@@ -299,6 +299,27 @@ pub fn answer_worktree_request(
     });
 }
 
+/// The trees of a folder of projects in the order the list shows them: the project worked on last
+/// first; in each project its own folder, then its worktrees, the one worked on last first. Ties go
+/// by path, so the order holds still between scans.
+fn most_recent_first(mut trees: Vec<agentty_bridge::inventory::TreeStatus>) -> Vec<agentty_bridge::inventory::TreeStatus> {
+    let mut latest: std::collections::HashMap<PathBuf, i64> = std::collections::HashMap::new();
+    for tree in &trees {
+        let at = latest.entry(tree.repo.clone()).or_insert(0);
+        *at = (*at).max(tree.last_worked());
+    }
+    trees.sort_by(|a, b| {
+        let project = |t: &agentty_bridge::inventory::TreeStatus| latest.get(&t.repo).copied().unwrap_or(0);
+        project(b)
+            .cmp(&project(a))
+            .then_with(|| a.repo.cmp(&b.repo))
+            .then_with(|| b.tree.main.cmp(&a.tree.main))
+            .then_with(|| b.last_worked().cmp(&a.last_worked()))
+            .then_with(|| a.tree.path.cmp(&b.tree.path))
+    });
+    trees
+}
+
 /// Whether `folder` may hold projects to look through: no repository itself, and the home folder
 /// or a folder under it (outside it, `/` or `/tmp`, nothing is searched).
 /// `~/Library` never: it holds other apps' data, and reading it makes macOS ask for permissions.
@@ -414,7 +435,8 @@ impl Workbench {
             let trees = agentty_bridge::inventory::all_trees(&repos, &never);
             let with_linked: std::collections::HashSet<PathBuf> =
                 trees.iter().filter(|t| !t.tree.main && !t.tree.prunable).map(|t| t.repo.clone()).collect();
-            trees.into_iter().filter(|t| with_linked.contains(&t.repo) && !t.tree.prunable).collect::<Vec<_>>()
+            let trees: Vec<_> = trees.into_iter().filter(|t| with_linked.contains(&t.repo) && !t.tree.prunable).collect();
+            most_recent_first(trees)
         });
         cx.spawn(async move |this, cx| {
             let trees = task.await;
@@ -717,6 +739,39 @@ mod tests {
         assert!(!folder_of_projects_under(&std::env::temp_dir(), &home), "outside home");
         assert!(!folder_of_projects_under(&home.join("gone"), &home), "a folder that is not there");
         std::fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn projects_worked_on_last_come_first() {
+        let tree = |repo: &str, path: &str, main: bool, at: i64| agentty_bridge::inventory::TreeStatus {
+            repo: PathBuf::from(repo),
+            tree: agentty_bridge::worktree::Worktree {
+                path: PathBuf::from(path),
+                branch: None,
+                head: String::new(),
+                main,
+                managed: false,
+                prunable: false,
+            },
+            base: String::new(),
+            dirty: 0,
+            ahead: 0,
+            last_commit: at,
+            last_change: 0,
+            pr: None,
+            pr_merged_here: false,
+            size: None,
+        };
+        let sorted = most_recent_first(vec![
+            tree("/a", "/a", true, 100),
+            tree("/a", "/a-old", false, 50),
+            tree("/b", "/b", true, 10),
+            tree("/b", "/b-old", false, 20),
+            tree("/b", "/b-new", false, 300),
+        ]);
+        let paths: Vec<&str> = sorted.iter().map(|t| t.tree.path.to_str().unwrap()).collect();
+        // /b was worked on last (300); its own folder first, then its trees newest first.
+        assert_eq!(paths, ["/b", "/b-new", "/b-old", "/a", "/a-old"]);
     }
 
     #[test]
