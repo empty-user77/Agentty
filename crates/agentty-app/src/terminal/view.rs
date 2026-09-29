@@ -26,7 +26,7 @@ use gpui::{
     UnderlineStyle, Window,
 };
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 actions!(terminal, [Copy, Paste, Clear, SelectAll]);
@@ -270,6 +270,15 @@ pub struct TerminalView {
     pub git_branch: Option<String>,
     /// Name of the linked git worktree the pane works in (`None` in a project's own folder).
     pub worktree: Option<String>,
+    /// The project folder the pane started in (the repository's main working tree, else the launch
+    /// folder): where it is shown to work when its own folder was removed (a working tree cleaned up).
+    project_dir: Option<PathBuf>,
+    /// The folder the pane works in was gone at the last probe: [`Self::display_cwd`] falls back
+    /// then. Kept here so that function (called many times a frame) asks the file system nothing.
+    cwd_gone: bool,
+    /// Linked worktrees of the repository the pane works in (from its main folder or one of them;
+    /// 0 outside git): the Files button says how many there are.
+    pub linked_trees: usize,
     /// Uncommitted changes in the pane's repository.
     pub git_dirty: bool,
     /// Commits not pushed yet (`None` without an upstream).
@@ -288,6 +297,15 @@ pub struct TerminalView {
     agent_exited: bool,
     agent_seen: bool,
     model_probe: Option<Task<()>>,
+    /// The foreground / folder sample of `probe` in flight.
+    probe_sample: Option<Task<()>>,
+    /// The transcript check for an Esc-interrupted turn, read in the background while the turn is
+    /// quiet: its task, whether it said so, which quiet spell it belongs to, and the transcript
+    /// file found for the session (looked up once per session).
+    interrupt_probe: Option<Task<()>>,
+    transcript_interrupted: bool,
+    quiet_spell: u64,
+    transcript_file: Option<(String, std::path::PathBuf)>,
     /// Whether the pane had keyboard focus in the last painted frame.
     focused: bool,
     _events: Option<Task<()>>,
@@ -318,7 +336,9 @@ impl TerminalView {
         let blink = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
             let alive = this.update(cx, |view, cx| {
-                if settings(cx).cursor_blink {
+                // Only the focused pane draws a blinking cursor; any other pane draws it solid, so a
+                // toggle there would redraw it for nothing.
+                if settings(cx).cursor_blink && view.focused {
                     view.cursor_visible = !view.cursor_visible;
                     cx.notify();
                 } else if !view.cursor_visible {
@@ -388,6 +408,9 @@ impl TerminalView {
             live_cwd: None,
             git_branch: None,
             worktree: None,
+            project_dir: None,
+            cwd_gone: false,
+            linked_trees: 0,
             git_dirty: false,
             git_ahead: None,
             git_probe: None,
@@ -398,6 +421,11 @@ impl TerminalView {
             agent_exited: false,
             agent_seen: false,
             model_probe: None,
+            probe_sample: None,
+            interrupt_probe: None,
+            transcript_interrupted: false,
+            quiet_spell: 0,
+            transcript_file: None,
             banner_model: None,
             focused: false,
             _events: None,
@@ -460,20 +488,45 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Samples what is running in the foreground, where, and on which branch. Cheap syscalls only.
+    /// Samples what is running in the foreground, where, and on which branch. The syscalls (a
+    /// dozen or more per pane, every second) run in the background; the result is applied here.
     fn probe(&mut self, cx: &mut Context<Self>) {
         let Some(backend) = &self.backend else { return };
-        let live = crate::procinfo::foreground_tool(backend.tty_fd, backend.child_pid);
+        if self.probe_sample.is_some() {
+            return;
+        }
+        let (tty_fd, child_pid) = (backend.tty_fd, backend.child_pid);
+        let known_cwd = self.live_cwd.clone();
+        let task = cx.background_spawn(async move { ProbeSample::take(tty_fd, child_pid, known_cwd.as_deref()) });
+        self.probe_sample = Some(cx.spawn(async move |this, cx| {
+            let sample = task.await;
+            let _ = this.update(cx, |view, cx| {
+                view.probe_sample = None;
+                // The pane restarted its shell meanwhile: this sample is about the old one.
+                if view.backend.as_ref().is_some_and(|b| b.child_pid == child_pid) {
+                    view.apply_probe(sample, cx);
+                }
+            });
+        }));
+    }
+
+    fn apply_probe(&mut self, sample: ProbeSample, cx: &mut Context<Self>) {
+        let ProbeSample { live, cwd, place } = sample;
         let live_tool = live.map(|(tool, _)| tool);
         let live_agent = match live_tool {
             Some("claude") => Some(PaneKind::Claude),
             Some("codex") => Some(PaneKind::Codex),
             _ => None,
         };
-        // ConPTY has no foreground process group (Windows): the agent's own process stands in.
-        let foreground = crate::procinfo::foreground_pid(backend.tty_fd).or(live.map(|(_, pid)| pid)).unwrap_or(backend.child_pid);
-        let cwd = crate::procinfo::cwd_of(foreground).or_else(|| crate::procinfo::cwd_of(backend.child_pid));
+        if self.project_dir.is_none() {
+            self.project_dir = agentty_bridge::worktree::main_tree(&self.spec.cwd);
+        }
         let mut changed = live_agent != self.live_agent || live_tool != self.live_tool;
+        let gone = !cwd.as_ref().or(self.live_cwd.as_ref()).unwrap_or(&self.spec.cwd).is_dir();
+        if gone != self.cwd_gone {
+            self.cwd_gone = gone;
+            changed = true;
+        }
         if self.spec.kind != PaneKind::Shell {
             if live_agent.is_some() {
                 self.agent_seen = true;
@@ -496,13 +549,26 @@ impl TerminalView {
         self.live_agent = live_agent;
         self.live_tool = live_tool;
         self.live_tool_pid = live.map(|(_, pid)| pid);
+        // The folder the pane was in is gone (its worktree cleaned up) and nothing reports a new one
+        // yet: stop showing that tree and its branch; the pane is shown in the project folder.
+        if cwd.is_none() && self.live_cwd.as_ref().is_some_and(|dir| !dir.is_dir()) {
+            self.live_cwd = None;
+            let shown = self.display_cwd();
+            self.git_branch = crate::procinfo::git_branch(&shown);
+            self.worktree = crate::workbench::worktrees::linked_tree_name(&shown);
+            changed = true;
+            cx.emit(TerminalEvent::DirectoryChanged);
+        }
         if cwd.is_some() && cwd != self.live_cwd {
             // Where the pane works is part of the layout, so a `cd` is worth saving — but only
             // when it really moved away from the folder the pane was started in. The first probe
             // of a restored pane finds the folder that is already written down.
             let moved = cwd.as_deref() != Some(self.spec.cwd.as_path());
-            self.git_branch = cwd.as_deref().and_then(crate::procinfo::git_branch);
-            self.worktree = cwd.as_deref().and_then(crate::workbench::worktrees::linked_tree_name);
+            // Read in the background, unless the folder the sample was compared with changed since.
+            (self.git_branch, self.worktree) = place.unwrap_or_else(|| {
+                let cwd = cwd.as_deref();
+                (cwd.and_then(crate::procinfo::git_branch), cwd.and_then(crate::workbench::worktrees::linked_tree_name))
+            });
             self.live_cwd = cwd;
             changed = true;
             if moved {
@@ -510,7 +576,7 @@ impl TerminalView {
             }
         }
         if self.probe_ticks.is_multiple_of(3) {
-            self.probe_git(cx);
+            self.probe_git_status(false, cx);
         }
         self.probe_ticks = self.probe_ticks.wrapping_add(1);
         if self.probe_ticks % 3 == 1 {
@@ -529,25 +595,40 @@ impl TerminalView {
     }
 
     /// Branch, uncommitted changes and unpushed commits, from `git status` in the background.
+    /// `probe` asks every few seconds; a caller that just changed the repository asks with `fresh`.
     pub fn probe_git(&mut self, cx: &mut Context<Self>) {
+        self.probe_git_status(true, cx);
+    }
+
+    fn probe_git_status(&mut self, fresh: bool, cx: &mut Context<Self>) {
         if self.git_probe.is_some() {
             return;
         }
         let cwd = self.display_cwd();
-        if crate::procinfo::git_branch(&cwd).is_none() {
-            if self.git_branch.is_some() || self.git_dirty {
-                self.git_branch = None;
-                self.git_dirty = false;
-                self.git_ahead = None;
-                cx.notify();
-            }
-            return;
-        }
-        let task = cx.background_spawn(async move { agentty_bridge::git::status(&cwd).ok() });
+        // `linked`: read from `.git/worktrees`, no git process, so trees made elsewhere show up
+        // within a probe. `None` status: not in a repository.
+        let task = cx.background_spawn(async move {
+            let linked = agentty_bridge::worktree::main_tree(&cwd).map_or(0, |root| agentty_bridge::worktree::linked_count(&root));
+            let status = crate::procinfo::git_branch(&cwd).map(|_| shared_git_status(&cwd, fresh));
+            (linked, status)
+        });
         self.git_probe = Some(cx.spawn(async move |this, cx| {
-            let status = task.await;
+            let (linked, status) = task.await;
             let _ = this.update(cx, |view, cx| {
                 view.git_probe = None;
+                if linked != view.linked_trees {
+                    view.linked_trees = linked;
+                    cx.notify();
+                }
+                let Some(status) = status else {
+                    if view.git_branch.is_some() || view.git_dirty {
+                        view.git_branch = None;
+                        view.git_dirty = false;
+                        view.git_ahead = None;
+                        cx.notify();
+                    }
+                    return;
+                };
                 let Some(status) = status else { return };
                 let branch = status.branch.clone().or_else(|| crate::procinfo::git_branch(&view.display_cwd()));
                 let dirty = !status.files.is_empty();
@@ -595,6 +676,9 @@ impl TerminalView {
     /// Corrects the hook-reported status with what the agent's screen shows. Hooks don't fire
     /// for Esc interrupts, Codex approvals or missed events; the screen always tells.
     fn update_from_screen(&mut self, cx: &mut Context<Self>) -> bool {
+        // What the last transcript read said counts for this check only: a turn that started
+        // since must not inherit it.
+        let transcript_interrupted = std::mem::take(&mut self.transcript_interrupted);
         let screen = classify_screen(&self.screen_lines(80));
         let before = self.status.clone();
         if let Some(prompt) = screen.permission.clone() {
@@ -621,10 +705,15 @@ impl TerminalView {
             AgentStatus::Working | AgentStatus::Thinking | AgentStatus::Permission(_) | AgentStatus::Question(_)
         ) {
             self.quiet_ticks = self.quiet_ticks.saturating_add(1);
+            if self.quiet_ticks == 1 {
+                self.quiet_spell += 1;
+            }
             let esc_recent = self.esc_at.is_some_and(|at| at.elapsed() < Duration::from_secs(20));
             // Esc early in a turn rewinds it without an "Interrupted" line; the transcript still says so.
-            let logged = self.quiet_ticks >= 2
-                && matches!((self.agent_kind().and_then(PaneKind::agent), self.session_id_live.as_deref()), (Some(agent), Some(id)) if agentty_bridge::last_turn_interrupted(agent, id));
+            if self.quiet_ticks >= 2 {
+                self.probe_interrupted(cx);
+            }
+            let logged = self.quiet_ticks >= 2 && transcript_interrupted;
             if screen.interrupted || logged || (esc_recent && self.quiet_ticks >= 2) {
                 self.status = AgentStatus::Interrupted;
                 self.working_since = None;
@@ -682,6 +771,36 @@ impl TerminalView {
             return agentty_bridge::banner_model(&below);
         }
         None
+    }
+
+    /// Reads the end of the session transcript in the background for an Esc-interrupted turn; the
+    /// next probe tick sees the answer. Finding the file walks the agent's session folders and the
+    /// read is up to 96 KB, too much for the UI thread every second of a quiet turn.
+    fn probe_interrupted(&mut self, cx: &mut Context<Self>) {
+        if self.interrupt_probe.is_some() {
+            return;
+        }
+        let (Some(agent), Some(id)) = (self.agent_kind().and_then(PaneKind::agent), self.session_id_live.clone()) else {
+            return;
+        };
+        let known = self.transcript_file.as_ref().filter(|(session, _)| *session == id).map(|(_, path)| path.clone());
+        let spell = self.quiet_spell;
+        let task = cx.background_spawn(async move {
+            let path = known.or_else(|| agentty_bridge::transcript_path(agent, &id))?;
+            let interrupted = agentty_bridge::transcript_turn_interrupted(agent, &path);
+            Some((id, path, interrupted))
+        });
+        self.interrupt_probe = Some(cx.spawn(async move |this, cx| {
+            let found = task.await;
+            let _ = this.update(cx, |view, _| {
+                view.interrupt_probe = None;
+                let Some((id, path, interrupted)) = found else { return };
+                view.transcript_file = Some((id, path));
+                if view.quiet_spell == spell {
+                    view.transcript_interrupted = interrupted;
+                }
+            });
+        }));
     }
 
     /// Reads the model from the session transcript in the background (every few seconds).
@@ -785,8 +904,16 @@ impl TerminalView {
         "shell"
     }
 
+    /// Where the pane works: the folder its shell or agent is in, else the launch folder. When that
+    /// folder is gone (a working tree removed under it), the project folder it belonged to, else home.
     pub fn display_cwd(&self) -> PathBuf {
-        self.live_cwd.clone().unwrap_or_else(|| self.spec.cwd.clone())
+        let cwd = self.live_cwd.clone().unwrap_or_else(|| self.spec.cwd.clone());
+        if !self.cwd_gone {
+            return cwd;
+        }
+        let home = crate::launch::home_dir();
+        let fallbacks: Vec<&std::path::Path> = self.project_dir.as_deref().into_iter().collect();
+        agentty_bridge::worktree::existing_dir(&cwd, &fallbacks, &home)
     }
 
     /// Running, or about to start on first paint.
@@ -849,6 +976,32 @@ impl TerminalView {
 
     pub fn is_running(&self) -> bool {
         self.backend.is_some() || (!self.spawned && self.error.is_none())
+    }
+
+    /// Whether the pane's shell waits at its prompt: nothing (no agent, no dev server) runs in the
+    /// foreground, so a typed command reaches the shell itself.
+    pub fn at_shell_prompt(&self) -> bool {
+        self.backend.as_ref().is_some_and(|b| crate::procinfo::foreground_pid(b.tty_fd) == Some(b.child_pid))
+    }
+
+    /// Whether Agentty can move this pane's shell by typing [`Self::cd_to`]: it waits at its prompt,
+    /// and it is a shell that knows `builtin cd` (zsh, bash, fish — not csh, nushell or xonsh).
+    pub fn can_move(&self) -> bool {
+        let shell = crate::launch::LaunchSpec::shell_program();
+        let known = matches!(
+            crate::shell_integration::flavor(&shell),
+            crate::shell_integration::ShellFlavor::Zsh | crate::shell_integration::ShellFlavor::Bash
+        ) || std::path::Path::new(&shell).file_name().is_some_and(|name| name == "fish");
+        known && self.at_shell_prompt()
+    }
+
+    /// Moves the shell to `dir`: clears what was typed on the prompt (to the end, then all of it:
+    /// bash's Ctrl-U only takes what is before the cursor), then `builtin cd` (a `cd` function such as
+    /// zoxide's stays out of it) with a leading space, which keeps it out of the history where the
+    /// shell is set to. Only while [`Self::at_shell_prompt`].
+    pub fn cd_to(&mut self, dir: &std::path::Path) {
+        let line = format!("\x05\x15 builtin cd -- {}\r", crate::launch::shell_quote(&dir.display().to_string()));
+        self.write(line.into_bytes());
     }
 
     pub fn is_agent(&self) -> bool {
@@ -2463,6 +2616,57 @@ pub fn strip_agent_mark(title: &str) -> &str {
     rest
 }
 
+/// How long a folder's `git status` answers the other panes working in the same folder.
+const SHARED_GIT_STATUS: Duration = Duration::from_secs(2);
+
+/// `git status` of `cwd`, shared by the panes working in the same folder: several agents in one
+/// project would otherwise each run it every few seconds. `fresh` always runs it.
+fn shared_git_status(cwd: &Path, fresh: bool) -> Option<std::sync::Arc<agentty_bridge::git::RepoStatus>> {
+    type Shared = std::collections::HashMap<PathBuf, (Instant, Option<std::sync::Arc<agentty_bridge::git::RepoStatus>>)>;
+    static SHARED: std::sync::Mutex<Option<Shared>> = std::sync::Mutex::new(None);
+    if !fresh {
+        let recent = SHARED.lock().ok().and_then(|shared| {
+            shared.as_ref()?.get(cwd).filter(|(at, _)| at.elapsed() < SHARED_GIT_STATUS).map(|(_, status)| status.clone())
+        });
+        if let Some(status) = recent {
+            return status;
+        }
+    }
+    let status = agentty_bridge::git::status(cwd).ok().map(std::sync::Arc::new);
+    if let Ok(mut shared) = SHARED.lock() {
+        let shared = shared.get_or_insert_with(Default::default);
+        // Folders no pane asked about for a while are dropped.
+        shared.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(60));
+        shared.insert(cwd.to_path_buf(), (Instant::now(), status.clone()));
+    }
+    status
+}
+
+/// What a pane's probe reads from the system: its foreground tool, its working folder, and, when
+/// that folder is not the one it knew, the branch and linked worktree there.
+struct ProbeSample {
+    live: Option<(&'static str, u32)>,
+    cwd: Option<PathBuf>,
+    place: Option<(Option<String>, Option<String>)>,
+}
+
+impl ProbeSample {
+    fn take(tty_fd: crate::procinfo::TtyFd, child_pid: u32, known_cwd: Option<&Path>) -> Self {
+        let live = crate::procinfo::foreground_tool(tty_fd, child_pid);
+        // ConPTY has no foreground process group (Windows): the agent's own process stands in.
+        let foreground = crate::procinfo::foreground_pid(tty_fd).or(live.map(|(_, pid)| pid)).unwrap_or(child_pid);
+        // A folder removed under the process (Linux reports it as `… (deleted)`) is no place to show.
+        let cwd = crate::procinfo::cwd_of(foreground)
+            .or_else(|| crate::procinfo::cwd_of(child_pid))
+            .filter(|dir| dir.is_absolute() && dir.is_dir());
+        let place = cwd
+            .as_deref()
+            .filter(|cwd| Some(*cwd) != known_cwd)
+            .map(|cwd| (crate::procinfo::git_branch(cwd), crate::workbench::worktrees::linked_tree_name(cwd)));
+        Self { live, cwd, place }
+    }
+}
+
 fn paste_payload(text: &str, bracketed: bool) -> Vec<u8> {
     let cleaned: String =
         text.replace("\r\n", "\n").replace('\r', "\n").chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).collect();
@@ -2482,6 +2686,29 @@ fn mouse_report(button: u8, (column, row): (usize, usize), pressed: bool, sgr: b
     let code = if pressed { button } else { 3 };
     let (x, y) = (column + 1 + 32, row + 1 + 32);
     (x <= 255 && y <= 255).then(|| vec![0x1b, b'[', b'M', 32 + code, x as u8, y as u8])
+}
+
+#[cfg(test)]
+mod shared_git_status_tests {
+    use super::shared_git_status;
+
+    #[test]
+    fn panes_in_one_folder_share_a_recent_status_and_a_fresh_ask_runs_git() {
+        let dir = std::env::temp_dir().join(format!("agentty-shared-status-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let init = std::process::Command::new("git").args(["init", "-q"]).current_dir(&dir).status();
+        assert!(init.is_ok_and(|s| s.success()));
+
+        let first = shared_git_status(&dir, true).expect("a repository");
+        assert!(first.files.is_empty());
+        // A new file right after: another pane within the sharing window gets the same answer...
+        std::fs::write(dir.join("new.txt"), "x").unwrap();
+        let shared = shared_git_status(&dir, false).expect("a repository");
+        assert!(std::sync::Arc::ptr_eq(&first, &shared));
+        // ...and one that just changed the repository sees the change.
+        assert_eq!(shared_git_status(&dir, true).expect("a repository").files.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
 }
 
 #[cfg(test)]

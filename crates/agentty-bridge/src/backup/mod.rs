@@ -443,6 +443,8 @@ pub fn import(bundle: &Bundle, options: &ImportOptions) -> Result<ImportReport, 
         report.copy = Some(path);
     }
     apply_to(&dir, bundle, &mut report)?;
+    let connectors = bundle.files.get("connectors.json").and_then(|v| v.get("connectors"));
+    let connector_ids = ids(connectors);
     for secret in &secrets {
         if secret.service == PLUGIN_SETTINGS_SERVICE {
             if let Ok(value) = serde_json::from_str::<Value>(&secret.value) {
@@ -455,8 +457,21 @@ pub fn import(bundle: &Bundle, options: &ImportOptions) -> Result<ImportReport, 
         if !known_service(&secret.service) {
             continue;
         }
+        let connector_key = secret.service == crate::connectors::KEYCHAIN_SERVICE;
+        // A connector key only for a connector of this file (not the host binding beside it).
+        if connector_key && !connector_ids.contains(&secret.account) {
+            continue;
+        }
         crate::secret_store::store(&scoped(&secret.service), &secret.account, &secret.value)
             .map_err(|_| ImportError::Failed("a secret could not be saved in the credential store".into()))?;
+        if connector_key {
+            // The key goes to the host this same file names for it (see `connectors::check_origin`).
+            match connector_origin(connectors, &secret.account) {
+                Some(origin) => crate::connectors::secrets::store_origin(&secret.account, &origin)
+                    .map_err(|_| ImportError::Failed("a secret could not be saved in the credential store".into()))?,
+                None => crate::connectors::secrets::forget_origin(&secret.account),
+            }
+        }
         report.secrets += 1;
     }
     if report.secrets > 0 {
@@ -466,6 +481,12 @@ pub fn import(bundle: &Bundle, options: &ImportOptions) -> Result<ImportReport, 
         install_plugins(&bundle.plugins, &mut report);
     }
     Ok(report)
+}
+
+/// The origin of connector `id`'s base URL in a bundle's `connectors` list.
+fn connector_origin(connectors: Option<&Value>, id: &str) -> Option<String> {
+    let item = connectors?.as_array()?.iter().find(|c| c.get("id").and_then(Value::as_str) == Some(id))?;
+    crate::connectors::origin_of(item.get("baseUrl")?.as_str()?).ok()
 }
 
 /// Only the services this module exports: a file cannot plant a value anywhere else.

@@ -19,16 +19,28 @@ pub const MIN_WIDTH: f32 = 220.;
 const MIN_TERMINALS: f32 = 440.;
 pub(super) const MIN_BROWSER: f32 = 320.;
 /// The working-tree list: one row at least, and by default no more than six and a half (the half row
-/// says "there is more"); the handle under it sets any height in between.
+/// says "there is more"); the handle under it sets any height (up to what the window leaves).
 const MIN_TREES_HEIGHT: f32 = TREE_ROW_HEIGHT;
 const DEFAULT_TREES_HEIGHT: f32 = TREE_ROW_HEIGHT * 6.5;
+/// A project's band in the list of a folder of projects, and the line (with its margins) between two.
+const PROJECT_BAND_HEIGHT: f32 = 40.;
+const PROJECT_GAP_HEIGHT: f32 = 11.;
+/// Room the window keeps for everything but the working-tree list while it is dragged taller.
+pub(super) const TREES_ROOM_LEFT: f32 = 260.;
 
-/// Height of the working-tree list: what the user dragged it to (`chosen`, 0 = never), never more
-/// than its rows need and never less than one row.
-pub(super) fn trees_height(rows: usize, chosen: f32) -> f32 {
-    let content = rows as f32 * TREE_ROW_HEIGHT + 4.;
-    let wanted = if chosen > 0. { chosen } else { DEFAULT_TREES_HEIGHT };
-    wanted.min(content).max(MIN_TREES_HEIGHT.min(content))
+/// Height of the working-tree list, whose content is `content` tall: what the user dragged it to
+/// (`chosen`, 0 = never; any height, at least one row), else all of it up to six and a half rows.
+pub(super) fn trees_height(content: f32, chosen: f32) -> f32 {
+    if chosen > 0. {
+        return chosen.max(MIN_TREES_HEIGHT);
+    }
+    DEFAULT_TREES_HEIGHT.min(content).max(MIN_TREES_HEIGHT.min(content))
+}
+
+/// How tall the list's content is: its tree rows, and in a folder of projects each project's band
+/// and the lines between them.
+fn trees_content_height(rows: usize, projects: usize) -> f32 {
+    rows as f32 * TREE_ROW_HEIGHT + projects as f32 * PROJECT_BAND_HEIGHT + projects.saturating_sub(1) as f32 * PROJECT_GAP_HEIGHT + 4.
 }
 
 /// Widths the browser and the files panel are shown at. Each has the width the user gave it — until
@@ -47,6 +59,14 @@ pub(super) fn docked_widths(room: f32, browser: Option<f32>, files: Option<f32>)
 }
 const ROW_HEIGHT: f32 = 22.;
 const TREE_ROW_HEIGHT: f32 = 40.;
+/// How long a tree row's single click waits for a second one (macOS's default double-click time).
+const DOUBLE_CLICK: Duration = Duration::from_millis(350);
+/// Worktree graph: room before the project's folder icon, room before a linked tree's icon, and
+/// where the trunk runs — under the centre of the project's icon (rail, then a 6 px gap, then half
+/// of the 13 px icon).
+const RAIL_MAIN: f32 = 4.;
+const RAIL_LINKED: f32 = 24.;
+const TRUNK_X: f32 = RAIL_MAIN + 6. + 6.5;
 /// Entries shown per folder; a folder with more says how many were left out.
 const MAX_ENTRIES: usize = 800;
 /// Entries read from one folder before giving up on the rest (a cache folder can hold millions).
@@ -74,6 +94,11 @@ struct TreeInfo {
     changes: usize,
     /// Commits the project's own tree does not have.
     ahead: u32,
+    /// The project it belongs to, in the list of a folder of projects (the home folder): the list
+    /// is grouped by it. `None` in a repository's own list.
+    repo: Option<PathBuf>,
+    /// When it was last worked on (seconds since the epoch; 0 unknown), as the Worktrees page says.
+    last_worked: i64,
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -116,6 +141,8 @@ pub(super) struct FilesPanel {
     expanded: HashSet<PathBuf>,
     tab: FilesTab,
     trees_folded: bool,
+    /// Projects folded in the list of a folder of projects (a click on the project's band).
+    folded_projects: HashSet<PathBuf>,
     selected: Option<PathBuf>,
     /// The removal the dialog is asking about, and an error from the last one.
     remove_confirm: Option<RemoveConfirm>,
@@ -128,6 +155,11 @@ pub(super) struct FilesPanel {
     seen: Option<(gpui::EntityId, PathBuf)>,
     /// Example tree picked while the onboarding tour shows its example working trees.
     demo_pick: usize,
+    /// A tree row's single click waiting out the double-click time: bumped by every click, so a
+    /// second click cancels the first one's action.
+    click_generation: u64,
+    /// The terminal the first click of a double click was made from (focus may move before the second).
+    click_terminal: Option<Pane>,
 }
 
 impl FilesPanel {
@@ -209,13 +241,28 @@ fn demo_trees() -> Vec<(TreeInfo, (&'static str, u32))> {
         prunable: false,
     };
     vec![
-        (TreeInfo { tree: tree("/example/my-project", "main", true), changes: 1, ahead: 0 }, ("claude", Chrome::ORANGE)),
         (
-            TreeInfo { tree: tree("/example/claude-0919-1121", "agentty/claude-0919-1121", false), changes: 2, ahead: 1 },
+            TreeInfo { tree: tree("/example/my-project", "main", true), changes: 1, ahead: 0, repo: None, last_worked: 0 },
+            ("claude", Chrome::ORANGE),
+        ),
+        (
+            TreeInfo {
+                tree: tree("/example/claude-0919-1121", "agentty/claude-0919-1121", false),
+                changes: 2,
+                ahead: 1,
+                repo: None,
+                last_worked: 0,
+            },
             ("claude", Chrome::SUCCESS),
         ),
         (
-            TreeInfo { tree: tree("/example/codex-0919-1122", "agentty/codex-0919-1122", false), changes: 1, ahead: 0 },
+            TreeInfo {
+                tree: tree("/example/codex-0919-1122", "agentty/codex-0919-1122", false),
+                changes: 1,
+                ahead: 0,
+                repo: None,
+                last_worked: 0,
+            },
             ("codex", Chrome::ATTENTION),
         ),
     ]
@@ -251,15 +298,17 @@ fn load(root: PathBuf, expanded: Vec<PathBuf>) -> Snapshot {
         .take(24)
         .map(|tree| {
             if tree.prunable {
-                return TreeInfo { tree, changes: 0, ahead: 0 };
+                return TreeInfo { tree, changes: 0, ahead: 0, repo: None, last_worked: 0 };
             }
-            let changes = if tree.path == root {
-                snapshot.changes.len()
+            let files: Vec<String> = if tree.path == root {
+                snapshot.changes.iter().map(|f| f.path.clone()).collect()
             } else {
-                agentty_bridge::git::status(&tree.path).map(|s| s.files.len()).unwrap_or(0)
+                agentty_bridge::git::status(&tree.path).map(|s| s.files.into_iter().map(|f| f.path).collect()).unwrap_or_default()
             };
             let ahead = if tree.main { 0 } else { agentty_bridge::worktree::commits_ahead(&tree.path, &base) };
-            TreeInfo { tree, changes, ahead }
+            let names: Vec<&str> = files.iter().map(String::as_str).collect();
+            let last_worked = agentty_bridge::inventory::last_worked_in(&tree.path, &names);
+            TreeInfo { tree, changes: files.len(), ahead, repo: None, last_worked }
         })
         .collect();
     snapshot
@@ -277,6 +326,10 @@ impl Workbench {
     pub(super) fn open_files_panel(&mut self, pinned: Option<PathBuf>, cx: &mut Context<Self>) {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "files_panel" }));
         self.show_files_panel(pinned, cx);
+        // Opened on a folder of projects: its worktrees are looked for again.
+        if let Some(folder) = self.active_pane().and_then(|pane| self.scan_folder_of(&pane, cx)) {
+            self.scan_folder(folder, cx);
+        }
     }
 
     /// Opens the panel without counting it as a use (a restart bringing it back).
@@ -291,6 +344,7 @@ impl Workbench {
                     expanded: HashSet::new(),
                     tab: FilesTab::Files,
                     trees_folded: false,
+                    folded_projects: HashSet::new(),
                     selected: None,
                     remove_confirm: None,
                     error: None,
@@ -300,13 +354,19 @@ impl Workbench {
                     loading: false,
                     seen: None,
                     demo_pick: 0,
+                    click_generation: 0,
+                    click_terminal: None,
                 });
                 // Refreshes while it is open; ends with the panel.
+                let handle = self.window_handle;
                 cx.spawn(async move |this, cx| loop {
                     cx.background_executor().timer(REFRESH_EVERY).await;
+                    // Not on screen (minimized, hidden, covered): nobody sees it, and the window
+                    // coming back to the front refreshes it at once.
+                    let shown = Self::on_screen(handle, cx);
                     match this.update(cx, |this, cx| {
                         let open = this.files_panel.is_some();
-                        if open && this.page.is_none() {
+                        if open && this.page.is_none() && shown {
                             this.refresh_files_panel(cx);
                         }
                         open
@@ -320,6 +380,13 @@ impl Workbench {
         }
         self.refresh_files_panel(cx);
         cx.notify();
+    }
+
+    /// The window came back to the front: files the agents changed meanwhile show at once.
+    pub(super) fn files_window_activated(&mut self) {
+        if let Some(panel) = self.files_panel.as_mut() {
+            panel.seen = None;
+        }
     }
 
     /// Follows the active pane: another tab or a `cd` shows that project right away. Called on render.
@@ -360,7 +427,12 @@ impl Workbench {
         }
         // A pinned tree is kept only while it belongs to the project the active pane is in.
         if let (Some(pinned), Some(active)) = (&panel.pinned, &active) {
-            let related = panel.snapshot.trees.is_empty() || panel.snapshot.trees.iter().any(|t| &t.tree.path == active);
+            // From a folder of projects (the home folder) any of its projects' trees can be looked at.
+            let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let under_folder = super::worktrees::is_folder_of_projects(active)
+                && agentty_bridge::worktree::main_tree(pinned)
+                    .is_some_and(|main| main.starts_with(active) || real(&main).starts_with(real(active)));
+            let related = under_folder || panel.snapshot.trees.is_empty() || panel.snapshot.trees.iter().any(|t| &t.tree.path == active);
             if pinned == active || !related || !pinned.is_dir() {
                 panel.pinned = None;
             }
@@ -381,6 +453,11 @@ impl Workbench {
                 if panel.snapshot != snapshot {
                     panel.snapshot = snapshot;
                     cx.notify();
+                }
+                // Picked (or unpinned) while this was loading: show that now, not at the next tick.
+                let wanted = panel.pinned.clone().or_else(|| this.active_tree(cx));
+                if this.files_panel.as_ref().is_some_and(|panel| wanted.is_some_and(|root| root != panel.snapshot.root)) {
+                    this.refresh_files_panel(cx);
                 }
             });
         })
@@ -569,6 +646,13 @@ impl Workbench {
                         }
                     }
                 };
+                // Lists of folders of projects may hold the tree: look again.
+                if result.is_ok() {
+                    let folders: Vec<PathBuf> = this.folder_scans.keys().cloned().collect();
+                    for folder in folders {
+                        this.scan_folder(folder, cx);
+                    }
+                }
                 if let Some(panel) = this.files_panel.as_mut() {
                     panel.remove_confirm = None;
                     panel.error = (!message.is_empty()).then_some(message);
@@ -808,8 +892,28 @@ impl Workbench {
         let menu = self.files_panel.as_ref()?.tree_menu.as_ref()?;
         let tree = menu.tree.clone();
         let (path, main) = (tree.path.clone(), tree.main);
-        let session = self.panes_in_tree(&path, cx).into_iter().next();
+        let sessions = self.panes_in_tree(&path, cx);
+        let session = sessions.first().cloned();
         let in_use = session.is_some();
+        let active = self.active_pane();
+        // The active pane is a terminal working elsewhere: "open in this terminal" moves it here.
+        let terminal_here = self.terminal_elsewhere(&path, cx);
+        // Only the active pane works in this linked tree: "clean up" takes it back to the project
+        // folder and removes the tree (asking first when something would be lost).
+        // Counted in every window: an agent of another window may work in this tree too.
+        let everywhere = self
+            .panes_everywhere(cx)
+            .into_iter()
+            .filter(|pane| agentty_bridge::worktree::tree_root(&pane.read(cx).display_cwd()).as_deref() == Some(path.as_path()))
+            .count();
+        let cleanable = (!main && sessions.len() == 1 && everywhere == 1 && cfg!(unix))
+            .then(|| {
+                active.filter(|pane| {
+                    let view = pane.read(cx);
+                    pane.entity_id() == sessions[0].entity_id() && !view.is_agent() && view.can_move()
+                })
+            })
+            .flatten();
         let separator = || div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER));
         let mut list = popover().w(px(250.)).on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_tree_menu(cx))).child(
             div()
@@ -824,6 +928,17 @@ impl Workbench {
         if !tree.prunable {
             let (view, terminal, reveal, copy) = (path.clone(), path.clone(), path.clone(), path.clone());
             list = list
+                .children(terminal_here.map(|pane| {
+                    let (target, id) = (path.clone(), pane.entity_id());
+                    menu_item(
+                        "files-tree-menu-open-here",
+                        t(cx, "files.menu.open_in_terminal"),
+                        cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.close_tree_menu(cx);
+                            this.switch_pane_to_tree(id, target.clone(), window, cx);
+                        }),
+                    )
+                }))
                 .child(menu_item(
                     "files-tree-menu-view",
                     t(cx, "files.menu.view"),
@@ -872,6 +987,19 @@ impl Workbench {
                 t(cx, "files.menu.prune"),
                 cx.listener(|this, _: &ClickEvent, _, cx| this.prune_trees(cx)),
             ));
+        } else if let Some(pane) = cleanable {
+            let id = pane.entity_id();
+            list = list.child(
+                menu_item(
+                    "files-tree-menu-clean-up",
+                    t(cx, "files.menu.clean_up"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.close_tree_menu(cx);
+                        this.clean_up_tree(id, cx);
+                    }),
+                )
+                .text_color(hex(Chrome::ERROR)),
+            );
         } else if in_use {
             list = list.child(div().px_3().py_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "files.tree_in_use")));
         } else {
@@ -901,6 +1029,36 @@ impl Workbench {
         gpui::deferred(gpui::anchored().position(position).snap_to_window_with_margin(px(8.)).child(list))
             .with_priority(3)
             .into_any_element()
+    }
+
+    /// The active pane when it is a terminal (no agent running in it) that works outside `tree`:
+    /// the one "open in this terminal" and a double click move there.
+    /// Windows can't tell whether its shell waits at the prompt (no foreground process group), so
+    /// nothing is offered there.
+    fn terminal_elsewhere(&self, tree: &Path, cx: &gpui::App) -> Option<Pane> {
+        self.active_pane().filter(|_| cfg!(unix)).filter(|pane| {
+            let view = pane.read(cx);
+            view.tool_id() == "shell"
+                && view.can_move()
+                && agentty_bridge::worktree::tree_root(&view.display_cwd()).as_deref() != Some(tree)
+        })
+    }
+
+    /// "Carry on in worktree x?": the terminal `pane` moves there when the answer is yes.
+    fn ask_continue_in_tree(&mut self, pane: gpui::EntityId, tree: Worktree, cx: &mut Context<Self>) {
+        let name = if tree.main { tree.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() } else { tree.name() };
+        let ask = super::ask::Ask {
+            title: tf(cx, "files.continue_title", &[("name", &name)]).into(),
+            body: Some(tf(cx, "files.continue_body", &[("folder", &tilde(&tree.path))]).into()),
+            choices: vec![super::ask::AskChoice {
+                label: t(cx, "files.continue_confirm").into(),
+                action: super::ask::AskAction::SwitchTree { pane, tree: tree.path },
+                primary: true,
+                danger: false,
+            }],
+            cancel: true,
+        };
+        self.ask(ask, cx);
     }
 
     /// Panes whose folder is inside the working tree `root`.
@@ -1011,8 +1169,15 @@ impl Workbench {
                 }),
             ));
 
-        let trees =
-            (!snapshot.trees.is_empty() || self.tour_shows_tree_demo()).then(|| self.render_worktrees(panel, active_tree.as_deref(), cx));
+        // A folder of projects (the home folder): the worktrees of the projects under it, grouped.
+        let folder = if snapshot.trees.is_empty() { self.folder_tree_infos(&snapshot.root, cx) } else { None };
+        let trees = if !snapshot.trees.is_empty() || self.tour_shows_tree_demo() {
+            Some(self.render_worktrees(panel, active_tree.as_deref(), None, cx))
+        } else {
+            folder
+                .filter(|(infos, scanning)| !infos.is_empty() || *scanning)
+                .map(|folder| self.render_worktrees(panel, active_tree.as_deref(), Some(folder), cx))
+        };
 
         let tab = |id: &'static str, label: String, which: FilesTab, cx: &mut Context<Self>| {
             let active = panel.tab == which;
@@ -1095,13 +1260,51 @@ impl Workbench {
     }
 
     /// The working trees of the project, as a small graph hanging off the project's own tree.
-    fn render_worktrees(&self, panel: &FilesPanel, active_tree: Option<&Path>, cx: &mut Context<Self>) -> AnyElement {
+    /// The worktrees of the projects under `folder` when it is a folder of projects (no repository,
+    /// under the home folder), as the Worktrees search found them, with whether it still runs.
+    fn folder_tree_infos(&self, folder: &Path, cx: &mut Context<Self>) -> Option<(Vec<TreeInfo>, bool)> {
+        if !self.is_folder_of_projects_cached(folder) {
+            return None;
+        }
+        self.want_folder_scan(folder, cx);
+        let scan = self.folder_scan(folder);
+        let infos = scan
+            .and_then(|scan| scan.trees.as_ref())
+            .map(|trees| {
+                trees
+                    .iter()
+                    .map(|found| TreeInfo {
+                        tree: found.tree.clone(),
+                        changes: found.dirty as usize,
+                        ahead: if found.tree.main { 0 } else { found.ahead },
+                        repo: Some(found.repo.clone()),
+                        last_worked: found.last_worked(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some((infos, scan.is_none_or(|scan| scan.scanning)))
+    }
+
+    /// `folder`: the list of a folder of projects (grouped by project) and whether it is still
+    /// being looked for, instead of the repository's own trees.
+    fn render_worktrees(
+        &self,
+        panel: &FilesPanel,
+        active_tree: Option<&Path>,
+        folder: Option<(Vec<TreeInfo>, bool)>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let snapshot = &panel.snapshot;
         let folded = panel.trees_folded;
         // The onboarding tour shows example trees where the project has none of its own.
-        let demo = self.tour_shows_tree_demo();
-        let (trees, demo_sessions): (Vec<TreeInfo>, Vec<(&'static str, u32)>) =
-            if demo { demo_trees().into_iter().unzip() } else { (snapshot.trees.clone(), Vec::new()) };
+        let demo = self.tour_shows_tree_demo() && folder.is_none();
+        let scanning = folder.as_ref().is_some_and(|(_, scanning)| *scanning);
+        let (trees, demo_sessions): (Vec<TreeInfo>, Vec<(&'static str, u32)>) = match folder {
+            _ if demo => demo_trees().into_iter().unzip(),
+            Some((infos, _)) => (infos, Vec::new()),
+            None => (snapshot.trees.clone(), Vec::new()),
+        };
         let linked = trees.iter().filter(|t| !t.tree.main).count();
         let title = div()
             .id("files-trees-title")
@@ -1116,6 +1319,8 @@ impl Workbench {
             .text_color(hex(Chrome::MUTED))
             .child(icon(if folded { "chevron-right" } else { "chevron-down" }, 12., hex(Chrome::MUTED)))
             .child(div().min_w_0().truncate().child(t(cx, "files.worktrees").to_uppercase()))
+            // Still looking through the projects of the folder.
+            .when(scanning, |d| d.child(crate::ui::spinner(IconSize::INLINE, hex(Chrome::MUTED))))
             .when(demo, |d| {
                 d.child(
                     div()
@@ -1141,7 +1346,42 @@ impl Workbench {
                 }
                 cx.notify();
             }));
-        let height = trees_height(trees.len(), crate::settings::settings(cx).files_panel_trees_height);
+        let headers = {
+            let mut repos: Vec<&PathBuf> = trees.iter().filter_map(|t| t.repo.as_ref()).collect();
+            repos.dedup();
+            repos.len()
+        };
+        // Folded projects keep their band and hide their trees.
+        let hidden = trees.iter().filter(|t| t.repo.as_ref().is_some_and(|repo| panel.folded_projects.contains(repo))).count();
+        let height =
+            trees_height(trees_content_height(trees.len() - hidden, headers), crate::settings::settings(cx).files_panel_trees_height);
+        // A project picked from the list of a folder of projects: the way back to that list.
+        let back = active_tree
+            .filter(|folder| demo_sessions.is_empty() && panel.pinned.is_some() && self.is_folder_of_projects_cached(folder))
+            .map(|folder| {
+                div()
+                    .id("files-trees-back")
+                    .mx_1()
+                    .px_1p5()
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .t_caption()
+                    .text_color(hex(Chrome::BLUE))
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .child(icon("arrow-left", 12., hex(Chrome::BLUE)))
+                    .child(div().min_w_0().truncate().child(tf(cx, "files.back_to_folder", &[("folder", &tilde(folder))])))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if let Some(panel) = this.files_panel.as_mut() {
+                            panel.pinned = None;
+                        }
+                        this.refresh_files_panel(cx);
+                        cx.notify();
+                    }))
+            });
         // Scrolls inside its own height, which the handle below it changes.
         let mut list = div().id("files-trees-list").h(px(height)).overflow_y_scroll().flex().flex_col().pb_1();
         let count = trees.len();
@@ -1151,23 +1391,131 @@ impl Workbench {
             let tree = &info.tree;
             let viewing = if demo { panel.demo_pick == index } else { tree.path == snapshot.root };
             let here = if demo { index == 0 } else { active_tree == Some(tree.path.as_path()) };
-            let last = index + 1 == count;
+            // The rail ends at the last tree of the project (of the list, outside a folder of projects).
+            let last = index + 1 == count || trees.get(index + 1).is_some_and(|next| next.repo.is_some() && next.repo != info.repo);
+            // Each project of a folder of projects opens with a band of its own: a line between
+            // projects, its name in full weight, where it is, and how many worktrees it has.
+            if let Some(repo) = info.repo.as_ref().filter(|repo| index == 0 || trees[index - 1].repo.as_ref() != Some(*repo)) {
+                let linked_here = trees.iter().filter(|t| t.repo.as_ref() == Some(repo) && !t.tree.main).count();
+                let project_folded = panel.folded_projects.contains(repo);
+                // Fixed heights, so the list's height is known before it is drawn (`trees_content_height`).
+                list = list
+                    .when(index > 0, |d| {
+                        d.child(
+                            div()
+                                .h(px(PROJECT_GAP_HEIGHT))
+                                .flex()
+                                .items_center()
+                                .child(div().mx_2().w_full().h(px(1.)).bg(hex(Chrome::BORDER))),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("files-tree-project-{index}")))
+                            .h(px(PROJECT_BAND_HEIGHT))
+                            .flex_shrink_0()
+                            .mx_1()
+                            .px_1p5()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded_md()
+                            .bg(hex_alpha(Chrome::BLUE, 0.08))
+                            .tooltip(Tooltip::text(tilde(repo), None))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hex_alpha(Chrome::BLUE, 0.16)))
+                            .on_click({
+                                let repo = repo.clone();
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    if let Some(panel) = this.files_panel.as_mut() {
+                                        if !panel.folded_projects.remove(&repo) {
+                                            panel.folded_projects.insert(repo.clone());
+                                        }
+                                    }
+                                    cx.notify();
+                                })
+                            })
+                            .child(icon(if project_folded { "chevron-right" } else { "chevron-down" }, 12., hex(Chrome::MUTED)))
+                            .child(icon(if project_folded { "folder" } else { "folder-open" }, 14., hex(Chrome::BLUE)))
+                            .child(
+                                // Two lines: the folder's name in full, then where it is — cut in the
+                                // middle when narrow, so both its start and the folder itself stay.
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .truncate()
+                                            .t_small()
+                                            .font_weight(crate::theme::EMPHASIS)
+                                            .text_color(hex(Chrome::BRIGHT))
+                                            .child(repo.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+                                    )
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .truncate()
+                                            .t_caption()
+                                            .text_color(hex(Chrome::FOREGROUND))
+                                            .child(crate::ui::middle_ellipsis(&tilde(repo), 34)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_0p5()
+                                    .px_1()
+                                    .rounded_sm()
+                                    .t_caption()
+                                    .bg(hex_alpha(Chrome::PURPLE, 0.18))
+                                    .text_color(hex(Chrome::PURPLE))
+                                    .child(icon("git-fork", 10., hex(Chrome::PURPLE)))
+                                    .child(linked_here.to_string()),
+                            ),
+                    );
+            }
+            if info.repo.as_ref().is_some_and(|repo| panel.folded_projects.contains(repo)) {
+                continue;
+            }
             let sessions = sessions_by_tree.remove(&tree.path).unwrap_or_default();
             let color = if tree.main { Chrome::BLUE } else { Chrome::PURPLE };
             let branch = tree.branch.clone().unwrap_or_else(|| t(cx, "files.detached").to_string());
-            // Rail of the graph: the project's tree is the trunk, linked trees branch off it.
-            let rail = div().w(px(18.)).h(px(TREE_ROW_HEIGHT)).flex_shrink_0().relative().when(!tree.main, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .left(px(8.))
-                        .top_0()
-                        .w(px(1.))
-                        .h(px(if last { TREE_ROW_HEIGHT / 2. } else { TREE_ROW_HEIGHT }))
-                        .bg(hex(Chrome::MUTED)),
-                )
-                .child(div().absolute().left(px(8.)).top(px(TREE_ROW_HEIGHT / 2.)).w(px(10.)).h(px(1.)).bg(hex(Chrome::MUTED)))
-            });
+            // Rail of the graph: the project's tree is the trunk, starting under its folder icon; each
+            // linked tree branches off it, one step in, and the trunk ends at the project's last one.
+            let line = hex_alpha(Chrome::PURPLE, 0.55);
+            let rail = match tree.main {
+                true => div().w(px(RAIL_MAIN)).h(px(TREE_ROW_HEIGHT)).flex_shrink_0(),
+                false => div()
+                    .w(px(RAIL_LINKED))
+                    .h(px(TREE_ROW_HEIGHT))
+                    .flex_shrink_0()
+                    .relative()
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(TRUNK_X))
+                            .top_0()
+                            .w(px(1.))
+                            .h(px(if last { TREE_ROW_HEIGHT / 2. } else { TREE_ROW_HEIGHT }))
+                            .bg(line),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(TRUNK_X))
+                            .top(px(TREE_ROW_HEIGHT / 2.))
+                            .w(px(RAIL_LINKED - TRUNK_X + 4.))
+                            .h(px(1.))
+                            .bg(line),
+                    ),
+            };
+            // The trunk leaves the project's folder icon when trees branch off below it.
+            let trunk_start = tree.main && trees.get(index + 1).is_some_and(|next| !next.tree.main && next.repo == info.repo);
             let mut avatars = div().flex().items_center().gap_0p5().flex_shrink_0();
             for pane in sessions.iter().take(4) {
                 let view = pane.read(cx);
@@ -1216,7 +1564,35 @@ impl Workbench {
                         if demo {
                             return this.pick_demo_tree(index, cx);
                         }
-                        this.open_tree(row_tree.clone(), window, cx);
+                        // A double click from a terminal: carry on in this tree there (asked first). The
+                        // single click waits out the double-click time before it acts, since what it does
+                        // (pin the tree, focus its session) moves the list and the focus under a second click.
+                        let terminal = this.terminal_elsewhere(&row_tree.path, cx);
+                        let Some(panel) = this.files_panel.as_mut() else { return };
+                        panel.click_generation += 1;
+                        if event.click_count() >= 2 {
+                            if let Some(pane) = panel.click_terminal.take().or(terminal.clone()) {
+                                return this.ask_continue_in_tree(pane.entity_id(), row_tree.clone(), cx);
+                            }
+                        }
+                        if terminal.is_none() {
+                            return this.open_tree(row_tree.clone(), window, cx);
+                        }
+                        panel.click_terminal = terminal;
+                        let (generation, tree, handle) = (panel.click_generation, row_tree.clone(), window.window_handle());
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(DOUBLE_CLICK).await;
+                            let _ = cx.update_window(handle, |_, window, cx| {
+                                let _ = this.update(cx, |this, cx| {
+                                    let Some(panel) = this.files_panel.as_mut().filter(|p| p.click_generation == generation) else {
+                                        return;
+                                    };
+                                    panel.click_terminal = None;
+                                    this.open_tree(tree.clone(), window, cx);
+                                });
+                            });
+                        })
+                        .detach();
                     }))
                     // Right click: what can be done with this tree (not with the tour's examples).
                     .when(!demo, |d| {
@@ -1230,6 +1606,17 @@ impl Workbench {
                     })
                     // The tour asks for a session's tree: those rows get its pulsing ring.
                     .when(ring && !tree.main, |d| d.child(crate::ui::pulse_ring("files-trees", false)))
+                    .when(trunk_start, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(TRUNK_X))
+                                .top(px(TREE_ROW_HEIGHT / 2. + 8.))
+                                .w(px(1.))
+                                .h(px(TREE_ROW_HEIGHT / 2. - 8.))
+                                .bg(line),
+                        )
+                    })
                     .child(rail)
                     .child(icon(if tree.main { "folder" } else { "git-fork" }, 13., hex(color)))
                     .child(
@@ -1297,6 +1684,16 @@ impl Workbench {
                                     }),
                             ),
                     )
+                    // When it was last worked on, as the Worktrees page says ("19 min ago").
+                    .when(info.last_worked > 0 && !demo, |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .t_caption()
+                                .text_color(hex(Chrome::MUTED))
+                                .child(super::tree_manager::ago(cx, info.last_worked)),
+                        )
+                    })
                     .child(avatars)
                     // Only trees Agentty made, and only when no session works in them.
                     .when(tree.managed && sessions.is_empty(), |d| {
@@ -1349,6 +1746,7 @@ impl Workbench {
         div()
             .flex_shrink_0()
             .child(title)
+            .children(back)
             .when(!folded, |d| d.child(list).child(handle))
             .when(folded, |d| d.border_b_1().border_color(hex(Chrome::BORDER)))
             .into_any_element()
@@ -1593,15 +1991,18 @@ mod tests {
     }
 
     #[test]
-    fn the_tree_list_is_as_tall_as_asked_within_its_rows() {
+    fn the_tree_list_is_as_tall_as_asked() {
+        let rows = |n: usize| trees_content_height(n, 0);
         // Never dragged: all rows up to six and a half, then it scrolls.
-        assert_eq!(trees_height(3, 0.), 3. * TREE_ROW_HEIGHT + 4.);
-        assert_eq!(trees_height(12, 0.), DEFAULT_TREES_HEIGHT);
-        // Dragged: that height, but never past the rows and never under one row.
-        assert_eq!(trees_height(12, 400.), 400.);
-        assert_eq!(trees_height(6, 400.), 6. * TREE_ROW_HEIGHT + 4.);
-        assert_eq!(trees_height(6, 10.), MIN_TREES_HEIGHT);
-        assert_eq!(trees_height(6, 90.), 90.);
+        assert_eq!(trees_height(rows(3), 0.), 3. * TREE_ROW_HEIGHT + 4.);
+        assert_eq!(trees_height(rows(12), 0.), DEFAULT_TREES_HEIGHT);
+        // Dragged: that height, taller or shorter than its rows, never under one row.
+        assert_eq!(trees_height(rows(12), 400.), 400.);
+        assert_eq!(trees_height(rows(6), 400.), 400.);
+        assert_eq!(trees_height(rows(6), 10.), MIN_TREES_HEIGHT);
+        assert_eq!(trees_height(rows(6), 90.), 90.);
+        // A folder of projects: bands and the lines between them count too.
+        assert_eq!(trees_content_height(2, 3), 2. * TREE_ROW_HEIGHT + 3. * PROJECT_BAND_HEIGHT + 2. * PROJECT_GAP_HEIGHT + 4.);
     }
 
     #[test]

@@ -126,6 +126,15 @@ pub fn find_repos(known: &[PathBuf], cancel: &AtomicBool) -> Vec<PathBuf> {
     unique_roots(candidates)
 }
 
+/// The main working trees of the repositories found under `dir` (a folder that is no repository
+/// itself, such as the home folder or a folder of projects), searched as deep as the Worktrees page
+/// searches the home folder. Sorted by path.
+pub fn repos_below(dir: &Path, cancel: &AtomicBool) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    repos_under(dir, SEARCH_DEPTH, true, &mut candidates, cancel);
+    unique_roots(candidates)
+}
+
 /// The main working trees of the repositories `candidates` (folders holding `.git`) belong to,
 /// each once, sorted.
 fn unique_roots(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -190,6 +199,14 @@ fn tree_status(repo: &Path, tree: Worktree, base: &str) -> TreeStatus {
             git(repo, &["rev-list", "--count", &format!("{base}..{head}")]).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
     }
     status
+}
+
+/// When the working tree at `path` was last worked on, the way the Worktrees page says it: its last
+/// commit or the newest of its uncommitted files (`changed`, relative to `path`), whichever is later.
+pub fn last_worked_in(path: &Path, changed: &[&str]) -> i64 {
+    let change = changed.iter().take(500).map(|p| mtime_secs(&path.join(p))).max().unwrap_or(0);
+    let commit = git(path, &["log", "-1", "--format=%ct"]).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    commit.max(change)
 }
 
 /// Every tree of the repository at `repo` with its state (no pull requests yet: see
@@ -308,6 +325,31 @@ mod tests {
         git(&repo, &["add", "a.txt"]).unwrap();
         git(&repo, &["commit", "-q", "-m", "first"]).unwrap();
         repo
+    }
+
+    /// Every repository under a folder of projects is found once, whether a folder under it is the
+    /// repository or one of its linked worktrees; hidden folders and dependency folders are skipped.
+    #[test]
+    fn finds_the_repositories_below_a_folder() {
+        if crate::process::command("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("agentty-below-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let projects = dir.join("code").join("team");
+        fs::create_dir_all(&projects).unwrap();
+        let repo = repo_in(&projects);
+        let linked = dir.join("code").join("repo-feature");
+        git(&repo, &["worktree", "add", "-q", "-b", "feature", &linked.to_string_lossy()]).unwrap();
+        fs::create_dir_all(dir.join("node_modules").join("pkg").join(".git")).unwrap();
+        fs::create_dir_all(dir.join(".hidden").join("x").join(".git")).unwrap();
+        let never = AtomicBool::new(false);
+        let found = repos_below(&dir, &never);
+        assert_eq!(found, vec![repo.canonicalize().unwrap()]);
+        let trees = all_trees(&found, &never);
+        assert_eq!(trees.len(), 2, "the project folder and its worktree");
+        assert!(repos_below(&dir.join("code").join("nothing-here"), &never).is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

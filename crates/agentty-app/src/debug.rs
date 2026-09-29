@@ -140,11 +140,12 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
             }
             f
         };
-        let mouse = |kind: u64, x: f64, y: f64, modifiers: u64| {
+        let mouse_counted = |kind: u64, x: f64, y: f64, modifiers: u64, clicks: isize| {
             let location = NSPoint::new(x, frame.size.height - y);
-            let event: id = msg_send![class!(NSEvent), mouseEventWithType: kind location: location modifierFlags: modifiers timestamp: 0.0f64 windowNumber: number context: nil eventNumber: 0isize clickCount: 1isize pressure: 1.0f32];
+            let event: id = msg_send![class!(NSEvent), mouseEventWithType: kind location: location modifierFlags: modifiers timestamp: 0.0f64 windowNumber: number context: nil eventNumber: 0isize clickCount: clicks pressure: 1.0f32];
             let () = msg_send![ns_window, sendEvent: event];
         };
+        let mouse = |kind: u64, x: f64, y: f64, modifiers: u64| mouse_counted(kind, x, y, modifiers, 1);
         match (command, coords) {
             ("move", (Some(x), Some(y))) => mouse(5, x, y, flags(argument)),
             // One step of a drag: the caller spaces them out so the window keeps painting.
@@ -154,12 +155,51 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
             }
             ("drag-to", (Some(x), Some(y))) => mouse(6, x, y, 0),
             ("release", (Some(x), Some(y))) => mouse(2, x, y, 0),
+            // `mouseEventWithType:` always reports button 0, which gpui reads as the left button: a
+            // right click is made from a CGEvent (button 1) and sent to this window only — the
+            // pointer on screen doesn't move.
+            ("click", (Some(x), Some(y))) if argument.contains("right") => {
+                #[link(name = "ApplicationServices", kind = "framework")]
+                extern "C" {
+                    fn CGEventCreateMouseEvent(
+                        source: *const std::ffi::c_void,
+                        kind: u32,
+                        point: core_graphics::geometry::CGPoint,
+                        button: u32,
+                    ) -> *mut std::ffi::c_void;
+                    fn CGEventSetIntegerValueField(event: *mut std::ffi::c_void, field: u32, value: i64);
+                    fn CFRelease(object: *const std::ffi::c_void);
+                }
+                mouse(5, x, y, 0);
+                // An event made from a CGEvent has no window: its `locationInWindow` is the CGEvent's
+                // location flipped to bottom-left screen coordinates. Put it where that reads as the
+                // point in this window, which is what gpui takes.
+                let screen_height = core_graphics::display::CGDisplay::main().bounds().size.height;
+                let point = core_graphics::geometry::CGPoint::new(x, screen_height - (frame.size.height - y));
+                // kCGEventRightMouseDown / Up, kCGMouseButtonRight; field 1: the click count.
+                for kind in [3u32, 4] {
+                    let event = CGEventCreateMouseEvent(std::ptr::null(), kind, point, 1);
+                    if event.is_null() {
+                        continue;
+                    }
+                    CGEventSetIntegerValueField(event, 1, 1);
+                    let ns_event: id = msg_send![class!(NSEvent), eventWithCGEvent: event];
+                    if ns_event != nil {
+                        let () = msg_send![ns_window, sendEvent: ns_event];
+                    }
+                    CFRelease(event);
+                }
+            }
+            // `click x y double`: the second press and release say it is the second click.
             ("click", (Some(x), Some(y))) => {
-                let right = argument.contains("right");
                 let modifiers = flags(argument);
                 mouse(5, x, y, 0);
-                mouse(if right { 3 } else { 1 }, x, y, modifiers);
-                mouse(if right { 4 } else { 2 }, x, y, modifiers);
+                mouse(1, x, y, modifiers);
+                mouse(2, x, y, modifiers);
+                if argument.contains("double") {
+                    mouse_counted(1, x, y, modifiers, 2);
+                    mouse_counted(2, x, y, modifiers, 2);
+                }
             }
             // `scroll x y lines` (negative lines scroll up); drags come in as press/drag-to/release.
             ("scroll", (Some(x), Some(y))) => {

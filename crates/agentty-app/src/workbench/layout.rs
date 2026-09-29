@@ -272,8 +272,8 @@ impl Workbench {
                             HudItem::Ports => d.children(port_chips.take()),
                             HudItem::Worktree => d.children(tree_chip.take()),
                             HudItem::Branch => d.children(chip.take()),
-                            // Where this pane is: project folder, with the path (cut in the middle) when
-                            // there is room; the whole path on hover, ⌘-click shows it in the file manager.
+                            // Where this pane is: the folder's name; the whole path on hover, ⌘-click
+                            // shows it in the file manager.
                             HudItem::Folder => d.child(
                                 div()
                                     .id(("pane-folder", pane.entity_id().as_u64() as usize))
@@ -303,17 +303,9 @@ impl Workbench {
                                             .truncate()
                                             .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
                                             .child(folder.clone()),
-                                    )
-                                    .when(width >= 620., |d| {
-                                        let room = ((width - 560.) / 7.5).clamp(14., 48.) as usize;
-                                        d.child(
-                                            div()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_color(hex(Chrome::MUTED))
-                                                .child(crate::ui::middle_ellipsis(&crate::ui::tilde(&cwd), room)),
-                                        )
-                                    }),
+                                    ),
+                                // Only the folder's name: the status bar under the panes already says the
+                                // whole path (and the tooltip here), so the bar keeps its room.
                             ),
                         };
                     }
@@ -497,6 +489,8 @@ pub struct BranchMenu {
     sync: Option<SyncKind>,
     /// Result of the last pull/push: (succeeded, message).
     sync_result: Option<(bool, String)>,
+    /// The last pull failed in a way an agent can resolve (the branch and its upstream diverged).
+    sync_trouble: Option<super::ai_resolve::GitTrouble>,
     _subscription: gpui::Subscription,
 }
 
@@ -586,6 +580,7 @@ impl Workbench {
             Chrome::MUTED
         };
         let sync_bar = open.map(|menu| self.render_branch_sync(menu, &full_name, cx));
+        let mut popup = open.and_then(|menu| menu.picker.update(cx, |picker, cx| picker.render_popup(cx)));
         div()
             .relative()
             .flex_shrink_0()
@@ -629,6 +624,10 @@ impl Workbench {
                 let popover = crate::ui::popover()
                     .w(px(320.))
                     .on_mouse_down_out(cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
+                        // A branch's own menu may reach past this one: a click in it is no click outside.
+                        if this.branch_menu.as_ref().is_some_and(|m| m.picker.read(cx).has_popup()) {
+                            return;
+                        }
                         if this.branch_menu.take().is_some() {
                             this.branch_menu_closed = Some((id, std::time::Instant::now()));
                             cx.notify();
@@ -637,7 +636,8 @@ impl Workbench {
                     .children(sync_bar)
                     .child(menu.picker.clone());
                 // Anchored right under the chip (over it when the bar sits under the terminal), left edges aligned.
-                d.child(bar_popover(crate::ui::fade_in("branch-menu-fade", popover), 2, cx))
+                // A branch's right-click menu: beside this one, in a layer above it.
+                d.child(bar_popover(crate::ui::fade_in("branch-menu-fade", popover), 2, cx)).children(popup.take())
             })
             .into_any_element()
     }
@@ -685,14 +685,33 @@ impl Workbench {
             match event {
                 BranchPickerEvent::Pick { name, remote } => this.switch_branch(repo, name.clone(), *remote, cx),
                 BranchPickerEvent::Create(name) => this.create_branch(repo, name.clone(), cx),
+                // A branch renamed, deleted or made from another in the menu: panes in the repository show it.
+                // Read from files (no git process per pane on the UI thread).
+                BranchPickerEvent::Changed => {
+                    // A rename or a new branch may have changed the branch the sync bar is about.
+                    this.load_branch_status(cx);
+                    for pane in this.all_panes() {
+                        if agentty_bridge::worktree::tree_root(&pane.read(cx).display_cwd()).as_deref() == Some(repo.as_path()) {
+                            pane.update(cx, |view, cx| view.probe_git(cx));
+                        }
+                    }
+                }
                 BranchPickerEvent::Dismiss => {
                     this.branch_menu = None;
                     cx.notify();
                 }
             }
         });
-        self.branch_menu =
-            Some(BranchMenu { pane: id, repo, picker, status: None, sync: None, sync_result: None, _subscription: subscription });
+        self.branch_menu = Some(BranchMenu {
+            pane: id,
+            repo,
+            picker,
+            status: None,
+            sync: None,
+            sync_result: None,
+            sync_trouble: None,
+            _subscription: subscription,
+        });
         self.load_branch_status(cx);
         cx.notify();
     }
@@ -720,6 +739,7 @@ impl Workbench {
         }
         menu.sync = Some(kind);
         menu.sync_result = None;
+        menu.sync_trouble = None;
         let repo = menu.repo.clone();
         let (branch, has_upstream) = menu.status.as_ref().map(|s| (s.branch.clone(), s.upstream.is_some())).unwrap_or((None, false));
         cx.notify();
@@ -753,8 +773,11 @@ impl Workbench {
                     (Err(err), _) => agentty_bridge::git::failure_reason(&err.to_string()),
                 };
                 let repo = this.branch_menu.as_ref().map(|m| m.repo.clone());
+                let diverged = matches!((&result, kind), (Err(err), SyncKind::Pull) if agentty_bridge::git::is_diverged(&err.to_string()));
+                let message = if diverged { t(cx, "git.pull_diverged").to_string() } else { message };
                 if let Some(menu) = this.branch_menu.as_mut() {
                     menu.sync = None;
+                    menu.sync_trouble = diverged.then_some(super::ai_resolve::GitTrouble::Pull);
                     menu.sync_result = Some((result.is_ok(), message.clone()));
                 } else {
                     this.set_status(message, cx);
@@ -864,6 +887,29 @@ impl Workbench {
                     div().t_caption().text_color(hex(if ok { Chrome::SUCCESS } else { Chrome::ERROR })).child(message)
                 }),
             )
+            .children(menu.sync_trouble.clone().map(|trouble| {
+                let repo = menu.repo.clone();
+                div()
+                    .id("branch-resolve-ai")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_1p5()
+                    .py_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .t_small()
+                    .bg(hex(Chrome::ACCENT))
+                    .text_color(hex(Chrome::BRIGHT))
+                    .hover(|s| s.opacity(0.85))
+                    .child(icon("sparkles", IconSize::INLINE, hex(Chrome::BRIGHT)))
+                    .child(t(cx, "git.ai_resolve"))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.branch_menu = None;
+                        this.resolve_with_ai(repo.clone(), trouble.clone(), window, cx);
+                    }))
+            }))
             .child(div().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
             .into_any_element()
     }
@@ -902,6 +948,7 @@ impl Workbench {
         if !remote && current.as_ref() == Some(&branch) {
             return;
         }
+        let label = crate::branch_picker::branch_label(&branch, remote).to_string();
         let task = cx.background_spawn(async move {
             agentty_bridge::git::checkout(&repo, &branch, remote)?;
             Ok::<_, anyhow::Error>(crate::branch_picker::branch_label(&branch, remote).to_string())
@@ -911,7 +958,7 @@ impl Workbench {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(branch) => this.show_branch(&menu.repo, branch, cx),
-                    Err(err) => this.set_status(format!("git: {err}"), cx),
+                    Err(err) => this.branch_switch_refused(&label, &err.to_string(), cx),
                 }
                 cx.notify();
             });
@@ -921,6 +968,32 @@ impl Workbench {
 }
 
 impl Workbench {
+    /// A branch switch git refused, said where it can't be missed. A branch another working tree has
+    /// checked out can't be switched to here at all: offer to open that tree instead.
+    pub(super) fn branch_switch_refused(&mut self, branch: &str, error: &str, cx: &mut Context<Self>) {
+        match agentty_bridge::git::checked_out_elsewhere(error) {
+            Some(tree) => {
+                let folder = crate::ui::tilde(&tree);
+                let ask = super::ask::Ask {
+                    title: tf(cx, "branch.in_other_tree_title", &[("branch", branch)]).into(),
+                    body: Some(tf(cx, "branch.in_other_tree_body", &[("branch", branch), ("folder", &folder)]).into()),
+                    choices: vec![super::ask::AskChoice {
+                        label: t(cx, "branch.open_that_tree").into(),
+                        action: super::ask::AskAction::OpenTree(tree),
+                        primary: true,
+                        danger: false,
+                    }],
+                    cancel: true,
+                };
+                self.ask(ask, cx);
+            }
+            None => {
+                let reason = agentty_bridge::git::failure_reason(error);
+                self.show_toast(tf(cx, "branch.switch_failed", &[("branch", branch), ("reason", &reason)]), cx);
+            }
+        }
+    }
+
     /// Always shows the model, context and branch; usage, elapsed time and the folder fold away
     /// as the pane narrows.
     fn render_agent_bar(&self, pane: &Pane, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {

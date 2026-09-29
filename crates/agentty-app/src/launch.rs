@@ -334,7 +334,7 @@ impl LaunchSpec {
         let shell = Self::shell_program();
         if let Start::Command(line) = &self.start {
             // User-defined command lines are shell syntax by design; run them as written.
-            let script = format!("{line}; {}", fallback_shell(&shell));
+            let script = format!("{line}; {}{}", leave_gone_folder(&shell, &self.cwd), fallback_shell(&shell));
             return (shell, vec!["-l".into(), "-i".into(), "-c".into(), script]);
         }
         match self.command() {
@@ -346,7 +346,12 @@ impl LaunchSpec {
             None => (shell, vec!["-l".into()]),
             Some(args) => {
                 let line = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
-                let script = format!("{}{line}; {}", auth.shell_prefix(), auth.clear_before(&fallback_shell(&shell)));
+                let script = format!(
+                    "{}{line}; {}{}",
+                    auth.shell_prefix(),
+                    leave_gone_folder(&shell, &self.cwd),
+                    auth.clear_before(&fallback_shell(&shell))
+                );
                 (shell, vec!["-l".into(), "-i".into(), "-c".into(), script])
             }
         }
@@ -424,6 +429,22 @@ impl AuthSetup {
             _ => exec_line.to_string(),
         }
     }
+}
+
+/// Shell snippet run before the fallback shell: when the command removed the folder the pane works in
+/// (an agent cleaning up its working tree), the shell would start in a folder that is gone and zsh
+/// shows it as `.`. Go to the project folder `cwd` belongs to (the repository's main working tree,
+/// noted now while `cwd` still exists), else home. POSIX syntax: only for zsh and bash, as other
+/// shells (csh, nushell, xonsh) would refuse the whole line and the agent with it.
+#[cfg(unix)]
+fn leave_gone_folder(shell: &str, cwd: &std::path::Path) -> String {
+    use crate::shell_integration::{flavor, ShellFlavor};
+    if !matches!(flavor(shell), ShellFlavor::Zsh | ShellFlavor::Bash) {
+        return String::new();
+    }
+    let project = agentty_bridge::worktree::main_tree(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let project = shell_quote(&project.display().to_string());
+    format!("[ -d \"$PWD\" ] || builtin cd -- {project} 2>/dev/null || builtin cd -- \"$HOME\"; ")
 }
 
 /// The interactive shell a pane falls back to when its command exits. The first shell's generated
@@ -1044,6 +1065,46 @@ pub(crate) mod tests {
         assert_eq!(args[..3], ["-l", "-i", "-c"]);
         assert!(args[3].starts_with("codex -c "));
         assert!(args[3].contains("; exec "));
+    }
+
+    /// A command pane whose folder was removed while it ran falls back to a shell in the project
+    /// folder, else home — never in the folder that is gone.
+    #[test]
+    #[cfg(unix)]
+    fn fallback_shell_leaves_a_removed_folder() {
+        let line = leave_gone_folder("/bin/zsh", std::path::Path::new("/tmp/agentty-example-not-a-repo"));
+        assert_eq!(leave_gone_folder("/bin/csh", std::path::Path::new("/tmp")), "", "csh can't parse it: nothing added");
+        assert_eq!(leave_gone_folder("/usr/local/bin/nu", std::path::Path::new("/tmp")), "");
+        assert_eq!(line, "[ -d \"$PWD\" ] || builtin cd -- /tmp/agentty-example-not-a-repo 2>/dev/null || builtin cd -- \"$HOME\"; ");
+        let spec = LaunchSpec::new(PaneKind::Codex, PathBuf::from("/tmp"));
+        let (shell, args) = spec.argv();
+        if matches!(
+            crate::shell_integration::flavor(&shell),
+            crate::shell_integration::ShellFlavor::Zsh | crate::shell_integration::ShellFlavor::Bash
+        ) {
+            assert!(args[3].contains("; [ -d \"$PWD\" ] || builtin cd -- /tmp "), "{}", args[3]);
+        }
+
+        // Run it: a shell in a folder removed under it ends up in the project folder, else home.
+        let dir = std::env::temp_dir().join(format!("agentty-leave-gone-{}", std::process::id()));
+        let (project, gone) = (dir.join("project"), dir.join("gone"));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&gone).unwrap();
+        let run = |target: &std::path::Path| {
+            let script = format!(
+                "cd {} && rmdir \"$PWD\" && {}pwd",
+                shell_quote(&gone.display().to_string()),
+                leave_gone_folder("/bin/bash", target)
+            );
+            // Run by bash, as the snippet only ever is (zsh or bash): `/bin/sh` is dash on Linux, which
+            // has no `builtin`.
+            let out = std::process::Command::new("bash").args(["-c", &script]).env("HOME", &dir).output().unwrap();
+            std::fs::create_dir_all(&gone).unwrap();
+            PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).canonicalize().unwrap()
+        };
+        assert_eq!(run(&project), project.canonicalize().unwrap());
+        assert_eq!(run(&dir.join("missing")), dir.canonicalize().unwrap());
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

@@ -489,10 +489,11 @@ pub fn loading_row(text: impl Into<SharedString>) -> Div {
 
 /// Rotating loader icon.
 pub fn spinner(size: f32, color: Hsla) -> impl IntoElement {
-    icon("loader-circle", size, color).with_animation(
-        "spinner",
-        gpui::Animation::new(std::time::Duration::from_millis(900)).repeat(),
-        |svg, delta| svg.with_transformation(gpui::Transformation::rotate(gpui::percentage(delta))),
+    // A full turn every 900 ms, drawn 30 times a second (see `Ticking`).
+    let turn = (clock_ms() % 900) as f32 / 900.0;
+    Ticking::new(
+        icon("loader-circle", size, color).with_transformation(gpui::Transformation::rotate(gpui::percentage(turn))),
+        std::time::Duration::from_millis(33),
     )
 }
 
@@ -500,20 +501,117 @@ pub fn spinner(size: f32, color: Hsla) -> impl IntoElement {
 /// card show the same thing the pane does.
 pub fn dot_spinner(id: impl Into<ElementId>, size: f32, color: Hsla) -> impl IntoElement {
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    div()
-        .flex_shrink_0()
-        .size(px(size))
-        .flex()
-        .items_center()
-        .justify_center()
-        // The terminal font has the braille block; the UI font may not.
-        .font_family("JetBrains Mono")
-        .text_size(px(size * 1.1))
-        .text_color(color)
-        .with_animation(id, gpui::Animation::new(std::time::Duration::from_millis(800)).repeat(), |frame, delta| {
-            let index = ((delta * FRAMES.len() as f32) as usize).min(FRAMES.len() - 1);
-            frame.child(FRAMES[index])
-        })
+    const FRAME_MS: u128 = 80;
+    let index = ((clock_ms() / FRAME_MS) % FRAMES.len() as u128) as usize;
+    Ticking::new(
+        div()
+            .id(id)
+            .flex_shrink_0()
+            .size(px(size))
+            .flex()
+            .items_center()
+            .justify_center()
+            // The terminal font has the braille block; the UI font may not.
+            .font_family("JetBrains Mono")
+            .text_size(px(size * 1.1))
+            .text_color(color)
+            .child(FRAMES[index]),
+        std::time::Duration::from_millis(FRAME_MS as u64),
+    )
+}
+
+/// Milliseconds on one clock shared by every spinner, so they all turn in step.
+fn clock_ms() -> u128 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis()
+}
+
+/// An element that has the view drawing it drawn again after `every`.
+///
+/// `with_animation(... .repeat())` asks for the next display frame, so one small spinner kept the
+/// whole window redrawing at the display's rate (up to 120 times a second) for as long as an agent
+/// worked. A spinner needs a new frame 12 to 20 times a second. One timer per view, however many
+/// spinners it shows.
+struct Ticking {
+    child: gpui::AnyElement,
+    every: std::time::Duration,
+}
+
+impl Ticking {
+    fn new(child: impl IntoElement, every: std::time::Duration) -> Self {
+        Self { child: child.into_any_element(), every }
+    }
+}
+
+thread_local! {
+    /// Views with a redraw already scheduled.
+    static TICKING_VIEWS: std::cell::RefCell<std::collections::HashSet<gpui::EntityId>> = Default::default();
+}
+
+impl IntoElement for Ticking {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for Ticking {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.prepaint(window, cx);
+        let view = window.current_view();
+        if TICKING_VIEWS.with(|views| views.borrow_mut().insert(view)) {
+            let every = self.every;
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(every).await;
+                TICKING_VIEWS.with(|views| views.borrow_mut().remove(&view));
+                let _ = cx.update(|cx| cx.notify(view));
+            })
+            .detach();
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+    }
 }
 
 pub fn hint(text: impl Into<SharedString>) -> Div {

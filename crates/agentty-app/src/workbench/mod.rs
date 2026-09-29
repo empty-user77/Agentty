@@ -3,6 +3,7 @@
 mod account_usage;
 mod accounts_page;
 mod agent_panel;
+pub mod ai_resolve;
 mod ask;
 mod backup;
 mod browser;
@@ -344,6 +345,9 @@ const DEFAULT_TOAST_MS: u64 = 5_000;
 pub struct Workbench {
     /// Which Agentty window this is (0 = main); picks its layout file.
     pub slot: usize,
+    /// This workbench's own window: told apart from the others without reading it (gpui panics on a
+    /// read of the window being drawn or updated).
+    window_id: gpui::WindowId,
     /// Closed on purpose (not quitting): don't save it for the next launch.
     closed: bool,
     focus_handle: FocusHandle,
@@ -426,6 +430,11 @@ pub struct Workbench {
     idea: Option<Entity<crate::idea_view::IdeaView>>,
     branch_menu: Option<layout::BranchMenu>,
     branch_menu_closed: Option<(gpui::EntityId, std::time::Instant)>,
+    /// Worktrees found under folders that are no repository (the home folder, a folder of projects).
+    folder_scans: std::collections::HashMap<PathBuf, worktrees::FolderScan>,
+    /// Whether a pane's folder is a folder of projects, asked from renders: kept a few seconds so a
+    /// frame asks the file system nothing.
+    folder_kinds: std::cell::RefCell<std::collections::HashMap<PathBuf, (bool, std::time::Instant)>>,
     /// Installed agent CLIs and local models (`None` until detected).
     pub installed: Option<crate::agents::Installed>,
     installed_at: Option<std::time::Instant>,
@@ -577,6 +586,8 @@ pub struct Workbench {
     notices: Vec<notices::Notice>,
     notices_open: bool,
     window_active: bool,
+    /// This workbench's window, for the background loops to ask whether it is on screen.
+    window_handle: gpui::AnyWindowHandle,
     alias_form: Option<settings_page::AliasForm>,
     accounts_form: Option<accounts_page::AccountsForm>,
     /// Settings → System check results (Windows / Linux), and whether a check is running.
@@ -653,6 +664,12 @@ impl Focusable for Workbench {
 }
 
 impl Workbench {
+    /// Whether this window is on screen now (see [`crate::native::is_on_screen`]). Loops that only
+    /// refresh what the window shows skip their work while it is not; true when unknown.
+    pub(super) fn on_screen(handle: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp) -> bool {
+        cx.update_window(handle, |_, window, _| crate::native::ns_window(window).is_none_or(crate::native::is_on_screen)).unwrap_or(true)
+    }
+
     pub fn new(slot: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let session_search = cx.new(|cx| TextInput::localized("", "sessions.search", window, cx));
         let session_search_subscription = cx.subscribe(&session_search, |this, _, event: &crate::text_input::TextInputEvent, cx| {
@@ -675,6 +692,7 @@ impl Workbench {
         });
         let mut this = Self {
             slot,
+            window_id: window.window_handle().window_id(),
             closed: false,
             focus_handle: cx.focus_handle(),
             workspaces: Vec::new(),
@@ -732,6 +750,8 @@ impl Workbench {
             idea: None,
             branch_menu: None,
             branch_menu_closed: None,
+            folder_scans: Default::default(),
+            folder_kinds: Default::default(),
             installed: None,
             installed_at: None,
             mini: None,
@@ -824,6 +844,7 @@ impl Workbench {
             notices: Vec::new(),
             notices_open: false,
             window_active: true,
+            window_handle: window.window_handle(),
             alias_form: None,
             accounts_form: None,
             system_check: None,
@@ -2835,8 +2856,10 @@ impl Workbench {
             });
             cx.notify();
         } else if let Some((start_y, start_height)) = self.files_trees_drag {
-            // Down makes the working-tree list taller; `trees_height` keeps it within its rows.
-            let height = (start_height + f32::from(event.position.y) - start_y).max(40.);
+            // Down makes the working-tree list taller, up shorter: any height, leaving the rest of
+            // the window its room.
+            let most = (f32::from(window.viewport_size().height) - files_panel::TREES_ROOM_LEFT).max(40.);
+            let height = (start_height + f32::from(event.position.y) - start_y).clamp(40., most);
             gpui::BorrowAppContext::update_global::<crate::settings::SettingsStore, _>(cx, |store, _| {
                 store.settings.files_panel_trees_height = height
             });
@@ -2916,6 +2939,7 @@ impl Render for Workbench {
         }
         if activated {
             self.docker_window_activated();
+            self.files_window_activated();
         }
         self.viewport_width = f32::from(window.viewport_size().width);
         // Opening or closing a panel or the sidebar is part of the layout. The toggles are many
@@ -3504,6 +3528,9 @@ impl Workbench {
                     crate::git_view::GitEvent::OpenTerminal(path) => {
                         this.page = None;
                         this.launch(PaneKind::Shell.into(), LaunchTarget::NewTab, path.clone(), window, cx);
+                    }
+                    crate::git_view::GitEvent::ResolveWithAi { repo, trouble } => {
+                        this.resolve_with_ai(repo.clone(), trouble.clone(), window, cx);
                     }
                 })
                 .detach();

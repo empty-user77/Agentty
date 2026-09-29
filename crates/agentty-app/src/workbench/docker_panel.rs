@@ -110,11 +110,14 @@ impl Workbench {
         let generation = self.docker.open_generation;
         self.page = None;
         // Looks again while it is open; ends with this opening of the panel.
+        let handle = self.window_handle;
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(REFRESH_EVERY).await;
+            // Not on screen: nobody sees it; coming to the front refreshes it (`docker_window_activated`).
+            let shown = Self::on_screen(handle, cx);
             match this.update(cx, |this, cx| {
                 let open = this.docker.open && this.docker.open_generation == generation;
-                if open && this.page.is_none() {
+                if open && this.page.is_none() && shown {
                     this.refresh_docker(cx);
                 }
                 open
