@@ -1096,7 +1096,9 @@ pub(crate) mod tests {
                 shell_quote(&gone.display().to_string()),
                 leave_gone_folder("/bin/bash", target)
             );
-            let out = std::process::Command::new("/bin/sh").args(["-c", &script]).env("HOME", &dir).output().unwrap();
+            // Run by bash, as the snippet only ever is (zsh or bash): `/bin/sh` is dash on Linux, which
+            // has no `builtin`.
+            let out = std::process::Command::new("bash").args(["-c", &script]).env("HOME", &dir).output().unwrap();
             std::fs::create_dir_all(&gone).unwrap();
             PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).canonicalize().unwrap()
         };
