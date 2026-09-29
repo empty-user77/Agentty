@@ -1,4 +1,4 @@
-//! Windows / Linux: no embedded browser yet (GPUI has no web view and WebKit is macOS-only), so
+//! Linux: no embedded browser yet (GPUI has no web view; macOS has WebKit and Windows WebView2), so
 //! `WebView::new` returns `None`; the browser pane then offers to open pages in the default
 //! browser, and agent browser tools answer with an error instead of hanging.
 
@@ -35,6 +35,10 @@ pub enum EditCommand {
     SelectAll,
 }
 
+pub fn available() -> bool {
+    false
+}
+
 pub fn perform_in_page(_command: EditCommand) -> bool {
     false
 }
@@ -43,7 +47,7 @@ pub const NET_TOTALS: &str = "";
 pub const NET_ENTRIES: &str = "";
 pub const NET_DETAIL: &str = "";
 
-const UNSUPPORTED: &str = "the in-app browser is only available on macOS";
+const UNSUPPORTED: &str = "the in-app browser is only available on macOS and Windows";
 
 pub struct WebView {
     _private: (),

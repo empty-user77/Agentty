@@ -699,7 +699,7 @@ impl Workbench {
                         ),
                     ))
                     .child(row(
-                        t(cx, "settings.browser_inspect"),
+                        t(cx, if cfg!(windows) { "settings.browser_inspect_devtools" } else { "settings.browser_inspect" }),
                         toggle("browser-inspect", b.inspectable, |s| s.browser.inspectable = !s.browser.inspectable, cx),
                     ))
                     .child(row(

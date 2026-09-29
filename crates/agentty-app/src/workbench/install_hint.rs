@@ -8,6 +8,17 @@ use crate::ui::TypeScale;
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context};
 
 impl Workbench {
+    /// Windows: the in-app browser's component is missing (see `webview_setup`).
+    pub(super) fn render_webview_setup_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        #[cfg(windows)]
+        return self.render_webview_setup(cx);
+        #[cfg(not(windows))]
+        {
+            let _ = cx;
+            None
+        }
+    }
+
     pub(super) fn render_install_hint(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (brand, name, url) = self.install_hint?;
         let button = |id: &'static str, label: String, primary: bool| {

@@ -12,7 +12,7 @@ Agentty is developed on macOS, which remains the reference platform. All three h
 | Pane shell | `$SHELL` | PowerShell (`pwsh` when installed) | `$SHELL` |
 | Credential store | Keychain | Credential Manager | Secret Service, else a private file |
 | Notifications | System notifications, click opens the pane | Toast | `notify-send` |
-| In-app browser | Inside Agentty | Default browser | Default browser |
+| In-app browser | Inside Agentty (WebKit) | Inside Agentty (WebView2) | Default browser |
 | Menu bar icon, mini mode | ✓ | — | — |
 | Title bar | Agentty's own | System | System, or Agentty's where the compositor has no decorations |
 | Install | DMG | Setup program (per user) | `.deb` / `.rpm` |

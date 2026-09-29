@@ -75,7 +75,10 @@ impl Workbench {
         self.servers.seen.retain(|key| live.contains(key));
         self.servers.pending.retain(|(pane, port, _)| live.contains(&(*pane, *port)));
         let prefs = settings(cx);
-        let wanted = prefs.link_opener == LinkOpener::InApp && prefs.browser.auto_open_servers && crate::platform::HAS_WEBVIEW;
+        let wanted = prefs.link_opener == LinkOpener::InApp
+            && prefs.browser.auto_open_servers
+            && crate::platform::HAS_WEBVIEW
+            && crate::webview::available();
         for key in live {
             if self.servers.seen.insert(key) && wanted {
                 self.servers.pending.push((key.0, key.1, 0));
