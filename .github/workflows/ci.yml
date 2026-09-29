@@ -65,7 +65,7 @@ jobs:
             dist/Agentty-*-arm64.dmg
             dist/Agentty-*-SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   # Windows can't be built on a Mac (GPUI compiles its shaders with the Windows SDK's fxc.exe), which
   # the hosted Windows image has.
@@ -96,7 +96,7 @@ jobs:
             dist/agentty-*-windows-*.zip
             dist/agentty-*-windows-*.zip.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   check-linux:
     needs: secrets
@@ -128,4 +128,4 @@ jobs:
             dist/agentty-*-linux-*.tar.gz
             dist/agentty-*-linux-*.tar.gz.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
