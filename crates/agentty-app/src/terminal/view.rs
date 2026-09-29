@@ -117,6 +117,44 @@ impl AgentStatus {
     }
 }
 
+/// One request for the user's attention gets one notice. A single question can arrive several
+/// ways — Claude Code's `PreToolUse` for `AskUserQuestion`, its `PermissionRequest` for the same
+/// tool, a `Notification` hook, the screen classifier — within seconds of each other. The gate
+/// opens with the first of them and closes only when the agent works again (the user answered,
+/// the tool ran) or the turn ends, so the next genuinely new request notifies again.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AskGate {
+    open: bool,
+}
+
+impl AskGate {
+    /// A request for the user arrived: `true` when it is new and should be announced.
+    fn ask(&mut self) -> bool {
+        !std::mem::replace(&mut self.open, true)
+    }
+
+    /// The agent is working again or the turn is over: whatever it asks next is a new request.
+    fn resume(&mut self) {
+        self.open = false;
+    }
+}
+
+/// The status to show when another report of a request that was already announced arrives:
+/// keep what the first report said (its kind and its text, which the notice showed), and only
+/// fill in a description it lacked.
+fn merge_waiting(current: &AgentStatus, incoming: AgentStatus) -> AgentStatus {
+    let text = |status: &AgentStatus| match status {
+        AgentStatus::Permission(text) | AgentStatus::Question(text) => text.clone(),
+        _ => None,
+    };
+    match current {
+        AgentStatus::Permission(None) => AgentStatus::Permission(text(&incoming)),
+        AgentStatus::Question(None) => AgentStatus::Question(text(&incoming)),
+        AgentStatus::Permission(_) | AgentStatus::Question(_) => current.clone(),
+        _ => incoming,
+    }
+}
+
 /// A subagent run by the pane's agent (Claude Code `SubagentStart` / `SubagentStop`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubagentRun {
@@ -254,6 +292,8 @@ pub struct TerminalView {
     esc_at: Option<Instant>,
     /// Consecutive probes without the busy hint while marked as working.
     quiet_ticks: u8,
+    /// Whether the request the agent waits on was already announced (one notice per request).
+    ask_gate: AskGate,
     /// Subagents of the current session, newest last.
     pub subagents: Vec<SubagentRun>,
     /// Descriptions of Agent tool calls whose subagent has not reported `SubagentStart` yet.
@@ -399,6 +439,7 @@ impl TerminalView {
             live_tool_pid: None,
             esc_at: None,
             quiet_ticks: 0,
+            ask_gate: AskGate::default(),
             subagents: Vec::new(),
             pending_subagent_tasks: Default::default(),
             last_tool: None,
@@ -652,6 +693,7 @@ impl TerminalView {
         self.agent_since_ms = None;
         self.live_usage = None;
         self.quiet_ticks = 0;
+        self.ask_gate.resume();
         self.last_tool = None;
         self.subagents.clear();
         self.pending_subagent_tasks.clear();
@@ -689,15 +731,18 @@ impl TerminalView {
             }
         } else if screen.busy {
             self.quiet_ticks = 0;
+            self.ask_gate.resume();
             if self.status != AgentStatus::Working {
                 self.status = AgentStatus::Working;
                 self.working_since.get_or_insert_with(Instant::now);
             }
         // A turn that went quiet reads as `Thinking`, and a question often comes after exactly that
         // pause: it has to count here too, or the pane waits on the user with nothing said.
-        } else if screen.question && matches!(self.status, AgentStatus::Working | AgentStatus::Thinking | AgentStatus::Question(_)) {
+        // A hook-reported request shown as a selection (Claude Code's `AskUserQuestion` comes with
+        // a `PermissionRequest`) is still waiting: it must not go quiet and come back as a new question.
+        } else if screen.question && (matches!(self.status, AgentStatus::Working | AgentStatus::Thinking) || self.status.needs_user()) {
             self.quiet_ticks = 0;
-            if !matches!(self.status, AgentStatus::Question(_)) {
+            if !self.status.needs_user() {
                 self.enter_waiting(AgentStatus::Question(None), NoticeKind::Question, None, cx);
             }
         } else if matches!(
@@ -715,6 +760,7 @@ impl TerminalView {
             }
             let logged = self.quiet_ticks >= 2 && transcript_interrupted;
             if screen.interrupted || logged || (esc_recent && self.quiet_ticks >= 2) {
+                self.ask_gate.resume();
                 self.status = AgentStatus::Interrupted;
                 self.working_since = None;
                 self.esc_at = None;
@@ -722,6 +768,7 @@ impl TerminalView {
                 if self.spec.kind == PaneKind::Shell && self.status == AgentStatus::Working {
                     // Started by hand, so no hooks will say so: report the finished turn here.
                     self.working_since = None;
+                    self.ask_gate.resume();
                     self.status = AgentStatus::Finished(None);
                     self.attention = true;
                     if !self.announce_with_headline(cx) {
@@ -731,6 +778,7 @@ impl TerminalView {
                     // The Stop hook never came (a crash, a hook that was never installed). A pane
                     // that has shown nothing for this long is not thinking about anything: say it
                     // is waiting rather than leave "Thinking…" up forever.
+                    self.ask_gate.resume();
                     self.status = AgentStatus::Idle;
                 } else {
                     // Launched agents report the end of a turn with their Stop hook. Until it
@@ -746,11 +794,27 @@ impl TerminalView {
     }
 
     fn enter_waiting(&mut self, status: AgentStatus, notice: NoticeKind, message: Option<String>, cx: &mut Context<Self>) {
-        self.status = status;
-        self.working_since = None;
-        self.attention = true;
         self.last_activity_ms = crate::ui::now_ms();
-        cx.emit(TerminalEvent::Notified { kind: notice, message });
+        if self.wait_on_user(status) {
+            cx.emit(TerminalEvent::Notified { kind: notice, message });
+        }
+    }
+
+    /// Puts the pane in a waiting status. `true` when this is a new request to announce; a repeat
+    /// of one already announced only refines the status and leaves the attention flag alone.
+    fn wait_on_user(&mut self, status: AgentStatus) -> bool {
+        self.working_since = None;
+        // A pane no longer shown waiting (whatever moved it on without passing `resume`) asks anew:
+        // a missed reopening must never swallow a real request.
+        let first = self.ask_gate.ask();
+        if first || !self.status.needs_user() {
+            self.status = status;
+            self.attention = true;
+            true
+        } else {
+            self.status = merge_waiting(&self.status, status);
+            false
+        }
     }
 
     /// The model in the newest Claude Code welcome banner on this terminal: the row under
@@ -1080,12 +1144,15 @@ impl TerminalView {
             // permission request (a notice, the system notification, the banner until answered).
             SignalKind::Working if detail.asks_user() => {
                 let question = detail.target.clone();
-                self.status = AgentStatus::Question(question.clone());
-                self.attention = true;
-                self.working_since = None;
-                return self.finish_signal(Some(NoticeKind::Question), question, cx);
+                let new = self.wait_on_user(AgentStatus::Question(question.clone()));
+                return self.finish_signal(new.then_some(NoticeKind::Question), question, cx);
             }
             SignalKind::Working => {
+                // The main agent moved on (a prompt, a tool that ran — the user answered): the
+                // next request is a new one. A subagent's tool call says nothing about that.
+                if detail.subagent.is_none() {
+                    self.ask_gate.resume();
+                }
                 if let Some((id, _)) = &detail.subagent {
                     // Tool calls inside a subagent keep the main turn working.
                     if let (Some(run), Some(tool)) = (self.subagents.iter_mut().find(|r| &r.id == id), detail.tool.clone()) {
@@ -1106,6 +1173,7 @@ impl TerminalView {
                 self.quiet_ticks = 0;
             }
             SignalKind::Stop => {
+                self.ask_gate.resume();
                 self.status = AgentStatus::Finished(message.clone());
                 self.attention = true;
                 // Codex says what it answered; Claude Code's Stop hook does not, so the notice waits
@@ -1118,9 +1186,8 @@ impl TerminalView {
             }
             SignalKind::Permission => {
                 let label = detail.tool.as_deref().map(|tool| tool_label(tool, detail.target.as_deref()));
-                self.status = AgentStatus::Permission(label.clone());
-                self.attention = true;
-                return self.finish_signal(Some(NoticeKind::Permission), label, cx);
+                let new = self.wait_on_user(AgentStatus::Permission(label.clone()));
+                return self.finish_signal(new.then_some(NoticeKind::Permission), label, cx);
             }
             SignalKind::Notification => match detail.notification_type.as_deref() {
                 // Sent a while after a finished turn; the finish was already reported.
@@ -1130,14 +1197,12 @@ impl TerminalView {
                         return;
                     }
                     let label = self.last_tool.as_ref().map(|(t, target)| tool_label(t, target.as_deref())).or(message.clone());
-                    self.status = AgentStatus::Permission(label.clone());
-                    self.attention = true;
-                    return self.finish_signal(Some(NoticeKind::Permission), label, cx);
+                    let new = self.wait_on_user(AgentStatus::Permission(label.clone()));
+                    return self.finish_signal(new.then_some(NoticeKind::Permission), label, cx);
                 }
                 Some(_) => {
-                    self.status = AgentStatus::Question(message.clone());
-                    self.attention = true;
-                    notice = Some(NoticeKind::Question);
+                    let new = self.wait_on_user(AgentStatus::Question(message.clone()));
+                    notice = new.then_some(NoticeKind::Question);
                 }
                 // Older versions don't say why; the message does.
                 None => {
@@ -1146,10 +1211,9 @@ impl TerminalView {
                         return;
                     }
                     let permission = message.as_deref().is_some_and(|m| m.contains("permission"));
-                    self.status =
-                        if permission { AgentStatus::Permission(message.clone()) } else { AgentStatus::Question(message.clone()) };
-                    self.attention = true;
-                    notice = Some(if permission { NoticeKind::Permission } else { NoticeKind::Question });
+                    let status = if permission { AgentStatus::Permission(message.clone()) } else { AgentStatus::Question(message.clone()) };
+                    let new = self.wait_on_user(status);
+                    notice = new.then_some(if permission { NoticeKind::Permission } else { NoticeKind::Question });
                 }
             },
             SignalKind::Notify => {
@@ -1331,6 +1395,7 @@ impl TerminalView {
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
         self.write_user_input(paste_payload(&text, bracketed));
         if self.agent_kind() == Some(PaneKind::Codex) {
+            self.ask_gate.resume();
             self.status = AgentStatus::Working;
             self.working_since = Some(Instant::now());
             cx.emit(TerminalEvent::StatusChanged);
@@ -1473,6 +1538,7 @@ impl TerminalView {
         if keystroke.key == "enter" && self.agent_kind() == Some(PaneKind::Codex) && !keystroke.modifiers.shift {
             // Codex has no "prompt submitted" hook; Enter is the best signal (the screen check
             // corrects it within seconds if nothing started).
+            self.ask_gate.resume();
             self.status = AgentStatus::Working;
             self.working_since = Some(Instant::now());
             self.quiet_ticks = 0;
@@ -2920,5 +2986,104 @@ mod link_tests {
         assert_eq!(url_at(&line, 20).as_deref(), Some("http://localhost:5173/"));
         assert_eq!(url_at(&line, 50).as_deref(), Some("https://a.dev/x"));
         assert_eq!(url_at(&line, 2), None);
+    }
+}
+
+#[cfg(test)]
+mod ask_gate_tests {
+    use super::{merge_waiting, AgentStatus, AskGate};
+
+    /// What reaches the pane, reduced to what the gate sees.
+    enum Event {
+        /// A request for the user (hook or screen), with the status it would set.
+        Ask(AgentStatus),
+        /// The main agent works again, or the turn ends.
+        Resume,
+        /// The status moved on by a path that did not reopen the gate.
+        MovedOn,
+    }
+
+    /// Replays events the way `TerminalView` handles them: the texts that get a notice, and the
+    /// status the pane ends in.
+    fn replay(events: Vec<Event>) -> (Vec<Option<String>>, AgentStatus) {
+        let mut gate = AskGate::default();
+        let mut status = AgentStatus::Working;
+        let mut notices = Vec::new();
+        for event in events {
+            match event {
+                Event::Ask(incoming) => {
+                    let first = gate.ask();
+                    if first || !status.needs_user() {
+                        if let AgentStatus::Permission(text) | AgentStatus::Question(text) = &incoming {
+                            notices.push(text.clone());
+                        }
+                        status = incoming;
+                    } else {
+                        status = merge_waiting(&status, incoming);
+                    }
+                }
+                Event::Resume => {
+                    gate.resume();
+                    status = AgentStatus::Working;
+                }
+                Event::MovedOn => status = AgentStatus::Working,
+            }
+        }
+        (notices, status)
+    }
+
+    fn some(text: &str) -> Option<String> {
+        Some(text.to_string())
+    }
+
+    #[test]
+    fn one_question_gives_one_notice() {
+        // Observed with Claude Code 2.1: PreToolUse(AskUserQuestion), then PermissionRequest for
+        // the same tool, then the screen classifier seeing the selection prompt.
+        let (notices, status) = replay(vec![
+            Event::Ask(AgentStatus::Question(some("Pick a color"))),
+            Event::Ask(AgentStatus::Permission(some("AskUserQuestion · Pick a color"))),
+            Event::Ask(AgentStatus::Question(None)),
+        ]);
+        assert_eq!(notices, vec![some("Pick a color")]);
+        assert_eq!(status, AgentStatus::Question(some("Pick a color")));
+    }
+
+    #[test]
+    fn a_new_request_after_an_answer_notifies_again() {
+        let (notices, status) = replay(vec![
+            Event::Ask(AgentStatus::Permission(some("Bash · ls"))),
+            Event::Resume,
+            Event::Ask(AgentStatus::Permission(some("Bash · rm -rf build"))),
+            Event::Ask(AgentStatus::Permission(some("Claude needs your permission to use Bash"))),
+        ]);
+        assert_eq!(notices, vec![some("Bash · ls"), some("Bash · rm -rf build")]);
+        assert_eq!(status, AgentStatus::Permission(some("Bash · rm -rf build")));
+    }
+
+    #[test]
+    fn a_request_after_the_pane_moved_on_always_notifies() {
+        let (notices, status) = replay(vec![
+            Event::Ask(AgentStatus::Permission(some("Bash · ls"))),
+            Event::MovedOn,
+            Event::Ask(AgentStatus::Question(some("Deploy now?"))),
+        ]);
+        assert_eq!(notices, vec![some("Bash · ls"), some("Deploy now?")]);
+        assert_eq!(status, AgentStatus::Question(some("Deploy now?")));
+    }
+
+    #[test]
+    fn a_repeat_fills_in_a_missing_description() {
+        // The screen classifier saw the prompt first, without text; the hook names it.
+        let (notices, status) =
+            replay(vec![Event::Ask(AgentStatus::Question(None)), Event::Ask(AgentStatus::Question(some("Deploy now?")))]);
+        assert_eq!(notices, vec![None]);
+        assert_eq!(status, AgentStatus::Question(some("Deploy now?")));
+    }
+
+    #[test]
+    fn merge_keeps_non_waiting_status_replaced() {
+        let incoming = AgentStatus::Permission(some("Edit · a.rs"));
+        assert_eq!(merge_waiting(&AgentStatus::Thinking, incoming.clone()), incoming);
     }
 }
