@@ -41,6 +41,8 @@ Agentty passes the agent a status hook on the command line when the pane starts.
 - System notifications when an agent finishes or needs input.
 - Whether to notify while Agentty is the front application.
 - Questions and permission requests always notify, unless you are looking at that pane.
+- One question from an agent gives one notification, even though the agent reports it more than once. A new question after you answered notifies again.
+- "In front" means Agentty is the active application at that moment.
 
 ### To your phone
 
