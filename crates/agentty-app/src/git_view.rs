@@ -6,6 +6,7 @@ use crate::i18n::{t, tf};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, now_ms, popover, relative_time, tilde, IconSize, TypeScale};
+use crate::workbench::ai_resolve::GitTrouble;
 use agentty_bridge::git::{self, Branch, Commit, CommitFile, DiffLine, FileChange, LineKind, RepoStatus};
 use gpui::{
     div, prelude::*, px, AnyElement, ClickEvent, Context, Div, Entity, EventEmitter, FontWeight, SharedString, Subscription, Window,
@@ -27,6 +28,8 @@ gpui::actions!(git, [CommitChanges, RemoteAction, Fetch, Refresh]);
 pub enum GitEvent {
     /// Open a terminal tab in the repository.
     OpenTerminal(PathBuf),
+    /// Open an agent in the repository to resolve what stopped the merge or pull.
+    ResolveWithAi { repo: PathBuf, trouble: GitTrouble },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,6 +90,10 @@ pub struct GitView {
     creating_branch: bool,
     busy: Option<&'static str>,
     message: Option<(String, bool)>,
+    /// What the error in `message` was, when an agent can resolve it (conflicts, a diverged pull).
+    trouble: Option<GitTrouble>,
+    /// The branch a merge under way merges in (for the agent's instructions if it stops).
+    merging: Option<String>,
     filter: Entity<TextInput>,
     summary: Entity<TextInput>,
     description: Entity<TextInput>,
@@ -160,6 +167,8 @@ impl GitView {
             creating_branch: false,
             busy: None,
             message: None,
+            trouble: None,
+            merging: None,
             filter,
             summary,
             description,
@@ -197,7 +206,7 @@ impl GitView {
             Some(("remote", _)) => self.remote_action(cx),
             Some(("merge", name)) => {
                 let name = name.to_string();
-                self.run("git.merging", cx, move |repo| git::merge(repo, &name));
+                self.merge(name, cx);
             }
             Some(("discard", path)) => {
                 if let Some(file) = self.file(path).cloned() {
@@ -444,6 +453,12 @@ impl GitView {
         cx.notify();
     }
 
+    /// Merges `name` into the current branch; conflicts leave a way to hand them to an agent.
+    fn merge(&mut self, name: String, cx: &mut Context<Self>) {
+        self.merging = Some(name.clone());
+        self.run("git.merging", cx, move |repo| git::merge(repo, &name));
+    }
+
     /// Runs a mutating git operation in the background, then refreshes.
     fn run(
         &mut self,
@@ -467,6 +482,8 @@ impl GitView {
         }
         self.busy = Some(label);
         self.message = None;
+        self.trouble = None;
+        let merging = if label == "git.merging" { self.merging.take() } else { None };
         let task = cx.background_spawn(async move { op(&repo) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -475,7 +492,30 @@ impl GitView {
                 match result {
                     Ok(Some(report)) => this.message = Some((report, false)),
                     Ok(None) => {}
-                    Err(err) => this.message = Some((agentty_bridge::git::failure_reason(&err.to_string()), true)),
+                    Err(err) => {
+                        let error = err.to_string();
+                        // Conflicts and a diverged pull: an agent can take those on (a button says so).
+                        this.trouble = match merging {
+                            Some(branch) if git::is_conflict(&error) => Some(GitTrouble::Merge { branch }),
+                            _ if label == "git.pulling" && git::is_diverged(&error) => Some(GitTrouble::Pull),
+                            _ => None,
+                        };
+                        // "already used by worktree at …": say which tree, in words, not git's.
+                        // A merge refused because one is under way: its conflicts are what the banner offers help with.
+                        if error.starts_with(git::UNDER_WAY) {
+                            this.message = Some((t(cx, "git.operation_under_way").to_string(), true));
+                            this.trouble = Some(GitTrouble::InProgress);
+                            this.selected_commit = None;
+                            this.refresh(cx);
+                            return cx.notify();
+                        }
+                        let text = match (&this.trouble, agentty_bridge::git::checked_out_elsewhere(&error)) {
+                            (Some(trouble), _) => crate::workbench::ai_resolve::trouble_text(trouble, cx),
+                            (None, Some(tree)) => tf(cx, "git.in_other_tree", &[("folder", &crate::ui::tilde(&tree))]),
+                            (None, None) => agentty_bridge::git::failure_reason(&error),
+                        };
+                        this.message = Some((text, true));
+                    }
                 }
                 this.selected_commit = None;
                 this.refresh(cx);
@@ -594,7 +634,7 @@ impl GitView {
                         this.menu = None;
                         if this.merge_mode {
                             if current.as_ref() != Some(&name) {
-                                this.run("git.merging", cx, move |repo| git::merge(repo, &name));
+                                this.merge(name, cx);
                             }
                         } else if remote || current.as_ref() != Some(&name) {
                             this.run("git.switching", cx, move |repo| git::checkout(repo, &name, remote));
@@ -605,6 +645,7 @@ impl GitView {
                         this.menu = None;
                         this.run("git.creating", cx, move |repo| git::create_branch(repo, &name));
                     }
+                    BranchPickerEvent::Changed => this.refresh(cx),
                     BranchPickerEvent::Dismiss => this.menu = None,
                 }
                 cx.notify();
@@ -913,6 +954,8 @@ impl GitView {
                     cx.notify();
                 })),
         );
+        // A branch's right-click menu: beside this one, in a layer above it.
+        let popup = picker.update(cx, |picker, cx| picker.render_popup(cx));
         let menu = popover()
             .p_0()
             .w(px(SIDEBAR_WIDTH + 120.))
@@ -924,6 +967,7 @@ impl GitView {
             .top(px(52.))
             .left(px(SIDEBAR_WIDTH))
             .child(gpui::deferred(crate::ui::fade_in("git-branch-menu-fade", menu)).with_priority(3))
+            .children(popup)
             .into_any_element()
     }
 
@@ -1402,7 +1446,38 @@ impl Render for GitView {
             Tab::History => self.render_history_detail(cx),
         };
 
-        let banner = self.message.clone().map(|(text, error)| {
+        // Files git left in conflict (a merge or rebase stopped, here or in a terminal): say so, with
+        // the same way out as a merge that stopped just now.
+        let conflicted = self.snapshot.status.files.iter().filter(|f| f.kind == 'U').count();
+        let (message, trouble) = match (&self.message, conflicted) {
+            (Some(message), _) => (Some(message.clone()), self.trouble.clone()),
+            (None, n) if n > 0 => (Some((tf(cx, "git.conflicts_count", &[("n", &n.to_string())]), true)), Some(GitTrouble::InProgress)),
+            (None, _) => (None, None),
+        };
+        let resolve = trouble.zip(self.repo.clone()).map(|(trouble, repo)| {
+            div()
+                .id("git-resolve-ai")
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .cursor_pointer()
+                .bg(hex(Chrome::ACCENT))
+                .text_color(hex(Chrome::BRIGHT))
+                .hover(|s| s.opacity(0.85))
+                .child(icon("sparkles", IconSize::INLINE, hex(Chrome::BRIGHT)))
+                .child(t(cx, "git.ai_resolve"))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.message = None;
+                    this.trouble = None;
+                    cx.emit(GitEvent::ResolveWithAi { repo: repo.clone(), trouble: trouble.clone() });
+                    cx.notify();
+                }))
+        });
+        let banner = message.map(|(text, error)| {
             div()
                 .flex_shrink_0()
                 .px_3()
@@ -1416,14 +1491,18 @@ impl Render for GitView {
                 .t_body()
                 .text_color(hex(Chrome::BRIGHT))
                 .child(div().flex_1().min_w_0().child(text))
-                .child(crate::ui::icon_only(
-                    "git-dismiss",
-                    "x",
-                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.message = None;
-                        cx.notify();
-                    }),
-                ))
+                .children(resolve)
+                .when(self.message.is_some(), |d| {
+                    d.child(crate::ui::icon_only(
+                        "git-dismiss",
+                        "x",
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.message = None;
+                            this.trouble = None;
+                            cx.notify();
+                        }),
+                    ))
+                })
         });
 
         div()

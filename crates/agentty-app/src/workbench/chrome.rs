@@ -86,7 +86,7 @@ impl Render for DragPreview {
 }
 
 /// Icon-only button in the tab strip, with a delayed name + shortcut tooltip.
-fn header_icon(
+pub(super) fn header_icon(
     id: &'static str,
     glyph: &'static str,
     active: bool,
@@ -2058,16 +2058,7 @@ impl Workbench {
                     ))
                     // The files panel docks at the right edge, so its button is the last one. A tree, not a
                     // framed panel: next to the split buttons a frame reads as one more way to split.
-                    .child(ringed(
-                        header_icon(
-                            "header-files",
-                            "list-tree",
-                            self.files_panel.is_some(),
-                            (t(cx, "files.title"), Some("⌥⌘B")),
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_files_panel(cx)),
-                        ),
-                        "header-files",
-                    ))
+                    .child(ringed(self.files_button(cx), "header-files"))
             })
     }
 

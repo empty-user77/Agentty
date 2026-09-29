@@ -54,8 +54,9 @@ impl Workbench {
     /// other pane does: closing them can take the trees along.
     fn trees_left_behind(&self, target: &CloseTarget, cx: &gpui::App) -> Vec<std::path::PathBuf> {
         let closing = self.target_panes(target);
-        let tree_of =
-            |pane: &Pane| agentty_bridge::worktree::tree_root(&pane.read(cx).display_cwd()).filter(|root| root.join(".git").is_file());
+        let tree_of = |pane: &Pane| {
+            agentty_bridge::worktree::tree_root(&pane.read(cx).display_cwd()).filter(|root| agentty_bridge::worktree::is_linked(root))
+        };
         let mut trees: Vec<std::path::PathBuf> = closing.iter().filter_map(tree_of).collect();
         trees.sort();
         trees.dedup();
