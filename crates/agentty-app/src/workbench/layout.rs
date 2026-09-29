@@ -272,8 +272,8 @@ impl Workbench {
                             HudItem::Ports => d.children(port_chips.take()),
                             HudItem::Worktree => d.children(tree_chip.take()),
                             HudItem::Branch => d.children(chip.take()),
-                            // Where this pane is: project folder, with the path (cut in the middle) when
-                            // there is room; the whole path on hover, ⌘-click shows it in the file manager.
+                            // Where this pane is: the folder's name; the whole path on hover, ⌘-click
+                            // shows it in the file manager.
                             HudItem::Folder => d.child(
                                 div()
                                     .id(("pane-folder", pane.entity_id().as_u64() as usize))
@@ -303,17 +303,9 @@ impl Workbench {
                                             .truncate()
                                             .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
                                             .child(folder.clone()),
-                                    )
-                                    .when(width >= 620., |d| {
-                                        let room = ((width - 560.) / 7.5).clamp(14., 48.) as usize;
-                                        d.child(
-                                            div()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_color(hex(Chrome::MUTED))
-                                                .child(crate::ui::middle_ellipsis(&crate::ui::tilde(&cwd), room)),
-                                        )
-                                    }),
+                                    ),
+                                // Only the folder's name: the status bar under the panes already says the
+                                // whole path (and the tooltip here), so the bar keeps its room.
                             ),
                         };
                     }
