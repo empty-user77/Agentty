@@ -48,12 +48,27 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
-      - name: Build (release)
-        run: cargo build --release -p agentty-app
+      # The release build, as a DMG (dev mode: ad-hoc signature, not notarized, so macOS asks
+      # before opening it the first time — right-click → Open). No credential is involved.
+      - name: Build (release) and DMG
+        run: ./scripts/build-dmg.sh dev
+      # Every job's package is uploaded as a workflow artifact: download it from the run's Summary
+      # page. From pushes to main and from pull requests of this repository — not from a fork's,
+      # whose unreviewed code must not be handed out under Agentty's name. A failed upload must not
+      # turn a green build red: the checks above are what CI is for, the package is a convenience.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        with:
+          name: agentty-macos-arm64
+          path: |
+            dist/Agentty-*-arm64.dmg
+            dist/Agentty-*-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 1
 
   # Windows can't be built on a Mac (GPUI compiles its shaders with the Windows SDK's fxc.exe), which
-  # the hosted Windows image has. The zip is uploaded as a workflow artifact: download it from the
-  # run's Summary page.
+  # the hosted Windows image has.
   check-windows:
     needs: secrets
     runs-on: windows-2025
@@ -71,10 +86,9 @@ jobs:
           ./scripts/package-windows.ps1
           $info = (Get-Item "target\release\agentty.exe").VersionInfo
           if ($info.ProductName -ne 'Agentty') { throw "version resource missing: '$($info.ProductName)'" }
-      # Packages from main only, for a day. A failed upload must not turn a green build red: the
-      # checks above are what CI is for, and the package is a convenience.
+      # The zip holds agentty.exe and its install scripts (see the macOS job for when it is uploaded).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         continue-on-error: true
         with:
           name: agentty-windows-x86_64
@@ -104,8 +118,9 @@ jobs:
         run: cargo test --workspace
       - name: Package
         run: scripts/package-linux.sh
+      # The tarball holds the `agentty` executable (see the macOS job for when it is uploaded).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         continue-on-error: true
         with:
           name: agentty-linux-x86_64
