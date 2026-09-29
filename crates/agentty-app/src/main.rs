@@ -49,6 +49,7 @@ mod single_instance;
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/status_item.rs")]
 mod status_item;
 mod statusline;
+mod system_load;
 mod terminal;
 mod text_input;
 mod theme;
