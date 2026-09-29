@@ -577,6 +577,8 @@ pub struct Workbench {
     notices: Vec<notices::Notice>,
     notices_open: bool,
     window_active: bool,
+    /// This workbench's window, for the background loops to ask whether it is on screen.
+    window_handle: gpui::AnyWindowHandle,
     alias_form: Option<settings_page::AliasForm>,
     accounts_form: Option<accounts_page::AccountsForm>,
     /// Settings → System check results (Windows / Linux), and whether a check is running.
@@ -650,6 +652,12 @@ impl Focusable for Workbench {
 }
 
 impl Workbench {
+    /// Whether this window is on screen now (see [`crate::native::is_on_screen`]). Loops that only
+    /// refresh what the window shows skip their work while it is not; true when unknown.
+    pub(super) fn on_screen(handle: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp) -> bool {
+        cx.update_window(handle, |_, window, _| crate::native::ns_window(window).is_none_or(crate::native::is_on_screen)).unwrap_or(true)
+    }
+
     pub fn new(slot: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let session_search = cx.new(|cx| TextInput::localized("", "sessions.search", window, cx));
         let session_search_subscription = cx.subscribe(&session_search, |this, _, event: &crate::text_input::TextInputEvent, cx| {
@@ -824,6 +832,7 @@ impl Workbench {
             notices: Vec::new(),
             notices_open: false,
             window_active: true,
+            window_handle: window.window_handle(),
             alias_form: None,
             accounts_form: None,
             system_check: None,
@@ -2916,6 +2925,7 @@ impl Render for Workbench {
         }
         if activated {
             self.docker_window_activated();
+            self.files_window_activated();
         }
         self.viewport_width = f32::from(window.viewport_size().width);
         // Opening or closing a panel or the sidebar is part of the layout. The toggles are many

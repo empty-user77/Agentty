@@ -39,7 +39,7 @@ pub mod worktree;
 
 use anyhow::{Context as _, Result};
 use model::{Agent, SessionInfo, Turn};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Sessions from the selected agents, newest first.
 pub fn list(agent: Option<Agent>, limit: usize) -> Vec<SessionInfo> {
@@ -134,7 +134,7 @@ pub fn claude_context_window(model: &str) -> u64 {
 }
 
 /// Path of a session transcript, for the agents that keep one Agentty can read.
-fn transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
+pub fn transcript_path(agent: Agent, id: &str) -> Option<PathBuf> {
     match agent {
         Agent::Claude => claude::find(id).ok(),
         Agent::Codex => codex::find(id).ok(),
@@ -341,13 +341,12 @@ fn parse_token_count(text: &str) -> Option<u64> {
 
 /// Whether the session's latest turn was stopped by the user (Esc), from the end of its transcript.
 pub fn last_turn_interrupted(agent: Agent, id: &str) -> bool {
-    let path = match agent {
-        Agent::Claude => claude::find(id),
-        Agent::Codex => codex::find(id),
-        _ => return false,
-    };
-    let Ok(path) = path else { return false };
-    turn_interrupted(agent, fsutil::tail_lines_rev(&path, 96 * 1024).iter().map(String::as_str))
+    transcript_path(agent, id).is_some_and(|path| transcript_turn_interrupted(agent, &path))
+}
+
+/// [`last_turn_interrupted`] for a transcript already found.
+pub fn transcript_turn_interrupted(agent: Agent, path: &Path) -> bool {
+    turn_interrupted(agent, fsutil::tail_lines_rev(path, 96 * 1024).iter().map(String::as_str))
 }
 
 /// `lines` newest first.

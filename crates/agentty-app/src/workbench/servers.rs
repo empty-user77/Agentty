@@ -10,8 +10,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// How often listening ports are sampled.
+/// How often listening ports are sampled (each time a `ps` and an `lsof`).
 const SAMPLE_EVERY: Duration = Duration::from_secs(3);
+/// The same while the window is not on screen (minimized, hidden, covered).
+const SAMPLE_EVERY_HIDDEN: Duration = Duration::from_secs(10);
 /// A new port gets this many chances to answer with a page (a dev server listens before its first
 /// build is done) before it is left alone.
 const PROBE_ATTEMPTS: u8 = 8;
@@ -44,6 +46,7 @@ impl Workbench {
     }
 
     pub(super) fn start_server_watch(&mut self, cx: &mut Context<Self>) {
+        let handle = self.window_handle;
         cx.spawn(async move |this, cx| loop {
             let Ok(roots) = this.read_with(cx, |this, cx| {
                 this.all_panes().iter().filter_map(|p| Some((p.read(cx).pane_id, p.read(cx).shell_pid()?))).collect::<Vec<_>>()
@@ -51,7 +54,11 @@ impl Workbench {
                 break;
             };
             let pids: Vec<u32> = roots.iter().map(|(_, pid)| *pid).collect();
-            let found = cx.background_spawn(async move { crate::procinfo::listeners(&pids) }).await;
+            let found = if pids.is_empty() {
+                Default::default()
+            } else {
+                cx.background_spawn(async move { crate::procinfo::listeners(&pids) }).await
+            };
             let listeners: HashMap<u64, Vec<Listener>> =
                 roots.into_iter().filter_map(|(pane, pid)| Some((pane, found.get(&pid)?.clone()))).collect();
             if this
@@ -66,7 +73,8 @@ impl Workbench {
             {
                 break;
             }
-            cx.background_executor().timer(SAMPLE_EVERY).await;
+            let shown = Self::on_screen(handle, cx);
+            cx.background_executor().timer(if shown { SAMPLE_EVERY } else { SAMPLE_EVERY_HIDDEN }).await;
         })
         .detach();
     }

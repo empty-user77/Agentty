@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-09-29
+
+### Changed
+- The sync repository's name in the sync popover and in Settings → Sync opens its page on GitHub
+  (or its web address for another https remote).
+
+### Fixed
+- Settings → Sync showed "Custom, 1 day" for removing old sessions before the repository's own
+  period was read; it now shows the default, 365 days.
+- Typing in a plugin panel's field is no longer undone when the plugin redraws its panel (a status
+  line, a countdown): deleting a digit or retyping a name stays as typed.
+
 ## [0.2.6] - 2026-09-28
 
 ### Fixed

@@ -29,6 +29,10 @@ pub fn ghost(_window: Id, _on: bool) {}
 
 pub fn order_out(_window: Id) {}
 
+pub fn is_on_screen(_window: Id) -> bool {
+    true
+}
+
 pub fn is_visible(_window: Id) -> bool {
     true
 }

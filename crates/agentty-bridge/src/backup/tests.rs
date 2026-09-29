@@ -11,6 +11,18 @@ fn no_secrets(_: &str, _: &str) -> Option<String> {
     None
 }
 
+#[test]
+fn an_imported_connector_key_is_bound_to_the_host_its_file_names() {
+    let connectors = json!([
+        { "id": "linear", "baseUrl": "https://api.linear.example/graphql" },
+        { "id": "broken", "baseUrl": "not a url" }
+    ]);
+    assert_eq!(connector_origin(Some(&connectors), "linear").as_deref(), Some("https://api.linear.example"));
+    assert_eq!(connector_origin(Some(&connectors), "broken"), None);
+    assert_eq!(connector_origin(Some(&connectors), "linear@origin"), None);
+    assert_eq!(connector_origin(None, "linear"), None);
+}
+
 fn write(dir: &Path, name: &str, value: &Value) {
     fs::write(dir.join(name), serde_json::to_vec_pretty(value).unwrap()).unwrap();
 }

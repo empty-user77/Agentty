@@ -7,6 +7,10 @@
 //!   Manager, Linux Secret Service — see [`crate::secret_store`]) and read only by the
 //!   `mcp-connector` process at request time. It is never written to agent config
 //!   files, logs or tool results.
+//! - The credential is bound to the origin (scheme, host, port) it was entered for, kept in the
+//!   credential store beside it. `connectors.json` travels with settings sync and config imports,
+//!   so whoever controls those could point a connector at another host; the key is not sent
+//!   there until the user enters it again for that host.
 //! - Requests are confined to the connector's base URL: paths must be relative, `..` segments are
 //!   rejected, redirects are not followed (so credentials can't leak to other hosts), HTTPS is
 //!   required except for localhost, and responses are size- and time-limited.
@@ -110,12 +114,25 @@ impl ConnectorStore {
     pub fn upsert(&mut self, connector: Connector, secret: Option<&str>) -> Result<()> {
         connector.validate()?;
         let exists = self.get(&connector.id).is_some();
+        let origin = connector.origin()?;
         match (&connector.auth, secret.filter(|s| !s.is_empty())) {
             (Auth::None, _) => {
                 let _ = secrets::delete(&connector.id);
             }
-            (_, Some(secret)) => secrets::store(&connector.id, secret)?,
-            (_, None) => ensure!(exists && secrets::load(&connector.id).is_ok(), "an API key is required"),
+            (_, Some(secret)) => {
+                secrets::store(&connector.id, secret)?;
+                secrets::store_origin(&connector.id, &origin)?;
+            }
+            (_, None) => {
+                ensure!(exists && secrets::load(&connector.id).is_ok(), "an API key is required");
+                // The key stays only while the connector keeps pointing where it was entered for.
+                let saved = match secrets::load_origin(&connector.id) {
+                    Some(saved) => saved,
+                    None => self.get(&connector.id).map(Connector::origin).transpose()?.unwrap_or_default(),
+                };
+                ensure!(saved == origin, "the API key was entered for {saved}; enter it again for {origin}");
+                secrets::store_origin(&connector.id, &origin)?;
+            }
         }
         self.connectors.retain(|c| c.id != connector.id);
         self.connectors.push(connector);
@@ -174,6 +191,11 @@ impl Connector {
             endpoints: Vec::new(),
             allow_any_path: true,
         }
+    }
+
+    /// Scheme, host and port of the base URL: what the credential is bound to.
+    pub fn origin(&self) -> Result<String> {
+        origin_of(&self.base_url)
     }
 
     /// MCP server name used when registering with an agent.
@@ -285,7 +307,62 @@ pub mod secrets {
     }
 
     pub fn delete(id: &str) -> Result<()> {
+        let _ = crate::secret_store::delete(&keychain_service(), &origin_account(id));
         crate::secret_store::delete(&keychain_service(), id)
+    }
+
+    /// The origin a connector's key was entered for, in an item of its own beside the key (the
+    /// key's own item keeps only the key, as older versions expect). Ids are `[a-z0-9-]`, so the
+    /// account name cannot be another connector's.
+    fn origin_account(id: &str) -> String {
+        format!("{id}@origin")
+    }
+
+    pub fn store_origin(id: &str, origin: &str) -> Result<()> {
+        crate::secret_store::store(&keychain_service(), &origin_account(id), origin)
+    }
+
+    /// `None` for a key saved before keys were bound to a host.
+    pub fn load_origin(id: &str) -> Option<String> {
+        crate::secret_store::load(&keychain_service(), &origin_account(id)).ok()
+    }
+
+    pub fn forget_origin(id: &str) {
+        let _ = crate::secret_store::delete(&keychain_service(), &origin_account(id));
+    }
+}
+
+/// Scheme, host and port of `base_url`.
+pub fn origin_of(base_url: &str) -> Result<String> {
+    let url = url::Url::parse(base_url).context("base URL is not a valid URL")?;
+    Ok(url.origin().ascii_serialization())
+}
+
+/// Refuses to send the key anywhere but the origin it was entered for. A key saved before keys
+/// were bound to a host (`saved` is `None`) is bound to the connector's origin on first use.
+fn check_origin(connector: &Connector, saved: Option<String>) -> Result<()> {
+    let origin = connector.origin()?;
+    match saved {
+        Some(saved) => ensure!(
+            saved == origin,
+            "{} now points at {origin}, but its API key was entered for {saved}; enter the key again in Agentty to use it there",
+            connector.name
+        ),
+        None => {
+            let _ = secrets::store_origin(&connector.id, &origin);
+        }
+    }
+    Ok(())
+}
+
+/// Binds keys saved before keys were bound to a host to the host each connector has now, so a
+/// later change to `connectors.json` (sync, an import) cannot move them. Run once at app start;
+/// the keys themselves are not read.
+pub fn bind_legacy_keys() {
+    for connector in ConnectorStore::load().connectors.iter().filter(|c| c.auth != Auth::None) {
+        if let (None, Ok(origin)) = (secrets::load_origin(&connector.id), connector.origin()) {
+            let _ = secrets::store_origin(&connector.id, &origin);
+        }
     }
 }
 
@@ -304,9 +381,13 @@ pub struct Request {
 pub fn execute(connector: &Connector, request: &Request) -> Result<(u16, String)> {
     let secret = match connector.auth {
         Auth::None => None,
-        _ => Some(
-            secrets::load(&connector.id).with_context(|| format!("API key not found in the {}", crate::secret_store::backend_name()))?,
-        ),
+        _ => {
+            check_origin(connector, secrets::load_origin(&connector.id))?;
+            Some(
+                secrets::load(&connector.id)
+                    .with_context(|| format!("API key not found in the {}", crate::secret_store::backend_name()))?,
+            )
+        }
     };
     let redact = |text: String| match &secret {
         Some(secret) if secret.len() >= 4 => text.replace(secret.as_str(), "***"),
@@ -536,6 +617,23 @@ mod tests {
         assert_eq!(c.resolve("/@evil.com").unwrap().host_str(), Some("api.example.com"));
     }
 
+    #[test]
+    fn a_key_goes_only_to_the_origin_it_was_entered_for() {
+        let c = connector();
+        assert_eq!(c.origin().unwrap(), "https://api.example.com");
+        let saved = || Some("https://api.example.com".to_string());
+        // Another path on the same host: still that API.
+        let mut moved = c.clone();
+        moved.base_url = "https://api.example.com/v2".into();
+        assert!(check_origin(&moved, saved()).is_ok());
+        // Another host, scheme or port (connectors.json changed by a sync or an import): refused.
+        for elsewhere in ["https://attacker.example", "http://api.example.com", "https://api.example.com:8443"] {
+            moved.base_url = elsewhere.into();
+            let err = check_origin(&moved, saved()).unwrap_err().to_string();
+            assert!(err.contains("enter the key again"), "{elsewhere}: {err}");
+        }
+    }
+
     /// Touches the real login Keychain; run with `cargo test -- --ignored keychain`.
     #[test]
     #[ignore]
@@ -545,6 +643,55 @@ mod tests {
         assert_eq!(secrets::load(&id).unwrap(), "s3cr3t-value");
         secrets::delete(&id).unwrap();
         assert!(secrets::load(&id).is_err());
+    }
+
+    /// End to end through the real login Keychain (a test-only service scoped to a temporary
+    /// data folder): run with `AGENTTY_DATA_DIR=<empty temp dir> cargo test -- --ignored key_follows`.
+    #[test]
+    #[ignore]
+    fn key_follows_its_origin_through_the_keychain() {
+        use std::net::TcpListener;
+        assert!(std::env::var_os("AGENTTY_DATA_DIR").is_some(), "set AGENTTY_DATA_DIR to a temporary folder");
+        let serve = |listener: TcpListener| {
+            std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap();
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").unwrap();
+                String::from_utf8_lossy(&buf[..n]).to_string()
+            })
+        };
+        let (api, elsewhere) = (TcpListener::bind("127.0.0.1:0").unwrap(), TcpListener::bind("127.0.0.1:0").unwrap());
+        let (api_port, other_port) = (api.local_addr().unwrap().port(), elsewhere.local_addr().unwrap().port());
+        let request = || Request { method: "GET".into(), path: "/x".into(), query: vec![], body: None };
+
+        let mut store = ConnectorStore::default();
+        let c = Connector::new("e2e test", &format!("http://127.0.0.1:{api_port}"), Auth::Bearer);
+        store.upsert(c.clone(), Some("fake-key-not-real")).unwrap();
+        let seen = serve(api);
+        execute(&c, &request()).unwrap();
+        assert!(seen.join().unwrap().contains("Authorization: Bearer fake-key-not-real"));
+
+        // connectors.json now names another host (a sync, an import): the key is not sent.
+        let mut moved = c.clone();
+        moved.base_url = format!("http://127.0.0.1:{other_port}");
+        let err = execute(&moved, &request()).unwrap_err().to_string();
+        assert!(err.contains("enter the key again"), "{err}");
+        // Saving it there without a new key is refused; with one it works.
+        assert!(store.upsert(moved.clone(), None).is_err());
+        store.upsert(moved.clone(), Some("fake-other-key-not-real")).unwrap();
+        let seen = serve(elsewhere);
+        execute(&moved, &request()).unwrap();
+        assert!(seen.join().unwrap().contains("Bearer fake-other-key-not-real"));
+
+        // A key saved before keys had a host is bound on first use.
+        secrets::forget_origin(&moved.id);
+        assert_eq!(secrets::load_origin(&moved.id), None);
+        check_origin(&moved, None).unwrap();
+        assert_eq!(secrets::load_origin(&moved.id), Some(moved.origin().unwrap()));
+
+        store.remove(&moved.id).unwrap();
+        assert!(secrets::load(&moved.id).is_err() && secrets::load_origin(&moved.id).is_none());
     }
 
     #[test]

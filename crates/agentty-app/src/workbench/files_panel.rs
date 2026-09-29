@@ -358,11 +358,15 @@ impl Workbench {
                     click_terminal: None,
                 });
                 // Refreshes while it is open; ends with the panel.
+                let handle = self.window_handle;
                 cx.spawn(async move |this, cx| loop {
                     cx.background_executor().timer(REFRESH_EVERY).await;
+                    // Not on screen (minimized, hidden, covered): nobody sees it, and the window
+                    // coming back to the front refreshes it at once.
+                    let shown = Self::on_screen(handle, cx);
                     match this.update(cx, |this, cx| {
                         let open = this.files_panel.is_some();
-                        if open && this.page.is_none() {
+                        if open && this.page.is_none() && shown {
                             this.refresh_files_panel(cx);
                         }
                         open
@@ -376,6 +380,13 @@ impl Workbench {
         }
         self.refresh_files_panel(cx);
         cx.notify();
+    }
+
+    /// The window came back to the front: files the agents changed meanwhile show at once.
+    pub(super) fn files_window_activated(&mut self) {
+        if let Some(panel) = self.files_panel.as_mut() {
+            panel.seen = None;
+        }
     }
 
     /// Follows the active pane: another tab or a `cd` shows that project right away. Called on render.

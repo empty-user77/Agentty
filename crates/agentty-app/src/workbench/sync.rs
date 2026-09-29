@@ -411,7 +411,27 @@ impl Workbench {
     /// The retention period in effect: the one chosen here while it is on its way, else the
     /// repository's.
     fn retention_days(&self) -> u32 {
-        self.sync.retention.unwrap_or(self.sync.overview.retention_days).max(1)
+        // 0 until the repository was read: the default period, not "1 day, custom".
+        let repository = match self.sync.overview.retention_days {
+            0 => bridge::model::DEFAULT_RETENTION_DAYS,
+            days => days,
+        };
+        self.sync.retention.unwrap_or(repository).max(1)
+    }
+
+    /// The repository's name, opening its page (GitHub's, or its `https://` URL) when clicked.
+    fn repository_link(&self, id: &'static str, remote: &Remote, body: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let label = div().truncate().child(remote.label());
+        let label =
+            if body { label.t_body().text_color(hex(Chrome::FOREGROUND)) } else { label.t_caption().text_color(hex(Chrome::MUTED)) };
+        let Some(url) = remote.web_url() else { return label.into_any_element() };
+        label
+            .id(id)
+            .cursor_pointer()
+            .hover(|s| s.text_color(hex(Chrome::ACCENT)).underline())
+            .tooltip(crate::ui::Tooltip::text(url.clone(), None))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_link(url.clone(), cx)))
+            .into_any_element()
     }
 
     /// Old sessions wait for the user's OK (and were not put off for later).
@@ -1378,13 +1398,7 @@ impl Workbench {
                     .flex()
                     .flex_col()
                     .child(div().t_body().font_weight(crate::theme::EMPHASIS).child(t(cx, "sync.title")))
-                    .children(
-                        self.sync
-                            .config
-                            .remote
-                            .as_ref()
-                            .map(|r| div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(r.label())),
-                    ),
+                    .children(self.sync.config.remote.as_ref().map(|r| self.repository_link("sync-popover-repo", r, false, cx))),
             )
             .child(
                 div()
@@ -1628,8 +1642,8 @@ impl Workbench {
             let device = self.device_name_input(window, cx);
             let repository = section(t(cx, "sync.repository"))
                 .child(intro)
-                .child(row_with_hint(
-                    &remote.label(),
+                .child(super::settings_page::row_with_hint_element(
+                    self.repository_link("sync-settings-repo", &remote, true, cx),
                     &self.sync_status_text(cx),
                     div()
                         .flex()
