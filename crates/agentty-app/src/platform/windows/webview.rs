@@ -160,8 +160,8 @@ thread_local! {
     static RUNTIME_FOUND: Cell<bool> = const { Cell::new(false) };
     /// The renderer process of each page's main frame (by frame id), as last asked of WebView2.
     static RENDERERS: RefCell<HashMap<u32, i32>> = RefCell::new(HashMap::new());
-    /// Work that waited for a page whose view went away, answered on the next turn of the loop.
-    static ORPHANS: RefCell<Vec<Queued>> = const { RefCell::new(Vec::new()) };
+    /// Work run on the next turn of the message loop (see [`defer`]).
+    static DEFERRED: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
     /// When [`RENDERERS`] was last asked for (it answers asynchronously).
     static RENDERERS_ASKED: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
 }
@@ -873,6 +873,7 @@ impl WebView {
     /// [`call_async`] in a world of its own (`Some(name)`): the page's scripts share the DOM with
     /// it but cannot see or replace its variables and functions.
     pub fn call_in_world(&self, body: &str, args: &[(&str, &str)], world: Option<&str>, reply: Reply) {
+        let reply = later(reply);
         let expression = match script_of(body, args) {
             Ok(expression) => expression,
             Err(error) => return reply(Err(error)),
@@ -887,6 +888,7 @@ impl WebView {
 
     /// Saves what the page shows as a PNG.
     pub fn snapshot_png(&self, path: std::path::PathBuf, reply: Reply) {
+        let reply = later(reply);
         self.with_page_or(move |page| match page {
             Some(page) => {
                 devtools(&page.webview, "Page.captureScreenshot", json!({ "format": "png" }), move |result| reply(write_png(path, result)))
@@ -897,6 +899,7 @@ impl WebView {
 
     /// A small picture of the page, `width` points wide (the Monitoring page's previews).
     pub fn snapshot_png_sized(&self, path: std::path::PathBuf, width: f64, reply: Reply) {
+        let reply = later(reply);
         self.with_page_or(move |page| {
             let Some(page) = page else { return reply(Err("snapshot failed".into())) };
             let webview = page.webview.clone();
@@ -1152,23 +1155,42 @@ impl Drop for WebView {
 
 /// Runs `ops` with no page on the next turn of the message loop.
 fn answer_later(ops: Vec<Queued>) {
-    use windows::Win32::UI::WindowsAndMessaging::SetTimer;
-    if ops.is_empty() {
-        return;
+    for op in ops {
+        defer(move || op(None));
     }
-    ORPHANS.with(|orphans| orphans.borrow_mut().extend(ops));
-    // SAFETY: a thread timer with a callback; `answer_orphans` kills it when it fires.
-    unsafe { SetTimer(None, 0, 0, Some(answer_orphans)) };
 }
 
-extern "system" fn answer_orphans(_: HWND, _: u32, timer: usize, _: u32) {
+/// Runs `work` on the next turn of the message loop, never from inside the call that asked for
+/// it. Callers hold `RefCell` borrows around their calls into the web view (the browser panel keeps
+/// its network inbox borrowed while it asks for the next poll) and borrow again in their replies:
+/// a reply delivered on the spot would find the cell still borrowed, and the app would abort.
+/// WebKit never answers on the spot either.
+fn defer(work: impl FnOnce() + 'static) {
+    use windows::Win32::UI::WindowsAndMessaging::SetTimer;
+    let first = DEFERRED.with(|deferred| {
+        let mut deferred = deferred.borrow_mut();
+        deferred.push(Box::new(work));
+        deferred.len() == 1
+    });
+    if first {
+        // SAFETY: a thread timer with a callback; `run_deferred` kills it when it fires.
+        unsafe { SetTimer(None, 0, 0, Some(run_deferred)) };
+    }
+}
+
+extern "system" fn run_deferred(_: HWND, _: u32, timer: usize, _: u32) {
     use windows::Win32::UI::WindowsAndMessaging::KillTimer;
     // SAFETY: killing the thread timer that called this.
     let _ = unsafe { KillTimer(None, timer) };
-    let ops = ORPHANS.with(|orphans| std::mem::take(&mut *orphans.borrow_mut()));
-    for op in ops {
-        op(None);
+    let work = DEFERRED.with(|deferred| std::mem::take(&mut *deferred.borrow_mut()));
+    for work in work {
+        work();
     }
+}
+
+/// `reply`, always delivered on a later turn of the message loop (see [`defer`]).
+fn later(reply: Reply) -> Reply {
+    Box::new(move |result| defer(move || reply(result)))
 }
 
 /// A load that could not start after all.

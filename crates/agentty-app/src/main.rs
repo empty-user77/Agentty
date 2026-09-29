@@ -16,6 +16,7 @@ mod browser_keeper;
 mod browser_mcp;
 mod browser_profiles;
 mod capture;
+mod crash_log;
 mod db_cli;
 mod debug;
 mod editor;
@@ -609,6 +610,8 @@ fn main() {
         single_instance::Lock::Unavailable => {}
     }
 
+    // A crash leaves its reason in `<data dir>/crash.log`.
+    crash_log::install();
     // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
     platform::raise_file_limit();
     // Killed while the machine was captured: put its proxy settings back before anything else runs.
