@@ -1149,7 +1149,14 @@ impl Workbench {
                 crate::ui::icon_only(
                     "files-refresh",
                     "refresh-cw",
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.refresh_files_panel(cx)),
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.refresh_files_panel(cx);
+                        // In a folder of projects the worktrees below it are looked for again too:
+                        // otherwise the list waits for its next scan (minutes) or the panel to reopen.
+                        if let Some(folder) = this.active_pane().and_then(|pane| this.scan_folder_of(&pane, cx)) {
+                            this.scan_folder(folder, cx);
+                        }
+                    }),
                 )
                 .tooltip(Tooltip::text(t(cx, "usage.refresh"), None)),
             )
