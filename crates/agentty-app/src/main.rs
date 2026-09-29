@@ -673,6 +673,8 @@ fn main() {
         cx.on_action(|_: &NewWindow, cx| new_window(cx));
         settings::start_prevent_sleep_timer(cx);
         metrics::start_uploads(cx);
+        // Before settings sync can change `connectors.json`; Keychain reads stay off the UI thread.
+        let _ = std::thread::Builder::new().name("connector-keys".into()).spawn(agentty_bridge::connectors::bind_legacy_keys);
         metrics::track(cx, "app_launched", serde_json::json!({ "windows": workbenches(cx).len() }));
 
         // Files dropped on a window go to the pane under the pointer.
