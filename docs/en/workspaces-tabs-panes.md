@@ -34,6 +34,8 @@ Each agent pane has a status bar with the model, context window, rate-limit usag
 
 Double-click that bar — the status, or the icon it is dragged by — to give the pane the whole tab. Double-click again to put the split back the way it was.
 
+The pane's header shows only the name of its folder; the status bar has the full path.
+
 ## Side panels
 
 Panels dock beside the terminals and are resized by dragging their edge:
@@ -50,3 +52,5 @@ Panels dock beside the terminals and are resized by dragging their edge:
 **⌃⌘M** folds the window into a small always-on-top panel at the edge of the screen. Agents that finish pop up as speech bubbles; clicking one brings the full window back.
 
 On macOS the menu bar icon animates while agents work, lists them, and keeps Agentty running after you close the window.
+
+The menu bar popover also shows the computer's **CPU** and **RAM** load beside the mini mode button, refreshed every 2 seconds while the popover is open. A value turns orange at 85% or more.
