@@ -16,8 +16,19 @@ use std::path::{Path, PathBuf};
 
 /// Commands the executable answers without starting the app (see `main`).
 #[cfg_attr(not(unix), allow(dead_code))] // the cleanup runs on macOS and Linux only
-pub const CLI_COMMANDS: &[&str] =
-    &["mcp-connector", "worktree-guard", "statusline", "mcp-browser", "browser", "signal", "tasks", "db", "worktree-for", "notify"];
+pub const CLI_COMMANDS: &[&str] = &[
+    "mcp-connector",
+    "worktree-guard",
+    "statusline",
+    "mcp-browser",
+    "browser",
+    "signal",
+    "tasks",
+    "group",
+    "db",
+    "worktree-for",
+    "notify",
+];
 
 pub enum Lock {
     /// This process is the one Agentty for its data folder (keep the file open for its lifetime).
@@ -88,6 +99,7 @@ Inside an Agentty terminal:
 
   agentty browser …       drive the in-app browser (agentty browser --help)
   agentty tasks …         split work into parallel sessions (agentty tasks --help)
+  agentty group …         work with the other members of an agent group (agentty group --help)
   agentty db …            read this project's databases (agentty db --help)
   agentty notify <text>   show a notification for this pane
 

@@ -513,6 +513,24 @@ impl Workbench {
         }
     }
 
+    /// [`Self::deliver`] for the other workbench modules (a prompt now, or after the current turn).
+    pub(super) fn deliver_to_pane(&mut self, pane_id: u64, prompt: String, cx: &mut Context<Self>) {
+        self.deliver(pane_id, prompt, cx);
+    }
+
+    /// Records a direct link between two Claude Code sessions that were introduced some other way
+    /// (an agent group tells its members each other's names itself).
+    pub(super) fn flow_link_direct(&mut self, from: u64, to: u64) {
+        match self.flow.edges.iter_mut().find(|e| e.from == from && e.to == to) {
+            Some(edge) => {
+                edge.mode = LinkMode::Direct;
+                edge.status = EdgeStatus::Shared(0);
+                edge.live = false;
+            }
+            None => self.flow.edges.push(FlowEdge::direct(from, to)),
+        }
+    }
+
     /// Submits a prompt to a pane now, or queues it until the agent finishes its current turn.
     fn deliver(&mut self, pane_id: u64, prompt: String, cx: &mut Context<Self>) {
         let Some(target) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id) else { return };

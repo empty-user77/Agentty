@@ -91,6 +91,15 @@
           }
         },
         {
+          "slug": "agent-groups",
+          "title": {
+            "en": "Agent groups",
+            "ko": "에이전트 그룹",
+            "ja": "エージェントグループ",
+            "zh": "智能体组"
+          }
+        },
+        {
           "slug": "agent-git",
           "title": {
             "en": "Git and working trees",

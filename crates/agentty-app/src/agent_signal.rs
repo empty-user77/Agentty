@@ -186,6 +186,9 @@ pub enum SocketMessage {
     /// `db\t{"cwd":…,"action":…}` from `agentty db`: an agent reads a project database, or asks to
     /// change it; answered on `reply` (writes only after the user approved the exact statement).
     Db(DbRequest),
+    /// `group\t{"action":…}` from `agentty group`: a member of an agent group lists the members or
+    /// hands a request to one; answered on `reply`.
+    Group(GroupRequest),
     /// `debug\t<command>\t<argument>`; only accepted when `AGENTTY_DEBUG=1`.
     Debug(String, String),
     /// `open\t["agentty://…", "/folder", …]` from a second launch (Windows / Linux single instance).
@@ -306,6 +309,17 @@ pub struct DbRequest {
     /// The asking agent's folder: the project whose connections apply.
     pub cwd: std::path::PathBuf,
     /// `{"action": "list" | "tables" | "describe" | "preview" | "query" | "mongo", "conn": …, …}`.
+    pub args: serde_json::Value,
+    /// One JSON line, as [`browser_reply`] makes it.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// A member of an agent group asks about its group (`agentty group`).
+#[derive(Debug, Clone)]
+pub struct GroupRequest {
+    /// The pane the connection belongs to: the member that asks.
+    pub pane: u64,
+    /// `{"action": "list"}` or `{"action": "send", "to": …, "message": …}`.
     pub args: serde_json::Value,
     /// One JSON line, as [`browser_reply`] makes it.
     pub reply: std::sync::mpsc::Sender<String>,
@@ -528,6 +542,23 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 answer
                     .recv_timeout(Duration::from_secs(15 * 60))
                     .unwrap_or_else(|_| browser_reply(Err("no answer in time (a write needs the user's approval in Agentty)".into())))
+            } else {
+                browser_reply(Err("bad request".into()))
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("group\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let response = if request["action"].is_string() {
+                let (reply, answer) = std::sync::mpsc::channel();
+                if tx.unbounded_send(SocketMessage::Group(GroupRequest { pane, args: request, reply })).is_err() {
+                    return;
+                }
+                answer.recv_timeout(Duration::from_secs(30)).unwrap_or_else(|_| browser_reply(Err("timed out".into())))
             } else {
                 browser_reply(Err("bad request".into()))
             };

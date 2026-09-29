@@ -26,6 +26,7 @@ mod worktree_guard;
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/file_drop.rs")]
 mod file_drop;
 mod git_view;
+mod group_cli;
 mod html_recorder;
 mod hud;
 mod i18n;
@@ -546,6 +547,11 @@ fn main() {
         std::process::exit(tasks_cli::run(&args[2..]));
     }
 
+    // `agentty group …`: a member of an agent group lists the members or hands a request over.
+    if args.get(1).map(String::as_str) == Some("group") {
+        std::process::exit(group_cli::run(&args[2..]));
+    }
+
     // `agentty db …`: an agent reads the project's databases (writes wait for the user).
     if args.get(1).map(String::as_str) == Some("db") {
         std::process::exit(db_cli::run(&args[2..]));
@@ -783,6 +789,16 @@ fn main() {
                                 match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
                                     Some(window) => {
                                         let _ = window.update(cx, |workbench, _, cx| workbench.ask_to_start_tasks(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
+                            agent_signal::SocketMessage::Group(request) => {
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.answer_group_request(request, cx));
                                     }
                                     None => {
                                         let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));

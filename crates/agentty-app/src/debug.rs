@@ -211,6 +211,9 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                         "escape" => "\u{1b}".to_string(),
                         "tab" => "\t".to_string(),
                         "backspace" => "\u{7f}".to_string(),
+                        // NSUpArrowFunctionKey / NSDownArrowFunctionKey.
+                        "up" => "\u{f700}".to_string(),
+                        "down" => "\u{f701}".to_string(),
                         other => other.to_string(),
                     };
                     let key_code: u16 = match key.as_str() {
@@ -218,6 +221,8 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                         "escape" => 53,
                         "tab" => 48,
                         "backspace" => 51,
+                        "up" => 126,
+                        "down" => 125,
                         _ => 0,
                     };
                     let text = NSString::alloc(nil).init_str(&chars);

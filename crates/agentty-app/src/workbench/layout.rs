@@ -12,6 +12,8 @@ use gpui::{
     SharedString,
 };
 
+/// Badge colours of the members of an agent group, in order.
+const GROUP_COLORS: [u32; 6] = [0x5b9cf6, 0x4cc38a, 0xf2a23c, 0xb07cf0, 0xef6b9a, 0x3cc2c2];
 const DIVIDER: f32 = 4.;
 const PANE_HEADER_HEIGHT: f32 = 26.;
 
@@ -163,6 +165,41 @@ impl Workbench {
         let (status, status_color) = status_label(view, cx);
         let pane_for_focus = pane.clone();
 
+        let group_role = self.group_member_of(view.pane_id).map(|(run, index)| {
+            let member = &run.group.agents[index];
+            let color = GROUP_COLORS[index % GROUP_COLORS.len()];
+            (member.name.clone(), member.badge_text(), member.role.clone(), run.group.name.clone(), color)
+        });
+        // A member of an agent group wears two badges over the top of its terminal, out of the bar's
+        // way: its name, in a colour of its own, and its role. The whole role is on hover, when the
+        // badges also fade so the line under them can be read.
+        let group_badges = group_role.map(|(name, badge, role, group, color)| {
+            let pill = |text: String, bg: gpui::Hsla, fg: gpui::Hsla| {
+                div().flex_shrink_0().px_1p5().rounded_sm().bg(bg).text_color(fg).truncate().child(text)
+            };
+            div()
+                .id(("pane-group-role", pane.entity_id().as_u64() as usize))
+                .absolute()
+                .top(px(6.))
+                .left(px(10.))
+                .flex()
+                .items_center()
+                .gap_1()
+                .max_w(px(320.))
+                .overflow_hidden()
+                .p_0p5()
+                .rounded_md()
+                .bg(hex_alpha(Chrome::OVERLAY, 0.85))
+                .shadow_md()
+                .t_small()
+                .hover(|s| s.opacity(0.25))
+                .tooltip(crate::ui::Tooltip::text(format!("{group} · {name} — {role}"), None))
+                .child(pill(name, hex(color), hex(0x111111)).font_weight(crate::theme::EMPHASIS))
+                .when(width >= 360., |d| {
+                    d.child(pill(badge, hex_alpha(color, 0.16), hex(color)).border_1().border_color(hex_alpha(color, 0.5)))
+                })
+                .into_any_element()
+        });
         // Split pane header: which tool, where (project folder + path), its live status and branch.
         let mut header = split.then(|| {
             let (zoom, close) = (pane.clone(), pane.clone());
@@ -387,6 +424,7 @@ impl Workbench {
                     .flex_1()
                     .min_h_0()
                     .child(gpui::AnyView::from(pane.clone()).cached(gpui::StyleRefinement::default().size_full()))
+                    .children(group_badges)
                     .children(find_bar)
                     .children(drop_zones)
                     .children(connect_pick),

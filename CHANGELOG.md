@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Agent groups: a team of agents with a role each (build, review, deploy, …), started together in
+  one tab of a project from the command palette. Every agent wears its name and role as badges,
+  hands work in another agent's role to it (`agentty group send`), leaves work in nobody's role
+  undone, and is linked with the others from the start. The first agent is the main one and starts
+  enlarged. A group is one JSON file that can be shared and imported, for every project or for one
+  repository.
+
 ## [0.2.7] - 2026-09-29
 
 ### Changed

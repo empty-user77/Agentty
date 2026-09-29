@@ -15,6 +15,14 @@ pub fn inherit_trust(project: &Path, tree: &Path) -> Result<bool> {
     inherit_trust_in(&crate::fsutil::home().join(".claude.json"), project, tree)
 }
 
+/// Whether the user told Claude Code to trust exactly `path`. A trusted folder above it does not
+/// count: Claude Code still asks there (it asked in a folder under a trusted `/private/tmp`).
+pub fn is_trusted_exactly(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(crate::fsutil::home().join(".claude.json")) else { return false };
+    serde_json::from_slice::<Value>(&bytes)
+        .is_ok_and(|config| config["projects"][path.to_string_lossy().as_ref()]["hasTrustDialogAccepted"].as_bool() == Some(true))
+}
+
 fn trusted(config: &Value, path: &Path) -> bool {
     path.ancestors().any(|dir| config["projects"][dir.to_string_lossy().as_ref()]["hasTrustDialogAccepted"].as_bool() == Some(true))
 }

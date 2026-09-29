@@ -2,6 +2,7 @@
 
 mod account_usage;
 mod accounts_page;
+mod agent_groups;
 mod agent_panel;
 mod ask;
 mod backup;
@@ -618,6 +619,9 @@ pub struct Workbench {
     prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
     /// Parallel tasks agents asked for (`agentty tasks`), waiting for the user; the first is shown.
     task_requests: std::collections::VecDeque<crate::agent_signal::TasksRequest>,
+    /// Agent groups started in this window, and the id of the last one.
+    agent_groups: Vec<agent_groups::GroupRun>,
+    next_group_run: u64,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
     install_hint: Option<(&'static str, &'static str, &'static str)>,
     /// The start page is shown even though workspaces exist (opened from the sidebar).
@@ -836,6 +840,8 @@ impl Workbench {
             prompt_dialog: None,
             prompt_queue: std::collections::VecDeque::new(),
             task_requests: std::collections::VecDeque::new(),
+            agent_groups: Vec::new(),
+            next_group_run: 0,
             welcome: false,
             install_hint: None,
             connect_pick: None,
@@ -3965,6 +3971,24 @@ impl Workbench {
             "close-workspace" => {
                 if let Some(id) = argument.trim().parse::<usize>().ok().and_then(|i| self.workspaces.get(i)).map(|ws| ws.id) {
                     self.close_workspace(id, window, cx);
+                }
+            }
+            // `agent-group <id> [folder]`: starts an installed agent group in the active workspace (in a
+            // new workspace at `folder` when given); `agent-group` alone prints the groups it may use.
+            "agent-group" => {
+                agentty_bridge::agent_groups::ensure_sample();
+                let (argument, folder) = argument.split_once(' ').unwrap_or((argument, ""));
+                if !folder.trim().is_empty() {
+                    self.create_workspace(LaunchSpec::new(PaneKind::Shell, PathBuf::from(folder.trim())), window, cx);
+                }
+                let project = self.workspaces.get(self.active_workspace).map(|ws| ws.cwd.clone()).unwrap_or_default();
+                let groups = agentty_bridge::agent_groups::available_for(&project);
+                match groups.into_iter().find(|g| g.id == argument.trim()) {
+                    Some(group) => self.start_agent_group(group, window, cx),
+                    None => eprintln!(
+                        "agent-group: {:?}",
+                        agentty_bridge::agent_groups::available_for(&project).iter().map(|g| g.id.clone()).collect::<Vec<_>>()
+                    ),
                 }
             }
             "workspace-at" => {

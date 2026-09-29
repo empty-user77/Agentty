@@ -199,6 +199,23 @@ impl Workbench {
                 this.create_group(window, cx);
             }),
         );
+        // Agent groups this project may use: for any project, or for its repository.
+        let groups_category = t(cx, "groups.category");
+        let project_dir = self.workspaces.get(self.active_workspace).map(|ws| ws.cwd.clone());
+        agentty_bridge::agent_groups::ensure_sample();
+        for group in project_dir.as_deref().map(agentty_bridge::agent_groups::available_for).unwrap_or_default() {
+            let label = crate::i18n::tf(cx, "groups.start", &[("name", &group.name)]);
+            let members: Vec<&str> = group.agents.iter().map(|a| a.name.as_str()).collect();
+            let detail = members.join(" · ");
+            push(
+                &label,
+                groups_category,
+                Some(&detail),
+                Rc::new(move |this, window, cx| this.start_agent_group(group.clone(), window, cx)),
+            );
+        }
+        push(t(cx, "groups.import"), groups_category, None, Rc::new(|this, _, cx| this.import_agent_group(cx)));
+        push(t(cx, "groups.open_folder"), groups_category, None, Rc::new(|this, _, cx| this.open_agent_groups_folder(cx)));
         for (page, key, shortcut) in [
             (Page::Flow, "page.flow", "⇧⌘F"),
             (Page::Browsers, "page.monitoring", "⌥⌘U"),

@@ -1,6 +1,7 @@
 //! Local Claude Code / Codex session discovery and cross-agent context handoff.
 
 pub mod agent_auth;
+pub mod agent_groups;
 pub mod agy;
 pub mod amp;
 pub mod backup;

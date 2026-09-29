@@ -43,7 +43,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn pane_by_id(&self, pane_id: u64, cx: &gpui::App) -> Option<Pane> {
+    pub(super) fn pane_by_id(&self, pane_id: u64, cx: &gpui::App) -> Option<Pane> {
         self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id)
     }
 
