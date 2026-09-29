@@ -27,13 +27,28 @@ fn agent_of(name: Option<&str>) -> Agent {
 
 impl Workbench {
     /// An agent asked to start tasks: queue the question (turned off in Settings: refuse at once).
-    pub fn ask_to_start_tasks(&mut self, request: TasksRequest, cx: &mut Context<Self>) {
+    pub fn ask_to_start_tasks(&mut self, mut request: TasksRequest, cx: &mut Context<Self>) {
         if !crate::settings::settings(cx).agent_tasks {
             let _ = request.reply.send(browser_reply(Err("starting parallel tasks is turned off in Agentty's settings".into())));
             return;
         }
+        request.cwd = self.tasks_project(&request, cx);
         self.task_requests.push_back(request);
         cx.notify();
+    }
+
+    /// The folder the tasks' working trees are made from. The command runs wherever the agent's shell
+    /// is — often a scratch folder outside the project — and a folder outside git would start every
+    /// task right there, without a tree of its own. Then the asking agent's own folder is the project.
+    fn tasks_project(&self, request: &TasksRequest, cx: &gpui::App) -> PathBuf {
+        let in_git = |dir: &std::path::Path| agentty_bridge::worktree::tree_root(dir).is_some();
+        if in_git(&request.cwd) {
+            return request.cwd.clone();
+        }
+        self.pane_by_id(request.pane, cx)
+            .map(|pane| pane.read(cx).display_cwd())
+            .filter(|dir| in_git(dir))
+            .unwrap_or_else(|| request.cwd.clone())
     }
 
     fn decline_tasks(&mut self, cx: &mut Context<Self>) {
@@ -92,6 +107,14 @@ impl Workbench {
                     Some(pane) => {
                         previous = Some(pane);
                         started.push(serde_json::json!({ "title": task.title, "branch": branch, "folder": folder }));
+                        if tree.is_none() {
+                            // Said out loud: the asking agent must not take the shared folder for a tree of its own.
+                            problems.push(format!(
+                                "{}: {} is not in a git repository, so the task started there without a worktree of its own",
+                                task.title,
+                                folder.display()
+                            ));
+                        }
                     }
                     None => problems.push(format!("{}: the asking agent's tab is gone", task.title)),
                 }

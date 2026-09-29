@@ -21,6 +21,13 @@ pub enum AskAction {
     NewTree(super::worktrees::TreeRequest),
     /// Start it in the working tree another agent already works in.
     SameTree(super::worktrees::TreeRequest),
+    /// Remove the linked worktree `tree` although it has changes or unmerged commits, and move
+    /// `pane` back to the project folder.
+    CleanTree { pane: gpui::EntityId, tree: std::path::PathBuf },
+    /// Move the terminal `pane` to the working tree `tree` (a double click in the Files panel).
+    SwitchTree { pane: gpui::EntityId, tree: std::path::PathBuf },
+    /// Open `tree` (where the branch asked for is checked out) in a new tab.
+    OpenTree(std::path::PathBuf),
     /// Take a session's newer copy from another computer and continue it.
     ContinueSynced(Box<super::sync::SyncedSession>),
 }
@@ -85,6 +92,9 @@ impl Workbench {
             AskAction::NewTree(request) => self.start_in_new_tree(request, window, cx),
             AskAction::SameTree(request) => self.start_in_same_tree(request, window, cx),
             AskAction::ContinueSynced(entry) => self.continue_synced(*entry, None, window, cx),
+            AskAction::CleanTree { pane, tree } => self.clean_up_tree_now(pane, tree, true, cx),
+            AskAction::OpenTree(tree) => self.open_tree_tab(None, tree, window, cx),
+            AskAction::SwitchTree { pane, tree } => self.switch_pane_to_tree(pane, tree, window, cx),
         }
         cx.notify();
     }

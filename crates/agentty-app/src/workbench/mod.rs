@@ -3,6 +3,7 @@
 mod account_usage;
 mod accounts_page;
 mod agent_panel;
+pub mod ai_resolve;
 mod ask;
 mod backup;
 mod browser;
@@ -335,6 +336,9 @@ const DEFAULT_TOAST_MS: u64 = 5_000;
 pub struct Workbench {
     /// Which Agentty window this is (0 = main); picks its layout file.
     pub slot: usize,
+    /// This workbench's own window: told apart from the others without reading it (gpui panics on a
+    /// read of the window being drawn or updated).
+    window_id: gpui::WindowId,
     /// Closed on purpose (not quitting): don't save it for the next launch.
     closed: bool,
     focus_handle: FocusHandle,
@@ -417,6 +421,11 @@ pub struct Workbench {
     idea: Option<Entity<crate::idea_view::IdeaView>>,
     branch_menu: Option<layout::BranchMenu>,
     branch_menu_closed: Option<(gpui::EntityId, std::time::Instant)>,
+    /// Worktrees found under folders that are no repository (the home folder, a folder of projects).
+    folder_scans: std::collections::HashMap<PathBuf, worktrees::FolderScan>,
+    /// Whether a pane's folder is a folder of projects, asked from renders: kept a few seconds so a
+    /// frame asks the file system nothing.
+    folder_kinds: std::cell::RefCell<std::collections::HashMap<PathBuf, (bool, std::time::Instant)>>,
     /// Installed agent CLIs and local models (`None` until detected).
     pub installed: Option<crate::agents::Installed>,
     installed_at: Option<std::time::Instant>,
@@ -663,6 +672,7 @@ impl Workbench {
         });
         let mut this = Self {
             slot,
+            window_id: window.window_handle().window_id(),
             closed: false,
             focus_handle: cx.focus_handle(),
             workspaces: Vec::new(),
@@ -720,6 +730,8 @@ impl Workbench {
             idea: None,
             branch_menu: None,
             branch_menu_closed: None,
+            folder_scans: Default::default(),
+            folder_kinds: Default::default(),
             installed: None,
             installed_at: None,
             mini: None,
@@ -3489,6 +3501,9 @@ impl Workbench {
                     crate::git_view::GitEvent::OpenTerminal(path) => {
                         this.page = None;
                         this.launch(PaneKind::Shell.into(), LaunchTarget::NewTab, path.clone(), window, cx);
+                    }
+                    crate::git_view::GitEvent::ResolveWithAi { repo, trouble } => {
+                        this.resolve_with_ai(repo.clone(), trouble.clone(), window, cx);
                     }
                 })
                 .detach();

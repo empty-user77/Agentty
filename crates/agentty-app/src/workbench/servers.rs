@@ -15,6 +15,9 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(3);
 /// A new port gets this many chances to answer with a page (a dev server listens before its first
 /// build is done) before it is left alone.
 const PROBE_ATTEMPTS: u8 = 8;
+/// Samples a port must be seen in, one after the other, before it is offered: a port that comes and
+/// goes within seconds (a test run's server, a tool's callback) is no page to open.
+const STEADY_SAMPLES: u8 = 2;
 
 #[derive(Default)]
 pub(super) struct ServerWatch {
@@ -24,6 +27,8 @@ pub(super) struct ServerWatch {
     seen: HashSet<(u64, u16)>,
     /// New ports waiting for a page to answer: (pane, port, attempts so far).
     pending: Vec<(u64, u16, u8)>,
+    /// New ports not offered yet, with the samples in a row they were seen in.
+    settling: HashMap<(u64, u16), u8>,
     probing: bool,
     /// `ps` output reused while several panes close at once (a workspace, "close other tabs").
     parents: Option<(Instant, Arc<HashMap<u32, u32>>)>,
@@ -76,8 +81,28 @@ impl Workbench {
         self.servers.pending.retain(|(pane, port, _)| live.contains(&(*pane, *port)));
         let prefs = settings(cx);
         let wanted = prefs.link_opener == LinkOpener::InApp && prefs.browser.auto_open_servers && crate::platform::HAS_WEBVIEW;
+        self.servers.settling.retain(|key, _| live.contains(key));
+        // Agentty's own processes (a dev build, test binaries) serve pages for Agentty, not for the user.
+        let own: HashSet<(u64, u16)> = self
+            .servers
+            .listeners
+            .iter()
+            .flat_map(|(pane, found)| found.iter().map(move |l| (*pane, l)))
+            .filter(|(pane, l)| !self.servers.seen.contains(&(*pane, l.port)) && is_agentty_process(l.pid))
+            .map(|(pane, l)| (pane, l.port))
+            .collect();
         for key in live {
-            if self.servers.seen.insert(key) && wanted {
+            if self.servers.seen.contains(&key) {
+                continue;
+            }
+            let samples = self.servers.settling.entry(key).or_insert(0);
+            *samples += 1;
+            if *samples < STEADY_SAMPLES {
+                continue;
+            }
+            self.servers.settling.remove(&key);
+            self.servers.seen.insert(key);
+            if wanted && !own.contains(&key) {
                 self.servers.pending.push((key.0, key.1, 0));
             }
         }
@@ -105,8 +130,10 @@ impl Workbench {
             let serves_page = cx.background_spawn(async move { serves_page(port) }).await;
             let _ = this.update(cx, |this, cx| {
                 this.servers.probing = false;
+                // Gone while it was asked (a short-lived server): an empty browser tab helps nobody.
+                let still_there = this.servers.listeners.get(&pane).is_some_and(|found| found.iter().any(|l| l.port == port));
                 match serves_page {
-                    Some(true) if this.page.is_none() => {
+                    Some(true) if this.page.is_none() && still_there => {
                         let url = format!("http://localhost:{port}");
                         this.open_link_for_terminal(pane, url, super::terminal_browser::Opener::Server, cx);
                     }
@@ -160,6 +187,13 @@ impl Workbench {
         })
         .detach();
     }
+}
+
+/// Whether `pid` is an Agentty binary (the app, a dev build, a test binary of its crates).
+fn is_agentty_process(pid: u32) -> bool {
+    crate::procinfo::executable_path(pid)
+        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().to_lowercase()))
+        .is_some_and(|name| name.starts_with("agentty"))
 }
 
 /// Whether `GET /` on the local `port` answers with a web page. `None`: nothing answered (yet).

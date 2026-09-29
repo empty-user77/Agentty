@@ -20,8 +20,18 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
+        // A merge tells its conflicts on stdout ("CONFLICT (content): …", "Automatic merge failed"),
+        // never on stderr: those join the error, after the reason. Other stdout ("On branch main")
+        // says nothing about the failure and stays out of it.
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        bail!("{}", if stderr.is_empty() { format!("git {} failed", args.first().unwrap_or(&"")) } else { stderr })
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let conflict = stdout.contains("CONFLICT") || stdout.contains("Automatic merge failed");
+        let text = [stderr, if conflict { stdout } else { String::new() }]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!("{}", if text.is_empty() { format!("git {} failed", args.first().unwrap_or(&"")) } else { text })
     }
 }
 
@@ -378,20 +388,104 @@ pub fn checkout(repo: &Path, branch: &str, remote: bool) -> Result<()> {
     Ok(())
 }
 
+/// The working tree a branch switch was refused for: git lets one branch be checked out in one
+/// working tree only, and names the other (`'main' is already used by worktree at '/path'`, or
+/// `is already checked out at '/path'` before git 2.42; `cannot delete branch 'x' used by worktree
+/// at '/path'` for a delete).
+pub fn checked_out_elsewhere(message: &str) -> Option<PathBuf> {
+    ["used by worktree at '", "checked out at '"].iter().find_map(|marker| {
+        let rest = &message[message.find(marker)? + marker.len()..];
+        let path = &rest[..rest.find('\'')?];
+        (!path.is_empty()).then(|| PathBuf::from(path))
+    })
+}
+
+/// Renames the local branch `from` to `to` (refuses when `to` exists).
+pub fn rename_branch(repo: &Path, from: &str, to: &str) -> Result<()> {
+    ensure!(valid_branch_name(repo, from) && valid_branch_name(repo, to), "invalid branch name");
+    git(repo, &["branch", "-m", "--", from, to]).map(|_| ())
+}
+
+/// Deletes the local branch `name`. Without `force` git refuses a branch whose commits are not
+/// merged; it always refuses the branch a working tree has checked out.
+pub fn delete_branch(repo: &Path, name: &str, force: bool) -> Result<()> {
+    ensure!(valid_branch_name(repo, name), "invalid branch name");
+    git(repo, &["branch", if force { "-D" } else { "-d" }, "--", name]).map(|_| ())
+}
+
+/// Deletes `remote/branch` (`origin/feature`) on the remote server.
+pub fn delete_remote_branch(repo: &Path, remote_branch: &str) -> Result<()> {
+    let (remote, branch) = remote_branch.split_once('/').context("not a remote branch")?;
+    ensure!(!remote.starts_with('-') && valid_branch_name(repo, branch), "invalid branch name");
+    // The server's answer can quote a remote URL that carries `user:token@`: never shown as is.
+    git(repo, &["push", remote, "--delete", branch])
+        .map(|_| ())
+        .map_err(|err| anyhow::anyhow!(crate::worktree::mask_credentials(&format!("{err:#}"))))
+}
+
+/// Creates the branch `name` from `base` (a local or remote-tracking branch) and switches to it.
+pub fn create_branch_from(repo: &Path, name: &str, base: &str) -> Result<()> {
+    ensure!(valid_branch_name(repo, name) && !base.starts_with('-'), "invalid branch name");
+    git(repo, &["switch", "-c", name, base]).map(|_| ())
+}
+
 pub fn create_branch(repo: &Path, name: &str) -> Result<()> {
     ensure!(valid_branch_name(repo, name), "invalid branch name");
     git(repo, &["switch", "-c", name])?;
     Ok(())
 }
 
+/// Start of the error [`merge`] gives when a merge, rebase, … is already under way (callers say it
+/// in the user's language).
+pub const UNDER_WAY: &str = "operation already under way";
+
 /// Merges `branch` into the current branch (aborting and reporting on conflicts).
 pub fn merge(repo: &Path, branch: &str) -> Result<()> {
     ensure!(valid_branch_name(repo, branch), "invalid branch name");
+    // One already under way: starting another fails, and the `--abort` below would throw away the
+    // conflicts resolved so far. Leave it to be finished (the Git page offers help with it).
+    if let Some(operation) = operation_in_progress(repo) {
+        bail!("{UNDER_WAY}: {operation}");
+    }
     if let Err(err) = git(repo, &["merge", "--no-edit", branch]) {
         let _ = git(repo, &["merge", "--abort"]);
         return Err(err);
     }
     Ok(())
+}
+
+/// Whether a git failure is a merge (or pull, rebase, cherry-pick) that stopped on conflicts.
+pub fn is_conflict(message: &str) -> bool {
+    message.contains("CONFLICT") || message.contains("Automatic merge failed") || message.contains("fix conflicts")
+}
+
+/// Whether `git pull --ff-only` failed because the branch and its upstream have diverged.
+pub fn is_diverged(message: &str) -> bool {
+    message.contains("Not possible to fast-forward") || message.contains("diverging branches") || message.contains("have diverged")
+}
+
+/// Files with unresolved conflicts right now.
+pub fn conflicted_files(repo: &Path) -> Vec<String> {
+    git(repo, &["diff", "--name-only", "--diff-filter=U"])
+        .map(|out| out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// The operation the repository is in the middle of (`merge`, `rebase`, `cherry-pick`, `revert`),
+/// read from the files git keeps for it — in this working tree's own git folder.
+pub fn operation_in_progress(repo: &Path) -> Option<&'static str> {
+    // `--git-path` answers relative to the repository (`--path-format` needs git 2.31).
+    let path = |name: &str| git(repo, &["rev-parse", "--git-path", name]).ok().map(|p| repo.join(p.trim()));
+    [
+        ("MERGE_HEAD", "merge"),
+        ("rebase-merge", "rebase"),
+        ("rebase-apply", "rebase"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+        ("REVERT_HEAD", "revert"),
+    ]
+    .into_iter()
+    .find(|(name, _)| path(name).is_some_and(|p| p.exists()))
+    .map(|(_, op)| op)
 }
 
 pub fn fetch(repo: &Path) -> Result<()> {
@@ -543,6 +637,109 @@ mod tests {
         git(&dir, &["config", "user.name", "Tester"]).unwrap();
         git(&dir, &["config", "commit.gpgsign", "false"]).unwrap();
         dir
+    }
+
+    #[test]
+    fn names_the_tree_a_branch_is_checked_out_in() {
+        let new = "fatal: 'main' is already used by worktree at '/Users/example/code/app'";
+        assert_eq!(checked_out_elsewhere(new), Some(PathBuf::from("/Users/example/code/app")));
+        let old = "fatal: 'side' is already checked out at '/tmp/app tree'";
+        assert_eq!(checked_out_elsewhere(old), Some(PathBuf::from("/tmp/app tree")));
+        assert_eq!(checked_out_elsewhere("error: pathspec 'x' did not match"), None);
+        let delete = "error: cannot delete branch 'side' used by worktree at '/tmp/side'";
+        assert_eq!(checked_out_elsewhere(delete), Some(PathBuf::from("/tmp/side")));
+
+        // And git really says so, whichever version is installed.
+        let repo = temp_repo("elsewhere");
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]).unwrap();
+        let tree = repo.with_extension("tree");
+        let _ = std::fs::remove_dir_all(&tree);
+        git(&repo, &["worktree", "add", "-q", "-b", "side", &tree.to_string_lossy()]).unwrap();
+        let err = checkout(&tree, "main", false).unwrap_err().to_string();
+        let named = checked_out_elsewhere(&err).map(|p| p.canonicalize().unwrap());
+        assert_eq!(named, Some(repo.canonicalize().unwrap()), "{err}");
+        let _ = std::fs::remove_dir_all(&tree);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// A merge that stops on conflicts is told apart (and aborted, leaving the tree clean); a
+    /// conflict left in the tree is found with its files and the operation under way; a pull that
+    /// can't fast-forward is told apart from other failures.
+    #[test]
+    fn tells_conflicts_and_diverged_pulls_apart() {
+        let repo = temp_repo("conflict");
+        std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+        git(&repo, &["add", "a.txt"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "base"]).unwrap();
+        git(&repo, &["switch", "-q", "-c", "side"]).unwrap();
+        std::fs::write(repo.join("a.txt"), "side\n").unwrap();
+        git(&repo, &["commit", "-q", "-am", "side"]).unwrap();
+        git(&repo, &["switch", "-q", "main"]).unwrap();
+        std::fs::write(repo.join("a.txt"), "main\n").unwrap();
+        git(&repo, &["commit", "-q", "-am", "main"]).unwrap();
+
+        let err = merge(&repo, "side").unwrap_err().to_string();
+        assert!(is_conflict(&err), "{err}");
+        assert!(!is_diverged(&err));
+        assert_eq!(operation_in_progress(&repo), None, "the failed merge was aborted");
+        assert!(conflicted_files(&repo).is_empty());
+
+        assert!(git(&repo, &["merge", "side"]).is_err());
+        assert_eq!(operation_in_progress(&repo), Some("merge"));
+        assert_eq!(conflicted_files(&repo), vec!["a.txt".to_string()]);
+        // A merge asked for while this one is under way is refused, and this one is kept as it is.
+        std::fs::write(repo.join("a.txt"), "resolved by hand\n").unwrap();
+        assert!(merge(&repo, "side").is_err());
+        assert_eq!(operation_in_progress(&repo), Some("merge"), "the merge under way was not aborted");
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "resolved by hand\n");
+        git(&repo, &["merge", "--abort"]).unwrap();
+
+        // A clone whose branch and upstream both moved on: the pull can't fast-forward.
+        let clone = repo.with_extension("clone");
+        let _ = std::fs::remove_dir_all(&clone);
+        git(&repo, &["clone", "-q", &repo.to_string_lossy(), &clone.to_string_lossy()]).unwrap();
+        for (key, value) in [("user.email", "t@example.com"), ("user.name", "Tester"), ("commit.gpgsign", "false")] {
+            git(&clone, &["config", key, value]).unwrap();
+        }
+        git(&clone, &["commit", "-q", "--allow-empty", "-m", "local"]).unwrap();
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "remote"]).unwrap();
+        let err = pull(&clone).unwrap_err().to_string();
+        assert!(is_diverged(&err), "{err}");
+        assert!(!is_conflict(&err));
+        let _ = std::fs::remove_dir_all(&clone);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn renames_and_deletes_branches() {
+        let repo = temp_repo("branches");
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]).unwrap();
+        let has = |name: &str| git(&repo, &["rev-parse", "--verify", "-q", &format!("refs/heads/{name}")]).is_ok();
+        git(&repo, &["branch", "old"]).unwrap();
+        rename_branch(&repo, "old", "new").unwrap();
+        assert!(!has("old") && has("new"));
+        assert!(rename_branch(&repo, "new", "main").is_err(), "an existing name is not taken over");
+        assert!(rename_branch(&repo, "new", "-bad").is_err());
+
+        // Merged: `-d` is enough. Unmerged: refused until forced.
+        delete_branch(&repo, "new", false).unwrap();
+        assert!(!has("new"));
+        git(&repo, &["switch", "-q", "-c", "ahead"]).unwrap();
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "work"]).unwrap();
+        git(&repo, &["switch", "-q", "main"]).unwrap();
+        assert!(delete_branch(&repo, "ahead", false).is_err());
+        assert!(has("ahead"));
+        delete_branch(&repo, "ahead", true).unwrap();
+        assert!(!has("ahead"));
+        // The checked-out branch never goes.
+        assert!(delete_branch(&repo, "main", true).is_err());
+        // A branch from another one, switched to.
+        create_branch_from(&repo, "from-main", "main").unwrap();
+        assert!(has("from-main"));
+        assert!(create_branch_from(&repo, "x", "--orphan").is_err());
+        git(&repo, &["switch", "-q", "main"]).unwrap();
+        assert!(delete_remote_branch(&repo, "main").is_err(), "not a remote branch");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]

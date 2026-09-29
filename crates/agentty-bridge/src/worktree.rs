@@ -66,6 +66,66 @@ pub fn tree_root(path: &Path) -> Option<PathBuf> {
     path.ancestors().find(|dir| dir.join(".git").exists()).map(Path::to_path_buf)
 }
 
+/// The repository's main working tree for `path`, whether it is in that tree or in one of its
+/// linked worktrees. Read from the `.git` entries, no git process; `None` outside git and for a
+/// repository whose shared folder is not a tree's `.git` (bare, `--separate-git-dir`).
+pub fn main_tree(path: &Path) -> Option<PathBuf> {
+    let root = tree_root(path)?;
+    if root.join(".git").is_dir() {
+        return Some(root);
+    }
+    // A linked worktree: `.git` is a file naming `<repo>/.git/worktrees/<name>`, whose `commondir`
+    // points back at the shared folder (relative to it).
+    let gitdir = linked_gitdir(&root)?;
+    let common = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let common = if Path::new(common.trim()).is_absolute() { PathBuf::from(common.trim()) } else { gitdir.join(common.trim()) };
+    // Resolved by name, not `canonicalize`: on Windows that turns `C:\x` into `\\?\C:\x`,
+    // which no longer starts with the folders it is compared with.
+    let common = lexical(&common);
+    if common.file_name()? != ".git" {
+        return None;
+    }
+    common.parent().filter(|main| main.is_dir()).map(Path::to_path_buf)
+}
+
+/// `path` with its `.` and `..` parts resolved by name (symbolic links are left as they are).
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The private git folder of the linked worktree at `root` (`<repo>/.git/worktrees/<name>`): its
+/// `.git` file names it, and it has a `commondir`. A submodule's `.git` file names a folder without
+/// one (`<super>/.git/modules/<name>`): no linked worktree, just a repository of its own.
+fn linked_gitdir(root: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(root.join(".git")).ok()?;
+    let gitdir = PathBuf::from(text.strip_prefix("gitdir:")?.trim());
+    let gitdir = if gitdir.is_absolute() { gitdir } else { root.join(gitdir) };
+    gitdir.join("commondir").is_file().then_some(gitdir)
+}
+
+/// Whether the working tree at `root` is a linked worktree of another repository (not its main
+/// tree, not a submodule). Read from files, no git process.
+pub fn is_linked(root: &Path) -> bool {
+    linked_gitdir(root).is_some()
+}
+
+/// Where a pane works when its folder may be gone (a worktree removed under it): `path` while it is
+/// a folder, else the first of `fallbacks` that is one, else `home`. A relative path counts as gone:
+/// a shell started in a removed folder calls it `.`.
+pub fn existing_dir(path: &Path, fallbacks: &[&Path], home: &Path) -> PathBuf {
+    std::iter::once(path).chain(fallbacks.iter().copied()).find(|dir| dir.is_absolute() && dir.is_dir()).unwrap_or(home).to_path_buf()
+}
+
 /// Where Agentty keeps the worktrees it creates.
 pub fn managed_dir() -> PathBuf {
     crate::fsutil::data_dir().join("worktrees")
@@ -279,7 +339,7 @@ fn branch_ok(repo: &Path, name: &str) -> bool {
 
 /// Git's words for a failed push, with any credential a remote URL carries masked: an https remote
 /// can hold `user:token@host`, and this text is shown in the panel.
-fn mask_credentials(text: &str) -> String {
+pub(crate) fn mask_credentials(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("://") {
@@ -334,6 +394,173 @@ pub fn remove_linked(repo: &Path, tree: &Path, delete_branch: bool, delete_remot
         Ok(_) => Ok(Removal { remote_deleted: Some(remote.clone()), ..Removal::default() }),
         Err(err) => Ok(Removal { remote_error: Some(mask_credentials(&format!("{err:#}"))), ..Removal::default() }),
     }
+}
+
+/// Linked working trees of the repository whose main tree is `main_root`, counted from the folders
+/// git keeps for them (`.git/worktrees/*`, whose `gitdir` names the tree's `.git`). No git process:
+/// cheap enough for a pane's status probe. A tree whose folder is gone (prunable) doesn't count, as
+/// the worktree menu doesn't list it either.
+pub fn linked_count(main_root: &Path) -> usize {
+    // `gitdir` is relative to this folder when git writes relative paths (`worktree.useRelativePaths`).
+    let alive = |entry: &std::fs::DirEntry| {
+        std::fs::read_to_string(entry.path().join("gitdir")).is_ok_and(|gitdir| entry.path().join(gitdir.trim()).exists())
+    };
+    std::fs::read_dir(main_root.join(".git").join("worktrees"))
+        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir() && alive(e)).count())
+        .unwrap_or(0)
+}
+
+/// What cleaning up a linked working tree would lose, as [`cleanup_check`] finds it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CleanupCheck {
+    /// The tree's branch (`None` while detached).
+    pub branch: Option<String>,
+    /// Files with uncommitted changes, untracked ones included.
+    pub changed_files: usize,
+    /// Files git ignores that removing the tree would delete too (a `.env.local`, a local
+    /// database), build output and dependency folders left out. Up to a few names, then the count.
+    pub ignored_files: Vec<String>,
+    /// Commits on the tree's branch that the default branch does not have.
+    pub unmerged_commits: u32,
+    /// What it was compared with (`origin/main`, else the local `main`); `None` in a repository
+    /// without a default branch, where nothing can be called merged.
+    pub default_branch: Option<String>,
+}
+
+impl CleanupCheck {
+    /// Nothing would be lost: the branch is merged and the tree has no changes.
+    pub fn is_safe(&self) -> bool {
+        self.default_branch.is_some() && self.changed_files == 0 && self.unmerged_commits == 0 && self.ignored_files.is_empty()
+    }
+}
+
+/// The project's default branch as refs to compare with: `origin/HEAD` (as last fetched) and the
+/// local branch of the same name ([`pick_base`]'s choice). A branch is merged when either has all
+/// its commits — the remote once a pull request landed, the local one after a merge by hand.
+/// Returns (the name to show, the refs, the local branch's name).
+fn default_refs(path: &Path) -> (Option<String>, Vec<String>, Option<String>) {
+    let exists = |reference: &str| git(path, &["rev-parse", "--verify", "--quiet", &format!("{reference}^{{commit}}")]).is_ok();
+    let remote_default = git(path, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]).ok();
+    let remote_default = remote_default.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    let mut refs = Vec::new();
+    let mut shown = None;
+    if let Some(remote) = remote_default.filter(|_| exists("refs/remotes/origin/HEAD")) {
+        refs.push("refs/remotes/origin/HEAD".to_string());
+        shown = Some(remote.to_string());
+    }
+    let base = pick_base(remote_default, exists);
+    let local = (base != "HEAD" && !base.starts_with("origin/")).then_some(base);
+    if let Some(local) = &local {
+        refs.push(format!("refs/heads/{local}"));
+        shown = shown.or_else(|| Some(local.clone()));
+    }
+    (shown, refs, local)
+}
+
+/// Whether the linked working tree `tree` can go without losing anything: its uncommitted files and
+/// the commits its branch has that the project's default branch (`origin/HEAD`, else the local
+/// default branch) does not. Nothing is fetched: merged means merged as far as the last fetch knows.
+pub fn cleanup_check(tree: &Path) -> Result<CleanupCheck> {
+    let status = git(tree, &["status", "--porcelain", "--untracked-files=all"])?;
+    let ignored = git(tree, &["status", "--porcelain", "--ignored=matching", "--untracked-files=normal"])?;
+    let ignored_files = ignored
+        .lines()
+        .filter_map(|line| line.strip_prefix("!! "))
+        .map(|path| path.trim_matches('"').to_string())
+        .filter(|path| !is_rebuildable(path))
+        .collect();
+    let branch = git(tree, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok().map(|b| b.trim().to_string()).filter(|b| !b.is_empty());
+    let (default_branch, refs, _) = default_refs(tree);
+    let unmerged_commits = if refs.is_empty() {
+        0
+    } else {
+        let mut args = vec!["rev-list", "--count", "HEAD", "--not"];
+        args.extend(refs.iter().map(String::as_str));
+        git(tree, &args)?.trim().parse().unwrap_or(0)
+    };
+    Ok(CleanupCheck {
+        branch,
+        changed_files: status.lines().filter(|l| !l.trim().is_empty()).count(),
+        ignored_files,
+        unmerged_commits,
+        default_branch,
+    })
+}
+
+/// Ignored paths nothing is lost with: build output, dependencies and caches, made again by a build.
+fn is_rebuildable(path: &str) -> bool {
+    const REBUILT: &[&str] = &[
+        "target",
+        "node_modules",
+        "dist",
+        "build",
+        "out",
+        ".next",
+        ".nuxt",
+        ".turbo",
+        ".cache",
+        ".parcel-cache",
+        ".svelte-kit",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".gradle",
+        "coverage",
+        ".DS_Store",
+    ];
+    // Only a whole ignored folder of build output counts (git reports it as `target/`): a file inside
+    // a folder of that name (`build/local.properties`) is somebody's file.
+    let folder = path.ends_with('/');
+    let path = path.trim_end_matches('/');
+    let last = path.rsplit('/').next().unwrap_or(path);
+    (folder && REBUILT.contains(&last)) || last == ".DS_Store" || last.ends_with(".pyc") || last.ends_with(".log")
+}
+
+/// What a clean-up did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cleanup {
+    /// The repository's main working tree: where the panes that were in the tree go back to.
+    pub main: PathBuf,
+    /// The branch that went with the tree.
+    pub branch_deleted: Option<String>,
+}
+
+/// Cleans up the linked working tree `tree`: removes it and deletes its branch. Without `force` only
+/// when [`cleanup_check`] finds nothing to lose; with it (the user saw what would be lost and said
+/// yes), uncommitted changes and unmerged commits go too. Never the project's own tree, and never
+/// the default branch itself or a branch another tree has checked out.
+pub fn clean_up(tree: &Path, force: bool) -> Result<Cleanup> {
+    let trees = list(tree)?;
+    let main = trees.iter().find(|t| t.main).context("the repository has no working tree")?.path.clone();
+    let same =
+        |a: &Path| a.canonicalize().unwrap_or_else(|_| a.to_path_buf()) == tree.canonicalize().unwrap_or_else(|_| tree.to_path_buf());
+    let entry = trees.iter().find(|t| same(&t.path)).context("not a working tree of this repository")?;
+    ensure!(!entry.main, "the project's own working tree is never removed");
+    if !force {
+        let check = cleanup_check(&entry.path)?;
+        ensure!(check.is_safe(), "the working tree has changes or commits the default branch does not have");
+    }
+    // Without a default branch to tell the project's main line by, no branch is deleted: the tree
+    // goes, its branch (maybe `develop`) stays.
+    let (_, refs, default_local) = default_refs(&main);
+    let branch = entry.branch.clone().filter(|b| {
+        !refs.is_empty()
+            && Some(b) != default_local.as_ref()
+            && !trees.iter().any(|t| !same(&t.path) && t.branch.as_ref() == Some(b))
+            && branch_ok(&main, b)
+    });
+    let path_text = entry.path.to_string_lossy().to_string();
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(&path_text);
+    git(&main, &args)?;
+    // Merged (checked above) or given up on by the user: `-D`, since `-d` only knows the local
+    // default branch and would keep a branch that landed through a pull request.
+    let branch_deleted = branch.filter(|b| git(&main, &["branch", "-D", b]).is_ok());
+    Ok(Cleanup { main, branch_deleted })
 }
 
 /// Forgets working trees whose folder is gone (`git worktree prune`).
@@ -394,6 +621,103 @@ mod tests {
         // Nothing to go by: the checked-out commit.
         assert_eq!(pick_base(None, refs(&[])), "HEAD");
         assert_eq!(pick_base(Some("origin/trunk"), refs(&["refs/heads/main"])), "HEAD");
+    }
+
+    /// A pane whose folder is gone lands in the first fallback that still exists, else at home;
+    /// never in `.` or another relative path.
+    #[test]
+    fn existing_dir_skips_gone_folders() {
+        let dir = std::env::temp_dir().join(format!("agentty-existing-dir-{}", std::process::id()));
+        let (here, project, home) = (dir.join("here"), dir.join("project"), dir.join("home"));
+        for folder in [&here, &project, &home] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let gone = dir.join("gone");
+        assert_eq!(existing_dir(&here, &[&project], &home), here);
+        assert_eq!(existing_dir(&gone, &[&project], &home), project);
+        assert_eq!(existing_dir(&gone, &[&gone, &project], &home), project);
+        assert_eq!(existing_dir(&gone, &[&gone], &home), home);
+        assert_eq!(existing_dir(&gone, &[], &home), home);
+        assert_eq!(existing_dir(Path::new("."), &[&project], &home), project);
+        assert_eq!(existing_dir(Path::new("."), &[Path::new("here")], &home), home);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// With no default branch to tell the main line by (a project on `develop`), a forced clean-up
+    /// removes the tree and keeps its branch.
+    #[test]
+    fn keeps_the_branch_without_a_default_branch() {
+        if crate::process::command("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("agentty-no-default-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "develop"]).unwrap();
+        git(&repo, &["-c", "user.email=t@example.com", "-c", "user.name=Tester", "commit", "-q", "--allow-empty", "-m", "first"]).unwrap();
+        git(&repo, &["switch", "-q", "-c", "elsewhere"]).unwrap();
+        let tree = dir.join("tree");
+        git(&repo, &["worktree", "add", "-q", &tree.to_string_lossy(), "develop"]).unwrap();
+        let done = clean_up(&tree, true).unwrap();
+        assert_eq!(done.branch_deleted, None);
+        assert!(!tree.exists());
+        assert!(git(&repo, &["rev-parse", "--verify", "-q", "refs/heads/develop"]).is_ok(), "develop is kept");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Build output counts as nothing to lose only as a whole ignored folder; files inside a folder
+    /// that happens to share its name do not.
+    #[test]
+    fn only_whole_build_folders_are_rebuildable() {
+        assert!(is_rebuildable("target/"));
+        assert!(is_rebuildable("app/node_modules/"));
+        assert!(is_rebuildable(".DS_Store"));
+        assert!(is_rebuildable("logs/server.log"));
+        assert!(!is_rebuildable("build/local.properties"));
+        assert!(!is_rebuildable("out/secrets.json"));
+        assert!(!is_rebuildable(".env.local"));
+        assert!(!is_rebuildable(".vscode/"));
+    }
+
+    /// `.` and `..` go by name; nothing else changes (no symbolic link is followed, no `\\?\` prefix).
+    #[test]
+    fn resolves_dots_by_name() {
+        assert_eq!(lexical(Path::new("/code/app/.git/worktrees/x/../..")), PathBuf::from("/code/app/.git"));
+        assert_eq!(lexical(Path::new("/a/./b/../c")), PathBuf::from("/a/c"));
+        assert_eq!(lexical(Path::new("/a/b")), PathBuf::from("/a/b"));
+    }
+
+    /// The project folder of a linked worktree is the main tree it came from, found without git.
+    #[test]
+    fn main_tree_of_linked_worktrees() {
+        if crate::process::command("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("agentty-main-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]).unwrap();
+        git(&repo, &["-c", "user.email=t@example.com", "-c", "user.name=Tester", "commit", "-q", "--allow-empty", "-m", "first"]).unwrap();
+        let linked = dir.join("linked");
+        git(&repo, &["worktree", "add", "-q", "-b", "side", &linked.to_string_lossy()]).unwrap();
+        std::fs::create_dir_all(linked.join("deep")).unwrap();
+        let main = |path: &Path| main_tree(path).map(|p| p.canonicalize().unwrap());
+        let repo = repo.canonicalize().unwrap();
+        assert_eq!(main(&repo.join("src")), Some(repo.clone()));
+        assert_eq!(main(&linked), Some(repo.clone()));
+        assert_eq!(main(&linked.join("deep")), Some(repo.clone()));
+        assert_eq!(main(&dir), None);
+        assert!(is_linked(&linked) && !is_linked(&repo));
+        // A submodule's `.git` file names a folder without `commondir`: no linked worktree.
+        let module = dir.join("module");
+        std::fs::create_dir_all(repo.join(".git/modules/module")).unwrap();
+        std::fs::create_dir_all(&module).unwrap();
+        std::fs::write(module.join(".git"), format!("gitdir: {}\n", repo.join(".git/modules/module").display())).unwrap();
+        assert!(!is_linked(&module));
+        assert_eq!(main_tree(&module), None);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// Trees the user made are removed on request too, safely: never the project's own tree, never
@@ -477,6 +801,123 @@ mod tests {
         assert!(list(&repo).unwrap().iter().any(|t| t.prunable));
         prune(&repo).unwrap();
         assert_eq!(list(&repo).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A merged, clean tree is cleaned up at once; one with changes or unmerged commits only when
+    /// forced — and the check says which, so the dialog can say what would be lost.
+    #[test]
+    fn cleans_up_merged_trees_and_forces_only_when_asked() {
+        if crate::process::command("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("agentty-worktree-cleanup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]).unwrap();
+        for (key, value) in [("user.email", "t@example.com"), ("user.name", "Tester"), ("commit.gpgsign", "false")] {
+            git(&repo, &["config", key, value]).unwrap();
+        }
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "a.txt"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "first"]).unwrap();
+        let add = |name: &str| {
+            let path = dir.join(name);
+            git(&repo, &["worktree", "add", "-q", "-b", name, &path.to_string_lossy()]).unwrap();
+            path
+        };
+        let commit = |tree: &Path, file: &str| {
+            std::fs::write(tree.join(file), "work\n").unwrap();
+            git(tree, &["add", file]).unwrap();
+            git(tree, &["commit", "-q", "-m", file]).unwrap();
+        };
+        let has_branch = |name: &str| git(&repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{name}")]).is_ok();
+        assert_eq!(linked_count(&repo), 0);
+
+        // Nothing on it the default branch lacks: safe, and it goes with its branch.
+        let merged = add("merged");
+        assert_eq!(linked_count(&repo), 1);
+        // A tree whose folder was deleted by hand is not counted (the menu doesn't list it either).
+        let gone = add("gone");
+        assert_eq!(linked_count(&repo), 2);
+        std::fs::remove_dir_all(&gone).unwrap();
+        assert_eq!(linked_count(&repo), 1);
+        git(&repo, &["worktree", "prune"]).unwrap();
+        git(&repo, &["branch", "-D", "gone"]).unwrap();
+        let check = cleanup_check(&merged).unwrap();
+        assert_eq!(check.branch.as_deref(), Some("merged"));
+        assert_eq!(check.default_branch.as_deref(), Some("main"));
+        assert!(check.is_safe());
+        let done = clean_up(&merged, false).unwrap();
+        assert_eq!(done.main.canonicalize().unwrap(), repo.canonicalize().unwrap());
+        assert_eq!(done.branch_deleted.as_deref(), Some("merged"));
+        assert!(!merged.exists() && !has_branch("merged"));
+
+        // Work merged into main afterwards counts as merged too.
+        let landed = add("landed");
+        commit(&landed, "landed.txt");
+        assert_eq!(cleanup_check(&landed).unwrap().unmerged_commits, 1);
+        git(&repo, &["merge", "-q", "--no-edit", "landed"]).unwrap();
+        assert!(cleanup_check(&landed).unwrap().is_safe());
+        clean_up(&landed, false).unwrap();
+        assert!(!has_branch("landed"));
+
+        // A file git ignores (a local `.env`) would go with the tree: not safe. Build output would not matter.
+        std::fs::write(repo.join(".gitignore"), ".env.local\ntarget/\n").unwrap();
+        git(&repo, &["add", ".gitignore"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "ignore"]).unwrap();
+        let local = add("local");
+        std::fs::create_dir_all(local.join("target/debug")).unwrap();
+        std::fs::write(local.join("target/debug/app"), "bin").unwrap();
+        assert!(cleanup_check(&local).unwrap().is_safe(), "build output alone is nothing to lose");
+        std::fs::write(local.join(".env.local"), "SECRET=example_not_a_real_value\n").unwrap();
+        let check = cleanup_check(&local).unwrap();
+        assert_eq!(check.ignored_files, vec![".env.local".to_string()]);
+        assert!(!check.is_safe());
+        assert!(clean_up(&local, false).is_err());
+        clean_up(&local, true).unwrap();
+
+        // Uncommitted (even untracked) files: not safe, refused without force, gone with it.
+        let dirty = add("dirty");
+        std::fs::write(dirty.join("scratch.txt"), "x\n").unwrap();
+        let check = cleanup_check(&dirty).unwrap();
+        assert_eq!((check.changed_files, check.unmerged_commits), (1, 0));
+        assert!(!check.is_safe());
+        assert!(clean_up(&dirty, false).is_err());
+        assert!(dirty.exists() && has_branch("dirty"), "a refused clean-up leaves everything as it was");
+        clean_up(&dirty, true).unwrap();
+        assert!(!dirty.exists() && !has_branch("dirty"));
+
+        // Unmerged commits: the same, and the forced clean-up deletes the branch as well.
+        let ahead = add("ahead");
+        commit(&ahead, "b.txt");
+        commit(&ahead, "c.txt");
+        let check = cleanup_check(&ahead).unwrap();
+        assert_eq!((check.changed_files, check.unmerged_commits), (0, 2));
+        assert!(clean_up(&ahead, false).is_err());
+        clean_up(&ahead, true).unwrap();
+        assert!(!ahead.exists() && !has_branch("ahead"));
+
+        // Merged on the remote (a pull request landed) while the local main was not pulled: merged.
+        let pushed = add("pushed");
+        commit(&pushed, "d.txt");
+        git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/pushed"]).unwrap();
+        git(&repo, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]).unwrap();
+        let check = cleanup_check(&pushed).unwrap();
+        assert_eq!(check.default_branch.as_deref(), Some("origin/main"));
+        assert!(check.is_safe());
+        assert_eq!(clean_up(&pushed, false).unwrap().branch_deleted.as_deref(), Some("pushed"));
+
+        // A linked tree on the default branch itself: the tree goes, the branch never does.
+        git(&repo, &["checkout", "-q", "-b", "elsewhere"]).unwrap();
+        let on_main = dir.join("on-main");
+        git(&repo, &["worktree", "add", "-q", &on_main.to_string_lossy(), "main"]).unwrap();
+        assert_eq!(clean_up(&on_main, true).unwrap().branch_deleted, None);
+        assert!(has_branch("main"));
+
+        // The project's own tree: never.
+        assert!(clean_up(&repo, true).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

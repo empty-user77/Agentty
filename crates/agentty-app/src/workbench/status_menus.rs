@@ -8,7 +8,9 @@ use crate::settings::AdvisorChoice;
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, IconSize, TypeScale};
 use agentty_bridge::context::ContextSnapshot;
-use agentty_bridge::extensions::{discover, parse_claude_mcp_list, parse_codex_mcp_list, Extension, ExtensionKind, McpHealth, McpStatus};
+use agentty_bridge::extensions::{
+    discover, parse_claude_mcp_list, parse_codex_mcp_list, Extension, ExtensionKind, McpHealth, McpStatus, Scope,
+};
 use agentty_bridge::model::Agent;
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString};
 use std::path::PathBuf;
@@ -47,6 +49,26 @@ pub struct AgentInventory {
 
 const MCP_TTL: Duration = Duration::from_secs(60);
 const MAX_ROWS: usize = 40;
+
+/// Order of the sections in the skills and subagents menus.
+fn scope_rank(scope: &Scope) -> u8 {
+    match scope {
+        Scope::Project => 0,
+        Scope::User => 1,
+        Scope::Plugin(_) => 2,
+        Scope::System => 3,
+    }
+}
+
+/// Section title for skills and subagents from `scope`.
+fn scope_label(scope: &Scope, cx: &gpui::App) -> String {
+    match scope {
+        Scope::Project => t(cx, "status.scope_project").to_string(),
+        Scope::User => t(cx, "status.scope_user").to_string(),
+        Scope::Plugin(name) => tf(cx, "status.scope_plugin", &[("name", name)]),
+        Scope::System => t(cx, "status.scope_system").to_string(),
+    }
+}
 
 /// Runs `<agent> mcp list` in `cwd` through the user's interactive login shell (full output).
 fn mcp_list(agent: Agent, cwd: PathBuf) -> Result<Vec<McpStatus>, String> {
@@ -224,11 +246,34 @@ impl Workbench {
                 match items {
                     None => list = list.child(crate::ui::loading_row(t(cx, "ext.loading"))),
                     Some(items) => {
-                        let matching: Vec<&Extension> = items.iter().filter(|e| e.kind == kind).collect();
+                        let mut matching: Vec<&Extension> = items.iter().filter(|e| e.kind == kind).collect();
                         if matching.is_empty() {
                             list = list.child(crate::ui::hint(t(cx, "status.none")));
                         }
+                        // Grouped by where they come from, the project's own first: a skill of this
+                        // repository and one of the user's reads the same otherwise.
+                        // One section per plugin, however discovery interleaved them.
+                        matching.sort_by(|a, b| {
+                            let name = |scope: &Scope| match scope {
+                                Scope::Plugin(name) => name.clone(),
+                                _ => String::new(),
+                            };
+                            (scope_rank(&a.scope), name(&a.scope)).cmp(&(scope_rank(&b.scope), name(&b.scope)))
+                        });
+                        let mut section: Option<&Scope> = None;
                         for (index, item) in matching.into_iter().take(MAX_ROWS).enumerate() {
+                            if section != Some(&item.scope) {
+                                section = Some(&item.scope);
+                                list = list.child(
+                                    div()
+                                        .px_2()
+                                        .pt_1p5()
+                                        .pb_0p5()
+                                        .t_caption()
+                                        .text_color(hex(Chrome::MUTED))
+                                        .child(scope_label(&item.scope, cx)),
+                                );
+                            }
                             let invocation = item.invocation.clone();
                             list = list.child(
                                 row(SharedString::from(format!("status-item-{index}")), None, item.name.clone(), item.description.clone())

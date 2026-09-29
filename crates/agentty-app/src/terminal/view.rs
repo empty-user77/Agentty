@@ -270,6 +270,15 @@ pub struct TerminalView {
     pub git_branch: Option<String>,
     /// Name of the linked git worktree the pane works in (`None` in a project's own folder).
     pub worktree: Option<String>,
+    /// The project folder the pane started in (the repository's main working tree, else the launch
+    /// folder): where it is shown to work when its own folder was removed (a working tree cleaned up).
+    project_dir: Option<PathBuf>,
+    /// The folder the pane works in was gone at the last probe: [`Self::display_cwd`] falls back
+    /// then. Kept here so that function (called many times a frame) asks the file system nothing.
+    cwd_gone: bool,
+    /// Linked worktrees of the repository the pane works in (from its main folder or one of them;
+    /// 0 outside git): the Files button says how many there are.
+    pub linked_trees: usize,
     /// Uncommitted changes in the pane's repository.
     pub git_dirty: bool,
     /// Commits not pushed yet (`None` without an upstream).
@@ -388,6 +397,9 @@ impl TerminalView {
             live_cwd: None,
             git_branch: None,
             worktree: None,
+            project_dir: None,
+            cwd_gone: false,
+            linked_trees: 0,
             git_dirty: false,
             git_ahead: None,
             git_probe: None,
@@ -472,8 +484,19 @@ impl TerminalView {
         };
         // ConPTY has no foreground process group (Windows): the agent's own process stands in.
         let foreground = crate::procinfo::foreground_pid(backend.tty_fd).or(live.map(|(_, pid)| pid)).unwrap_or(backend.child_pid);
-        let cwd = crate::procinfo::cwd_of(foreground).or_else(|| crate::procinfo::cwd_of(backend.child_pid));
+        // A folder removed under the process (Linux reports it as `… (deleted)`) is no place to show.
+        let cwd = crate::procinfo::cwd_of(foreground)
+            .or_else(|| crate::procinfo::cwd_of(backend.child_pid))
+            .filter(|dir| dir.is_absolute() && dir.is_dir());
+        if self.project_dir.is_none() {
+            self.project_dir = agentty_bridge::worktree::main_tree(&self.spec.cwd);
+        }
         let mut changed = live_agent != self.live_agent || live_tool != self.live_tool;
+        let gone = !cwd.as_ref().or(self.live_cwd.as_ref()).unwrap_or(&self.spec.cwd).is_dir();
+        if gone != self.cwd_gone {
+            self.cwd_gone = gone;
+            changed = true;
+        }
         if self.spec.kind != PaneKind::Shell {
             if live_agent.is_some() {
                 self.agent_seen = true;
@@ -496,6 +519,16 @@ impl TerminalView {
         self.live_agent = live_agent;
         self.live_tool = live_tool;
         self.live_tool_pid = live.map(|(_, pid)| pid);
+        // The folder the pane was in is gone (its worktree cleaned up) and nothing reports a new one
+        // yet: stop showing that tree and its branch; the pane is shown in the project folder.
+        if cwd.is_none() && self.live_cwd.as_ref().is_some_and(|dir| !dir.is_dir()) {
+            self.live_cwd = None;
+            let shown = self.display_cwd();
+            self.git_branch = crate::procinfo::git_branch(&shown);
+            self.worktree = crate::workbench::worktrees::linked_tree_name(&shown);
+            changed = true;
+            cx.emit(TerminalEvent::DirectoryChanged);
+        }
         if cwd.is_some() && cwd != self.live_cwd {
             // Where the pane works is part of the layout, so a `cd` is worth saving — but only
             // when it really moved away from the folder the pane was started in. The first probe
@@ -534,6 +567,12 @@ impl TerminalView {
             return;
         }
         let cwd = self.display_cwd();
+        // Read from `.git/worktrees`, no git process: trees made elsewhere show up within a probe.
+        let linked = agentty_bridge::worktree::main_tree(&cwd).map_or(0, |root| agentty_bridge::worktree::linked_count(&root));
+        if linked != self.linked_trees {
+            self.linked_trees = linked;
+            cx.notify();
+        }
         if crate::procinfo::git_branch(&cwd).is_none() {
             if self.git_branch.is_some() || self.git_dirty {
                 self.git_branch = None;
@@ -785,8 +824,16 @@ impl TerminalView {
         "shell"
     }
 
+    /// Where the pane works: the folder its shell or agent is in, else the launch folder. When that
+    /// folder is gone (a working tree removed under it), the project folder it belonged to, else home.
     pub fn display_cwd(&self) -> PathBuf {
-        self.live_cwd.clone().unwrap_or_else(|| self.spec.cwd.clone())
+        let cwd = self.live_cwd.clone().unwrap_or_else(|| self.spec.cwd.clone());
+        if !self.cwd_gone {
+            return cwd;
+        }
+        let home = crate::launch::home_dir();
+        let fallbacks: Vec<&std::path::Path> = self.project_dir.as_deref().into_iter().collect();
+        agentty_bridge::worktree::existing_dir(&cwd, &fallbacks, &home)
     }
 
     /// Running, or about to start on first paint.
@@ -849,6 +896,32 @@ impl TerminalView {
 
     pub fn is_running(&self) -> bool {
         self.backend.is_some() || (!self.spawned && self.error.is_none())
+    }
+
+    /// Whether the pane's shell waits at its prompt: nothing (no agent, no dev server) runs in the
+    /// foreground, so a typed command reaches the shell itself.
+    pub fn at_shell_prompt(&self) -> bool {
+        self.backend.as_ref().is_some_and(|b| crate::procinfo::foreground_pid(b.tty_fd) == Some(b.child_pid))
+    }
+
+    /// Whether Agentty can move this pane's shell by typing [`Self::cd_to`]: it waits at its prompt,
+    /// and it is a shell that knows `builtin cd` (zsh, bash, fish — not csh, nushell or xonsh).
+    pub fn can_move(&self) -> bool {
+        let shell = crate::launch::LaunchSpec::shell_program();
+        let known = matches!(
+            crate::shell_integration::flavor(&shell),
+            crate::shell_integration::ShellFlavor::Zsh | crate::shell_integration::ShellFlavor::Bash
+        ) || std::path::Path::new(&shell).file_name().is_some_and(|name| name == "fish");
+        known && self.at_shell_prompt()
+    }
+
+    /// Moves the shell to `dir`: clears what was typed on the prompt (to the end, then all of it:
+    /// bash's Ctrl-U only takes what is before the cursor), then `builtin cd` (a `cd` function such as
+    /// zoxide's stays out of it) with a leading space, which keeps it out of the history where the
+    /// shell is set to. Only while [`Self::at_shell_prompt`].
+    pub fn cd_to(&mut self, dir: &std::path::Path) {
+        let line = format!("\x05\x15 builtin cd -- {}\r", crate::launch::shell_quote(&dir.display().to_string()));
+        self.write(line.into_bytes());
     }
 
     pub fn is_agent(&self) -> bool {
