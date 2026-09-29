@@ -30,6 +30,11 @@ const AGENT_ROW: f32 = 44.;
 /// A click on the icon right after the popover closed (it lost key status to that click) must
 /// not reopen it.
 const REOPEN_GUARD: Duration = Duration::from_millis(300);
+/// First CPU/RAM reading after opening, then how often it refreshes.
+const LOAD_FIRST_SAMPLE: Duration = Duration::from_millis(300);
+const LOAD_INTERVAL: Duration = Duration::from_secs(2);
+/// Load at or above which the header shows it in the warning color.
+const LOAD_HIGH: f32 = 85.;
 
 #[derive(Default)]
 struct PopoverWindow {
@@ -144,6 +149,7 @@ impl Snapshot {
 pub struct TrayPopover {
     focus: FocusHandle,
     height: f32,
+    load: crate::system_load::Sampler,
     _activation: Subscription,
 }
 
@@ -164,7 +170,22 @@ impl TrayPopover {
             }
         })
         .detach();
-        Self { focus, height: INITIAL_HEIGHT, _activation: activation }
+        cx.spawn(async move |this, cx| {
+            let mut delay = LOAD_FIRST_SAMPLE;
+            loop {
+                cx.background_executor().timer(delay).await;
+                delay = LOAD_INTERVAL;
+                let sampled = this.update(cx, |this, cx| {
+                    this.load.sample();
+                    cx.notify();
+                });
+                if sampled.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        Self { focus, height: INITIAL_HEIGHT, load: crate::system_load::Sampler::new(), _activation: activation }
     }
 
     /// Queues `action` for the app loop and closes the popover.
@@ -224,11 +245,34 @@ impl TrayPopover {
                             }),
                     ),
             )
+            .child(Self::system_load(&self.load, cx))
             .child(
                 crate::ui::icon_only_sized("tray-mini", "picture-in-picture-2", 28., 15., Self::run(TrayAction::ToggleMini))
                     .when(snapshot.mini, |d| d.bg(hex(Chrome::SELECTED)))
                     .tooltip(crate::ui::Tooltip::text(mini_tip, None)),
             )
+    }
+
+    /// CPU and RAM load, one per line, beside the mini mode button.
+    fn system_load(load: &crate::system_load::Sampler, cx: &App) -> impl IntoElement {
+        let row = |label: &str, percent: Option<f32>| {
+            let value = percent.map_or_else(|| "—".to_string(), |p| format!("{:.0}%", p.round()));
+            let color = if percent.is_some_and(|p| p >= LOAD_HIGH) { Chrome::ORANGE } else { Chrome::FOREGROUND };
+            div()
+                .flex()
+                .justify_between()
+                .gap_2()
+                .child(div().text_color(hex(Chrome::MUTED)).child(label.to_string()))
+                .child(div().text_color(hex(color)).child(value))
+        };
+        div()
+            .flex_shrink_0()
+            .w(px(64.))
+            .flex()
+            .flex_col()
+            .t_caption()
+            .child(row(t(cx, "tray.cpu"), load.cpu))
+            .child(row(t(cx, "tray.ram"), load.memory))
     }
 
     fn usage_section(usage: &[AccountUsage], cx: &App) -> impl IntoElement {
