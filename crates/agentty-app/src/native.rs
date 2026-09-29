@@ -100,6 +100,16 @@ pub fn order_out(window: Id) {
     }
 }
 
+/// Whether any part of the window is on screen: not minimized, hidden, on another Space or
+/// covered by other windows. GPUI stops drawing it otherwise.
+pub fn is_on_screen(window: Id) -> bool {
+    const NS_WINDOW_OCCLUSION_STATE_VISIBLE: u64 = 1 << 1;
+    unsafe {
+        let state: u64 = msg_send![window, occlusionState];
+        state & NS_WINDOW_OCCLUSION_STATE_VISIBLE != 0
+    }
+}
+
 pub fn is_visible(window: Id) -> bool {
     unsafe {
         let visible: objc::runtime::BOOL = msg_send![window, isVisible];
