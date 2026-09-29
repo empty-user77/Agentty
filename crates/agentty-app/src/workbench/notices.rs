@@ -50,7 +50,7 @@ impl Workbench {
 
         let prefs = settings(cx);
         let sort_finished_to_top = prefs.sort_finished_to_top;
-        let background = !self.window_active || self.is_mini();
+        let background = !self.in_front() || self.is_mini();
         // The user is looking at this very pane: no need to tell them elsewhere.
         let in_view = self.pane_in_view(pane_id, cx);
         let asks = matches!(kind, NoticeKind::Permission | NoticeKind::Question);
@@ -75,11 +75,18 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Whether this window is in front: it was the active one when it last drew, and Agentty is the
+    /// active app now. A window that is hidden, covered or behind a locked screen draws nothing, so
+    /// what it saw last can be old; the app's own state is asked at the moment.
+    fn in_front(&self) -> bool {
+        self.window_active && crate::native::app_is_active()
+    }
+
     /// Whether the user is looking at this very pane: the window is in front, no page covers the
     /// terminals, and the pane is one of the tab's split panes — not only its focused one, since
     /// every pane of the tab on screen is equally in view.
     pub(super) fn pane_in_view(&self, pane_id: u64, cx: &gpui::App) -> bool {
-        if !self.window_active || self.is_mini() || self.page.is_some() {
+        if !self.in_front() || self.is_mini() || self.page.is_some() {
             return false;
         }
         let Some(ws) = self.workspaces.get(self.active_workspace) else { return false };

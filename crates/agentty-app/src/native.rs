@@ -117,6 +117,17 @@ pub fn is_visible(window: Id) -> bool {
     }
 }
 
+/// Whether Agentty is the active app right now. Asked at the moment it matters, unlike what a
+/// window last saw when it drew: a hidden, covered or locked-away window draws nothing, so its own
+/// idea of being in front can be old.
+pub fn app_is_active() -> bool {
+    unsafe {
+        let app: Id = msg_send![objc::class!(NSApplication), sharedApplication];
+        let active: objc::runtime::BOOL = msg_send![app, isActive];
+        active == YES
+    }
+}
+
 /// Shows the window above others without activating Agentty (keyboard focus stays where it is).
 pub fn order_front_regardless(window: Id) {
     unsafe {
