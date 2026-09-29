@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,6 +69,55 @@ struct ClaudeProgress {
     /// Message ids counted so far, hashed: kept for as long as the transcript is.
     seen: HashSet<u64>,
     project: Option<String>,
+    /// Tool records pushed from a complete last line without its newline: that line is read again
+    /// next time, so they are taken back first.
+    tail_tools: usize,
+    /// What the read part of the file looked like (see `fingerprint`), to tell a transcript that
+    /// grew from a different file put at the same path.
+    fingerprint: Option<Fingerprint>,
+}
+
+/// How many bytes at the start of a transcript, and before where its reading stopped, identify it.
+const FINGERPRINT_BYTES: u64 = 512;
+
+/// A cheap identity of a transcript as far as it was read: the file's identity (inode on unix) and
+/// a hash of its first bytes and of the bytes before the offset, so growing it costs two short
+/// reads rather than a hash of the whole file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Fingerprint {
+    file_id: Option<(u64, u64)>,
+    hash: u64,
+}
+
+fn file_id(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
+}
+
+/// The fingerprint of `path` as read up to `offset`; `None` when it cannot be read that far.
+fn fingerprint(path: &Path, offset: u64) -> Option<Fingerprint> {
+    use std::hash::Hasher;
+    let mut file = File::open(path).ok()?;
+    let file_id = file_id(&file.metadata().ok()?);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let head = offset.min(FINGERPRINT_BYTES);
+    let tail_start = offset - head;
+    for start in [0, tail_start] {
+        let mut buf = vec![0; head as usize];
+        file.seek(SeekFrom::Start(start)).ok()?;
+        file.read_exact(&mut buf).ok()?;
+        hasher.write(&buf);
+    }
+    hasher.write_u64(offset);
+    Some(Fingerprint { file_id, hash: hasher.finish() })
 }
 
 pub fn root_dir(agent: Agent) -> PathBuf {
@@ -82,26 +131,37 @@ pub fn root_dir(agent: Agent) -> PathBuf {
 
 impl UsageScanner {
     pub fn scan(&mut self, agent: Agent) -> FileUsage {
-        let prices = PriceTable::load();
+        self.scan_in(agent, &root_dir(agent), &PriceTable::load())
+    }
+
+    /// `scan` over the transcripts under `root` (empty: an agent without local accounting).
+    fn scan_in(&mut self, agent: Agent, root: &Path, prices: &PriceTable) -> FileUsage {
         let mut files = Vec::new();
-        fsutil::jsonl_files(&root_dir(agent), 4, &mut files);
+        if !root.as_os_str().is_empty() {
+            fsutil::jsonl_files(root, 4, &mut files);
+        }
 
         let mut merged = FileUsage::default();
         let mut seen_requests = HashSet::new();
         let mut seen_tools = HashSet::new();
         // This agent's transcripts deleted since its last scan are dropped from the cache (one
-        // scanner serves every agent, each under its own folder).
-        let root = root_dir(agent);
-        let listed: HashSet<&PathBuf> = files.iter().collect();
-        self.cache.retain(|path, _| !path.starts_with(&root) || listed.contains(path));
+        // scanner serves every agent, each under its own folder). An agent without a folder has
+        // nothing to drop (every path starts with an empty one).
+        if !root.as_os_str().is_empty() {
+            let listed: HashSet<&PathBuf> = files.iter().collect();
+            self.cache.retain(|path, _| !path.starts_with(root) || listed.contains(path));
+        }
         for path in &files {
             let Ok(meta) = std::fs::metadata(path) else { continue };
             let (len, mtime) = (meta.len(), fsutil::mtime_ms(path));
             match self.cache.get_mut(path) {
                 Some(entry) if (entry.len, entry.mtime) == (len, mtime) => {}
-                // Grown: only the new lines are read.
-                Some(Cached { len: old_len, mtime: old_mtime, usage, claude: Some(progress) }) if len > *old_len => {
-                    parse_claude(path, &prices, progress, usage);
+                // Grown, and still the file that was read (not another one put in its place): only
+                // the new lines are read.
+                Some(Cached { len: old_len, mtime: old_mtime, usage, claude: Some(progress) })
+                    if len > *old_len && progress.fingerprint.is_some() && fingerprint(path, progress.offset) == progress.fingerprint =>
+                {
+                    parse_claude(path, prices, progress, usage);
                     (*old_len, *old_mtime) = (len, mtime);
                 }
                 _ => {
@@ -109,11 +169,11 @@ impl UsageScanner {
                     let claude = match agent {
                         Agent::Claude => {
                             let mut progress = ClaudeProgress::default();
-                            parse_claude(path, &prices, &mut progress, &mut usage);
+                            parse_claude(path, prices, &mut progress, &mut usage);
                             Some(progress)
                         }
                         Agent::Codex => {
-                            usage = parse_codex(path, &prices);
+                            usage = parse_codex(path, prices);
                             None
                         }
                         _ => None,
@@ -157,70 +217,84 @@ fn parse_claude(path: &Path, prices: &PriceTable, progress: &mut ClaudeProgress,
     if progress.offset > 0 && file.seek(SeekFrom::Start(progress.offset)).is_err() {
         return;
     }
-    let ClaudeProgress { offset, seen, project } = progress;
+    let ClaudeProgress { offset, seen, project, tail_tools, fingerprint: _ } = &mut *progress;
+    usage.tools.truncate(usage.tools.len().saturating_sub(std::mem::take(tail_tools)));
     let mut reader = BufReader::new(file);
     let mut bytes = Vec::new();
     loop {
         bytes.clear();
-        match reader.read_until(b'\n', &mut bytes) {
-            Ok(read) if read > 0 && bytes.ends_with(b"\n") => *offset += read as u64,
+        let tools_before = usage.tools.len();
+        let complete = match reader.read_until(b'\n', &mut bytes) {
+            Ok(read) if read > 0 && bytes.ends_with(b"\n") => {
+                *offset += read as u64;
+                true
+            }
             // The last line, without its newline: `offset` stays before it.
-            Ok(read) if read > 0 && serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() => {}
+            Ok(read) if read > 0 && serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() => false,
             _ => break,
+        };
+        parse_claude_line(&bytes, prices, seen, project, usage);
+        if !complete {
+            *tail_tools = usage.tools.len() - tools_before;
         }
-        let Ok(line) = std::str::from_utf8(&bytes) else { continue };
-        // Group by the directory the session started in; later lines follow the agent's `cd`s.
-        if project.is_none() && line.contains("\"cwd\":") {
-            *project = serde_json::from_str::<Value>(line).ok().and_then(|v| v["cwd"].as_str().map(str::to_string));
-        }
-        if !line.contains("\"type\":\"assistant\"") {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-        let message = &v["message"];
-        let Some(timestamp_ms) = parse_timestamp(&v["timestamp"]) else { continue };
+    }
+    progress.fingerprint = fingerprint(path, progress.offset);
+}
 
-        if let Some(blocks) = message["content"].as_array() {
-            for block in blocks.iter().filter(|b| b["type"] == "tool_use") {
-                if let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str()) {
-                    usage.tools.push(ToolRecord { key: id.to_string(), timestamp_ms, name: name.to_string() });
-                }
+/// One line of a Claude transcript (see `parse_claude`).
+fn parse_claude_line(bytes: &[u8], prices: &PriceTable, seen: &mut HashSet<u64>, project: &mut Option<String>, usage: &mut FileUsage) {
+    let Ok(line) = std::str::from_utf8(bytes) else { return };
+    // Group by the directory the session started in; later lines follow the agent's `cd`s.
+    if project.is_none() && line.contains("\"cwd\":") {
+        *project = serde_json::from_str::<Value>(line).ok().and_then(|v| v["cwd"].as_str().map(str::to_string));
+    }
+    if !line.contains("\"type\":\"assistant\"") {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+    let message = &v["message"];
+    let Some(timestamp_ms) = parse_timestamp(&v["timestamp"]) else { return };
+
+    if let Some(blocks) = message["content"].as_array() {
+        for block in blocks.iter().filter(|b| b["type"] == "tool_use") {
+            if let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str()) {
+                usage.tools.push(ToolRecord { key: id.to_string(), timestamp_ms, name: name.to_string() });
             }
         }
-
-        let u = &message["usage"];
-        let Some(message_id) = message["id"].as_str() else { continue };
-        if u.is_null() || !seen.insert(id_hash(message_id)) {
-            continue;
-        }
-        let model = message["model"].as_str().unwrap_or("unknown").to_string();
-        let n = |k: &str| u[k].as_u64().unwrap_or(0);
-        let (input, output, cache_read) = (n("input_tokens"), n("output_tokens"), n("cache_read_input_tokens"));
-        let cache_write = n("cache_creation_input_tokens");
-        let write_1h = u["cache_creation"]["ephemeral_1h_input_tokens"].as_u64().unwrap_or(0).min(cache_write);
-        let write_5m = cache_write - write_1h;
-        let fast = u["speed"].as_str() == Some("fast");
-        let cost = prices.lookup(&model, fast).map(|p| {
-            (input as f64 * p.input
-                + output as f64 * p.output
-                + cache_read as f64 * p.cache_read()
-                + write_5m as f64 * p.cache_write_5m()
-                + write_1h as f64 * p.cache_write_1h())
-                / 1_000_000.0
-        });
-        usage.requests.push(RequestRecord {
-            key: format!("claude:{message_id}"),
-            timestamp_ms,
-            model,
-            project: project.clone().or_else(|| v["cwd"].as_str().map(str::to_string)).unwrap_or_default(),
-            session_id: v["sessionId"].as_str().unwrap_or("").to_string(),
-            input,
-            output,
-            cache_write,
-            cache_read,
-            cost,
-        });
     }
+
+    let u = &message["usage"];
+    let Some(message_id) = message["id"].as_str() else { return };
+    if u.is_null() || !seen.insert(id_hash(message_id)) {
+        return;
+    }
+    let model = message["model"].as_str().unwrap_or("unknown").to_string();
+    let n = |k: &str| u[k].as_u64().unwrap_or(0);
+    let (input, output, cache_read) = (n("input_tokens"), n("output_tokens"), n("cache_read_input_tokens"));
+    let cache_write = n("cache_creation_input_tokens");
+    let write_1h = u["cache_creation"]["ephemeral_1h_input_tokens"].as_u64().unwrap_or(0).min(cache_write);
+    let write_5m = cache_write - write_1h;
+    let fast = u["speed"].as_str() == Some("fast");
+    let cost = prices.lookup(&model, fast).map(|p| {
+        (input as f64 * p.input
+            + output as f64 * p.output
+            + cache_read as f64 * p.cache_read()
+            + write_5m as f64 * p.cache_write_5m()
+            + write_1h as f64 * p.cache_write_1h())
+            / 1_000_000.0
+    });
+    usage.requests.push(RequestRecord {
+        key: format!("claude:{message_id}"),
+        timestamp_ms,
+        model,
+        project: project.clone().or_else(|| v["cwd"].as_str().map(str::to_string)).unwrap_or_default(),
+        session_id: v["sessionId"].as_str().unwrap_or("").to_string(),
+        input,
+        output,
+        cache_write,
+        cache_read,
+        cost,
+    });
 }
 
 fn parse_codex(path: &Path, prices: &PriceTable) -> FileUsage {
@@ -560,6 +634,91 @@ mod tests {
         std::fs::write(&path, format!("{first}\n{second}\n{first}\n{third}\n")).unwrap();
         parse_claude(&path, &PriceTable::empty(), &mut progress, &mut usage);
         assert_eq!(usage.requests.len(), 3);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn assistant_line(id: &str, tool: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"2026-09-16T01:00:00Z","cwd":"/p","sessionId":"s","message":{{"id":"{id}","model":"m","usage":{{"input_tokens":1,"output_tokens":2}},"content":[{{"type":"tool_use","id":"{tool}","name":"Bash","input":{{}}}}]}}}}"#
+        )
+    }
+
+    fn scan_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("agentty-usage-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn keys(usage: &FileUsage) -> Vec<&str> {
+        usage.requests.iter().map(|r| r.key.as_str()).collect()
+    }
+
+    #[test]
+    fn a_transcript_replaced_by_a_larger_one_is_read_again_from_the_start() {
+        let dir = scan_dir("replace");
+        let path = dir.join("s.jsonl");
+        let prices = PriceTable::empty();
+        let mut scanner = UsageScanner::default();
+        std::fs::write(&path, format!("{}\n", assistant_line("old1", "t-old1"))).unwrap();
+        assert_eq!(keys(&scanner.scan_in(Agent::Claude, &dir, &prices)), ["claude:old1"]);
+
+        // Rewritten in place (same inode) with other, longer content.
+        let (a, b) = (assistant_line("new1", "t-new1"), assistant_line("new2", "t-new2"));
+        std::fs::write(&path, format!("{a}\n{b}\n")).unwrap();
+        assert_eq!(keys(&scanner.scan_in(Agent::Claude, &dir, &prices)), ["claude:new1", "claude:new2"]);
+
+        // Replaced by another file (a new inode) that starts the same way and is longer.
+        let other = dir.join("other.tmp");
+        std::fs::write(&other, format!("{a}\n{}\n{}\n", assistant_line("new3", "t-new3"), assistant_line("new4", "t-new4"))).unwrap();
+        std::fs::rename(&other, &path).unwrap();
+        let usage = scanner.scan_in(Agent::Claude, &dir, &prices);
+        assert_eq!(keys(&usage), ["claude:new1", "claude:new3", "claude:new4"]);
+
+        // Appending still reads only the new lines, and keeps what was read.
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str(&format!("{}\n", assistant_line("new5", "t-new5")));
+        std::fs::write(&path, text).unwrap();
+        let usage = scanner.scan_in(Agent::Claude, &dir, &prices);
+        assert_eq!(keys(&usage), ["claude:new1", "claude:new3", "claude:new4", "claude:new5"]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn scanning_an_agent_without_a_folder_keeps_the_others_cached() {
+        let dir = scan_dir("no-root");
+        let path = dir.join("s.jsonl");
+        let prices = PriceTable::empty();
+        let mut scanner = UsageScanner::default();
+        std::fs::write(&path, format!("{}\n", assistant_line("m1", "t1"))).unwrap();
+        scanner.scan_in(Agent::Claude, &dir, &prices);
+        assert!(scanner.cache.contains_key(&path));
+        let none = scanner.scan_in(Agent::Gemini, Path::new(""), &prices);
+        assert!(none.requests.is_empty());
+        assert!(scanner.cache.contains_key(&path));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_last_line_read_again_does_not_grow_the_cached_tools() {
+        let dir = scan_dir("tail-tools");
+        let path = dir.join("s.jsonl");
+        let prices = PriceTable::empty();
+        let mut scanner = UsageScanner::default();
+        let (a, b) = (assistant_line("m1", "t1"), assistant_line("m2", "t2"));
+        // The last line is complete but has no newline yet: read again on every growth.
+        std::fs::write(&path, format!("{a}\n{b}")).unwrap();
+        assert_eq!(scanner.scan_in(Agent::Claude, &dir, &prices).tools.len(), 2);
+        std::fs::write(&path, format!("{a}\n{b}\n")).unwrap();
+        assert_eq!(scanner.scan_in(Agent::Claude, &dir, &prices).tools.len(), 2);
+        assert_eq!(scanner.cache[&path].usage.tools.len(), 2);
+        let c = assistant_line("m3", "t3");
+        std::fs::write(&path, format!("{a}\n{b}\n{c}")).unwrap();
+        scanner.scan_in(Agent::Claude, &dir, &prices);
+        std::fs::write(&path, format!("{a}\n{b}\n{c} ")).unwrap();
+        scanner.scan_in(Agent::Claude, &dir, &prices);
+        let tools: Vec<&str> = scanner.cache[&path].usage.tools.iter().map(|t| t.key.as_str()).collect();
+        assert_eq!(tools, ["t1", "t2", "t3"]);
         std::fs::remove_dir_all(dir).ok();
     }
 }
