@@ -66,7 +66,8 @@ struct Cached {
 #[derive(Default)]
 struct ClaudeProgress {
     offset: u64,
-    seen: HashSet<String>,
+    /// Message ids counted so far, hashed: kept for as long as the transcript is.
+    seen: HashSet<u64>,
     project: Option<String>,
 }
 
@@ -88,9 +89,11 @@ impl UsageScanner {
         let mut merged = FileUsage::default();
         let mut seen_requests = HashSet::new();
         let mut seen_tools = HashSet::new();
-        // Transcripts deleted since the last scan are dropped from the cache.
+        // This agent's transcripts deleted since its last scan are dropped from the cache (one
+        // scanner serves every agent, each under its own folder).
+        let root = root_dir(agent);
         let listed: HashSet<&PathBuf> = files.iter().collect();
-        self.cache.retain(|path, _| listed.contains(path));
+        self.cache.retain(|path, _| !path.starts_with(&root) || listed.contains(path));
         for path in &files {
             let Ok(meta) = std::fs::metadata(path) else { continue };
             let (len, mtime) = (meta.len(), fsutil::mtime_ms(path));
@@ -135,12 +138,20 @@ impl UsageScanner {
     }
 }
 
+fn id_hash(id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn parse_timestamp(value: &Value) -> Option<i64> {
     DateTime::parse_from_rfc3339(value.as_str()?).ok().map(|t| t.timestamp_millis())
 }
 
-/// Reads a Claude transcript from `progress.offset` on, adding to `usage`. A line still being
-/// written (no newline yet) is left for the next read.
+/// Reads a Claude transcript from `progress.offset` on, adding to `usage`. A last line without its
+/// newline counts when it is complete JSON, and is read again next time (ids keep it from counting
+/// twice); one still being written is left for the next read.
 fn parse_claude(path: &Path, prices: &PriceTable, progress: &mut ClaudeProgress, usage: &mut FileUsage) {
     let Ok(mut file) = File::open(path) else { return };
     if progress.offset > 0 && file.seek(SeekFrom::Start(progress.offset)).is_err() {
@@ -153,6 +164,8 @@ fn parse_claude(path: &Path, prices: &PriceTable, progress: &mut ClaudeProgress,
         bytes.clear();
         match reader.read_until(b'\n', &mut bytes) {
             Ok(read) if read > 0 && bytes.ends_with(b"\n") => *offset += read as u64,
+            // The last line, without its newline: `offset` stays before it.
+            Ok(read) if read > 0 && serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok() => {}
             _ => break,
         }
         let Ok(line) = std::str::from_utf8(&bytes) else { continue };
@@ -177,7 +190,7 @@ fn parse_claude(path: &Path, prices: &PriceTable, progress: &mut ClaudeProgress,
 
         let u = &message["usage"];
         let Some(message_id) = message["id"].as_str() else { continue };
-        if u.is_null() || !seen.insert(message_id.to_string()) {
+        if u.is_null() || !seen.insert(id_hash(message_id)) {
             continue;
         }
         let model = message["model"].as_str().unwrap_or("unknown").to_string();
@@ -537,6 +550,16 @@ mod tests {
         let keys: Vec<&str> = usage.requests.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, ["claude:m1", "claude:m2"]);
         assert_eq!(usage.requests[1].project, "/p");
+
+        // A complete last line without its newline counts, once, also when the newline comes.
+        let third = line("m3");
+        std::fs::write(&path, format!("{first}\n{second}\n{first}\n{third}")).unwrap();
+        let before = progress.offset;
+        parse_claude(&path, &PriceTable::empty(), &mut progress, &mut usage);
+        assert_eq!((usage.requests.len(), progress.offset), (3, before));
+        std::fs::write(&path, format!("{first}\n{second}\n{first}\n{third}\n")).unwrap();
+        parse_claude(&path, &PriceTable::empty(), &mut progress, &mut usage);
+        assert_eq!(usage.requests.len(), 3);
         std::fs::remove_dir_all(dir).ok();
     }
 }

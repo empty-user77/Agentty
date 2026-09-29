@@ -299,8 +299,6 @@ pub struct TerminalView {
     transcript_file: Option<(String, std::path::PathBuf)>,
     /// Whether the pane had keyboard focus in the last painted frame.
     focused: bool,
-    /// Whether its window was the active one in the last painted frame.
-    window_active: bool,
     _events: Option<Task<()>>,
     /// Failed starts so far; a few are retried before the pane shows the error.
     spawn_attempts: usize,
@@ -329,9 +327,9 @@ impl TerminalView {
         let blink = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
             let alive = this.update(cx, |view, cx| {
-                // Only the focused pane of the active window draws a blinking cursor; any other
-                // pane draws it solid, so a toggle there would redraw it for nothing.
-                if settings(cx).cursor_blink && view.focused && view.window_active {
+                // Only the focused pane draws a blinking cursor; any other pane draws it solid, so a
+                // toggle there would redraw it for nothing.
+                if settings(cx).cursor_blink && view.focused {
                     view.cursor_visible = !view.cursor_visible;
                     cx.notify();
                 } else if !view.cursor_visible {
@@ -418,7 +416,6 @@ impl TerminalView {
             transcript_file: None,
             banner_model: None,
             focused: false,
-            window_active: false,
             _events: None,
             spawn_attempts: 0,
             last_repaint: Instant::now(),
@@ -643,6 +640,9 @@ impl TerminalView {
     /// Corrects the hook-reported status with what the agent's screen shows. Hooks don't fire
     /// for Esc interrupts, Codex approvals or missed events; the screen always tells.
     fn update_from_screen(&mut self, cx: &mut Context<Self>) -> bool {
+        // What the last transcript read said counts for this check only: a turn that started
+        // since must not inherit it.
+        let transcript_interrupted = std::mem::take(&mut self.transcript_interrupted);
         let screen = classify_screen(&self.screen_lines(80));
         let before = self.status.clone();
         if let Some(prompt) = screen.permission.clone() {
@@ -671,14 +671,13 @@ impl TerminalView {
             self.quiet_ticks = self.quiet_ticks.saturating_add(1);
             if self.quiet_ticks == 1 {
                 self.quiet_spell += 1;
-                self.transcript_interrupted = false;
             }
             let esc_recent = self.esc_at.is_some_and(|at| at.elapsed() < Duration::from_secs(20));
             // Esc early in a turn rewinds it without an "Interrupted" line; the transcript still says so.
             if self.quiet_ticks >= 2 {
                 self.probe_interrupted(cx);
             }
-            let logged = self.quiet_ticks >= 2 && self.transcript_interrupted;
+            let logged = self.quiet_ticks >= 2 && transcript_interrupted;
             if screen.interrupted || logged || (esc_recent && self.quiet_ticks >= 2) {
                 self.status = AgentStatus::Interrupted;
                 self.working_since = None;
@@ -742,7 +741,7 @@ impl TerminalView {
     /// next probe tick sees the answer. Finding the file walks the agent's session folders and the
     /// read is up to 96 KB, too much for the UI thread every second of a quiet turn.
     fn probe_interrupted(&mut self, cx: &mut Context<Self>) {
-        if self.interrupt_probe.is_some() || self.transcript_interrupted {
+        if self.interrupt_probe.is_some() {
             return;
         }
         let (Some(agent), Some(id)) = (self.agent_kind().and_then(PaneKind::agent), self.session_id_live.clone()) else {
@@ -2333,7 +2332,6 @@ impl Element for TerminalElement {
                 view.marked_text = None;
             }
             view.focused = focused;
-            view.window_active = window.is_window_active();
         });
         frame
     }

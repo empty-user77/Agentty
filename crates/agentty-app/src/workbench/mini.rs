@@ -184,13 +184,7 @@ impl MiniView {
         // Elapsed times tick while agents work.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
-            let tick = this.update(cx, |this: &mut Self, cx| {
-                // Nothing ticks while nobody works.
-                if this.workbench.upgrade().is_some_and(|wb| wb.read(cx).tray_state(cx).working > 0) {
-                    cx.notify();
-                }
-            });
-            if tick.is_err() {
+            if this.update(cx, |_, cx| cx.notify()).is_err() {
                 break;
             }
         })

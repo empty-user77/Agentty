@@ -489,11 +489,11 @@ pub fn loading_row(text: impl Into<SharedString>) -> Div {
 
 /// Rotating loader icon.
 pub fn spinner(size: f32, color: Hsla) -> impl IntoElement {
-    // A full turn every 900 ms, drawn 20 times a second (see `Ticking`).
+    // A full turn every 900 ms, drawn 30 times a second (see `Ticking`).
     let turn = (clock_ms() % 900) as f32 / 900.0;
     Ticking::new(
         icon("loader-circle", size, color).with_transformation(gpui::Transformation::rotate(gpui::percentage(turn))),
-        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(33),
     )
 }
 
