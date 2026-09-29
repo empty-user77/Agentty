@@ -778,6 +778,8 @@ strings! {
     "quit_confirm.quit" => ["Quit", "종료", "終了", "退出"],
     "tray.agents" => ["Agents", "에이전트", "エージェント", "智能体"],
     "tray.plugins" => ["Plugins", "플러그인", "プラグイン", "插件"],
+    "tray.cpu" => ["CPU", "CPU", "CPU", "CPU"],
+    "tray.ram" => ["RAM", "RAM", "RAM", "RAM"],
     "tray.waiting" => ["{n} waiting", "{n}개 대기 중", "{n} 件待機中", "{n} 个等待中"],
     "settings.notify_when_focused" => ["Notify even while Agentty is in front", "Agentty이 앞에 있을 때도 알림 표시", "Agentty が前面にあるときも通知", "Agentty 在前台时也通知"],
     "workspaces.as_list" => ["Show as a thin list", "간략한 목록으로 보기", "コンパクトな一覧で表示", "以紧凑列表显示"],
