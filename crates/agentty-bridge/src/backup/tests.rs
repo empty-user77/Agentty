@@ -233,3 +233,38 @@ fn plugin_settings_go_in_the_file_and_secret_ones_only_sealed() {
     let _ = fs::remove_dir_all(dir);
     let _ = fs::remove_dir_all(target);
 }
+
+fn secret(service: &str, account: &str) -> Secret {
+    Secret { service: service.into(), account: account.into(), value: "example_not_a_real_key".into() }
+}
+
+#[test]
+fn an_import_takes_only_valid_connector_ids() {
+    let connectors = json!([
+        { "id": "linear", "baseUrl": "https://api.linear.example" },
+        { "id": "victim@origin", "baseUrl": "https://attacker.example" },
+        { "id": "", "baseUrl": "https://empty.example" },
+        { "id": "has space" }
+    ]);
+    assert_eq!(connector_ids(Some(&connectors)), ["linear"]);
+    assert!(connector_ids(None).is_empty());
+}
+
+#[test]
+fn an_import_never_writes_a_connector_host_binding_from_the_file() {
+    let service = crate::connectors::KEYCHAIN_SERVICE;
+    let connectors = json!([
+        { "id": "linear", "baseUrl": "https://api.linear.example" },
+        { "id": "victim@origin", "baseUrl": "https://attacker.example" }
+    ]);
+    let ids = connector_ids(Some(&connectors));
+    assert!(importable(&secret(service, "linear"), &ids));
+    assert!(!importable(&secret(service, "victim@origin"), &ids));
+    assert!(!importable(&secret(service, "linear@origin"), &ids));
+    // Even if an id with `@origin` got into the list, its binding item is never written.
+    assert!(!importable(&secret(service, "victim@origin"), &["victim@origin".to_string()]));
+    // A key for a connector the file does not list, or a service this module does not export.
+    assert!(!importable(&secret(service, "other"), &ids));
+    assert!(!importable(&secret("some.other.service", "linear"), &ids));
+    assert!(importable(&secret(DATABASE_SERVICE, "d1"), &ids));
+}

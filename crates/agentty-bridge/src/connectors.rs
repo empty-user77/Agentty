@@ -204,10 +204,7 @@ impl Connector {
     }
 
     pub fn validate(&self) -> Result<()> {
-        ensure!(
-            !self.id.is_empty() && self.id.len() <= 48 && self.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
-            "name must contain letters or numbers"
-        );
+        ensure!(id_ok(&self.id), "name must contain letters or numbers");
         let url = url::Url::parse(&self.base_url).context("base URL is not a valid URL")?;
         let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
         ensure!(
@@ -311,6 +308,11 @@ pub mod secrets {
         crate::secret_store::delete(&keychain_service(), id)
     }
 
+    /// Whether `account` is the host-binding item of some connector rather than a key.
+    pub fn is_origin_account(account: &str) -> bool {
+        account.ends_with("@origin")
+    }
+
     /// The origin a connector's key was entered for, in an item of its own beside the key (the
     /// key's own item keeps only the key, as older versions expect). Ids are `[a-z0-9-]`, so the
     /// account name cannot be another connector's.
@@ -330,6 +332,12 @@ pub mod secrets {
     pub fn forget_origin(id: &str) {
         let _ = crate::secret_store::delete(&keychain_service(), &origin_account(id));
     }
+}
+
+/// Whether `id` is a valid connector id: `[A-Za-z0-9-]`, 1 to 48 characters. It never contains
+/// `@`, so a key's credential-store account cannot be another connector's host binding.
+pub fn id_ok(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 48 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// Scheme, host and port of `base_url`.

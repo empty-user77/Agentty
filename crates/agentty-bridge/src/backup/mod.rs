@@ -444,7 +444,7 @@ pub fn import(bundle: &Bundle, options: &ImportOptions) -> Result<ImportReport, 
     }
     apply_to(&dir, bundle, &mut report)?;
     let connectors = bundle.files.get("connectors.json").and_then(|v| v.get("connectors"));
-    let connector_ids = ids(connectors);
+    let connector_ids = connector_ids(connectors);
     for secret in &secrets {
         if secret.service == PLUGIN_SETTINGS_SERVICE {
             if let Ok(value) = serde_json::from_str::<Value>(&secret.value) {
@@ -454,14 +454,10 @@ pub fn import(bundle: &Bundle, options: &ImportOptions) -> Result<ImportReport, 
             }
             continue;
         }
-        if !known_service(&secret.service) {
+        if !importable(secret, &connector_ids) {
             continue;
         }
         let connector_key = secret.service == crate::connectors::KEYCHAIN_SERVICE;
-        // A connector key only for a connector of this file (not the host binding beside it).
-        if connector_key && !connector_ids.contains(&secret.account) {
-            continue;
-        }
         crate::secret_store::store(&scoped(&secret.service), &secret.account, &secret.value)
             .map_err(|_| ImportError::Failed("a secret could not be saved in the credential store".into()))?;
         if connector_key {
@@ -481,6 +477,27 @@ pub fn import(bundle: &Bundle, options: &ImportOptions) -> Result<ImportReport, 
         install_plugins(&bundle.plugins, &mut report);
     }
     Ok(report)
+}
+
+/// The ids of a bundle's connectors that are valid connector ids (`connectors::id_ok`): an id
+/// such as `victim@origin` would name another connector's host binding, not a key.
+fn connector_ids(connectors: Option<&Value>) -> Vec<String> {
+    ids(connectors).into_iter().filter(|id| crate::connectors::id_ok(id)).collect()
+}
+
+/// Whether a credential-store secret from a bundle may be written: only the services this module
+/// exports, and a connector key only for a valid connector of the same file, never the host
+/// binding item beside it (that one is written from the file's base URL, not taken from it).
+fn importable(secret: &Secret, connector_ids: &[String]) -> bool {
+    if !known_service(&secret.service) {
+        return false;
+    }
+    if secret.service == crate::connectors::KEYCHAIN_SERVICE {
+        return !crate::connectors::secrets::is_origin_account(&secret.account)
+            && crate::connectors::id_ok(&secret.account)
+            && connector_ids.contains(&secret.account);
+    }
+    true
 }
 
 /// The origin of connector `id`'s base URL in a bundle's `connectors` list.
