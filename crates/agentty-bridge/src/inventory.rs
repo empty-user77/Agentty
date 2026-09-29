@@ -270,9 +270,10 @@ fn canonical(path: &Path) -> PathBuf {
 
 /// Removes the linked tree `tree` of the repository `repo`. `force` removes it even with
 /// uncommitted changes (the user ticked that). With `delete_branch`, its branch goes when nothing
-/// on it would be lost: git's own check (`branch -d`), or — for a branch GitHub squashed or rebased
-/// — `merged_head`, the commit its merged pull request ended on, being exactly the branch's tip.
-/// Never the project's own tree, never its default branch.
+/// on it would be lost: the default branch has all its commits ([`worktree::merged_into_default`] —
+/// not `git branch -d`, which also passes a branch merged only into its own upstream), or — for a
+/// branch GitHub squashed or rebased — `merged_head`, the commit its merged pull request ended on,
+/// being exactly the branch's tip. Never the project's own tree, never its default branch.
 pub fn remove(repo: &Path, tree: &Path, delete_branch: bool, force: bool, merged_head: Option<&str>) -> Result<Removal> {
     let trees = worktree::list(repo)?;
     let main = trees.iter().find(|t| t.main).context("the repository has no working tree")?.path.clone();
@@ -298,7 +299,7 @@ pub fn remove(repo: &Path, tree: &Path, delete_branch: bool, force: bool, merged
     if branch == default || branch.starts_with('-') || trees.iter().any(|t| t.path != entry.path && t.branch.as_deref() == Some(&branch)) {
         return Ok(Removal { branch_kept: Some(branch), ..Removal::default() });
     }
-    if git(&main, &["branch", "-d", &branch]).is_ok() {
+    if worktree::merged_into_default(&main, &branch) && git(&main, &["branch", "-D", &branch]).is_ok() {
         return Ok(Removal::default());
     }
     let tip = git(&main, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
@@ -420,6 +421,37 @@ mod tests {
         fs::remove_dir_all(&clean).unwrap();
         assert_eq!(remove(&repo, &clean, true, false, None).unwrap(), Removal::default());
         assert_eq!(repo_trees(&repo).len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A branch pushed with `-u` but not merged into the default branch is kept: `git branch -d`
+    /// alone would take it, since it is merged into its own upstream.
+    #[test]
+    fn keeps_a_pushed_but_unmerged_branch() {
+        if crate::process::command("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("agentty-inventory-pushed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let repo = repo_in(&dir);
+        git(&repo, &["config", "user.email", "it@example.invalid"]).unwrap();
+        let origin = dir.join("origin.git");
+        git(&repo, &["init", "-q", "--bare", &origin.to_string_lossy()]).unwrap();
+        git(&repo, &["remote", "add", "origin", &origin.to_string_lossy()]).unwrap();
+        let tree = dir.join("u");
+        git(&repo, &["worktree", "add", "-q", "-b", "u", &tree.to_string_lossy()]).unwrap();
+        fs::write(tree.join("u.txt"), "work\n").unwrap();
+        git(&tree, &["add", "u.txt"]).unwrap();
+        git(&tree, &["commit", "-q", "-m", "work"]).unwrap();
+        git(&tree, &["push", "-q", "-u", "origin", "u"]).unwrap();
+        assert_eq!(remove(&repo, &tree, true, false, None).unwrap().branch_kept.as_deref(), Some("u"));
+        assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/u"]).is_ok());
+        // Merged into `main`: it goes.
+        git(&repo, &["merge", "-q", "--no-edit", "u"]).unwrap();
+        git(&repo, &["worktree", "add", "-q", &tree.to_string_lossy(), "u"]).unwrap();
+        assert_eq!(remove(&repo, &tree, true, false, None).unwrap(), Removal::default());
+        assert!(git(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/u"]).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }
