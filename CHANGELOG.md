@@ -5,6 +5,43 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-10-01
+
+### Added
+- Help → Diagnose problems, also the wrench on a pane's bar: checks the agent CLIs, their settings
+  and the terminal setup — an agent installed but not found by new terminals, several copies of one
+  CLI, Claude Code's fullscreen screen turned off, settings files with a syntax error, variables
+  that confuse Claude Code set in shell startup files, missing terminal integration files. Fix or
+  Fix all puts them right and keeps a copy of every file it changes.
+- With several copies of Claude Code or Codex installed, Agentty starts the newest one, in tabs and
+  when typed into a terminal; the status bar and System check show that version.
+- Tab strip: a Git button to clone a repository into the terminal's folder, searching GitHub when
+  the `gh` CLI is signed in. It shows in a plain terminal whose folder is empty or holds only
+  folders.
+- Settings → Windows lists every Agentty window with its workspaces: bring forward, reopen or
+  delete.
+- Settings: an option to start Claude Code and Codex in their own no-approval mode, for
+  tabs and for agents typed into a terminal (off by default).
+- Workspace search says where each result matched and marks the words in the conversation line.
+
+### Changed
+- Claude Code keeps its fullscreen screen in Agentty when it was chosen with `/tui fullscreen`.
+- When another agent already works in the folder, the question where a typed `claude` or `codex`
+  starts no longer prints a line in the terminal; unanswered for 30 seconds, the agent starts where
+  it was typed.
+- The Files button keeps its tree icon and turns purple when worktrees are around.
+- Faster conversation search while typing; search boxes have a clear button and Escape clears them.
+- Notifications are silent.
+- Narrow panes show a short status instead of a cut-off one.
+- Cosmica plugin 1.2.0: save on top, save into Cosmica folders, one-click continue of a note.
+
+### Fixed
+- Each pane's AI status bar follows its own session: several Codex panes in one folder no longer
+  show each other's model and context.
+- The bot token and channel fields in Settings → Notifications take the keyboard again.
+- A workspace linked into a session no longer disappears when its parent sits in a collapsed group.
+- Settings → Terminal style scrolls smoothly.
+
 ## [0.2.8] - 2026-09-30
 
 ### Added
