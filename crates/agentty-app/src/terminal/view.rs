@@ -303,6 +303,8 @@ pub struct TerminalView {
     /// The session the agent's own hook events name (Claude Code's `session_id`, Codex's
     /// `thread-id`): the one sure answer when several agents work in the same folder.
     hook_session: Option<String>,
+    /// The session the hooks named before the last one.
+    hook_previous: Option<String>,
     /// The agent in front has started a turn since it began (see `probe_model`).
     turn_seen: bool,
     /// Subagent transcripts of that session: (total, written in the last few seconds).
@@ -451,6 +453,7 @@ impl TerminalView {
             last_tool: None,
             session_id_live: None,
             hook_session: None,
+            hook_previous: None,
             turn_seen: false,
             subagent_files: (0, 0),
             last_activity_ms: crate::ui::now_ms(),
@@ -708,6 +711,7 @@ impl TerminalView {
         self.live_usage = None;
         self.hook_session = None;
         self.turn_seen = false;
+        self.hook_previous = None;
         self.quiet_ticks = 0;
         self.ask_gate.resume();
         self.last_tool = None;
@@ -922,7 +926,7 @@ impl TerminalView {
         let cwd = self.display_cwd();
         // An agent typed into an old shell pane: transcripts written before it started are not its own.
         let since = self.agent_since_ms.unwrap_or(self.launched_at_ms);
-        let (pane_id, hooked) = (self.pane_id, self.hook_session.clone());
+        let (pane_id, hooks) = (self.pane_id, [self.hook_session.clone(), self.hook_previous.clone()]);
         // A Codex that has not been asked anything yet has no session of its own: the newest one
         // in the folder is another pane's that just started a turn, and taking it swapped two
         // panes' model and context for good.
@@ -947,6 +951,8 @@ impl TerminalView {
                 // register itself): `/clear` and a resume fork the agent into a new transcript, so
                 // the id the pane launched with can stop growing — follow whichever file is still
                 // written.
+                // A named session without a transcript (Codex's titling side conversation) is not it.
+                let hooked = hooks.into_iter().flatten().find(|id| agentty_bridge::transcript_path(agent, id).is_some());
                 registered.or(hooked).or_else(|| agentty_bridge::live_session_id(agent, known.filter(|id| !taken(id)), recent()))
             })?;
             let subagents =
@@ -1192,8 +1198,10 @@ impl TerminalView {
         self.last_activity_ms = crate::ui::now_ms();
         if let Some(session) = detail.session.clone() {
             if self.hook_session.as_ref() != Some(&session) {
-                // The agent said which session it is: the next probe reads that transcript.
-                self.hook_session = Some(session);
+                // The agent said which session it is: the next probe reads that transcript. The
+                // one before stays at hand: Codex also reports the side conversation that names
+                // the session, which has no transcript of its own.
+                self.hook_previous = self.hook_session.replace(session);
                 self.model_probe = None;
             }
         }
