@@ -3648,7 +3648,25 @@ fn first_pane(node: &NodeSnapshot) -> Option<&PaneSnapshot> {
 }
 
 pub fn status_label(view: &TerminalView, cx: &gpui::App) -> (String, u32) {
+    status_label_sized(view, false, cx)
+}
+
+/// [`status_label`], or in a narrow pane its short form ("완료" for "작업 완료", "Done"): a cut-off
+/// word says less than a short one. The colour tells the rest.
+pub fn status_label_sized(view: &TerminalView, compact: bool, cx: &gpui::App) -> (String, u32) {
     use crate::terminal::AgentStatus;
+    if compact && view.is_running() && view.is_agent() {
+        let (key, color) = match &view.status {
+            AgentStatus::Idle => ("status.idle_short", Chrome::MUTED),
+            AgentStatus::Working => ("status.working_short", Chrome::ORANGE),
+            AgentStatus::Thinking => ("status.thinking_short", Chrome::BLUE),
+            AgentStatus::Finished(_) => ("status.finished_short", Chrome::SUCCESS),
+            AgentStatus::Permission(_) => ("status.permission_short", Chrome::ATTENTION),
+            AgentStatus::Question(_) => ("status.question_short", Chrome::ATTENTION),
+            AgentStatus::Interrupted => ("status.interrupted_short", Chrome::WARNING),
+        };
+        return (t(cx, key).into(), color);
+    }
     if !view.is_running() {
         return (t(cx, "status.exited").into(), Chrome::MUTED);
     }
@@ -3916,6 +3934,12 @@ impl Workbench {
                 }
             }
             "agents" => eprintln!("agents: {:?}", self.installed),
+            // `panes`: the session each pane follows (the per-pane status bar's source).
+            "panes" => {
+                for pane in self.all_panes() {
+                    eprintln!("{}", pane.read(cx).debug_session());
+                }
+            }
             "launcher" => {
                 self.launcher_open = true;
                 cx.notify();

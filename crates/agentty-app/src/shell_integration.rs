@@ -184,10 +184,27 @@ fn posix_bypass_helper() -> String {
 /// Lines that set `__agentty_bypass` to the bypass options for `command`, when the setting is on.
 fn posix_bypass_lines(command: &str, bypass: bool) -> String {
     let options = bypass_options(command);
-    if !bypass || options.is_empty() {
-        return "  local -a __agentty_bypass=()\n".into();
+    let mut lines = if !bypass || options.is_empty() {
+        "  local -a __agentty_bypass=()\n".to_string()
+    } else {
+        format!("  local -a __agentty_bypass=()\n  __agentty_bypass_ok \"$@\" && __agentty_bypass=({})\n", options.join(" "))
+    };
+    lines.push_str(&posix_hook_lines(command));
+    lines
+}
+
+/// Lines that set `__agentty_hooks` to the end-of-turn hook of a Codex typed into a pane — the same
+/// one a Codex tab gets. It names the session that just answered, the only sure way to tell which
+/// of several Codex in one folder is this pane's. Only inside an Agentty pane, and not for commands
+/// that start no session.
+fn posix_hook_lines(command: &str) -> String {
+    if command != "codex" {
+        return "  local -a __agentty_hooks=()\n".into();
     }
-    format!("  local -a __agentty_bypass=()\n  __agentty_bypass_ok \"$@\" && __agentty_bypass=({})\n", options.join(" "))
+    format!(
+        "  local -a __agentty_hooks=()\n  [ -n \"$AGENTTY_SOCKET\" ] && __agentty_bypass_ok \"$@\" && __agentty_hooks=(-c {})\n",
+        single_quote(&crate::launch::codex_notify_override())
+    )
 }
 
 /// zsh functions wrapping each command; exact-match arguments are replaced by their expansion
@@ -209,7 +226,7 @@ pub fn zsh_script(aliases: &[CommandAlias], bypass: bool) -> String {
         out.push_str(&posix_guide_lines(&command));
         out.push_str(&posix_bypass_lines(&command, bypass));
         if entries.is_empty() {
-            out.push_str(&posix_call(&command, "\"${__agentty_guide[@]}\" \"${__agentty_bypass[@]}\" \"$@\""));
+            out.push_str(&posix_call(&command, "\"${__agentty_guide[@]}\" \"${__agentty_bypass[@]}\" \"${__agentty_hooks[@]}\" \"$@\""));
             let _ = writeln!(out, "}}");
             continue;
         }
@@ -227,7 +244,10 @@ pub fn zsh_script(aliases: &[CommandAlias], bypass: bool) -> String {
         let _ = writeln!(out, "      *) __agentty_args+=(\"$__agentty_word\");;");
         let _ = writeln!(out, "    esac");
         let _ = writeln!(out, "  done");
-        out.push_str(&posix_call(&command, "\"${__agentty_guide[@]}\" \"${__agentty_bypass[@]}\" \"${__agentty_args[@]}\""));
+        out.push_str(&posix_call(
+            &command,
+            "\"${__agentty_guide[@]}\" \"${__agentty_bypass[@]}\" \"${__agentty_hooks[@]}\" \"${__agentty_args[@]}\"",
+        ));
         let _ = writeln!(out, "}}");
     }
     out
@@ -250,7 +270,7 @@ pub fn bash_script(aliases: &[CommandAlias], bypass: bool) -> String {
         out.push_str(&posix_guide_lines(&command));
         out.push_str(&posix_bypass_lines(&command, bypass));
         if entries.is_empty() {
-            out.push_str(&posix_call(&command, "\"${__agentty_guide[@]}\" \"${__agentty_bypass[@]}\" \"$@\""));
+            out.push_str(&posix_call(&command, "\"${__agentty_guide[@]}\" \"${__agentty_bypass[@]}\" \"${__agentty_hooks[@]}\" \"$@\""));
             let _ = writeln!(out, "}}");
             continue;
         }
@@ -268,7 +288,10 @@ pub fn bash_script(aliases: &[CommandAlias], bypass: bool) -> String {
         let _ = writeln!(out, "      *) __agentty_args+=(\"$__agentty_word\");;");
         let _ = writeln!(out, "    esac");
         let _ = writeln!(out, "  done");
-        out.push_str(&posix_call(&command, "\"${__agentty_guide[@]}\" \"${__agentty_bypass[@]}\" \"${__agentty_args[@]}\""));
+        out.push_str(&posix_call(
+            &command,
+            "\"${__agentty_guide[@]}\" \"${__agentty_bypass[@]}\" \"${__agentty_hooks[@]}\" \"${__agentty_args[@]}\"",
+        ));
         let _ = writeln!(out, "}}");
     }
     out
@@ -331,6 +354,17 @@ pub fn powershell_script(aliases: &[CommandAlias], bypass: bool) -> String {
             let _ = writeln!(out, "    $__agentty_bypass = @({})", words.join(", "));
             let _ = writeln!(out, "  }}");
         }
+        // A typed Codex reports its finished turns (and which session they were) like a Codex tab.
+        let _ = writeln!(out, "  $__agentty_hooks = @()");
+        if command == "codex" {
+            let _ = writeln!(
+                out,
+                "  if ($env:AGENTTY_SOCKET -and -not ($args.Count -gt 0 -and \"$($args[0])\" -in @({}))) {{",
+                list(BYPASS_SKIP_FIRST)
+            );
+            let _ = writeln!(out, "    $__agentty_hooks = @('-c', {})", quote(&crate::launch::codex_notify_override()));
+            let _ = writeln!(out, "  }}");
+        }
         if entries.is_empty() {
             let _ = writeln!(out, "  $__agentty_args = $args");
         } else {
@@ -353,7 +387,7 @@ pub fn powershell_script(aliases: &[CommandAlias], bypass: bool) -> String {
             out,
             "  if (-not $__agentty_program) {{ Write-Error \"{command}: the term '{command}' is not recognized as a program\"; return }}"
         );
-        let _ = writeln!(out, "  & $__agentty_program.Source @__agentty_guide @__agentty_bypass @__agentty_args");
+        let _ = writeln!(out, "  & $__agentty_program.Source @__agentty_guide @__agentty_bypass @__agentty_hooks @__agentty_args");
         let _ = writeln!(out, "}}");
     }
     out
@@ -765,13 +799,47 @@ mod tests {
         }
     }
 
+    /// A Codex typed into a pane gets the same end-of-turn hook as a Codex tab (it names the
+    /// session, so two Codex in one folder are told apart); outside Agentty, and for `exec`, not.
+    #[test]
+    #[cfg(unix)]
+    fn typed_codex_reports_its_turns_inside_agentty() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("agentty-codex-hook-{}", std::process::id()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let codex = bin.join("codex");
+        std::fs::write(&codex, "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\n").unwrap();
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("wrappers"), zsh_script(&[], false)).unwrap();
+        let run = |socket: Option<&str>, line: &str| {
+            let mut command = Command::new("zsh");
+            command
+                .args(["-f", "-c", &format!("source {}; {line}", dir.join("wrappers").display())])
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env_remove("AGENTTY_BIN")
+                .env_remove("AGENTTY_SHELL_API")
+                .env_remove("AGENTTY_SOCKET");
+            if let Some(socket) = socket {
+                command.env("AGENTTY_SOCKET", socket);
+            }
+            String::from_utf8_lossy(&command.output().unwrap().stdout).to_string()
+        };
+        let hook = format!("[-c][{}]", crate::launch::codex_notify_override());
+        assert_eq!(run(Some("/tmp/example.sock"), "codex hi"), format!("{hook}[hi]"));
+        assert_eq!(run(Some("/tmp/example.sock"), "codex resume"), format!("{hook}[resume]"));
+        assert_eq!(run(Some("/tmp/example.sock"), "codex exec hi"), "[exec][hi]");
+        assert_eq!(run(None, "codex hi"), "[hi]", "outside an Agentty pane");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn powershell_wrapper_adds_always_bypass_only_when_on() {
         assert!(!powershell_script(&[], false).contains("--dangerously"));
         let script = powershell_script(&[], true);
         assert!(script.contains("$__agentty_bypass = @('--dangerously-skip-permissions', '--permission-mode', 'bypassPermissions')"));
         assert!(script.contains("$__agentty_bypass = @('--dangerously-bypass-approvals-and-sandbox')"));
-        assert!(script.contains("@__agentty_guide @__agentty_bypass @__agentty_args"));
+        assert!(script.contains("@__agentty_guide @__agentty_bypass @__agentty_hooks @__agentty_args"));
     }
 
     #[test]

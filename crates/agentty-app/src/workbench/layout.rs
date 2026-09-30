@@ -1,7 +1,7 @@
 //! Renders a tab's split tree: pane headers, attention borders and draggable dividers.
 
 use super::panes::{zoom_sizes, Axis, PaneNode};
-use super::{status_label, Pane, Tab, Workbench};
+use super::{status_label_sized, Pane, Tab, Workbench};
 use crate::hud::HudItem;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -160,7 +160,7 @@ impl Workbench {
         } else {
             hex_alpha(0, 0.)
         };
-        let (status, status_color) = status_label(view, cx);
+        let (status, status_color) = status_label_sized(view, width < COMPACT_METER_WIDTH, cx);
         let pane_for_focus = pane.clone();
 
         // Split pane header: which tool, where (project folder + path), its live status and branch.
@@ -1009,7 +1009,7 @@ impl Workbench {
         let mut context_meter = Some(self.context_meter(pane, percent, false, cx));
         let view = pane.read(cx);
         let kind = view.agent_kind()?;
-        let (status, status_color) = status_label(view, cx);
+        let (status, status_color) = status_label_sized(view, width < COMPACT_METER_WIDTH, cx);
         let name = crate::brand::brand(crate::brand::kind_id(kind)).name;
         let working = view.working_since.is_some();
         Some(

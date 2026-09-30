@@ -600,7 +600,7 @@ fn codex_browser_mcp_override() -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn codex_notify_override() -> String {
+pub(crate) fn codex_notify_override() -> String {
     // Codex runs `notify` with the event JSON as the last argument.
     let script = signal_command("stop", "printf '%s' \"$1\" | tr -d '\\n'");
     format!("notify=[{},{},{},{}]", toml_string("sh"), toml_string("-c"), toml_string(&script), toml_string("agentty"))
@@ -608,7 +608,7 @@ fn codex_notify_override() -> String {
 
 /// `agentty signal stop <event JSON>` (the JSON is appended by Codex).
 #[cfg(not(target_os = "macos"))]
-fn codex_notify_override() -> String {
+pub(crate) fn codex_notify_override() -> String {
     format!("notify=[{},{},{}]", toml_string(&agentty_exe()), toml_string("signal"), toml_string("stop"))
 }
 

@@ -303,6 +303,8 @@ pub struct TerminalView {
     /// The session the agent's own hook events name (Claude Code's `session_id`, Codex's
     /// `thread-id`): the one sure answer when several agents work in the same folder.
     hook_session: Option<String>,
+    /// The agent in front has started a turn since it began (see `probe_model`).
+    turn_seen: bool,
     /// Subagent transcripts of that session: (total, written in the last few seconds).
     pub subagent_files: (usize, usize),
     /// Latest tool call of the main agent: (tool, target).
@@ -449,6 +451,7 @@ impl TerminalView {
             last_tool: None,
             session_id_live: None,
             hook_session: None,
+            turn_seen: false,
             subagent_files: (0, 0),
             last_activity_ms: crate::ui::now_ms(),
             live_cwd: None,
@@ -704,6 +707,7 @@ impl TerminalView {
         self.agent_since_ms = None;
         self.live_usage = None;
         self.hook_session = None;
+        self.turn_seen = false;
         self.quiet_ticks = 0;
         self.ask_gate.resume();
         self.last_tool = None;
@@ -919,6 +923,13 @@ impl TerminalView {
         // An agent typed into an old shell pane: transcripts written before it started are not its own.
         let since = self.agent_since_ms.unwrap_or(self.launched_at_ms);
         let (pane_id, hooked) = (self.pane_id, self.hook_session.clone());
+        // A Codex that has not been asked anything yet has no session of its own: the newest one
+        // in the folder is another pane's that just started a turn, and taking it swapped two
+        // panes' model and context for good.
+        if self.status != AgentStatus::Idle {
+            self.turn_seen = true;
+        }
+        let may_guess = agent != agentty_bridge::model::Agent::Codex || self.turn_seen;
         let task = cx.background_spawn(async move {
             let registered = agent_pid.and_then(agentty_bridge::claude::session_of_pid);
             // Sessions other panes follow are theirs: with N agents in one folder the newest
@@ -928,7 +939,7 @@ impl TerminalView {
                     agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent_except(&cwd, since, |id| {
                         taken(id) || agentty_bridge::claude::owned_by_other_process(id, agent_pid)
                     }),
-                    agentty_bridge::model::Agent::Codex => agentty_bridge::codex::find_recent_except(&cwd, since, taken),
+                    agentty_bridge::model::Agent::Codex if may_guess => agentty_bridge::codex::find_recent_except(&cwd, since, taken),
                     _ => None,
                 };
                 // The running process is the truth, then the session the agent's own events name.
@@ -1127,6 +1138,20 @@ impl TerminalView {
             .or_else(|| self.live_cwd.clone())
             .filter(|p| p.is_dir())
             .unwrap_or_else(|| self.spec.cwd.clone())
+    }
+
+    /// Debug driver: which session this pane follows and why (`panes`).
+    pub fn debug_session(&self) -> String {
+        format!(
+            "pane {} kind={:?} live={:?} launched={:?} hooked={:?} model={:?} context={:?}",
+            self.pane_id,
+            self.agent_kind(),
+            self.session_id_live,
+            self.spec.session_id,
+            self.hook_session,
+            self.stats.as_ref().and_then(|s| s.model.clone()),
+            self.stats.as_ref().and_then(|s| s.context_percent()).map(|p| p.round()),
+        )
     }
 
     /// Visible text with non-ASCII characters shown as code points (debug builds only).
