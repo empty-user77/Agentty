@@ -341,12 +341,6 @@ strings! {
     "worktree.ask_on_branch" => ["Work on branch {branch}", "{branch} 브랜치에서 작업하기", "{branch} ブランチで作業する", "在 {branch} 分支上工作"],
     "worktree.ask_new" => ["Create a new worktree", "새 워크트리 만들기", "新しいワークツリーを作成", "新建工作树"],
     "worktree.ask_existing" => ["Open the existing worktree", "기존 워크트리 열기", "既存のワークツリーを開く", "打开现有工作树"],
-    "worktree.ask_shell" => [
-        "Choose in the Agentty window where this session starts.",
-        "이 세션을 어디서 시작할지 Agentty 창에서 골라주세요.",
-        "このセッションをどこで始めるか、Agentty のウィンドウで選んでください。",
-        "请在 Agentty 窗口中选择此会话从哪里开始。"
-    ],
     "worktree.creating" => ["Another session works in this project — creating a working tree…", "이 프로젝트에서 다른 세션이 작업 중입니다 — 워크트리를 만드는 중…", "このプロジェクトでは別のセッションが作業中です — ワークツリーを作成中…", "此项目已有其他会话在工作 — 正在创建工作树…"],
     "settings.always_bypass" => ["Always start Claude / Codex in Bypass / Full Access mode", "Claude/Codex를 항상 Bypass/Full Access 모드로 실행", "Claude / Codex を常に Bypass / Full Access モードで起動", "始终以 Bypass / Full Access 模式启动 Claude / Codex"],
     "settings.always_bypass_hint" => ["Claude Code and Codex started from now on — as tabs or typed in a terminal — run commands and edit files without asking. Use only in projects you trust.", "이제부터 시작하는 Claude Code·Codex(탭으로 열거나 터미널에서 직접 실행한 것 모두)가 묻지 않고 명령을 실행하고 파일을 고칩니다. 신뢰하는 프로젝트에서만 사용하세요.", "これから起動する Claude Code・Codex（タブで開いたものもターミナルで直接実行したものも）は確認なしでコマンドを実行し、ファイルを編集します。信頼できるプロジェクトでのみ使用してください。", "此后启动的 Claude Code 和 Codex（无论以标签页打开还是在终端中直接运行）将不经询问直接运行命令、修改文件。请仅在信任的项目中使用。"],
@@ -402,7 +396,6 @@ strings! {
     "git.operation_under_way" => ["A merge (or rebase) is already under way here: finish it before starting another.", "이미 진행 중인 병합(또는 리베이스)이 있습니다. 먼저 끝낸 뒤 다시 시도하세요.", "すでにマージ（またはリベース）が進行中です。先に完了させてから再度お試しください。", "已有正在进行的合并（或变基）。请先完成后再试。"],
     "git.working" => ["Working…", "처리 중…", "処理中…", "处理中…"],
     "worktree.chip" => ["Working tree {name} — click to see its files", "워크트리 {name} — 클릭하면 파일을 봅니다", "ワークツリー {name} — クリックでファイルを表示", "工作树 {name} — 点击查看其文件"],
-    "worktree.folder_scanning" => ["Looking for worktrees under this folder…", "이 폴더 아래 워크트리를 찾는 중…", "このフォルダ以下のワークツリーを探しています…", "正在查找此文件夹下的工作树…"],
     "worktree.opened_in_tab" => ["Something runs in this pane, so {name} opened in a new tab", "이 창에서 실행 중인 것이 있어 {name}을(를) 새 탭에서 열었습니다", "このペインで実行中のものがあるため、{name} を新しいタブで開きました", "此窗格中有程序在运行，已在新标签页中打开 {name}"],
     "worktree.clean_agent" => ["Quit the AI session first: it works in {name}", "먼저 AI 세션을 종료하세요: {name}에서 작업 중입니다", "先に AI セッションを終了してください: {name} で作業中です", "请先退出 AI 会话：它正在 {name} 中工作"],
     "worktree.clean_busy" => ["Something still runs in this pane: stop it first, then clean up {name}", "이 창에서 아직 실행 중인 것이 있습니다. 먼저 종료한 뒤 {name}을(를) 정리하세요", "このペインでまだ実行中のものがあります。先に終了してから {name} を整理してください", "此窗格中仍有程序在运行：请先停止，再清理 {name}"],
@@ -1667,6 +1660,96 @@ strings! {
     "help.shortcuts" => ["Keyboard Shortcuts", "키보드 단축키", "キーボードショートカット", "键盘快捷键"],
     "help.settings" => ["Settings", "설정", "設定", "设置"],
     "help.troubleshooting" => ["Troubleshooting", "문제 해결", "トラブルシューティング", "疑难解答"],
+    "diag.title" => ["Diagnose problems", "문제점 자동진단", "問題を自動診断", "自动诊断问题"],
+    "diag.intro" => [
+        "Checks the agent CLIs, their settings and the terminal setup. Every fix keeps a copy of the files it changes.",
+        "에이전트 CLI, 설정 파일, 터미널 환경을 점검합니다. 자동 해결은 고치는 파일의 사본을 먼저 남깁니다.",
+        "エージェント CLI、設定ファイル、ターミナル環境を点検します。自動修正は変更するファイルのコピーを先に残します。",
+        "检查代理 CLI、设置文件和终端环境。自动修复会先保留所改文件的副本。"
+    ],
+    "diag.running" => ["Checking…", "점검하는 중…", "点検中…", "正在检查…"],
+    "diag.rerun" => ["Check again", "다시 점검", "再点検", "重新检查"],
+    "diag.fix" => ["Fix", "자동 해결", "自動修正", "自动修复"],
+    "diag.fix_all" => ["Fix all", "모두 해결", "すべて修正", "全部修复"],
+    "diag.close" => ["Close", "닫기", "閉じる", "关闭"],
+    "diag.fixed" => [
+        "Fixed: {what}. New terminals get the change.",
+        "해결함: {what}. 새로 여는 터미널부터 적용됩니다.",
+        "修正しました: {what}。新しく開くターミナルから反映されます。",
+        "已修复：{what}。新打开的终端生效。"
+    ],
+    "diag.fix_failed" => ["Could not fix {what}: {error}", "{what}을(를) 해결하지 못했습니다: {error}", "{what} を修正できませんでした: {error}", "无法修复 {what}：{error}"],
+    "diag.agent_ok" => ["{agent} is installed", "{agent}이(가) 설치되어 있습니다", "{agent} はインストールされています", "已安装 {agent}"],
+    "diag.agent_missing" => ["{agent} is not installed", "{agent}이(가) 설치되어 있지 않습니다", "{agent} がインストールされていません", "未安装 {agent}"],
+    "diag.agent_missing_body" => [
+        "Install it from Settings → System check.",
+        "설정 → 시스템 점검에서 설치할 수 있습니다.",
+        "設定 → システムチェックからインストールできます。",
+        "可在 设置 → 系统检查 中安装。"
+    ],
+    "diag.not_on_path" => ["{agent} is installed but a new terminal cannot find it", "{agent}이(가) 설치되어 있지만 새 터미널에서 찾지 못합니다", "{agent} はインストール済みですが、新しいターミナルから見つかりません", "{agent} 已安装，但新终端找不到它"],
+    "diag.not_on_path_body" => [
+        "Its folder is not on PATH. Agentty's terminals still start it; the fix adds the folder to PATH in {rc} so every terminal does.",
+        "설치 폴더가 PATH에 없습니다. Agentty 터미널에서는 그래도 실행되며, 자동 해결은 {rc}에 PATH를 추가해 다른 터미널에서도 실행되게 합니다.",
+        "インストール先が PATH にありません。Agentty のターミナルでは起動できます。自動修正は {rc} に PATH を追加し、ほかのターミナルでも使えるようにします。",
+        "其安装目录不在 PATH 中。Agentty 的终端仍能启动它；自动修复会在 {rc} 中加入 PATH，让所有终端都能使用。"
+    ],
+    "diag.many_copies" => ["{count} copies of {agent} are installed", "{agent}이(가) {count}개 설치되어 있습니다", "{agent} が {count} 個インストールされています", "安装了 {count} 个 {agent}"],
+    "diag.many_copies_body" => [
+        "Agentty starts the newest: {path}",
+        "Agentty는 가장 최신 버전을 실행합니다: {path}",
+        "Agentty は最新版を起動します: {path}",
+        "Agentty 会启动最新版本：{path}"
+    ],
+    "diag.many_copies_older_first" => [
+        "Agentty starts the newest ({path}), but other terminals start an older one that comes first on PATH. Remove the old copy if you no longer use it.",
+        "Agentty는 가장 최신 버전({path})을 실행하지만, 다른 터미널에서는 PATH에서 앞선 오래된 버전이 실행됩니다. 쓰지 않는 오래된 설치본은 지우는 것이 좋습니다.",
+        "Agentty は最新版（{path}）を起動しますが、ほかのターミナルでは PATH で先に来る古い版が起動します。使っていない古いものは削除してください。",
+        "Agentty 会启动最新版本（{path}），但其他终端会启动 PATH 中靠前的旧版本。不再使用的旧版本建议删除。"
+    ],
+    "diag.fullscreen_off" => ["Claude Code turned its fullscreen screen off", "Claude Code가 전체 화면 모드를 스스로 껐습니다", "Claude Code がフルスクリーン表示を自動で無効にしました", "Claude Code 自动关闭了全屏界面"],
+    "diag.fullscreen_off_body" => [
+        "It does so after starts that ended early. Agentty's terminals ignore this; the fix clears it for other terminals too.",
+        "시작 직후 종료된 실행이 있으면 Claude Code가 이렇게 합니다. Agentty 터미널은 영향을 받지 않으며, 자동 해결은 다른 터미널에서도 이 기록을 지웁니다.",
+        "起動直後に終了した実行があると Claude Code はこうします。Agentty のターミナルは影響を受けません。自動修正はほかのターミナルでもこの記録を消します。",
+        "当有启动后很快结束的运行时，Claude Code 会这样做。Agentty 的终端不受影响；自动修复会为其他终端也清除该记录。"
+    ],
+    "diag.fullscreen_ok" => ["Claude Code's fullscreen screen is on", "Claude Code 전체 화면 모드가 켜져 있습니다", "Claude Code のフルスクリーン表示は有効です", "Claude Code 全屏界面已开启"],
+    "diag.broken_file" => ["{file} cannot be read", "{file}을(를) 읽을 수 없습니다", "{file} を読み込めません", "无法读取 {file}"],
+    "diag.broken_file_body" => [
+        "The file has a syntax error, so its settings are ignored. Correct it by hand.",
+        "파일에 문법 오류가 있어 설정이 무시됩니다. 직접 고쳐 주세요.",
+        "ファイルに構文エラーがあり、設定が無視されます。手動で修正してください。",
+        "文件存在语法错误，其中的设置被忽略。请手动修改。"
+    ],
+    "diag.broken_file_backup" => [
+        "The file has a syntax error, so its settings are ignored. The fix puts back the last good copy.",
+        "파일에 문법 오류가 있어 설정이 무시됩니다. 자동 해결은 마지막으로 정상이던 사본으로 되돌립니다.",
+        "ファイルに構文エラーがあり、設定が無視されます。自動修正は最後に正常だったコピーに戻します。",
+        "文件存在语法错误，其中的设置被忽略。自动修复会恢复最后一个正常的副本。"
+    ],
+    "diag.files_ok" => ["Claude Code and Codex settings files read fine", "Claude Code·Codex 설정 파일이 정상입니다", "Claude Code・Codex の設定ファイルは正常です", "Claude Code 和 Codex 的设置文件正常"],
+    "diag.leaked_variable" => ["{name} is set in every new terminal", "새 터미널마다 {name}이(가) 설정됩니다", "新しいターミナルごとに {name} が設定されます", "每个新终端都设置了 {name}"],
+    "diag.leaked_variable_body" => [
+        "Set in {file}. It makes Claude Code act as if it ran inside another session. The fix turns that line into a comment.",
+        "{file}에서 설정됩니다. Claude Code가 다른 세션 안에서 실행된 것처럼 동작하게 만듭니다. 자동 해결은 그 줄을 주석으로 바꿉니다.",
+        "{file} で設定されています。Claude Code が別のセッション内で実行されたかのように動作します。自動修正はその行をコメントにします。",
+        "在 {file} 中设置。它会让 Claude Code 表现得像在另一个会话中运行。自动修复会将该行改为注释。"
+    ],
+    "diag.leaked_variable_unknown" => [
+        "It makes Claude Code act as if it ran inside another session. Remove it from your shell's startup files.",
+        "Claude Code가 다른 세션 안에서 실행된 것처럼 동작하게 만듭니다. 셸 시작 파일에서 지워 주세요.",
+        "Claude Code が別のセッション内で実行されたかのように動作します。シェルの起動ファイルから削除してください。",
+        "它会让 Claude Code 表现得像在另一个会话中运行。请从 shell 启动文件中删除。"
+    ],
+    "diag.shell_ok" => ["Agentty's terminal setup is in place", "Agentty 터미널 연동이 정상입니다", "Agentty のターミナル連携は正常です", "Agentty 终端集成正常"],
+    "diag.shell_stale" => ["Agentty's terminal setup is missing or out of date", "Agentty 터미널 연동 파일이 없거나 오래되었습니다", "Agentty のターミナル連携ファイルがないか古くなっています", "Agentty 终端集成文件缺失或已过期"],
+    "diag.shell_stale_body" => [
+        "Reserved words, the worktree question and pane status may not work in terminals. The fix writes the files again.",
+        "예약어, 워크트리 선택, 패널 상태 표시가 동작하지 않을 수 있습니다. 자동 해결은 파일을 다시 만듭니다.",
+        "予約語、ワークツリーの選択、ペインの状態表示が動作しないことがあります。自動修正はファイルを作り直します。",
+        "保留字、工作树选择和面板状态可能无法工作。自动修复会重新写入这些文件。"
+    ],
     "help.faq" => ["Frequently Asked Questions", "자주 묻는 질문", "よくある質問", "常见问题"],
     "help.support" => ["Get Support", "지원받기", "サポートを受ける", "获取支持"],
     "menu.history" => ["History", "History", "履歴", "历史"],

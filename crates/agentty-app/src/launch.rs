@@ -238,7 +238,7 @@ impl LaunchSpec {
                     // `--advisor` has no "off"; this also overrides an `advisorModel` setting.
                     args.extend(["env".into(), "CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1".into()]);
                 }
-                args.push("claude".into());
+                args.push(crate::agent_bins::program("claude"));
                 match &self.start {
                     Start::Resume(id) => args.extend(["--resume".into(), id.clone()]),
                     _ => {
@@ -288,7 +288,7 @@ impl LaunchSpec {
                 // ends, and never stops at the interactive screen's questions (whether to trust a
                 // new folder), which nobody is there to answer.
                 let job = self.restricted && matches!(self.start, Start::Prompt(_));
-                args.push("codex".into());
+                args.push(crate::agent_bins::program("codex"));
                 if job {
                     args.extend(["exec".into(), "--skip-git-repo-check".into()]);
                 }

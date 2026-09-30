@@ -4,6 +4,7 @@
 // Release builds on Windows are GUI apps (no console window of their own).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod agent_bins;
 mod agent_guide;
 mod agent_signal;
 mod agents;
@@ -18,6 +19,7 @@ mod browser_profiles;
 mod capture;
 mod db_cli;
 mod debug;
+mod diagnostics;
 mod editor;
 mod extensions_view;
 mod tasks_cli;
@@ -362,6 +364,7 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::action(t(cx, "help.shortcuts"), OpenGuide { page: "keyboard-shortcuts" }),
                 MenuItem::action(t(cx, "help.settings"), OpenGuide { page: "settings" }),
                 MenuItem::separator(),
+                MenuItem::action(t(cx, "diag.title"), workbench::RunDiagnostics),
                 MenuItem::action(t(cx, "help.troubleshooting"), OpenGuide { page: "troubleshooting" }),
                 MenuItem::action(t(cx, "help.faq"), OpenGuide { page: "faq" }),
                 MenuItem::action(t(cx, "help.support"), GetSupport),
@@ -633,6 +636,10 @@ fn main() {
             eprintln!("agentty: failed to load bundled fonts: {err:#}");
         }
         settings::SettingsStore::init(cx);
+        // The newest copy of each agent CLI: last run's choice for the tabs restored now, a fresh
+        // look in the background for the ones opened later.
+        agent_bins::load_saved();
+        let _ = std::thread::Builder::new().name("agent-bins".into()).spawn(agent_bins::refresh);
         let signals = match agent_signal::start() {
             Ok((socket, rx)) => {
                 if !cfg!(target_os = "macos") {

@@ -2166,13 +2166,17 @@ impl Workbench {
                 d
                     // Plugins with a panel, then cmux-style quick actions: icons only.
                     .children(self.render_plugin_header_buttons(cx))
-                    .child(header_icon(
-                        "header-git-clone",
-                        "git-branch",
-                        self.clone_dialog.is_some(),
-                        (t(cx, "clone.tooltip"), None),
-                        cx.listener(|this, _: &ClickEvent, window, cx| this.open_clone_dialog(window, cx)),
-                    ))
+                    // Only where a clone makes sense: a plain terminal in an empty folder (or one of
+                    // repositories side by side), never in a repository, `/` or the home folder.
+                    .when(self.clone_dialog.is_some() || self.clone_offered(cx), |d| {
+                        d.child(header_icon(
+                            "header-git-clone",
+                            "folder-git-2",
+                            self.clone_dialog.is_some(),
+                            (t(cx, "clone.tooltip"), None),
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.open_clone_dialog(window, cx)),
+                        ))
+                    })
                     .child(ringed(
                         header_icon(
                             "header-browser",

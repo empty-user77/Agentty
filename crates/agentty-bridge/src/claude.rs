@@ -174,12 +174,21 @@ fn last_model(text: &str) -> Option<String> {
     })
 }
 
-/// The default model from Claude Code's user settings (`model` in settings.json), if set.
-pub fn configured_model() -> Option<String> {
+/// Claude Code's user settings (`settings.json` in its config folder), if readable.
+fn user_settings() -> Option<Value> {
     let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| fsutil::home().join(".claude"));
     let text = std::fs::read_to_string(dir.join("settings.json")).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    json["model"].as_str().map(str::to_string).filter(|m| !m.trim().is_empty())
+    serde_json::from_str(&text).ok()
+}
+
+/// The default model from Claude Code's user settings (`model` in settings.json), if set.
+pub fn configured_model() -> Option<String> {
+    user_settings()?["model"].as_str().map(str::to_string).filter(|m| !m.trim().is_empty())
+}
+
+/// Whether the user chose Claude Code's fullscreen renderer (`"tui": "fullscreen"` in settings.json).
+pub fn prefers_fullscreen() -> bool {
+    user_settings().is_some_and(|settings| settings["tui"] == "fullscreen")
 }
 
 pub fn find(id: &str) -> Result<PathBuf> {

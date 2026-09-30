@@ -318,6 +318,14 @@ impl Workbench {
                         // Always there, in every pane: enlarging or closing a pane should not need a hover first.
                         .child(
                             small_icon_button(
+                                ("pane-diagnose", pane.entity_id().as_u64() as usize),
+                                "wrench",
+                                cx.listener(move |this, _: &ClickEvent, _, cx| this.open_diagnostics(cx)),
+                            )
+                            .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "diag.title"), None)),
+                        )
+                        .child(
+                            small_icon_button(
                                 ("pane-zoom", pane.entity_id().as_u64() as usize),
                                 if zoomed { "minimize-2" } else { "maximize-2" },
                                 cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_zoom(&zoom, window, cx)),
@@ -1086,6 +1094,15 @@ impl Workbench {
                     }
                     d
                 })
+                // The split header's wrench, for a pane that fills its tab.
+                .child(
+                    small_icon_button(
+                        ("agent-bar-diagnose", pane.entity_id().as_u64() as usize),
+                        "wrench",
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.open_diagnostics(cx)),
+                    )
+                    .tooltip(crate::ui::Tooltip::text(crate::i18n::t(cx, "diag.title"), None)),
+                )
                 .into_any_element(),
         )
     }

@@ -74,6 +74,22 @@ pub fn which_in(name: &str, path_env: &OsStr) -> Option<PathBuf> {
     None
 }
 
+/// Every program called `name` in the directories of `path_env`, in search order, each real file
+/// once (a symlink and its target, or a folder listed twice, count as one).
+pub fn which_all(name: &str, path_env: &OsStr) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for dir in search_dirs(path_env) {
+        let Some(path) = which_in(name, dir.as_os_str()) else { continue };
+        let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !seen.contains(&real) {
+            seen.push(real);
+            found.push(path);
+        }
+    }
+    found
+}
+
 /// The directories of a `PATH` value that are searched: absolute ones only.
 fn search_dirs(path_env: &OsStr) -> impl Iterator<Item = PathBuf> + '_ {
     std::env::split_paths(path_env).filter(|dir| dir.is_absolute())
