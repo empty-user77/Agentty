@@ -257,7 +257,8 @@ impl TrayPopover {
     fn system_load(load: &crate::system_load::Sampler, cx: &App) -> impl IntoElement {
         let row = |label: &str, percent: Option<f32>| {
             let value = percent.map_or_else(|| "—".to_string(), |p| format!("{:.0}%", p.round()));
-            let color = if percent.is_some_and(|p| p >= LOAD_HIGH) { Chrome::ORANGE } else { Chrome::FOREGROUND };
+            // Compared as shown: 84.6 reads "85%" and is high.
+            let color = if percent.is_some_and(|p| p.round() >= LOAD_HIGH) { Chrome::ORANGE } else { Chrome::FOREGROUND };
             div()
                 .flex()
                 .justify_between()

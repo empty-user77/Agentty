@@ -242,6 +242,9 @@ pub struct PluginHost {
     /// text out of its own storage — which needs no permission — and type it into a terminal.
     /// Only the user restarting it from the Plugins page clears this.
     link_tainted: std::collections::HashSet<String>,
+    /// When a plugin a link reached last opened an agent tab without the dialog: a page opening
+    /// links in a loop gets one tab, and the rest wait in **Send to…** one at a time.
+    link_launched_at: Option<Instant>,
     tx: UnboundedSender<Envelope>,
     next_request: u64,
     /// Bumped whenever something visible changes.
@@ -263,6 +266,7 @@ pub fn init(cx: &mut App) -> UnboundedReceiver<Envelope> {
     cx.set_global(PluginHost {
         installed: store::installed(),
         link_tainted: std::collections::HashSet::new(),
+        link_launched_at: None,
         runtimes: HashMap::new(),
         tx,
         next_request: 1,
@@ -643,17 +647,55 @@ pub fn stop(id: &str, cx: &mut App) {
 }
 
 /// Whether a link has reached this plugin, so what it asks for next may be the link author's wish
-/// rather than the user's — any website can open one. While this holds, the plugin cannot type
-/// into a terminal and its prompts go through the "Send to…" dialog.
+/// rather than the user's — any website can open one. While this holds, the plugin may put text in
+/// front of the user but never press Enter (see [`guard_link_call`]).
 ///
 /// Nothing lifts it but the user restarting the plugin. Not a click in the panel the link opened,
-/// which is not consent to type into a terminal; not waiting, which a plugin can do as easily as
-/// a user can click; and not the plugin's own process ending, which it can arrange — it would
+/// which is not consent to run what the plugin types; not waiting, which a plugin can do as easily
+/// as a user can click; and not the plugin's own process ending, which it can arrange — it would
 /// otherwise come back untainted, read the link's text back out of its own storage (which needs
 /// no permission) and carry on.
 pub fn link_guarded(id: &str, cx: &App) -> bool {
     host(cx).link_tainted.contains(id)
 }
+
+/// What a plugin a link reached may still ask for: text in front of the user, never Enter.
+///
+/// - `prompt/inject` into a new Claude Code or Codex tab or workspace opens it with the text typed
+///   into the agent's prompt, unsent — when `may_launch` (one such tab every
+///   [`LINK_LAUNCH_GAP`]); anything else (an open terminal, a shell, the plugin's own workspace)
+///   goes through **Send to…**.
+/// - `terminal/send` types without pressing Enter, into an agent only (`agentsOnly`): text left on
+///   a shell's command line would run with whatever the user types there next. Still only where
+///   the plugin may type at all (right after the user used it, or a terminal it opened).
+///
+/// Typing never runs anything: it is pasted with control characters removed, and a newline is
+/// bracketed or turned into a space (`TerminalView::insert_text`). Returns whether the call opens
+/// an agent tab without the dialog.
+pub fn guard_link_call(method: &str, params: &mut Value, may_launch: bool) -> bool {
+    match method {
+        "prompt/inject" => {
+            let target = serde_json::from_value::<PromptTarget>(params["target"].clone()).unwrap_or_default();
+            let new_agent = may_launch
+                && matches!(target, PromptTarget::NewTab | PromptTarget::NewWorkspace)
+                && matches!(params.get("agent").and_then(Value::as_str), None | Some("claude" | "codex"));
+            if !new_agent {
+                params["target"] = serde_json::to_value(PromptTarget::Ask).unwrap_or_default();
+            }
+            params["submit"] = Value::Bool(false);
+            new_agent
+        }
+        "terminal/send" => {
+            params["submit"] = Value::Bool(false);
+            params["agentsOnly"] = Value::Bool(true);
+            false
+        }
+        _ => false,
+    }
+}
+
+/// How often a plugin a link reached may open an agent tab without **Send to…**.
+pub const LINK_LAUNCH_GAP: Duration = Duration::from_secs(5);
 
 /// The user asking for the plugin to start again — the one thing that clears a link's guard.
 pub fn restart(id: &str, cx: &mut App) {
@@ -892,9 +934,6 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 reply(Err((codes::INVALID_PARAMS, "that path cannot be revealed".into())), cx)
             }
         }
-        "terminal/send" if guarded => {
-            reply(Err((codes::PERMISSION_DENIED, "a plugin that a link reached may not type into terminals; restart it first".into())), cx)
-        }
         // The browser is signed in as the user: a link's author must not get to drive it.
         browser if browser.starts_with("browser/") && guarded => {
             reply(Err((codes::PERMISSION_DENIED, "a plugin that a link reached may not use the browser; restart it first".into())), cx)
@@ -922,10 +961,11 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             }
         }
         _ => {
-            if method == "prompt/inject" && guarded {
-                // Whatever a link asks for, the user picks where it goes and presses Enter.
-                params["target"] = serde_json::to_value(PromptTarget::Ask).unwrap_or_default();
-                params["submit"] = Value::Bool(false);
+            if guarded {
+                let may_launch = host(cx).link_launched_at.is_none_or(|at| at.elapsed() >= LINK_LAUNCH_GAP);
+                if guard_link_call(method, &mut params, may_launch) {
+                    host_mut(cx).link_launched_at = Some(Instant::now());
+                }
             }
             let unanswered = request_id.clone();
             let request = PluginCall {
@@ -1449,6 +1489,40 @@ impl PluginCall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_link_reached_plugin_types_but_never_presses_enter() {
+        let guarded = |method: &str, params: Value| {
+            let mut params = params;
+            guard_link_call(method, &mut params, true);
+            params
+        };
+        // Right after one such tab, the next goes through the dialog.
+        let mut again = json!({ "text": "x", "target": "newTab" });
+        assert!(!guard_link_call("prompt/inject", &mut again, false));
+        assert_eq!(again["target"].as_str(), Some("ask"));
+        assert!(guard_link_call("prompt/inject", &mut json!({ "text": "x", "target": "newTab" }), true));
+        // A new agent tab opens straight away, with the text left unsent.
+        let tab = guarded("prompt/inject", json!({ "text": "x", "target": "newTab", "agent": "codex", "submit": true }));
+        assert_eq!((tab["target"].as_str(), tab["submit"].as_bool()), (Some("newTab"), Some(false)));
+        let workspace = guarded("prompt/inject", json!({ "text": "x", "target": "newWorkspace" }));
+        assert_eq!((workspace["target"].as_str(), workspace["submit"].as_bool()), (Some("newWorkspace"), Some(false)));
+        // A shell, an open terminal or no target at all: the user picks in Send to….
+        for params in [
+            json!({ "text": "x", "target": "newTab", "agent": "shell" }),
+            json!({ "text": "x", "target": "active", "submit": true }),
+            json!({ "text": "x", "target": "pane", "paneId": 3 }),
+            json!({ "text": "x", "target": "workspace", "workspaceId": 1 }),
+            json!({ "text": "x", "target": "own" }),
+            json!({ "text": "x", "target": "split" }),
+            json!({ "text": "x" }),
+        ] {
+            let asked = guarded("prompt/inject", params);
+            assert_eq!((asked["target"].as_str(), asked["submit"].as_bool()), (Some("ask"), Some(false)));
+        }
+        let send = guarded("terminal/send", json!({ "text": "rm -rf ~", "submit": true }));
+        assert_eq!((send["submit"].as_bool(), send["agentsOnly"].as_bool()), (Some(false), Some(true)));
+    }
 
     #[test]
     #[cfg(target_os = "macos")]

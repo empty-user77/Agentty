@@ -1,8 +1,8 @@
 //! Parallel tasks an agent asks for (`agentty tasks`): nothing starts until the user says so in a
 //! dialog. Then every task gets a working tree of its own (a new branch from the project's default
-//! branch, like a second session of a project) and a pane split off the asking agent's, where
-//! Claude Code or Codex starts with the task's prompt. The asking agent hears which tasks started
-//! and where.
+//! branch, like a second session of a project) and a pane split off the asking agent's — from three
+//! tasks on a tab of its own, so the asking agent keeps its room — where Claude Code or Codex starts
+//! with the task's prompt. The asking agent hears which tasks started and where.
 //!
 //! Requests from several agents wait in line; one dialog shows all the tasks of one request.
 
@@ -25,6 +25,11 @@ fn agent_of(name: Option<&str>) -> Agent {
     }
 }
 
+/// Up to two tasks split off the asking agent's pane; from three on, each gets a tab of its own.
+fn opens_as_tabs(count: usize) -> bool {
+    count >= 3
+}
+
 impl Workbench {
     /// An agent asked to start tasks: queue the question (turned off in Settings: refuse at once).
     pub fn ask_to_start_tasks(&mut self, mut request: TasksRequest, cx: &mut Context<Self>) {
@@ -39,16 +44,17 @@ impl Workbench {
 
     /// The folder the tasks' working trees are made from. The command runs wherever the agent's shell
     /// is — often a scratch folder outside the project — and a folder outside git would start every
-    /// task right there, without a tree of its own. Then the asking agent's own folder is the project.
+    /// task right there, without a tree of its own. Then the asking agent's own folder is the project:
+    /// where the pane works now or, since that is read from whatever runs in front (the very shell
+    /// that sent the command, still in the scratch folder), the folder the pane was started in.
     fn tasks_project(&self, request: &TasksRequest, cx: &gpui::App) -> PathBuf {
         let in_git = |dir: &std::path::Path| agentty_bridge::worktree::tree_root(dir).is_some();
         if in_git(&request.cwd) {
             return request.cwd.clone();
         }
-        self.pane_by_id(request.pane, cx)
-            .map(|pane| pane.read(cx).display_cwd())
-            .filter(|dir| in_git(dir))
-            .unwrap_or_else(|| request.cwd.clone())
+        let Some(pane) = self.pane_by_id(request.pane, cx) else { return request.cwd.clone() };
+        let pane = pane.read(cx);
+        [pane.display_cwd(), pane.spec.cwd.clone()].into_iter().find(|dir| in_git(dir)).unwrap_or_else(|| request.cwd.clone())
     }
 
     fn decline_tasks(&mut self, cx: &mut Context<Self>) {
@@ -63,7 +69,8 @@ impl Workbench {
     }
 
     /// The user said yes: working trees first (in the background), then one pane per task — the first
-    /// to the right of the asking agent, the next ones below it — and the answer to the agent.
+    /// to the right of the asking agent, the next ones below it (a tab each from three tasks on) — and
+    /// the answer to the agent.
     fn start_tasks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(request) = self.task_requests.pop_front() else { return };
         let Some(caller) = self.pane_by_id(request.pane, cx) else {
@@ -72,6 +79,7 @@ impl Workbench {
         };
         let handle = window.window_handle();
         let (cwd, tasks) = (request.cwd.clone(), request.tasks.clone());
+        let as_tabs = opens_as_tabs(tasks.len());
         cx.spawn(async move |this, cx| {
             let mut started: Vec<serde_json::Value> = Vec::new();
             let mut problems: Vec<String> = Vec::new();
@@ -99,7 +107,15 @@ impl Workbench {
                 let axis = if previous.is_some() { Axis::Vertical } else { Axis::Horizontal };
                 let opened = cx
                     .update_window(handle, |_, window, cx| {
-                        this.update(cx, |this, cx| this.split_pane_with(&anchor, spec, axis, window, cx)).ok().flatten()
+                        this.update(cx, |this, cx| {
+                            if as_tabs {
+                                this.tab_beside(&caller, spec, cx)
+                            } else {
+                                this.split_pane_with(&anchor, spec, axis, window, cx)
+                            }
+                        })
+                        .ok()
+                        .flatten()
                     })
                     .ok()
                     .flatten();
@@ -132,6 +148,18 @@ impl Workbench {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Adds a tab running `spec` to `anchor`'s workspace, behind the tab on screen: many tasks at
+    /// once would squeeze the asking agent into a sliver if they were all split off its pane.
+    fn tab_beside(&mut self, anchor: &Pane, spec: LaunchSpec, cx: &mut Context<Self>) -> Option<Pane> {
+        let (w, _) = self.locate(anchor)?;
+        self.wake_for_new_tab(w, cx);
+        let pane = self.spawn_pane(spec, cx);
+        self.workspaces[w].tabs.push(super::Tab { root: super::panes::PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
+        self.persist(cx);
+        cx.notify();
+        Some(pane)
     }
 
     /// Splits `anchor` (wherever it is) with a new pane running `spec`, and shows it.
@@ -283,5 +311,18 @@ impl Workbench {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opens_as_tabs;
+
+    #[test]
+    fn two_tasks_split_and_three_or_more_open_as_tabs() {
+        assert!(!opens_as_tabs(1));
+        assert!(!opens_as_tabs(2));
+        assert!(opens_as_tabs(3));
+        assert!(opens_as_tabs(6));
     }
 }

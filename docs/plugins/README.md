@@ -327,10 +327,7 @@ install it and then continues with the link.
 
 Links can come from anywhere, including web pages. Validate every parameter (the Cosmica plugin only
 opens `.md` files inside the Cosmica notes folder). Once a link has reached a plugin, and for as
-long as that plugin keeps running, Agentty routes its `injectPrompt` calls through **Send to…**
-without pressing Enter and refuses `sendToTerminal` outright. Neither a click in the panel the link
-opened nor simply waiting lifts it — a plugin can wait as easily as a user can click — so a link
-cannot turn one click into typing inside a terminal. Restarting the plugin is what clears it.
+long as that plugin keeps running, `injectPrompt` with target `newTab` or `newWorkspace` and agent Claude Code or Codex (or no agent, which defaults to Claude Code) opens directly with the text unsent; every other case goes through **Send to…** unsent. `sendToTerminal` types the text without pressing Enter. A click in the panel the link opened is not consent to run what the plugin types, and neither is waiting — a plugin can wait as easily as a user can click. Restarting the plugin is what clears it.
 
 The one thing a plugin the link reached can still do outside Agentty is `openUrl`, and Agentty
 meters it at one address every 700 ms — it needs no permission, and without that a plugin could
@@ -380,7 +377,7 @@ be served from a release of a repository, or from the same host as the list itse
 
 | Permission | Allows |
 |---|---|
-| `prompt.inject` | `injectPrompt` — including opening an agent session of its own, without asking. Only `target: "ask"` puts the prompt in front of the user first, and only a plugin a link reached is forced to use it |
+| `prompt.inject` | `injectPrompt` — including opening an agent session of its own, without asking. Only `target: "ask"` puts the prompt in front of the user first. A plugin a link reached has constrained targets: `newTab`/`newWorkspace` with Claude Code or Codex open directly unsent; others go through **Send to…** unsent |
 | `terminal.write` | `sendToTerminal` — typing into any open pane and pressing Enter, a shell pane included, where that runs the command |
 | `session.read` | `getSession` — reading AI conversations |
 | `workspace.read` | `listWorkspaces` |

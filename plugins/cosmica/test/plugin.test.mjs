@@ -102,17 +102,21 @@ test('panel lists notes from the Cosmica config and searches them', async () => 
   }
 });
 
-test('continue link injects the note through the Send to dialog', async () => {
+test('continue link opens the note in a new tab, typed but not sent', async () => {
   const box = sandbox();
-  const host = start(box, { 'prompt/inject': { status: 'asked' } });
+  const host = start(box, { 'prompt/inject': { status: 'sent', paneId: 4, submitted: false } });
   try {
     const note = path.join(box.notes, 'Work', '20260101-000000-aaaa.md');
     host.send('url/open', { path: 'continue', query: { path: note, title: 'Release plan' }, url: 'agentty://plugin/cosmica/continue', context: host.context });
     const inject = await host.next('prompt/inject');
-    assert.equal(inject.params.target, 'ask');
+    assert.equal(inject.params.target, 'newWorkspace', 'no workspace is open in the test context');
+    assert.equal(inject.params.submit, false, 'a link never starts the agent by itself');
+    assert.equal(inject.params.agent, 'claude');
+    assert.equal(inject.params.cwd, box.root);
     assert.equal(inject.params.title, 'Release plan');
     assert.match(inject.params.text, /Ship the plugin store\./);
     assert.ok(!inject.params.text.includes('tags:'), 'front matter is not part of the prompt');
+    assert.match((await host.next('ui/notify')).params.message, /press Enter to start/);
 
     host.send('url/open', { path: 'continue', query: { path: box.outside }, url: 'agentty://plugin/cosmica/continue', context: host.context });
     const notify = await host.next('ui/notify');
@@ -147,11 +151,69 @@ test('AI summary asks the focused agent to write into the Cosmica folder', async
   }
 });
 
-test('busy agents are not interrupted and shells are refused', async () => {
+test('clicking a note continues it in a new tab where it was written', async () => {
   const box = sandbox();
+  const workDir = path.join(box.root, 'project');
+  fs.mkdirSync(workDir);
+  fs.writeFileSync(path.join(box.notes, 'Work', 'summary.md'), `---\nsource: agentty\ncwd: ${workDir}\nagent: codex\n---\n# Summary\n\nNext steps.\n`);
+  const host = start(box, { 'prompt/inject': { status: 'sent', paneId: 4 } });
+  const context = { ...host.context, workspace: { id: 1, name: 'ws', cwd: box.root, active: true } };
+  try {
+    host.send('ui/event', { element: 'notes', event: 'click', item: path.join(box.notes, 'Work', 'summary.md'), context });
+    const inject = await host.next('prompt/inject');
+    assert.equal(inject.params.target, 'newTab');
+    assert.equal(inject.params.submit, true);
+    assert.equal(inject.params.cwd, workDir);
+    assert.equal(inject.params.agent, 'codex');
+
+    host.send('ui/event', { element: 'notes', event: 'action', action: 'elsewhere', item: path.join(box.notes, 'Work', 'summary.md'), context });
+    assert.equal((await host.next('prompt/inject')).params.target, 'ask');
+  } finally {
+    host.stop();
+  }
+});
+
+test('the panel shows a few notes first, saving on top, and folders to pick', async () => {
+  const box = sandbox();
+  for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(box.notes, `extra-${i}.md`), `# Extra ${i}\n`);
   const host = start(box);
   try {
+    host.send('panel/open', { context: host.context });
+    let panel = (await host.next('ui/setPanel')).params.tree;
+    assert.equal(panel.children[0].type, 'section');
+    assert.ok(find(panel.children[0], (n) => n.id === 'save'), 'saving comes first');
+    assert.equal(find(panel, (n) => n.type === 'list').items.length, 6);
+    const folders = find(panel, (n) => n.type === 'choice' && n.id === 'folder');
+    assert.equal(folders.value, 'Agentty');
+    assert.deepEqual(folders.options.map((o) => o.value).slice(0, 2), ['Agentty', 'Work']);
+
+    host.send('ui/event', { element: 'more', event: 'click', context: host.context });
+    panel = (await host.next('ui/setPanel')).params.tree;
+    assert.equal(find(panel, (n) => n.type === 'list').items.length, 12);
+
+    host.send('ui/event', { element: 'folder', event: 'change', value: ':new', context: host.context });
+    panel = (await host.next('ui/setPanel')).params.tree;
+    assert.ok(find(panel, (n) => n.id === 'new-folder'));
+    host.send('ui/event', { element: 'new-folder', event: 'change', value: 'Sessions', context: host.context });
+    host.send('ui/event', { element: 'create-folder', event: 'click', context: host.context });
+    assert.equal((await host.next('ui/notify')).params.kind, 'success');
+    panel = (await host.next('ui/setPanel')).params.tree;
+    assert.ok(fs.statSync(path.join(box.notes, 'Sessions')).isDirectory());
+    assert.equal(find(panel, (n) => n.id === 'folder').value, 'Sessions');
+    assert.ok(!find(panel, (n) => n.id === 'new-folder'));
+  } finally {
+    host.stop();
+  }
+});
+
+test('a working agent gets the request queued; one waiting for the user and shells are refused', async () => {
+  const box = sandbox();
+  const host = start(box, { 'terminal/send': { paneId: 3 } });
+  try {
     host.send('command/execute', { command: 'cosmica.saveSummary', args: {}, context: { ...host.context, pane: { ...host.context.pane, status: 'working' } } });
+    assert.equal((await host.next('terminal/send')).params.submit, true);
+    assert.match((await host.next('ui/notify')).params.message, /as soon as it finishes/);
+    host.send('command/execute', { command: 'cosmica.saveSummary', args: {}, context: { ...host.context, pane: { ...host.context.pane, status: 'question' } } });
     assert.equal((await host.next('ui/notify')).params.kind, 'warning');
     host.send('command/execute', { command: 'cosmica.saveSummary', args: {}, context: { ...host.context, pane: { ...host.context.pane, kind: 'shell' } } });
     assert.equal((await host.next('ui/notify')).params.kind, 'warning');

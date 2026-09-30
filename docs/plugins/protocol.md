@@ -73,8 +73,8 @@ when you don't care.
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
 | `host/revealPath` | `workspace.read` | `{ path }` (absolute, existing) | `null` |
-| `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, model?, cwd?, submit?, tools? }` — `model`: one `agent/list` named for that agent — `target`: `ask` · `active` · `newWorkspace` · `newTab` · `split` · `pane` · `workspace` · `own` (a new tab in the plugin's own workspace) | `{ status: "asked" }` or `{ status: "sent", paneId }` |
-| `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId }` |
+| `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, model?, cwd?, submit?, tools? }` — `model`: one `agent/list` named for that agent — `target`: `ask` · `active` · `newWorkspace` · `newTab` · `split` · `pane` · `workspace` · `own` (a new tab in the plugin's own workspace) | `{ status: "asked" }` or `{ status: "sent", paneId, submitted }` |
+| `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId, submitted }` |
 | `agent/list` | `prompt.inject` | `{}` | `[{ id, name, version?, models: [{ id, label }] }]` — the agents `prompt/inject` can start here (installed): `claude`, `codex`, with the models each was seen using (its default first) |
 | `terminal/close` | `prompt.inject` | `{ paneId }` — a terminal `prompt/inject` opened for this plugin (`newTab`, `newWorkspace`, `split`, `own`); any other is refused with `-32001` | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
@@ -110,6 +110,13 @@ terminal — the user's own agents and shells, `active`, `pane`, `workspace` —
 its commands), and never while that terminal waits for the user to approve or answer something. A
 `prompt/inject` outside that goes to the `ask` dialog instead (`{ status: "asked" }`, not sent until
 the user sends it); `terminal/send` fails with `-32001`.
+
+A plugin an `agentty://` link reached never gets Enter pressed for it, until it restarts: a
+`newTab` or `newWorkspace` prompt for Claude Code or Codex (or no agent, which means Claude Code)
+opens with the text typed in and unsent (`{ status: "sent", paneId, submitted: false }`) — one
+such tab every 5 seconds, the rest go to `ask` — every other prompt goes to `ask`, and
+`terminal/send` types without Enter, into Claude Code or Codex only (never a shell, where the text
+would run with the user's next command), under the rules above (`{ paneId, submitted: false }`).
 
 Agentty drops `ui/notify` calls that arrive faster than one per 700 ms (answering them normally), and
 stops a plugin that sends more than 240 messages a second. `host/openUrl` is metered the same way —
@@ -270,7 +277,7 @@ Errors use these codes:
 |---|---|
 | `-32601` | unknown method |
 | `-32602` | invalid parameters (bad UI tree, no such pane, …) |
-| `-32001` | permission missing, or refused because a link reached the plugin (until it restarts) |
+| `-32001` | permission missing, or (for the browser only) refused because a link reached the plugin (until it restarts) |
 | `-32002` | unavailable (no window open, no session yet) |
 
 ## Example session

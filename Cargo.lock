@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "agentty-app"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "agentty-bridge",
  "agentty-db",
@@ -60,13 +60,14 @@ dependencies = [
 
 [[package]]
 name = "agentty-bridge"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
  "clap",
  "dirs 7.0.0",
+ "memchr",
  "ring",
  "rustls",
  "rustls-platform-verifier",
@@ -83,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "agentty-db"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "agentty-bridge",
  "anyhow",

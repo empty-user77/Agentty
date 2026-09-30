@@ -37,6 +37,11 @@ pub fn is_visible(_window: Id) -> bool {
     true
 }
 
+/// No app-wide answer here: the window's own view of being in front stands.
+pub fn app_is_active() -> bool {
+    true
+}
+
 pub fn order_front_regardless(_window: Id) {}
 
 pub fn order_back(_window: Id) {}

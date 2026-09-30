@@ -236,3 +236,24 @@ export async function refreshCosmica(config) {
     // Not running: it reconciles on its next start.
   }
 }
+
+/** Folders directly under the notes folder, by name (hidden ones left out), at most `limit`. */
+export async function listFolders(root, limit = 30) {
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+/** Makes `folder` under the notes folder (no traversal) and returns its clean name. */
+export async function createFolder(root, folder) {
+  const name = safeFolder(folder);
+  await fs.mkdir(path.join(root, name), { recursive: true });
+  return name;
+}

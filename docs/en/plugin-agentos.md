@@ -119,7 +119,7 @@ Two things a workflow does not get to decide, because an AgentOS is a plugin tal
 And two the workflow itself has to get right:
 
 - **The user stays in front of it.** A step's prompt goes into a session they can read, in a tab they can take over.
-- **A link is not a run.** A plugin a link reached cannot type into terminals, and its prompts go through **Send to…** for as long as it keeps running. An AgentOS started that way asks first — and it still follows the session you placed, so asking costs it nothing but a turn.
+- **A link is not a run.** A plugin a link reached has constrained prompts: `newTab` and `newWorkspace` with Claude Code or Codex open directly, unsent; others go through **Send to…**, unsent. An AgentOS started that way asks first — and it still follows the session you placed, so asking costs it nothing but a turn. Terminal typing is allowed but never presses Enter, so no terminal runs what the plugin typed.
 
 ## The examples
 

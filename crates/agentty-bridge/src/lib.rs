@@ -6,6 +6,7 @@ pub mod amp;
 pub mod backup;
 pub mod claude;
 pub mod claude_trust;
+pub mod clone;
 pub mod codex;
 pub mod connectors;
 pub mod context;
@@ -30,6 +31,7 @@ pub mod plugins;
 pub mod pricing;
 pub mod process;
 pub mod protobuf;
+pub mod search;
 pub mod secret_store;
 pub mod service_status;
 pub mod sync;
@@ -327,6 +329,19 @@ pub fn banner_model(line: &str) -> Option<(String, u64)> {
     parse_model_display(model)
 }
 
+/// The model in Codex's footer (`GPT-6.1-Sol medium · ~/project · main`), as Codex names it in
+/// its settings (`gpt-6.1-sol`). It is there from the moment Codex starts, before any transcript,
+/// and it is this very session's: two Codex in one folder may run different models.
+pub fn codex_footer_model(line: &str) -> Option<String> {
+    let (head, _rest) = line.trim().split_once(" · ")?;
+    let model = head.split_whitespace().next()?;
+    let looks_like_model = model.len() <= 48
+        && model.starts_with(|c: char| c.is_ascii_alphabetic())
+        && model.chars().any(|c| c.is_ascii_digit())
+        && model.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+    looks_like_model.then(|| model.to_ascii_lowercase())
+}
+
 /// "1M" → 1 000 000, "200K" → 200 000.
 fn parse_token_count(text: &str) -> Option<u64> {
     let text = text.trim();
@@ -405,17 +420,10 @@ pub fn pretty_model(model: &str) -> String {
     }
 }
 
-/// Whether a transcript file mentions `needle` (case-insensitive), for full-text session search.
+/// Whether a transcript file mentions `needle` (case-insensitive) in what was said, for
+/// full-text session search. [`search::search_transcripts`] searches many at once.
 pub fn transcript_contains(path: &std::path::Path, needle: &str) -> bool {
-    use std::io::{BufRead, Read};
-    /// How much of a transcript a search reads. A transcript is one line per message, and a search
-    /// runs over every session while someone is still typing — without a limit here, one file left
-    /// without a line break (a corrupted transcript, or one huge tool result) would be read into
-    /// memory whole. Anything real is far below this.
-    const MAX_SCAN: u64 = 16 * 1024 * 1024;
-    let needle = needle.to_lowercase();
-    let Ok(file) = std::fs::File::open(path) else { return false };
-    std::io::BufReader::new(file.take(MAX_SCAN)).lines().map_while(Result::ok).any(|line| line.to_lowercase().contains(&needle))
+    search::Needle::new(needle).is_some_and(|needle| search::find_in_file(path, &needle).is_some())
 }
 
 #[cfg(test)]
@@ -450,6 +458,17 @@ mod model_name_tests {
         assert_eq!(banner_model("Opus 5.5 (1M context)"), None);
         assert_eq!(banner_model("~/Agentty/Agentty · main"), None);
         assert_eq!(banner_model("some prose, with a · in it"), None);
+    }
+
+    #[test]
+    fn the_codex_footer_says_which_model_this_session_runs() {
+        use super::codex_footer_model;
+        assert_eq!(codex_footer_model("  GPT-6.1-Sol medium · ~/work/app · feature/login").as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(codex_footer_model("GPT-6-Astra medium · /private/tmp/proj").as_deref(), Some("gpt-6-astra"));
+        // Other lines with a dot in them.
+        assert_eq!(codex_footer_model("~/work/app · main"), None);
+        assert_eq!(codex_footer_model("Worked for 16s · 10:23 AM"), None);
+        assert_eq!(codex_footer_model("← for agents · ? for shortcuts"), None);
     }
 
     #[test]

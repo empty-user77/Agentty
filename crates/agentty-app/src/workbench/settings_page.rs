@@ -45,6 +45,8 @@ pub enum SettingsSection {
     Shortcuts,
     /// Desktop notifications and messages to chat services.
     Notifications,
+    /// Every Agentty window and the workspaces in each.
+    Windows,
     /// Workspaces and sessions synced through a private git repository.
     Sync,
     /// The whole configuration exported to a file and imported from one.
@@ -55,9 +57,10 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 13] = [
         Self::General,
         Self::Project,
+        Self::Windows,
         Self::Accounts,
         Self::Notifications,
         Self::Sync,
@@ -88,6 +91,7 @@ impl SettingsSection {
             Self::Aliases => "settings.aliases",
             Self::Shortcuts => "settings.shortcuts",
             Self::Notifications => "settings.notifications",
+            Self::Windows => "settings.windows",
             Self::Sync => "settings.sync",
             Self::Backup => "settings.backup",
             Self::System => "settings.system",
@@ -105,6 +109,7 @@ impl SettingsSection {
             Self::Aliases => "tag",
             Self::Shortcuts => "command",
             Self::Notifications => "bell",
+            Self::Windows => "app-window",
             Self::Sync => "cloud",
             Self::Backup => "history",
             Self::System => "wrench",
@@ -286,12 +291,15 @@ fn color_row(
     set: fn(&mut Settings, Option<u32>),
     cx: &mut Context<Workbench>,
 ) -> Div {
-    let mut swatches = div().flex().flex_wrap().gap_1().items_center();
+    // One row of fixed-size swatches, wrapping only in the narrow layout: a wrapping row inside a
+    // row is laid out again and again, and four of them made scrolling this page stutter.
+    let mut swatches = div().flex().when(narrow(), |d| d.flex_wrap()).gap_1().items_center();
     for color in super::PALETTE.iter().copied().chain([0x000000, 0x1e1e1e, 0x2b2b2b, 0xd2d2d8, 0xffffff]) {
         let chosen = overridden && color == current;
         swatches = swatches.child(
             div()
                 .id(SharedString::from(format!("{id}-{color:06x}")))
+                .flex_none()
                 .size(px(16.))
                 .rounded_sm()
                 .bg(hex(color))
@@ -1371,6 +1379,11 @@ impl Workbench {
                             t(cx, "settings.agent_tasks"),
                             t(cx, "settings.agent_tasks_hint"),
                             toggle("agent-tasks", prefs.agent_tasks, |s| s.agent_tasks = !s.agent_tasks, cx),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.always_bypass"),
+                            t(cx, "settings.always_bypass_hint"),
+                            toggle("always-bypass", prefs.always_bypass, |s| s.always_bypass = !s.always_bypass, cx),
                         )),
                 )
                 .child(
@@ -1590,6 +1603,7 @@ impl Workbench {
             SettingsSection::Aliases => aliases.into_any_element(),
             SettingsSection::Shortcuts => render_shortcuts(cx).into_any_element(),
             SettingsSection::Notifications => self.render_notification_settings(window, cx).into_any_element(),
+            SettingsSection::Windows => self.render_windows_settings(cx).into_any_element(),
             SettingsSection::Sync => self.render_sync_settings(window, cx).into_any_element(),
             SettingsSection::Backup => self.render_backup_settings(window, cx).into_any_element(),
             SettingsSection::System => self.render_system_check(cx).into_any_element(),

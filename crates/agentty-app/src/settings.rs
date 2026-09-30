@@ -280,6 +280,9 @@ pub struct Settings {
     /// Agents started by Agentty get a short guide to what Agentty offers them (and Claude Code its
     /// Agentty skills).
     pub agent_guide: bool,
+    /// Claude Code and Codex tabs Agentty starts skip every permission prompt (Claude Code's
+    /// `--dangerously-skip-permissions`, Codex's full access). Off by default; the user opts in.
+    pub always_bypass: bool,
     /// Closing a pane stops the local servers (dev servers) started in it.
     pub stop_servers_on_close: bool,
     /// Claude Code advisor for new Claude tabs.
@@ -646,6 +649,7 @@ impl Default for Settings {
             auto_worktree: true,
             agent_tasks: true,
             agent_guide: true,
+            always_bypass: false,
             stop_servers_on_close: true,
             advisor: AdvisorChoice::Inherit,
             harness_detect: true,
@@ -767,7 +771,7 @@ impl SettingsStore {
         let composed = SettingsStore::compose(&settings, &themes);
         let store = SettingsStore { settings, revision: 0, themes, composed };
         let _ = store.save();
-        if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases) {
+        if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass) {
             eprintln!("agentty: shell integration unavailable: {err:#}");
         }
         if let Err(err) = crate::agent_guide::write_files() {
@@ -819,6 +823,12 @@ pub fn agent_guide_enabled() -> bool {
     std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.agent_guide)
 }
 
+/// Whether new Claude Code / Codex tabs skip permission prompts, read from the settings file like
+/// [`browser_tools_enabled`]. Unreadable settings mean off: asking is the safe side.
+pub fn always_bypass() -> bool {
+    std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_some_and(|s| s.always_bypass)
+}
+
 /// The advisor for new Claude tabs, read from the settings file like [`browser_tools_enabled`].
 pub fn advisor_default() -> AdvisorChoice {
     std::fs::read(Settings::path())
@@ -863,13 +873,13 @@ pub fn start_prevent_sleep_timer(cx: &mut App) {
 
 pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     cx.update_global::<SettingsStore, _>(|store, _| {
-        let aliases_before = store.settings.aliases.clone();
+        let wrappers_before = (store.settings.aliases.clone(), store.settings.always_bypass);
         change(&mut store.settings);
         store.composed = SettingsStore::compose(&store.settings, &store.themes);
         store.revision += 1;
         let _ = store.save();
-        if store.settings.aliases != aliases_before {
-            let _ = crate::shell_integration::write_files(&store.settings.aliases);
+        if (&store.settings.aliases, store.settings.always_bypass) != (&wrappers_before.0, wrappers_before.1) {
+            let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
         crate::platform::wakelock::set(store.settings.prevent_sleep);
     });
@@ -882,14 +892,14 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
 pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Result<()> {
     let settings = serde_json::from_value::<Settings>(value)?.migrate();
     cx.update_global::<SettingsStore, _>(|store, _| {
-        let aliases_before = store.settings.aliases.clone();
+        let wrappers_before = (store.settings.aliases.clone(), store.settings.always_bypass);
         store.settings = settings;
         store.themes = load_themes();
         store.composed = SettingsStore::compose(&store.settings, &store.themes);
         store.revision += 1;
         let _ = store.save();
-        if store.settings.aliases != aliases_before {
-            let _ = crate::shell_integration::write_files(&store.settings.aliases);
+        if (&store.settings.aliases, store.settings.always_bypass) != (&wrappers_before.0, wrappers_before.1) {
+            let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
         crate::platform::wakelock::set(store.settings.prevent_sleep);
     });

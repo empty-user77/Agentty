@@ -47,7 +47,7 @@ fn toast_script(title: &str, body: &str) -> String {
         "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null\n\
          [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null\n\
          $xml = New-Object Windows.Data.Xml.Dom.XmlDocument\n\
-         $xml.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>Agentty · {}</text><text>{}</text></binding></visual></toast>')\n\
+         $xml.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>Agentty · {}</text><text>{}</text></binding></visual><audio silent=\"true\"/></toast>')\n\
          $id = '{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\powershell.exe'\n\
          [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show([Windows.UI.Notifications.ToastNotification]::new($xml))\n",
         escape(title),
@@ -62,5 +62,7 @@ mod tests {
         let script = super::toast_script("Build <done>", "it's \"ok\" & fine");
         assert!(script.contains("Build &lt;done&gt;"));
         assert!(script.contains("it''s &quot;ok&quot; &amp; fine"));
+        // Silent, like the macOS ones: a sound per notification was too loud next to a call.
+        assert!(script.contains("<audio silent=\"true\"/>"));
     }
 }

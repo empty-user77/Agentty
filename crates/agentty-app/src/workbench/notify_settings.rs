@@ -21,8 +21,10 @@ use std::collections::{HashMap, HashSet};
 pub(super) struct ChatNotifyState {
     /// The masked field for each service's webhook URL / bot token, per transport.
     inputs: HashMap<(Channel, Transport), Entity<TextInput>>,
-    /// Where a bot writes to, per service (saved as you type): a Slack channel, a Discord channel
-    /// id, a Telegram chat.
+    /// Enter in those fields saves, like the Save button.
+    input_events: Vec<Subscription>,
+    /// Where a bot writes to, per service (saved with the Save button or Enter, never per key): a
+    /// Slack channel, a Discord channel id, a Telegram chat.
     targets: HashMap<Channel, (Entity<TextInput>, Subscription)>,
     /// Whether a credential is saved, per channel and transport — a webhook and a bot are set up
     /// separately, so switching between them must not look configured when it is not.
@@ -47,6 +49,19 @@ impl ChatNotifyState {
             "status": per(&|c| self.status.get(&c).map(|(text, error)| serde_json::json!([text, error])).unwrap_or_default()),
         })
     }
+}
+
+/// What `notify::validate` said, in the user's language.
+fn validation_text(reason: &str, cx: &gpui::App) -> String {
+    let key = match reason {
+        r if r.starts_with("a Slack bot token") => "chat.invalid_slack_bot",
+        r if r.starts_with("a Discord bot token") => "chat.invalid_discord_bot",
+        r if r.starts_with("a Telegram bot token") => "chat.invalid_telegram_bot",
+        r if r.starts_with("a Slack webhook") => "chat.invalid_slack_hook",
+        r if r.starts_with("a Discord webhook") => "chat.invalid_discord_hook",
+        _ => "chat.invalid",
+    };
+    t(cx, key).to_string()
 }
 
 fn kind_code(kind: NoticeKind) -> u8 {
@@ -168,12 +183,34 @@ impl Workbench {
         .detach();
     }
 
+    /// The Save button (or Enter in either field): the channel / chat the bot writes to, and the
+    /// credential typed in. Nothing is saved while typing. An empty credential field keeps the one
+    /// saved before, so the channel can be changed on its own.
     fn save_chat_secret(&mut self, channel: Channel, cx: &mut Context<Self>) {
         let transport = settings(cx).chat_notify.transport(channel);
+        let target_changed = if channel.needs_target(transport) {
+            let typed = self.chat_notify.targets.get(&channel).map(|(input, _)| input.read(cx).text().trim().to_string());
+            match typed.filter(|value| *value != settings(cx).chat_notify.target(channel)) {
+                Some(value) => {
+                    update_settings(cx, move |s| s.chat_notify.set_target(channel, value.clone()));
+                    true
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
         let Some(input) = self.chat_notify.inputs.get(&(channel, transport)).cloned() else { return };
         let value = input.read(cx).text().trim().to_string();
+        if value.is_empty() && self.chat_notify.configured.get(&(channel, transport)) == Some(&true) {
+            if target_changed {
+                self.chat_notify.status.insert(channel, (t(cx, "chat.target_saved").to_string(), false));
+            }
+            return cx.notify();
+        }
         if let Err(reason) = notify::validate(channel, transport, &value) {
-            self.chat_notify.status.insert(channel, (reason.to_string(), true));
+            let text = if value.is_empty() { t(cx, "chat.enter_secret").to_string() } else { validation_text(reason, cx) };
+            self.chat_notify.status.insert(channel, (text, true));
             return cx.notify();
         }
         self.chat_notify.busy.insert(channel);
@@ -238,6 +275,16 @@ impl Workbench {
         .detach();
     }
 
+    /// Debug driver: which chat fields hold the keyboard, and how much each holds (never the text).
+    pub(super) fn chat_notify_focus(&self, window: &Window, cx: &gpui::App) -> Vec<(String, bool, usize)> {
+        let fields = self.chat_notify.inputs.iter().map(|((channel, transport), input)| (format!("{}:{transport:?}", channel.id()), input));
+        let targets = self.chat_notify.targets.iter().map(|(channel, (input, _))| (format!("{}:target", channel.id()), input));
+        fields
+            .chain(targets)
+            .map(|(name, input)| (name, gpui::Focusable::focus_handle(input.read(cx), cx).is_focused(window), input.read(cx).text().len()))
+            .collect()
+    }
+
     /// The masked credential field. Keyed by channel and transport, so switching between a webhook
     /// and a bot gives a field that asks for the right thing instead of keeping the other's hint.
     fn chat_input(&mut self, channel: Channel, transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextInput> {
@@ -245,11 +292,17 @@ impl Workbench {
             return input.clone();
         }
         let input = cx.new(|cx| TextInput::new("", secret_placeholder(channel, transport), window, cx).masked());
+        let events = cx.subscribe(&input, move |this, _, event: &TextInputEvent, cx| {
+            if matches!(event, TextInputEvent::Confirmed) {
+                this.save_chat_secret(channel, cx);
+            }
+        });
+        self.chat_notify.input_events.push(events);
         self.chat_notify.inputs.insert((channel, transport), input.clone());
         input
     }
 
-    /// The field for where this service's bot writes to, kept across renders and saved as typed.
+    /// The field for where this service's bot writes to, kept across renders; saved with Save or Enter.
     fn target_input(&mut self, channel: Channel, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextInput> {
         if let Some((input, _)) = self.chat_notify.targets.get(&channel) {
             return input.clone();
@@ -261,10 +314,9 @@ impl Workbench {
             Channel::Telegram => "chat.telegram_chat_placeholder",
         };
         let input = cx.new(|cx| TextInput::localized(current, placeholder, window, cx));
-        let subscription = cx.subscribe(&input, move |_, input, event: &TextInputEvent, cx| {
-            if matches!(event, TextInputEvent::Changed | TextInputEvent::Confirmed) {
-                let value = input.read(cx).text().trim().to_string();
-                update_settings(cx, move |s| s.chat_notify.set_target(channel, value.clone()));
+        let subscription = cx.subscribe(&input, move |this, _, event: &TextInputEvent, cx| {
+            if matches!(event, TextInputEvent::Confirmed) {
+                this.save_chat_secret(channel, cx);
             }
         });
         self.chat_notify.targets.insert(channel, (input.clone(), subscription));
@@ -318,9 +370,19 @@ impl Workbench {
         let input = self.chat_input(channel, transport, window, cx);
         let id = channel.id();
         let field = |input: Entity<TextInput>| {
+            let focus = input.clone();
             div()
                 .flex_1()
                 .min_w_0()
+                // The whole box focuses the field: the text element of an empty field is only as
+                // wide as its hint, so a click anywhere else in the box did nothing at all.
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                    window.focus(&gpui::Focusable::focus_handle(&focus, cx));
+                    // Otherwise the workbench behind, which tracks focus too, takes it back on the same click.
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .cursor_text()
                 .px_2()
                 .py_1()
                 .rounded_md()

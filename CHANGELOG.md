@@ -5,6 +5,46 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-09-30
+
+### Added
+- Worktrees in the Files panel: the worktrees of the repository a pane is in, or — in a folder of
+  projects such as your home folder — of every project under it, grouped and foldable, the project
+  worked on last first, each with when it was last worked on. The Files button turns purple with
+  their count. Double-click a worktree (or right-click → Open in this terminal) to carry on there;
+  "Clean up and go back to the project folder" removes a merged, clean tree at once and otherwise
+  says first what would be lost. It is never offered while an agent or another pane works there.
+- Branch picker right-click menu: switch, rename, new branch from here, copy name, delete
+  (optionally also on the server) and delete on the server. A switch refused because another
+  folder has the branch checked out offers to open that folder.
+- "Resolve with AI" for merge conflicts and diverged pulls opens Claude Code (or Codex, or another
+  installed agent) in the repository with instructions.
+- The menu bar popover shows the computer's CPU and RAM load.
+
+### Changed
+- Lower CPU use while idle and in the background: spinners and the cursor redraw only what they
+  need, pane checks run off the UI thread, panes in the same folder share `git status`, and the
+  Files and Docker panels pause while the window is out of sight.
+- A pane's header shows only its folder name; the status bar has the full path.
+- One question from an agent gives one notification instead of up to three.
+- `agentty tasks` sent from a folder outside git uses the asking pane's project.
+
+### Fixed
+- Notifications followed what the window last drew: with the window hidden or the screen locked,
+  a finished turn could go unannounced. They now go by whether Agentty is the active app.
+- A shell whose worktree folder was removed (an agent cleaning up) lands in the project folder, and
+  is shown there, instead of in a folder that no longer exists.
+- Removing a worktree with its branch keeps a branch whose commits are not in the default branch,
+  also when it was pushed; before, a pushed branch could be deleted locally and on the server.
+- Cleaning up a worktree asks first when an ignored `build/`, `out/`, `dist/`, `.cache/` or
+  `coverage/` folder holds files.
+- The Files panel's refresh button also looks for new worktrees.
+- Usage totals stay right when a transcript file is replaced.
+
+### Security
+- A connector's API key is only sent to the host it was entered for; changing the host needs the
+  key again. Importing a configuration file follows the same rule.
+
 ## [0.2.7] - 2026-09-29
 
 ### Changed

@@ -20,6 +20,7 @@ A connector turns any HTTP API into an MCP server your agents can use. You descr
 - Definitions live in `~/.agentty/connectors.json`.
 - **Secrets never go in that file.** They are stored in the operating system's credential store: Keychain on macOS, Credential Manager on Windows, Secret Service on Linux. Where none exists, a private file readable only by your account is used.
 - Values that may contain a secret are redacted wherever they are displayed.
+- **An API key is only sent to the host it was entered for.** Agentty remembers that host beside the key. A call to another host is refused until you enter the key again for it, and saving a connector with a different host and no new key is refused; another path on the same host is fine. Keys saved by older versions are bound to their connector's host automatically. Importing a backup binds each key to the host the file names for it.
 
 ## Agent sign-in
 

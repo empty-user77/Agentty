@@ -386,7 +386,7 @@ impl Workbench {
                         self.open_prompt_dialog(request, window, cx);
                         call.reply(Ok(json!({ "status": "asked" })), cx);
                     } else {
-                        let request_target = request.target;
+                        let (request_target, submitted) = (request.target, request.submit);
                         let result = self.deliver_prompt(request, window, cx);
                         // The pane this plugin set to work: it hears how that pane gets on.
                         if let Ok(pane) = &result {
@@ -399,7 +399,9 @@ impl Workbench {
                             }
                         }
                         call.reply(
-                            result.map(|pane| json!({ "status": "sent", "paneId": pane })).map_err(|e| (codes::INVALID_PARAMS, e)),
+                            result
+                                .map(|pane| json!({ "status": "sent", "paneId": pane, "submitted": submitted }))
+                                .map_err(|e| (codes::INVALID_PARAMS, e)),
                             cx,
                         );
                     }
@@ -413,12 +415,19 @@ impl Workbench {
                     Some(id) => self.all_panes().into_iter().find(|p| p.read(cx).pane_id == id),
                     None => self.active_pane(),
                 };
+                // Set by the host for a plugin a link reached (`plugins::guard_link_call`).
+                let agents_only = params["agentsOnly"].as_bool().unwrap_or(false);
                 match pane {
+                    Some(pane) if agents_only && !pane.read(cx).is_agent() => call.reply(
+                        Err((codes::PERMISSION_DENIED, "a plugin that a link reached types only into agents; restart it first".into())),
+                        cx,
+                    ),
                     Some(pane) if !text.is_empty() => match self.plugin_may_type(&call.plugin, &pane, cx) {
                         Ok(()) => {
                             let id = pane.read(cx).pane_id;
                             type_into(&pane, text, submit, true, cx);
-                            call.reply(Ok(json!({ "paneId": id })), cx);
+                            // `submitted: false` when a link's guard left Enter to the user.
+                            call.reply(Ok(json!({ "paneId": id, "submitted": submit })), cx);
                         }
                         Err(why) => call.reply(Err((codes::PERMISSION_DENIED, why)), cx),
                     },

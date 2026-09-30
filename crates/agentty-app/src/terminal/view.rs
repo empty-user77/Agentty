@@ -117,6 +117,44 @@ impl AgentStatus {
     }
 }
 
+/// One request for the user's attention gets one notice. A single question can arrive several
+/// ways — Claude Code's `PreToolUse` for `AskUserQuestion`, its `PermissionRequest` for the same
+/// tool, a `Notification` hook, the screen classifier — within seconds of each other. The gate
+/// opens with the first of them and closes only when the agent works again (the user answered,
+/// the tool ran) or the turn ends, so the next genuinely new request notifies again.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AskGate {
+    open: bool,
+}
+
+impl AskGate {
+    /// A request for the user arrived: `true` when it is new and should be announced.
+    fn ask(&mut self) -> bool {
+        !std::mem::replace(&mut self.open, true)
+    }
+
+    /// The agent is working again or the turn is over: whatever it asks next is a new request.
+    fn resume(&mut self) {
+        self.open = false;
+    }
+}
+
+/// The status to show when another report of a request that was already announced arrives:
+/// keep what the first report said (its kind and its text, which the notice showed), and only
+/// fill in a description it lacked.
+fn merge_waiting(current: &AgentStatus, incoming: AgentStatus) -> AgentStatus {
+    let text = |status: &AgentStatus| match status {
+        AgentStatus::Permission(text) | AgentStatus::Question(text) => text.clone(),
+        _ => None,
+    };
+    match current {
+        AgentStatus::Permission(None) => AgentStatus::Permission(text(&incoming)),
+        AgentStatus::Question(None) => AgentStatus::Question(text(&incoming)),
+        AgentStatus::Permission(_) | AgentStatus::Question(_) => current.clone(),
+        _ => incoming,
+    }
+}
+
 /// A subagent run by the pane's agent (Claude Code `SubagentStart` / `SubagentStop`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubagentRun {
@@ -254,12 +292,21 @@ pub struct TerminalView {
     esc_at: Option<Instant>,
     /// Consecutive probes without the busy hint while marked as working.
     quiet_ticks: u8,
+    /// Whether the request the agent waits on was already announced (one notice per request).
+    ask_gate: AskGate,
     /// Subagents of the current session, newest last.
     pub subagents: Vec<SubagentRun>,
     /// Descriptions of Agent tool calls whose subagent has not reported `SubagentStart` yet.
     pending_subagent_tasks: std::collections::VecDeque<Option<String>>,
     /// Session id of the agent in the foreground (launched with it, or found from its transcript).
     pub session_id_live: Option<String>,
+    /// The session the agent's own hook events name (Claude Code's `session_id`, Codex's
+    /// `thread-id`): the one sure answer when several agents work in the same folder.
+    hook_session: Option<String>,
+    /// The session the hooks named before the last one.
+    hook_previous: Option<String>,
+    /// The agent in front has started a turn since it began (see `probe_model`).
+    turn_seen: bool,
     /// Subagent transcripts of that session: (total, written in the last few seconds).
     pub subagent_files: (usize, usize),
     /// Latest tool call of the main agent: (tool, target).
@@ -270,8 +317,9 @@ pub struct TerminalView {
     pub git_branch: Option<String>,
     /// Name of the linked git worktree the pane works in (`None` in a project's own folder).
     pub worktree: Option<String>,
-    /// The project folder the pane started in (the repository's main working tree, else the launch
-    /// folder): where it is shown to work when its own folder was removed (a working tree cleaned up).
+    /// The project folder the pane works in (the main working tree of the repository it last worked
+    /// in, else of the folder it started in): where it is shown to work when its own folder was
+    /// removed (a working tree cleaned up).
     project_dir: Option<PathBuf>,
     /// The folder the pane works in was gone at the last probe: [`Self::display_cwd`] falls back
     /// then. Kept here so that function (called many times a frame) asks the file system nothing.
@@ -399,10 +447,14 @@ impl TerminalView {
             live_tool_pid: None,
             esc_at: None,
             quiet_ticks: 0,
+            ask_gate: AskGate::default(),
             subagents: Vec::new(),
             pending_subagent_tasks: Default::default(),
             last_tool: None,
             session_id_live: None,
+            hook_session: None,
+            hook_previous: None,
+            turn_seen: false,
             subagent_files: (0, 0),
             last_activity_ms: crate::ui::now_ms(),
             live_cwd: None,
@@ -523,6 +575,7 @@ impl TerminalView {
         }
         let mut changed = live_agent != self.live_agent || live_tool != self.live_tool;
         let gone = !cwd.as_ref().or(self.live_cwd.as_ref()).unwrap_or(&self.spec.cwd).is_dir();
+        let went = gone && !self.cwd_gone;
         if gone != self.cwd_gone {
             self.cwd_gone = gone;
             changed = true;
@@ -550,9 +603,10 @@ impl TerminalView {
         self.live_tool = live_tool;
         self.live_tool_pid = live.map(|(_, pid)| pid);
         // The folder the pane was in is gone (its worktree cleaned up) and nothing reports a new one
-        // yet: stop showing that tree and its branch; the pane is shown in the project folder.
-        if cwd.is_none() && self.live_cwd.as_ref().is_some_and(|dir| !dir.is_dir()) {
-            self.live_cwd = None;
+        // yet: stop showing that tree and its branch; the pane is shown in the project folder. The
+        // removed folder stays the live one until the shell moves: forgetting it would show the
+        // folder the pane was started in instead, which may be another tree on another branch.
+        if went && cwd.is_none() && self.live_cwd.as_ref().is_some_and(|dir| !dir.is_dir()) {
             let shown = self.display_cwd();
             self.git_branch = crate::procinfo::git_branch(&shown);
             self.worktree = crate::workbench::worktrees::linked_tree_name(&shown);
@@ -569,6 +623,10 @@ impl TerminalView {
                 let cwd = cwd.as_deref();
                 (cwd.and_then(crate::procinfo::git_branch), cwd.and_then(crate::workbench::worktrees::linked_tree_name))
             });
+            // The project of the folder it works in now: where it is shown should that folder go.
+            if let Some(project) = cwd.as_deref().and_then(agentty_bridge::worktree::main_tree) {
+                self.project_dir = Some(project);
+            }
             self.live_cwd = cwd;
             changed = true;
             if moved {
@@ -651,7 +709,11 @@ impl TerminalView {
         self.stats = None;
         self.agent_since_ms = None;
         self.live_usage = None;
+        self.hook_session = None;
+        self.turn_seen = false;
+        self.hook_previous = None;
         self.quiet_ticks = 0;
+        self.ask_gate.resume();
         self.last_tool = None;
         self.subagents.clear();
         self.pending_subagent_tasks.clear();
@@ -689,15 +751,18 @@ impl TerminalView {
             }
         } else if screen.busy {
             self.quiet_ticks = 0;
+            self.ask_gate.resume();
             if self.status != AgentStatus::Working {
                 self.status = AgentStatus::Working;
                 self.working_since.get_or_insert_with(Instant::now);
             }
         // A turn that went quiet reads as `Thinking`, and a question often comes after exactly that
         // pause: it has to count here too, or the pane waits on the user with nothing said.
-        } else if screen.question && matches!(self.status, AgentStatus::Working | AgentStatus::Thinking | AgentStatus::Question(_)) {
+        // A hook-reported request shown as a selection (Claude Code's `AskUserQuestion` comes with
+        // a `PermissionRequest`) is still waiting: it must not go quiet and come back as a new question.
+        } else if screen.question && (matches!(self.status, AgentStatus::Working | AgentStatus::Thinking) || self.status.needs_user()) {
             self.quiet_ticks = 0;
-            if !matches!(self.status, AgentStatus::Question(_)) {
+            if !self.status.needs_user() {
                 self.enter_waiting(AgentStatus::Question(None), NoticeKind::Question, None, cx);
             }
         } else if matches!(
@@ -715,6 +780,7 @@ impl TerminalView {
             }
             let logged = self.quiet_ticks >= 2 && transcript_interrupted;
             if screen.interrupted || logged || (esc_recent && self.quiet_ticks >= 2) {
+                self.ask_gate.resume();
                 self.status = AgentStatus::Interrupted;
                 self.working_since = None;
                 self.esc_at = None;
@@ -722,6 +788,7 @@ impl TerminalView {
                 if self.spec.kind == PaneKind::Shell && self.status == AgentStatus::Working {
                     // Started by hand, so no hooks will say so: report the finished turn here.
                     self.working_since = None;
+                    self.ask_gate.resume();
                     self.status = AgentStatus::Finished(None);
                     self.attention = true;
                     if !self.announce_with_headline(cx) {
@@ -731,6 +798,7 @@ impl TerminalView {
                     // The Stop hook never came (a crash, a hook that was never installed). A pane
                     // that has shown nothing for this long is not thinking about anything: say it
                     // is waiting rather than leave "Thinking…" up forever.
+                    self.ask_gate.resume();
                     self.status = AgentStatus::Idle;
                 } else {
                     // Launched agents report the end of a turn with their Stop hook. Until it
@@ -746,11 +814,27 @@ impl TerminalView {
     }
 
     fn enter_waiting(&mut self, status: AgentStatus, notice: NoticeKind, message: Option<String>, cx: &mut Context<Self>) {
-        self.status = status;
-        self.working_since = None;
-        self.attention = true;
         self.last_activity_ms = crate::ui::now_ms();
-        cx.emit(TerminalEvent::Notified { kind: notice, message });
+        if self.wait_on_user(status) {
+            cx.emit(TerminalEvent::Notified { kind: notice, message });
+        }
+    }
+
+    /// Puts the pane in a waiting status. `true` when this is a new request to announce; a repeat
+    /// of one already announced only refines the status and leaves the attention flag alone.
+    fn wait_on_user(&mut self, status: AgentStatus) -> bool {
+        self.working_since = None;
+        // A pane no longer shown waiting (whatever moved it on without passing `resume`) asks anew:
+        // a missed reopening must never swallow a real request.
+        let first = self.ask_gate.ask();
+        if first || !self.status.needs_user() {
+            self.status = status;
+            self.attention = true;
+            true
+        } else {
+            self.status = merge_waiting(&self.status, status);
+            false
+        }
     }
 
     /// The model in the newest Claude Code welcome banner on this terminal: the row under
@@ -771,6 +855,11 @@ impl TerminalView {
             return agentty_bridge::banner_model(&below);
         }
         None
+    }
+
+    /// The model in Codex's footer, the last lines on the screen. The window is not said there (0).
+    fn read_codex_footer_model(&self) -> Option<(String, u64)> {
+        self.screen_lines(8).iter().rev().find_map(|line| agentty_bridge::codex_footer_model(line)).map(|model| (model, 0))
     }
 
     /// Reads the end of the session transcript in the background for an Esc-interrupted turn; the
@@ -812,11 +901,13 @@ impl TerminalView {
         if self.model_probe.is_some() {
             return;
         }
-        // Until the transcript names a model, the session's own banner does.
-        let banner = if agent == agentty_bridge::model::Agent::Claude && self.stats.as_ref().is_none_or(|s| s.model.is_none()) {
-            self.read_banner_model()
-        } else {
-            None
+        // Until the transcript names a model, the session's own screen does: Claude Code's banner,
+        // Codex's footer. Not the configured default — this pane may have been started with another.
+        let banner = match agent {
+            _ if self.stats.as_ref().is_some_and(|s| s.model.is_some()) => None,
+            agentty_bridge::model::Agent::Claude => self.read_banner_model(),
+            agentty_bridge::model::Agent::Codex => self.read_codex_footer_model(),
+            _ => None,
         };
         if banner != self.banner_model {
             self.banner_model = banner;
@@ -835,19 +926,35 @@ impl TerminalView {
         let cwd = self.display_cwd();
         // An agent typed into an old shell pane: transcripts written before it started are not its own.
         let since = self.agent_since_ms.unwrap_or(self.launched_at_ms);
+        let (pane_id, hooks) = (self.pane_id, [self.hook_session.clone(), self.hook_previous.clone()]);
+        // A Codex that has not been asked anything yet has no session of its own: the newest one
+        // in the folder is another pane's that just started a turn, and taking it swapped two
+        // panes' model and context for good.
+        if self.status != AgentStatus::Idle {
+            self.turn_seen = true;
+        }
+        let may_guess = agent != agentty_bridge::model::Agent::Codex || self.turn_seen;
         let task = cx.background_spawn(async move {
             let registered = agent_pid.and_then(agentty_bridge::claude::session_of_pid);
-            let recent = match agent {
-                // Another Claude Code working in the same folder keeps its transcript the newest one.
-                agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent(&cwd, since)
-                    .filter(|id| !agentty_bridge::claude::owned_by_other_process(id, agent_pid)),
-                agentty_bridge::model::Agent::Codex => agentty_bridge::codex::find_recent(&cwd, since),
-                _ => None,
-            };
-            // The running process is the truth. Failing that (Codex, or a Claude Code too old to
-            // register itself): `/clear` and a resume fork the agent into a new transcript, so the
-            // id the pane launched with can stop growing — follow whichever file is still written.
-            let id = registered.or_else(|| agentty_bridge::live_session_id(agent, known, recent))?;
+            // Sessions other panes follow are theirs: with N agents in one folder the newest
+            // transcript belongs to whichever ran last, not to every one of them.
+            let id = session_claims::resolve(pane_id, |taken| {
+                let recent = || match agent {
+                    agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent_except(&cwd, since, |id| {
+                        taken(id) || agentty_bridge::claude::owned_by_other_process(id, agent_pid)
+                    }),
+                    agentty_bridge::model::Agent::Codex if may_guess => agentty_bridge::codex::find_recent_except(&cwd, since, taken),
+                    _ => None,
+                };
+                // The running process is the truth, then the session the agent's own events name.
+                // Failing both (Codex before its first finished turn, or a Claude Code too old to
+                // register itself): `/clear` and a resume fork the agent into a new transcript, so
+                // the id the pane launched with can stop growing — follow whichever file is still
+                // written.
+                // A named session without a transcript (Codex's titling side conversation) is not it.
+                let hooked = hooks.into_iter().flatten().find(|id| agentty_bridge::transcript_path(agent, id).is_some());
+                registered.or(hooked).or_else(|| agentty_bridge::live_session_id(agent, known.filter(|id| !taken(id)), recent()))
+            })?;
             let subagents =
                 if agent == agentty_bridge::model::Agent::Claude { agentty_bridge::claude::subagent_activity(&id) } else { (0, 0) };
             Some((id.clone(), agentty_bridge::session_stats(agent, &id), subagents))
@@ -959,6 +1066,7 @@ impl TerminalView {
         self.agent_seen = false;
         self.forget_agent_state();
         self.session_id_live = None;
+        session_claims::release(self.pane_id);
         self.search = None;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SPAWN_FALLBACK_DELAY).await;
@@ -1038,6 +1146,20 @@ impl TerminalView {
             .unwrap_or_else(|| self.spec.cwd.clone())
     }
 
+    /// Debug driver: which session this pane follows and why (`panes`).
+    pub fn debug_session(&self) -> String {
+        format!(
+            "pane {} kind={:?} live={:?} launched={:?} hooked={:?} model={:?} context={:?}",
+            self.pane_id,
+            self.agent_kind(),
+            self.session_id_live,
+            self.spec.session_id,
+            self.hook_session,
+            self.stats.as_ref().and_then(|s| s.model.clone()),
+            self.stats.as_ref().and_then(|s| s.context_percent()).map(|p| p.round()),
+        )
+    }
+
     /// Visible text with non-ASCII characters shown as code points (debug builds only).
     pub fn debug_screen_text(&self) -> String {
         let Some(backend) = &self.backend else { return String::new() };
@@ -1074,18 +1196,30 @@ impl TerminalView {
             return;
         }
         self.last_activity_ms = crate::ui::now_ms();
+        if let Some(session) = detail.session.clone() {
+            if self.hook_session.as_ref() != Some(&session) {
+                // The agent said which session it is: the next probe reads that transcript. The
+                // one before stays at hand: Codex also reports the side conversation that names
+                // the session, which has no transcript of its own.
+                self.hook_previous = self.hook_session.replace(session);
+                self.model_probe = None;
+            }
+        }
         let mut notice = None;
         match kind {
             // A question to the user: the agent waits for the answer, which is told like a
             // permission request (a notice, the system notification, the banner until answered).
             SignalKind::Working if detail.asks_user() => {
                 let question = detail.target.clone();
-                self.status = AgentStatus::Question(question.clone());
-                self.attention = true;
-                self.working_since = None;
-                return self.finish_signal(Some(NoticeKind::Question), question, cx);
+                let new = self.wait_on_user(AgentStatus::Question(question.clone()));
+                return self.finish_signal(new.then_some(NoticeKind::Question), question, cx);
             }
             SignalKind::Working => {
+                // The main agent moved on (a prompt, a tool that ran — the user answered): the
+                // next request is a new one. A subagent's tool call says nothing about that.
+                if detail.subagent.is_none() {
+                    self.ask_gate.resume();
+                }
                 if let Some((id, _)) = &detail.subagent {
                     // Tool calls inside a subagent keep the main turn working.
                     if let (Some(run), Some(tool)) = (self.subagents.iter_mut().find(|r| &r.id == id), detail.tool.clone()) {
@@ -1106,6 +1240,7 @@ impl TerminalView {
                 self.quiet_ticks = 0;
             }
             SignalKind::Stop => {
+                self.ask_gate.resume();
                 self.status = AgentStatus::Finished(message.clone());
                 self.attention = true;
                 // Codex says what it answered; Claude Code's Stop hook does not, so the notice waits
@@ -1118,9 +1253,8 @@ impl TerminalView {
             }
             SignalKind::Permission => {
                 let label = detail.tool.as_deref().map(|tool| tool_label(tool, detail.target.as_deref()));
-                self.status = AgentStatus::Permission(label.clone());
-                self.attention = true;
-                return self.finish_signal(Some(NoticeKind::Permission), label, cx);
+                let new = self.wait_on_user(AgentStatus::Permission(label.clone()));
+                return self.finish_signal(new.then_some(NoticeKind::Permission), label, cx);
             }
             SignalKind::Notification => match detail.notification_type.as_deref() {
                 // Sent a while after a finished turn; the finish was already reported.
@@ -1130,14 +1264,12 @@ impl TerminalView {
                         return;
                     }
                     let label = self.last_tool.as_ref().map(|(t, target)| tool_label(t, target.as_deref())).or(message.clone());
-                    self.status = AgentStatus::Permission(label.clone());
-                    self.attention = true;
-                    return self.finish_signal(Some(NoticeKind::Permission), label, cx);
+                    let new = self.wait_on_user(AgentStatus::Permission(label.clone()));
+                    return self.finish_signal(new.then_some(NoticeKind::Permission), label, cx);
                 }
                 Some(_) => {
-                    self.status = AgentStatus::Question(message.clone());
-                    self.attention = true;
-                    notice = Some(NoticeKind::Question);
+                    let new = self.wait_on_user(AgentStatus::Question(message.clone()));
+                    notice = new.then_some(NoticeKind::Question);
                 }
                 // Older versions don't say why; the message does.
                 None => {
@@ -1146,10 +1278,9 @@ impl TerminalView {
                         return;
                     }
                     let permission = message.as_deref().is_some_and(|m| m.contains("permission"));
-                    self.status =
-                        if permission { AgentStatus::Permission(message.clone()) } else { AgentStatus::Question(message.clone()) };
-                    self.attention = true;
-                    notice = Some(if permission { NoticeKind::Permission } else { NoticeKind::Question });
+                    let status = if permission { AgentStatus::Permission(message.clone()) } else { AgentStatus::Question(message.clone()) };
+                    let new = self.wait_on_user(status);
+                    notice = new.then_some(if permission { NoticeKind::Permission } else { NoticeKind::Question });
                 }
             },
             SignalKind::Notify => {
@@ -1331,6 +1462,7 @@ impl TerminalView {
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
         self.write_user_input(paste_payload(&text, bracketed));
         if self.agent_kind() == Some(PaneKind::Codex) {
+            self.ask_gate.resume();
             self.status = AgentStatus::Working;
             self.working_since = Some(Instant::now());
             cx.emit(TerminalEvent::StatusChanged);
@@ -1473,6 +1605,7 @@ impl TerminalView {
         if keystroke.key == "enter" && self.agent_kind() == Some(PaneKind::Codex) && !keystroke.modifiers.shift {
             // Codex has no "prompt submitted" hook; Enter is the best signal (the screen check
             // corrects it within seconds if nothing started).
+            self.ask_gate.resume();
             self.status = AgentStatus::Working;
             self.working_since = Some(Instant::now());
             self.quiet_ticks = 0;
@@ -2494,6 +2627,87 @@ fn resolve_color(color: AnsiColor, colors: &Colors, theme: &TerminalTheme, bold:
     }
 }
 
+impl Drop for TerminalView {
+    fn drop(&mut self) {
+        session_claims::release(self.pane_id);
+    }
+}
+
+/// Which agent session each pane follows, across all panes. Several agents in one folder write
+/// several transcripts there, and a pane that only looks for "the newest one" shows whichever
+/// agent ran last — every pane the same model and context. A session one pane follows is not
+/// another's to take.
+mod session_claims {
+    use std::sync::Mutex;
+
+    /// (pane id, session id).
+    static CLAIMS: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+
+    /// Finds `pane`'s session with `find` — told which sessions other panes hold — and records it.
+    /// One lock around both, so two panes looking at the same moment cannot take the same one.
+    pub fn resolve(pane: u64, find: impl FnOnce(&dyn Fn(&str) -> bool) -> Option<String>) -> Option<String> {
+        let mut claims = CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
+        let found = {
+            let held = &*claims;
+            let taken = |id: &str| held.iter().any(|(other, session)| *other != pane && session == id);
+            find(&taken)
+        };
+        claims.retain(|(other, _)| *other != pane);
+        if let Some(id) = &found {
+            claims.push((pane, id.clone()));
+        }
+        found
+    }
+
+    pub fn release(pane: u64) {
+        CLAIMS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(other, _)| *other != pane);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{release, resolve};
+
+        /// Two panes in one folder, both seeing the same two transcripts, newest first.
+        fn newest_free(taken: &dyn Fn(&str) -> bool) -> Option<String> {
+            ["session-b", "session-a"].into_iter().find(|id| !taken(id)).map(str::to_string)
+        }
+
+        #[test]
+        fn two_panes_in_one_folder_follow_two_sessions() {
+            let (first, second) = (9_000_001, 9_000_002);
+            assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
+            assert_eq!(resolve(second, newest_free).as_deref(), Some("session-a"));
+            // Asking again keeps each on its own, however often.
+            assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
+            assert_eq!(resolve(second, newest_free).as_deref(), Some("session-a"));
+            release(first);
+            release(second);
+        }
+
+        #[test]
+        fn what_the_agent_says_wins_and_the_other_pane_moves_off() {
+            let (first, second) = (9_000_011, 9_000_012);
+            assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
+            // The second pane's agent names session-b as its own (a hook event): that is the truth.
+            assert_eq!(resolve(second, |_| Some("session-b".into())).as_deref(), Some("session-b"));
+            // The first pane no longer counts session-b as free and takes the other one.
+            assert_eq!(resolve(first, newest_free).as_deref(), Some("session-a"));
+            release(first);
+            release(second);
+        }
+
+        #[test]
+        fn a_closed_pane_frees_its_session() {
+            let (first, second) = (9_000_021, 9_000_022);
+            assert_eq!(resolve(first, |_| Some("session-z".into())).as_deref(), Some("session-z"));
+            release(first);
+            let only_z = |taken: &dyn Fn(&str) -> bool| (!taken("session-z")).then(|| "session-z".to_string());
+            assert_eq!(resolve(second, only_z).as_deref(), Some("session-z"));
+            release(second);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_symbol_glyph, is_web_link};
@@ -2920,5 +3134,104 @@ mod link_tests {
         assert_eq!(url_at(&line, 20).as_deref(), Some("http://localhost:5173/"));
         assert_eq!(url_at(&line, 50).as_deref(), Some("https://a.dev/x"));
         assert_eq!(url_at(&line, 2), None);
+    }
+}
+
+#[cfg(test)]
+mod ask_gate_tests {
+    use super::{merge_waiting, AgentStatus, AskGate};
+
+    /// What reaches the pane, reduced to what the gate sees.
+    enum Event {
+        /// A request for the user (hook or screen), with the status it would set.
+        Ask(AgentStatus),
+        /// The main agent works again, or the turn ends.
+        Resume,
+        /// The status moved on by a path that did not reopen the gate.
+        MovedOn,
+    }
+
+    /// Replays events the way `TerminalView` handles them: the texts that get a notice, and the
+    /// status the pane ends in.
+    fn replay(events: Vec<Event>) -> (Vec<Option<String>>, AgentStatus) {
+        let mut gate = AskGate::default();
+        let mut status = AgentStatus::Working;
+        let mut notices = Vec::new();
+        for event in events {
+            match event {
+                Event::Ask(incoming) => {
+                    let first = gate.ask();
+                    if first || !status.needs_user() {
+                        if let AgentStatus::Permission(text) | AgentStatus::Question(text) = &incoming {
+                            notices.push(text.clone());
+                        }
+                        status = incoming;
+                    } else {
+                        status = merge_waiting(&status, incoming);
+                    }
+                }
+                Event::Resume => {
+                    gate.resume();
+                    status = AgentStatus::Working;
+                }
+                Event::MovedOn => status = AgentStatus::Working,
+            }
+        }
+        (notices, status)
+    }
+
+    fn some(text: &str) -> Option<String> {
+        Some(text.to_string())
+    }
+
+    #[test]
+    fn one_question_gives_one_notice() {
+        // Observed with Claude Code 2.1: PreToolUse(AskUserQuestion), then PermissionRequest for
+        // the same tool, then the screen classifier seeing the selection prompt.
+        let (notices, status) = replay(vec![
+            Event::Ask(AgentStatus::Question(some("Pick a color"))),
+            Event::Ask(AgentStatus::Permission(some("AskUserQuestion · Pick a color"))),
+            Event::Ask(AgentStatus::Question(None)),
+        ]);
+        assert_eq!(notices, vec![some("Pick a color")]);
+        assert_eq!(status, AgentStatus::Question(some("Pick a color")));
+    }
+
+    #[test]
+    fn a_new_request_after_an_answer_notifies_again() {
+        let (notices, status) = replay(vec![
+            Event::Ask(AgentStatus::Permission(some("Bash · ls"))),
+            Event::Resume,
+            Event::Ask(AgentStatus::Permission(some("Bash · rm -rf build"))),
+            Event::Ask(AgentStatus::Permission(some("Claude needs your permission to use Bash"))),
+        ]);
+        assert_eq!(notices, vec![some("Bash · ls"), some("Bash · rm -rf build")]);
+        assert_eq!(status, AgentStatus::Permission(some("Bash · rm -rf build")));
+    }
+
+    #[test]
+    fn a_request_after_the_pane_moved_on_always_notifies() {
+        let (notices, status) = replay(vec![
+            Event::Ask(AgentStatus::Permission(some("Bash · ls"))),
+            Event::MovedOn,
+            Event::Ask(AgentStatus::Question(some("Deploy now?"))),
+        ]);
+        assert_eq!(notices, vec![some("Bash · ls"), some("Deploy now?")]);
+        assert_eq!(status, AgentStatus::Question(some("Deploy now?")));
+    }
+
+    #[test]
+    fn a_repeat_fills_in_a_missing_description() {
+        // The screen classifier saw the prompt first, without text; the hook names it.
+        let (notices, status) =
+            replay(vec![Event::Ask(AgentStatus::Question(None)), Event::Ask(AgentStatus::Question(some("Deploy now?")))]);
+        assert_eq!(notices, vec![None]);
+        assert_eq!(status, AgentStatus::Question(some("Deploy now?")));
+    }
+
+    #[test]
+    fn merge_keeps_non_waiting_status_replaced() {
+        let incoming = AgentStatus::Permission(some("Edit · a.rs"));
+        assert_eq!(merge_waiting(&AgentStatus::Thinking, incoming.clone()), incoming);
     }
 }

@@ -29,8 +29,8 @@ fn bundled() -> bool {
     }
 }
 
-/// Banner + list + sound, also while Agentty is in front (the app decides when to notify).
-const PRESENT_OPTIONS: usize = 16 | 8 | 2;
+/// Banner + list, also while Agentty is in front (the app decides when to notify). No sound.
+const PRESENT_OPTIONS: usize = 16 | 8;
 
 extern "C" fn will_present(_: &Object, _: Sel, _center: Id, _notification: Id, handler: Id) {
     let handler = handler as *mut Block<(usize,), ()>;
@@ -98,8 +98,8 @@ pub fn show(pane_id: u64, title: &str, body: &str) {
         let content: Id = msg_send![class!(UNMutableNotificationContent), new];
         let _: () = msg_send![content, setTitle: ns_string(title)];
         let _: () = msg_send![content, setBody: ns_string(body)];
-        let sound: Id = msg_send![class!(UNNotificationSound), defaultSound];
-        let _: () = msg_send![content, setSound: sound];
+        // Silent on purpose: the system's alert played at full alert volume, one per notification,
+        // so a few panes finishing together stacked into a loud, clipped burst over a call.
         let identifier = format!("agentty-pane-{pane_id}-{}", crate::ui::now_ms());
         let request: Id = msg_send![class!(UNNotificationRequest), requestWithIdentifier: ns_string(&identifier) content: content trigger: std::ptr::null_mut::<Object>()];
         let _: () = msg_send![center, addNotificationRequest: request withCompletionHandler: std::ptr::null_mut::<Object>()];
