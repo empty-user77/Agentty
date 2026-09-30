@@ -4272,6 +4272,24 @@ impl Workbench {
                 }
             }
             // `click x y [right]`, `key cmd-n`, `text 한글abc`: synthetic input, dispatched after this update.
+            // `scroll-burst x y pixels count`: a trackpad-like run of small scroll steps, one every
+            // 8 ms, to see how a page keeps up with scrolling (sample the process meanwhile).
+            "scroll-burst" => {
+                let mut parts = argument.split_whitespace();
+                let (x, y, step) = (parts.next().unwrap_or("700"), parts.next().unwrap_or("500"), parts.next().unwrap_or("-4"));
+                let count: usize = parts.next().and_then(|n| n.parse().ok()).unwrap_or(120);
+                let step_argument = format!("{x} {y} {step} px fast");
+                if let Some(ns) = crate::native::ns_window(window) {
+                    crate::native::order_front_regardless(ns);
+                    cx.spawn(async move |_, cx| {
+                        for _ in 0..count {
+                            crate::debug::synthetic_input(ns, "scroll", &step_argument);
+                            cx.background_executor().timer(std::time::Duration::from_millis(8)).await;
+                        }
+                    })
+                    .detach();
+                }
+            }
             "click" | "move" | "scroll" | "key" | "text" | "press" | "drag-to" | "release" => {
                 let (command, argument) = (command.to_string(), argument.to_string());
                 if let Some(ns) = crate::native::ns_window(window) {

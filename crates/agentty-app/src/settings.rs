@@ -240,8 +240,6 @@ pub struct Settings {
     pub aliases: Vec<CommandAlias>,
     /// macOS notifications when an agent finishes or needs input while Agentty is in the background.
     pub system_notifications: bool,
-    /// A soft sound with those notifications (once for several arriving together).
-    pub notification_sound: bool,
     /// Local sessions pinned to the top (`claude:<id>`, `codex:<id>`).
     pub favorite_sessions: Vec<String>,
     /// Notify even while Agentty is the focused app.
@@ -633,7 +631,6 @@ impl Default for Settings {
             recent_dirs: Vec::new(),
             aliases: Vec::new(),
             system_notifications: true,
-            notification_sound: true,
             notify_when_focused: false,
             notify_answer_requests: true,
             chat_notify: ChatNotify::default(),
@@ -774,7 +771,7 @@ impl SettingsStore {
         let composed = SettingsStore::compose(&settings, &themes);
         let store = SettingsStore { settings, revision: 0, themes, composed };
         let _ = store.save();
-        if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases) {
+        if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass) {
             eprintln!("agentty: shell integration unavailable: {err:#}");
         }
         if let Err(err) = crate::agent_guide::write_files() {
@@ -876,13 +873,13 @@ pub fn start_prevent_sleep_timer(cx: &mut App) {
 
 pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     cx.update_global::<SettingsStore, _>(|store, _| {
-        let aliases_before = store.settings.aliases.clone();
+        let wrappers_before = (store.settings.aliases.clone(), store.settings.always_bypass);
         change(&mut store.settings);
         store.composed = SettingsStore::compose(&store.settings, &store.themes);
         store.revision += 1;
         let _ = store.save();
-        if store.settings.aliases != aliases_before {
-            let _ = crate::shell_integration::write_files(&store.settings.aliases);
+        if (&store.settings.aliases, store.settings.always_bypass) != (&wrappers_before.0, wrappers_before.1) {
+            let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
         crate::platform::wakelock::set(store.settings.prevent_sleep);
     });
@@ -895,14 +892,14 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
 pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Result<()> {
     let settings = serde_json::from_value::<Settings>(value)?.migrate();
     cx.update_global::<SettingsStore, _>(|store, _| {
-        let aliases_before = store.settings.aliases.clone();
+        let wrappers_before = (store.settings.aliases.clone(), store.settings.always_bypass);
         store.settings = settings;
         store.themes = load_themes();
         store.composed = SettingsStore::compose(&store.settings, &store.themes);
         store.revision += 1;
         let _ = store.save();
-        if store.settings.aliases != aliases_before {
-            let _ = crate::shell_integration::write_files(&store.settings.aliases);
+        if (&store.settings.aliases, store.settings.always_bypass) != (&wrappers_before.0, wrappers_before.1) {
+            let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
         crate::platform::wakelock::set(store.settings.prevent_sleep);
     });

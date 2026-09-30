@@ -57,9 +57,6 @@ impl Workbench {
         let answer_request = asks && prefs.notify_answer_requests && !in_view;
         if prefs.system_notifications && kind != NoticeKind::Bell && (background || prefs.notify_when_focused || answer_request) {
             crate::notifications::show(pane_id, &format!("{source} · {workspace}"), &text);
-            if prefs.notification_sound {
-                crate::notifications::chime();
-            }
         }
         self.send_chat_notice(pane_id, kind, &source, &workspace, &text, cx);
         if kind != NoticeKind::Bell {

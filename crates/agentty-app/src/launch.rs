@@ -264,8 +264,8 @@ impl LaunchSpec {
                     // The user turned on "always Bypass" in Settings (off by default). The flag alone
                     // leaves the starting mode to the user's `defaultMode` (`auto` stayed `auto` in a
                     // test), so the mode is named too.
-                    args.push("--dangerously-skip-permissions".into()); // audit: ok — the user's explicit opt-in setting
-                    let mode = ["--permission-mode", "bypassPermissions"]; // audit: ok — same opt-in
+                    args.push("--dangerously-skip-permissions".into()); // audit: ok — always-bypass opt-in (the user's own setting)
+                    let mode = ["--permission-mode", "bypassPermissions"]; // audit: ok — always-bypass opt-in
                     args.extend(mode.map(String::from));
                 } else if crate::agents::claude_auto_mode() && agentty_bridge::idea::is_idea_project(&self.cwd) {
                     // "Build my idea" projects belong to people who cannot judge a permission prompt:
@@ -307,7 +307,8 @@ impl LaunchSpec {
                 } else {
                     if crate::settings::always_bypass() {
                         // The user turned on "always Full Access" in Settings (off by default).
-                        args.push("--dangerously-bypass-approvals-and-sandbox".into());
+                        let full_access = "--dangerously-bypass-approvals-and-sandbox"; // audit: ok — always-bypass opt-in
+                        args.push(full_access.into());
                     }
                     if crate::settings::browser_tools_enabled() {
                         args.extend(["-c".into(), codex_browser_mcp_override()]);

@@ -117,9 +117,12 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
     use objc::{class, msg_send, sel, sel_impl};
     let mut parts = argument.split_whitespace();
     let coords = (parts.next().and_then(|x| x.parse::<f64>().ok()), parts.next().and_then(|y| y.parse::<f64>().ok()));
-    // Covered windows don't repaint, and hit testing uses the last painted frame.
-    crate::native::order_front_regardless(ns_window);
-    std::thread::sleep(std::time::Duration::from_millis(120));
+    // Covered windows don't repaint, and hit testing uses the last painted frame. A burst of
+    // scroll steps (`fast`, see `scroll-burst`) is already in front and must not wait each time.
+    if !argument.contains("fast") {
+        crate::native::order_front_regardless(ns_window);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    }
     unsafe {
         let content: id = msg_send![ns_window, contentView];
         let frame: cocoa::foundation::NSRect = msg_send![content, frame];
@@ -220,8 +223,9 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                     fn CGEventSetLocation(event: *mut std::ffi::c_void, location: core_graphics::geometry::CGPoint);
                     fn CFRelease(object: *const std::ffi::c_void);
                 }
-                // Units: 0 = pixels, 1 = lines.
-                let event = CGEventCreateScrollWheelEvent2(std::ptr::null(), 1, 1, lines, 0, 0);
+                // Units: 0 = pixels (a trackpad's small steps, `px`), 1 = lines.
+                let units = if argument.contains("px") { 0 } else { 1 };
+                let event = CGEventCreateScrollWheelEvent2(std::ptr::null(), units, 1, lines, 0, 0);
                 if !event.is_null() {
                     CGEventSetLocation(event, core_graphics::geometry::CGPoint::new(content_origin.x, screen_height - content_origin.y));
                     let ns: id = msg_send![class!(NSEvent), eventWithCGEvent: event];

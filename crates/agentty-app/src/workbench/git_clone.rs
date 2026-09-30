@@ -324,7 +324,14 @@ impl Workbench {
                         ))
                         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(hint))
                         .children(status)
-                        .child(list),
+                        .child(list)
+                        // A way out besides Esc and a click outside. A clone already running finishes.
+                        .child(
+                            div().flex().justify_end().child(
+                                button("clone-cancel", t(cx, "confirm.cancel").to_string(), false)
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_clone_dialog(cx))),
+                            ),
+                        ),
                 )
                 .into_any_element(),
         )

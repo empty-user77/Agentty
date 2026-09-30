@@ -21,8 +21,10 @@ use std::collections::{HashMap, HashSet};
 pub(super) struct ChatNotifyState {
     /// The masked field for each service's webhook URL / bot token, per transport.
     inputs: HashMap<(Channel, Transport), Entity<TextInput>>,
-    /// Where a bot writes to, per service (saved as you type): a Slack channel, a Discord channel
-    /// id, a Telegram chat.
+    /// Enter in those fields saves, like the Save button.
+    input_events: Vec<Subscription>,
+    /// Where a bot writes to, per service (saved with the Save button or Enter, never per key): a
+    /// Slack channel, a Discord channel id, a Telegram chat.
     targets: HashMap<Channel, (Entity<TextInput>, Subscription)>,
     /// Whether a credential is saved, per channel and transport — a webhook and a bot are set up
     /// separately, so switching between them must not look configured when it is not.
@@ -47,6 +49,19 @@ impl ChatNotifyState {
             "status": per(&|c| self.status.get(&c).map(|(text, error)| serde_json::json!([text, error])).unwrap_or_default()),
         })
     }
+}
+
+/// What `notify::validate` said, in the user's language.
+fn validation_text(reason: &str, cx: &gpui::App) -> String {
+    let key = match reason {
+        r if r.starts_with("a Slack bot token") => "chat.invalid_slack_bot",
+        r if r.starts_with("a Discord bot token") => "chat.invalid_discord_bot",
+        r if r.starts_with("a Telegram bot token") => "chat.invalid_telegram_bot",
+        r if r.starts_with("a Slack webhook") => "chat.invalid_slack_hook",
+        r if r.starts_with("a Discord webhook") => "chat.invalid_discord_hook",
+        _ => "chat.invalid",
+    };
+    t(cx, key).to_string()
 }
 
 fn kind_code(kind: NoticeKind) -> u8 {
@@ -168,12 +183,34 @@ impl Workbench {
         .detach();
     }
 
+    /// The Save button (or Enter in either field): the channel / chat the bot writes to, and the
+    /// credential typed in. Nothing is saved while typing. An empty credential field keeps the one
+    /// saved before, so the channel can be changed on its own.
     fn save_chat_secret(&mut self, channel: Channel, cx: &mut Context<Self>) {
         let transport = settings(cx).chat_notify.transport(channel);
+        let target_changed = if channel.needs_target(transport) {
+            let typed = self.chat_notify.targets.get(&channel).map(|(input, _)| input.read(cx).text().trim().to_string());
+            match typed.filter(|value| *value != settings(cx).chat_notify.target(channel)) {
+                Some(value) => {
+                    update_settings(cx, move |s| s.chat_notify.set_target(channel, value.clone()));
+                    true
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
         let Some(input) = self.chat_notify.inputs.get(&(channel, transport)).cloned() else { return };
         let value = input.read(cx).text().trim().to_string();
+        if value.is_empty() && self.chat_notify.configured.get(&(channel, transport)) == Some(&true) {
+            if target_changed {
+                self.chat_notify.status.insert(channel, (t(cx, "chat.target_saved").to_string(), false));
+            }
+            return cx.notify();
+        }
         if let Err(reason) = notify::validate(channel, transport, &value) {
-            self.chat_notify.status.insert(channel, (reason.to_string(), true));
+            let text = if value.is_empty() { t(cx, "chat.enter_secret").to_string() } else { validation_text(reason, cx) };
+            self.chat_notify.status.insert(channel, (text, true));
             return cx.notify();
         }
         self.chat_notify.busy.insert(channel);
@@ -255,11 +292,17 @@ impl Workbench {
             return input.clone();
         }
         let input = cx.new(|cx| TextInput::new("", secret_placeholder(channel, transport), window, cx).masked());
+        let events = cx.subscribe(&input, move |this, _, event: &TextInputEvent, cx| {
+            if matches!(event, TextInputEvent::Confirmed) {
+                this.save_chat_secret(channel, cx);
+            }
+        });
+        self.chat_notify.input_events.push(events);
         self.chat_notify.inputs.insert((channel, transport), input.clone());
         input
     }
 
-    /// The field for where this service's bot writes to, kept across renders and saved as typed.
+    /// The field for where this service's bot writes to, kept across renders; saved with Save or Enter.
     fn target_input(&mut self, channel: Channel, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextInput> {
         if let Some((input, _)) = self.chat_notify.targets.get(&channel) {
             return input.clone();
@@ -271,10 +314,9 @@ impl Workbench {
             Channel::Telegram => "chat.telegram_chat_placeholder",
         };
         let input = cx.new(|cx| TextInput::localized(current, placeholder, window, cx));
-        let subscription = cx.subscribe(&input, move |_, input, event: &TextInputEvent, cx| {
-            if matches!(event, TextInputEvent::Changed | TextInputEvent::Confirmed) {
-                let value = input.read(cx).text().trim().to_string();
-                update_settings(cx, move |s| s.chat_notify.set_target(channel, value.clone()));
+        let subscription = cx.subscribe(&input, move |this, _, event: &TextInputEvent, cx| {
+            if matches!(event, TextInputEvent::Confirmed) {
+                this.save_chat_secret(channel, cx);
             }
         });
         self.chat_notify.targets.insert(channel, (input.clone(), subscription));
@@ -289,11 +331,6 @@ impl Workbench {
                 t(cx, "settings.system_notifications"),
                 t(cx, "settings.system_notifications_hint"),
                 toggle("system-notifications", prefs.system_notifications, |s| s.system_notifications = !s.system_notifications, cx),
-            ))
-            .child(row_with_hint(
-                t(cx, "settings.notification_sound"),
-                t(cx, "settings.notification_sound_hint"),
-                toggle("notification-sound", prefs.notification_sound, |s| s.notification_sound = !s.notification_sound, cx),
             ))
             .child(row_with_hint(
                 t(cx, "settings.notify_answer_requests"),
