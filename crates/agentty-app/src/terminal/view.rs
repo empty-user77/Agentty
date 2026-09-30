@@ -300,6 +300,9 @@ pub struct TerminalView {
     pending_subagent_tasks: std::collections::VecDeque<Option<String>>,
     /// Session id of the agent in the foreground (launched with it, or found from its transcript).
     pub session_id_live: Option<String>,
+    /// The session the agent's own hook events name (Claude Code's `session_id`, Codex's
+    /// `thread-id`): the one sure answer when several agents work in the same folder.
+    hook_session: Option<String>,
     /// Subagent transcripts of that session: (total, written in the last few seconds).
     pub subagent_files: (usize, usize),
     /// Latest tool call of the main agent: (tool, target).
@@ -445,6 +448,7 @@ impl TerminalView {
             pending_subagent_tasks: Default::default(),
             last_tool: None,
             session_id_live: None,
+            hook_session: None,
             subagent_files: (0, 0),
             last_activity_ms: crate::ui::now_ms(),
             live_cwd: None,
@@ -699,6 +703,7 @@ impl TerminalView {
         self.stats = None;
         self.agent_since_ms = None;
         self.live_usage = None;
+        self.hook_session = None;
         self.quiet_ticks = 0;
         self.ask_gate.resume();
         self.last_tool = None;
@@ -844,6 +849,11 @@ impl TerminalView {
         None
     }
 
+    /// The model in Codex's footer, the last lines on the screen. The window is not said there (0).
+    fn read_codex_footer_model(&self) -> Option<(String, u64)> {
+        self.screen_lines(8).iter().rev().find_map(|line| agentty_bridge::codex_footer_model(line)).map(|model| (model, 0))
+    }
+
     /// Reads the end of the session transcript in the background for an Esc-interrupted turn; the
     /// next probe tick sees the answer. Finding the file walks the agent's session folders and the
     /// read is up to 96 KB, too much for the UI thread every second of a quiet turn.
@@ -883,11 +893,13 @@ impl TerminalView {
         if self.model_probe.is_some() {
             return;
         }
-        // Until the transcript names a model, the session's own banner does.
-        let banner = if agent == agentty_bridge::model::Agent::Claude && self.stats.as_ref().is_none_or(|s| s.model.is_none()) {
-            self.read_banner_model()
-        } else {
-            None
+        // Until the transcript names a model, the session's own screen does: Claude Code's banner,
+        // Codex's footer. Not the configured default — this pane may have been started with another.
+        let banner = match agent {
+            _ if self.stats.as_ref().is_some_and(|s| s.model.is_some()) => None,
+            agentty_bridge::model::Agent::Claude => self.read_banner_model(),
+            agentty_bridge::model::Agent::Codex => self.read_codex_footer_model(),
+            _ => None,
         };
         if banner != self.banner_model {
             self.banner_model = banner;
@@ -906,19 +918,26 @@ impl TerminalView {
         let cwd = self.display_cwd();
         // An agent typed into an old shell pane: transcripts written before it started are not its own.
         let since = self.agent_since_ms.unwrap_or(self.launched_at_ms);
+        let (pane_id, hooked) = (self.pane_id, self.hook_session.clone());
         let task = cx.background_spawn(async move {
             let registered = agent_pid.and_then(agentty_bridge::claude::session_of_pid);
-            let recent = match agent {
-                // Another Claude Code working in the same folder keeps its transcript the newest one.
-                agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent(&cwd, since)
-                    .filter(|id| !agentty_bridge::claude::owned_by_other_process(id, agent_pid)),
-                agentty_bridge::model::Agent::Codex => agentty_bridge::codex::find_recent(&cwd, since),
-                _ => None,
-            };
-            // The running process is the truth. Failing that (Codex, or a Claude Code too old to
-            // register itself): `/clear` and a resume fork the agent into a new transcript, so the
-            // id the pane launched with can stop growing — follow whichever file is still written.
-            let id = registered.or_else(|| agentty_bridge::live_session_id(agent, known, recent))?;
+            // Sessions other panes follow are theirs: with N agents in one folder the newest
+            // transcript belongs to whichever ran last, not to every one of them.
+            let id = session_claims::resolve(pane_id, |taken| {
+                let recent = || match agent {
+                    agentty_bridge::model::Agent::Claude => agentty_bridge::claude::find_recent_except(&cwd, since, |id| {
+                        taken(id) || agentty_bridge::claude::owned_by_other_process(id, agent_pid)
+                    }),
+                    agentty_bridge::model::Agent::Codex => agentty_bridge::codex::find_recent_except(&cwd, since, taken),
+                    _ => None,
+                };
+                // The running process is the truth, then the session the agent's own events name.
+                // Failing both (Codex before its first finished turn, or a Claude Code too old to
+                // register itself): `/clear` and a resume fork the agent into a new transcript, so
+                // the id the pane launched with can stop growing — follow whichever file is still
+                // written.
+                registered.or(hooked).or_else(|| agentty_bridge::live_session_id(agent, known.filter(|id| !taken(id)), recent()))
+            })?;
             let subagents =
                 if agent == agentty_bridge::model::Agent::Claude { agentty_bridge::claude::subagent_activity(&id) } else { (0, 0) };
             Some((id.clone(), agentty_bridge::session_stats(agent, &id), subagents))
@@ -1030,6 +1049,7 @@ impl TerminalView {
         self.agent_seen = false;
         self.forget_agent_state();
         self.session_id_live = None;
+        session_claims::release(self.pane_id);
         self.search = None;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SPAWN_FALLBACK_DELAY).await;
@@ -1145,6 +1165,13 @@ impl TerminalView {
             return;
         }
         self.last_activity_ms = crate::ui::now_ms();
+        if let Some(session) = detail.session.clone() {
+            if self.hook_session.as_ref() != Some(&session) {
+                // The agent said which session it is: the next probe reads that transcript.
+                self.hook_session = Some(session);
+                self.model_probe = None;
+            }
+        }
         let mut notice = None;
         match kind {
             // A question to the user: the agent waits for the answer, which is told like a
@@ -2563,6 +2590,87 @@ fn resolve_color(color: AnsiColor, colors: &Colors, theme: &TerminalTheme, bold:
                 i if i == NamedColor::DimForeground as usize => dimmed(theme.foreground),
                 _ => hex(default_color(theme, index)),
             }
+        }
+    }
+}
+
+impl Drop for TerminalView {
+    fn drop(&mut self) {
+        session_claims::release(self.pane_id);
+    }
+}
+
+/// Which agent session each pane follows, across all panes. Several agents in one folder write
+/// several transcripts there, and a pane that only looks for "the newest one" shows whichever
+/// agent ran last — every pane the same model and context. A session one pane follows is not
+/// another's to take.
+mod session_claims {
+    use std::sync::Mutex;
+
+    /// (pane id, session id).
+    static CLAIMS: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+
+    /// Finds `pane`'s session with `find` — told which sessions other panes hold — and records it.
+    /// One lock around both, so two panes looking at the same moment cannot take the same one.
+    pub fn resolve(pane: u64, find: impl FnOnce(&dyn Fn(&str) -> bool) -> Option<String>) -> Option<String> {
+        let mut claims = CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
+        let found = {
+            let held = &*claims;
+            let taken = |id: &str| held.iter().any(|(other, session)| *other != pane && session == id);
+            find(&taken)
+        };
+        claims.retain(|(other, _)| *other != pane);
+        if let Some(id) = &found {
+            claims.push((pane, id.clone()));
+        }
+        found
+    }
+
+    pub fn release(pane: u64) {
+        CLAIMS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(other, _)| *other != pane);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{release, resolve};
+
+        /// Two panes in one folder, both seeing the same two transcripts, newest first.
+        fn newest_free(taken: &dyn Fn(&str) -> bool) -> Option<String> {
+            ["session-b", "session-a"].into_iter().find(|id| !taken(id)).map(str::to_string)
+        }
+
+        #[test]
+        fn two_panes_in_one_folder_follow_two_sessions() {
+            let (first, second) = (9_000_001, 9_000_002);
+            assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
+            assert_eq!(resolve(second, newest_free).as_deref(), Some("session-a"));
+            // Asking again keeps each on its own, however often.
+            assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
+            assert_eq!(resolve(second, newest_free).as_deref(), Some("session-a"));
+            release(first);
+            release(second);
+        }
+
+        #[test]
+        fn what_the_agent_says_wins_and_the_other_pane_moves_off() {
+            let (first, second) = (9_000_011, 9_000_012);
+            assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
+            // The second pane's agent names session-b as its own (a hook event): that is the truth.
+            assert_eq!(resolve(second, |_| Some("session-b".into())).as_deref(), Some("session-b"));
+            // The first pane no longer counts session-b as free and takes the other one.
+            assert_eq!(resolve(first, newest_free).as_deref(), Some("session-a"));
+            release(first);
+            release(second);
+        }
+
+        #[test]
+        fn a_closed_pane_frees_its_session() {
+            let (first, second) = (9_000_021, 9_000_022);
+            assert_eq!(resolve(first, |_| Some("session-z".into())).as_deref(), Some("session-z"));
+            release(first);
+            let only_z = |taken: &dyn Fn(&str) -> bool| (!taken("session-z")).then(|| "session-z".to_string());
+            assert_eq!(resolve(second, only_z).as_deref(), Some("session-z"));
+            release(second);
         }
     }
 }

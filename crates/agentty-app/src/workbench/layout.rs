@@ -441,7 +441,10 @@ fn pane_model_label(view: &crate::terminal::TerminalView, installed: Option<&cra
     view.stats
         .as_ref()
         .and_then(model_label)
-        .or_else(|| view.banner_model.as_ref().map(|(name, window)| ModelLabel { name: name.clone(), window: Some(*window) }))
+        .or_else(|| {
+            // Codex's footer names the model without its window (0).
+            view.banner_model.as_ref().map(|(name, window)| ModelLabel { name: name.clone(), window: (*window > 0).then_some(*window) })
+        })
         .or_else(|| configured_model_label(installed, view.display_kind()))
 }
 

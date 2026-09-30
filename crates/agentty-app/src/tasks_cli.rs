@@ -14,9 +14,9 @@ pub const HELP: &str = "agentty tasks — start work in parallel sessions next t
 
 A plan is a JSON array of up to 6 tasks: [{\"title\": \"…\", \"prompt\": \"…\", \"agent\": \"claude\"}, …].
 Agentty shows the tasks to the user, who starts or declines them. Each started task runs in a
-split pane, in its own git worktree on a new branch from the project's default branch (the
-project is this folder, or the asking agent's folder when this one is outside git), and
-receives its prompt as the first message: make every prompt self-contained (goal, files, rules,
+split pane (from three tasks on, in a tab of its own), in its own git worktree on a new branch
+from the project's default branch (the project is this folder, or the asking agent's folder
+when this one is outside git), and receives its prompt as the first message: make every prompt self-contained (goal, files, rules,
 how to verify, whether to commit and open a pull request).
 
 Prints the started tasks as JSON (title, branch, folder); exits 1 when the user declined or

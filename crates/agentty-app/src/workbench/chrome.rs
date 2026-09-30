@@ -2017,6 +2017,13 @@ impl Workbench {
                 d
                     // Plugins with a panel, then cmux-style quick actions: icons only.
                     .children(self.render_plugin_header_buttons(cx))
+                    .child(header_icon(
+                        "header-git-clone",
+                        "git-branch",
+                        self.clone_dialog.is_some(),
+                        (t(cx, "clone.tooltip"), None),
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.open_clone_dialog(window, cx)),
+                    ))
                     .child(ringed(
                         header_icon(
                             "header-browser",

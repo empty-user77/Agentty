@@ -22,6 +22,7 @@ mod file_diff;
 mod files_panel;
 mod find;
 pub mod flow;
+mod git_clone;
 mod guide;
 mod harness;
 mod hud_settings;
@@ -629,6 +630,8 @@ pub struct Workbench {
     prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
     /// Parallel tasks agents asked for (`agentty tasks`), waiting for the user; the first is shown.
     task_requests: std::collections::VecDeque<crate::agent_signal::TasksRequest>,
+    /// The "Clone from Git" dialog, while open.
+    clone_dialog: Option<git_clone::CloneDialog>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
     install_hint: Option<(&'static str, &'static str, &'static str)>,
     /// The start page is shown even though workspaces exist (opened from the sidebar).
@@ -857,6 +860,7 @@ impl Workbench {
             prompt_dialog: None,
             prompt_queue: std::collections::VecDeque::new(),
             task_requests: std::collections::VecDeque::new(),
+            clone_dialog: None,
             welcome: false,
             install_hint: None,
             connect_pick: None,
@@ -3006,6 +3010,14 @@ impl Render for Workbench {
             .id("workbench")
             .key_context("Workbench")
             .track_focus(&self.focus_handle)
+            // Esc leaves "pick a terminal to connect" before the focused terminal sees the key: the
+            // agent there would take it as "interrupt".
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.connect_pick.is_some() {
+                    this.cancel_connect_pick(cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewTerminalTab, window, cx| {
                 // In a plugin's workspace a new tab is a new automation.
                 match this.front_plugin_workspace(cx).filter(|_| this.page.is_none()) {
@@ -3301,6 +3313,7 @@ impl Render for Workbench {
             .children(self.render_rename_dialog(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_tasks_dialog(cx))
+            .children(self.render_clone_dialog(cx))
             .children(self.render_db_approval(cx))
             .children(self.render_harness_dialog(cx))
             .children(self.render_onboarding(cx))
@@ -4065,6 +4078,13 @@ impl Workbench {
                 self.set_viewport(next, cx);
             }
             "link" => self.open_link(argument.to_string(), cx),
+            // `connect-pick`: the link button's "pick a terminal" mode, from the pane in front.
+            "connect-pick" => {
+                if let Some(pane) = self.active_pane() {
+                    let pane_id = pane.read(cx).pane_id;
+                    self.start_connect_pick(pane_id, cx);
+                }
+            }
             // `agentty-link agentty://…`: as if another app opened the link.
             "agentty-link" => self.open_agentty_link(argument, window, cx),
             // `plugin-panel <id>` / `plugin-command <id> <command>`.
@@ -4304,9 +4324,10 @@ impl Workbench {
                     .as_ref()
                     .map(|f| (f.keyword.focus_handle(cx).is_focused(window), f.expansion.focus_handle(cx).is_focused(window)));
                 eprintln!(
-                    "focus: alias(keyword, expansion)={alias:?} sidebar={} workbench={}",
+                    "focus: alias(keyword, expansion)={alias:?} sidebar={} workbench={} chat={:?}",
                     self.sidebar_focus.is_focused(window),
-                    self.focus_handle.is_focused(window)
+                    self.focus_handle.is_focused(window),
+                    self.chat_notify_focus(window, cx)
                 );
             }
             "frame" => eprintln!(

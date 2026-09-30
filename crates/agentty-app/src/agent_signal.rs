@@ -212,6 +212,9 @@ pub struct SignalDetail {
     pub subagent: Option<(String, String)>,
     /// The hook that sent it (`PreToolUse`, `PostToolUse`, …), when the agent says.
     pub event: Option<String>,
+    /// The session the event comes from, as the agent itself names it (Claude Code's `session_id`,
+    /// Codex's `thread-id`): which transcript is this pane's, even when others share its folder.
+    pub session: Option<String>,
 }
 
 impl SignalDetail {
@@ -379,6 +382,11 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
         target,
         subagent,
         event: text("hook_event_name"),
+        // Only an id's characters: it becomes part of a transcript path.
+        session: ["session_id", "thread-id", "thread_id"]
+            .iter()
+            .find_map(|k| text(k))
+            .filter(|id| id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')),
     };
     Some(AgentSignal { pane_id, kind, message, detail })
 }
@@ -772,6 +780,20 @@ mod tests {
         ))
         .unwrap();
         assert!(!in_subagent.detail.asks_user(), "a subagent's question reaches the user through the main agent");
+    }
+
+    #[test]
+    fn events_name_the_session_they_come_from() {
+        let codex = parse_line(&format!(
+            "4\tstop\t{}",
+            r#"{"type":"agent-turn-complete","thread-id":"019a1b2c-3d4e-7f00-8a9b-0c1d2e3f4a5b","last-assistant-message":"Done."}"#
+        ))
+        .unwrap();
+        assert_eq!(codex.detail.session.as_deref(), Some("019a1b2c-3d4e-7f00-8a9b-0c1d2e3f4a5b"));
+        let claude = parse_line(&format!("4\tworking\t{}", r#"{"session_id":"abc-123","hook_event_name":"PreToolUse"}"#)).unwrap();
+        assert_eq!(claude.detail.session.as_deref(), Some("abc-123"));
+        let path_like = parse_line(&format!("4\tstop\t{}", r#"{"session_id":"../../etc/passwd"}"#)).unwrap();
+        assert_eq!(path_like.detail.session, None);
     }
 
     #[test]

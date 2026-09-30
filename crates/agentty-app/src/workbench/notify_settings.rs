@@ -238,6 +238,16 @@ impl Workbench {
         .detach();
     }
 
+    /// Debug driver: which chat fields hold the keyboard, and how much each holds (never the text).
+    pub(super) fn chat_notify_focus(&self, window: &Window, cx: &gpui::App) -> Vec<(String, bool, usize)> {
+        let fields = self.chat_notify.inputs.iter().map(|((channel, transport), input)| (format!("{}:{transport:?}", channel.id()), input));
+        let targets = self.chat_notify.targets.iter().map(|(channel, (input, _))| (format!("{}:target", channel.id()), input));
+        fields
+            .chain(targets)
+            .map(|(name, input)| (name, gpui::Focusable::focus_handle(input.read(cx), cx).is_focused(window), input.read(cx).text().len()))
+            .collect()
+    }
+
     /// The masked credential field. Keyed by channel and transport, so switching between a webhook
     /// and a bot gives a field that asks for the right thing instead of keeping the other's hint.
     fn chat_input(&mut self, channel: Channel, transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextInput> {
@@ -281,6 +291,11 @@ impl Workbench {
                 toggle("system-notifications", prefs.system_notifications, |s| s.system_notifications = !s.system_notifications, cx),
             ))
             .child(row_with_hint(
+                t(cx, "settings.notification_sound"),
+                t(cx, "settings.notification_sound_hint"),
+                toggle("notification-sound", prefs.notification_sound, |s| s.notification_sound = !s.notification_sound, cx),
+            ))
+            .child(row_with_hint(
                 t(cx, "settings.notify_answer_requests"),
                 t(cx, "settings.notify_answer_requests_hint"),
                 toggle("notify-answers", prefs.notify_answer_requests, |s| s.notify_answer_requests = !s.notify_answer_requests, cx),
@@ -318,9 +333,19 @@ impl Workbench {
         let input = self.chat_input(channel, transport, window, cx);
         let id = channel.id();
         let field = |input: Entity<TextInput>| {
+            let focus = input.clone();
             div()
                 .flex_1()
                 .min_w_0()
+                // The whole box focuses the field: the text element of an empty field is only as
+                // wide as its hint, so a click anywhere else in the box did nothing at all.
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                    window.focus(&gpui::Focusable::focus_handle(&focus, cx));
+                    // Otherwise the workbench behind, which tracks focus too, takes it back on the same click.
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .cursor_text()
                 .px_2()
                 .py_1()
                 .rounded_md()

@@ -260,6 +260,13 @@ impl LaunchSpec {
                     args.extend(["--permission-mode".into(), "acceptEdits".into()]);
                     args.extend(["--disallowedTools".into(), RESTRICTED_DENIED_TOOLS.join(",")]);
                     args.extend(["--strict-mcp-config".into()]);
+                } else if crate::settings::always_bypass() {
+                    // The user turned on "always Bypass" in Settings (off by default). The flag alone
+                    // leaves the starting mode to the user's `defaultMode` (`auto` stayed `auto` in a
+                    // test), so the mode is named too.
+                    args.push("--dangerously-skip-permissions".into()); // audit: ok — the user's explicit opt-in setting
+                    let mode = ["--permission-mode", "bypassPermissions"]; // audit: ok — same opt-in
+                    args.extend(mode.map(String::from));
                 } else if crate::agents::claude_auto_mode() && agentty_bridge::idea::is_idea_project(&self.cwd) {
                     // "Build my idea" projects belong to people who cannot judge a permission prompt:
                     // Claude Code's auto mode decides instead. Only the command line can turn it on —
@@ -297,8 +304,14 @@ impl LaunchSpec {
                         args.extend(["--ask-for-approval".into(), "never".into()]);
                     }
                     args.extend(["-c".into(), "sandbox_workspace_write.network_access=false".into()]);
-                } else if crate::settings::browser_tools_enabled() {
-                    args.extend(["-c".into(), codex_browser_mcp_override()]);
+                } else {
+                    if crate::settings::always_bypass() {
+                        // The user turned on "always Full Access" in Settings (off by default).
+                        args.push("--dangerously-bypass-approvals-and-sandbox".into());
+                    }
+                    if crate::settings::browser_tools_enabled() {
+                        args.extend(["-c".into(), codex_browser_mcp_override()]);
+                    }
                 }
                 if let Some(model) = &self.model {
                     args.extend(["-m".into(), model.clone()]);

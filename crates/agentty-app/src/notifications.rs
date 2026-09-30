@@ -98,8 +98,8 @@ pub fn show(pane_id: u64, title: &str, body: &str) {
         let content: Id = msg_send![class!(UNMutableNotificationContent), new];
         let _: () = msg_send![content, setTitle: ns_string(title)];
         let _: () = msg_send![content, setBody: ns_string(body)];
-        let sound: Id = msg_send![class!(UNNotificationSound), defaultSound];
-        let _: () = msg_send![content, setSound: sound];
+        // No sound of its own: the system's alert plays at full alert volume, one per notification,
+        // so a few panes finishing together stacked into a loud, clipped burst. [`chime`] plays.
         let identifier = format!("agentty-pane-{pane_id}-{}", crate::ui::now_ms());
         let request: Id = msg_send![class!(UNNotificationRequest), requestWithIdentifier: ns_string(&identifier) content: content trigger: std::ptr::null_mut::<Object>()];
         let _: () = msg_send![center, addNotificationRequest: request withCompletionHandler: std::ptr::null_mut::<Object>()];
@@ -132,6 +132,36 @@ pub fn withdraw(pane_id: u64) {
     }
 }
 
+/// A soft sound for a notification: quieter than the system alert, and once for a burst — several
+/// notifications within a moment play it once instead of on top of each other.
+pub fn chime() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST_MS: AtomicU64 = AtomicU64::new(0);
+    let now = crate::ui::now_ms();
+    let last = LAST_MS.load(Ordering::Relaxed);
+    if !chime_due(last, now) || LAST_MS.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        return;
+    }
+    unsafe {
+        let sound: Id = msg_send![class!(NSSound), soundNamed: ns_string("Glass")];
+        if sound.is_null() {
+            return;
+        }
+        let _: () = msg_send![sound, stop];
+        let _: () = msg_send![sound, setVolume: CHIME_VOLUME];
+        let _: BOOL = msg_send![sound, play];
+    }
+}
+
+/// Of the system's output volume; the alert sound at 1.0 was far louder than a call beside it.
+const CHIME_VOLUME: f32 = 0.3;
+/// Notifications closer together than this share one sound.
+const CHIME_GAP_MS: u64 = 1_500;
+
+fn chime_due(last_ms: u64, now_ms: u64) -> bool {
+    now_ms.saturating_sub(last_ms) >= CHIME_GAP_MS
+}
+
 fn show_with_osascript(title: &str, body: &str) {
     let script = format!("display notification {} with title \"Agentty\" subtitle {}", applescript_string(body), applescript_string(title));
     std::thread::spawn(move || {
@@ -150,10 +180,18 @@ pub fn applescript_string(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::applescript_string;
+    use super::{applescript_string, chime_due, CHIME_GAP_MS};
 
     #[test]
     fn escapes_applescript() {
         assert_eq!(applescript_string("say \"hi\" \\ now\n"), "\"say \\\"hi\\\" \\\\ now\"");
+    }
+
+    #[test]
+    fn notifications_close_together_share_one_sound() {
+        let first = 10_000_000;
+        assert!(chime_due(0, first));
+        assert!(!chime_due(first, first + 200), "a second pane finishing right after does not play on top");
+        assert!(chime_due(first, first + CHIME_GAP_MS));
     }
 }

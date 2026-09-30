@@ -240,6 +240,8 @@ pub struct Settings {
     pub aliases: Vec<CommandAlias>,
     /// macOS notifications when an agent finishes or needs input while Agentty is in the background.
     pub system_notifications: bool,
+    /// A soft sound with those notifications (once for several arriving together).
+    pub notification_sound: bool,
     /// Local sessions pinned to the top (`claude:<id>`, `codex:<id>`).
     pub favorite_sessions: Vec<String>,
     /// Notify even while Agentty is the focused app.
@@ -280,6 +282,9 @@ pub struct Settings {
     /// Agents started by Agentty get a short guide to what Agentty offers them (and Claude Code its
     /// Agentty skills).
     pub agent_guide: bool,
+    /// Claude Code and Codex tabs Agentty starts skip every permission prompt (Claude Code's
+    /// `--dangerously-skip-permissions`, Codex's full access). Off by default; the user opts in.
+    pub always_bypass: bool,
     /// Closing a pane stops the local servers (dev servers) started in it.
     pub stop_servers_on_close: bool,
     /// Claude Code advisor for new Claude tabs.
@@ -628,6 +633,7 @@ impl Default for Settings {
             recent_dirs: Vec::new(),
             aliases: Vec::new(),
             system_notifications: true,
+            notification_sound: true,
             notify_when_focused: false,
             notify_answer_requests: true,
             chat_notify: ChatNotify::default(),
@@ -646,6 +652,7 @@ impl Default for Settings {
             auto_worktree: true,
             agent_tasks: true,
             agent_guide: true,
+            always_bypass: false,
             stop_servers_on_close: true,
             advisor: AdvisorChoice::Inherit,
             harness_detect: true,
@@ -817,6 +824,12 @@ pub fn browser_tools_enabled() -> bool {
 /// Whether agents get Agentty's guide, read from the settings file like [`browser_tools_enabled`].
 pub fn agent_guide_enabled() -> bool {
     std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.agent_guide)
+}
+
+/// Whether new Claude Code / Codex tabs skip permission prompts, read from the settings file like
+/// [`browser_tools_enabled`]. Unreadable settings mean off: asking is the safe side.
+pub fn always_bypass() -> bool {
+    std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_some_and(|s| s.always_bypass)
 }
 
 /// The advisor for new Claude tabs, read from the settings file like [`browser_tools_enabled`].

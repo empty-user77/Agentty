@@ -29,6 +29,9 @@ pub fn show(_pane_id: u64, title: &str, body: &str) {
     });
 }
 
+/// Toasts and `notify-send` notifications play the desktop's own sound, if it has one.
+pub fn chime() {}
+
 /// Toasts and `notify-send` notifications are not taken back here: they expire on their own.
 pub fn withdraw(_pane_id: u64) {}
 

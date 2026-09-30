@@ -1371,6 +1371,11 @@ impl Workbench {
                             t(cx, "settings.agent_tasks"),
                             t(cx, "settings.agent_tasks_hint"),
                             toggle("agent-tasks", prefs.agent_tasks, |s| s.agent_tasks = !s.agent_tasks, cx),
+                        ))
+                        .child(row_with_hint(
+                            t(cx, "settings.always_bypass"),
+                            t(cx, "settings.always_bypass_hint"),
+                            toggle("always-bypass", prefs.always_bypass, |s| s.always_bypass = !s.always_bypass, cx),
                         )),
                 )
                 .child(
