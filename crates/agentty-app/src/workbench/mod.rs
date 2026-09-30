@@ -23,6 +23,7 @@ mod file_diff;
 mod files_panel;
 mod find;
 pub mod flow;
+mod git_clone;
 mod guide;
 mod harness;
 mod hud_settings;
@@ -649,6 +650,8 @@ pub struct Workbench {
     prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
     /// Parallel tasks agents asked for (`agentty tasks`), waiting for the user; the first is shown.
     task_requests: std::collections::VecDeque<crate::agent_signal::TasksRequest>,
+    /// The "Clone from Git" dialog, while open.
+    clone_dialog: Option<git_clone::CloneDialog>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
     install_hint: Option<(&'static str, &'static str, &'static str)>,
     /// The start page is shown even though workspaces exist (opened from the sidebar).
@@ -892,6 +895,7 @@ impl Workbench {
             prompt_dialog: None,
             prompt_queue: std::collections::VecDeque::new(),
             task_requests: std::collections::VecDeque::new(),
+            clone_dialog: None,
             welcome: false,
             install_hint: None,
             connect_pick: None,
@@ -3095,6 +3099,14 @@ impl Render for Workbench {
             .id("workbench")
             .key_context("Workbench")
             .track_focus(&self.focus_handle)
+            // Esc leaves "pick a terminal to connect" before the focused terminal sees the key: the
+            // agent there would take it as "interrupt".
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.connect_pick.is_some() {
+                    this.cancel_connect_pick(cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewTerminalTab, window, cx| {
                 // In a plugin's workspace a new tab is a new automation.
                 match this.front_plugin_workspace(cx).filter(|_| this.page.is_none()) {
@@ -3390,6 +3402,7 @@ impl Render for Workbench {
             .children(self.render_rename_dialog(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_tasks_dialog(cx))
+            .children(self.render_clone_dialog(cx))
             .children(self.render_db_approval(cx))
             .children(self.render_harness_dialog(cx))
             .children(self.render_onboarding(cx))
@@ -3724,7 +3737,25 @@ fn first_pane(node: &NodeSnapshot) -> Option<&PaneSnapshot> {
 }
 
 pub fn status_label(view: &TerminalView, cx: &gpui::App) -> (String, u32) {
+    status_label_sized(view, false, cx)
+}
+
+/// [`status_label`], or in a narrow pane its short form ("완료" for "작업 완료", "Done"): a cut-off
+/// word says less than a short one. The colour tells the rest.
+pub fn status_label_sized(view: &TerminalView, compact: bool, cx: &gpui::App) -> (String, u32) {
     use crate::terminal::AgentStatus;
+    if compact && view.is_running() && view.is_agent() {
+        let (key, color) = match &view.status {
+            AgentStatus::Idle => ("status.idle_short", Chrome::MUTED),
+            AgentStatus::Working => ("status.working_short", Chrome::ORANGE),
+            AgentStatus::Thinking => ("status.thinking_short", Chrome::BLUE),
+            AgentStatus::Finished(_) => ("status.finished_short", Chrome::SUCCESS),
+            AgentStatus::Permission(_) => ("status.permission_short", Chrome::ATTENTION),
+            AgentStatus::Question(_) => ("status.question_short", Chrome::ATTENTION),
+            AgentStatus::Interrupted => ("status.interrupted_short", Chrome::WARNING),
+        };
+        return (t(cx, key).into(), color);
+    }
     if !view.is_running() {
         return (t(cx, "status.exited").into(), Chrome::MUTED);
     }
@@ -4016,6 +4047,12 @@ impl Workbench {
                 }
             }
             "agents" => eprintln!("agents: {:?}", self.installed),
+            // `panes`: the session each pane follows (the per-pane status bar's source).
+            "panes" => {
+                for pane in self.all_panes() {
+                    eprintln!("{}", pane.read(cx).debug_session());
+                }
+            }
             "launcher" => {
                 self.launcher_open = true;
                 cx.notify();
@@ -4179,6 +4216,13 @@ impl Workbench {
                 self.set_viewport(next, cx);
             }
             "link" => self.open_link(argument.to_string(), cx),
+            // `connect-pick`: the link button's "pick a terminal" mode, from the pane in front.
+            "connect-pick" => {
+                if let Some(pane) = self.active_pane() {
+                    let pane_id = pane.read(cx).pane_id;
+                    self.start_connect_pick(pane_id, cx);
+                }
+            }
             // `agentty-link agentty://…`: as if another app opened the link.
             "agentty-link" => self.open_agentty_link(argument, window, cx),
             // `plugin-panel <id>` / `plugin-command <id> <command>`.
@@ -4366,6 +4410,24 @@ impl Workbench {
                 }
             }
             // `click x y [right]`, `key cmd-n`, `text 한글abc`: synthetic input, dispatched after this update.
+            // `scroll-burst x y pixels count`: a trackpad-like run of small scroll steps, one every
+            // 8 ms, to see how a page keeps up with scrolling (sample the process meanwhile).
+            "scroll-burst" => {
+                let mut parts = argument.split_whitespace();
+                let (x, y, step) = (parts.next().unwrap_or("700"), parts.next().unwrap_or("500"), parts.next().unwrap_or("-4"));
+                let count: usize = parts.next().and_then(|n| n.parse().ok()).unwrap_or(120);
+                let step_argument = format!("{x} {y} {step} px fast");
+                if let Some(ns) = crate::native::ns_window(window) {
+                    crate::native::order_front_regardless(ns);
+                    cx.spawn(async move |_, cx| {
+                        for _ in 0..count {
+                            crate::debug::synthetic_input(ns, "scroll", &step_argument);
+                            cx.background_executor().timer(std::time::Duration::from_millis(8)).await;
+                        }
+                    })
+                    .detach();
+                }
+            }
             "click" | "move" | "scroll" | "key" | "text" | "press" | "drag-to" | "release" => {
                 let (command, argument) = (command.to_string(), argument.to_string());
                 if let Some(ns) = crate::native::ns_window(window) {
@@ -4418,9 +4480,10 @@ impl Workbench {
                     .as_ref()
                     .map(|f| (f.keyword.focus_handle(cx).is_focused(window), f.expansion.focus_handle(cx).is_focused(window)));
                 eprintln!(
-                    "focus: alias(keyword, expansion)={alias:?} sidebar={} workbench={}",
+                    "focus: alias(keyword, expansion)={alias:?} sidebar={} workbench={} chat={:?}",
                     self.sidebar_focus.is_focused(window),
-                    self.focus_handle.is_focused(window)
+                    self.focus_handle.is_focused(window),
+                    self.chat_notify_focus(window, cx)
                 );
             }
             "frame" => eprintln!(

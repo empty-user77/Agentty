@@ -366,12 +366,19 @@ pub fn project_dir_for(cwd: &Path) -> PathBuf {
 
 /// Id of the newest session in `cwd` written after `since_ms` (for agents started by hand).
 pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
+    find_recent_except(cwd, since_ms, |_| false)
+}
+
+/// [`find_recent`], passing over the sessions `taken` says belong to someone else (another pane in
+/// the same folder follows it).
+pub fn find_recent_except(cwd: &Path, since_ms: u64, taken: impl Fn(&str) -> bool) -> Option<String> {
     let mut files = Vec::new();
     fsutil::jsonl_files(&project_dir_for(cwd), 0, &mut files);
-    fsutil::newest(files, 1)
+    fsutil::newest(files, 16)
         .into_iter()
-        .find(|(_, mtime)| *mtime + 1_000 >= since_ms)
-        .and_then(|(path, _)| path.file_stem().map(|s| s.to_string_lossy().to_string()))
+        .take_while(|(_, mtime)| *mtime + 1_000 >= since_ms)
+        .filter_map(|(path, _)| path.file_stem().map(|s| s.to_string_lossy().to_string()))
+        .find(|id| !taken(id))
 }
 
 /// A running Claude Code session as it registers itself in `~/.claude/sessions/<pid>.json`.

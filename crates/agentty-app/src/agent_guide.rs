@@ -22,7 +22,7 @@ falls into independent parts that would each take a while, hand the parts to new
 of doing them one after another: write one self-contained prompt per part and run \
 `agentty tasks --plan <plan.json>` (a JSON array of {\"title\", \"prompt\", \"agent\"}; up to 6) or \
 `agentty tasks --title <title> --prompt-file <file>`. Agentty asks the user once; each started task \
-runs in a split pane of this tab, in its own git worktree on a new branch from the project's default \
+runs in a split pane of this tab (from three tasks on, in a tab of its own), in its own git worktree on a new branch from the project's default \
 branch, and gets its prompt as the first message. The command prints each task's branch and folder. \
 A task's prompt must stand on its own: goal, relevant files, constraints, how to verify, and whether \
 to commit, push and open a pull request when done. Do not edit the other tasks' worktrees yourself.

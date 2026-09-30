@@ -191,11 +191,19 @@ fn message_turn(payload: &Value) -> Option<Turn> {
 /// Id of the newest Codex session started in `cwd` whose rollout was written after `since_ms`.
 /// Used to find the session behind a Codex pane (Codex cannot be told its session id up front).
 pub fn find_recent(cwd: &Path, since_ms: u64) -> Option<String> {
+    find_recent_except(cwd, since_ms, |_| false)
+}
+
+/// [`find_recent`], passing over the sessions `taken` says belong to someone else: with several
+/// Codex panes in one folder the newest rollout is only one of them, and every pane taking it
+/// would show that session's model and context in all of them.
+pub fn find_recent_except(cwd: &Path, since_ms: u64, taken: impl Fn(&str) -> bool) -> Option<String> {
     let cwd = cwd.to_string_lossy();
     fsutil::newest(rollouts(), usize::MAX).into_iter().take_while(|(_, mtime)| *mtime + 1_000 >= since_ms).find_map(|(path, _)| {
         let first = BufReader::new(File::open(&path).ok()?).lines().next()?.ok()?;
         let v: Value = serde_json::from_str(&first).ok()?;
         let meta = &v["payload"];
-        (meta["cwd"].as_str() == Some(&*cwd)).then(|| meta["id"].as_str().map(str::to_string)).flatten()
+        let id = meta["id"].as_str().filter(|_| meta["cwd"].as_str() == Some(&*cwd))?;
+        (!taken(id)).then(|| id.to_string())
     })
 }
