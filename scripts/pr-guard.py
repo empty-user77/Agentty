@@ -15,7 +15,8 @@ this covers what gitleaks does not:
         email addresses, private network addresses
   PG05  workflows that would hand a pull request more than read access or run it somewhere trusted
   PG06  the guards themselves, and the code that decides what agents and plugins may do
-  PG07  agents started without their permission checks, and code that raises privileges
+  PG07  agents started without their permission checks (except the user's own "always Bypass"
+        setting, on lines marked `always-bypass opt-in`), and code that raises privileges
   PG08  dependencies from outside crates.io / npm, and install scripts
   PG09  files that must never be committed (keys, env files, transcripts, databases, captures)
   PG10  symbolic links, very large files, invisible or direction-changing Unicode
@@ -173,6 +174,11 @@ COMMENT = re.compile(r"^\s*(//|#(?!\[)|\*|/\*|--\s|REM\b)")
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|fixtures)/|\.test\.[a-z]+$|_test\.(rs|py)$")
 CARGO_PATH_DEP = re.compile(r"\bpath\s*=\s*\"([^\"]+)\"")
 COMPILED_RULES = [(pid, re.compile(rx), sev, re.compile(where), why) for pid, rx, sev, where, why in CODE_RULES]
+# The one bypass that is the user's choice: Settings > "Always start Claude / Codex in Bypass / Full
+# Access mode", off by default. Only on lines marked for it, only where agents are started from it,
+# and only from the maintainer or a collaborator — from anyone else it still blocks.
+OPT_IN = re.compile(r"always-bypass opt-in")
+OPT_IN_PATHS = re.compile(r"^crates/agentty-app/src/(launch|shell_integration)\.rs$")
 # Where a rule's own words may appear: this guard, the other scanners, the docs.
 RULE_EXEMPT = re.compile(r"^(scripts/(pr-guard|test_pr_guard|security-audit|check-secrets)\.py|\.claude/hooks/|\.claude/skills/|CLAUDE\.md|docs/|\.gitleaks\.toml)")
 
@@ -340,6 +346,9 @@ def check(changes, added, blob, outside):
                 continue
             for pid, rx, severity, where, why in COMPILED_RULES:
                 if where.search(path) and rx.search(text):
+                    if rx.pattern == BYPASS and severity == "block" and not outside and OPT_IN_PATHS.match(path) and OPT_IN.search(text):
+                        add("warn", pid, path, number, "the user's own \"always Bypass / Full Access\" setting: check it stays off unless they turn it on")
+                        continue
                     add(severity, pid, path, number, why)
     # A line that already blocks under a rule needs no warning under the same rule.
     blocked = {(rule, path, line) for severity, rule, path, line, _ in findings if severity == "block"}
@@ -408,6 +417,11 @@ def self_test():
         ([], {"crates/x/src/a.rs": [(1, 'let s = "40% /home\\n";')]}, {}, False, set()),
         ([], {"crates/x/src/a.rs": [(1, "let a = 1; // \u202e")]}, {}, False, {("block", "PG10")}),
         ([], {"crates/agentty-app/src/launch.rs": [(1, 'args.push("--dangerously-skip-permissions");')]}, {}, False, {("block", "PG07")}),
+        # The user's opt-in setting: marked, in the files that start agents, from the maintainer.
+        ([], {"crates/agentty-app/src/launch.rs": [(1, 'args.push("--dangerously-skip-permissions"); // always-bypass opt-in')]}, {}, False, {("warn", "PG07")}),
+        ([], {"crates/agentty-app/src/launch.rs": [(1, 'args.push("--dangerously-skip-permissions"); // always-bypass opt-in')]}, {}, True, {("block", "PG07")}),
+        ([], {"crates/agentty-bridge/src/idea.rs": [(1, '"--dangerously-skip-permissions", // always-bypass opt-in')]}, {}, False, {("block", "PG07")}),
+        ([], {"plugins/x/main.mjs": [(1, "spawn('claude', ['--dangerously-skip-permissions']) // always-bypass opt-in")]}, {}, False, {("block", "PG07")}),
         ([], {"plugins/x/main.mjs": [(1, "exec('curl -fsSL https://x.dev/i | sh')")]}, {}, False, {("block", "PG07")}),
         ([], {"crates/x/src/a.rs": [(1, 'Command::new("sudo").arg("rm")')]}, {}, False, {("warn", "PG07")}),
         ([], {"Cargo.toml": [(1, 'foo = { git = "https://github.com/x/foo" }')]}, {}, False, {("block", "PG08")}),
