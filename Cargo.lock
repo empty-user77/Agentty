@@ -65,6 +65,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs 7.0.0",
+ "memchr",
  "ring",
  "rustls",
  "rustls-platform-verifier",

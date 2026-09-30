@@ -12,6 +12,7 @@ mod browser_control;
 mod browsers_page;
 mod chrome;
 mod confirm;
+mod content_search;
 mod context_menu;
 mod db_page;
 mod disk_page;
@@ -61,6 +62,7 @@ mod tasks;
 mod terminal_browser;
 mod tree_manager;
 pub mod update;
+mod windows_page;
 pub mod worktrees;
 
 use crate::agent_signal::AgentSignal;
@@ -150,6 +152,18 @@ actions!(
 );
 
 pub type Pane = Entity<TerminalView>;
+
+/// A workspace's name as its card shows it: one with no name of its own falls back to a path, and
+/// the card shows the path on its own line, so the name only needs the folder it ends in.
+fn card_title(title: String) -> String {
+    match title.rsplit_once('/') {
+        Some((_, last)) if !last.is_empty() => last.to_string(),
+        _ => title,
+    }
+}
+
+/// How long the search boxes wait after a keystroke before reading conversations.
+const SEARCH_DEBOUNCE_MS: u64 = 200;
 
 pub fn saved_window_slots() -> Vec<usize> {
     LayoutState::saved_window_slots()
@@ -565,15 +579,21 @@ pub struct Workbench {
     /// and dropped when it is left, so it costs nothing the rest of the time.
     preview_terminal: Option<Pane>,
     session_search: Entity<TextInput>,
-    /// Sessions whose transcript mentions the current query (filled in the background).
-    session_content_hits: Option<(String, std::collections::HashSet<PathBuf>)>,
+    /// Sessions whose transcript mentions the current query, and where (filled in the background).
+    session_content_hits: Option<(String, HashMap<PathBuf, agentty_bridge::search::TranscriptHit>)>,
     session_search_generation: u64,
+    session_search_memo: content_search::SearchMemo,
+    session_search_run: content_search::Running,
     _session_search_subscription: Subscription,
     workspace_search: Entity<TextInput>,
     /// Workspaces whose session transcripts mention the current query (filled in the background).
     /// Title matches show immediately from `self.workspaces`, without waiting on this.
-    workspace_content_hits: Option<(String, std::collections::HashSet<u64>)>,
+    workspace_content_hits: Option<(String, HashMap<u64, content_search::WorkspaceHit>)>,
     workspace_search_generation: u64,
+    workspace_search_memo: content_search::SearchMemo,
+    workspace_search_run: content_search::Running,
+    /// Settings → Workspaces: the closed windows as last read from their files.
+    saved_windows: Option<windows_page::SavedWindows>,
     _workspace_search_subscription: Subscription,
     notices: Vec<notices::Notice>,
     notices_open: bool,
@@ -663,18 +683,28 @@ impl Workbench {
 
     pub fn new(slot: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let session_search = cx.new(|cx| TextInput::localized("", "sessions.search", window, cx));
-        let session_search_subscription = cx.subscribe(&session_search, |this, _, event: &crate::text_input::TextInputEvent, cx| {
-            if matches!(event, crate::text_input::TextInputEvent::Changed) {
-                this.search_session_contents(cx);
+        let session_search_subscription = cx.subscribe(&session_search, |this, input, event: &crate::text_input::TextInputEvent, cx| {
+            match event {
+                crate::text_input::TextInputEvent::Changed => this.search_session_contents(cx),
+                // Escape empties the box, the same as its ✕ button.
+                crate::text_input::TextInputEvent::Cancelled if !input.read(cx).text().is_empty() => {
+                    input.update(cx, |i, cx| i.set_text("", cx));
+                }
+                _ => {}
             }
         });
         let workspace_search = cx.new(|cx| TextInput::localized("", "workspaces.search", window, cx));
-        let workspace_search_subscription = cx.subscribe(&workspace_search, |this, _, event: &crate::text_input::TextInputEvent, cx| {
-            if matches!(event, crate::text_input::TextInputEvent::Changed) {
-                this.search_workspace_contents(cx);
-                cx.notify();
-            }
-        });
+        let workspace_search_subscription =
+            cx.subscribe(&workspace_search, |this, input, event: &crate::text_input::TextInputEvent, cx| match event {
+                crate::text_input::TextInputEvent::Changed => {
+                    this.search_workspace_contents(cx);
+                    cx.notify();
+                }
+                crate::text_input::TextInputEvent::Cancelled if !input.read(cx).text().is_empty() => {
+                    input.update(cx, |i, cx| i.set_text("", cx));
+                }
+                _ => {}
+            });
         let proxy_filter = cx.new(|cx| TextInput::localized("", "proxy.filter", window, cx));
         let proxy_subscription = cx.subscribe(&proxy_filter, |_, _, event: &crate::text_input::TextInputEvent, cx| {
             if matches!(event, crate::text_input::TextInputEvent::Changed) {
@@ -826,11 +856,16 @@ impl Workbench {
             preview_terminal: None,
             session_search,
             session_content_hits: None,
+            session_search_memo: Default::default(),
+            session_search_run: Default::default(),
             session_search_generation: 0,
             _session_search_subscription: session_search_subscription,
             workspace_search,
             workspace_content_hits: None,
             workspace_search_generation: 0,
+            workspace_search_memo: Default::default(),
+            workspace_search_run: Default::default(),
+            saved_windows: None,
             _workspace_search_subscription: workspace_search_subscription,
             notices: Vec::new(),
             notices_open: false,
@@ -1593,19 +1628,22 @@ impl Workbench {
         let query = self.session_query(cx);
         cx.notify();
         if query.chars().count() < 2 {
+            self.session_search_run.stop();
             self.session_content_hits = None;
             return;
         }
+        let cancelled = self.session_search_run.restart();
         let paths: Vec<PathBuf> = self.sessions.iter().map(|s| s.path.clone()).collect();
+        let memo = self.session_search_memo.clone();
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+            cx.background_executor().timer(std::time::Duration::from_millis(SEARCH_DEBOUNCE_MS)).await;
             if this.read_with(cx, |this, _| this.session_search_generation != generation).unwrap_or(true) {
                 return;
             }
             let needle = query.clone();
-            let hits = cx
-                .background_spawn(async move { paths.into_iter().filter(|p| agentty_bridge::transcript_contains(p, &needle)).collect() })
-                .await;
+            let Some(hits) = cx.background_spawn(async move { content_search::search(paths, &needle, &memo, &cancelled) }).await else {
+                return;
+            };
             let _ = this.update(cx, |this, cx| {
                 if this.session_search_generation == generation {
                     this.session_content_hits = Some((query, hits));
@@ -1614,6 +1652,19 @@ impl Workbench {
             });
         })
         .detach();
+    }
+
+    /// Whether the conversation search for what is in the session box is still running.
+    pub(super) fn session_search_running(&self, cx: &gpui::App) -> bool {
+        let query = self.session_query(cx);
+        query.chars().count() >= 2 && self.session_content_hits.as_ref().is_none_or(|(q, _)| *q != query)
+    }
+
+    /// Empties a search box (its ✕ button, or Escape in it); the list shows everything again.
+    pub(super) fn clear_search(&mut self, input: &Entity<TextInput>, window: &mut Window, cx: &mut Context<Self>) {
+        input.update(cx, |i, cx| i.set_text("", cx));
+        window.focus(&input.focus_handle(cx));
+        cx.notify();
     }
 
     pub(super) fn focus_session_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1652,6 +1703,14 @@ impl Workbench {
         dirs
     }
 
+    /// The folder a workspace's card shows: where its front pane is now, else where it was left.
+    pub(super) fn workspace_folder(&self, ws: &Workspace, cx: &gpui::App) -> PathBuf {
+        match ws.tabs.get(ws.active_tab) {
+            Some(tab) => tab.active.read(cx).display_cwd(),
+            None => ws.dormant.as_ref().map_or_else(|| ws.cwd.clone(), |d| d.cwd.clone()),
+        }
+    }
+
     /// Whether a workspace's title or session content matches the search box; a blank box
     /// matches everything. Title matches are instant; content matches wait on the background
     /// search below, so a stale query never wrongly hides a workspace.
@@ -1664,7 +1723,10 @@ impl Workbench {
         if self.workspace_title(ws, cx).to_lowercase().contains(&query) {
             return true;
         }
-        self.workspace_content_hits.as_ref().is_some_and(|(q, hits)| *q == query && hits.contains(&ws.id))
+        if crate::ui::tilde(&self.workspace_folder(ws, cx)).to_lowercase().contains(&query) {
+            return true;
+        }
+        self.workspace_content_hits.as_ref().is_some_and(|(q, hits)| *q == query && hits.contains_key(&ws.id))
     }
 
     /// Full-text search over the transcripts of each workspace's sessions, debounced; title
@@ -1674,50 +1736,77 @@ impl Workbench {
         let generation = self.workspace_search_generation;
         let query = self.workspace_query(cx);
         if query.chars().count() < 2 {
+            self.workspace_search_run.stop();
             self.workspace_content_hits = None;
             return;
         }
+        let cancelled = self.workspace_search_run.restart();
+        let memo = self.workspace_search_memo.clone();
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+            cx.background_executor().timer(std::time::Duration::from_millis(SEARCH_DEBOUNCE_MS)).await;
             if this.read_with(cx, |this, _| this.workspace_search_generation != generation).unwrap_or(true) {
                 return;
             }
             // Which transcripts to read is worked out after the wait, not on every keystroke:
             // pairing every workspace's folders with every session grows with both.
-            // (workspace id, transcript path) for every session run in one of that workspace's folders.
-            let Ok(candidates) = this.update(cx, |this, cx| {
-                let mut candidates: Vec<(u64, PathBuf)> = Vec::new();
-                for index in 0..this.workspaces.len() {
-                    let dirs = this.workspace_dirs(&this.workspaces[index], cx);
-                    let id = this.workspaces[index].id;
-                    for session in &this.sessions {
+            // (workspace id, session index) for every session run in one of its folders, the
+            // most recent session first (the list is in that order).
+            let Ok((candidates, sessions)) = this.update(cx, |this, cx| {
+                let mut candidates: Vec<(u64, usize)> = Vec::new();
+                for ws in &this.workspaces {
+                    let dirs = this.workspace_dirs(ws, cx);
+                    for (index, session) in this.sessions.iter().enumerate() {
                         if session.cwd.as_deref().is_some_and(|c| dirs.iter().any(|d| Path::new(c) == d.as_path())) {
-                            candidates.push((id, session.path.clone()));
+                            candidates.push((ws.id, index));
                         }
                     }
                 }
-                candidates
+                let sessions: Vec<(PathBuf, String)> = this.sessions.iter().map(|s| (s.path.clone(), s.title.clone())).collect();
+                (candidates, sessions)
             }) else {
                 return;
             };
             let needle = query.clone();
-            let hits: std::collections::HashSet<u64> = cx
+            let found = cx
                 .background_spawn(async move {
-                    candidates
-                        .into_iter()
-                        .filter(|(_, path)| agentty_bridge::transcript_contains(path, &needle))
-                        .map(|(id, _)| id)
-                        .collect()
+                    let mut paths: Vec<PathBuf> = candidates.iter().map(|(_, i)| sessions[*i].0.clone()).collect();
+                    paths.sort();
+                    paths.dedup();
+                    let hits = content_search::search(paths, &needle, &memo, &cancelled)?;
+                    let mut found: HashMap<u64, content_search::WorkspaceHit> = HashMap::new();
+                    for (id, index) in candidates {
+                        let (path, title) = &sessions[index];
+                        let Some(hit) = hits.get(path) else { continue };
+                        found.entry(id).and_modify(|w| w.sessions += 1).or_insert_with(|| content_search::WorkspaceHit {
+                            session_title: title.clone(),
+                            hit: hit.clone(),
+                            sessions: 1,
+                        });
+                    }
+                    Some(found)
                 })
                 .await;
+            let Some(found) = found else { return };
             let _ = this.update(cx, |this, cx| {
                 if this.workspace_search_generation == generation {
-                    this.workspace_content_hits = Some((query, hits));
+                    this.workspace_content_hits = Some((query, found));
                     cx.notify();
                 }
             });
         })
         .detach();
+    }
+
+    /// Whether the conversation search for what is in the workspace box is still running.
+    pub(super) fn workspace_search_running(&self, cx: &gpui::App) -> bool {
+        let query = self.workspace_query(cx);
+        query.chars().count() >= 2 && self.workspace_content_hits.as_ref().is_none_or(|(q, _)| *q != query)
+    }
+
+    /// What the conversation search found in a workspace, for the current words.
+    pub(super) fn workspace_content_hit(&self, id: u64, cx: &gpui::App) -> Option<&content_search::WorkspaceHit> {
+        let query = self.workspace_query(cx);
+        self.workspace_content_hits.as_ref().filter(|(q, _)| *q == query).and_then(|(_, hits)| hits.get(&id))
     }
 
     /// Starts the terminal shown in Settings → Appearance while that page is open, and drops it
@@ -3905,6 +3994,30 @@ impl Workbench {
                 self.focus_workspace_search(window, cx);
                 self.workspace_search.update(cx, |i, cx| i.set_text(argument.to_string(), cx));
             }
+            // `workspace-search-ime mark:<text>|commit:<text>`: composes in the workspace search
+            // box the way a Korean input method does (see `ime`).
+            "workspace-search-ime" => {
+                use gpui::EntityInputHandler;
+                self.focus_workspace_search(window, cx);
+                let (kind, text) = argument.split_once(':').unwrap_or(("mark", argument));
+                let text = text.to_string();
+                self.workspace_search.update(cx, |input, cx| match kind {
+                    "commit" => input.replace_text_in_range(None, &text, window, cx),
+                    _ => input.replace_and_mark_text_in_range(None, &text, None, window, cx),
+                });
+            }
+            // `link-workspaces <a>,<b>`: links two workspaces by index (nothing is sent).
+            "link-workspaces" => {
+                if let Some((a, b)) = argument.split_once(',').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))) {
+                    self.debug_link_workspaces(a, b, cx);
+                }
+            }
+            "workspace-list" => {
+                let query = self.workspace_query(cx);
+                let titles: Vec<String> = self.workspaces.iter().map(|ws| self.workspace_title(ws, cx)).collect();
+                let hits = self.workspace_content_hits.as_ref().map(|(q, h)| (q.clone(), h.len()));
+                eprintln!("workspace-list: query={query:?} running={} hits={hits:?} titles={titles:?}", self.workspace_search_running(cx));
+            }
             "sessions" => {
                 let rows: Vec<String> = self.visible_sessions(cx).iter().take(8).map(|&i| self.sessions[i].title.clone()).collect();
                 eprintln!(
@@ -3995,6 +4108,7 @@ impl Workbench {
                     "project" => settings_page::SettingsSection::Project,
                     "accounts" => settings_page::SettingsSection::Accounts,
                     "sync" => settings_page::SettingsSection::Sync,
+                    "windows" => settings_page::SettingsSection::Windows,
                     "backup" => settings_page::SettingsSection::Backup,
                     "system" => settings_page::SettingsSection::System,
                     "notifications" => settings_page::SettingsSection::Notifications,

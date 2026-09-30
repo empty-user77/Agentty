@@ -411,32 +411,8 @@ impl Workbench {
         // Title and session content, debounced the same way the sessions panel searches: title
         // matches show at once, content matches trail in from the background.
         let workspace_search = (self.panel == SidePanel::Workspaces && settings(cx).workspace_search_bar).then(|| {
-            let query = self.workspace_query(cx);
-            let searching = self.workspace_content_hits.as_ref().is_none_or(|(q, _)| *q != query) && query.chars().count() >= 2;
-            div()
-                .flex_shrink_0()
-                .px_2()
-                .pb_2()
-                // Without this, a click here still focuses the text field first (it is the
-                // deeper element) but then bubbles up to the sidebar's own mouse-down handler,
-                // which immediately hands focus to the workspace list instead — the box takes
-                // the click but never keeps the caret, so nothing typed goes anywhere.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(hex(Chrome::BORDER))
-                        .bg(hex(0x1a1a1a))
-                        .child(icon("search", IconSize::INLINE, hex(Chrome::MUTED)))
-                        .child(div().flex_1().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(self.workspace_search.clone()))
-                        .when(searching, |d| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).child("…"))),
-                )
+            let running = self.workspace_search_running(cx);
+            self.render_search_box("workspace-search", &self.workspace_search, running, cx).px_2().pb_2()
         });
 
         div()
@@ -523,32 +499,97 @@ impl Workbench {
             )
     }
 
+    /// A sidebar search box: a spinner while conversations are still being searched, and a ✕
+    /// that empties it (as does Escape, and deleting every letter).
+    fn render_search_box(
+        &self,
+        id: &'static str,
+        input: &gpui::Entity<crate::text_input::TextInput>,
+        running: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let has_text = !input.read(cx).text().is_empty();
+        let clear = input.clone();
+        div()
+            .flex_shrink_0()
+            // Without this, a click here still focuses the text field first (it is the deeper
+            // element) but then bubbles up to the sidebar's own mouse-down handler, which
+            // immediately hands focus to the list instead — the box takes the click but never
+            // keeps the caret, so nothing typed goes anywhere.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .bg(hex(0x1a1a1a))
+                    .child(if running {
+                        crate::ui::spinner(IconSize::INLINE, hex(Chrome::MUTED)).into_any_element()
+                    } else {
+                        icon("search", IconSize::INLINE, hex(Chrome::MUTED)).into_any_element()
+                    })
+                    .child(div().flex_1().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(input.clone()))
+                    .when(has_text, |d| {
+                        d.child(
+                            div()
+                                .id(SharedString::from(format!("{id}-clear")))
+                                .flex_shrink_0()
+                                .size(px(16.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(hex_alpha(0xffffff, 0.1)))
+                                .tooltip(crate::ui::Tooltip::text(t(cx, "search.clear"), None))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.clear_search(&clear, window, cx);
+                                }))
+                                .child(icon("x", IconSize::INLINE, hex(Chrome::MUTED))),
+                        )
+                    }),
+            )
+    }
+
     fn render_workspaces_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut list = div().flex().flex_col().px_2().pt_1().gap_px();
         if self.workspaces.is_empty() && self.groups.is_empty() {
             return list.child(hint(t(cx, "hint.no_workspaces")));
         }
-
-        // A blank box matches everything, so filtering costs nothing when the user isn't searching.
-        // Computed once, up front: the render calls below need `cx` mutably, so nothing here can
-        // hold a borrow of it.
+        // While searching the list becomes a list of results: every match on its own, whatever
+        // group, fold or link it sits in, with what matched and where.
         let query = self.workspace_query(cx);
-        let searching = !query.is_empty();
-        let is_match: Vec<bool> = (0..self.workspaces.len()).map(|i| !searching || self.workspace_matches(i, cx)).collect();
-        let mut any_match = false;
+        if !query.is_empty() {
+            return self.render_workspace_results(&query, list, cx);
+        }
 
         // Workspaces linked into one session sit together under the one the link started from,
-        // wherever they are in the list; unlinking puts them straight back.
-        let linked = self.linked_workspaces(cx);
-        let ungrouped: Vec<usize> = (0..self.workspaces.len())
-            .filter(|i| self.workspaces[*i].group.is_none() && !linked.followers.contains(i) && is_match[*i])
-            .collect();
-        any_match = any_match || !ungrouped.is_empty();
+        // wherever they are in the list; unlinking puts them straight back. A workspace whose
+        // leader is folded away is listed in its own place instead: it must never go missing.
+        let mut linked = self.linked_workspaces(cx);
+        let shown = |index: usize| match self.workspaces[index].group {
+            None => self.groups.is_empty() || !self.ungrouped_collapsed,
+            Some(gid) => self.groups.iter().any(|g| g.id == gid && !g.collapsed),
+        };
+        let folded: Vec<usize> = linked.members.keys().copied().filter(|leader| !shown(*leader)).collect();
+        for leader in folded {
+            for follower in linked.members.remove(&leader).unwrap_or_default() {
+                linked.followers.remove(&follower);
+            }
+        }
+        let ungrouped: Vec<usize> =
+            (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group.is_none() && !linked.followers.contains(i)).collect();
         // The "ungrouped" header matters once groups exist and something is (or is being dragged)
-        // outside them; while searching, an empty ungrouped section is left out entirely.
+        // outside them.
         let dragging = cx.has_active_drag();
         let mut ungrouped_open = true;
-        if !self.groups.is_empty() && (!ungrouped.is_empty() || (!searching && dragging)) {
+        if !self.groups.is_empty() && (!ungrouped.is_empty() || dragging) {
             ungrouped_open = !self.ungrouped_collapsed;
             let label = t(cx, "ungrouped").into();
             list = list.child(self.render_group_header(None, label, self.ungrouped_collapsed, ungrouped.len(), window, cx));
@@ -559,15 +600,9 @@ impl Workbench {
             }
         }
         for group in &self.groups {
-            let all_members: Vec<usize> = (0..self.workspaces.len())
+            let members: Vec<usize> = (0..self.workspaces.len())
                 .filter(|i| self.workspaces[*i].group == Some(group.id) && !linked.followers.contains(i))
                 .collect();
-            let members: Vec<usize> = all_members.iter().copied().filter(|i| is_match[*i]).collect();
-            if searching && members.is_empty() {
-                // Nothing in this group matches: skip it rather than show an empty frame.
-                continue;
-            }
-            any_match = true;
             // A group with a colour is drawn inside a frame of it, header included, so it reads as
             // one block; the header keeps its own rounded top.
             let accent = super::accent_color(group.color);
@@ -575,13 +610,12 @@ impl Workbench {
                 Some(color) => d.rounded_md().border_1().border_color(hex_alpha(color, 0.55)).p_px(),
                 None => d,
             });
-            let count = if searching { members.len() } else { all_members.len() };
-            block = block.child(self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, count, window, cx));
+            block = block.child(self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, members.len(), window, cx));
             if group.collapsed {
                 list = list.child(block);
                 continue;
             }
-            if members.is_empty() && !searching {
+            if members.is_empty() {
                 let gid = group.id;
                 block = block.child(
                     div()
@@ -609,8 +643,105 @@ impl Workbench {
             }
             list = list.child(block);
         }
-        if searching && !any_match {
-            list = list.child(hint(t(cx, "workspaces.no_matches")));
+        list
+    }
+
+    /// The workspace list while searching: one card per workspace that matches, in list order,
+    /// each saying what matched — its name, its folder, or something said in one of its
+    /// conversations (with the sentence around it).
+    fn render_workspace_results(&self, query: &str, mut list: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+        use super::content_search::{marked, match_block, match_line, role_label, snippet, tag};
+        // Ungrouped first, then each group in its order: the order the plain list shows them in.
+        let group_rank = |ws: &Workspace| ws.group.and_then(|gid| self.groups.iter().position(|g| g.id == gid)).map_or(0, |p| p + 1);
+        let mut order: Vec<usize> = (0..self.workspaces.len()).filter(|i| self.workspace_matches(*i, cx)).collect();
+        order.sort_by_key(|i| group_rank(&self.workspaces[*i]));
+        let running = self.workspace_search_running(cx);
+        let summary = if order.is_empty() && !running {
+            t(cx, "workspaces.no_matches").to_string()
+        } else {
+            tf(cx, "search.results", &[("n", &order.len().to_string())])
+        };
+        list = list.child(
+            div()
+                .px_2()
+                .pb_1()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .t_small()
+                .text_color(hex(Chrome::MUTED))
+                .child(summary)
+                .when(running, |d| d.child(div().t_caption().child(t(cx, "search.searching_conversations")))),
+        );
+        for index in order {
+            let ws = &self.workspaces[index];
+            let id = ws.id;
+            // Named as its card names it; the whole path goes on the line below.
+            let title = super::card_title(self.workspace_title(ws, cx));
+            let folder = tilde(&self.workspace_folder(ws, cx));
+            let by_name = title.to_lowercase().contains(query);
+            let by_folder = folder.to_lowercase().contains(query);
+            let group = ws.group.and_then(|gid| self.groups.iter().find(|g| g.id == gid)).map(|g| g.name.clone());
+            let active = index == self.active_workspace && self.page.is_none_or(Workbench::page_keeps_sidebar);
+            let hit = self.workspace_content_hit(id, cx).cloned();
+            let mut card = div()
+                .id(SharedString::from(format!("ws-result-{id}")))
+                .px_2()
+                .py_1p5()
+                .rounded_md()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .cursor_pointer()
+                .border_1()
+                .border_color(if active { hex_alpha(Chrome::BRIGHT, 0.45) } else { hex(Chrome::BORDER) })
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    let Some(i) = this.workspaces.iter().position(|w| w.id == id) else { return };
+                    if this.page == Some(Page::Git) {
+                        this.select_workspace_for_page(i, cx);
+                        window.focus(&this.sidebar_focus);
+                    } else {
+                        this.activate_workspace(i, window, cx);
+                    }
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .min_w_0()
+                        .children(super::accent_color(ws.color).map(|c| div().flex_shrink_0().size(px(8.)).rounded_full().bg(hex(c))))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .t_body()
+                                .text_color(hex(Chrome::FOREGROUND))
+                                .child(marked(title, if by_name { query } else { "" })),
+                        )
+                        .when(by_name, |d| d.child(tag(t(cx, "search.in_name"))))
+                        .children(group.map(|name| {
+                            div().flex_shrink_0().max_w(px(90.)).truncate().t_caption().text_color(hex(Chrome::MUTED)).child(name)
+                        })),
+                );
+            card = if by_folder {
+                card.child(match_line(t(cx, "search.in_folder"), marked(folder, query)))
+            } else {
+                card.child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(folder))
+            };
+            if let Some(found) = hit {
+                let label = format!("{} · {}", t(cx, "search.in_conversation"), role_label(found.hit.role, cx));
+                card = card.child(match_block(label, snippet(&found.hit, 24))).child(
+                    div().pl_1().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(if found.sessions > 1 {
+                        tf(cx, "search.session_and_more", &[("title", &found.session_title), ("n", &(found.sessions - 1).to_string())])
+                    } else {
+                        tf(cx, "search.session", &[("title", &found.session_title)])
+                    }),
+                );
+            }
+            list = list.child(card);
         }
         list
     }
@@ -801,13 +932,7 @@ impl Workbench {
         let ws = &self.workspaces[index];
         let id = ws.id;
         let active = index == self.active_workspace && self.page.is_none_or(Workbench::page_keeps_sidebar) && self.session_viewer.is_none();
-        let title = self.workspace_title(ws, cx);
-        // A workspace with no name of its own falls back to a path. The card shows the path on its
-        // own line below, so the name only needs the folder it ends in.
-        let title = match title.rsplit_once('/') {
-            Some((_, last)) if !last.is_empty() => last.to_string(),
-            _ => title,
-        };
+        let title = super::card_title(self.workspace_title(ws, cx));
         let summary = self.summarize(ws, cx);
         let renaming = matches!(&self.rename, Some(r) if r.target == RenameTarget::Workspace(id));
         let ws_colored = ws.color.is_some();
@@ -1422,7 +1547,7 @@ impl Workbench {
                     || session.title.to_lowercase().contains(&query)
                     || session.cwd.as_deref().is_some_and(|c| c.to_lowercase().contains(&query))
                     || session.id.to_lowercase().starts_with(&query)
-                    || hits.is_some_and(|h| h.contains(&session.path))
+                    || hits.is_some_and(|h| h.contains_key(&session.path))
             })
             .collect();
         // Stable sort keeps recency order within favorites and non-favorites.
@@ -1464,31 +1589,8 @@ impl Workbench {
             .when(self.sync_connected(), |d| {
                 d.child(filter_chip("filter-synced", t(cx, "sync.sessions_filter"), SessionFilter::Synced, cx))
             });
-        let searching = self.session_content_hits.as_ref().is_none_or(|(q, _)| *q != self.session_query(cx))
-            && self.session_query(cx).chars().count() >= 2;
-        let search = div()
-            .flex_shrink_0()
-            .px_3()
-            .pb_2()
-            // Same fix as the workspace search box: without this, a click focuses the field (it
-            // is the deeper element) and then bubbles up to the sidebar's own mouse-down handler,
-            // which immediately hands focus back to the list.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(hex(Chrome::BORDER))
-                    .bg(hex(0x1a1a1a))
-                    .child(icon("search", IconSize::INLINE, hex(Chrome::MUTED)))
-                    .child(div().flex_1().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(self.session_search.clone()))
-                    .when(searching, |d| d.child(div().t_caption().text_color(hex(Chrome::MUTED)).child("…"))),
-            );
+        let running = self.session_search_running(cx);
+        let search = self.render_search_box("session-search", &self.session_search, running, cx).px_3().pb_2();
 
         let visible = self.visible_sessions(cx);
         let body: AnyElement = if self.session_filter == SessionFilter::Synced {
@@ -1522,7 +1624,39 @@ impl Workbench {
                 .child(crate::ui::scrollbar(base))
                 .into_any_element()
         };
-        div().size_full().flex().flex_col().child(search).child(chips).child(body)
+        // While searching: how many sessions matched, and whether conversations are still read.
+        let summary = (!self.session_query(cx).is_empty() && self.session_filter != SessionFilter::Synced).then(|| {
+            div()
+                .flex_shrink_0()
+                .px_3()
+                .pb_1()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .t_small()
+                .text_color(hex(Chrome::MUTED))
+                .child(tf(cx, "search.results", &[("n", &visible.len().to_string())]))
+                .when(running, |d| d.child(div().t_caption().child(t(cx, "search.searching_conversations"))))
+        });
+        div().size_full().flex().flex_col().child(search).child(chips).children(summary).child(body)
+    }
+
+    /// What made a session a search result, as one line: the words in something said in it (with
+    /// the sentence around them), else in its title, folder or id.
+    fn session_match_line(&self, session: &agentty_bridge::model::SessionInfo, query: &str, cx: &gpui::App) -> Option<gpui::Div> {
+        use super::content_search::{marked, match_line, role_label, snippet};
+        let hit = self.session_content_hits.as_ref().filter(|(q, _)| q == query).and_then(|(_, hits)| hits.get(&session.path));
+        if let Some(hit) = hit {
+            let label = format!("{} · {}", t(cx, "search.in_conversation"), role_label(hit.role, cx));
+            return Some(match_line(label, snippet(hit, 10)));
+        }
+        if session.title.to_lowercase().contains(query) {
+            return Some(match_line(t(cx, "search.in_title"), marked(session.title.clone(), query)));
+        }
+        if let Some(cwd) = session.cwd.as_deref().filter(|c| c.to_lowercase().contains(query)) {
+            return Some(match_line(t(cx, "search.in_folder"), marked(cwd.to_string(), query)));
+        }
+        session.id.to_lowercase().starts_with(query).then(|| match_line(t(cx, "search.in_id"), marked(session.id.clone(), query)))
     }
 
     fn render_session_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1538,6 +1672,10 @@ impl Workbench {
         let open_here = self.pane_for_session(&session.id, cx).is_some();
         let selected = self.session_viewer.as_ref().is_some_and(|v| v.session.path == session.path);
         let summary = super::resume_hint::session_summary(session);
+        // While searching, the line under the folder says what matched and where instead.
+        let query = self.session_query(cx);
+        let found = (!query.is_empty()).then(|| self.session_match_line(session, &query, cx)).flatten();
+        let title_words = if session.title.to_lowercase().contains(&query) { query.as_str() } else { "" };
         div()
             .id(("session", index))
             .group("session-row")
@@ -1557,7 +1695,15 @@ impl Workbench {
                     .items_center()
                     .gap_2()
                     .child(crate::brand::avatar_colored(session.agent.id(), 16.))
-                    .child(div().flex_1().min_w_0().truncate().t_body().text_color(hex(Chrome::FOREGROUND)).child(session.title.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .t_body()
+                            .text_color(hex(Chrome::FOREGROUND))
+                            .child(super::content_search::marked(session.title.clone(), title_words)),
+                    )
                     .child(div().flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(relative_time(now, session.updated_at)))
                     .child(
                         div()
@@ -1586,7 +1732,10 @@ impl Workbench {
                     ),
             )
             .child(div().pl(px(24.)).truncate().t_small().text_color(hex(Chrome::MUTED)).child(cwd))
-            .child(div().pl(px(24.)).truncate().t_small().text_color(hex(0xa8a8a8)).child(summary.unwrap_or_default()))
+            .child(match found {
+                Some(line) => div().pl(px(24.)).child(line),
+                None => div().pl(px(24.)).truncate().t_small().text_color(hex(0xa8a8a8)).child(summary.unwrap_or_default()),
+            })
             .child(
                 div()
                     .pl(px(24.))

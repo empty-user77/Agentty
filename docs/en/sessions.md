@@ -12,7 +12,7 @@ The files are JSONL — one line per event — written by Claude Code and Codex 
 **⇧⌘S** opens the session list: everything in `~/.claude` and `~/.codex`, newest first, with title, folder and agent.
 
 - Click a session to open it, or resume it in a new tab.
-- **⇧⌘O** searches by title, conversation content or path.
+- **⇧⌘O** searches by title, conversation content, path or id. Each result says what matched, with the words marked; a match in the conversation shows the line it was found in and who said it. **✕** or **Esc** clears the search.
 - Star a session to pin it to the top.
 
 ## Resuming where you left off
