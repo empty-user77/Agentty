@@ -45,6 +45,8 @@ pub enum SettingsSection {
     Shortcuts,
     /// Desktop notifications and messages to chat services.
     Notifications,
+    /// Every Agentty window and the workspaces in each.
+    Windows,
     /// Workspaces and sessions synced through a private git repository.
     Sync,
     /// The whole configuration exported to a file and imported from one.
@@ -55,9 +57,10 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 13] = [
         Self::General,
         Self::Project,
+        Self::Windows,
         Self::Accounts,
         Self::Notifications,
         Self::Sync,
@@ -88,6 +91,7 @@ impl SettingsSection {
             Self::Aliases => "settings.aliases",
             Self::Shortcuts => "settings.shortcuts",
             Self::Notifications => "settings.notifications",
+            Self::Windows => "settings.windows",
             Self::Sync => "settings.sync",
             Self::Backup => "settings.backup",
             Self::System => "settings.system",
@@ -105,6 +109,7 @@ impl SettingsSection {
             Self::Aliases => "tag",
             Self::Shortcuts => "command",
             Self::Notifications => "bell",
+            Self::Windows => "app-window",
             Self::Sync => "cloud",
             Self::Backup => "history",
             Self::System => "wrench",
@@ -1590,6 +1595,7 @@ impl Workbench {
             SettingsSection::Aliases => aliases.into_any_element(),
             SettingsSection::Shortcuts => render_shortcuts(cx).into_any_element(),
             SettingsSection::Notifications => self.render_notification_settings(window, cx).into_any_element(),
+            SettingsSection::Windows => self.render_windows_settings(cx).into_any_element(),
             SettingsSection::Sync => self.render_sync_settings(window, cx).into_any_element(),
             SettingsSection::Backup => self.render_backup_settings(window, cx).into_any_element(),
             SettingsSection::System => self.render_system_check(cx).into_any_element(),

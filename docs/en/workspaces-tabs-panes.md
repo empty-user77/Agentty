@@ -10,6 +10,8 @@ Agentty has three levels. A **workspace** is a project, a **tab** is one screen 
 Each row in the sidebar (**⌘B**) is a workspace, with a folder it opens in. **⌘N** creates one.
 
 - Drag rows to reorder them, or drop one onto another to make a **group**. Groups collapse.
+- The search box above the list finds workspaces by name, folder or anything said in their conversations. While you search, the list turns into results: each one says where it matched — name, folder, or a line of the conversation with the words marked, and who said it. **✕** or **Esc** clears the search and brings the whole list back.
+- Workspaces linked into one session sit together under the one the link started from. When that one is in a collapsed group, the others stay listed in their own place.
 - Double-click a name to rename it.
 - **⌥⌘↓ / ⌥⌘↑** move between workspaces, **⌘1…⌘9** jump to one.
 - Every workspace, its tabs, splits and groups come back after a restart.

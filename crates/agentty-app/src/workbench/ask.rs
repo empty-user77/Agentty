@@ -30,6 +30,8 @@ pub enum AskAction {
     OpenTree(std::path::PathBuf),
     /// Take a session's newer copy from another computer and continue it.
     ContinueSynced(Box<super::sync::SyncedSession>),
+    /// Delete Agentty window `slot` and the workspaces in it (Settings → Workspaces).
+    DeleteWindow(usize),
 }
 
 #[derive(Clone)]
@@ -95,6 +97,7 @@ impl Workbench {
             AskAction::CleanTree { pane, tree } => self.clean_up_tree_now(pane, tree, true, cx),
             AskAction::OpenTree(tree) => self.open_tree_tab(None, tree, window, cx),
             AskAction::SwitchTree { pane, tree } => self.switch_pane_to_tree(pane, tree, window, cx),
+            AskAction::DeleteWindow(slot) => self.delete_window(slot, window, cx),
         }
         cx.notify();
     }

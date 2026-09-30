@@ -487,6 +487,9 @@ impl EntityInputHandler for TextInput {
             .map(|r| self.range_from_utf16(r))
             .map(|new_range| new_range.start + range.start..new_range.end + range.start)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        // A syllable still being composed (Korean, Japanese) is text in the field too: whoever
+        // filters by it must hear of it, and of the composition being deleted back to nothing.
+        cx.emit(TextInputEvent::Changed);
         cx.notify();
     }
 

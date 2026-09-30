@@ -291,6 +291,18 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Links the first panes of workspaces `a` and `b` without sending anything (debug), to see
+    /// how linked workspaces are listed.
+    pub(super) fn debug_link_workspaces(&mut self, a: usize, b: usize, cx: &mut Context<Self>) {
+        let first = |i: usize| self.workspaces.get(i).and_then(|w| w.tabs.first()).map(|t| t.active.read(cx).pane_id);
+        if let (Some(from), Some(to)) = (first(a), first(b)) {
+            if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
+                self.flow.edges.push(FlowEdge::direct(from, to));
+            }
+        }
+        cx.notify();
+    }
+
     pub(super) fn debug_connect(&mut self, from: u64, to: u64, cx: &mut Context<Self>) {
         if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
             self.flow.edges.push(FlowEdge::new(from, to));

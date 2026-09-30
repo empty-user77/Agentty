@@ -265,7 +265,7 @@ impl LayoutState {
     }
 
     /// Every extra window with a saved layout (open at the last quit or recently closed).
-    fn all_window_slots() -> Vec<usize> {
+    pub(super) fn all_window_slots() -> Vec<usize> {
         let Ok(entries) = std::fs::read_dir(agentty_bridge::fsutil::data_dir()) else { return Vec::new() };
         let mut slots: Vec<usize> = entries
             .flatten()
@@ -290,6 +290,19 @@ impl LayoutState {
     fn remove(slot: usize) {
         if slot > 0 {
             let _ = std::fs::remove_file(Self::path(slot));
+        }
+    }
+
+    /// Deletes window `slot` for good: its layout, and its place in the recently closed windows.
+    pub(super) fn forget_window(slot: usize) {
+        if slot == 0 {
+            return;
+        }
+        Self::remove(slot);
+        let mut closed = ClosedWindows::load();
+        if closed.contains(slot) {
+            closed.windows.retain(|w| w.slot != slot);
+            closed.save();
         }
     }
 

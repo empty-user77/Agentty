@@ -390,7 +390,9 @@ fn register_app_actions(cx: &mut App) {
             let _ = handle.update(cx, |_, window, _| window.minimize_window());
         }
     });
-    cx.on_action(|action: &ReopenWindow, cx| reopen_window(action.slot, cx));
+    cx.on_action(|action: &ReopenWindow, cx| {
+        reopen_window(action.slot, cx);
+    });
     cx.on_action(|_: &ZoomWindow, cx| {
         if let Some(handle) = cx.active_window() {
             let _ = handle.update(cx, |_, window, _| window.zoom_window());
@@ -904,17 +906,19 @@ pub fn new_window(cx: &mut App) {
 }
 
 /// Opens a recently closed window again, or brings it forward if it is already open.
-fn reopen_window(slot: usize, cx: &mut App) {
+pub(crate) fn reopen_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench>> {
     if let Some(open) = workbenches(cx).into_iter().find(|w| w.read(cx).is_ok_and(|wb| wb.slot == slot)) {
         let _ = open.update(cx, |_, window, _| window.activate_window());
-        return;
+        return Some(open);
     }
     workbench::ClosedWindows::reopen(slot);
-    if let Some(window) = open_window(slot, cx) {
+    let window = open_window(slot, cx);
+    if let Some(window) = window {
         let _ = window.update(cx, |_, window, _| window.activate_window());
         cx.activate(true);
     }
     set_app_menus(cx);
+    window
 }
 
 /// Quits — unless a window has files with unsaved changes in its editor: that window comes to
@@ -989,7 +993,7 @@ pub fn forget_discard_answers(cx: &mut App) {
 }
 
 /// Agentty windows, main window first.
-fn workbenches(cx: &App) -> Vec<gpui::WindowHandle<Workbench>> {
+pub(crate) fn workbenches(cx: &App) -> Vec<gpui::WindowHandle<Workbench>> {
     let mut windows: Vec<_> = cx.windows().into_iter().filter_map(|w| w.downcast::<Workbench>()).collect();
     windows.sort_by_key(|w| w.read(cx).map(|wb| wb.slot).unwrap_or(usize::MAX));
     windows

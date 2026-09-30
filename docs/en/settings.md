@@ -28,6 +28,10 @@ Language (English, 한국어, 日本語, 中文), and the behavior of the things
 
 Where a new tab starts, the harness patterns Agentty looks for, whether the harness prompt is sent right away, and which agent starts harness work. Also which editor **Open in editor** uses.
 
+## Windows
+
+Every Agentty window (**⇧⌘N** opens another) keeps a workspace list of its own. This page lists the windows, open and recently closed, with the workspaces in each and the terminals still running. Click a workspace to go to it. **Bring forward** shows an open window, **Reopen** opens a closed one again, and **Delete** closes a window and removes its workspaces after asking; the conversations stay in the session list. The main window is never deleted.
+
 ## Accounts
 
 How new Claude Code and Codex tabs sign in. The default changes nothing — the agents use their own login. See [MCP and connectors](/docs/mcp-and-connectors) for the alternatives and where the credentials are kept.
