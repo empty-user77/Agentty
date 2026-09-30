@@ -48,7 +48,7 @@ Context is filtered by what the plugin declared. Without `workspace.read`, folde
 
 The dialog is not a boundary, and it is worth being plain about that. `prompt.inject` lets a plugin **open an agent session of its own and send it text, without asking**. That is deliberate: an [AgentOS](/docs/plugin-agentos) is a plugin whose whole job is running steps through sessions it started, and it could not do that through a dialog.
 
-A plugin **may** hand the choice to the user instead. `target: "ask"` opens **Send to…**: they see the text, pick the agent and the destination, and nothing happens until they press **Send**. Every other target — `newTab`, `newWorkspace`, `active`, `pane`, `workspace` — skips it. So a plugin acting on anything that came from outside should always use `ask`, and one a link reached has no say: Agentty routes it through the dialog whatever it asked for.
+A plugin **may** hand the choice to the user instead. `target: "ask"` opens **Send to…**: they see the text, pick the agent and the destination, and nothing happens until they press **Send**. Every other target — `newTab`, `newWorkspace`, `active`, `pane`, `workspace` — skips it. So a plugin acting on anything that came from outside should always use `ask`. A plugin a link reached is constrained: `newTab` and `newWorkspace` with agent Claude Code or Codex (or no agent given, which means Claude Code) open directly; every other case goes through **Send to…** unsent.
 
 The two calls differ on Enter, and the difference is the whole of `terminal.write`:
 
@@ -57,14 +57,15 @@ The two calls differ on Enter, and the difference is the whole of `terminal.writ
 
 ## Links are not trusted
 
-`agentty://` links can come from anywhere, including a web page. Once a link has reached a plugin, and for as long as that plugin keeps running, Agentty
+`agentty://` links can come from anywhere, including a web page. Once a link has reached a plugin, and for as long as that plugin keeps running:
 
-- routes that plugin's `prompt/inject` through **Send to…** whatever target it asked for, and never presses Enter, and
-- refuses `terminal/send` outright.
+- `prompt/inject` with target `newTab` or `newWorkspace` and agent Claude Code or Codex (or no agent, which defaults to Claude Code) opens that new agent tab or workspace directly, with the text typed into the agent's prompt unsent — the user reads it and presses Enter. One such tab every few seconds: a page opening links in a loop gets one, and the rest wait in **Send to…**. Every other case — an open terminal with target `active`, `pane`, or `workspace`; `split`; `own`; a shell or terminal agent; or no target — goes through **Send to…**, unsent.
+- `terminal/send` types the text without pressing Enter (`submit` is forced to false), into a Claude Code or Codex terminal the plugin may type into — never a shell, where text left on the command line would run with whatever the user types next. Typing never runs anything: text is pasted with control characters removed, and newlines are bracketed-pasted or turned into spaces.
+- Both calls answer with `submitted: false` when Enter was left to the user.
 
-Nothing lifts it while the plugin runs. A click in the panel the link opened is not consent to type into a terminal, and neither is waiting — a plugin can wait as easily as a user can click. **Restarting the plugin is what clears it.**
+The browser is still refused (`-32001`). `host/openUrl` is still the one thing a link-reached plugin can do outside Agentty, one address at a time. A click in the panel the link opened is not consent to run what the plugin types, and neither is waiting — a plugin can wait as easily as a user can click. **Restarting the plugin is what clears it.**
 
-The one thing a link-reached plugin can still do outside Agentty is `host/openUrl`, one address at a time. Agentty cannot tell a good address from a bad one, so that part is yours: treat whatever a link hands you as text from a stranger, and never open an address it gave you unexamined.
+Agentty cannot tell a good address from a bad one, so that part is yours: treat whatever a link hands you as text from a stranger, and never open an address it gave you unexamined.
 
 > [!IMPORTANT]
 > If your plugin handles links, validate every parameter. The Cosmica plugin only opens `.md` files inside the Cosmica notes folder and refuses paths outside it.

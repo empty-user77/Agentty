@@ -61,8 +61,7 @@ The "Send to…" dialog is not a boundary, and it is worth knowing that before y
 this. A plugin with `prompt.inject` can open an agent session of its own and send it text without
 asking — and that is deliberate: an [AgentOS](agentos.md) walks a piece of work through several
 sessions, and it could not if a dialog stood in front of every one. A plugin may instead ask you
-where a prompt should go; a plugin that an `agentty://` link reached always has to, and cannot
-press Enter for you.
+where a prompt should go. A plugin that an `agentty://` link reached has constraints: certain targets open directly unsent, others go through the dialog unsent; Enter is never pressed for you.
 
 When a plugin does ask — or when a link from another app sends a prompt — Agentty shows what will
 be sent and lets you choose:

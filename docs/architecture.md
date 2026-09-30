@@ -118,8 +118,7 @@ next finished turn is its reply to that context and is not forwarded back, so tw
   over a channel to the app loop. Events from an older process generation are ignored after a restart.
 - Calls are checked against the manifest's permissions. Calls that need a window (`prompt/inject`, `terminal/send`,
   `session/get`, `workspace/list`, `ui/notify`) go to the frontmost workbench. After a link reached a plugin, and until
-  the user interacts with that plugin, its prompts are forced through the "Send to…" dialog and `terminal/send` is
-  refused, so a web page can't drive an agent through a plugin.
+  the plugin restarts, its prompts are constrained: `newTab` and `newWorkspace` with Claude Code or Codex open directly unsent; others go through the "Send to…" dialog unsent. `terminal/send` types without pressing Enter. The browser is refused. So a web page can't press Enter or open a browser through a plugin.
 - Plugins never draw: `ui/setPanel` sends a tree (columns, rows, text, buttons, inputs, lists, …) that
   `workbench/plugin_panel.rs` renders natively in a column right of the terminals; text inputs are GPUI entities kept
   per plugin and element id. A plugin's panel opens from the window header, the sidebar or the command palette,
