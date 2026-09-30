@@ -88,7 +88,7 @@ Status arrives whether or not anything is being drawn: a window behind another, 
 |---|---|
 | `-32601` | Unknown method |
 | `-32602` | Invalid parameters — bad UI tree, no such pane, … |
-| `-32001` | Permission missing, or refused because a link reached the plugin — until it restarts |
+| `-32001` | Permission missing, or (for the browser only) refused because a link reached the plugin — until it restarts |
 | `-32002` | Unavailable — no window open, no session yet |
 
 ## An example exchange

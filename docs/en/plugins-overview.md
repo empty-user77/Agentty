@@ -124,11 +124,11 @@ If a link needs a built-in plugin you don't have yet, Agentty offers to install 
 [Cosmica](https://www.cosmica.ink/) is a notes app. Its plugin ships with Agentty and is marked *Recommended* when Cosmica is installed. It reads only the notes folder and local port from Cosmica's own settings.
 
 1. **Plugins → Install** on the Cosmica card, then open its panel from the tab strip.
-2. **Notes → prompt** — search your notes, then insert one into the focused terminal or continue it somewhere you choose.
-3. **From Cosmica** — right-click a note → **Continue in Agentty**. The note is saved first, then **Send to…** opens in Agentty.
-4. **Session → Cosmica** — with a Claude Code or Codex pane focused, **Save AI summary** asks the agent to write a structured summary (goal, what was done, files changed, decisions, next steps) into `Agentty/` in your notes. **Save conversation log** stores the raw conversation without asking the AI anything.
+2. **Save this session** (top of the panel) — with a Claude Code or Codex pane focused, **Save to Cosmica** asks the agent to write a structured summary (goal, what was done, files changed, decisions, next steps) into the folder picked below it. The folders come from your Cosmica notes; `Agentty` is picked by default and made the first time you save, and **+ New folder** makes another. **Log only** stores the raw conversation without asking the AI anything.
+3. **Continue from a note** — click a note to continue it in a new tab. A summary Agentty saved reopens in the folder, and with the agent, it was written in; otherwise the focused pane's folder and agent are used. The recent few notes show first (**Show more** for the rest); search looks through all of them. The row's buttons insert the note into the focused terminal, or pick another place with **Continue elsewhere…**.
+4. **From Cosmica** — right-click a note → **Continue in Agentty**. The note opens in a new tab, typed in for you to read; press Enter to start.
 
-Busy agents are left alone; try again when the turn finishes. While Cosmica is running, notes are saved through its local API so they are indexed right away; otherwise the file is written and Cosmica picks it up on its next start.
+An agent that is still working gets the request queued and writes the summary as soon as its turn ends; one waiting for your answer or approval is left alone. While Cosmica is running, notes are saved through its local API so they are indexed right away; otherwise the file is written and Cosmica picks it up on its next start.
 
 ## If something goes wrong
 

@@ -122,9 +122,7 @@ And two the workflow itself has to get right:
 
 - **The user stays in front of it.** A step's prompt goes into a session the user can read, in a
   tab they can take over.
-- **A link is not a run.** A plugin that a link reached cannot type into terminals and its prompts
-  go through the "Send to…" dialog (`link_guarded`). An AgentOS started that way asks first — and
-  it still follows the session the user placed, so asking costs it nothing but a turn.
+- **A link is not a run.** A plugin that a link reached has constrained prompts: `newTab`/`newWorkspace` with Claude Code or Codex open directly unsent; others go through **Send to…** unsent. Terminal typing is allowed but never presses Enter. An AgentOS started that way asks first — and it still follows the session the user placed, so asking costs it nothing but a turn.
 
 ## Reading and posting through the browser
 

@@ -183,8 +183,9 @@ export interface Plugin {
   notify(message: string, kind?: 'info' | 'success' | 'warning' | 'error'): Promise<void>;
   setBadge(text: string): Promise<void>;
   getContext(): Promise<Context>;
-  injectPrompt(request: PromptRequest): Promise<{ status: 'sent' | 'asked'; paneId?: number }>;
-  sendToTerminal(request: { paneId?: number; text: string; submit?: boolean }): Promise<{ paneId: number }>;
+  /** `submitted: false` when the text was typed but Enter left to the user (always, once a link reached the plugin). */
+  injectPrompt(request: PromptRequest): Promise<{ status: 'sent' | 'asked'; paneId?: number; submitted?: boolean }>;
+  sendToTerminal(request: { paneId?: number; text: string; submit?: boolean }): Promise<{ paneId: number; submitted?: boolean }>;
   getSession(request?: { paneId?: number; maxTurns?: number }): Promise<Session>;
   listWorkspaces(): Promise<WorkspaceInfo[]>;
   openUrl(url: string): Promise<void>;
