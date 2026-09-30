@@ -141,7 +141,7 @@ app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bel
 blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right
 chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud
 code columns-2 command container copy database download ellipsis external-link eye file-input
-file-plus file-text folder folder-open folder-plus git-branch git-commit-horizontal
+file-plus file-text folder folder-git-2 folder-open folder-plus git-branch git-commit-horizontal
 git-pull-request globe grip-vertical hammer hash history house image info key-round
 layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question
 message-square minimize-2 minus network notebook notebook-pen package panel-left-close

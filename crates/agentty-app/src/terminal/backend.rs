@@ -121,6 +121,15 @@ impl Backend {
                 env.insert("CLAUDE_CODE_GIT_BASH_PATH".into(), bash.display().to_string());
             }
         }
+        // Claude Code turns its fullscreen renderer off, for one launch or for good, when an earlier
+        // launch on this machine went away before it counted as started; with many agents running
+        // side by side that happens with nothing wrong in the renderer. Someone who chose
+        // fullscreen keeps it.
+        if agentty_bridge::claude::prefers_fullscreen() {
+            env.insert("CLAUDE_CODE_NO_FLICKER".into(), "1".into());
+        }
+        // The newest copy of each agent CLI, for the shell wrappers to start when one is typed.
+        env.extend(crate::agent_bins::pane_environment());
         // Where the shell wrapper finds Agentty's guide for a `claude` typed into the pane.
         if crate::agent_guide::enabled() && crate::agent_guide::guide_file().is_file() {
             env.insert("AGENTTY_GUIDE_FILE".into(), crate::agent_guide::guide_file().display().to_string());

@@ -30,7 +30,40 @@ pub(super) struct CloneDialog {
     status: Option<(String, bool, Option<PathBuf>)>,
 }
 
+/// Whether `dir` is somewhere a repository is cloned into: not `/` or the home folder, not inside
+/// a repository already, and empty — or holding only folders (cloned repositories side by side).
+/// `.DS_Store` doesn't count.
+fn is_clone_spot(dir: &std::path::Path, home: &std::path::Path) -> bool {
+    if dir.parent().is_none() || dir == home || agentty_bridge::worktree::tree_root(dir).is_some() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    entries.flatten().filter(|entry| entry.file_name() != ".DS_Store").all(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+}
+
 impl Workbench {
+    /// Whether the tab bar offers "Clone from Git": the terminal in front runs no agent and its
+    /// folder is a place to clone into ([`is_clone_spot`], remembered for a few seconds — renders
+    /// ask it every frame).
+    pub(super) fn clone_offered(&self, cx: &gpui::App) -> bool {
+        let Some(pane) = self.active_pane() else { return false };
+        let view = pane.read(cx);
+        if view.tool_id() != "shell" {
+            return false;
+        }
+        let cwd = view.display_cwd();
+        let mut spots = self.clone_spots.borrow_mut();
+        if let Some((answer, _)) = spots.get(&cwd).filter(|(_, at)| at.elapsed() < Duration::from_secs(3)) {
+            return *answer;
+        }
+        if spots.len() > 64 {
+            spots.clear();
+        }
+        let answer = is_clone_spot(&cwd, &crate::launch::home_dir());
+        spots.insert(cwd, (answer, std::time::Instant::now()));
+        answer
+    }
+
     pub(super) fn open_clone_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dir) = self
             .active_pane()
@@ -335,5 +368,34 @@ impl Workbench {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_clone_spot;
+
+    /// Offered in an empty folder or one holding only folders; never with files in it, inside a
+    /// repository, at `/` or in the home folder.
+    #[test]
+    fn clone_is_offered_only_where_a_repository_can_go() {
+        let base = std::env::temp_dir().join(format!("agentty-clone-spot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (home, empty, folders, files, repo) =
+            (base.join("home"), base.join("empty"), base.join("folders"), base.join("files"), base.join("repo"));
+        for dir in [&home, &empty, &folders.join("one"), &folders.join("two"), &files, &repo.join(".git"), &repo.join("src")] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(empty.join(".DS_Store"), "").unwrap();
+        std::fs::write(files.join("notes.txt"), "x").unwrap();
+
+        assert!(is_clone_spot(&empty, &home), "empty (a .DS_Store doesn't count)");
+        assert!(is_clone_spot(&folders, &home), "only folders");
+        assert!(!is_clone_spot(&files, &home), "a file in it");
+        assert!(!is_clone_spot(&repo, &home), "a repository");
+        assert!(!is_clone_spot(&repo.join("src"), &home), "inside a repository");
+        assert!(!is_clone_spot(&home, &home), "the home folder");
+        assert!(!is_clone_spot(std::path::Path::new("/"), &home), "the root");
+        std::fs::remove_dir_all(base).ok();
     }
 }

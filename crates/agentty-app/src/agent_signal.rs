@@ -486,8 +486,9 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 return;
             }
             // Creating a tree is a `git worktree add`: seconds at most. When the user is asked which
-            // tree to use, a first line says so and the answer takes as long as they do.
-            let mut wait = Duration::from_secs(30);
+            // tree to use, a first line says so and the answer takes up to `ASK_WAIT` (the dialog
+            // closes then), plus the tree for a late "new worktree".
+            let mut wait = TREE_WAIT;
             loop {
                 let response = answer.recv_timeout(wait).unwrap_or_else(|_| browser_reply(Err("timed out".into())));
                 if let Some(writer) = writer.as_mut() {
@@ -497,7 +498,7 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 if !is_asking(&response) {
                     break;
                 }
-                wait = ASK_WAIT;
+                wait = ASK_WAIT + TREE_WAIT;
             }
             continue;
         }
@@ -575,8 +576,13 @@ pub fn is_agent_label(label: &str) -> bool {
     matches!(label, "claude" | "codex")
 }
 
-/// How long an agent typed into a shell waits for the user to pick its working tree.
-const ASK_WAIT: Duration = Duration::from_secs(600);
+/// How long an agent typed into a shell waits for the user to pick its working tree. Without an
+/// answer by then (no dialog came up, or it was left open) the agent starts where it was typed,
+/// and the dialog closes.
+pub const ASK_WAIT: Duration = Duration::from_secs(30);
+
+/// How long creating a working tree may take (`git worktree add`).
+const TREE_WAIT: Duration = Duration::from_secs(30);
 
 /// A reply that only says the user is being asked; the real answer follows on the next line.
 fn is_asking(reply: &str) -> bool {
@@ -608,13 +614,10 @@ pub fn worktree_for(args: &[String]) -> i32 {
     let mut line = String::new();
     let _ = reader.read_line(&mut line);
     let mut reply: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
-    // Another agent already works here and the user is asked where this one goes: say so under
-    // the command, and wait for the choice (Agentty's own dialog), not for a machine.
+    // Another agent already works here and the user is asked where this one goes: wait for the
+    // choice (Agentty's own dialog), not for a machine.
     if reply["result"]["asking"] == true {
-        if let Some(message) = reply["result"]["message"].as_str() {
-            eprintln!("{message}");
-        }
-        let _ = reader.get_ref().set_read_timeout(Some(ASK_WAIT));
+        let _ = reader.get_ref().set_read_timeout(Some(ASK_WAIT + TREE_WAIT));
         line.clear();
         let _ = reader.read_line(&mut line);
         reply = serde_json::from_str(line.trim()).unwrap_or_default();

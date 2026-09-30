@@ -3,6 +3,22 @@ title: 故障排查
 description: 常见的出错情形，以及该怎么办。
 ---
 
+## 自动诊断问题
+
+Agentty 可以自动查找并修复常见问题。打开**帮助 → 自动诊断问题**，或点击任意终端窗格栏上的扳手按钮。
+
+诊断检查会查看:
+- Claude Code 或 Codex 已安装但新终端找不到 —— Agentty 可以将其文件夹添加到你的 shell 启动文件
+- 同一 CLI 的多个副本导致 PATH 顺序冲突 —— Agentty 会启动最新版本，并针对旧版本发出警告
+- Claude Code 全屏模式在异常退出后仍被记录 —— Agentty 可以清除记录，使其他终端不受影响
+- Claude Code 的 `settings.json`、`~/.claude.json` 或 Codex `config.toml` 中的语法错误 —— Agentty 可以恢复最后一个良好版本
+- Shell 启动文件中设置的环境变量产生干扰 —— Agentty 可以注释掉它们
+- Agentty 的终端集成文件缺失或过期 —— Agentty 可以重新写入
+
+Agentty 能修复的每个问题都有一个**自动修复**按钮。使用**全部修复**一次应用所有修复。在改动任何文件前，Agentty 会创建名为 `<filename>.agentty-<timestamp>` 的备份。对 shell 启动文件的改动仅在新打开的终端中生效。
+
+另外: 当另一个 Claude 或智能体进程已在某个文件夹中工作，而你被问及在哪里启动时，如果 30 秒内没有选择，它会自动在你的当前文件夹启动。
+
 ## 智能体没有出现，或启动不了
 
 Agentty 只提供能在你**登录 shell** 的 `PATH` 中找到的智能体 CLI。如果某个工具在终端里能用、在这里却不行，多半是 `PATH` 写在了只有交互式 shell 才读取的文件里（`.zshrc`、`.bashrc`）。把 export 移到登录 shell 会读取的位置，或查看**设置 → 系统检查**，它会列出缺失项并替你安装。

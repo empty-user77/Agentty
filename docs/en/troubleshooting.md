@@ -3,6 +3,22 @@ title: Troubleshooting
 description: The things that usually go wrong, and what to do about them.
 ---
 
+## Diagnose problems
+
+Agentty can automatically find and fix common issues. Open **Help → Diagnose problems**, or tap the wrench button on any terminal pane's bar.
+
+The diagnostic check looks for:
+- Claude Code or Codex installed but not found by a new terminal — Agentty can add its folder to your shell's startup file
+- Multiple copies of the same CLI with conflicting PATH order — Agentty starts the newest version and warns about older ones
+- Claude Code fullscreen mode left on after early exits — Agentty can clear the record so other terminals are unaffected
+- Syntax errors in Claude Code's `settings.json`, `~/.claude.json`, or Codex `config.toml` — Agentty can restore the last good version
+- Shell environment variables set in startup files that interfere — Agentty can comment them out
+- Agentty's terminal integration files missing or outdated — Agentty can write them again
+
+Each issue Agentty can fix has a **Fix** button. Use **Fix all** to apply every fix at once. Before changing any file, Agentty keeps a backup named `<filename>.agentty-<timestamp>`. Changes to shell startup files apply to newly opened terminals only.
+
+Also: when another Claude or agent process is already working in a folder and you're asked where to start, it now starts in your current folder automatically if you don't choose within 30 seconds.
+
 ## An agent isn't offered, or won't start
 
 Agentty only offers agent CLIs it can find on the `PATH` of your **login shell**. If a tool works in your terminal but not here, the `PATH` is probably set in a file only interactive shells read (`.zshrc`, `.bashrc`). Move the export to where a login shell reads it, or check **Settings → System check**, which lists what is missing and installs it for you.

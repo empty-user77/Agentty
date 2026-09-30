@@ -174,9 +174,11 @@ fn probe() -> String {
 fn probe_script() -> String {
     let binaries: Vec<&str> = ["claude", "codex", "ollama"].into_iter().chain(OTHER_AGENTS.iter().map(|a| a.binary)).collect();
     let list = binaries.iter().map(|b| shell_quote(b)).collect::<Vec<_>>().join(" ");
+    // The copy of Claude Code / Codex that tabs start (the newest installed), for its version and options.
+    let (claude, codex) = (shell_quote(&crate::agent_bins::program("claude")), shell_quote(&crate::agent_bins::program("codex")));
     // Shims living inside other apps' bundles (e.g. cmux's `grok`) are not real installs.
     format!(
-        "for b in {list}; do p=$(command -v \"$b\" 2>/dev/null) || continue; case \"$p\" in *.app/Contents/*) ;; *) echo \"bin:$b\";; esac; done; for b in claude codex; do command -v \"$b\" >/dev/null 2>&1 && echo \"version:$b:$(\"$b\" --version 2>/dev/null </dev/null | head -n 1)\"; done; command -v claude >/dev/null 2>&1 && claude --help 2>/dev/null </dev/null | grep -q '\"auto\"' && echo \"{CLAUDE_AUTO_MODE_LINE}\"; command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | sed 's/^/ollama:/'; true"
+        "for b in {list}; do p=$(command -v \"$b\" 2>/dev/null) || continue; case \"$p\" in *.app/Contents/*) ;; *) echo \"bin:$b\";; esac; done; command -v {claude} >/dev/null 2>&1 && echo \"version:claude:$({claude} --version 2>/dev/null </dev/null | head -n 1)\"; command -v {codex} >/dev/null 2>&1 && echo \"version:codex:$({codex} --version 2>/dev/null </dev/null | head -n 1)\"; command -v {claude} >/dev/null 2>&1 && {claude} --help 2>/dev/null </dev/null | grep -q '\"auto\"' && echo \"{CLAUDE_AUTO_MODE_LINE}\"; command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | sed 's/^/ollama:/'; true"
     )
 }
 
@@ -259,8 +261,12 @@ fn claude_models() -> Vec<(String, String)> {
 }
 
 pub fn detect() -> Installed {
+    // Versions are read from the copy tabs start: the newest, looked for once per run first.
+    crate::agent_bins::ensure_refreshed();
     let output = probe();
-    let (binaries, ollama_models, versions) = parse_probe(&output);
+    let (mut binaries, ollama_models, versions) = parse_probe(&output);
+    // A copy found outside `PATH` (in an installer's folder) still starts: it is installed.
+    binaries.extend(crate::agent_bins::AGENTS.iter().filter(|name| crate::agent_bins::chosen(name).is_some()).map(|name| name.to_string()));
     remember_auto_mode(output.lines().any(|line| line.trim() == CLAUDE_AUTO_MODE_LINE));
     let codex_models = if binaries.contains("codex") { codex_models() } else { Vec::new() };
     let claude_models = if binaries.contains("claude") { claude_models() } else { Vec::new() };

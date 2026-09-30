@@ -66,6 +66,7 @@ pub const ICONS: &[&str] = &[
     "ellipsis",
     "folder",
     "folder-plus",
+    "folder-git-2",
     "git-branch",
     "history",
     "layout-panel-left",

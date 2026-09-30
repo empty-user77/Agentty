@@ -15,6 +15,7 @@ mod confirm;
 mod content_search;
 mod context_menu;
 mod db_page;
+mod diagnostics;
 mod disk_page;
 mod docker_panel;
 mod drop_split;
@@ -111,6 +112,7 @@ actions!(
         OpenSettings,
         OpenExtensions,
         OpenGit,
+        RunDiagnostics,
         OpenPlugins,
         ToggleBrowser,
         HardReloadBrowser,
@@ -441,6 +443,8 @@ pub struct Workbench {
     /// Whether a pane's folder is a folder of projects, asked from renders: kept a few seconds so a
     /// frame asks the file system nothing.
     folder_kinds: std::cell::RefCell<std::collections::HashMap<PathBuf, (bool, std::time::Instant)>>,
+    /// Folders asked whether "Clone from Git" belongs there, with when (see `clone_offered`).
+    clone_spots: std::cell::RefCell<std::collections::HashMap<PathBuf, (bool, std::time::Instant)>>,
     /// Installed agent CLIs and local models (`None` until detected).
     pub installed: Option<crate::agents::Installed>,
     installed_at: Option<std::time::Instant>,
@@ -500,6 +504,8 @@ pub struct Workbench {
     pending_editor_open: Option<PathBuf>,
     /// A short question waiting for an answer (migrate, delete, compact before resuming).
     ask: Option<ask::Ask>,
+    /// Help → Diagnose problems, while open.
+    diagnostics: Option<diagnostics::Diagnostics>,
     launcher_more: bool,
     service_status: HashMap<&'static str, agentty_bridge::service_status::ServiceStatus>,
     status_dismissed: std::collections::HashSet<String>,
@@ -773,6 +779,7 @@ impl Workbench {
             branch_menu_closed: None,
             folder_scans: Default::default(),
             folder_kinds: Default::default(),
+            clone_spots: Default::default(),
             installed: None,
             installed_at: None,
             mini: None,
@@ -808,6 +815,7 @@ impl Workbench {
             discard_confirmed: false,
             pending_editor_open: None,
             ask: None,
+            diagnostics: None,
             launcher_more: false,
             service_status: HashMap::new(),
             status_dismissed: Default::default(),
@@ -3186,6 +3194,7 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_page(Page::Settings, cx)))
             .on_action(cx.listener(|this, _: &OpenExtensions, _, cx| this.open_page(Page::Extensions, cx)))
             .on_action(cx.listener(|this, _: &OpenGit, _, cx| this.open_page(Page::Git, cx)))
+            .on_action(cx.listener(|this, _: &RunDiagnostics, _, cx| this.open_diagnostics(cx)))
             .on_action(cx.listener(|this, _: &OpenPlugins, _, cx| this.open_page(Page::Plugins, cx)))
             // The Edit menu's ⌘C / ⌘V / ⌘A land here when no terminal is focused; a page in the
             // in-app browser still needs them, since a menu key equivalent never reaches it.
@@ -3399,6 +3408,7 @@ impl Render for Workbench {
             .children(self.render_close_confirm(cx))
             .children(self.render_tree_remove_confirm(cx))
             .children(self.render_ask(cx))
+            .children(self.render_diagnostics(cx))
             .children(self.render_rename_dialog(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_tasks_dialog(cx))
@@ -3886,6 +3896,7 @@ impl Workbench {
             "docker" => self.debug_docker(argument, window, cx),
             "db" => self.debug_db(argument, window, cx),
             "chat-notify" => self.debug_chat_notify(argument, cx),
+            "diagnose" => self.debug_diagnose(argument, cx),
             "sync" => self.debug_sync(argument, window, cx),
             "backup" => self.debug_backup(argument, window, cx),
             "files" => match argument {

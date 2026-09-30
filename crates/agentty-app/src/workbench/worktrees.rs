@@ -11,7 +11,7 @@ use crate::agent_signal::browser_reply;
 use crate::i18n::{t, tf};
 use crate::launch::{LaunchChoice, PaneKind};
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::{icon, TypeScale};
+use crate::ui::icon;
 use agentty_bridge::worktree::tree_root;
 use gpui::{div, prelude::*, px, AppContext, Context, Window};
 use std::path::{Path, PathBuf};
@@ -143,8 +143,9 @@ impl Workbench {
     /// "An agent already works here": a new working tree, or the existing one.
     pub(super) fn ask_which_tree(&mut self, request: TreeRequest, cx: &mut Context<Self>) {
         let root = request.root().to_path_buf();
+        let shell_pane = request.shell_pane();
         // Closing the question sends a waiting shell's agent into the existing tree: that is already an answer.
-        let cancel = request.shell_pane().is_none();
+        let cancel = shell_pane.is_none();
         // The branch the other session is on, as its own bar shows it; the folder when it has none.
         let branch = self.all_panes().iter().find_map(|pane| {
             let view = pane.read(cx);
@@ -180,6 +181,19 @@ impl Workbench {
             cancel,
         };
         self.ask(ask, cx);
+        // A shell stops waiting after a while and starts its agent where it was typed: the
+        // question goes with it.
+        if let Some(pane) = shell_pane {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(crate::agent_signal::ASK_WAIT).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.asks_for_shell(pane) {
+                        this.dismiss_ask(cx);
+                    }
+                });
+            })
+            .detach();
+        }
     }
 
     /// Joins the working tree in use: the session starts in the folder it was asked for.
@@ -284,9 +298,9 @@ pub fn answer_worktree_request(
     if !taken {
         return stay(&request);
     }
-    // The answer is the user's now: tell the wrapper to wait for it, and what it is waiting on.
+    // The answer is the user's now: tell the wrapper to wait for it (Agentty's dialog says what for).
     let _ = holder.update(cx, |this, _, cx| {
-        let waiting = serde_json::json!({ "asking": true, "message": t(cx, "worktree.ask_shell") });
+        let waiting = serde_json::json!({ "asking": true });
         let _ = request.reply.send(browser_reply(Ok(waiting.to_string())));
         let request = TreeRequest::Shell {
             reply: request.reply.clone(),
@@ -674,45 +688,33 @@ impl Workbench {
         (scan.map_or(0, |s| s.counts().1), scanning)
     }
 
-    /// The Files button at the end of the tab bar. With worktrees around the active pane it turns
-    /// purple and says how many ("⑂ 9"): the Files panel is where they are listed and managed.
+    /// The Files button at the end of the tab bar. With worktrees around the active pane the same
+    /// tree icon turns purple (how many is in its tooltip): the Files panel is where they are
+    /// listed and managed.
     pub(super) fn files_button(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let open = self.files_panel.is_some();
-        let (count, scanning) = self.worktrees_around_active(cx);
-        if count == 0 && !scanning {
-            return super::chrome::header_icon(
-                "header-files",
-                "list-tree",
-                open,
-                (t(cx, "files.title"), Some("⌥⌘B")),
-                cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.toggle_files_panel(cx)),
-            );
+        let (count, _) = self.worktrees_around_active(cx);
+        let on_click = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.toggle_files_panel(cx));
+        if count == 0 {
+            return super::chrome::header_icon("header-files", "list-tree", open, (t(cx, "files.title"), Some("⌥⌘B")), on_click);
         }
-        let tooltip = if count == 0 {
-            t(cx, "worktree.folder_scanning").to_string()
-        } else {
-            format!("{} · {}", t(cx, "files.title"), tf(cx, "worktree.button_count", &[("n", &count.to_string())]))
-        };
+        let tooltip = format!("{} · {}", t(cx, "files.title"), tf(cx, "worktree.button_count", &[("n", &count.to_string())]));
         div()
             .id("header-files")
-            .h(px(26.))
-            .px_1p5()
+            .relative()
+            .flex_shrink_0()
+            .my_auto()
+            .size(px(crate::ui::ICON_BUTTON))
             .flex()
             .items_center()
-            .gap_1()
+            .justify_center()
             .rounded_md()
             .cursor_pointer()
             .bg(hex_alpha(Chrome::PURPLE, if open { 0.32 } else { 0.18 }))
-            .text_color(hex(Chrome::PURPLE))
-            .t_small()
             .hover(|s| s.bg(hex_alpha(Chrome::PURPLE, 0.3)))
             .tooltip(crate::ui::Tooltip::text(tooltip, Some("⌥⌘B")))
-            .map(|d| match scanning && count == 0 {
-                true => d.child(crate::ui::spinner(13., hex(Chrome::PURPLE))),
-                false => d.child(icon("git-fork", 13., hex(Chrome::PURPLE))),
-            })
-            .when(count > 0, |d| d.child(count.to_string()))
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.toggle_files_panel(cx)))
+            .child(icon("list-tree", crate::ui::IconSize::BUTTON, hex(Chrome::PURPLE)))
+            .on_click(on_click)
     }
 }
 
