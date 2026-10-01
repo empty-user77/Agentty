@@ -5,7 +5,7 @@ description: The things that usually go wrong, and what to do about them.
 
 ## Diagnose problems
 
-Agentty can automatically find and fix common issues. Open **Help → Diagnose problems**, or tap the wrench button on any terminal pane's bar.
+Agentty can automatically find and fix common issues. Open **Help → Diagnose problems**, or **Diagnose** under **Settings → System check**.
 
 The diagnostic check looks for:
 - Claude Code or Codex installed but not found by a new terminal — Agentty can add its folder to your shell's startup file
