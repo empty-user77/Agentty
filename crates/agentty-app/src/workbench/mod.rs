@@ -63,6 +63,8 @@ mod tasks;
 mod terminal_browser;
 mod tree_manager;
 pub mod update;
+#[cfg(windows)]
+mod webview_setup;
 mod windows_page;
 pub mod worktrees;
 
@@ -216,6 +218,13 @@ pub struct Workspace {
 
 /// How many closed tabs a workspace remembers.
 pub const CLOSED_TAB_HISTORY: usize = 10;
+
+/// What an agent or a plugin hears when the in-app browser cannot open a page on this computer.
+pub const BROWSER_MISSING: &str = if cfg!(windows) {
+    "the in-app browser needs the Microsoft Edge WebView2 Runtime, which is not installed on this PC; open the browser in Agentty once to install it"
+} else {
+    "the in-app browser is not available here"
+};
 
 /// The last state of a workspace with nothing running, as [`Workbench::dormant_info`] reads it
 /// back from the saved layout. The sidebar card is drawn from this while the workspace is closed.
@@ -660,6 +669,9 @@ pub struct Workbench {
     clone_dialog: Option<git_clone::CloneDialog>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
     install_hint: Option<(&'static str, &'static str, &'static str)>,
+    /// Windows: the in-app browser's component (WebView2) is missing; offering to install it.
+    #[cfg(windows)]
+    webview_setup: Option<webview_setup::WebviewSetup>,
     /// The start page is shown even though workspaces exist (opened from the sidebar).
     welcome: bool,
     /// "Pick a pane to connect": the pane the link starts from.
@@ -906,6 +918,8 @@ impl Workbench {
             clone_dialog: None,
             welcome: false,
             install_hint: None,
+            #[cfg(windows)]
+            webview_setup: None,
             connect_pick: None,
             plugins_page: Default::default(),
             onboarding: None,
@@ -3405,6 +3419,7 @@ impl Render for Workbench {
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
             .children(self.render_connect_pick_bar(cx))
             .children(self.render_install_hint(cx))
+            .children(self.render_webview_setup_dialog(cx))
             .children(self.render_close_confirm(cx))
             .children(self.render_tree_remove_confirm(cx))
             .children(self.render_ask(cx))

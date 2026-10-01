@@ -17,6 +17,7 @@ mod browser_keeper;
 mod browser_mcp;
 mod browser_profiles;
 mod capture;
+mod crash_log;
 mod db_cli;
 mod debug;
 mod diagnostics;
@@ -58,7 +59,8 @@ mod theme;
 mod tray_popover;
 mod ui;
 mod usage_view;
-#[cfg_attr(not(target_os = "macos"), path = "platform/fallback/webview.rs")]
+#[cfg_attr(windows, path = "platform/windows/webview.rs")]
+#[cfg_attr(not(any(target_os = "macos", windows)), path = "platform/fallback/webview.rs")]
 mod webview;
 mod workbench;
 
@@ -613,6 +615,8 @@ fn main() {
         single_instance::Lock::Unavailable => {}
     }
 
+    // A crash leaves its reason in `<data dir>/crash.log`.
+    crash_log::install();
     // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
     platform::raise_file_limit();
     // Killed while the machine was captured: put its proxy settings back before anything else runs.

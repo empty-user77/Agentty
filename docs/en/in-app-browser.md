@@ -3,7 +3,7 @@ title: In-app browser
 description: A browser panel beside your terminals, dev servers that open themselves, and letting an agent drive the page.
 ---
 
-**⇧⌘B** opens a browser panel next to your terminals. On macOS it is a WebKit view inside Agentty; on Windows and Linux links open in your default browser instead.
+**⇧⌘B** opens a browser panel next to your terminals. It is a WebKit view inside Agentty on macOS and a Microsoft Edge WebView2 (Chromium) view on Windows; on Linux links open in your default browser instead. WebView2 comes with Windows 10 and 11 — on a PC without it, opening the browser offers to download and install it from Microsoft first.
 
 ## Opening things in it
 
@@ -51,7 +51,7 @@ Every terminal has a browser of its own. Open the browser in one terminal and go
 - **An agent works in a tab of its own** in its terminal's browser, made on its first `browser_open` and labelled with the terminal's folder and number (`app #3`). Everything that agent does goes to that tab only: it never changes another terminal's page, a page you opened, or a plugin's page. Its page is laid out at 1280 px (or the size set with `browser_viewport`) whether it is on screen or not, and scaled to fit the panel when it is, so what it checks does not depend on how wide your panel is.
 - **Limits keep it light.** At most 6 terminals' browsers run out of sight, and all in-app browser pages together use at most 30% of the computer's memory (both in **Settings → Browser**). Beyond either, the browsers out of sight are unloaded, the one seen longest ago first — never the one on screen, nor one whose agent sent a command in the last two minutes. An unloaded page keeps its address and loads again when its terminal is selected or its agent sends a command (which then waits for the page to load).
 - **Closing the panel hides the terminal's browser**; it comes back as it was when you open it again. **Closing a terminal closes its browser.**
-- **Cookies and sign-ins are shared**, so you sign in to a site once. To give each agent's tab cookies of its own, turn on **Settings → Browser → Separate cookies and sign-ins for each terminal** (macOS 14 or later); they are removed when the terminal closes.
+- **Cookies and sign-ins are shared**, so you sign in to a site once. To give each agent's tab cookies of its own, turn on **Settings → Browser → Separate cookies and sign-ins for each terminal** (macOS 14 or later; on Windows, WebView2 Runtime 101 or later); they are removed when the terminal closes.
 
 > [!IMPORTANT]
 > The browser keeps the sessions you are signed into. An agent driving it acts inside those sessions. Enable it when you want that, and be aware of which tabs are open.

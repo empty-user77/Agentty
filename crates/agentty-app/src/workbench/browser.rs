@@ -404,6 +404,11 @@ impl Workbench {
             // No embedded browser on this platform: the default browser opens the page instead.
             return cx.open_url(&url.unwrap_or_else(|| browser_url(&settings(cx).browser.home, cx)));
         }
+        // Windows without the WebView2 Runtime: offer to install it first.
+        #[cfg(windows)]
+        if self.ask_for_webview(url.clone(), cx) {
+            return;
+        }
         self.page = None;
         // The terminal in front had one, closed: it comes back, pages and all.
         self.reopen_terminal_browser();

@@ -12,7 +12,7 @@ that doesn't depend on AppKit or WebKit.
 | Credential store | Keychain | Credential Manager | Secret Service (`secret-tool`), else `~/.agentty/secrets/` (`0600`) |
 | Notifications | UserNotifications (click opens the pane) | Toast | `notify-send` |
 | Title bar | Agentty's, with traffic lights | System | System; Agentty's with window buttons when the compositor has no server-side decorations |
-| In-app browser | WKWebView | Default browser | Default browser |
+| In-app browser | WKWebView | WebView2 (Edge / Chromium; offers to install the runtime when missing) | Default browser |
 | Menu bar item, mini mode | ✓ | — | — |
 | Reserved words (`claude zzzz`) | zsh / bash | PowerShell | zsh / bash |
 | Foreground program, cwd, ports | ✓ | Launch kind only | `/proc` |
@@ -43,7 +43,10 @@ word, Ctrl+Home / End for the file). Shortcut labels in the UI are shown in the 
   frames) and helpers that differ per OS (opening folders, OS version, UI language).
 - The macOS modules `native`, `status_item`, `webview`, `file_drop` and `notifications` are compiled only on macOS;
   Windows and Linux compile the same module names from `platform/fallback/` with the same API, so call sites have no
-  `cfg`.
+  `cfg`. The exception is `webview` on Windows: `platform/windows/webview.rs`, a WebView2 page in a window Agentty's
+  window owns, kept over the panel and moved with the window (GPUI's DirectComposition layer would cover a child
+  window, and drawing without it makes game overlays hook into Agentty), driven through the DevTools
+  protocol for scripts, isolated worlds and screenshots. `platform/page_scripts.rs` holds what both put into pages.
 - `ipc.rs` is the socket transport; `launch.rs` builds the pane command line per platform; `agentty_bridge::process`
   starts background programs without console windows and finds programs on `PATH` (with `PATHEXT` on Windows).
 

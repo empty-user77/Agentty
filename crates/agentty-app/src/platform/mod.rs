@@ -8,18 +8,23 @@
 pub mod app_nap;
 pub mod drops;
 pub mod frame;
+#[cfg(any(target_os = "macos", windows))]
+pub mod page_scripts;
 pub mod system_proxy;
 pub mod tray;
 pub mod url;
 pub mod video;
 pub mod wakelock;
+#[cfg(any(windows, test))]
+pub mod webview2_logic;
 
 use std::path::Path;
 
 /// The menu bar status item (NSStatusItem); elsewhere closing the last window quits.
 pub const HAS_STATUS_ITEM: bool = cfg!(target_os = "macos");
-/// The in-app browser (WKWebView); elsewhere links open in the default browser.
-pub const HAS_WEBVIEW: bool = cfg!(target_os = "macos");
+/// The in-app browser (WKWebView on macOS, WebView2 on Windows); elsewhere links open in the
+/// default browser. On Windows it also needs the WebView2 Runtime (`webview::available`).
+pub const HAS_WEBVIEW: bool = cfg!(any(target_os = "macos", windows));
 /// Mini mode folds the window with AppKit frame animations.
 pub const HAS_MINI_MODE: bool = cfg!(target_os = "macos");
 

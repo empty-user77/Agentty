@@ -941,6 +941,9 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
         browser if browser.starts_with("browser/") && !crate::platform::HAS_WEBVIEW => {
             reply(Err((codes::UNAVAILABLE, "the in-app browser is not available on this platform yet".into())), cx)
         }
+        browser if browser.starts_with("browser/") && !crate::webview::available() => {
+            reply(Err((codes::UNAVAILABLE, crate::workbench::BROWSER_MISSING.into())), cx)
+        }
         browser if browser.starts_with("browser/") => {
             let unanswered = request_id.clone();
             let tab = params.get("tabId").and_then(Value::as_u64);
