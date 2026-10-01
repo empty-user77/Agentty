@@ -170,8 +170,9 @@ pub fn validate(channel: Channel, transport: Transport, secret: &str) -> Result<
 
 /// A Slack channel to post to: `#name`, `name`, or a channel/user id like `C01ABCDEF`.
 pub fn valid_slack_channel(channel: &str) -> bool {
+    // Slack names may be in any script (`#개발`, `#開発`), up to 80 characters, not bytes.
     let name = channel.trim().strip_prefix('#').unwrap_or(channel.trim());
-    (1..=80).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    (1..=80).contains(&name.chars().count()) && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
 /// A Discord channel id. The API posts to an id, not a name — a name cannot be resolved without
@@ -474,6 +475,12 @@ mod tests {
         assert!(valid_target(Channel::Slack, "#general") && valid_target(Channel::Slack, "general"));
         assert!(valid_target(Channel::Slack, "C01ABCDEF"));
         assert!(!valid_target(Channel::Slack, "") && !valid_target(Channel::Slack, "has space"));
+        assert!(valid_target(Channel::Slack, "#개발-알림") && valid_target(Channel::Slack, "開発_通知"), "names in any script");
+        assert!(
+            valid_target(Channel::Slack, &"가".repeat(80)) && !valid_target(Channel::Slack, &"가".repeat(81)),
+            "80 characters, not bytes"
+        );
+        assert!(!valid_target(Channel::Slack, "#알림!") && !valid_target(Channel::Slack, "#a/b"));
         // Discord posts to an id, not a name.
         assert!(valid_target(Channel::Discord, "123456789012345678")); // gitleaks:allow — a made-up id in a test
         assert!(!valid_target(Channel::Discord, "#general") && !valid_target(Channel::Discord, "1234"));
