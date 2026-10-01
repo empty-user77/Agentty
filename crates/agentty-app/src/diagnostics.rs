@@ -519,7 +519,9 @@ mod tests {
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("zshrc.agentty-")))
-            .min_by_key(|p| p.file_name().map(|n| n.len()))
+            // The oldest name sorts first: `<stamp>` before `<stamp>-2`, and before `<stamp + 1>` when
+            // the clock ticked between the two fixes.
+            .min()
             .unwrap();
         assert_eq!(std::fs::read_to_string(first).unwrap(), "alias ll='ls -l'\nexport CLAUDECODE=1\nexport EDITOR=vim");
 
