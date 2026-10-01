@@ -54,6 +54,7 @@ impl Workbench {
             EditorEvent::TabsChanged => cx.notify(),
             EditorEvent::OpenUrl(url) => this.open_link(url.clone(), cx),
             EditorEvent::OpenFile(path, project) => this.open_in_editor(path, project, window, cx),
+            EditorEvent::ShowInBrowser(path) => this.show_file_in_browser(path, cx),
             EditorEvent::Empty => {
                 this.editor_shown = false;
                 this.focus_active(window, cx);

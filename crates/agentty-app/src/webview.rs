@@ -12,6 +12,7 @@ use objc::{class, msg_send, sel, sel_impl};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::sync::{Mutex, Once};
+use std::time::{Duration, Instant};
 
 type Id = *mut Object;
 
@@ -165,6 +166,57 @@ static POPUPS: Mutex<Option<HashMap<usize, Vec<String>>>> = Mutex::new(None);
 static KEYS: Mutex<Vec<(usize, BrowserKey)>> = Mutex::new(Vec::new());
 /// Every web view that exists right now, so [`perform_in_page`] can find the focused page.
 static VIEWS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// `file://` addresses the user asked to see (an HTML file's browser button), each good for one
+/// [`WebView::load`] within [`FILE_GRANT_FOR`]. Nothing else opens a local file: not a page, a
+/// plugin or an agent.
+static FILE_GRANTS: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+/// How long a grant waits for its load: the page opens on the next frame, and a grant the browser
+/// had no tab for must not be left for another view to use later.
+const FILE_GRANT_FOR: Duration = Duration::from_secs(10);
+/// The folder (`file:///…/`) a view showing a granted file may read and move around in, by view:
+/// the page's own styles, scripts and images, and the pages it links to beside it.
+static FILE_ROOTS: Mutex<Option<HashMap<usize, String>>> = Mutex::new(None);
+
+/// Lets the next [`WebView::load`] of `url` (a `file://` address) open that file.
+pub fn grant_file(url: &str) {
+    let mut grants = FILE_GRANTS.lock().unwrap_or_else(|e| e.into_inner());
+    grants.retain(|(g, _)| g != url);
+    grants.push((url.to_string(), Instant::now()));
+}
+
+fn take_file_grant(url: &str) -> bool {
+    let mut grants = FILE_GRANTS.lock().unwrap_or_else(|e| e.into_inner());
+    let granted = grants.iter().any(|(g, at)| g == url && at.elapsed() < FILE_GRANT_FOR);
+    grants.retain(|(g, at)| g != url && at.elapsed() < FILE_GRANT_FOR);
+    granted
+}
+
+fn set_file_root(view: Id, root: Option<String>) {
+    let mut roots = FILE_ROOTS.lock().unwrap_or_else(|e| e.into_inner());
+    let roots = roots.get_or_insert_with(HashMap::new);
+    match root {
+        Some(root) => roots.insert(view as usize, root),
+        None => roots.remove(&(view as usize)),
+    };
+}
+
+/// Whether `url` is a file inside the folder `view` was given (see [`FILE_ROOTS`]).
+fn file_in_root(view: Id, url: &str) -> bool {
+    let roots = FILE_ROOTS.lock().unwrap_or_else(|e| e.into_inner());
+    roots.as_ref().and_then(|roots| roots.get(&(view as usize))).is_some_and(|root| file_under(root, url))
+}
+
+/// `url` is `root` or below it, with no way back up (`..`, spelled out or encoded).
+fn file_under(root: &str, url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let lower = path.to_ascii_lowercase();
+    path.starts_with(root)
+        && !path.contains("/../")
+        && !path.ends_with("/..")
+        && !lower.contains("%2e%2e")
+        && !lower.contains(".%2e")
+        && !lower.contains("%2e.")
+}
 
 /// A standard editing command, as the Edit menu names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,8 +360,18 @@ fn navigation_allowed(url: &str) -> bool {
     matches!(scheme.as_str(), "http" | "https" | "about" | "data" | "blob")
 }
 
+/// Whether a navigation action replaces the page itself (not a frame inside it).
+unsafe fn targets_main_frame(action: Id) -> bool {
+    let frame: Id = msg_send![action, targetFrame];
+    if frame.is_null() {
+        return false;
+    }
+    let main: BOOL = msg_send![frame, isMainFrame];
+    main == YES
+}
+
 /// `webView:decidePolicyForNavigationAction:decisionHandler:`.
-extern "C" fn decide_navigation(_: &Object, _: Sel, _view: Id, action: Id, handler: Id) {
+extern "C" fn decide_navigation(_: &Object, _: Sel, view: Id, action: Id, handler: Id) {
     let url = unsafe {
         let request: Id = msg_send![action, request];
         let url: Id = if request.is_null() { std::ptr::null_mut() } else { msg_send![request, URL] };
@@ -320,7 +382,12 @@ extern "C" fn decide_navigation(_: &Object, _: Sel, _view: Id, action: Id, handl
         }
     };
     // WKNavigationActionPolicyCancel = 0, Allow = 1.
-    let policy: isize = if url.as_deref().is_some_and(navigation_allowed) { 1 } else { 0 };
+    let allowed = url.as_deref().is_some_and(|url| navigation_allowed(url) || file_in_root(view, url));
+    // Leaving the local page for the web takes its folder with it: no site gets to go back there.
+    if allowed && url.as_deref().is_some_and(|url| !url.starts_with("file:")) && unsafe { targets_main_frame(action) } {
+        set_file_root(view, None);
+    }
+    let policy: isize = if allowed { 1 } else { 0 };
     let handler = handler as *mut Block<(isize,), ()>;
     unsafe { (*handler).call((policy,)) };
 }
@@ -872,6 +939,15 @@ impl WebView {
             if ns_url.is_null() {
                 return;
             }
+            if url.starts_with("file://") && take_file_grant(url) {
+                let folder: Id = msg_send![ns_url, URLByDeletingLastPathComponent];
+                let root = if folder.is_null() { None } else { rust_string(msg_send![folder, absoluteString]) };
+                if let Some(root) = root.filter(|root| root.ends_with('/') && root.len() > "file:///".len()) {
+                    set_file_root(self.view, Some(root));
+                    let _: Id = msg_send![self.view, loadFileURL: ns_url allowingReadAccessToURL: folder];
+                }
+                return;
+            }
             let request: Id = msg_send![class!(NSURLRequest), requestWithURL: ns_url];
             let _: Id = msg_send![self.view, loadRequest: request];
         }
@@ -1202,6 +1278,7 @@ impl WebView {
 impl Drop for WebView {
     fn drop(&mut self) {
         set_load_error(self.view, None);
+        set_file_root(self.view, None);
         let id = self.view as usize;
         if let Some(popups) = POPUPS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             popups.remove(&id);
@@ -1255,5 +1332,37 @@ pub fn focus_gpui_view(window: &gpui::Window) {
             }
             current = msg_send![current, superview];
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_under, grant_file, take_file_grant};
+
+    #[test]
+    fn a_file_page_stays_in_its_folder() {
+        let root = "file:///Users/me/out/";
+        assert!(file_under(root, "file:///Users/me/out/index.html"));
+        assert!(file_under(root, "file:///Users/me/out/pages/a%20b.html?x=1#top"));
+        for url in [
+            "file:///Users/me/outside.html",
+            "file:///Users/me/out/../.ssh/id_ed25519",
+            "file:///Users/me/out/%2e%2e/secret",
+            "file:///Users/me/out/.%2E/secret",
+            "file:///Users/me/output/index.html",
+            "https://example.com/Users/me/out/",
+        ] {
+            assert!(!file_under(root, url), "{url} must stay out");
+        }
+    }
+
+    #[test]
+    fn a_grant_opens_one_load() {
+        let url = "file:///tmp/agentty-grant-test/index.html";
+        assert!(!take_file_grant(url));
+        grant_file(url);
+        grant_file(url);
+        assert!(take_file_grant(url));
+        assert!(!take_file_grant(url));
     }
 }
