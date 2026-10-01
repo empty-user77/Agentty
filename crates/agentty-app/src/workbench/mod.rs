@@ -213,6 +213,8 @@ pub struct Workspace {
     /// The plugin this workspace belongs to (`mode: "workspace"`): its panel and the browser come
     /// up while it is in front.
     pub plugin: Option<String>,
+    /// Left out of remote access (its menu): the web page neither lists it nor reaches it.
+    pub remote_hidden: bool,
 }
 
 /// How many closed tabs a workspace remembers.
@@ -1227,6 +1229,7 @@ impl Workbench {
                         branch: last_branch,
                         last_activity_ms: Some(last_activity),
                         plugin: ws.plugin.clone(),
+                        remote_hidden: ws.remote_hidden,
                     });
                 }
                 None => {
@@ -1325,6 +1328,7 @@ impl Workbench {
             closed_tabs: Vec::new(),
             color: None,
             plugin: None,
+            remote_hidden: false,
         });
         self.activate_workspace(self.workspaces.len() - 1, window, cx);
         self.persist(cx);
@@ -2791,6 +2795,7 @@ impl Workbench {
                         closed_tabs: ws.closed_tabs.clone(),
                         color: None,
                         color_value: ws.color,
+                        remote_hidden: ws.remote_hidden,
                         tabs,
                         ..dormant.clone()
                     };
@@ -2806,6 +2811,7 @@ impl Workbench {
                     color: None,
                     color_value: ws.color,
                     plugin: ws.plugin.clone(),
+                    remote_hidden: ws.remote_hidden,
                     tabs: ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)).collect(),
                     // What the card says while the workspace is open, so it says the same once it
                     // is folded away: the branch it is on and when it last did something.
@@ -2861,6 +2867,7 @@ impl Workbench {
                 closed_tabs: snapshot.closed_tabs.clone(),
                 color: stored_color(snapshot.color_value, snapshot.color),
                 plugin: snapshot.plugin.clone(),
+                remote_hidden: snapshot.remote_hidden,
                 dormant: Some(snapshot),
                 asleep_on_close: false,
             });

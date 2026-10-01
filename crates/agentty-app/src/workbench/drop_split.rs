@@ -160,6 +160,7 @@ impl Workbench {
                     closed_tabs: Vec::new(),
                     color: None,
                     plugin: None,
+                    remote_hidden: false,
                 });
                 self.active_workspace = self.workspaces.len() - 1;
             }

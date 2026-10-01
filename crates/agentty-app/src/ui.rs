@@ -56,6 +56,7 @@ pub const ICONS: &[&str] = &[
     "cloud-off",
     "cloud-upload",
     "laptop",
+    "remote-desktop",
     "monitor",
     "blocks",
     "brain",

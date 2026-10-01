@@ -820,7 +820,9 @@ function notifyChanges(sessions) {
     if (s.needs_user && !old.needs_user) what = T.asks;
     else if (old.working && !s.working && !s.needs_user) what = T.finished;
     if (!what) continue;
-    const n = new Notification(`${what} · ${s.workspace}`, { body: s.asks || s.title || "", tag: "agentty-" + s.pane });
+    // The session's name only, never what the agent asks: a notification can show on a locked
+    // phone's screen, and that text may hold anything the agent read.
+    const n = new Notification(`${what} · ${s.workspace}`, { body: s.title || "", tag: "agentty-" + s.pane });
     n.onclick = () => {
       window.focus();
       selectPane(s.pane);

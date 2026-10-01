@@ -48,15 +48,6 @@ pub fn password_problem(password: &str) -> Option<&'static str> {
         Some("remote.password_short")
     } else if password.len() > MAX_PASSWORD_BYTES {
         Some("remote.password_long")
-    } else if !password.chars().all(|c| c.is_ascii_graphic()) {
-        // Typed with a Korean (or other) input method on, a masked field stores jamo where the
-        // user meant Latin letters, and the browser's password field, which turns input methods
-        // off, can then never match it. Only what a password field anywhere types is accepted.
-        Some("remote.password_ascii")
-    } else if !password.chars().any(|c| c.is_ascii_digit()) {
-        Some("remote.password_needs_digit")
-    } else if !password.chars().any(|c| !c.is_alphanumeric() && !c.is_whitespace()) {
-        Some("remote.password_needs_symbol")
     } else {
         None
     }
@@ -80,6 +71,25 @@ fn from_hex(text: &str) -> Option<Vec<u8>> {
 }
 
 /// The stored form of `password`.
+/// What a password looks like without what it is, for a debug build's log: its length in
+/// characters and bytes, and whether it holds spaces, control characters or anything but ASCII.
+pub fn shape(password: &str) -> String {
+    format!(
+        "chars={} bytes={} space={} control={} non_ascii={} bullets={} hangul={} other_non_ascii={}",
+        password.chars().count(),
+        password.len(),
+        password.chars().any(char::is_whitespace),
+        password.chars().any(char::is_control),
+        !password.is_ascii(),
+        password.chars().filter(|c| *c == '•').count(),
+        password.chars().filter(|c| matches!(*c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7A3)).count(),
+        password
+            .chars()
+            .filter(|c| !c.is_ascii() && *c != '•' && !matches!(*c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7A3))
+            .count(),
+    )
+}
+
 pub fn hash_password(password: &str) -> String {
     hash_with(password, ITERATIONS)
 }
@@ -278,12 +288,8 @@ mod tests {
     #[test]
     fn password_rules() {
         assert_eq!(password_problem("sh0rt!"), Some("remote.password_short"));
-        assert_eq!(password_problem("longenough!"), Some("remote.password_needs_digit"));
-        assert_eq!(password_problem("longenough1"), Some("remote.password_needs_symbol"));
-        assert_eq!(password_problem("long enough 1!"), Some("remote.password_ascii"), "no spaces");
-        assert_eq!(password_problem("abcdefg1!"), None);
-        assert_eq!(password_problem("ㅅㄷㄴㅅㅔㅁㄴㄴ1!"), Some("remote.password_ascii"), "typed with the Korean input method on");
-        assert_eq!(password_problem("비밀번호여덟1!"), Some("remote.password_ascii"));
+        assert_eq!(password_problem("abcdefgh"), None, "eight characters are enough");
+        assert_eq!(password_problem("비밀번호여덟글자"), None, "in any script, counted in characters");
         assert_eq!(password_problem(&"x".repeat(MAX_PASSWORD_BYTES + 1)), Some("remote.password_long"));
         assert!(!verify_password(&hash_with("abc", 1_000), &"x".repeat(MAX_PASSWORD_BYTES + 1)));
     }

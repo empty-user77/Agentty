@@ -317,14 +317,36 @@ impl Workbench {
                     // Extensions has no icon here any more: it is reached from the command palette
                     // (⇧⌘X) and from where an extension is actually needed.
                     .when(settings(cx).remote.feature, |d| {
-                        d.child(item(
-                            "activity-remote",
-                            "remote-desktop",
-                            self.page == Some(Page::Remote),
-                            "page.remote",
-                            Box::new(|this, cx| this.open_page(Page::Remote, cx)),
-                            cx,
-                        ))
+                        // On and reachable: a green dot at the icon's lower right corner, ringed
+                        // in the bar's colour so it stands off the glyph.
+                        let online =
+                            cx.try_global::<crate::remote::Remote>().is_some_and(|r| matches!(r.phase, crate::remote::Phase::On { .. }));
+                        const DOT: f32 = 9.;
+                        let corner = |extent: f32| extent / 2. + IconSize::ACTIVITY / 2. - DOT + 1.;
+                        d.child(
+                            item(
+                                "activity-remote",
+                                "remote-desktop",
+                                self.page == Some(Page::Remote),
+                                "page.remote",
+                                Box::new(|this, cx| this.open_page(Page::Remote, cx)),
+                                cx,
+                            )
+                            .relative()
+                            .when(online, |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(corner(ACTIVITY_BAR_WIDTH)))
+                                        .top(px(corner(48.)))
+                                        .size(px(DOT))
+                                        .rounded_full()
+                                        .border_2()
+                                        .border_color(hex(Chrome::ACTIVITY_BAR))
+                                        .bg(hex(super::remote_page::NEON_GREEN)),
+                                )
+                            }),
+                        )
                     })
                     .child(item(
                         "activity-plugins",
@@ -1284,7 +1306,7 @@ impl Workbench {
         let menu_open = self.workspace_menu == Some(id);
         // A card near the bottom of the sidebar would have its menu cut off by the window edge, so
         // there the menu grows upwards from the card instead of downwards.
-        let upwards = menu_open && self.workspace_menu_at + self.workspace_menu_height() > f32::from(window.viewport_size().height) - 8.;
+        let upwards = menu_open && self.workspace_menu_at + self.workspace_menu_height(cx) > f32::from(window.viewport_size().height) - 8.;
         // Deferred so the menu paints above the rows below it (e.g. the selected workspace).
         div()
             .relative()
@@ -1468,15 +1490,17 @@ impl Workbench {
 
     /// Roughly how tall the workspace menu comes out, to decide which way it opens. Measured from
     /// what it is built of below: rows, the colour block, and the palette when it is unfolded.
-    fn workspace_menu_height(&self) -> f32 {
+    fn workspace_menu_height(&self, cx: &gpui::App) -> f32 {
         const ROW: f32 = 28.;
         const COLOUR_BLOCK: f32 = 52.;
         const PALETTE: f32 = 116.;
         let groups = self.groups.len() as f32;
         let palette = if matches!(self.color_palette_open, Some(ColorTarget::Workspace(_))) { PALETTE } else { 0. };
         let group_section = if groups > 0. { 24. + groups * ROW } else { 0. };
-        // rename + colour + groups + "new group" + ungroup + rule + close, inside the popover's padding.
-        12. + ROW + COLOUR_BLOCK + palette + group_section + ROW * 2. + 9. + ROW
+        let remote = if crate::settings::settings(cx).remote.feature { ROW } else { 0. };
+        // rename + colour + remote + groups + "new group" + ungroup + rule + close, inside the
+        // popover's padding.
+        12. + ROW + COLOUR_BLOCK + palette + remote + group_section + ROW * 2. + 9. + ROW
     }
 
     fn render_workspace_menu(&self, id: u64, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1502,6 +1526,15 @@ impl Workbench {
                 self.workspaces.iter().find(|w| w.id == id).and_then(|w| w.color),
                 cx,
             ));
+        if crate::settings::settings(cx).remote.feature {
+            let hidden = self.workspaces.iter().find(|w| w.id == id).is_some_and(|w| w.remote_hidden);
+            let label = t(cx, "remote.hide_workspace");
+            menu = menu.child(menu_item(
+                "wm-remote-hidden",
+                if hidden { format!("✓ {label}") } else { label.to_string() },
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_remote_hidden(id, cx)),
+            ));
+        }
         if !self.groups.is_empty() {
             menu = menu.child(div().px_3().pt_2().pb_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "move.to.group")));
             for group in &self.groups {
