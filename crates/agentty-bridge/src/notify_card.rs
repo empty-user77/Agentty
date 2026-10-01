@@ -166,7 +166,7 @@ impl Card {
         }
         if !self.body.is_empty() {
             out.push_str("\n\n");
-            out.push_str(&markdown_to_telegram(&self.body));
+            out.push_str(&telegram_quoted(&markdown_to_telegram(&self.body)));
         }
         let footer = self.footer();
         if !footer.is_empty() {
@@ -331,6 +331,27 @@ pub fn markdown_to_telegram(markdown: &str) -> String {
     out.join("\n")
 }
 
+/// The agent's words in a collapsible quote box: a long reply folds to a few lines and opens with
+/// a tap. Code blocks stay between the boxes, since Telegram does not take `<pre>` inside a quote.
+fn telegram_quoted(html: &str) -> String {
+    let mut out = String::new();
+    let quote = |out: &mut String, text: &str| {
+        let text = text.trim_matches('\n');
+        if !text.is_empty() {
+            out.push_str(&format!("<blockquote expandable>{text}</blockquote>"));
+        }
+    };
+    let mut rest = html;
+    while let Some(start) = rest.find("<pre>") {
+        quote(&mut out, &rest[..start]);
+        let end = rest[start..].find("</pre>").map_or(rest.len(), |i| start + i + "</pre>".len());
+        out.push_str(&rest[start..end]);
+        rest = &rest[end..];
+    }
+    quote(&mut out, rest);
+    out
+}
+
 fn telegram_inline(text: &str) -> String {
     let mut out = String::new();
     let chars: Vec<char> = text.chars().collect();
@@ -422,6 +443,21 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("<b>✅ Finished</b>\n<b>CosmicaDesktop</b> · Claude Code\n<i>Fix the timer</i>"));
+    }
+
+    #[test]
+    fn telegram_quotes_the_reply_around_code_blocks() {
+        let html = markdown_to_telegram("Done.\n```\nlet a = 1;\n```\nAll **good** <pre>");
+        assert_eq!(
+            telegram_quoted(&html),
+            "<blockquote expandable>Done.</blockquote><pre>let a = 1;</pre><blockquote expandable>All <b>good</b> &lt;pre&gt;</blockquote>"
+        );
+        let mut body = json!({});
+        card().telegram(&mut body);
+        assert!(body["text"]
+            .as_str()
+            .unwrap()
+            .contains("<blockquote expandable>Done. See <b>Slack card</b> and <code>notify.rs</code>.</blockquote>"));
     }
 
     #[test]
