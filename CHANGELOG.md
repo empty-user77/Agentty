@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-10-01
+
+Replaces 0.2.9, which was withdrawn shortly after release.
+
+### Changed
+- Diagnose problems moved from the wrench on each pane's bar to its own section in
+  Settings → System check; Help → Diagnose problems stays.
+
 ## [0.2.9] - 2026-10-01
 
 ### Added
