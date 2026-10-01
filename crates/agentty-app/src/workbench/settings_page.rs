@@ -1355,7 +1355,15 @@ impl Workbench {
                         ))
                         .when(crate::platform::HAS_STATUS_ITEM, |d| {
                             d.child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
-                        }),
+                        })
+                        .child(row_with_hint(
+                            t(cx, "settings.remote_feature"),
+                            t(cx, "settings.remote_feature_hint"),
+                            switch("remote-feature", prefs.remote.feature, |_, _, cx| {
+                                let on = !crate::settings::settings(cx).remote.feature;
+                                crate::remote::set_feature(on, cx);
+                            }),
+                        )),
                 )
                 .child(
                     section(t(cx, "settings.group.agents"))

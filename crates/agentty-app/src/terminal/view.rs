@@ -315,6 +315,11 @@ pub struct TerminalView {
     pub last_activity_ms: u64,
     pub live_cwd: Option<PathBuf>,
     pub git_branch: Option<String>,
+    /// The size the remote page asked for while it shows this terminal (columns, lines); the
+    /// pane's own size again once it lets go.
+    pub remote_size: Option<(usize, usize)>,
+    /// The grid the pane itself last laid out, to go back to when the remote page lets go.
+    own_grid: Option<GridSize>,
     /// Name of the linked git worktree the pane works in (`None` in a project's own folder).
     pub worktree: Option<String>,
     /// The project folder the pane works in (the main working tree of the repository it last worked
@@ -459,6 +464,8 @@ impl TerminalView {
             last_activity_ms: crate::ui::now_ms(),
             live_cwd: None,
             git_branch: None,
+            remote_size: None,
+            own_grid: None,
             worktree: None,
             project_dir: None,
             cwd_gone: false,
@@ -733,6 +740,149 @@ impl TerminalView {
                 (0..columns).map(|c| line[Column(c)].c).collect::<String>().trim_end().to_string()
             })
             .collect()
+    }
+
+    /// The live screen for the remote page (`crate::remote`): rows of styled runs in the colors
+    /// this pane is drawn in, whatever the user scrolled to here.
+    pub fn remote_screen(&self, theme: &TerminalTheme) -> Option<crate::remote::snapshot::Screen> {
+        use crate::remote::snapshot::{Run, Screen, BOLD, DIM, ITALIC, STRIKE, UNDERLINE, WIDE};
+        let backend = self.backend.as_ref()?;
+        let term = backend.term.lock();
+        let colors = term.colors();
+        let grid = term.grid();
+        let (rows, columns) = (grid.screen_lines(), grid.columns());
+        let rgb = |color: Hsla| {
+            let c = gpui::Rgba::from(color);
+            (((c.r * 255.).round() as u32) << 16) | (((c.g * 255.).round() as u32) << 8) | (c.b * 255.).round() as u32
+        };
+        let mut lines = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let line = &grid[Line(row as i32)];
+            let mut runs: Vec<Run> = Vec::new();
+            for col in 0..columns {
+                let cell = &line[Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let mut fg = resolve_color(cell.fg, colors, theme, cell.flags.contains(Flags::BOLD));
+                let mut bg = resolve_color(cell.bg, colors, theme, false);
+                if cell.flags.contains(Flags::INVERSE) {
+                    std::mem::swap(&mut fg, &mut bg);
+                }
+                let mut style = 0;
+                for (flag, bit) in [(Flags::BOLD, BOLD), (Flags::ITALIC, ITALIC), (Flags::STRIKEOUT, STRIKE), (Flags::WIDE_CHAR, WIDE)] {
+                    if cell.flags.contains(flag) {
+                        style |= bit;
+                    }
+                }
+                if cell.flags.intersects(Flags::ALL_UNDERLINES) {
+                    style |= UNDERLINE;
+                }
+                if cell.flags.contains(Flags::DIM) || fg.a < 1. {
+                    style |= DIM;
+                }
+                let (fg, bg) = (rgb(fg), rgb(bg));
+                let f = (fg != theme.foreground).then_some(fg);
+                let b = (bg != theme.background).then_some(bg);
+                let mut text = String::new();
+                text.push(if cell.c == '\0' { ' ' } else { cell.c });
+                if let Some(extra) = cell.zerowidth() {
+                    text.extend(extra.iter());
+                }
+                // Wide glyphs stay runs of their own so the page can give each two cells.
+                match runs.last_mut() {
+                    Some(last) if last.f == f && last.b == b && last.s == style && style & WIDE == 0 => last.t.push_str(&text),
+                    _ => runs.push(Run { t: text, f, b, s: style }),
+                }
+            }
+            // Trailing blank cells in the default style carry nothing.
+            if let Some(last) = runs.last_mut() {
+                if last.b.is_none() && last.s & UNDERLINE == 0 {
+                    let trimmed = last.t.trim_end_matches(' ').len();
+                    last.t.truncate(trimmed);
+                }
+            }
+            runs.retain(|r| !r.t.is_empty());
+            lines.push(runs);
+        }
+        let cursor = term.mode().contains(TermMode::SHOW_CURSOR).then(|| {
+            let point = grid.cursor.point;
+            (point.column.0 as u16, point.line.0.max(0) as u16)
+        });
+        Some(Screen { cols: columns as u16, rows: rows as u16, cursor, fg: theme.foreground, bg: theme.background, lines })
+    }
+
+    /// A key from the remote page, by its GPUI name: what the program gets is what typing it here
+    /// would send, and the pane's state follows the same way.
+    pub fn remote_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
+        self.note_key(keystroke, cx);
+        let printable = !keystroke.modifiers.control && !keystroke.modifiers.alt && keystroke.key.chars().count() == 1;
+        let bytes = if printable {
+            Some(keystroke.key.as_bytes().to_vec())
+        } else {
+            // Alt is Meta on the page (a phone has no Option key to type with).
+            keys::to_escape(keystroke, self.mode(), true, self.live_agent.is_some())
+        };
+        if let Some(bytes) = bytes {
+            self.marked_text = None;
+            self.write_user_input(bytes);
+            cx.notify();
+        }
+    }
+
+    /// What a key tells about the agent's state, before it reaches the program: Esc may interrupt
+    /// a turn, and Enter in Codex starts one.
+    fn note_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
+        if keystroke.key == "escape" && matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_))
+        {
+            self.esc_at = Some(Instant::now());
+        }
+        if keystroke.key == "enter" && self.agent_kind() == Some(PaneKind::Codex) && !keystroke.modifiers.shift {
+            // Codex has no "prompt submitted" hook; Enter is the best signal (the screen check
+            // corrects it within seconds if nothing started).
+            self.ask_gate.resume();
+            self.status = AgentStatus::Working;
+            self.working_since = Some(Instant::now());
+            self.quiet_ticks = 0;
+            cx.emit(TerminalEvent::StatusChanged);
+        }
+    }
+
+    /// Text typed on the remote page: as typed, line breaks as Return, other control characters
+    /// dropped (those come as keys).
+    pub fn remote_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let text: String =
+            text.replace("\r\n", "\r").replace('\n', "\r").chars().filter(|c| !c.is_control() || matches!(c, '\r' | '\t')).collect();
+        if !text.is_empty() {
+            self.marked_text = None;
+            self.write_user_input(text.into_bytes());
+            cx.notify();
+        }
+    }
+
+    /// The remote page shows this terminal at `size` (columns, lines), or lets go with `None`.
+    /// The grid changes at once, painted or not.
+    pub fn set_remote_size(&mut self, size: Option<(usize, usize)>, cx: &mut Context<Self>) {
+        if self.remote_size == size {
+            return;
+        }
+        self.remote_size = size;
+        if let Some(backend) = self.backend.as_mut() {
+            let current = backend.size();
+            // A pane never laid out yet (its workspace not shown) still has the size it started with.
+            if self.own_grid.is_none() {
+                self.own_grid = Some(current);
+            }
+            // A pane out of sight is not laid out again until shown, so it goes back at once.
+            let grid = match size {
+                Some((columns, lines)) => Some(GridSize { columns, lines, ..current }),
+                None => self.own_grid,
+            };
+            if let Some(grid) = grid {
+                backend.resize(grid);
+            }
+        }
+        cx.notify();
     }
 
     /// Corrects the hook-reported status with what the agent's screen shows. Hooks don't fire
@@ -1598,19 +1748,7 @@ impl TerminalView {
                 return;
             }
         }
-        if keystroke.key == "escape" && matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_))
-        {
-            self.esc_at = Some(Instant::now());
-        }
-        if keystroke.key == "enter" && self.agent_kind() == Some(PaneKind::Codex) && !keystroke.modifiers.shift {
-            // Codex has no "prompt submitted" hook; Enter is the best signal (the screen check
-            // corrects it within seconds if nothing started).
-            self.ask_gate.resume();
-            self.status = AgentStatus::Working;
-            self.working_since = Some(Instant::now());
-            self.quiet_ticks = 0;
-            cx.emit(TerminalEvent::StatusChanged);
-        }
+        self.note_key(keystroke, cx);
         if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta, self.live_agent.is_some()) {
             // This key went to the program rather than to the input method, so whatever was being
             // composed is not what the program has. Drawing it on would put it over the text the
@@ -2225,6 +2363,12 @@ impl Element for TerminalElement {
             if !view.spawned {
                 view.spawn(grid, cx);
             }
+            // While the remote page is looking at this terminal, its size is the page's.
+            view.own_grid = Some(grid);
+            let grid = match view.remote_size {
+                Some((columns, lines)) => GridSize { columns, lines, ..grid },
+                None => grid,
+            };
             view.backend.as_mut().map(|backend| {
                 backend.resize(grid);
                 backend.term.clone()
@@ -2553,28 +2697,32 @@ impl Element for TerminalElement {
         let over_link = self.view.read(cx).hover_link.is_some();
         window.set_cursor_style(if over_link { CursorStyle::PointingHand } else { CursorStyle::IBeam }, &frame.hitbox);
 
-        window.paint_layer(bounds, |window| {
-            for quad in frame.backgrounds.drain(..) {
-                window.paint_quad(quad);
-            }
-            for (origin, line) in &frame.lines {
-                let _ = line.paint(*origin, frame.line_height, window, cx);
-            }
-            for quad in frame.decorations.drain(..) {
-                window.paint_quad(quad);
-            }
-            if let Some(cursor) = frame.cursor.take() {
-                window.paint_quad(cursor);
-            }
-            if let Some((origin, line)) = &frame.cursor_text {
-                let _ = line.paint(*origin, frame.line_height, window, cx);
-            }
-            if let Some((backdrop, glyphs)) = frame.marked.take() {
-                window.paint_quad(backdrop);
-                for (origin, line) in glyphs {
-                    let _ = line.paint(origin, frame.line_height, window, cx);
+        // Clipped to the pane: while the remote page sizes this terminal (`remote_size`), its grid
+        // can be larger than the pane, and must not spill over its neighbours.
+        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            window.paint_layer(bounds, |window| {
+                for quad in frame.backgrounds.drain(..) {
+                    window.paint_quad(quad);
                 }
-            }
+                for (origin, line) in &frame.lines {
+                    let _ = line.paint(*origin, frame.line_height, window, cx);
+                }
+                for quad in frame.decorations.drain(..) {
+                    window.paint_quad(quad);
+                }
+                if let Some(cursor) = frame.cursor.take() {
+                    window.paint_quad(cursor);
+                }
+                if let Some((origin, line)) = &frame.cursor_text {
+                    let _ = line.paint(*origin, frame.line_height, window, cx);
+                }
+                if let Some((backdrop, glyphs)) = frame.marked.take() {
+                    window.paint_quad(backdrop);
+                    for (origin, line) in glyphs {
+                        let _ = line.paint(origin, frame.line_height, window, cx);
+                    }
+                }
+            })
         });
     }
 }

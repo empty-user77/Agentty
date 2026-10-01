@@ -27,6 +27,12 @@ futures = "0.3.34"
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
 libc = "0.2.189"
 plist = "1.10.1"
+# Remote access: the web password's PBKDF2 hash, its constant-time check and the session tokens'
+# randomness. Already in the build through agentty-bridge (same version), so nothing new is fetched.
+ring = "0.17"
+# Remote access: the page's address as a QR code to open on a phone. Only the encoder (no image,
+# SVG or terminal output); the settings page draws the modules itself.
+qrcode = { version = "0.14.1", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 # The markdown preview's Content-Security-Policy lists its scripts by hash.

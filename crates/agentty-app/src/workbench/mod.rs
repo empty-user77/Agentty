@@ -48,6 +48,7 @@ mod plugins_page;
 mod processes;
 mod prompt_dialog;
 mod proxy_page;
+mod remote_page;
 mod responsive;
 pub mod resume_hint;
 mod servers;
@@ -302,6 +303,8 @@ pub enum Page {
     Idea,
     /// The active project's databases (only offered when it has some).
     Database,
+    /// Remote access over Tailscale (when the feature is on in Settings → General).
+    Remote,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -423,6 +426,7 @@ pub struct Workbench {
     viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
     chat_notify: notify_settings::ChatNotifyState,
+    remote_page: remote_page::RemotePageState,
     sync: sync::SyncUi,
     backup: backup::BackupUi,
     split_drag: Option<layout::SplitDrag>,
@@ -764,6 +768,7 @@ impl Workbench {
             viewport_width: 1400.,
             browser_home_input: None,
             chat_notify: Default::default(),
+            remote_page: Default::default(),
             sync: Default::default(),
             backup: Default::default(),
             split_drag: None,
@@ -3089,6 +3094,7 @@ impl Render for Workbench {
             }
             Some(Page::Flow) => self.render_flow(window, cx).into_any_element(),
             Some(Page::Plugins) => self.render_plugins_page(cx).into_any_element(),
+            Some(Page::Remote) => self.render_remote_page(window, cx).into_any_element(),
             Some(Page::Database) => self.render_db_page(cx),
             Some(Page::Idea) => {
                 gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
@@ -3413,6 +3419,7 @@ impl Render for Workbench {
             .children(self.render_connect_pick_bar(cx))
             .children(self.render_install_hint(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_remote_password_dialog(window, cx))
             .children(self.render_tree_remove_confirm(cx))
             .children(self.render_ask(cx))
             .children(self.render_diagnostics(cx))
@@ -3589,6 +3596,7 @@ impl Workbench {
             Page::Settings => "settings",
             Page::Extensions => "extensions",
             Page::Plugins => "plugins",
+            Page::Remote => "remote",
             Page::Idea => "idea",
             Page::Database => "database",
         };
@@ -3903,6 +3911,7 @@ impl Workbench {
             "docker" => self.debug_docker(argument, window, cx),
             "db" => self.debug_db(argument, window, cx),
             "chat-notify" => self.debug_chat_notify(argument, cx),
+            "remote" => self.debug_remote(argument, window, cx),
             "diagnose" => self.debug_diagnose(argument, cx),
             "sync" => self.debug_sync(argument, window, cx),
             "backup" => self.debug_backup(argument, window, cx),
@@ -3922,6 +3931,7 @@ impl Workbench {
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
                     "plugins" => Some(Page::Plugins),
+                    "remote" => Some(Page::Remote),
                     "idea" => Some(Page::Idea),
                     "db" => Some(Page::Database),
                     "git" => Some(Page::Git),

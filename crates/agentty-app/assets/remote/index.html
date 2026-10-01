@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#161616">
+<meta name="referrer" content="no-referrer">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Agentty</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<section id="login" class="screen" hidden>
+  <div class="login-main">
+    <form id="login-form" class="card login-card" autocomplete="off">
+      <img src="/icon.svg" alt="" class="logo">
+      <h1>Agentty</h1>
+      <input id="password" type="password" name="password" autocomplete="current-password" required>
+      <button id="login-button" type="submit" class="primary"></button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+    <!-- What this connection is: shown here, never stored. -->
+    <dl id="connection" class="connection" hidden></dl>
+  </div>
+  <footer class="site-footer">
+    <nav class="footer-links">
+      <a href="https://www.agentty.run" target="_blank" rel="noopener noreferrer">Agentty</a>
+      <a href="https://github.com/empty-user77/Agentty" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a href="https://x.com/agentty_run" target="_blank" rel="noopener noreferrer">X</a>
+      <a id="link-privacy" href="https://www.agentty.run/privacy-policy" target="_blank" rel="noopener noreferrer"></a>
+      <a id="link-terms" href="https://www.agentty.run/terms-of-service" target="_blank" rel="noopener noreferrer"></a>
+      <a id="link-eula" href="https://www.agentty.run/eula" target="_blank" rel="noopener noreferrer"></a>
+    </nav>
+    <div class="copyright">© 2026 Agentty</div>
+  </footer>
+</section>
+
+<div id="app" class="app" hidden>
+  <!-- Left: groups and workspaces, as the app's sidebar. A drawer on phones, always open on wide screens. -->
+  <aside id="sidebar" class="drawer left" aria-label="Workspaces">
+    <header class="drawer-head">
+      <img src="/icon.svg" alt="" class="logo-small">
+      <span class="drawer-title">Agentty</span>
+      <span id="live" class="dot"></span>
+    </header>
+    <nav id="workspaces" class="workspaces"></nav>
+    <footer class="drawer-foot">
+      <button id="notify-button" type="button" class="ghost"></button>
+      <button id="logout-button" type="button" class="ghost"></button>
+    </footer>
+  </aside>
+
+  <main class="main">
+    <header class="bar">
+      <button id="menu-button" type="button" class="icon-button" aria-label="Workspaces">
+        <span class="burger"><i></i><i></i><i></i></span>
+        <span id="menu-badge" class="badge" hidden></span>
+      </button>
+      <div class="ws-head">
+        <div class="ws-name"><span id="ws-dot" class="ws-dot"></span><span id="ws-name"></span></div>
+        <div id="ws-sub" class="ws-sub"></div>
+      </div>
+      <span id="pane-status" class="chip"></span>
+      <button id="panes-button" type="button" class="icon-button" aria-label="Panes" hidden>
+        <span class="split-icon"><i></i><i></i></span>
+        <span id="panes-count" class="count"></span>
+      </button>
+    </header>
+    <nav id="tabs" class="tabs"></nav>
+    <div id="asks" class="asks" hidden></div>
+    <div id="placeholder" class="placeholder" hidden></div>
+    <div id="term-wrap" class="term-wrap">
+      <div id="term" class="term" tabindex="0" aria-label="Terminal"></div>
+      <textarea id="keyboard" class="keyboard" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Type into the terminal"></textarea>
+    </div>
+    <div id="keys" class="keys"></div>
+    <form id="prompt-form" class="prompt">
+      <textarea id="prompt" rows="1" autocomplete="off"></textarea>
+      <button id="send-button" type="submit" class="primary"></button>
+    </form>
+  </main>
+
+  <!-- Right: the split panes of the current tab. -->
+  <aside id="panes" class="drawer right" aria-label="Panes">
+    <header class="drawer-head"><span id="panes-title" class="drawer-title"></span></header>
+    <nav id="pane-list" class="pane-list"></nav>
+  </aside>
+  <div id="scrim" class="scrim" hidden></div>
+</div>
+</body>
+</html>

@@ -43,6 +43,9 @@ pub struct Card {
     pub branch: String,
     /// The folder, home shortened to `~`.
     pub folder: String,
+    /// Where to see it now (the remote page, opened at this terminal), and what to call that.
+    pub link: String,
+    pub link_label: String,
 }
 
 impl Card {
@@ -65,7 +68,19 @@ impl Card {
                 out.push_str(extra);
             }
         }
+        if let Some(link) = self.link() {
+            out.push_str(&format!("\n{}: {link}", self.link_label));
+        }
         out
+    }
+
+    /// The link, when it is one: an `https://` address with nothing in it that could break out of
+    /// the markup it goes into.
+    fn link(&self) -> Option<&str> {
+        let ok = self.link.starts_with("https://")
+            && self.link.len() <= 300
+            && !self.link.chars().any(|c| c.is_whitespace() || c.is_control() || "<>|\"'`".contains(c));
+        ok.then_some(self.link.as_str())
     }
 
     fn footer(&self) -> Vec<String> {
@@ -109,6 +124,10 @@ impl Card {
                 footer.iter().map(|part| json!({ "type": "mrkdwn", "text": format!("`{}`", part.replace('`', "'")) })).collect();
             blocks.push(json!({ "type": "context", "elements": elements }));
         }
+        if let Some(link) = self.link() {
+            let text = format!("*{}:* <{}>", slack_escape(&self.link_label), link.replace('&', "&amp;"));
+            blocks.push(json!({ "type": "section", "text": { "type": "mrkdwn", "text": text } }));
+        }
         body["text"] = json!(slack_escape(&self.preview()));
         body["unfurl_links"] = json!(false);
         if !blocks.is_empty() {
@@ -136,6 +155,10 @@ impl Card {
         if !self.body.is_empty() {
             lines.push(String::new());
             lines.push(self.body.clone());
+        }
+        if let Some(link) = self.link() {
+            lines.push(String::new());
+            lines.push(format!("**{}:** {link}", discord_escape(&self.link_label)));
         }
         let mut embed = json!({ "title": self.headline, "description": lines.join("\n"), "color": self.tone.rgb() });
         let footer = self.footer();
@@ -172,6 +195,10 @@ impl Card {
         if !footer.is_empty() {
             out.push_str("\n\n");
             out.push_str(&footer.iter().map(|part| format!("<code>{}</code>", html_escape(part))).collect::<Vec<_>>().join(" · "));
+        }
+        if let Some(link) = self.link() {
+            let link = html_escape(link);
+            out.push_str(&format!("\n\n<b>{}:</b> <a href=\"{link}\">{link}</a>", html_escape(&self.link_label)));
         }
         body["text"] = json!(out);
         body["parse_mode"] = json!("HTML");
@@ -406,6 +433,7 @@ mod tests {
             body: "Done. See **Slack card** and `notify.rs`.".into(),
             branch: "main".into(),
             folder: "~/cosmica-desktop".into(),
+            ..Default::default()
         }
     }
 
@@ -458,6 +486,32 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("<blockquote expandable>Done. See <b>Slack card</b> and <code>notify.rs</code>.</blockquote>"));
+    }
+
+    #[test]
+    fn the_link_goes_last_and_only_when_it_is_safe() {
+        let linked = Card { link: "https://mac.tail1.ts.net:8743/#12".into(), link_label: "바로 확인하기".into(), ..card() };
+        let mut slack = json!({});
+        linked.slack(&mut slack);
+        let blocks = slack["attachments"][0]["blocks"].as_array().unwrap();
+        assert_eq!(blocks.last().unwrap()["text"]["text"], "*바로 확인하기:* <https://mac.tail1.ts.net:8743/#12>");
+        let mut telegram = json!({});
+        linked.telegram(&mut telegram);
+        assert!(telegram["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("<b>바로 확인하기:</b> <a href=\"https://mac.tail1.ts.net:8743/#12\">https://mac.tail1.ts.net:8743/#12</a>"));
+        let mut discord = json!({});
+        linked.discord(&mut discord);
+        assert!(discord["embeds"][0]["description"].as_str().unwrap().ends_with("**바로 확인하기:** https://mac.tail1.ts.net:8743/#12"));
+        assert!(linked.plain().ends_with("바로 확인하기: https://mac.tail1.ts.net:8743/#12"));
+        for bad in ["javascript:alert(1)", "http://plain.example/", "https://x.example/a b", "https://x.example/\"><b>", "https://x|y"] {
+            let card = Card { link: bad.into(), link_label: "L".into(), ..card() };
+            let mut slack = json!({});
+            card.slack(&mut slack);
+            assert!(!slack.to_string().contains("L:"), "{bad}");
+            assert!(!card.plain().contains("L:"), "{bad}");
+        }
     }
 
     #[test]

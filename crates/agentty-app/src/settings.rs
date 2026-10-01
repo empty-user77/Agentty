@@ -249,6 +249,10 @@ pub struct Settings {
     pub notify_answer_requests: bool,
     /// Messages to Slack / Discord / Telegram (their secrets live in the credential store).
     pub chat_notify: ChatNotify,
+    /// Remote access from a browser over the user's Tailscale network (`remote`). The password
+    /// lives in the credential store, never here.
+    #[serde(default)]
+    pub remote: RemoteSettings,
     /// Menu bar icon; closing the window keeps Agentty running there.
     pub menu_bar: bool,
     pub link_opener: LinkOpener,
@@ -427,6 +431,28 @@ fn lenient_search_engine<'de, D: serde::Deserializer<'de>>(deserializer: D) -> R
         "bing" => SearchEngine::Bing,
         _ => SearchEngine::Google,
     })
+}
+
+/// Remote access over Tailscale. Off until the user sets a password and turns it on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteSettings {
+    /// The feature itself: its item in the activity bar and its page. Off hides both and keeps
+    /// remote access off, whatever `enabled` says.
+    pub feature: bool,
+    /// On: Agentty serves its web page to the user's tailnet whenever it runs.
+    pub enabled: bool,
+    /// The tailnet HTTPS port (`https://<machine>.<tailnet>.ts.net:<port>`). Not 443, which people
+    /// often serve something else on.
+    pub https_port: u16,
+    /// Keeps the Mac from idle sleep while remote access is on, so the page stays reachable.
+    pub keep_awake: bool,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        RemoteSettings { feature: true, enabled: false, https_port: 8743, keep_awake: true }
+    }
 }
 
 /// Which chat services get a message, and what. The webhook URLs and the bot token are in the
@@ -637,6 +663,7 @@ impl Default for Settings {
             notify_when_focused: false,
             notify_answer_requests: true,
             chat_notify: ChatNotify::default(),
+            remote: RemoteSettings::default(),
             menu_bar: true,
             link_opener: LinkOpener::InApp,
             external_editor: ExternalEditor::Auto,
