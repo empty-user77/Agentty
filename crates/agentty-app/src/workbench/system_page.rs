@@ -196,9 +196,24 @@ impl Workbench {
                     .child(buttons),
             );
         }
-        section(t(cx, "system.tools"))
-            .child(header)
-            .child(list)
-            .child(div().pt_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "system.install_note")))
+        // Diagnose problems lives here, next to the tools it checks, rather than on every pane's bar.
+        let diagnose = section(t(cx, "diag.title")).child(
+            div()
+                .flex()
+                .items_start()
+                .gap_3()
+                .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "diag.intro")))
+                .child(div().flex_shrink_0().child(action_button(
+                    "system-diagnose",
+                    t(cx, "diag.run"),
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.open_diagnostics(cx)),
+                ))),
+        );
+        div().flex().flex_col().child(diagnose).child(
+            section(t(cx, "system.tools"))
+                .child(header)
+                .child(list)
+                .child(div().pt_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "system.install_note"))),
+        )
     }
 }
