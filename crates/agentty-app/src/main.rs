@@ -618,12 +618,6 @@ fn main() {
     platform::raise_file_limit();
     // Killed while the machine was captured: put its proxy settings back before anything else runs.
     platform::system_proxy::restore_after_crash();
-    // Windows: GPUI draws through DirectComposition by default, and its layer then covers every
-    // child window — the in-app browser's pages included. Drawn straight into the window instead,
-    // the pages (child windows) show over it, as the WebKit view does on macOS. Set before GPUI
-    // reads it, while this process is still single-threaded.
-    #[cfg(windows)]
-    std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
     let app = Application::new().with_assets(assets::Assets);
     // Clicking the Dock icon brings the window back (after closing to the menu bar or mini mode).
     app.on_open_urls(|urls| {

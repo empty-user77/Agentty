@@ -1,6 +1,10 @@
 //! In-app browser on Windows: a Microsoft Edge WebView2 (Chromium) placed over a GPUI element.
-//! Each page lives in a child window of Agentty's window (the "host"), which is moved over the
-//! placeholder element every frame, as the WebKit view is on macOS. The API is the same as
+//! Each page lives in a window of its own (the "host") that Agentty's window owns, moved over the
+//! placeholder element every frame, as the WebKit view is on macOS. Not a child window: GPUI draws
+//! through DirectComposition, whose layer covers child windows, and turning that off makes Agentty
+//! look like a game to overlays (NVIDIA, Steam, Discord) that then hook into it. A window the
+//! main one owns always stays above it, follows it when it moves (see [`follow_owner`]) and is
+//! hidden with it when it is minimized. The API is the same as
 //! `webview.rs` (macOS), so the panel, the agents' `agentty browser` commands and plugins drive
 //! both alike.
 //!
@@ -27,14 +31,20 @@ use webview2_com::{
     NavigationCompletedEventHandler, NavigationStartingEventHandler, NewWindowRequestedEventHandler, ProcessFailedEventHandler,
 };
 use windows::core::{Interface, BOOL, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Graphics::Gdi::{GetSysColorBrush, COLOR_WINDOW};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
+use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, GetFocus, GetKeyState, SetActiveWindow, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowRect, IsChild, RegisterClassW, SetWindowPos, ShowWindow,
-    HWND_TOP, SWP_NOACTIVATE, SW_HIDE, SW_SHOWNA, WINDOW_EX_STYLE, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, IsChild, RegisterClassW, SetWindowPos, ShowWindow, EVENT_OBJECT_LOCATIONCHANGE,
+    OBJID_WINDOW, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WINEVENT_OUTOFCONTEXT, WNDCLASSW, WS_CLIPCHILDREN,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 use crate::platform::page_scripts::{navigation_allowed, CONSOLE_CAPTURE, NETWORK_CAPTURE};
@@ -112,6 +122,12 @@ type Queued = Box<dyn FnOnce(Option<&Page>)>;
 
 /// What a page's event handlers and the queue share with its [`WebView`].
 struct Inner {
+    /// The page's window, and Agentty's window that owns it.
+    host: HWND,
+    owner: HWND,
+    /// Where the page is over Agentty's window (client pixels) while it is on screen; `None`
+    /// while it is parked or hidden. The host follows it when the window moves.
+    frame: Option<(i32, i32, i32, i32)>,
     page: Option<Page>,
     /// WebView2 could not make the page; queued work is answered with an error.
     failed: bool,
@@ -396,6 +412,19 @@ fn host_class() -> PCWSTR {
 }
 
 extern "system" fn host_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindow, PostMessageW, GW_OWNER, WM_CLOSE};
+    // Alt+F4 while a page has the keyboard closes the page's window, which is the active one: it
+    // goes to Agentty's window instead, as it would on macOS. The page's window is only ever
+    // destroyed by its view.
+    if message == WM_CLOSE {
+        // SAFETY: plain calls on our own window and the one that owns it.
+        unsafe {
+            if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+                let _ = PostMessageW(Some(owner), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
+        }
+        return LRESULT(0);
+    }
     // SAFETY: forwarding the message this window received.
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
@@ -416,6 +445,75 @@ fn scale_of(hwnd: HWND) -> f64 {
         1.
     } else {
         dpi as f64 / 96.
+    }
+}
+
+/// A point of `window`'s client area on the screen.
+fn client_to_screen(window: HWND, x: i32, y: i32) -> (i32, i32) {
+    let mut point = POINT { x, y };
+    // SAFETY: a plain conversion on a window handle.
+    let _ = unsafe { ClientToScreen(window, &mut point) };
+    (point.x, point.y)
+}
+
+/// Makes Agentty's window the active one again and gives it the keyboard. The page's window is a
+/// top-level window of its own, so clicking into it made it the active one.
+fn give_keyboard_to(owner: HWND) {
+    // SAFETY: activating and focusing Agentty's own window, on its thread.
+    unsafe {
+        let _ = SetActiveWindow(owner);
+        let _ = SetFocus(Some(owner));
+    }
+}
+
+/// Starts following Agentty's windows (once per thread): when one moves, the pages over it move
+/// with it. Its frames are drawn only when something changes, not while it is dragged around, so
+/// the frame-by-frame placement alone would leave the pages behind.
+fn follow_owner() {
+    thread_local! {
+        static HOOK: Cell<bool> = const { Cell::new(false) };
+    }
+    if HOOK.with(|hook| hook.replace(true)) {
+        return;
+    }
+    // SAFETY: an out-of-context hook for this thread's windows only; its callback runs on this
+    // thread, from the message loop, and lives as long as the process.
+    unsafe {
+        SetWinEventHook(
+            EVENT_OBJECT_LOCATIONCHANGE,
+            EVENT_OBJECT_LOCATIONCHANGE,
+            None,
+            Some(owner_moved),
+            GetCurrentProcessId(),
+            GetCurrentThreadId(),
+            WINEVENT_OUTOFCONTEXT,
+        );
+    }
+}
+
+unsafe extern "system" fn owner_moved(_: HWINEVENTHOOK, _: u32, window: HWND, object: i32, child: i32, _: u32, _: u32) {
+    // The window itself (not its caret or a part of it).
+    if object != OBJID_WINDOW.0 || child != 0 || window.is_invalid() {
+        return;
+    }
+    for (_, inner) in live_views() {
+        let Ok(state) = inner.try_borrow() else { continue };
+        if state.owner != window {
+            continue;
+        }
+        let page = state.page.clone();
+        if let Some((x, y, w, h)) = state.frame {
+            let (x, y) = client_to_screen(window, x, y);
+            let host = state.host;
+            drop(state);
+            // SAFETY: moving our own window along with the one that owns it.
+            let _ = unsafe { SetWindowPos(host, None, x, y, w, h, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER) };
+        }
+        // Drop-downs and other pop-ups a page opens are placed from where its window is.
+        if let Some(page) = page {
+            // SAFETY: a plain call on a live page.
+            let _ = unsafe { page.controller.NotifyParentWindowPositionChanged() };
+        }
     }
 }
 
@@ -612,11 +710,22 @@ pub struct WebView {
     locked: bool,
     /// Size a terminal's page is laid out at while parked, at zoom 1 (see [`WebView::park_as`]).
     parked_layout: Option<(f64, f64)>,
-    /// Where the host was last put (parent client pixels), so an unchanged frame costs nothing.
-    placed: Option<(i32, i32, i32, i32)>,
-    /// The parent window's place on screen when the page was last told about it.
-    parent_rect: Option<(i32, i32, i32, i32)>,
+    /// Where the host was last put (client pixels on screen, or the parked size), so an unchanged
+    /// frame costs nothing.
+    placed: Option<Placement>,
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum Placement {
+    /// Over Agentty's window: `x, y` in its client area.
+    Over(i32, i32, i32, i32),
+    /// Parked off every screen, `w × h`.
+    Parked(i32, i32),
+}
+
+/// Screen position of parked pages: far from any monitor, but on the coordinate range Windows
+/// keeps windows in.
+const PARK_AT: i32 = -30000;
 
 impl WebView {
     /// Creates the web view inside `window` (hidden until `set_frame`).
@@ -643,15 +752,17 @@ impl WebView {
             return None;
         }
         let parent = window_hwnd(window)?;
-        // SAFETY: a child window of Agentty's own window, with a registered class.
+        follow_owner();
+        // SAFETY: a window Agentty's window owns (a pop-up, not a child), with a registered class;
+        // a tool window, so it is never in the taskbar or Alt+Tab.
         let host = unsafe {
             CreateWindowExW(
-                WINDOW_EX_STYLE(0),
+                WS_EX_TOOLWINDOW,
                 host_class(),
                 PCWSTR::null(),
-                WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-                0,
-                0,
+                WS_POPUP | WS_CLIPCHILDREN,
+                PARK_AT,
+                PARK_AT,
                 10,
                 10,
                 Some(parent),
@@ -663,6 +774,9 @@ impl WebView {
         .ok()?;
         let zoom = prefs.zoom.clamp(0.3, 3.0) as f64;
         let inner = Rc::new(RefCell::new(Inner {
+            host,
+            owner: parent,
+            frame: None,
             page: None,
             failed: false,
             queue: Vec::new(),
@@ -694,7 +808,6 @@ impl WebView {
             locked: false,
             parked_layout: None,
             placed: None,
-            parent_rect: None,
         })
     }
 
@@ -930,15 +1043,22 @@ impl WebView {
         self.inner.borrow().progress
     }
 
-    /// Puts the host at `x, y` (parent client pixels), `w × h`, and the page inside it.
-    fn place(&mut self, x: i32, y: i32, w: i32, h: i32) {
-        let (w, h) = (w.max(1), h.max(1));
-        if self.placed != Some((x, y, w, h)) {
-            self.placed = Some((x, y, w, h));
-            // SAFETY: moving our own child window.
-            let _ = unsafe { SetWindowPos(self.host, Some(HWND_TOP), x, y, w, h, SWP_NOACTIVATE) };
+    /// Puts the host where `placement` says, and the page inside it.
+    fn place(&mut self, placement: Placement) {
+        if self.placed != Some(placement) {
+            self.placed = Some(placement);
+            let (frame, (x, y), (w, h)) = match placement {
+                Placement::Over(x, y, w, h) => {
+                    let (w, h) = (w.max(1), h.max(1));
+                    (Some((x, y, w, h)), client_to_screen(self.parent, x, y), (w, h))
+                }
+                Placement::Parked(w, h) => (None, (PARK_AT, PARK_AT), (w.max(1), h.max(1))),
+            };
+            // SAFETY: moving our own window; it keeps its place above the window that owns it.
+            let _ = unsafe { SetWindowPos(self.host, None, x, y, w, h, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER) };
             let resized = {
                 let mut inner = self.inner.borrow_mut();
+                inner.frame = frame;
                 let resized = inner.size != (w, h);
                 inner.size = (w, h);
                 resized.then(|| inner.page.clone()).flatten()
@@ -976,21 +1096,7 @@ impl WebView {
         let px = |v: gpui::Pixels| (f32::from(v) as f64 * scale).round() as i32;
         self.parked = false;
         self.visible = true;
-        self.place(px(bounds.origin.x), px(bounds.origin.y), px(bounds.size.width), px(bounds.size.height));
-        // Dropdowns and other pop-ups a page opens are placed from where the window is: the page is
-        // told when Agentty's window has moved.
-        let mut rect = RECT::default();
-        // SAFETY: a plain query on Agentty's window.
-        if unsafe { GetWindowRect(self.parent, &mut rect) }.is_ok() {
-            let now = (rect.left, rect.top, rect.right, rect.bottom);
-            if self.parent_rect != Some(now) {
-                self.parent_rect = Some(now);
-                if let Some(page) = self.inner.borrow().page.clone() {
-                    // SAFETY: a plain call on a live page.
-                    let _ = unsafe { page.controller.NotifyParentWindowPositionChanged() };
-                }
-            }
-        }
+        self.place(Placement::Over(px(bounds.origin.x), px(bounds.origin.y), px(bounds.size.width), px(bounds.size.height)));
     }
 
     /// Page zoom. Responsive mode uses it to lay the page out at a device's width in a smaller
@@ -1041,11 +1147,7 @@ impl WebView {
         self.release_keyboard();
         let scale = scale_of(self.parent);
         let (w, h) = self.parked_layout.unwrap_or((PARKED_WIDTH, PARKED_HEIGHT));
-        let (w, h) = ((w * scale).round() as i32, (h * scale).round() as i32);
-        let mut client = RECT::default();
-        // SAFETY: a plain query on Agentty's window.
-        let _ = unsafe { GetClientRect(self.parent, &mut client) };
-        self.place(-(w + client.right + 400), -(h + client.bottom + 400), w, h);
+        self.place(Placement::Parked((w * scale).round() as i32, (h * scale).round() as i32));
         self.visible = false;
         self.parked = true;
         // A terminal's page keeps the width it is laid out at, on screen or off.
@@ -1085,6 +1187,7 @@ impl WebView {
         let page = {
             let mut inner = self.inner.borrow_mut();
             inner.shown = false;
+            inner.frame = None;
             inner.page.clone()
         };
         if let Some(page) = page {
@@ -1116,8 +1219,7 @@ impl WebView {
     /// Hands the keyboard back to Agentty's window when this page holds it.
     fn release_keyboard(&self) {
         if self.has_keyboard() {
-            // SAFETY: focusing Agentty's own window.
-            let _ = unsafe { SetFocus(Some(self.parent)) };
+            give_keyboard_to(self.parent);
         }
     }
 }
@@ -1810,7 +1912,7 @@ pub fn focus_gpui_view(window: &gpui::Window) {
             return;
         }
         if live_views().iter().any(|(id, _)| is_inside(HWND(*id as *mut _), focus)) {
-            let _ = SetFocus(Some(parent));
+            give_keyboard_to(parent);
         }
     }
 }

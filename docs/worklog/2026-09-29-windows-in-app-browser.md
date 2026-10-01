@@ -19,7 +19,7 @@ says a component must be installed and lets the user download it.
 |---|---|
 | D1 | Microsoft Edge WebView2 (Chromium). It ships with Windows 10 and 11; where it is missing, opening the browser shows a dialog that downloads Microsoft's Evergreen bootstrapper (`go.microsoft.com/fwlink/p/?LinkId=2124703`), runs it only if its Authenticode signature is valid and signed by `O=Microsoft Corporation`, and then opens the browser as asked. "Open in default browser" is the other way out. |
 | D2 | Same API as `webview.rs` (macOS) so no call site changes: `platform/windows/webview.rs` is compiled as `crate::webview` on Windows. |
-| D3 | Each page is a WebView2 controller in a child window ("host") of Agentty's window, moved over the placeholder every frame like the WebKit view. GPUI's DirectComposition layer covers child windows, so GPUI is told to draw without it (`GPUI_DISABLE_DIRECT_COMPOSITION=1`, set in `main` before GPUI starts). |
+| D3 | Each page is a WebView2 controller in a window ("host") that Agentty's window owns — a pop-up, not a child — moved over the placeholder every frame like the WebKit view, and with the window when it moves (a WinEvent hook). See "Update: owned windows" below for why not a child window. |
 | D4 | Scripts (`call_async` / `call_in_world`) and screenshots go through the DevTools protocol: `Runtime.evaluate` awaits promises and ignores the page's CSP (what `callAsyncJavaScript` does); a plugin's world is `Page.createIsolatedWorld`, kept per document and made again when the document changes. |
 | D5 | Profiles (separate cookies per terminal, plugins' profiles) are WebView2 profiles (`ProfileName`, runtime ≥ 101); private mode is InPrivate. Data folder `~/.agentty/webview2`. |
 | D6 | Pages out of sight keep running: browser arguments turn off Chromium's occlusion detection and background throttling; parked pages stay visible at a desktop size outside the window, as on macOS. |
@@ -70,10 +70,26 @@ Found and fixed while going through the logic against the macOS module and every
 
 ## Not verified (needs a Windows machine)
 
-Nothing here ran on Windows. To try on a Windows PC: the panel shows pages over the terminals (DirectComposition off),
+Nothing here ran on Windows. To try on a Windows PC: the panel shows pages over the terminals and they follow the window,
 typing and clicking in a page, Ctrl+C/V inside it, focus returning to terminals on click, two terminals' pages running
 at once, `agentty browser open/click/eval/screenshot/console`, a plugin's `browser/*` calls and isolated world state,
 separate cookies option, responsive mode, the install dialog on a PC without the runtime.
+
+## Update: owned windows instead of child windows (2026-10-01)
+
+The first version put each page in a child window and told GPUI to draw without DirectComposition
+(`GPUI_DISABLE_DIRECT_COMPOSITION=1`), whose layer covers child windows. Tried on Windows by the owner: the pages
+showed, but the NVIDIA overlay ("press Alt+Z") came up — drawn straight into the window, Agentty looks like a game
+to overlays (NVIDIA, Steam, Discord), which then hook into it — the app closed a little later, without a
+`crash.log` (a native crash in the hooked code, not a Rust panic), and moving the window stuttered.
+
+Now GPUI keeps DirectComposition, and each page is a pop-up window owned by Agentty's window (`WS_POPUP`, a tool
+window: never in the taskbar or Alt+Tab). An owned window always stays above its owner and is hidden with it when
+it is minimized; a WinEvent hook (`EVENT_OBJECT_LOCATIONCHANGE`, this thread) moves the pages with the window, whose
+frames are not drawn while it is dragged. Parked pages sit at screen position -30000. Clicking into a page makes its
+window the active one, so the keyboard is handed back by activating Agentty's window again (`SetActiveWindow`
+before `SetFocus`); while a page has the keyboard, Agentty's window counts as inactive (its title bar dims, plugin
+context is not sent). Alt+F4 in a page closes Agentty, not the page's window.
 
 ## Not included
 
