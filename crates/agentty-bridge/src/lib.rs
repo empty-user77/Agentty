@@ -27,6 +27,7 @@ pub mod limits;
 pub mod metrics;
 pub mod model;
 pub mod notify;
+pub mod notify_card;
 pub mod plugins;
 pub mod pricing;
 pub mod process;

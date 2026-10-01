@@ -64,6 +64,11 @@ fn validation_text(reason: &str, cx: &gpui::App) -> String {
     t(cx, key).to_string()
 }
 
+/// What Send test sends: the same card a real notice uses, so the test shows how notices look.
+fn test_card(cx: &gpui::App) -> notify::Card {
+    notify::Card { headline: "🔔 Agentty".to_string(), body: t(cx, "chat.test_message").to_string(), ..Default::default() }
+}
+
 fn kind_code(kind: NoticeKind) -> u8 {
     match kind {
         NoticeKind::Finished => 0,
@@ -125,21 +130,36 @@ impl Workbench {
             NoticeKind::Question => t(cx, "chat.question"),
             _ => t(cx, "chat.finished"),
         };
-        let place = super::notices::view_title_for_bubble(source, workspace);
-        let mut message = format!("{headline} — {place}");
-        if prefs.details && !text.trim().is_empty() {
-            message.push('\n');
-            message.push_str(text.trim());
+        let mut card = notify::Card {
+            tone: if asks { notify::Tone::Ask } else { notify::Tone::Done },
+            headline: headline.to_string(),
+            workspace: workspace.to_string(),
+            agent: source.to_string(),
+            ..Default::default()
+        };
+        // The session, what the agent said and where it ran only with "Include what the agent
+        // asks" on; off, the message names the agent and the workspace and nothing else.
+        if prefs.details {
+            card.body = text.trim().to_string();
+            if let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id) {
+                let view = pane.read(cx);
+                let session = view.display_title();
+                if session != workspace && session != source {
+                    card.session = session;
+                }
+                card.branch = view.git_branch.clone().unwrap_or_default();
+                card.folder = crate::ui::tilde(&view.display_cwd());
+            }
         }
         for channel in channels {
-            self.send_chat(channel, message.clone(), Some(pane_id), cx);
+            self.send_chat(channel, card.clone(), Some(pane_id), cx);
         }
     }
 
-    /// Sends `message` to `channel` in the background and records the result for the settings page.
+    /// Sends `card` to `channel` in the background and records the result for the settings page.
     /// `pane` is the agent's pane for a real notice and `None` for the Send test button; a real
     /// notice that fails also lands in the notification list, where the user looks.
-    fn send_chat(&mut self, channel: Channel, message: String, pane: Option<u64>, cx: &mut Context<Self>) {
+    fn send_chat(&mut self, channel: Channel, message: notify::Card, pane: Option<u64>, cx: &mut Context<Self>) {
         let test = pane.is_none();
         let prefs = settings(cx).chat_notify.clone();
         let transport = prefs.transport(channel);
@@ -541,7 +561,7 @@ impl Workbench {
                         SharedString::from(format!("chat-test-{id}")),
                         t(cx, "chat.test"),
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            let message = t(cx, "chat.test_message").to_string();
+                            let message = test_card(cx);
                             this.send_chat(channel, message, None, cx)
                         }),
                     ))
@@ -591,7 +611,7 @@ impl Workbench {
                 cx.notify();
             }
             ("test", Some(channel)) => {
-                let message = t(cx, "chat.test_message").to_string();
+                let message = test_card(cx);
                 self.send_chat(channel, message, None, cx);
             }
             ("remove", Some(channel)) => self.remove_chat_secret(channel, cx),

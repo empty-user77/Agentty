@@ -1624,10 +1624,10 @@ strings! {
     ],
     "chat.details" => ["Include what the agent asks", "요청 내용 포함", "依頼内容を含める", "包含请求内容"],
     "chat.details_hint" => [
-        "The command or question is sent to the chat service. Off: only the agent and the workspace",
-        "명령이나 질문 내용이 메신저로 전송됩니다. 끄면 에이전트와 작업공간 이름만 보냅니다",
-        "コマンドや質問の内容がチャットサービスに送られます。オフ: エージェントとワークスペース名のみ",
-        "命令或问题内容会发送到聊天服务。关闭时只发送智能体和工作区名称"
+        "What the agent said or asks, the session title, the branch and the folder are sent to the chat service. Off: only the agent and the workspace",
+        "에이전트가 남긴 내용이나 질문, 세션 제목, 브랜치와 폴더가 메신저로 전송됩니다. 끄면 에이전트와 작업공간 이름만 보냅니다",
+        "エージェントの返答や質問、セッション名、ブランチ、フォルダがチャットサービスに送られます。オフ: エージェントとワークスペース名のみ",
+        "智能体的回复或问题、会话标题、分支和文件夹会发送到聊天服务。关闭时只发送智能体和工作区名称"
     ],
     "chat.when_in_view" => ["Also while the session is on screen", "화면이 띄워져 있어도 알림 받기", "画面に表示中でも通知を受け取る", "会话显示在屏幕上时也接收通知"],
     "chat.when_in_view_hint" => [
