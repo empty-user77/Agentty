@@ -73,7 +73,7 @@ impl Workbench {
             .workspaces
             .iter()
             .map(|ws| WindowWorkspace {
-                title: super::card_title(self.workspace_title(ws, cx)),
+                title: self.workspace_label(ws, cx),
                 group: ws.group.and_then(|g| self.groups.iter().find(|x| x.id == g)).map(|g| g.name.clone()),
                 running: ws.tabs.iter().flat_map(|t| t.root.leaves()).any(|p| p.read(cx).is_running()),
             })

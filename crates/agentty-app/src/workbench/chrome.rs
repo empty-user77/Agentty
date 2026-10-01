@@ -677,7 +677,7 @@ impl Workbench {
             let ws = &self.workspaces[index];
             let id = ws.id;
             // Named as its card names it; the whole path goes on the line below.
-            let title = super::card_title(self.workspace_title(ws, cx));
+            let title = self.workspace_label(ws, cx);
             let folder = tilde(&self.workspace_folder(ws, cx));
             let by_name = title.to_lowercase().contains(query);
             let by_folder = folder.to_lowercase().contains(query);
@@ -932,7 +932,7 @@ impl Workbench {
         let ws = &self.workspaces[index];
         let id = ws.id;
         let active = index == self.active_workspace && self.page.is_none_or(Workbench::page_keeps_sidebar) && self.session_viewer.is_none();
-        let title = super::card_title(self.workspace_title(ws, cx));
+        let title = self.workspace_label(ws, cx);
         let summary = self.summarize(ws, cx);
         let renaming = matches!(&self.rename, Some(r) if r.target == RenameTarget::Workspace(id));
         let ws_colored = ws.color.is_some();

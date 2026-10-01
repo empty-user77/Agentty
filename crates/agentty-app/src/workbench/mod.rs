@@ -2520,6 +2520,13 @@ impl Workbench {
             .unwrap_or_else(|| crate::ui::tilde(&ws.cwd))
     }
 
+    /// The workspace's name exactly as its sidebar card shows it. Everything else that tells the
+    /// user where a session lives (mini mode, the menu bar, notifications, processes) uses this,
+    /// so a workspace reads the same everywhere.
+    pub fn workspace_label(&self, ws: &Workspace, cx: &gpui::App) -> String {
+        card_title(self.workspace_title(ws, cx))
+    }
+
     fn start_rename(&mut self, target: RenameTarget, window: &mut Window, cx: &mut Context<Self>) {
         let current = match target {
             RenameTarget::Workspace(id) => self.workspaces.iter().find(|w| w.id == id).map(|w| self.workspace_title(w, cx)),

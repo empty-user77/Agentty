@@ -58,6 +58,25 @@ pub struct AgentSummary {
 }
 
 impl AgentSummary {
+    /// The row's first line: the workspace, named as its sidebar card names it, so a session is
+    /// found under the same name in the sidebar, mini mode, the menu bar and notifications.
+    pub fn heading(&self) -> &str {
+        if self.workspace.is_empty() {
+            &self.title
+        } else {
+            &self.workspace
+        }
+    }
+
+    /// The second line: what the session is about, unless that only repeats the heading.
+    pub fn detail(&self) -> &str {
+        if self.title == self.heading() {
+            ""
+        } else {
+            &self.title
+        }
+    }
+
     /// Status, with how long it has been working ("Working · 2m 10s").
     pub fn status_line(&self) -> String {
         match self.elapsed.filter(|_| self.working) {
@@ -392,8 +411,8 @@ impl Render for MiniView {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(div().t_small().truncate().text_color(hex(Chrome::BRIGHT)).child(agent.title.clone()))
-                            .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(agent.workspace.clone())),
+                            .child(div().t_small().truncate().text_color(hex(Chrome::BRIGHT)).child(agent.heading().to_string()))
+                            .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(agent.detail().to_string())),
                     )
                     .child(
                         div()
@@ -480,7 +499,7 @@ impl Workbench {
     pub fn agent_summaries(&self, cx: &App) -> Vec<AgentSummary> {
         let mut out = Vec::new();
         for ws in &self.workspaces {
-            let workspace = self.workspace_title(ws, cx);
+            let workspace = self.workspace_label(ws, cx);
             for tab in &ws.tabs {
                 for pane in tab.root.leaves() {
                     let view = pane.read(cx);
@@ -848,6 +867,31 @@ mod tests {
         assert_eq!(base, MiniView::desired_height(1, 0, false));
         assert!(MiniView::desired_height(3, 1, false) > MiniView::desired_height(3, 0, false));
         assert_eq!(MiniView::desired_height(50, 0, false), MiniView::desired_height(super::MAX_ROWS, 0, false));
+    }
+
+    #[test]
+    fn rows_lead_with_the_workspace_name() {
+        let agent = |title: &str, workspace: &str| super::AgentSummary {
+            pane_id: 1,
+            kind: crate::launch::PaneKind::Claude,
+            tool: "claude",
+            needs_user: false,
+            last_activity_ms: 0,
+            title: title.into(),
+            workspace: workspace.into(),
+            status: String::new(),
+            color: 0,
+            working: false,
+            waiting: false,
+            elapsed: None,
+            in_plugin: false,
+        };
+        let named = agent("Fix the timer", "CosmicaDesktop");
+        assert_eq!((named.heading(), named.detail()), ("CosmicaDesktop", "Fix the timer"));
+        let same = agent("Claude Code", "Claude Code");
+        assert_eq!((same.heading(), same.detail()), ("Claude Code", ""));
+        let unplaced = agent("Fix the timer", "");
+        assert_eq!((unplaced.heading(), unplaced.detail()), ("Fix the timer", ""));
     }
 
     #[test]

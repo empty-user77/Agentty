@@ -98,43 +98,57 @@ impl Workbench {
         text: &str,
         cx: &mut Context<Self>,
     ) {
-        let in_view = self.pane_in_view(pane_id, cx);
         let prefs = settings(cx).chat_notify.clone();
         let asks = matches!(kind, NoticeKind::Permission | NoticeKind::Question);
         let finished = matches!(kind, NoticeKind::Finished | NoticeKind::Message) && prefs.on_finish;
-        if in_view || !(asks || finished) {
+        let channels: Vec<Channel> = Channel::ALL.into_iter().filter(|c| prefs.enabled(*c)).collect();
+        if channels.is_empty() || !(asks || finished) {
             return;
         }
-        let channels: Vec<Channel> = Channel::ALL.into_iter().filter(|c| prefs.enabled(*c)).collect();
-        if channels.is_empty() || !self.chat_notify.limiter.allow(pane_id, kind_code(kind), std::time::Instant::now()) {
-            return;
+        // A notice the user wants but that is held back says why on the settings page, so "nothing
+        // arrived" can be told apart from "it failed".
+        let held = if !prefs.when_in_view && self.pane_in_view(pane_id, cx) {
+            Some("chat.skipped_in_view")
+        } else if !self.chat_notify.limiter.allow(pane_id, kind_code(kind), std::time::Instant::now()) {
+            Some("chat.skipped_limit")
+        } else {
+            None
+        };
+        if let Some(key) = held {
+            for channel in channels {
+                self.chat_notify.status.insert(channel, (t(cx, key).to_string(), false));
+            }
+            return cx.notify();
         }
         let headline = match kind {
             NoticeKind::Permission => t(cx, "chat.permission"),
             NoticeKind::Question => t(cx, "chat.question"),
             _ => t(cx, "chat.finished"),
         };
-        let place = if workspace.is_empty() { source.to_string() } else { format!("{source} · {workspace}") };
+        let place = super::notices::view_title_for_bubble(source, workspace);
         let mut message = format!("{headline} — {place}");
         if prefs.details && !text.trim().is_empty() {
             message.push('\n');
             message.push_str(text.trim());
         }
         for channel in channels {
-            self.send_chat(channel, message.clone(), false, cx);
+            self.send_chat(channel, message.clone(), Some(pane_id), cx);
         }
     }
 
     /// Sends `message` to `channel` in the background and records the result for the settings page.
-    fn send_chat(&mut self, channel: Channel, message: String, test: bool, cx: &mut Context<Self>) {
+    /// `pane` is the agent's pane for a real notice and `None` for the Send test button; a real
+    /// notice that fails also lands in the notification list, where the user looks.
+    fn send_chat(&mut self, channel: Channel, message: String, pane: Option<u64>, cx: &mut Context<Self>) {
+        let test = pane.is_none();
         let prefs = settings(cx).chat_notify.clone();
         let transport = prefs.transport(channel);
         let target = prefs.target(channel);
         // A bot with nowhere to write would fail on every message: say so once, here.
         if channel.needs_target(transport) && !notify::valid_target(channel, &target) {
             let key = if channel == Channel::Telegram { "chat.telegram_no_chat" } else { "chat.no_channel" };
-            self.chat_notify.status.insert(channel, (t(cx, key).to_string(), true));
-            return cx.notify();
+            let reason = t(cx, key).to_string();
+            return self.chat_failed(channel, pane, reason, cx);
         }
         if test {
             self.chat_notify.busy.insert(channel);
@@ -144,16 +158,40 @@ impl Workbench {
             let result = cx.background_spawn(async move { notify::send(channel, transport, Some(&target), &message) }).await;
             let _ = this.update(cx, |this, cx| {
                 this.chat_notify.busy.remove(&channel);
-                let status = match result {
-                    Ok(()) if test => (t(cx, "chat.test_sent").to_string(), false),
-                    Ok(()) => (t(cx, "chat.last_sent").to_string(), false),
-                    Err(err) => (format!("{err:#}"), true),
-                };
-                this.chat_notify.status.insert(channel, status);
-                cx.notify();
+                match result {
+                    Ok(()) => {
+                        let key = if test { "chat.test_sent" } else { "chat.last_sent" };
+                        this.chat_notify.status.insert(channel, (t(cx, key).to_string(), false));
+                        cx.notify();
+                    }
+                    Err(err) => this.chat_failed(channel, pane, format!("{err:#}"), cx),
+                }
             });
         })
         .detach();
+    }
+
+    /// A message to `channel` did not go out: the reason goes under the service on the settings
+    /// page and, for an agent's notice (not the test button, whose answer is right there), into the
+    /// notification list too. The reason never holds the credential (see `notify::send`).
+    fn chat_failed(&mut self, channel: Channel, pane: Option<u64>, reason: String, cx: &mut Context<Self>) {
+        self.chat_notify.status.insert(channel, (reason.clone(), true));
+        if let Some(pane_id) = pane {
+            self.notices.insert(
+                0,
+                super::notices::Notice {
+                    pane_id,
+                    kind: NoticeKind::Message,
+                    text: tf(cx, "chat.send_failed", &[("service", channel.label()), ("reason", &reason)]),
+                    source: channel.label().to_string(),
+                    at_ms: crate::ui::now_ms(),
+                    read: false,
+                    chat_failed: true,
+                },
+            );
+            self.notices.truncate(super::notices::MAX_NOTICES);
+        }
+        cx.notify();
     }
 
     /// Looks up which services have a secret saved (the credential store may be slow or ask).
@@ -343,12 +381,9 @@ impl Workbench {
                 toggle("notify-focused", prefs.notify_when_focused, |s| s.notify_when_focused = !s.notify_when_focused, cx),
             ));
 
-        let mut chats =
-            section(t(cx, "settings.notifications_chat")).child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "chat.intro")));
-        for channel in Channel::ALL {
-            chats = chats.child(self.render_chat_card(channel, window, cx));
-        }
-        chats = chats
+        // What gets sent comes first, above the services: below three cards it went unseen.
+        let mut chats = section(t(cx, "settings.notifications_chat"))
+            .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "chat.intro")))
             .child(row_with_hint(
                 t(cx, "chat.on_finish"),
                 t(cx, "chat.on_finish_hint"),
@@ -358,7 +393,20 @@ impl Workbench {
                 t(cx, "chat.details"),
                 t(cx, "chat.details_hint"),
                 toggle("chat-details", prefs.chat_notify.details, |s| s.chat_notify.details = !s.chat_notify.details, cx),
+            ))
+            .child(row_with_hint(
+                t(cx, "chat.when_in_view"),
+                t(cx, "chat.when_in_view_hint"),
+                toggle(
+                    "chat-when-in-view",
+                    prefs.chat_notify.when_in_view,
+                    |s| s.chat_notify.when_in_view = !s.chat_notify.when_in_view,
+                    cx,
+                ),
             ));
+        for channel in Channel::ALL {
+            chats = chats.child(self.render_chat_card(channel, window, cx));
+        }
         div().flex().flex_col().child(desktop).child(chats)
     }
 
@@ -494,7 +542,7 @@ impl Workbench {
                         t(cx, "chat.test"),
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
                             let message = t(cx, "chat.test_message").to_string();
-                            this.send_chat(channel, message, true, cx)
+                            this.send_chat(channel, message, None, cx)
                         }),
                     ))
                     .child(action_button(
@@ -544,7 +592,7 @@ impl Workbench {
             }
             ("test", Some(channel)) => {
                 let message = t(cx, "chat.test_message").to_string();
-                self.send_chat(channel, message, true, cx);
+                self.send_chat(channel, message, None, cx);
             }
             ("remove", Some(channel)) => self.remove_chat_secret(channel, cx),
             ("notice", _) => {
