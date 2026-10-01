@@ -316,6 +316,16 @@ impl Workbench {
                     ))
                     // Extensions has no icon here any more: it is reached from the command palette
                     // (⇧⌘X) and from where an extension is actually needed.
+                    .when(settings(cx).remote.feature, |d| {
+                        d.child(item(
+                            "activity-remote",
+                            "remote-desktop",
+                            self.page == Some(Page::Remote),
+                            "page.remote",
+                            Box::new(|this, cx| this.open_page(Page::Remote, cx)),
+                            cx,
+                        ))
+                    })
                     .child(item(
                         "activity-plugins",
                         "puzzle",
@@ -1860,6 +1870,7 @@ impl Workbench {
                 Page::Flow => vec![(page, None, t(cx, "page.flow"))],
                 Page::Settings => vec![(page, None, t(cx, "page.settings"))],
                 Page::Plugins => vec![(page, None, t(cx, "page.plugins"))],
+                Page::Remote => vec![(page, None, t(cx, "page.remote"))],
                 Page::Idea => vec![(page, None, t(cx, "page.idea"))],
                 Page::Database => vec![(page, None, t(cx, "page.database"))],
             };

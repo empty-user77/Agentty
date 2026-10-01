@@ -125,8 +125,8 @@ impl Workbench {
             let count = filtered(&palette.items, &query).len();
             match event {
                 TextInputEvent::Changed => palette.selected = 0,
-                TextInputEvent::Up => palette.selected = palette.selected.saturating_sub(1),
-                TextInputEvent::Down => palette.selected = (palette.selected + 1).min(count.saturating_sub(1)),
+                TextInputEvent::Up | TextInputEvent::Previous => palette.selected = palette.selected.saturating_sub(1),
+                TextInputEvent::Down | TextInputEvent::Next => palette.selected = (palette.selected + 1).min(count.saturating_sub(1)),
                 TextInputEvent::Confirmed => {
                     let chosen = filtered(&palette.items, &query).get(palette.selected).map(|item| item.run.clone());
                     this.close_palette(window, cx);
@@ -210,10 +210,14 @@ impl Workbench {
             (Page::Browsers, "page.browsers", ""),
             (Page::Extensions, "page.extensions", "⇧⌘X"),
             (Page::Plugins, "page.plugins", ""),
+            (Page::Remote, "page.remote", ""),
             (Page::Idea, "page.idea", ""),
             (Page::Database, "page.database", ""),
             (Page::Settings, "page.settings", "⌘,"),
         ] {
+            if page == Page::Remote && !crate::settings::settings(cx).remote.feature {
+                continue;
+            }
             if page == Page::Idea && !crate::settings::settings(cx).idea_mode {
                 continue;
             }

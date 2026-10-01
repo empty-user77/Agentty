@@ -64,6 +64,15 @@
           }
         },
         {
+          "slug": "remote-access",
+          "title": {
+            "en": "Remote access",
+            "ko": "원격 접속",
+            "ja": "リモートアクセス",
+            "zh": "远程访问"
+          }
+        },
+        {
           "slug": "advisor",
           "title": {
             "en": "Claude advisor",

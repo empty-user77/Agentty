@@ -1,0 +1,85 @@
+---
+title: Remote access
+description: Open your terminals and Agentty workspaces from another device on your Tailscale network.
+---
+
+Remote access lets you open your Agentty workspaces from a browser on another device — a phone, tablet, or computer — in your own Tailscale network. You can watch terminal sessions, type commands directly, and send prompts to agents, all over the local network inside your Tailscale account.
+
+## What you see
+
+The page is laid out like Agentty itself:
+
+- **☰ menu** — your groups and workspaces, in the sidebar's order, with their colors, branch and folder. A red number shows how many terminals there wait for your answer. On a wide screen the list stays open on the left.
+- **Tabs** — the chosen workspace's tabs across the top. A dot shows a tab that is working or waiting for you; ▥2 marks a tab split into two panes.
+- **Split panes** — when the tab is split, the button at the top right opens the list of its panes, with each one's state and what it asks; tap one to switch to it.
+- **The terminal** — the chosen pane's live screen in the middle.
+
+Plugin workspaces do not appear on the page.
+
+You can type into the terminal directly using an on-screen key bar with Esc, Tab, Shift+Tab, arrow keys, Enter, Ctrl+C, a sticky Ctrl key, and quick buttons (1/2/3) when an agent is asking for an answer. Or send a prompt from the box at the bottom — press Enter on a computer, or Shift+Enter to add a line.
+
+**Notify me** on the page switches on browser notifications when a session finishes or asks something while you are looking elsewhere.
+
+While you look at a terminal on the page, it takes the page's size: as many columns and lines as fit your screen, so nothing wraps or scrolls sideways. **A−** and **A+** change the text size (kept on that device). When no page shows the terminal any more, it goes back to its size in the app. The page can be added to your home screen as an app.
+
+With Slack, Discord or Telegram notifications set up (Settings → Notifications), each message also carries **Open now: <address>** while remote access is on. The address opens the page at that very terminal (after Tailscale and the web password, as always).
+
+## Requirements
+
+You need:
+
+- **Tailscale** installed and connected on your Mac (and on the other device, signed in to the same Tailscale account)
+- **MagicDNS and HTTPS certificates** enabled for your tailnet (Tailscale admin console → DNS)
+- **Tailscale Serve** allowed for your tailnet — if not, Agentty shows a button to turn it on
+
+## Setup
+
+1. Click **Remote access** (the globe-and-monitor icon) in the side menu
+2. Set a **Web password** (at least 8 characters, entered twice)
+3. Turn on **Remote access**
+4. Copy the address that appears (`https://<machine>.<tailnet>.ts.net:8743/`), or tap **Open** to go there directly
+5. On the other device, sign in with your web password
+
+That's it. Your sessions are now visible on that device.
+
+## Security
+
+Remote access is only reachable inside your Tailscale network — never on the public internet. Agentty refuses to run if Funnel is turned on for its port. Getting in takes both of these:
+
+1. **Your Tailscale account** — only the account that owns this Mac is let in. Other people who share your tailnet and tagged devices are refused.
+2. **The web password** — the one you set on the Remote access page.
+
+Someone else's Tailscale account never gets in, even inside your tailnet. Whoever does get past both checks — signed in to *your* Tailscale account and knowing the web password — can type into your terminals, which means running commands on your Mac. So keep the web password to yourself, don't use it anywhere else, and turn Remote access off when you don't need it.
+
+Failed sign-in attempts are rate-limited: 5 wrong passwords lock the page for 1 minute. Each wrong password after a lock doubles the wait time, up to 1 hour. You get a desktop notification when a device signs in and when the page is locked.
+
+The password is stored only as a hash in your system keychain. Sign-ins last up to 7 days (12 hours idle). Quitting Agentty, changing your password, or tapping **Sign out everywhere** signs every device out at once.
+
+## Keep awake
+
+While Remote access is on, Agentty keeps your Mac from idle sleep so it stays reachable. The display may still sleep. You can turn this off if you prefer.
+
+A sleeping Mac or a closed laptop cannot be reached.
+
+Remote access stays on across restarts until you turn it off. It uses Tailscale port 8743 and does not interfere with anything else you serve with Tailscale. If something else is already using port 8743, Agentty shows an error instead.
+
+## Hiding the feature
+
+Don't use remote access at all? Turn off **Settings → General → Remote access feature** (on by default), or press **Disable remote access** on the Remote access page. Its icon leaves the side menu and remote access turns off. Turn the setting back on to bring it back.
+
+## Troubleshooting
+
+**Tailscale is not connected**
+Connect in the Tailscale app on your Mac.
+
+**HTTPS certificates are off**
+Enable MagicDNS and HTTPS in your Tailscale admin console (DNS settings). This creates certificates for your tailnet domain.
+
+**Serve is off**
+Agentty shows a button in Settings to turn on Serve. Tap it to open the Tailscale admin console.
+
+**This Tailscale account may not use this Agentty** (shown on the sign-in page)
+The other device is signed in to a different Tailscale account. Sign in to the same account as your Mac.
+
+**Page says locked** (shown instead of the sign-in form)
+Either you entered the wrong password 5 times, or someone else did. Wait, or check **Remote access → Recent activity** to see what happened.

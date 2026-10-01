@@ -44,6 +44,7 @@ mod notifications;
 mod platform;
 mod plugins;
 mod procinfo;
+mod remote;
 mod settings;
 mod setup_check;
 mod shell_integration;
@@ -104,7 +105,7 @@ pub fn guide_url(language: &str, page: &str) -> String {
 /// Where to report a problem or ask for help.
 const SUPPORT_URL: &str = "https://github.com/empty-user77/Agentty/issues";
 
-const FONTS: &[&[u8]] = &[
+pub(crate) const FONTS: &[&[u8]] = &[
     include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
     include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
     include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
@@ -658,6 +659,7 @@ fn main() {
         notifications::prepare();
         let mut plugin_events = plugins::init(cx);
         browser_keeper::start(cx);
+        remote::init(cx);
         cx.spawn(async move |cx| {
             while let Some(envelope) = plugin_events.next().await {
                 if cx.update(|cx| plugins::handle(envelope, cx)).is_err() {

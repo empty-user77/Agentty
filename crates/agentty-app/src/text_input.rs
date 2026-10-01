@@ -14,7 +14,26 @@ use crate::theme::{hex, hex_alpha, Chrome};
 
 actions!(
     text_input,
-    [Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Paste, Cut, Copy, Confirm, Cancel, MoveUp, MoveDown]
+    [
+        Backspace,
+        Delete,
+        Left,
+        Right,
+        SelectLeft,
+        SelectRight,
+        SelectAll,
+        Home,
+        End,
+        Paste,
+        Cut,
+        Copy,
+        Confirm,
+        Cancel,
+        MoveUp,
+        MoveDown,
+        NextField,
+        PreviousField
+    ]
 );
 
 const CONTEXT: &str = "TextInput";
@@ -35,6 +54,8 @@ pub fn bind_keys(cx: &mut App) {
         crate::key("end", End, Some(CONTEXT)),
         crate::key("enter", Confirm, Some(CONTEXT)),
         crate::key("escape", Cancel, Some(CONTEXT)),
+        crate::key("tab", NextField, Some(CONTEXT)),
+        crate::key("shift-tab", PreviousField, Some(CONTEXT)),
         crate::key("up", MoveUp, Some(CONTEXT)),
         crate::key("down", MoveDown, Some(CONTEXT)),
     ]);
@@ -44,6 +65,9 @@ pub enum TextInputEvent {
     Changed,
     Confirmed,
     Cancelled,
+    /// Tab and Shift+Tab: the form moves to its next or previous field.
+    Next,
+    Previous,
     Blurred,
     Up,
     Down,
@@ -934,6 +958,8 @@ impl Render for TextInput {
                 }
             }))
             .on_action(cx.listener(|_, _: &Cancel, _, cx| cx.emit(TextInputEvent::Cancelled)))
+            .on_action(cx.listener(|_, _: &NextField, _, cx| cx.emit(TextInputEvent::Next)))
+            .on_action(cx.listener(|_, _: &PreviousField, _, cx| cx.emit(TextInputEvent::Previous)))
             .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
                 if this.is_multiline() {
                     this.move_line(false, false, cx);
