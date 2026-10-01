@@ -2072,6 +2072,7 @@ strings! {
     "editor.formatter_failed" => ["{tool} could not format the file:", "{tool}이(가) 파일을 포맷하지 못했습니다:", "{tool} でファイルをフォーマットできませんでした:", "{tool} 无法格式化此文件:"],
     "editor.formatter_timeout" => ["{tool} took too long and was stopped.", "{tool}이(가) 너무 오래 걸려 중지했습니다.", "{tool} の処理に時間がかかりすぎたため停止しました。", "{tool} 耗时过长，已停止。"],
     "editor.open_external" => ["Open in editor", "기본 편집기로 열기", "エディタで開く", "在编辑器中打开"],
+    "editor.open_browser" => ["Show in the browser", "인앱 브라우저로 보기", "アプリ内ブラウザで表示", "在内置浏览器中查看"],
     "editor.external_missing" => ["{app} is not installed. Pick another editor in Settings → Project.", "{app}이(가) 설치되어 있지 않습니다. 설정 → 프로젝트에서 다른 편집기를 고르세요.", "{app} がインストールされていません。設定 → プロジェクトで別のエディタを選んでください。", "未安装 {app}。请在 设置 → 项目 中选择其他编辑器。"],
     "editor.external_failed" => ["Could not open the editor: {error}", "편집기를 열지 못했습니다: {error}", "エディタを開けませんでした: {error}", "无法打开编辑器: {error}"],
     "editor.external_auto" => ["Automatic", "자동", "自動", "自动"],
