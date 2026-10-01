@@ -1600,6 +1600,19 @@ strings! {
     ],
     "chat.test_sent" => ["Test message sent", "테스트 메시지를 보냈습니다", "テストメッセージを送信しました", "已发送测试消息"],
     "chat.last_sent" => ["Last message sent", "마지막 메시지 전송됨", "最後のメッセージを送信しました", "已发送最新消息"],
+    "chat.send_failed" => ["Couldn't send to {service}: {reason}", "{service} 전송 실패: {reason}", "{service} に送信できませんでした: {reason}", "无法发送到 {service}：{reason}"],
+    "chat.skipped_in_view" => [
+        "Last notice not sent: that session was on screen in Agentty. Turn on \"Also while the session is on screen\" to get these too.",
+        "마지막 알림은 보내지 않았습니다: Agentty 화면에 그 세션이 떠 있었습니다. 이때도 받으려면 \"화면이 띄워져 있어도 알림 받기\"를 켜세요.",
+        "最後の通知は送信しませんでした: そのセッションが Agentty の画面に表示されていました。この場合も受け取るには「画面に表示中でも通知を受け取る」をオンにしてください。",
+        "上一条通知未发送：该会话正显示在 Agentty 屏幕上。如需此时也接收，请打开“会话显示在屏幕上时也接收通知”。"
+    ],
+    "chat.skipped_limit" => [
+        "Last notice not sent: the same session sent one less than 30 seconds ago, or 30 went out in the last 10 minutes.",
+        "마지막 알림은 보내지 않았습니다: 같은 세션이 30초 안에 이미 보냈거나, 최근 10분 동안 30개를 보냈습니다.",
+        "最後の通知は送信しませんでした: 同じセッションが 30 秒以内に送信済みか、直近 10 分で 30 件送信しました。",
+        "上一条通知未发送：同一会话在 30 秒内已发送过，或最近 10 分钟已发送 30 条。"
+    ],
     "chat.remove" => ["Remove", "삭제", "削除", "删除"],
     "chat.working" => ["Working…", "처리 중…", "処理中…", "处理中…"],
     "chat.on_finish" => ["Also when an agent finishes", "작업 완료도 보내기", "完了時にも送信", "完成时也发送"],
@@ -1611,10 +1624,17 @@ strings! {
     ],
     "chat.details" => ["Include what the agent asks", "요청 내용 포함", "依頼内容を含める", "包含请求内容"],
     "chat.details_hint" => [
-        "The command or question is sent to the chat service. Off: only the agent and the workspace",
-        "명령이나 질문 내용이 메신저로 전송됩니다. 끄면 에이전트와 작업공간 이름만 보냅니다",
-        "コマンドや質問の内容がチャットサービスに送られます。オフ: エージェントとワークスペース名のみ",
-        "命令或问题内容会发送到聊天服务。关闭时只发送智能体和工作区名称"
+        "What the agent said or asks, the session title, the branch and the folder are sent to the chat service. Off: only the agent and the workspace",
+        "에이전트가 남긴 내용이나 질문, 세션 제목, 브랜치와 폴더가 메신저로 전송됩니다. 끄면 에이전트와 작업공간 이름만 보냅니다",
+        "エージェントの返答や質問、セッション名、ブランチ、フォルダがチャットサービスに送られます。オフ: エージェントとワークスペース名のみ",
+        "智能体的回复或问题、会话标题、分支和文件夹会发送到聊天服务。关闭时只发送智能体和工作区名称"
+    ],
+    "chat.when_in_view" => ["Also while the session is on screen", "화면이 띄워져 있어도 알림 받기", "画面に表示中でも通知を受け取る", "会话显示在屏幕上时也接收通知"],
+    "chat.when_in_view_hint" => [
+        "For when Agentty is open but you are away or working on it remotely. Off: a session you are looking at sends nothing",
+        "Agentty 창을 띄워 둔 채 자리를 비우거나 원격으로 작업할 때 켜세요. 끄면 보고 있는 세션의 알림은 보내지 않습니다",
+        "Agentty を開いたまま離席中やリモートで作業するときに。オフ: 表示中のセッションの通知は送りません",
+        "适用于 Agentty 开着但你不在电脑前或远程操作时。关闭时，正在查看的会话不发送通知"
     ],
     "chat.permission" => ["🔐 Permission needed", "🔐 권한 요청", "🔐 権限リクエスト", "🔐 需要权限"],
     "chat.question" => ["❓ Your answer is needed", "❓ 답변 요청", "❓ 回答待ち", "❓ 需要你的回答"],

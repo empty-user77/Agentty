@@ -509,8 +509,8 @@ impl TrayPopover {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(div().t_small().truncate().text_color(hex(Chrome::BRIGHT)).child(agent.title.clone()))
-                            .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(agent.workspace.clone())),
+                            .child(div().t_small().truncate().text_color(hex(Chrome::BRIGHT)).child(agent.heading().to_string()))
+                            .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(agent.detail().to_string())),
                     )
                     .child(
                         div()

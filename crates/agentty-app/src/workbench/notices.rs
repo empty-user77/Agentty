@@ -10,7 +10,7 @@ use crate::ui::TypeScale;
 use crate::ui::{action_button, hint, now_ms, popover, relative_time};
 use gpui::{div, prelude::*, px, ClickEvent, Context, FontWeight, Window};
 
-const MAX_NOTICES: usize = 100;
+pub(super) const MAX_NOTICES: usize = 100;
 
 #[derive(Clone)]
 pub struct Notice {
@@ -20,6 +20,9 @@ pub struct Notice {
     pub source: String,
     pub at_ms: u64,
     pub read: bool,
+    /// A message to a chat service (Slack, …) failed: shown in red, and a click opens the
+    /// notification settings, where the reason and the fix are.
+    pub chat_failed: bool,
 }
 
 impl Workbench {
@@ -39,13 +42,24 @@ impl Workbench {
             }
             .to_string()
         });
-        let workspace = self.locate(pane).map(|(w, _)| self.workspace_title(&self.workspaces[w], cx)).unwrap_or_default();
+        let workspace = self.locate(pane).map(|(w, _)| self.workspace_label(&self.workspaces[w], cx)).unwrap_or_default();
         let workspace_id = self.locate(pane).map(|(w, _)| self.workspaces[w].id);
         if kind == NoticeKind::Finished {
             crate::metrics::track(cx, "agent_turn_finished", serde_json::json!({ "tool": view.tool_id() }));
         }
         let pane_id = view.pane_id;
-        self.notices.insert(0, Notice { pane_id, kind, text: text.clone(), source: source.clone(), at_ms: now_ms(), read: false });
+        self.notices.insert(
+            0,
+            Notice {
+                pane_id,
+                kind,
+                text: text.clone(),
+                source: view_title_for_bubble(&source, &workspace),
+                at_ms: now_ms(),
+                read: false,
+                chat_failed: false,
+            },
+        );
         self.notices.truncate(MAX_NOTICES);
 
         let prefs = settings(cx);
@@ -56,7 +70,7 @@ impl Workbench {
         let asks = matches!(kind, NoticeKind::Permission | NoticeKind::Question);
         let answer_request = asks && prefs.notify_answer_requests && !in_view;
         if prefs.system_notifications && kind != NoticeKind::Bell && (background || prefs.notify_when_focused || answer_request) {
-            crate::notifications::show(pane_id, &format!("{source} · {workspace}"), &text);
+            crate::notifications::show(pane_id, &view_title_for_bubble(&source, &workspace), &text);
         }
         self.send_chat_notice(pane_id, kind, &source, &workspace, &text, cx);
         if kind != NoticeKind::Bell {
@@ -178,8 +192,10 @@ impl Workbench {
         }
         for (index, notice) in self.notices.iter().take(40).enumerate() {
             let pane_id = notice.pane_id;
-            let tool = tool_of(pane_id, cx);
+            let tool = tool_of(pane_id, cx).filter(|_| !notice.chat_failed);
+            let (chat_failed, at_ms) = (notice.chat_failed, notice.at_ms);
             let color = match notice.kind {
+                _ if chat_failed => Chrome::ERROR,
                 NoticeKind::Finished => Chrome::SUCCESS,
                 NoticeKind::Permission | NoticeKind::Question => Chrome::ATTENTION,
                 NoticeKind::Message => Chrome::PURPLE,
@@ -196,6 +212,18 @@ impl Workbench {
                     .cursor_pointer()
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        if chat_failed {
+                            // Found again by what it is: a notice arriving meanwhile shifts the rows.
+                            if let Some(notice) =
+                                this.notices.iter_mut().find(|n| n.chat_failed && n.pane_id == pane_id && n.at_ms == at_ms)
+                            {
+                                notice.read = true;
+                            }
+                            this.notices_open = false;
+                            this.page = Some(super::Page::Settings);
+                            this.settings_section = super::settings_page::SettingsSection::Notifications;
+                            return cx.notify();
+                        }
                         if !this.jump_to_pane_id(pane_id, window, cx) {
                             this.mark_pane_read(pane_id);
                             cx.notify();
@@ -317,7 +345,7 @@ impl Workbench {
                     Some(agent) => agent.display_name().to_string(),
                     None => crate::ui::tilde(&view.display_cwd()),
                 };
-                let workspace = self.locate(&pane).map(|(w, _)| self.workspace_title(&self.workspaces[w], cx)).unwrap_or_default();
+                let workspace = self.locate(&pane).map(|(w, _)| self.workspace_label(&self.workspaces[w], cx)).unwrap_or_default();
                 let at = self.notices.iter().find(|n| n.pane_id == view.pane_id).map_or(0, |n| n.at_ms);
                 Some((at, Waiting { pane_id: view.pane_id, permission, who: view_title_for_bubble(&source, &workspace), what }))
             })
@@ -390,10 +418,21 @@ impl Workbench {
     }
 }
 
-fn view_title_for_bubble(source: &str, workspace: &str) -> String {
+/// Workspace first, named as its sidebar card names it, then the agent: every notice reads the
+/// same way as the sidebar.
+pub(super) fn view_title_for_bubble(source: &str, workspace: &str) -> String {
     if workspace.is_empty() {
         source.to_string()
     } else {
-        format!("{source} · {workspace}")
+        format!("{workspace} · {source}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn notices_name_the_workspace_first() {
+        assert_eq!(super::view_title_for_bubble("Claude Code", "CosmicaDesktop"), "CosmicaDesktop · Claude Code");
+        assert_eq!(super::view_title_for_bubble("Claude Code", ""), "Claude Code");
     }
 }

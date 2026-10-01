@@ -409,7 +409,7 @@ impl Workbench {
                 .map(|(w, tab)| {
                     format!(
                         "{} › {}",
-                        self.workspace_title(&self.workspaces[w], cx),
+                        self.workspace_label(&self.workspaces[w], cx),
                         tf(cx, "collab.tab", &[("n", &(tab + 1).to_string())])
                     )
                 })
@@ -598,7 +598,7 @@ impl Workbench {
                 .map(|(w, tab)| {
                     format!(
                         "{} › {}",
-                        self.workspace_title(&self.workspaces[w], cx),
+                        self.workspace_label(&self.workspaces[w], cx),
                         tf(cx, "collab.tab", &[("n", &(tab + 1).to_string())])
                     )
                 })

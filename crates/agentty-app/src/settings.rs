@@ -455,6 +455,9 @@ pub struct ChatNotify {
     pub on_finish: bool,
     /// Include what the agent asks (the command, the question). Off: only who and where.
     pub details: bool,
+    /// Also while that session is on screen in Agentty: the window can be up while the user works
+    /// on it from elsewhere (remote desktop, another room).
+    pub when_in_view: bool,
 }
 
 impl ChatNotify {
