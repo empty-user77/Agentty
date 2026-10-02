@@ -5,6 +5,31 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-10-02
+
+### Added
+- Remote access: open your workspaces from a browser on your phone, tablet or another computer
+  over your own Tailscale network. See every workspace, tab and split pane with its status, watch
+  a terminal live and type into it, answer an agent's question with quick buttons, send prompts,
+  and get browser notifications. Open it from the globe-and-monitor icon in the side menu.
+  - Reachable only through Tailscale, only by the Tailscale account that owns the Mac, and only
+    with a web password; it stops within seconds whenever Tailscale disconnects and comes back
+    when it reconnects.
+  - A green dot on its icon shows when it is on; Unlock on its page lifts a sign-in lock.
+  - Hide it entirely in Settings → General, or one workspace from that workspace's menu.
+- Slack, Discord and Telegram notices arrive as formatted cards; Telegram folds the agent's reply
+  into an expandable quote. With remote access on and details included, they link straight to the
+  terminal.
+- Notifications can also be sent while the session is on screen, for when Agentty is open but
+  used from elsewhere.
+- An HTML file open in the editor can be shown as a page in the in-app browser.
+
+### Fixed
+- Mini mode, the menu bar list, notifications and chat messages name a workspace exactly as its
+  sidebar card does.
+- A chat notice that fails to send shows in the notification list with the reason.
+- Slack channel names in Korean and other scripts are accepted.
+
 ## [0.2.10] - 2026-10-01
 
 Replaces 0.2.9, which was withdrawn shortly after release.
