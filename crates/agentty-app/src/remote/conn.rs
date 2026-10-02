@@ -47,7 +47,9 @@ impl Endpoint {
 pub enum Listener {
     Tcp(TcpListener),
     #[cfg(unix)]
-    Unix(UnixListener, PathBuf),
+    /// The listener, its path, and the socket file's (device, inode): another server started at
+    /// the same path since must keep its file when this one goes.
+    Unix(UnixListener, PathBuf, (u64, u64)),
 }
 
 impl Listener {
@@ -79,14 +81,15 @@ impl Listener {
         let listener = UnixListener::bind(path)?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         listener.set_nonblocking(true)?;
-        Ok(Listener::Unix(listener, path.to_path_buf()))
+        let made = std::fs::symlink_metadata(path)?;
+        Ok(Listener::Unix(listener, path.to_path_buf(), (made.dev(), made.ino())))
     }
 
     pub fn endpoint(&self) -> std::io::Result<Endpoint> {
         match self {
             Listener::Tcp(listener) => Ok(Endpoint::Tcp(listener.local_addr()?.port())),
             #[cfg(unix)]
-            Listener::Unix(_, path) => Ok(Endpoint::Unix(path.clone())),
+            Listener::Unix(_, path, _) => Ok(Endpoint::Unix(path.clone())),
         }
     }
 
@@ -96,7 +99,7 @@ impl Listener {
         let accepted = match self {
             Listener::Tcp(listener) => listener.accept().map(|(stream, peer)| peer.ip().is_loopback().then_some(Conn::Tcp(stream))),
             #[cfg(unix)]
-            Listener::Unix(listener, _) => listener.accept().map(|(stream, _)| Some(Conn::Unix(stream))),
+            Listener::Unix(listener, _, _) => listener.accept().map(|(stream, _)| Some(Conn::Unix(stream))),
         };
         match accepted {
             Ok(conn) => Ok(conn),
@@ -109,8 +112,12 @@ impl Listener {
 impl Drop for Listener {
     fn drop(&mut self) {
         #[cfg(unix)]
-        if let Listener::Unix(_, path) = self {
-            let _ = std::fs::remove_file(path);
+        if let Listener::Unix(_, path, made) = self {
+            use std::os::unix::fs::MetadataExt;
+            // Only the file this server made: a newer one may have taken the path over.
+            if std::fs::symlink_metadata(&path).is_ok_and(|now| (now.dev(), now.ino()) == *made) {
+                let _ = std::fs::remove_file(&path);
+            }
         }
     }
 }
@@ -272,10 +279,13 @@ mod tests {
         let socket = std::fs::symlink_metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!((folder, socket), (0o700, 0o600));
         assert_eq!(listener.endpoint().unwrap().serve_target(), format!("unix:{}", path.display()));
-        // A second start replaces the socket a crashed run left.
-        drop(Listener::unix(&path).unwrap());
+        // A second server at the same path (a restart) takes it over; the first one going
+        // away later must not take the second one's socket with it.
+        let second = Listener::unix(&path).unwrap();
         drop(listener);
-        assert!(!path.exists(), "removed when the server stops");
+        assert!(path.exists(), "the newer server keeps its socket");
+        drop(second);
+        assert!(!path.exists(), "removed when its own server stops");
         let _ = std::fs::remove_dir_all(&base);
     }
 

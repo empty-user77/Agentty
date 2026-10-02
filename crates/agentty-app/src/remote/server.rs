@@ -775,11 +775,8 @@ impl Hub {
         if let Some(pane) = pane {
             self.watch(pane, 1);
         }
+        let _counted = Watching { hub: self, pane };
         self.stream_to(&mut stream, token, login, pane);
-        if let Some(pane) = pane {
-            self.watch(pane, -1);
-        }
-        self.watch(0, -1);
     }
 
     fn stream_to(&self, stream: &mut Conn, token: &str, login: &str, pane: Option<u64>) {
@@ -876,6 +873,21 @@ fn send(stream: &mut Conn, response: &Response, head_only: bool) {
     let deadline = Instant::now() + RESPONSE_DEADLINE;
     if stream.write_by(http::response_head(response).as_bytes(), deadline).is_ok() && !head_only {
         let _ = stream.write_by(&response.body, deadline);
+    }
+}
+
+/// A page watching (and a terminal shown), counted in `Hub::watchers` until dropped.
+struct Watching<'a> {
+    hub: &'a Hub,
+    pane: Option<u64>,
+}
+
+impl Drop for Watching<'_> {
+    fn drop(&mut self) {
+        if let Some(pane) = self.pane {
+            self.hub.watch(pane, -1);
+        }
+        self.hub.watch(0, -1);
     }
 }
 

@@ -164,12 +164,23 @@ pub fn init(cx: &mut App) {
         if let Some(mut child) = remote.keep_awake.take() {
             let _ = child.kill();
         }
-        async move {
+        for old in remote.parked.drain(..) {
+            old.shutdown();
+        }
+        // On a thread of its own: quitting waits for this future on the main thread, and the
+        // Tailscale tool can take seconds. What doesn't finish before the app exits is still in
+        // the marker, for the next launch to take down.
+        let (done, finished) = futures::channel::oneshot::channel::<()>();
+        let _ = std::thread::Builder::new().name("agentty-remote-quit".into()).spawn(move || {
             match served {
                 Some((port, target)) => tailscale::serve_off(port, &target),
                 // Quit while still starting: whatever that start recorded goes too.
                 None => tailscale::clean_leftover(),
             }
+            let _ = done.send(());
+        });
+        async move {
+            let _ = finished.await;
         }
     })
     .detach();
@@ -235,6 +246,9 @@ fn listener(dev: bool, tcp: bool) -> std::io::Result<conn::Listener> {
 }
 
 pub fn start(cx: &mut App) {
+    if !(settings(cx).remote.feature && settings(cx).remote.enabled) {
+        return stop(cx);
+    }
     stop_serving(cx);
     let remote = cx.global_mut::<Remote>();
     remote.generation += 1;
@@ -279,9 +293,21 @@ pub fn start(cx: &mut App) {
         let (config, password) = match checked {
             Ok(found) => found,
             Err(problem) => {
-                let _ = cx.update(|cx| fail(problem, generation, cx));
+                let _ = cx.update(|cx| {
+                    // Saved while this start read the Keychain: start again with it.
+                    if problem == Problem::NoPassword && cx.global::<Remote>().password_saves != saves {
+                        return start(cx);
+                    }
+                    fail(problem, generation, cx)
+                });
                 return;
             }
+        };
+        // A server that may still have a serve entry pointing at it keeps its port (closed to
+        // everyone) until that entry is surely gone; see `stop_serving`.
+        let park = |hub: Arc<Hub>, cx: &mut AsyncApp| {
+            hub.pause();
+            let _ = cx.update(|cx| cx.global_mut::<Remote>().parked.push(hub));
         };
         let (hub, url, served) = if dev {
             let hub = match listener(true, false).and_then(|l| Hub::start(config.clone(), Some(password), l)) {
@@ -318,7 +344,8 @@ pub fn start(cx: &mut App) {
                     None => hub.endpoint.serve_target(),
                 };
                 let serve_target = target.clone();
-                match cx.background_executor().spawn(async move { tailscale::serve_on(https_port, &serve_target) }).await {
+                let serve_host = host.clone();
+                match cx.background_executor().spawn(async move { tailscale::serve_on(https_port, &serve_host, &serve_target) }).await {
                     Ok(epoch) => {
                         let probe = url.clone();
                         // The socket only counts once it is seen to work; a port is taken on
@@ -330,11 +357,16 @@ pub fn start(cx: &mut App) {
                         }
                         let off = target.clone();
                         cx.background_executor().spawn(async move { tailscale::serve_off_if(https_port, &off, epoch) }).await;
-                        hub.shutdown();
+                        park(hub, cx);
                         last_problem = Problem::Other("Tailscale can't reach Agentty's page".into());
                     }
+                    // A Tailscale that refuses the socket outright: try the port.
+                    Err(tailscale::ServeError::Failed(text)) if !tcp => {
+                        park(hub, cx);
+                        last_problem = Problem::Other(text);
+                    }
                     Err(error) => {
-                        hub.shutdown();
+                        park(hub, cx);
                         let problem = match error {
                             tailscale::ServeError::NeedsEnabling(url) => Problem::NeedsEnabling(url),
                             tailscale::ServeError::Funnel => Problem::Funnel,
@@ -359,8 +391,9 @@ pub fn start(cx: &mut App) {
             let remote = cx.global_mut::<Remote>();
             if remote.generation != generation {
                 // Turned off while it was starting: take down this start's serve only, not one a
-                // newer start set up meanwhile.
-                hub.shutdown();
+                // newer start set up meanwhile, and hold the port until that is done.
+                hub.pause();
+                remote.parked.push(hub);
                 if let Some((port, target, epoch)) = served {
                     std::thread::spawn(move || tailscale::serve_off_if(port, &target, epoch));
                 }
@@ -501,6 +534,7 @@ fn watch_tailscale(cx: &mut App) {
     let waiting = enabled && matches!(remote.phase, Phase::Failed(Problem::NotRunning | Problem::NotInstalled | Problem::NoHttps));
     let parked = !remote.parked.is_empty();
     let served_now = remote.served.is_some();
+    let attempts = tailscale::serve_attempts();
     if (remote.served.is_none() && !waiting && !parked)
         || remote.checking
         || remote.last_check.is_some_and(|at| at.elapsed() < TAILSCALE_CHECK)
@@ -522,11 +556,12 @@ fn watch_tailscale(cx: &mut App) {
             .background_executor()
             .spawn(async move {
                 let status = tailscale::status();
-                let funnel = funnel_port.is_some_and(tailscale::funnel_on);
+                // `None` when it couldn't be read this time: a slow answer is not Funnel.
+                let funnel = funnel_port.and_then(tailscale::funnel_state);
                 // Stopped servers hold their ports until the entry that pointed at them is gone.
                 let entry_gone = parked && !serving && {
                     if status.running {
-                        tailscale::clean_leftover();
+                        tailscale::clean_leftover_unless_newer(attempts);
                     }
                     !tailscale::has_leftover()
                 };
@@ -551,12 +586,18 @@ fn watch_tailscale(cx: &mut App) {
                 }
                 return;
             }
+            // Only a server that is up is watched past here: one turned off (and only parked)
+            // must never be turned on, or shown an error, by this check.
+            let enabled = settings(cx).remote.feature && settings(cx).remote.enabled;
+            if !enabled || !serving {
+                return;
+            }
             if !connected {
                 stop_serving(cx);
                 cx.global_mut::<Remote>().phase = Phase::Failed(Problem::NotRunning);
                 cx.global_mut::<Remote>().tailscale = Some(status);
                 cx.refresh_windows();
-            } else if funnel {
+            } else if funnel == Some(true) {
                 stop_serving(cx);
                 cx.global_mut::<Remote>().phase = Phase::Failed(Problem::Funnel);
                 cx.refresh_windows();
@@ -577,7 +618,15 @@ fn tick(cx: &mut App) {
     if !commands.is_empty() {
         cx.global_mut::<Remote>().last_input = Some(std::time::Instant::now());
     }
+    let watched_now = hub.watched();
     for command in commands {
+        // Its last page left and came back before this round: it is shown again, at the size
+        // that page sends.
+        if let server::Command::Release { pane } = command {
+            if watched_now.contains(&pane) {
+                continue;
+            }
+        }
         for window in &windows {
             let handled = window.update(cx, |wb, _, cx| wb.remote_apply(&command, cx)).unwrap_or(false);
             if handled {
