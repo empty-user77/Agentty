@@ -41,7 +41,7 @@ impl Workbench {
     fn remote_panes(&self) -> impl Iterator<Item = (&super::Workspace, super::Pane)> + '_ {
         self.workspaces
             .iter()
-            .filter(|ws| ws.plugin.is_none())
+            .filter(|ws| ws.plugin.is_none() && !ws.remote_hidden)
             .flat_map(|ws| ws.tabs.iter().flat_map(|tab| tab.root.leaves()).map(move |p| (ws, p)))
     }
 
@@ -50,7 +50,7 @@ impl Workbench {
     /// terminal's state.
     pub fn remote_overview(&self, cx: &gpui::App) -> (Vec<WorkspaceInfo>, Vec<SessionInfo>) {
         let hex_color = |c: u32| format!("#{c:06x}");
-        let user = |ws: &&super::Workspace| ws.plugin.is_none();
+        let user = |ws: &&super::Workspace| ws.plugin.is_none() && !ws.remote_hidden;
         let ungrouped_label = (!self.groups.is_empty()).then(|| t(cx, "ungrouped").to_string());
         let mut order: Vec<(&super::Workspace, Option<&super::Group>)> =
             self.workspaces.iter().filter(user).filter(|ws| ws.group.is_none()).map(|ws| (ws, None)).collect();
@@ -134,6 +134,23 @@ impl Workbench {
         true
     }
 
+    /// Leaves a workspace out of remote access, or lets it back in. Left out, the page loses it at
+    /// its next update (its terminals refuse input from then on) and its terminals go back to
+    /// their panes' size.
+    pub(super) fn toggle_remote_hidden(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == id) else { return };
+        ws.remote_hidden = !ws.remote_hidden;
+        if ws.remote_hidden {
+            let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
+            for pane in panes {
+                pane.update(cx, |view, cx| view.set_remote_size(None, cx));
+            }
+        }
+        self.workspace_menu = None;
+        self.persist(cx);
+        cx.notify();
+    }
+
     /// Every terminal back to its pane's own size (the server stopped).
     pub fn remote_release_all(&mut self, cx: &mut Context<Self>) {
         let panes: Vec<_> = self.remote_panes().map(|(_, pane)| pane.clone()).collect();
@@ -166,18 +183,17 @@ impl Workbench {
         }
     }
 
-    /// Debug driver: `password <text>`, `on`, `off`, `state` (printed; never the password).
+    /// Debug driver: `on`, `off`, `dialog`, `disable`, `state` (printed; never the password).
+    /// There is no way to set the password from here, in any build: it is only ever typed into
+    /// the popup by the user. Turning it on only in a debug build: in a release, anything running
+    /// as this user could otherwise open the Mac's terminals to the tailnet through the driver's
+    /// socket whenever `AGENTTY_DEBUG=1` happens to be set.
     pub(super) fn debug_remote(&mut self, argument: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let dev = cfg!(debug_assertions);
         match argument.split_once(' ').unwrap_or((argument, "")) {
-            ("password", text) => {
-                let saved = |result: Result<(), String>, _: &mut gpui::App| {
-                    eprintln!("remote: password saved: {}", result.is_ok()) // audit: ok — whether it saved, never the value
-                };
-                remote::set_password(text.to_string(), cx, saved)
-            }
-            ("on", _) => remote::set_enabled(true, cx),
+            ("on", _) if dev => remote::set_enabled(true, cx),
             ("off", _) => remote::set_enabled(false, cx),
-            ("dialog", _) => self.open_password_dialog(window, cx),
+            ("dialog", _) if dev => self.open_password_dialog(window, cx),
             // What the page's "Disable remote access" button does, from inside a workbench update as it is.
             ("disable", _) => {
                 remote::set_feature(false, cx);
@@ -304,8 +320,20 @@ impl Workbench {
                 wb.remote_page.saving = false;
                 match result {
                     Ok(()) => {
-                        wb.remote_page.message = Some((t(cx, "remote.password_saved").to_string(), false));
+                        let saved = t(cx, "remote.password_saved").to_string();
+                        wb.remote_page.message = Some((saved.clone(), false));
                         wb.close_password_dialog(cx);
+                        // Said once, then gone: the button above already shows the password is set.
+                        cx.spawn(async move |page, cx| {
+                            cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
+                            let _ = page.update(cx, |wb, cx| {
+                                if wb.remote_page.message.as_ref().is_some_and(|(text, _)| *text == saved) {
+                                    wb.remote_page.message = None;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .detach();
                     }
                     Err(err) => wb.remote_page.dialog_error = Some(err),
                 }
@@ -676,7 +704,16 @@ impl Workbench {
                 tailscale.as_ref().and_then(|s| s.dns_name.clone()).unwrap_or_default(),
             ))
             .child(check(online.then_some(true), t(cx, "remote.sec.private").to_string(), t(cx, "remote.sec.private_sub").to_string()))
-            .child(check(Some(true), t(cx, "remote.sec.local").to_string(), "127.0.0.1".to_string()));
+            .child(check(
+                Some(true),
+                t(cx, "remote.sec.local").to_string(),
+                match hub.as_ref().map(|h| &h.endpoint) {
+                    #[cfg(unix)]
+                    Some(remote::conn::Endpoint::Unix(_)) => t(cx, "remote.sec.local_socket").to_string(),
+                    Some(_) => t(cx, "remote.sec.local_secret").to_string(),
+                    None => "127.0.0.1".to_string(),
+                },
+            ));
 
         // ── Activity log and devices ─────────────────────────────────────────────────────
         let mut activity = card("LOG.ACCESS", t(cx, "remote.log"));
@@ -740,6 +777,33 @@ impl Workbench {
                                     .text_color(hex(Chrome::MUTED))
                                     .child(format!("{} · {}", entry.login, entry.device)),
                             ),
+                    );
+                }
+                // Locked by wrong passwords: maybe by someone else on purpose. The owner, here at
+                // the Mac, can lift it.
+                if let Some(left) = hub.locked_for() {
+                    let minutes = left.as_secs().div_ceil(60).max(1).to_string();
+                    let unlock = hub.clone();
+                    activity = activity.child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_3()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(hex_alpha(Chrome::ERROR, 0.5))
+                            .child(div().flex_1().min_w(gpui::px(200.)).t_body().text_color(hex(Chrome::ERROR)).child(tf(
+                                cx,
+                                "remote.locked_now",
+                                &[("minutes", &minutes)],
+                            )))
+                            .child(action_button("remote-unlock", t(cx, "remote.unlock"), move |_, _, cx| {
+                                unlock.unlock();
+                                cx.refresh_windows();
+                            })),
                     );
                 }
                 activity = activity.child(lines).child(div().child(action_button(
@@ -890,7 +954,7 @@ impl Workbench {
 
 /// The dashboard's colours: phosphor green for what is live, cyan for the network, amber for
 /// what waits, on a panel a shade off the background.
-const NEON_GREEN: u32 = 0x3dff9a;
+pub(super) const NEON_GREEN: u32 = 0x3dff9a;
 const NEON_CYAN: u32 = 0x35d4e8;
 const NEON_AMBER: u32 = 0xffb340;
 const PANEL: u32 = 0x12171c;

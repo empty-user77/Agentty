@@ -109,6 +109,9 @@ pub struct WorkspaceSnapshot {
     /// The plugin the workspace belongs to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
+    /// Left out of remote access: the web page neither lists it nor reaches its terminals.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote_hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

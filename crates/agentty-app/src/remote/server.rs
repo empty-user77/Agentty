@@ -1,6 +1,11 @@
-//! The remote page's server: listens on `127.0.0.1` only, where Tailscale's `serve` proxy reaches it
-//! and the network does not. Every request passes, in order:
+//! The remote page's server: listens where only Tailscale's `serve` proxy reaches it (a private
+//! Unix socket, or `127.0.0.1` where that can't be used; see `conn`), never the network. Every
+//! request passes, in order:
 //!
+//! 0. **The secret path**: `serve` is pointed at `http://127.0.0.1:<port>/<secret>` and puts that
+//!    secret in front of every path it forwards; a request without it did not come through
+//!    Tailscale (something on this Mac connected directly) and is refused before anything else.
+//!    Only Tailscale's configuration holds the secret, which only administrators can read.
 //! 1. **Host**: the name it was sent to must be this machine's tailnet name (or, for a developer
 //!    build, `127.0.0.1`), so a web page elsewhere can't reach it by rebinding DNS.
 //! 2. **Tailscale identity**: `serve` adds the sender's login (`Tailscale-User-Login`) and drops any
@@ -14,19 +19,24 @@
 //! takes the page's input out, so the server never touches a terminal itself.
 
 use super::auth::{self, Lockout, Sessions};
+use super::conn::{Conn, Endpoint, Listener};
 use super::http::{self, HttpError, Request, Response};
 use super::snapshot::{screen_update, Screen, SessionInfo, WorkspaceInfo};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
-use std::io::Write;
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 /// Open connections at once; past this a request is answered 503.
 const MAX_CONNECTIONS: usize = 32;
+/// Live streams at once, in all and per session: one page holds one, so a few devices fit, and
+/// streams can never take every connection.
+const MAX_STREAMS: usize = 16;
+const MAX_STREAMS_PER_SESSION: usize = 4;
+/// A whole response is written within this, however slowly the other end reads.
+const RESPONSE_DEADLINE: Duration = Duration::from_secs(20);
 /// A live stream ends after this and the page reconnects, which checks its session again.
 const STREAM_LIFETIME: Duration = Duration::from_secs(30 * 60);
 const KEEPALIVE: Duration = Duration::from_secs(15);
@@ -53,6 +63,9 @@ pub struct Config {
     pub hosts: Vec<String>,
     /// Served over HTTPS (through `tailscale serve`): the cookie is `Secure` and `__Host-`.
     pub https: bool,
+    /// The path prefix `serve` adds to everything it forwards (check 0). `None` on the private
+    /// Unix socket, which only Tailscale opens, and in the local test mode.
+    pub secret: Option<String>,
 }
 
 impl Config {
@@ -134,7 +147,8 @@ struct View {
 }
 
 pub struct Hub {
-    pub port: u16,
+    /// Where it listens: what `tailscale serve` is pointed at.
+    pub endpoint: Endpoint,
     config: RwLock<Config>,
     auth: Mutex<AuthState>,
     /// One password check at a time: each costs ~0.3 s of CPU on purpose.
@@ -145,12 +159,20 @@ pub struct Hub {
     watchers: Mutex<HashMap<u64, usize>>,
     open: AtomicUsize,
     stop: AtomicBool,
+    /// Holds its port but lets nobody in (`pause`).
+    paused: AtomicBool,
     log: Mutex<VecDeque<LogEntry>>,
     alerts: Mutex<Vec<Alert>>,
     /// Wakes the app the moment input arrives, instead of at its next round.
     waker: Mutex<Option<futures::channel::mpsc::UnboundedSender<()>>>,
+    /// A wake is on its way: more input before the app's round needs no second one.
+    wake_pending: AtomicBool,
     /// Tailnet devices looked up for the sign-in page: address → (when, what it is).
     devices_seen: Mutex<HashMap<String, (Instant, Option<super::tailscale::Device>)>>,
+    /// When `tailscale whois` last ran for a new address: at most one a second.
+    last_whois: Mutex<Option<Instant>>,
+    /// Live streams per session token.
+    streams: Mutex<HashMap<String, usize>>,
 }
 
 #[derive(Deserialize)]
@@ -219,13 +241,11 @@ fn allowed_key(key: &str) -> bool {
 }
 
 impl Hub {
-    /// Opens the listener on `127.0.0.1` (a free port) and starts serving.
-    pub fn start(config: Config, password: Option<String>) -> std::io::Result<Arc<Hub>> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-        listener.set_nonblocking(true)?;
-        let port = listener.local_addr()?.port();
+    /// Starts serving on `listener`.
+    pub fn start(config: Config, password: Option<String>, listener: Listener) -> std::io::Result<Arc<Hub>> {
+        let endpoint = listener.endpoint()?;
         let hub = Arc::new(Hub {
-            port,
+            endpoint,
             config: RwLock::new(config),
             auth: Mutex::new(AuthState { password, ..Default::default() }),
             verifying: Mutex::new(()),
@@ -235,45 +255,56 @@ impl Hub {
             watchers: Mutex::new(HashMap::new()),
             open: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             log: Mutex::new(VecDeque::new()),
             alerts: Mutex::new(Vec::new()),
             waker: Mutex::new(None),
+            wake_pending: AtomicBool::new(false),
             devices_seen: Mutex::new(HashMap::new()),
+            last_whois: Mutex::new(None),
+            streams: Mutex::new(HashMap::new()),
         });
         let accept = hub.clone();
         std::thread::Builder::new().name("agentty-remote".into()).spawn(move || accept.accept_loop(listener))?;
         Ok(hub)
     }
 
-    fn accept_loop(self: Arc<Self>, listener: TcpListener) {
+    fn accept_loop(self: Arc<Self>, listener: Listener) {
         while !self.stop.load(Ordering::SeqCst) {
             match listener.accept() {
-                Ok((stream, peer)) => {
-                    // Only this machine: the proxy, or something local that still has to pass
-                    // every check below.
-                    if !peer.ip().is_loopback() {
+                Ok(Some(mut conn)) => {
+                    if self.paused.load(Ordering::SeqCst) {
                         continue;
                     }
                     if self.open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
                         self.open.fetch_sub(1, Ordering::SeqCst);
-                        let mut stream = stream;
-                        let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
-                        let _ = http::write_response(&mut stream, &Response::new(503, "text/plain", "busy"), false);
+                        let _ = conn.set_nonblocking(false);
+                        let busy = Response::new(503, "text/plain", "busy");
+                        let _ = conn.write_by(http::response_head(&busy).as_bytes(), Instant::now() + Duration::from_secs(1));
                         continue;
                     }
-                    let hub = self.clone();
-                    let spawned = std::thread::Builder::new().name("agentty-remote-conn".into()).spawn(move || {
-                        hub.serve_connection(stream);
-                        hub.open.fetch_sub(1, Ordering::SeqCst);
+                    // Counted back down however the connection ends, a panic included (a slot
+                    // that leaked would never come back), or with the closure if no thread starts.
+                    let slot = OpenSlot(self.clone());
+                    let _ = std::thread::Builder::new().name("agentty-remote-conn".into()).spawn(move || {
+                        slot.0.serve_connection(conn);
+                        drop(slot);
                     });
-                    if spawned.is_err() {
-                        self.open.fetch_sub(1, Ordering::SeqCst);
-                    }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(40)),
+                Ok(None) => std::thread::sleep(Duration::from_millis(40)),
                 Err(_) => std::thread::sleep(Duration::from_millis(200)),
             }
         }
+        // The listener, and a Unix socket's file, go with this thread.
+    }
+
+    /// Stops serving but keeps the listener, closing every connection at once: while a Tailscale
+    /// entry may still point at this port (Tailscale disconnected can't take it down), nothing
+    /// else on the Mac can take the port over and receive what the entry forwards.
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+        self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.clear();
+        self.changed.notify_all();
     }
 
     /// Stops serving: the listener closes and every live stream ends.
@@ -296,6 +327,17 @@ impl Hub {
         auth.lockout.succeed();
         drop(auth);
         self.changed.notify_all();
+    }
+
+    /// How long sign-in stays locked after wrong passwords, if it is.
+    pub fn locked_for(&self) -> Option<Duration> {
+        self.auth.lock().unwrap_or_else(|e| e.into_inner()).lockout.remaining(SystemTime::now())
+    }
+
+    /// Lifts the lock from the Mac: someone may have locked the owner out on purpose, and the
+    /// owner, at the Mac, can undo that.
+    pub fn unlock(&self) {
+        self.auth.lock().unwrap_or_else(|e| e.into_inner()).lockout.succeed();
     }
 
     pub fn sign_out_everywhere(&self) {
@@ -327,7 +369,9 @@ impl Hub {
     }
 
     pub fn take_commands(&self) -> Vec<Command> {
-        std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()))
+        let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
+        self.wake_pending.store(false, Ordering::SeqCst);
+        std::mem::take(&mut *inbox)
     }
 
     /// Panes some page is looking at: only their screens are copied.
@@ -382,13 +426,16 @@ impl Hub {
         log.truncate(LOG_LEN);
     }
 
-    fn serve_connection(&self, mut stream: TcpStream) {
+    fn serve_connection(&self, mut stream: Conn) {
         let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
         let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
         let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
         let deadline = Instant::now() + REQUEST_DEADLINE;
         let request = match http::read_request(&mut stream, deadline, |head| {
+            if config.secret.as_deref().is_some_and(|secret| strip_secret(&head.path, secret).is_none()) {
+                return Err(404);
+            }
             self.admitted(head, &config, true).map(|_| ()).map_err(|refused| refused.status)
         }) {
             Ok(request) => request,
@@ -401,17 +448,38 @@ impl Hub {
                     HttpError::Refused(status) => status,
                     _ => 400,
                 };
-                let _ = http::write_response(&mut stream, &Response::new(status, "text/plain", http::reason(status)), false);
+                send(&mut stream, &Response::new(status, "text/plain", http::reason(status)), false);
                 return;
             }
         };
+        let mut request = request;
+        if let Some(path) = config.secret.as_deref().and_then(|secret| strip_secret(&request.path, secret)) {
+            request.path = path;
+        }
         let head_only = request.method == "HEAD";
         match self.route(&request) {
-            Routed::Response(response) => {
-                let _ = http::write_response(&mut stream, &response, head_only);
+            Routed::Response(response) => send(&mut stream, &response, head_only),
+            Routed::Events { token, login, pane } => {
+                // A slot, or 429: one page (or a page reconnecting in a loop) can't take them all.
+                let Some(_slot) = self.stream_slot(&token) else {
+                    send(&mut stream, &Response::json(429, &json!({ "error": "too many streams" })), false);
+                    return;
+                };
+                self.stream_events(stream, &token, &login, pane);
             }
-            Routed::Events { token, login, pane } => self.stream_events(stream, &token, &login, pane),
         }
+    }
+
+    /// Reserves a live stream for `token`, given back when the guard drops.
+    fn stream_slot(&self, token: &str) -> Option<StreamSlot<'_>> {
+        let mut streams = self.streams.lock().unwrap_or_else(|e| e.into_inner());
+        let total: usize = streams.values().sum();
+        let mine = streams.get(token).copied().unwrap_or(0);
+        if total >= MAX_STREAMS || mine >= MAX_STREAMS_PER_SESSION {
+            return None;
+        }
+        streams.insert(token.to_string(), mine + 1);
+        Some(StreamSlot { hub: self, token: token.to_string() })
     }
 
     /// Checks 1 and 2, from the head alone: the name it was sent to, and who Tailscale says sent
@@ -447,11 +515,13 @@ impl Hub {
         let method = request.method.as_str();
         let get = method == "GET" || method == "HEAD";
         match (get, path) {
-            (true, "/") => return Routed::Response(Response::new(200, "text/html; charset=utf-8", INDEX_HTML)),
-            (true, "/app.js") => return Routed::Response(Response::new(200, "text/javascript; charset=utf-8", APP_JS)),
-            (true, "/app.css") => return Routed::Response(Response::new(200, "text/css; charset=utf-8", APP_CSS)),
-            (true, "/icon.svg") => return Routed::Response(Response::new(200, "image/svg+xml", ICON_SVG)),
-            (true, "/manifest.webmanifest") => return Routed::Response(Response::new(200, "application/manifest+json", MANIFEST)),
+            (true, "/") => return Routed::Response(Response::fixed(200, "text/html; charset=utf-8", INDEX_HTML.as_bytes())),
+            (true, "/app.js") => return Routed::Response(Response::fixed(200, "text/javascript; charset=utf-8", APP_JS.as_bytes())),
+            (true, "/app.css") => return Routed::Response(Response::fixed(200, "text/css; charset=utf-8", APP_CSS.as_bytes())),
+            (true, "/icon.svg") => return Routed::Response(Response::fixed(200, "image/svg+xml", ICON_SVG.as_bytes())),
+            (true, "/manifest.webmanifest") => {
+                return Routed::Response(Response::fixed(200, "application/manifest+json", MANIFEST.as_bytes()));
+            }
             // The app's own terminal fonts, so the page draws text as the app does; the Nerd Font
             // symbols only load when a prompt uses them (`unicode-range` in app.css). They never
             // change within a version, so the browser may keep them.
@@ -461,7 +531,7 @@ impl Hub {
                     "/fonts/mono-bold.ttf" => crate::FONTS[1],
                     _ => crate::FONTS[4],
                 };
-                return Routed::Response(Response::new(200, "font/ttf", font).with("Cache-Control", "private, max-age=604800"));
+                return Routed::Response(Response::fixed(200, "font/ttf", font).with("Cache-Control", "private, max-age=604800"));
             }
             _ => {}
         }
@@ -530,11 +600,13 @@ impl Hub {
         }
     }
 
-    /// The device a request came from: `tailscale serve` names its tailnet address in
-    /// `X-Forwarded-For`, and `tailscale whois` says what that device is. Remembered for a few
-    /// minutes so a page reloading does not run the tool each time.
+    /// The device a request came from: `tailscale serve` adds its tailnet address to
+    /// `X-Forwarded-For` (after any the sender wrote, so the last entry is the one it vouches
+    /// for), and `tailscale whois` says what that device is. Remembered for a few minutes so a
+    /// page reloading does not run the tool each time; a new address is looked up at most once a
+    /// second.
     fn device_of(&self, request: &Request) -> Option<super::tailscale::Device> {
-        let ip = request.header("x-forwarded-for")?.split(',').next()?.trim().to_string();
+        let ip = request.header("x-forwarded-for")?.rsplit(',').next()?.trim().to_string();
         ip.parse::<std::net::IpAddr>().ok()?;
         let cache = self.devices_seen.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((at, device)) = cache.get(&ip) {
@@ -543,6 +615,13 @@ impl Hub {
             }
         }
         drop(cache);
+        {
+            let mut last = self.last_whois.lock().unwrap_or_else(|e| e.into_inner());
+            if last.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
+                return None;
+            }
+            *last = Some(Instant::now());
+        }
         let device = super::tailscale::whois(&ip);
         let mut cache = self.devices_seen.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() > 64 {
@@ -594,6 +673,10 @@ impl Hub {
         }
         let locked = auth.lockout.fail(SystemTime::now());
         drop(auth);
+        if cfg!(debug_assertions) {
+            let shape = auth::shape(&body.password);
+            eprintln!("remote: sign-in refused, password {shape}"); // audit: ok — length and kind only, never the value
+        }
         self.record("remote.log.wrong_password", login, &device);
         match locked {
             Some(lock) => {
@@ -626,18 +709,36 @@ impl Hub {
             }
             _ => return Response::json(400, &json!({ "error": "bad request" })),
         };
+        // Held while queueing: a size is only taken while a page shows that terminal, and the
+        // `Release` its last page sends on leaving can't come before it (see `watch`).
+        let watchers = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(command, Command::Resize { .. }) && !watchers.contains_key(&body.pane) {
+            return Response::json(409, &json!({ "error": "not shown" }));
+        }
         let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
+        // A newer size for the same terminal replaces the one still waiting.
+        if let Command::Resize { pane, .. } = command {
+            if let Some(waiting) = inbox.iter_mut().find(|c| matches!(c, Command::Resize { pane: p, .. } if *p == pane)) {
+                *waiting = command;
+                return Response::json(200, &json!({ "ok": true }));
+            }
+        }
         // The app drains this several times a second; a flood waits its turn rather than grows.
         if inbox.len() >= 256 {
             return Response::json(429, &json!({ "error": "busy" }));
         }
         inbox.push(command);
         drop(inbox);
+        drop(watchers);
         self.wake();
         Response::json(200, &json!({ "ok": true }))
     }
 
+    /// Signals the app's round loop, once until it takes the commands.
     fn wake(&self) {
+        if self.wake_pending.swap(true, Ordering::SeqCst) {
+            return;
+        }
         if let Some(waker) = self.waker.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             let _ = waker.unbounded_send(());
         }
@@ -655,33 +756,56 @@ impl Hub {
                 // looked when this one left, at this page's size.
                 self.view.lock().unwrap_or_else(|e| e.into_inner()).screens.remove(&pane);
                 // The last page showing it left: the terminal goes back to its pane's size. This
-                // one goes in even when the inbox is full, or the size would stick.
-                self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push(Command::Release { pane });
+                // one goes in even when the inbox is full, or the size would stick; once per
+                // terminal, so pages opening and closing fast can't pile them up.
+                let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
+                if !inbox.contains(&Command::Release { pane }) {
+                    inbox.push(Command::Release { pane });
+                }
+                drop(inbox);
                 self.wake();
             }
         }
     }
 
-    fn stream_events(&self, mut stream: TcpStream, token: &str, login: &str, pane: Option<u64>) {
-        if http::write_event_stream_head(&mut stream).is_err() {
-            return;
-        }
-        // Key 0 counts open pages; a pane id counts the pages showing that terminal.
+    fn stream_events(&self, mut stream: Conn, token: &str, login: &str, pane: Option<u64>) {
+        // Key 0 counts open pages; a pane id counts the pages showing that terminal. Counted
+        // before the page hears back, so the size it sends as soon as the stream opens is taken.
         self.watch(0, 1);
         if let Some(pane) = pane {
             self.watch(pane, 1);
         }
+        let _counted = Watching { hub: self, pane };
+        self.stream_to(&mut stream, token, login, pane);
+    }
+
+    fn stream_to(&self, stream: &mut Conn, token: &str, login: &str, pane: Option<u64>) {
+        let mut head = Vec::new();
+        let _ = http::write_event_stream_head(&mut head);
+        if stream.write_by(&head, Instant::now() + IO_TIMEOUT).is_err() {
+            return;
+        }
+        // Every event is written within IO_TIMEOUT, however slowly the page reads.
+        let event = |stream: &mut Conn, name: &str, data: &str| {
+            let mut bytes = Vec::new();
+            let _ = http::write_event(&mut bytes, name, data);
+            stream.write_by(&bytes, Instant::now() + IO_TIMEOUT)
+        };
         let started = Instant::now();
         let mut sent_sessions = 0u64;
         let mut sent_screen = 0u64;
         let mut rows: Vec<u64> = Vec::new();
         let mut last_write = Instant::now();
         loop {
-            if self.stop.load(Ordering::SeqCst) || started.elapsed() > STREAM_LIFETIME || peer_gone(&stream) {
+            if self.stop.load(Ordering::SeqCst)
+                || self.paused.load(Ordering::SeqCst)
+                || started.elapsed() > STREAM_LIFETIME
+                || stream.peer_gone()
+            {
                 break;
             }
             if !self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(token, login, SystemTime::now()) {
-                let _ = http::write_event(&mut stream, "signedout", "{}");
+                let _ = event(stream, "signedout", "{}");
                 break;
             }
             let (seen, sessions, screen) = {
@@ -699,14 +823,14 @@ impl Hub {
             };
             let mut wrote = false;
             if let Some(sessions) = sessions {
-                if http::write_event(&mut stream, "sessions", &sessions).is_err() {
+                if event(stream, "sessions", &sessions).is_err() {
                     break;
                 }
                 wrote = true;
             }
             if let (Some(pane), Some(screen)) = (pane, screen) {
                 if let Some(update) = screen_update(pane, &screen, &mut rows) {
-                    if http::write_event(&mut stream, "screen", &update.to_string()).is_err() {
+                    if event(stream, "screen", &update.to_string()).is_err() {
                         break;
                     }
                     wrote = true;
@@ -715,7 +839,7 @@ impl Hub {
             if wrote {
                 last_write = Instant::now();
             } else if last_write.elapsed() >= KEEPALIVE {
-                if stream.write_all(b": ping\n\n").and_then(|_| stream.flush()).is_err() {
+                if stream.write_by(b": ping\n\n", Instant::now() + IO_TIMEOUT).is_err() {
                     break;
                 }
                 last_write = Instant::now();
@@ -727,26 +851,71 @@ impl Hub {
                 let _ = self.changed.wait_timeout(view, Duration::from_secs(1));
             }
         }
-        if let Some(pane) = pane {
-            self.watch(pane, -1);
-        }
-        self.watch(0, -1);
     }
 }
 
-/// Whether the page closed its end. A write to a closed connection still succeeds once (the
-/// reset comes back after it), so a page that left would count as watching until two more
-/// updates; this looks for the end of the stream instead.
-fn peer_gone(stream: &TcpStream) -> bool {
-    if stream.set_nonblocking(true).is_err() {
-        return true;
+/// `path` without the secret prefix (`/<secret>/app.js` → `/app.js`), or `None` when it does not
+/// start with it. Compared in constant time.
+fn strip_secret(path: &str, secret: &str) -> Option<String> {
+    let rest = path.strip_prefix('/')?;
+    let (head, tail) = rest.split_at_checked(secret.len())?;
+    let same = head.len() == secret.len() && head.bytes().zip(secret.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0;
+    match tail {
+        _ if !same => None,
+        "" => Some("/".to_string()),
+        _ if tail.starts_with('/') => Some(tail.to_string()),
+        _ => None,
     }
-    let gone = match stream.peek(&mut [0u8; 1]) {
-        Ok(0) => true,
-        Ok(_) => false,
-        Err(e) => e.kind() != std::io::ErrorKind::WouldBlock,
-    };
-    stream.set_nonblocking(false).is_err() || gone
+}
+
+/// Writes a whole response within RESPONSE_DEADLINE.
+fn send(stream: &mut Conn, response: &Response, head_only: bool) {
+    let deadline = Instant::now() + RESPONSE_DEADLINE;
+    if stream.write_by(http::response_head(response).as_bytes(), deadline).is_ok() && !head_only {
+        let _ = stream.write_by(&response.body, deadline);
+    }
+}
+
+/// A page watching (and a terminal shown), counted in `Hub::watchers` until dropped.
+struct Watching<'a> {
+    hub: &'a Hub,
+    pane: Option<u64>,
+}
+
+impl Drop for Watching<'_> {
+    fn drop(&mut self) {
+        if let Some(pane) = self.pane {
+            self.hub.watch(pane, -1);
+        }
+        self.hub.watch(0, -1);
+    }
+}
+
+/// One open connection, counted in `Hub::open` until dropped.
+struct OpenSlot(Arc<Hub>);
+
+impl Drop for OpenSlot {
+    fn drop(&mut self) {
+        self.0.open.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// One live stream of a session, counted in `Hub::streams` until dropped.
+struct StreamSlot<'a> {
+    hub: &'a Hub,
+    token: String,
+}
+
+impl Drop for StreamSlot<'_> {
+    fn drop(&mut self) {
+        let mut streams = self.hub.streams.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = streams.get_mut(&self.token) {
+            *count -= 1;
+            if *count == 0 {
+                streams.remove(&self.token);
+            }
+        }
+    }
 }
 
 enum Routed {
@@ -813,14 +982,19 @@ fn device_name(agent: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Read};
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{Ipv4Addr, TcpStream};
 
     const HOST: &str = "mac.example.ts.net:8743";
     const OWNER: &str = "me@example.com";
 
     fn hub(password: &str) -> Arc<Hub> {
-        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true };
-        Hub::start(config, Some(auth::hash_for_tests(password))).unwrap()
+        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None };
+        Hub::start(config, Some(auth::hash_for_tests(password)), Listener::tcp().unwrap()).unwrap()
+    }
+
+    fn port(hub: &Hub) -> u16 {
+        hub.endpoint.tcp_port().expect("tests serve on TCP")
     }
 
     fn session(pane: u64) -> SessionInfo {
@@ -844,7 +1018,7 @@ mod tests {
 
     /// Sends raw bytes and returns (status, head, body).
     fn send(hub: &Hub, raw: &str) -> (u16, String, String) {
-        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, hub.port)).unwrap();
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port(hub))).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         stream.write_all(raw.as_bytes()).unwrap();
         let mut out = String::new();
@@ -944,15 +1118,83 @@ mod tests {
         hub.shutdown();
     }
 
+    #[cfg(unix)]
     #[test]
-    fn notices_a_page_that_left() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (server, _) = listener.accept().unwrap();
-        assert!(!peer_gone(&server), "still there");
-        drop(client);
-        std::thread::sleep(Duration::from_millis(50));
-        assert!(peer_gone(&server), "closed its end");
+    fn serves_on_a_private_socket() {
+        let base = std::env::temp_dir().join(format!("agentty-hub-test-{}", std::process::id()));
+        let path = base.join("remote").join("web.sock");
+        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None };
+        let hub = Hub::start(config, Some(auth::hash_for_tests("secret-password")), Listener::unix(&path).unwrap()).unwrap();
+        let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        stream.write_all(Req::get("/").raw().as_bytes()).unwrap();
+        let mut out = String::new();
+        let _ = stream.read_to_string(&mut out);
+        assert!(out.starts_with("HTTP/1.1 200"), "{out:.80}");
+        // Every check still applies on the socket: the identity, then a session.
+        let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        stream.write_all(Req { login: Some("other@example.com"), ..Req::get("/") }.raw().as_bytes()).unwrap();
+        let mut out = String::new();
+        let _ = stream.read_to_string(&mut out);
+        assert!(out.starts_with("HTTP/1.1 403"), "{out:.80}");
+        hub.shutdown();
+        for _ in 0..50 {
+            if !path.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!path.exists(), "the socket goes with the server");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn only_requests_with_the_secret_path_get_in() {
+        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: Some("s3cr3t".into()) };
+        let hub = Hub::start(config, Some(auth::hash_for_tests("secret-password")), Listener::tcp().unwrap()).unwrap();
+        // What Tailscale forwards: the secret in front of the page's own path.
+        let (status, _, body) = send(&hub, &Req::get("/s3cr3t/").raw());
+        assert_eq!(status, 200);
+        assert!(body.contains("<html"));
+        assert_eq!(send(&hub, &Req::get("/s3cr3t").raw()).0, 200);
+        assert_eq!(send(&hub, &Req::get("/s3cr3t/app.js").raw()).0, 200);
+        // Straight to the port, with every header Tailscale would add forged: refused.
+        assert_eq!(send(&hub, &Req::get("/").raw()).0, 404);
+        assert_eq!(send(&hub, &Req::get("/app.js").raw()).0, 404);
+        assert_eq!(send(&hub, &Req::post("/api/login", json!({ "password": "secret-password" })).raw()).0, 404);
+        assert_eq!(send(&hub, &Req::get("/s3cr3tX/").raw()).0, 404, "a longer name is not the secret");
+        assert_eq!(send(&hub, &Req::get("/s3cr3/").raw()).0, 404);
+        hub.shutdown();
+        assert_eq!(strip_secret("/abc/api/me", "abc").as_deref(), Some("/api/me"));
+        assert_eq!(strip_secret("/abc", "abc").as_deref(), Some("/"));
+        assert_eq!(strip_secret("/abd/api", "abc"), None);
+        assert_eq!(strip_secret("/ab", "abc"), None);
+        assert_eq!(strip_secret("/한글/x", "abc"), None, "no panic off a character boundary");
+    }
+
+    #[test]
+    fn a_paused_server_keeps_its_port_and_lets_nobody_in() {
+        let hub = hub("secret-password");
+        let cookie = sign_in(&hub, "secret-password");
+        hub.pause();
+        // The port is still this server's: nothing else could bind it.
+        assert!(std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port(&hub))).is_err());
+        assert_eq!(send(&hub, &Req::get("/").raw()).0, 0, "closed without an answer");
+        assert_eq!(send(&hub, &Req { cookie: Some(cookie), ..Req::get("/api/sessions") }.raw()).0, 0);
+        hub.shutdown();
+    }
+
+    #[test]
+    fn a_session_gets_a_few_streams_not_all() {
+        let hub = hub("secret-password");
+        let cookie = sign_in(&hub, "secret-password");
+        let token = cookie.split_once('=').unwrap().1.to_string();
+        let slots: Vec<_> = (0..MAX_STREAMS_PER_SESSION).map(|_| hub.stream_slot(&token).unwrap()).collect();
+        assert!(hub.stream_slot(&token).is_none(), "one session's limit");
+        assert!(hub.stream_slot("another-session").is_some(), "others still get theirs");
+        drop(slots);
+        assert!(hub.stream_slot(&token).is_some(), "given back when they end");
+        hub.shutdown();
     }
 
     #[test]
@@ -985,7 +1227,10 @@ mod tests {
         assert_eq!(input(json!({ "pane": 7, "kind": "exec", "text": "x" })), 400);
         assert_eq!(input(json!({ "pane": 7, "kind": "text", "text": "x", "extra": 1 })), 400, "unknown fields refused");
         assert_eq!(input(json!({ "pane": 7, "kind": "text", "text": "x".repeat(MAX_INPUT_CHARS + 1) })), 413);
+        assert_eq!(input(json!({ "pane": 7, "kind": "resize", "cols": 48, "rows": 30 })), 409, "no page shows it: the size would stick");
+        hub.watch(7, 1);
         assert_eq!(input(json!({ "pane": 7, "kind": "resize", "cols": 48, "rows": 30 })), 200);
+        assert_eq!(input(json!({ "pane": 7, "kind": "resize", "cols": 50, "rows": 30 })), 200);
         assert_eq!(input(json!({ "pane": 7, "kind": "resize", "cols": 5, "rows": 30 })), 400, "too narrow");
         assert_eq!(input(json!({ "pane": 7, "kind": "resize", "cols": 48, "rows": 900 })), 400, "too tall");
         assert_eq!(input(json!({ "pane": 7, "kind": "resize" })), 400, "no size");
@@ -994,15 +1239,20 @@ mod tests {
             vec![
                 Command::Prompt { pane: 7, text: "run the tests".into() },
                 Command::Key { pane: 7, key: "c".into(), ctrl: true, alt: false, shift: false },
-                Command::Resize { pane: 7, cols: 48, rows: 30 }
-            ]
+                Command::Resize { pane: 7, cols: 50, rows: 30 }
+            ],
+            "the newer size replaced the one still waiting"
         );
-        hub.watch(7, 1);
         hub.watch(7, 1);
         hub.watch(7, -1);
         assert!(hub.take_commands().is_empty(), "another page still shows it");
         hub.watch(7, -1);
         assert_eq!(hub.take_commands(), vec![Command::Release { pane: 7 }], "the last page left");
+        for _ in 0..5 {
+            hub.watch(7, 1);
+            hub.watch(7, -1);
+        }
+        assert_eq!(hub.take_commands(), vec![Command::Release { pane: 7 }], "pages coming and going pile up one release, not five");
         hub.watch(0, 1);
         hub.watch(0, -1);
         assert!(hub.take_commands().is_empty(), "the page count is not a terminal");
@@ -1013,8 +1263,8 @@ mod tests {
 
     #[test]
     fn a_session_is_bound_to_its_tailscale_login() {
-        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true };
-        let hub = Hub::start(config.clone(), Some(auth::hash_for_tests("secret-password"))).unwrap();
+        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None };
+        let hub = Hub::start(config.clone(), Some(auth::hash_for_tests("secret-password")), Listener::tcp().unwrap()).unwrap();
         let cookie = sign_in(&hub, "secret-password");
         // The owner changes (another account signs in to Tailscale on this Mac).
         hub.set_config(Config { owner: Some("new@example.com".into()), ..config });
@@ -1104,7 +1354,7 @@ mod tests {
         let hub = hub("secret-password");
         hub.publish(Vec::new(), vec![session(7)]);
         let cookie = sign_in(&hub, "secret-password");
-        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, hub.port)).unwrap();
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port(&hub))).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         stream.write_all(Req { cookie: Some(cookie), ..Req::get("/api/events?pane=7") }.raw().as_bytes()).unwrap();
         let mut reader = BufReader::new(stream);

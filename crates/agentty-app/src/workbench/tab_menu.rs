@@ -43,6 +43,8 @@ impl Workbench {
             tab
         };
         let source_id = self.workspaces[source].id;
+        // A tab taken out of a workspace hidden from remote access stays hidden in a new one.
+        let source_hidden = self.workspaces[source].remote_hidden;
         if self.workspaces[source].tabs.is_empty() && self.workspaces[source].dormant.is_none() {
             self.workspaces.remove(source);
         }
@@ -69,6 +71,7 @@ impl Workbench {
                     closed_tabs: Vec::new(),
                     color: None,
                     plugin: None,
+                    remote_hidden: source_hidden,
                 });
                 self.workspaces.len() - 1
             }

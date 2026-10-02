@@ -152,8 +152,10 @@ impl Workbench {
             }
         }
         // With remote access on, a link that opens the page at this very terminal (after Tailscale
-        // and the web password, as always). The address names only the machine and the pane.
-        if let Some(crate::remote::Phase::On { url }) = cx.try_global::<crate::remote::Remote>().map(|r| r.phase.clone()) {
+        // and the web password, as always). The address names the machine and the tailnet, so it
+        // goes to the chat service only with the details.
+        let remote = cx.try_global::<crate::remote::Remote>().map(|r| r.phase.clone()).filter(|_| prefs.details);
+        if let Some(crate::remote::Phase::On { url }) = remote {
             if url.starts_with("https://") {
                 card.link = format!("{url}#{pane_id}");
                 card.link_label = t(cx, "chat.open_now").to_string();

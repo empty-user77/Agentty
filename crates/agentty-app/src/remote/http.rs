@@ -132,7 +132,12 @@ pub fn read_request(
         return Err(HttpError::Refused(status));
     }
     let length = match request.header("content-length") {
-        Some(value) => value.parse::<usize>().map_err(|_| HttpError::Bad)?,
+        // Digits only: `parse` would also take a sign (`+5`), which a proxy in front may read
+        // differently.
+        Some(value) if !value.is_empty() && value.len() <= 10 && value.bytes().all(|b| b.is_ascii_digit()) => {
+            value.parse::<usize>().map_err(|_| HttpError::Bad)?
+        }
+        Some(_) => return Err(HttpError::Bad),
         None => 0,
     };
     if length > MAX_BODY {
@@ -211,11 +216,16 @@ fn parse_head(head: &str) -> Result<Request, HttpError> {
 pub struct Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+    pub body: std::borrow::Cow<'static, [u8]>,
 }
 
 impl Response {
     pub fn new(status: u16, content_type: &str, body: impl Into<Vec<u8>>) -> Self {
+        Response { status, headers: vec![("Content-Type".into(), content_type.into())], body: body.into().into() }
+    }
+
+    /// A body built into the app (the page, the fonts): sent from where it is, not copied.
+    pub fn fixed(status: u16, content_type: &str, body: &'static [u8]) -> Self {
         Response { status, headers: vec![("Content-Type".into(), content_type.into())], body: body.into() }
     }
 
@@ -267,7 +277,17 @@ pub const SECURITY_HEADERS: &[(&str, &str)] = &[
     ("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
 ];
 
+#[cfg(test)]
 pub fn write_response(stream: &mut impl Write, response: &Response, head_only: bool) -> std::io::Result<()> {
+    stream.write_all(response_head(response).as_bytes())?;
+    if !head_only {
+        stream.write_all(&response.body)?;
+    }
+    stream.flush()
+}
+
+/// The status line and headers of `response`, up to the blank line.
+pub fn response_head(response: &Response) -> String {
     let mut out = format!("HTTP/1.1 {} {}\r\n", response.status, reason(response.status));
     // A response may set its own caching (the fonts); every other default always goes out.
     let own = |name: &str| response.headers.iter().any(|(n, _)| n.eq_ignore_ascii_case(name));
@@ -280,11 +300,7 @@ pub fn write_response(stream: &mut impl Write, response: &Response, head_only: b
         out.push_str(&format!("{name}: {value}\r\n"));
     }
     out.push_str(&format!("Content-Length: {}\r\nConnection: close\r\n\r\n", response.body.len()));
-    stream.write_all(out.as_bytes())?;
-    if !head_only {
-        stream.write_all(&response.body)?;
-    }
-    stream.flush()
+    out
 }
 
 /// Starts a server-sent event stream; events follow with `write_event`.
@@ -374,6 +390,7 @@ mod tests {
             ("GET / HTTP/2\r\n\r\n", HttpError::Bad),
             ("GET /a b HTTP/1.1\r\n\r\n", HttpError::Bad),
             ("POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n", HttpError::Bad),
+            ("POST / HTTP/1.1\r\nContent-Length: +1\r\n\r\na", HttpError::Bad),
             ("GET / HTTP/1.1\r\nTailscale-User-Login: a\r\nTailscale-User-Login: b\r\n\r\n", HttpError::Bad),
             ("GET / HTTP/1.1\r\nX: a\u{7}b\r\n\r\n", HttpError::Bad),
         ];

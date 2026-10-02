@@ -22,7 +22,7 @@ You can type into the terminal directly using an on-screen key bar with Esc, Tab
 
 While you look at a terminal on the page, it takes the page's size: as many columns and lines as fit your screen, so nothing wraps or scrolls sideways. **A−** and **A+** change the text size (kept on that device). When no page shows the terminal any more, it goes back to its size in the app. The page can be added to your home screen as an app.
 
-With Slack, Discord or Telegram notifications set up (Settings → Notifications), each message also carries **Open now: <address>** while remote access is on. The address opens the page at that very terminal (after Tailscale and the web password, as always).
+With Slack, Discord or Telegram notifications set up (Settings → Notifications), each message also carries **Open now: <address>** while remote access is on. The address opens the page at that very terminal (after Tailscale and the web password, as always). It is sent only with **Include what the agent asks** on, since the address names your Mac and your tailnet.
 
 ## Requirements
 
@@ -51,7 +51,9 @@ Remote access is only reachable inside your Tailscale network — never on the p
 
 Someone else's Tailscale account never gets in, even inside your tailnet. Whoever does get past both checks — signed in to *your* Tailscale account and knowing the web password — can type into your terminals, which means running commands on your Mac. So keep the web password to yourself, don't use it anywhere else, and turn Remote access off when you don't need it.
 
-Failed sign-in attempts are rate-limited: 5 wrong passwords lock the page for 1 minute. Each wrong password after a lock doubles the wait time, up to 1 hour. You get a desktop notification when a device signs in and when the page is locked.
+Only Tailscale can reach Agentty's page at all. Agentty listens where only Tailscale's `serve` gets in — a private socket where Tailscale can open one, otherwise a local port behind a secret path that only Tailscale is told — so another program or another user account on your Mac can't reach it directly. The page runs only while Tailscale does: when Tailscale disconnects, signs out or quits, Agentty takes the page down within seconds, and brings it back once Tailscale is connected again.
+
+Failed sign-in attempts are rate-limited: 5 wrong passwords lock the page for 1 minute. Each wrong password after a lock doubles the wait time, up to 1 hour. You get a desktop notification when a device signs in and when the page is locked. If the page is locked and it wasn't you, **Unlock** on the Remote access page lifts it.
 
 The password is stored only as a hash in your system keychain. Sign-ins last up to 7 days (12 hours idle). Quitting Agentty, changing your password, or tapping **Sign out everywhere** signs every device out at once.
 
@@ -66,6 +68,8 @@ Remote access stays on across restarts until you turn it off. It uses Tailscale 
 ## Hiding the feature
 
 Don't use remote access at all? Turn off **Settings → General → Remote access feature** (on by default), or press **Disable remote access** on the Remote access page. Its icon leaves the side menu and remote access turns off. Turn the setting back on to bring it back.
+
+To keep one workspace off the page, open its menu (right-click its card) and choose **Hide from remote access**. The page no longer lists it or reaches its terminals.
 
 ## Troubleshooting
 
@@ -82,4 +86,4 @@ Agentty shows a button in Settings to turn on Serve. Tap it to open the Tailscal
 The other device is signed in to a different Tailscale account. Sign in to the same account as your Mac.
 
 **Page says locked** (shown instead of the sign-in form)
-Either you entered the wrong password 5 times, or someone else did. Wait, or check **Remote access → Recent activity** to see what happened.
+Either you entered the wrong password 5 times, or someone else did. Wait, or check **Remote access → Recent activity** to see what happened. If it wasn't you, press **Unlock** on the Remote access page on your Mac.

@@ -1537,6 +1537,11 @@ strings! {
     "remote.sec.private" => ["Tailnet only, never the internet", "tailnet 전용 (인터넷 비공개)", "tailnet 内のみ（インターネット非公開）", "仅限 tailnet（不公开到互联网）"],
     "remote.sec.private_sub" => ["Funnel stays off", "Funnel 꺼짐", "Funnel はオフ", "Funnel 保持关闭"],
     "remote.sec.local" => ["Listens on this Mac only", "이 Mac 안에서만 대기", "この Mac 内でのみ待ち受け", "仅在本机监听"],
+    "remote.sec.local_secret" => ["127.0.0.1, behind a secret path only Tailscale knows", "127.0.0.1 + Tailscale만 아는 비밀 경로", "127.0.0.1 + Tailscale だけが知る秘密のパス", "127.0.0.1 + 仅 Tailscale 知道的秘密路径"],
+    "remote.sec.local_socket" => ["Private socket only Tailscale opens", "Tailscale만 여는 전용 소켓", "Tailscale だけが開く専用ソケット", "仅 Tailscale 可打开的专用套接字"],
+    "remote.locked_now" => ["Sign-in is locked for {minutes} min after wrong passwords.", "비밀번호가 여러 번 틀려 로그인이 {minutes}분 동안 잠겨 있습니다.", "パスワードの誤りによりサインインが {minutes} 分間ロックされています。", "因密码错误，登录已锁定 {minutes} 分钟。"],
+    "remote.unlock" => ["Unlock", "잠금 해제", "ロック解除", "解除锁定"],
+    "remote.hide_workspace" => ["Hide from remote access", "원격 접속에서 숨기기", "リモートアクセスで非表示", "在远程访问中隐藏"],
     "remote.options" => ["Options", "옵션", "オプション", "选项"],
     "page.remote" => ["Remote access", "원격 접속", "リモートアクセス", "远程访问"],
     "settings.remote_feature" => ["Remote access feature", "원격 접속 기능 사용", "リモートアクセス機能を使う", "使用远程访问功能"],
@@ -1585,10 +1590,7 @@ strings! {
     "remote.keep_awake_hint" => ["A sleeping Mac can't be reached. The display may still turn off", "잠자기 상태의 Mac에는 접속할 수 없습니다. 화면은 꺼질 수 있습니다", "スリープ中の Mac には接続できません。画面はオフになることがあります", "睡眠中的 Mac 无法访问。显示器仍可能关闭"],
     "remote.password" => ["Web password", "웹 비밀번호", "Web パスワード", "网页密码"],
     "remote.password_intro" => ["Asked on the page after Tailscale lets you in. Remote access can't be turned on without it. Changing it signs every device out.", "Tailscale 확인을 통과한 뒤 페이지에서 한 번 더 묻습니다. 비밀번호가 없으면 원격 접속을 켤 수 없습니다. 바꾸면 모든 기기가 로그아웃됩니다.", "Tailscale の確認を通った後、ページでもう一度求められます。パスワードがないとリモートアクセスはオンにできません。変更するとすべての端末がサインアウトします。", "通过 Tailscale 验证后，页面上还会再要求输入。没有密码就无法开启远程访问。修改后所有设备都会退出登录。"],
-    "remote.password_rules" => ["At least 8 characters in English letters, with a number and a special character (such as ! @ # $). Type it with the English input on. Use one you don't use anywhere else.", "영문 8자 이상, 숫자와 특수문자(! @ # $ 등)를 포함해야 합니다. 한/영을 영문으로 두고 입력하세요. 다른 곳에서 쓰지 않는 비밀번호를 쓰세요.", "英字で 8 文字以上、数字と記号（! @ # $ など）を含めてください。英字入力で入力してください。他で使っていないものにしてください。", "至少 8 个英文字符，并包含数字和特殊字符（如 ! @ # $）。请在英文输入状态下输入。请使用在别处没用过的密码。"],
-    "remote.password_needs_digit" => ["Include at least one number.", "숫자를 하나 이상 넣어야 합니다.", "数字を 1 つ以上含めてください。", "至少需要包含一个数字。"],
-    "remote.password_ascii" => ["Use English letters, numbers and symbols only (no spaces). If you typed with the Korean input on, switch it to English and try again.", "영문, 숫자, 특수문자만 쓸 수 있습니다(공백 불가). 한글 입력 상태였다면 한/영을 영문으로 바꾸고 다시 입력하세요.", "英字・数字・記号のみ使えます（スペース不可）。日本語入力がオンだった場合は英字に切り替えて入力し直してください。", "只能使用英文字母、数字和符号（不能有空格）。如果刚才开着中文输入法，请切换到英文后重新输入。"],
-    "remote.password_needs_symbol" => ["Include at least one special character (such as ! @ # $).", "특수문자(! @ # $ 등)를 하나 이상 넣어야 합니다.", "記号（! @ # $ など）を 1 つ以上含めてください。", "至少需要包含一个特殊字符（如 ! @ # $）。"],
+    "remote.password_rules" => ["At least 8 characters. Use one you don't use anywhere else.", "8자 이상이면 됩니다. 다른 곳에서 쓰지 않는 비밀번호를 쓰세요.", "8 文字以上。他で使っていないものにしてください。", "至少 8 个字符。请使用在别处没用过的密码。"],
     "remote.password_is_set" => ["Password set", "비밀번호 설정됨", "パスワード設定済み", "已设置密码"],
     "remote.password_not_set" => ["Password needed", "비밀번호 설정 필요", "パスワードの設定が必要", "需要设置密码"],
     "remote.password_dialog" => ["Web password", "웹 비밀번호 설정", "Web パスワードの設定", "设置网页密码"],
@@ -1746,10 +1748,10 @@ strings! {
     ],
     "chat.details" => ["Include what the agent asks", "요청 내용 포함", "依頼内容を含める", "包含请求内容"],
     "chat.details_hint" => [
-        "What the agent said or asks, the session title, the branch and the folder are sent to the chat service. Off: only the agent and the workspace",
-        "에이전트가 남긴 내용이나 질문, 세션 제목, 브랜치와 폴더가 메신저로 전송됩니다. 끄면 에이전트와 작업공간 이름만 보냅니다",
-        "エージェントの返答や質問、セッション名、ブランチ、フォルダがチャットサービスに送られます。オフ: エージェントとワークスペース名のみ",
-        "智能体的回复或问题、会话标题、分支和文件夹会发送到聊天服务。关闭时只发送智能体和工作区名称"
+        "What the agent said or asks, the session title, the branch, the folder and (with remote access on) the link to the session are sent to the chat service. Off: only the agent and the workspace",
+        "에이전트가 남긴 내용이나 질문, 세션 제목, 브랜치와 폴더, (원격 접속이 켜져 있으면) 세션 바로가기 링크가 메신저로 전송됩니다. 끄면 에이전트와 작업공간 이름만 보냅니다",
+        "エージェントの返答や質問、セッション名、ブランチ、フォルダ、(リモートアクセスがオンなら) セッションへのリンクがチャットサービスに送られます。オフ: エージェントとワークスペース名のみ",
+        "智能体的回复或问题、会话标题、分支、文件夹以及（远程访问开启时）会话链接会发送到聊天服务。关闭时只发送智能体和工作区名称"
     ],
     "chat.when_in_view" => ["Also while the session is on screen", "화면이 띄워져 있어도 알림 받기", "画面に表示中でも通知を受け取る", "会话显示在屏幕上时也接收通知"],
     "chat.when_in_view_hint" => [
