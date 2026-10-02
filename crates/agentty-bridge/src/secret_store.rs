@@ -5,6 +5,11 @@
 //! - Linux: the Secret Service (GNOME Keyring / KWallet) through `secret-tool`; when no Secret
 //!   Service is running (headless machines, minimal desktops) a private file
 //!   (`<data dir>/secrets/<service>.json`, `0600` in a `0700` directory) is used instead.
+//! - A developer's test copy on macOS (a debug build started with its own `AGENTTY_DATA_DIR`) uses
+//!   that same private file in its data folder instead of the Keychain. The Keychain ties an item
+//!   to the code signature of the build that wrote it, and every rebuild is signed anew, so each
+//!   one asked again in a dialog on the Mac's screen: no one answers it while the work is done
+//!   remotely. A release build is always on the Keychain; this is decided when it is compiled.
 //!
 //! Secrets are addressed by `(service, account)`; nothing here ever prints or logs a value.
 
@@ -12,20 +17,42 @@ use anyhow::Result;
 
 /// Human-readable name of the store that holds secrets on this machine (shown in Settings).
 pub fn backend_name() -> &'static str {
+    if dev_file_store() {
+        return "<data dir>/secrets (0600, test copy)";
+    }
     imp::backend_name()
 }
 
 pub fn store(service: &str, account: &str, secret: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if dev_file_store() {
+        return file::store(service, account, secret);
+    }
     imp::store(service, account, secret)
 }
 
 pub fn load(service: &str, account: &str) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    if dev_file_store() {
+        return file::load(service, account).ok_or_else(|| anyhow::anyhow!("secret not found"));
+    }
     imp::load(service, account)
 }
 
 /// Removes a secret; removing one that does not exist is not an error.
 pub fn delete(service: &str, account: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if dev_file_store() {
+        return file::delete(service, account);
+    }
     imp::delete(service, account)
+}
+
+/// A developer's test copy on macOS: a debug build with a data folder of its own. Never a release
+/// build, and never a debug build on the installed app's own folder (whose secrets stay in the
+/// Keychain, where the installed app finds them).
+fn dev_file_store() -> bool {
+    cfg!(all(debug_assertions, target_os = "macos")) && std::env::var_os("AGENTTY_DATA_DIR").is_some_and(|dir| !dir.is_empty())
 }
 
 #[cfg(target_os = "macos")]
@@ -176,7 +203,7 @@ mod imp {
                 return Ok(());
             }
         }
-        file::store(service, account, secret)
+        super::file::store(service, account, secret)
     }
 
     pub fn load(service: &str, account: &str) -> Result<String> {
@@ -192,7 +219,7 @@ mod imp {
                 return Ok(secret.strip_suffix('\n').unwrap_or(&secret).to_string());
             }
         }
-        match file::load(service, account) {
+        match super::file::load(service, account) {
             Some(secret) => Ok(secret),
             None => bail!("secret not found"),
         }
@@ -207,77 +234,15 @@ mod imp {
                 .stderr(Stdio::null())
                 .status();
         }
-        file::delete(service, account)
-    }
-
-    /// Fallback: one JSON object per service in a private directory.
-    pub(super) mod file {
-        use anyhow::Result;
-        use std::collections::BTreeMap;
-        use std::path::{Path, PathBuf};
-
-        fn path(base: &Path, service: &str) -> PathBuf {
-            let name: String = service.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' { c } else { '_' }).collect();
-            base.join("secrets").join(format!("{name}.json"))
-        }
-
-        fn read(base: &Path, service: &str) -> BTreeMap<String, String> {
-            std::fs::read(path(base, service)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-        }
-
-        fn write(base: &Path, service: &str, entries: &BTreeMap<String, String>) -> Result<()> {
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            let path = path(base, service);
-            let dir = path.parent().expect("secrets file has a directory");
-            std::fs::create_dir_all(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-            let tmp = path.with_extension("json.tmp");
-            let _ = std::fs::remove_file(&tmp);
-            // Created 0600 from the start, so the secret is never readable by others, even briefly.
-            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
-            std::io::Write::write_all(&mut file, &serde_json::to_vec(entries)?)?;
-            drop(file);
-            std::fs::rename(tmp, path)?;
-            Ok(())
-        }
-
-        pub fn store_at(base: &Path, service: &str, account: &str, secret: &str) -> Result<()> {
-            let mut entries = read(base, service);
-            entries.insert(account.to_string(), secret.to_string());
-            write(base, service, &entries)
-        }
-
-        pub fn load_at(base: &Path, service: &str, account: &str) -> Option<String> {
-            read(base, service).remove(account)
-        }
-
-        pub fn delete_at(base: &Path, service: &str, account: &str) -> Result<()> {
-            let mut entries = read(base, service);
-            if entries.remove(account).is_some() {
-                write(base, service, &entries)?;
-            }
-            Ok(())
-        }
-
-        pub fn store(service: &str, account: &str, secret: &str) -> Result<()> {
-            store_at(&crate::fsutil::data_dir(), service, account, secret)
-        }
-
-        pub fn load(service: &str, account: &str) -> Option<String> {
-            load_at(&crate::fsutil::data_dir(), service, account)
-        }
-
-        pub fn delete(service: &str, account: &str) -> Result<()> {
-            delete_at(&crate::fsutil::data_dir(), service, account)
-        }
+        super::file::delete(service, account)
     }
 }
 
-#[cfg(all(test, not(any(target_os = "macos", windows))))]
+#[cfg(all(test, unix))]
 mod tests {
     #[test]
     fn file_fallback_roundtrip_is_private() {
-        use super::imp::file;
+        use super::file;
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("agentty-secrets-{}", std::process::id()));
         let value = format!("{}_{}", "example", "not_a_real_key");
@@ -288,5 +253,69 @@ mod tests {
         file::delete_at(&dir, "run.agentty.test", "one").unwrap();
         assert!(file::load_at(&dir, "run.agentty.test", "one").is_none());
         std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+/// One JSON object per service in a private directory: Linux without a Secret Service, and a
+/// developer's test copy on macOS.
+#[cfg(unix)]
+mod file {
+    use anyhow::Result;
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    fn path(base: &Path, service: &str) -> PathBuf {
+        let name: String = service.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' { c } else { '_' }).collect();
+        base.join("secrets").join(format!("{name}.json"))
+    }
+
+    fn read(base: &Path, service: &str) -> BTreeMap<String, String> {
+        std::fs::read(path(base, service)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    fn write(base: &Path, service: &str, entries: &BTreeMap<String, String>) -> Result<()> {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let path = path(base, service);
+        let dir = path.parent().expect("secrets file has a directory");
+        std::fs::create_dir_all(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        let tmp = path.with_extension("json.tmp");
+        let _ = std::fs::remove_file(&tmp);
+        // Created 0600 from the start, so the secret is never readable by others, even briefly.
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        std::io::Write::write_all(&mut file, &serde_json::to_vec(entries)?)?;
+        drop(file);
+        std::fs::rename(tmp, path)?;
+        Ok(())
+    }
+
+    pub fn store_at(base: &Path, service: &str, account: &str, secret: &str) -> Result<()> {
+        let mut entries = read(base, service);
+        entries.insert(account.to_string(), secret.to_string());
+        write(base, service, &entries)
+    }
+
+    pub fn load_at(base: &Path, service: &str, account: &str) -> Option<String> {
+        read(base, service).remove(account)
+    }
+
+    pub fn delete_at(base: &Path, service: &str, account: &str) -> Result<()> {
+        let mut entries = read(base, service);
+        if entries.remove(account).is_some() {
+            write(base, service, &entries)?;
+        }
+        Ok(())
+    }
+
+    pub fn store(service: &str, account: &str, secret: &str) -> Result<()> {
+        store_at(&crate::fsutil::data_dir(), service, account, secret)
+    }
+
+    pub fn load(service: &str, account: &str) -> Option<String> {
+        load_at(&crate::fsutil::data_dir(), service, account)
+    }
+
+    pub fn delete(service: &str, account: &str) -> Result<()> {
+        delete_at(&crate::fsutil::data_dir(), service, account)
     }
 }

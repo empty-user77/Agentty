@@ -19,7 +19,9 @@
 6. **If a secret is ever committed**: stop, tell the user immediately which file/commit, recommend revoking the
    credential, and ask before rewriting history or force-pushing.
 
-App code follows the same principle: secrets live in the macOS Keychain (`agentty-bridge/src/connectors.rs`), UI shows
+App code follows the same principle: secrets live in the macOS Keychain (`agentty-bridge/src/connectors.rs`; a debug
+build started with its own `AGENTTY_DATA_DIR` keeps them in `<data dir>/secrets/`, `0600`, so rebuilds don't stop on a
+Keychain prompt — release builds never do, see `secret_store.rs`), UI shows
 redacted values (`redact_args`, `redact_url`), and files with conversation data are created `0600`.
 
 ## Enforcement (already installed)
