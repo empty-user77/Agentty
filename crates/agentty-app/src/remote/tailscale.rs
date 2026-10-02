@@ -5,7 +5,7 @@
 //!   anything unreadable about it counts as on.
 //! - A port where something else is already served is left alone, and only an entry pointing at
 //!   this Agentty's own server is ever taken down (a test copy with its own data folder never
-//!   touches the installed app's).
+//!   touches the installed app's), or an Agentty entry nothing answers behind any more.
 //! - `serve` on and off run one at a time. A marker file, written before `serve` runs, lets the
 //!   next launch (or quit) take down an entry a crash left behind.
 
@@ -250,6 +250,11 @@ pub fn serve_on(https_port: u16, host: &str, target: &str) -> Result<u64, ServeE
     if let Some((port, old)) = leftover() {
         off_if_ours(port, &old);
     }
+    // One whose marker was lost (overwritten by a start Tailscale wasn't ready for) is still known
+    // by its shape, once nothing serves behind it any more.
+    if let Some(stale) = serve_config().and_then(|json| served_target(&json, https_port)).filter(|t| dead_agentty_target(t)) {
+        off_if_ours(https_port, &stale);
+    }
     match serve_config().map(|json| port_in_use(&json, https_port)) {
         Some(Ok(false)) => {}
         Some(Ok(true)) => return Err(ServeError::PortTaken),
@@ -453,6 +458,30 @@ pub fn served_target(json: &str, port: u16) -> Option<String> {
     })
 }
 
+/// The local port of a target shaped like Agentty's own on a port: `http://127.0.0.1:<port>/`
+/// and a secret path of 64 hex digits (`auth::new_token`).
+pub fn agentty_tcp_port(target: &str) -> Option<u16> {
+    let (port, secret) = target.strip_prefix("http://127.0.0.1:")?.trim_end_matches('/').split_once('/')?;
+    let port: u16 = port.parse().ok()?;
+    (port != 0 && secret.len() == 64 && secret.bytes().all(|b| b.is_ascii_hexdigit())).then_some(port)
+}
+
+/// Whether `target` is an Agentty server that is gone: its shape on a port, or this data folder's
+/// socket, with nothing listening there. A running Agentty (a stopped one keeps its port until
+/// its entry is gone) always answers, so only a dead entry is ever taken for a leftover.
+fn dead_agentty_target(target: &str) -> bool {
+    if let Some(port) = agentty_tcp_port(target) {
+        let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+        return std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_err();
+    }
+    #[cfg(unix)]
+    if let Some(path) = target.strip_prefix("unix:") {
+        let ours = super::conn::socket_path(&agentty_bridge::fsutil::data_dir());
+        return std::path::Path::new(path) == ours && std::os::unix::net::UnixStream::connect(path).is_err();
+    }
+    false
+}
+
 /// Whether two serve targets name the same place (`serve` may write one back with a slash).
 fn same_target(a: &str, b: &str) -> bool {
     a.trim_end_matches('/') == b.trim_end_matches('/')
@@ -649,6 +678,18 @@ mod tests {
         assert_eq!(port_in_use("{ not json", 8743), Err(()));
         let foreground = r#"{ "Foreground": { "abc": { "TCP": { "8743": { "HTTPS": true } } } } }"#;
         assert_eq!(port_in_use(foreground, 8743), Ok(true), "a serve running in a terminal");
+    }
+
+    #[test]
+    fn knows_agentty_targets_by_shape() {
+        let secret = "ab".repeat(32);
+        assert_eq!(agentty_tcp_port(&format!("http://127.0.0.1:58960/{secret}")), Some(58960));
+        assert_eq!(agentty_tcp_port(&format!("http://127.0.0.1:58960/{secret}/")), Some(58960));
+        assert_eq!(agentty_tcp_port("http://127.0.0.1:3000"), None, "someone's dev server");
+        assert_eq!(agentty_tcp_port("http://127.0.0.1:3000/api"), None);
+        assert_eq!(agentty_tcp_port(&format!("http://127.0.0.1:3000/{}", "a".repeat(63))), None);
+        assert_eq!(agentty_tcp_port(&format!("http://192.168.0.2:3000/{secret}")), None, "not this Mac");
+        assert_eq!(agentty_tcp_port(&format!("http://127.0.0.1:0/{secret}")), None);
     }
 
     #[test]
