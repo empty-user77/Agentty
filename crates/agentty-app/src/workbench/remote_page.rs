@@ -120,7 +120,12 @@ impl Workbench {
 
     /// Applies one of the page's inputs if its terminal is in this window.
     pub fn remote_apply(&mut self, command: &Command, cx: &mut Context<Self>) -> bool {
-        let Some((_, pane)) = self.remote_panes().find(|(_, p)| p.read(cx).pane_id == command.pane()) else { return false };
+        match command {
+            Command::Wake { workspace } => return self.remote_wake(*workspace, cx),
+            Command::NewTab { workspace, kind } => return self.remote_new_tab(*workspace, *kind, cx),
+            _ => {}
+        }
+        let Some((_, pane)) = self.remote_panes().find(|(_, p)| Some(p.read(cx).pane_id) == command.pane()) else { return false };
         pane.update(cx, |view, cx| match command {
             Command::Key { key, ctrl, alt, shift, .. } => {
                 let modifiers = gpui::Modifiers { control: *ctrl, alt: *alt, shift: *shift, ..Default::default() };
@@ -130,8 +135,69 @@ impl Workbench {
             Command::Prompt { text, .. } => view.submit_prompt(text.clone(), cx),
             Command::Resize { cols, rows, .. } => view.set_remote_size(Some((*cols as usize, *rows as usize)), cx),
             Command::Release { .. } => view.set_remote_size(None, cx),
+            Command::Wake { .. } | Command::NewTab { .. } => {}
         });
         true
+    }
+
+    /// The index of a workspace the remote page may act on: the user's own, not left out.
+    fn remote_workspace(&self, id: u64) -> Option<usize> {
+        self.workspaces.iter().position(|ws| ws.id == id && ws.plugin.is_none() && !ws.remote_hidden)
+    }
+
+    /// Brings a sleeping workspace back, as opening it would, but leaves the desktop on the
+    /// workspace it shows: whoever sits at the Mac is not thrown elsewhere.
+    fn remote_wake(&mut self, id: u64, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.remote_workspace(id) else { return false };
+        let ws = &mut self.workspaces[index];
+        if let Some(snapshot) = ws.dormant.take() {
+            self.revive(index, snapshot, cx);
+            self.persist(cx);
+            cx.notify();
+        }
+        true
+    }
+
+    /// A new tab in a workspace, started where the workspace is (a sleeping one wakes first), and
+    /// made its active tab; the desktop stays on the workspace it shows.
+    fn remote_new_tab(&mut self, id: u64, kind: crate::launch::PaneKind, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.remote_workspace(id) else { return false };
+        let cwd = {
+            let ws = &self.workspaces[index];
+            match ws.tabs.get(ws.active_tab) {
+                Some(tab) => tab.active.read(cx).current_dir(),
+                None => self.dormant_cwd(ws),
+            }
+        };
+        self.wake_for_new_tab(index, cx);
+        let pane = self.spawn_pane(crate::launch::LaunchSpec::new(kind, cwd), cx);
+        let ws = &mut self.workspaces[index];
+        ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+        ws.active_tab = ws.tabs.len() - 1;
+        self.persist(cx);
+        cx.notify();
+        true
+    }
+
+    /// The tabs of plugins' workspaces (their automations), for the page's plugin list:
+    /// (plugin, automation id, title, workspace asleep).
+    pub fn remote_automations(&self, cx: &gpui::App) -> Vec<(String, String, String, bool)> {
+        let mut found = Vec::new();
+        for ws in &self.workspaces {
+            let Some(plugin) = &ws.plugin else { continue };
+            for tab in &ws.tabs {
+                let Some(instance) = &tab.instance else { continue };
+                let title = instance.title.clone().unwrap_or_else(|| tab.active.read(cx).display_title());
+                found.push((plugin.clone(), instance.id.clone(), title, false));
+            }
+            if let Some(dormant) = &ws.dormant {
+                for tab in &dormant.tabs {
+                    let Some(instance) = &tab.instance else { continue };
+                    found.push((plugin.clone(), instance.id.clone(), instance.title.clone().unwrap_or_default(), true));
+                }
+            }
+        }
+        found
     }
 
     /// Leaves a workspace out of remote access, or lets it back in. Left out, the page loses it at

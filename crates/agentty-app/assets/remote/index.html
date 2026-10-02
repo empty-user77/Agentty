@@ -49,6 +49,7 @@
       <span class="drawer-title">Agentty</span>
       <span id="live" class="dot"></span>
     </header>
+    <button id="home-link" type="button" class="home-link"><span class="home-icon" aria-hidden="true"></span><span id="home-label"></span></button>
     <nav id="workspaces" class="workspaces"></nav>
     <footer class="drawer-foot">
       <button id="notify-button" type="button" class="ghost"></button>
@@ -73,6 +74,7 @@
       </button>
     </header>
     <nav id="tabs" class="tabs"></nav>
+    <div id="home" class="home" hidden></div>
     <div id="asks" class="asks" hidden></div>
     <div id="placeholder" class="placeholder" hidden></div>
     <div id="term-wrap" class="term-wrap">
@@ -92,6 +94,12 @@
     <nav id="pane-list" class="pane-list"></nav>
   </aside>
   <div id="scrim" class="scrim" hidden></div>
+  <!-- What to start in a new tab. -->
+  <div id="new-sheet" class="sheet" role="dialog" aria-modal="true" hidden>
+    <div id="new-title" class="sheet-title"></div>
+    <div id="new-choices" class="sheet-choices"></div>
+    <button id="new-cancel" type="button" class="ghost"></button>
+  </div>
 </div>
 </body>
 </html>

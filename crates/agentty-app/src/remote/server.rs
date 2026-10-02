@@ -21,7 +21,8 @@
 use super::auth::{self, Lockout, Sessions};
 use super::conn::{Conn, Endpoint, Listener};
 use super::http::{self, HttpError, Request, Response};
-use super::snapshot::{screen_update, Screen, SessionInfo, WorkspaceInfo};
+use super::snapshot::{screen_update, PluginInfo, Screen, SessionInfo, WorkspaceInfo};
+use crate::launch::PaneKind;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
@@ -95,16 +96,22 @@ pub enum Command {
     Resize { pane: u64, cols: u16, rows: u16 },
     /// No page shows this terminal any more: back to the pane's own size.
     Release { pane: u64 },
+    /// A sleeping workspace brought back, its saved tabs started again.
+    Wake { workspace: u64 },
+    /// A new tab in a workspace, with a shell or an agent, where the workspace is.
+    NewTab { workspace: u64, kind: PaneKind },
 }
 
 impl Command {
-    pub fn pane(&self) -> u64 {
+    /// The terminal it is for; `None` for what is done to a whole workspace.
+    pub fn pane(&self) -> Option<u64> {
         match self {
             Command::Key { pane, .. }
             | Command::Text { pane, .. }
             | Command::Prompt { pane, .. }
             | Command::Resize { pane, .. }
-            | Command::Release { pane } => *pane,
+            | Command::Release { pane } => Some(*pane),
+            Command::Wake { .. } | Command::NewTab { .. } => None,
         }
     }
 }
@@ -143,6 +150,7 @@ struct View {
     workspaces: Vec<WorkspaceInfo>,
     sessions: Vec<SessionInfo>,
     sessions_version: u64,
+    plugins: Vec<PluginInfo>,
     screens: HashMap<u64, (u64, Screen)>,
 }
 
@@ -173,6 +181,8 @@ pub struct Hub {
     last_whois: Mutex<Option<Instant>>,
     /// Live streams per session token.
     streams: Mutex<HashMap<String, usize>>,
+    /// When the page last opened tabs, for `MAX_NEW_TABS`.
+    new_tabs: Mutex<VecDeque<Instant>>,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +190,19 @@ pub struct Hub {
 struct LoginBody {
     password: String,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceBody {
+    workspace: u64,
+    action: String,
+    #[serde(default)]
+    tool: String,
+}
+
+/// Tabs the page may open in a minute: a few by hand, never a loop starting hundreds of shells.
+const MAX_NEW_TABS: usize = 10;
+const NEW_TAB_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -263,6 +286,7 @@ impl Hub {
             devices_seen: Mutex::new(HashMap::new()),
             last_whois: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
+            new_tabs: Mutex::new(VecDeque::new()),
         });
         let accept = hub.clone();
         std::thread::Builder::new().name("agentty-remote".into()).spawn(move || accept.accept_loop(listener))?;
@@ -385,11 +409,12 @@ impl Hub {
     }
 
     /// The workspaces (sidebar order, with tabs and panes) and every terminal in them.
-    pub fn publish(&self, workspaces: Vec<WorkspaceInfo>, sessions: Vec<SessionInfo>) {
+    pub fn publish(&self, workspaces: Vec<WorkspaceInfo>, sessions: Vec<SessionInfo>, plugins: Vec<PluginInfo>) {
         let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
-        if view.sessions != sessions || view.workspaces != workspaces {
+        if view.sessions != sessions || view.workspaces != workspaces || view.plugins != plugins {
             view.workspaces = workspaces;
             view.sessions = sessions;
+            view.plugins = plugins;
             view.version += 1;
             view.sessions_version = view.version;
             let watched: Vec<u64> = view.sessions.iter().map(|s| s.pane).collect();
@@ -583,7 +608,7 @@ impl Hub {
             }
             ("GET", "/api/sessions") => {
                 let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
-                Routed::Response(Response::json(200, &json!({ "workspaces": view.workspaces, "sessions": view.sessions })))
+                Routed::Response(Response::json(200, &overview(&view)))
             }
             ("GET", "/api/events") => {
                 let pane = match request.query_param("pane") {
@@ -596,6 +621,7 @@ impl Hub {
                 Routed::Events { token, login, pane }
             }
             ("POST", "/api/input") => Routed::Response(self.input(request)),
+            ("POST", "/api/workspace") => Routed::Response(self.workspace_action(request)),
             _ => Routed::Response(Response::json(404, &json!({ "error": "not found" }))),
         }
     }
@@ -734,6 +760,51 @@ impl Hub {
         Response::json(200, &json!({ "ok": true }))
     }
 
+    /// Wakes a sleeping workspace, or opens a tab in one. Only workspaces the page is shown (the
+    /// user's own, not left out of remote access) can be named.
+    fn workspace_action(&self, request: &Request) -> Response {
+        let Ok(body) = serde_json::from_slice::<WorkspaceBody>(&request.body) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        let known = self.view.lock().unwrap_or_else(|e| e.into_inner()).workspaces.iter().any(|w| w.id == body.workspace);
+        if !known {
+            return Response::json(404, &json!({ "error": "no such workspace" }));
+        }
+        let command = match (body.action.as_str(), body.tool.as_str()) {
+            ("wake", "") => Command::Wake { workspace: body.workspace },
+            ("new", tool) => {
+                let kind = match tool {
+                    "shell" => PaneKind::Shell,
+                    "claude" => PaneKind::Claude,
+                    "codex" => PaneKind::Codex,
+                    _ => return Response::json(400, &json!({ "error": "bad request" })),
+                };
+                let mut opened = self.new_tabs.lock().unwrap_or_else(|e| e.into_inner());
+                while opened.front().is_some_and(|at| at.elapsed() >= NEW_TAB_WINDOW) {
+                    opened.pop_front();
+                }
+                if opened.len() >= MAX_NEW_TABS {
+                    return Response::json(429, &json!({ "error": "busy" }));
+                }
+                opened.push_back(Instant::now());
+                Command::NewTab { workspace: body.workspace, kind }
+            }
+            _ => return Response::json(400, &json!({ "error": "bad request" })),
+        };
+        let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
+        if inbox.len() >= 256 {
+            return Response::json(429, &json!({ "error": "busy" }));
+        }
+        // Asked twice before the app's round (a double tap): once is enough.
+        if matches!(command, Command::Wake { .. }) && inbox.contains(&command) {
+            return Response::json(200, &json!({ "ok": true }));
+        }
+        inbox.push(command);
+        drop(inbox);
+        self.wake();
+        Response::json(200, &json!({ "ok": true }))
+    }
+
     /// Signals the app's round loop, once until it takes the commands.
     fn wake(&self) {
         if self.wake_pending.swap(true, Ordering::SeqCst) {
@@ -813,7 +884,7 @@ impl Hub {
                 let seen = view.version;
                 let sessions = (view.sessions_version > sent_sessions || sent_sessions == 0).then(|| {
                     sent_sessions = view.sessions_version.max(1);
-                    json!({ "workspaces": view.workspaces, "sessions": view.sessions }).to_string()
+                    overview(&view).to_string()
                 });
                 let screen = pane.and_then(|pane| view.screens.get(&pane)).filter(|(v, _)| *v > sent_screen).map(|(v, s)| {
                     sent_screen = *v;
@@ -852,6 +923,11 @@ impl Hub {
             }
         }
     }
+}
+
+/// What the page lists: workspaces, terminals and plugins.
+fn overview(view: &View) -> serde_json::Value {
+    json!({ "workspaces": view.workspaces, "sessions": view.sessions, "plugins": view.plugins })
 }
 
 /// `path` without the secret prefix (`/<secret>/app.js` → `/app.js`), or `None` when it does not
@@ -1200,7 +1276,7 @@ mod tests {
     #[test]
     fn everything_needs_a_session() {
         let hub = hub("secret-password");
-        hub.publish(Vec::new(), vec![session(7)]);
+        hub.publish(Vec::new(), vec![session(7)], Vec::new());
         for path in ["/api/sessions", "/api/events", "/api/events?pane=7"] {
             assert_eq!(send(&hub, &Req::get(path).raw()).0, 401, "{path}");
         }
@@ -1211,10 +1287,63 @@ mod tests {
         hub.shutdown();
     }
 
+    fn workspace(id: u64) -> WorkspaceInfo {
+        WorkspaceInfo {
+            id,
+            name: "repo".into(),
+            group: None,
+            group_color: None,
+            color: None,
+            branch: None,
+            folder: "~/repo".into(),
+            sleeping: true,
+            active_tab: 0,
+            tabs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn wakes_and_opens_tabs_in_listed_workspaces_only() {
+        let hub = hub("secret-password");
+        let plugin = PluginInfo {
+            id: "x".into(),
+            name: "X".into(),
+            version: "1.0.0".into(),
+            state: "running",
+            error: None,
+            automations: Vec::new(),
+        };
+        hub.publish(vec![workspace(3)], Vec::new(), vec![plugin]);
+        let cookie = sign_in(&hub, "secret-password");
+        let (_, _, body) = send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get("/api/sessions") }.raw());
+        assert!(body.contains("\"plugins\":[{"), "plugins are listed: {body}");
+        let act = |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/workspace", body) }.raw()).0;
+        assert_eq!(act(json!({ "workspace": 3, "action": "wake" })), 200);
+        assert_eq!(act(json!({ "workspace": 3, "action": "wake" })), 200, "a double tap");
+        assert_eq!(act(json!({ "workspace": 3, "action": "new", "tool": "claude" })), 200);
+        assert_eq!(act(json!({ "workspace": 4, "action": "wake" })), 404, "a workspace the page is not shown");
+        assert_eq!(act(json!({ "workspace": 3, "action": "new", "tool": "bash -c x" })), 400, "only the known tools");
+        assert_eq!(act(json!({ "workspace": 3, "action": "remove" })), 400);
+        assert_eq!(act(json!({ "workspace": 3, "action": "wake", "tool": "shell" })), 400);
+        assert_eq!(act(json!({ "workspace": 3, "action": "wake", "cwd": "/" })), 400, "unknown fields refused");
+        assert_eq!(
+            hub.take_commands(),
+            vec![Command::Wake { workspace: 3 }, Command::NewTab { workspace: 3, kind: PaneKind::Claude }],
+            "the second wake was not queued again"
+        );
+        for _ in 1..MAX_NEW_TABS {
+            assert_eq!(act(json!({ "workspace": 3, "action": "new", "tool": "shell" })), 200);
+        }
+        assert_eq!(act(json!({ "workspace": 3, "action": "new", "tool": "shell" })), 429, "a few tabs a minute, not a flood");
+        let anonymous = send(&hub, &Req::post("/api/workspace", json!({ "workspace": 3, "action": "wake" })).raw()).0;
+        assert_eq!(anonymous, 401, "needs a session");
+        hub.shutdown();
+    }
+
     #[test]
     fn signs_in_and_works_then_signs_out() {
         let hub = hub("secret-password");
-        hub.publish(Vec::new(), vec![session(7)]);
+        hub.publish(Vec::new(), vec![session(7)], Vec::new());
         let cookie = sign_in(&hub, "secret-password");
         let (status, _, body) = send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get("/api/sessions") }.raw());
         assert_eq!(status, 200);
@@ -1276,7 +1405,7 @@ mod tests {
     #[test]
     fn cross_site_requests_are_refused() {
         let hub = hub("secret-password");
-        hub.publish(Vec::new(), vec![session(7)]);
+        hub.publish(Vec::new(), vec![session(7)], Vec::new());
         let cookie = sign_in(&hub, "secret-password");
         let body = json!({ "pane": 7, "kind": "text", "text": "rm -rf ~" });
         let base = || Req { cookie: Some(cookie.clone()), ..Req::post("/api/input", body.clone()) };
@@ -1352,7 +1481,7 @@ mod tests {
     #[test]
     fn streams_sessions_and_the_watched_screen() {
         let hub = hub("secret-password");
-        hub.publish(Vec::new(), vec![session(7)]);
+        hub.publish(Vec::new(), vec![session(7)], Vec::new());
         let cookie = sign_in(&hub, "secret-password");
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port(&hub))).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
@@ -1404,7 +1533,7 @@ mod tests {
     #[test]
     fn events_for_a_pane_not_on_the_list_are_refused() {
         let hub = hub("secret-password");
-        hub.publish(Vec::new(), vec![session(7)]);
+        hub.publish(Vec::new(), vec![session(7)], Vec::new());
         let cookie = sign_in(&hub, "secret-password");
         assert_eq!(send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get("/api/events?pane=99") }.raw()).0, 404);
         assert_eq!(send(&hub, &Req { cookie: Some(cookie), ..Req::get("/api/events?pane=abc") }.raw()).0, 404);

@@ -609,6 +609,59 @@ fn watch_tailscale(cx: &mut App) {
     .detach();
 }
 
+/// Characters of a plugin's failure kept for the page.
+const MAX_PLUGIN_ERROR_CHARS: usize = 300;
+
+/// Every installed plugin and how it runs, with its automations (`automations`: plugin, id,
+/// title, asleep) and what each last reported.
+fn plugin_overview(automations: &[(String, String, String, bool)], cx: &App) -> Vec<snapshot::PluginInfo> {
+    use crate::plugins::{InstanceState, RunState};
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let mut plugins = Vec::new();
+    for plugin in &crate::plugins::host(cx).installed {
+        let runtime = crate::plugins::runtime(cx, &plugin.id);
+        let (state, error) = match runtime.map(|r| &r.state) {
+            _ if !plugin.enabled => ("off", None),
+            _ if plugin.manifest.is_none() => ("failed", plugin.error.clone()),
+            Some(RunState::Running) => ("running", None),
+            Some(RunState::Starting) => ("starting", None),
+            Some(RunState::Failed(why)) => ("failed", Some(why.clone())),
+            Some(RunState::NeedsConsent) => ("consent", None),
+            Some(RunState::Stopped) | None => ("stopped", None),
+        };
+        // Its panel outside any workspace reports under `""`: the plugin's own line, untitled.
+        let own = runtime.filter(|r| r.statuses.contains_key("")).map(|_| (plugin.id.clone(), String::new(), String::new(), false));
+        let automations = own
+            .iter()
+            .chain(automations.iter().filter(|(owner, ..)| *owner == plugin.id))
+            .map(|(_, id, title, sleeping)| {
+                let status = runtime.and_then(|r| r.statuses.get(id));
+                snapshot::AutomationInfo {
+                    title: title.clone(),
+                    state: match status.map(|s| s.state) {
+                        Some(InstanceState::Working) => "working",
+                        Some(InstanceState::Idle) => "idle",
+                        Some(InstanceState::Error) => "error",
+                        None => "",
+                    },
+                    text: status.and_then(|s| s.text.clone()),
+                    elapsed: status.and_then(|s| s.working_since_ms).map(|since| now_ms.saturating_sub(since) / 1000),
+                    sleeping: *sleeping,
+                }
+            })
+            .collect();
+        plugins.push(snapshot::PluginInfo {
+            id: plugin.id.clone(),
+            name: plugin.name().to_string(),
+            version: plugin.manifest.as_ref().map(|m| m.version.clone()).unwrap_or_default(),
+            state,
+            error: error.map(|e| e.chars().take(MAX_PLUGIN_ERROR_CHARS).collect()),
+            automations,
+        });
+    }
+    plugins
+}
+
 /// One round: the page's input into the terminals, then sessions and watched screens out.
 fn tick(cx: &mut App) {
     watch_tailscale(cx);
@@ -642,13 +695,14 @@ fn tick(cx: &mut App) {
         remote.last_overview = Some(std::time::Instant::now());
     }
     let watched = hub.watched();
-    let (mut workspaces, mut sessions) = (Vec::new(), Vec::new());
+    let (mut workspaces, mut sessions, mut automations) = (Vec::new(), Vec::new(), Vec::new());
     for window in &windows {
         let _ = window.update(cx, |wb, _, cx| {
             if overview {
                 let (w, s) = wb.remote_overview(cx);
                 workspaces.extend(w);
                 sessions.extend(s);
+                automations.extend(wb.remote_automations(cx));
             }
             for pane in &watched {
                 if let Some(screen) = wb.remote_screen(*pane, cx) {
@@ -658,7 +712,7 @@ fn tick(cx: &mut App) {
         });
     }
     if overview {
-        hub.publish(workspaces, sessions);
+        hub.publish(workspaces, sessions, plugin_overview(&automations, cx));
     }
     // The dashboard's counters and log follow along, about once a second, while it is open.
     let remote = cx.global_mut::<Remote>();
