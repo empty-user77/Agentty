@@ -9,12 +9,17 @@ Remote access lets you open your Agentty workspaces from a browser on another de
 
 The page is laid out like Agentty itself:
 
+- **Home** — where the page opens: how many terminals wait for you and how many are working, the ones waiting with what they ask, the agents at work, every workspace (asleep ones included), and your plugins with their state. Tap a terminal or a workspace to go there. **Home** at the top of the ☰ menu brings you back.
 - **☰ menu** — your groups and workspaces, in the sidebar's order, with their colors, branch and folder. A red number shows how many terminals there wait for your answer. On a wide screen the list stays open on the left.
 - **Tabs** — the chosen workspace's tabs across the top. A dot shows a tab that is working or waiting for you; ▥2 marks a tab split into two panes.
 - **Split panes** — when the tab is split, the button at the top right opens the list of its panes, with each one's state and what it asks; tap one to switch to it.
 - **The terminal** — the chosen pane's live screen in the middle.
 
-Plugin workspaces do not appear on the page.
+**New tabs** — **+** at the end of the tabs (or beside a workspace on Home) opens a new tab in that workspace with a terminal, Claude Code or Codex, started in the workspace's folder. The page switches to it.
+
+**Sleeping workspaces** — a workspace that is asleep in Agentty shows **Wake up**: its saved tabs start again, and the page shows them. Neither changes what your Mac's screen shows.
+
+**Plugins** — Home lists your installed plugins with their state (running, stopped, stopped with an error) and what each automation is doing right now. The page only shows them: plugin workspaces don't open on the page, and plugins can't be started or stopped from it.
 
 You can type into the terminal directly using an on-screen key bar with Esc, Tab, Shift+Tab, arrow keys, Enter, Ctrl+C, a sticky Ctrl key, and quick buttons (1/2/3) when an agent is asking for an answer. Or send a prompt from the box at the bottom — press Enter on a computer, or Shift+Enter to add a line.
 

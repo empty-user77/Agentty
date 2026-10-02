@@ -61,6 +61,34 @@ pub struct SessionInfo {
     pub asks: Option<String>,
 }
 
+/// An installed plugin and how it runs, for the page's home. Only shown: the page can't start,
+/// stop or reach a plugin.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PluginInfo {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// `running`, `starting`, `stopped`, `failed`, `consent` (waits for the user to allow what it
+    /// asks for), or `off` (turned off in the Plugins page).
+    pub state: &'static str,
+    /// Why it failed, cut short.
+    pub error: Option<String>,
+    pub automations: Vec<AutomationInfo>,
+}
+
+/// One automation of a plugin: a tab of its workspace.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AutomationInfo {
+    pub title: String,
+    /// `working`, `idle`, `error`, or `""` when it has said nothing.
+    pub state: &'static str,
+    pub text: Option<String>,
+    /// Seconds it has been working.
+    pub elapsed: Option<u64>,
+    /// Its workspace is asleep: the automation does not run.
+    pub sleeping: bool,
+}
+
 /// A stretch of cells in one style. `f` / `b` unset: the terminal's own foreground / background.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Run {

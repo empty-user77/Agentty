@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Remote access opens on a home page: what waits for you, what is working, every workspace and
+  your plugins with their state and what each automation is doing.
+- Remote access can open a new tab (terminal, Claude Code or Codex) in a workspace and wake a
+  sleeping workspace, without changing what the Mac's screen shows.
+
 ## [0.2.12] - 2026-10-02
 
 ### Fixed
