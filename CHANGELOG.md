@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-10-02
+
+### Fixed
+- Remote access no longer refuses to start with "Tailscale is already sharing something else on
+  port 8743" when what is left on that port is an earlier Agentty's own, now-closed page. Agentty
+  takes it over; anything else on the port is still left alone.
+
 ## [0.2.11] - 2026-10-02
 
 ### Added
