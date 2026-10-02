@@ -158,8 +158,9 @@ impl Workbench {
         true
     }
 
-    /// A new tab in a workspace, started where the workspace is (a sleeping one wakes first), and
-    /// made its active tab; the desktop stays on the workspace it shows.
+    /// A new tab in a workspace, started where the workspace is (a sleeping one wakes first), added
+    /// as its last tab. It becomes the active tab only of a workspace the desktop is not showing:
+    /// whoever sits at the Mac keeps the tab they are looking at.
     fn remote_new_tab(&mut self, id: u64, kind: crate::launch::PaneKind, cx: &mut Context<Self>) -> bool {
         let Some(index) = self.remote_workspace(id) else { return false };
         let cwd = {
@@ -171,9 +172,12 @@ impl Workbench {
         };
         self.wake_for_new_tab(index, cx);
         let pane = self.spawn_pane(crate::launch::LaunchSpec::new(kind, cwd), cx);
+        let shown = index == self.active_workspace;
         let ws = &mut self.workspaces[index];
         ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None });
-        ws.active_tab = ws.tabs.len() - 1;
+        if !shown {
+            ws.active_tab = ws.tabs.len() - 1;
+        }
         self.persist(cx);
         cx.notify();
         true

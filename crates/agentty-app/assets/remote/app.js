@@ -271,11 +271,13 @@ function onOverview(data) {
     state.started = true;
     return pickStart();
   }
-  // A tab asked for here has opened: show it (the workspace's active tab is the new one).
+  // A tab asked for here has opened: show it. It is the workspace's last tab (not always its
+  // active one: the Mac keeps the tab it shows).
   const pending = state.pendingNew && workspace(state.pendingNew.workspace);
   if (pending && pending.tabs.length > state.pendingNew.count) {
     state.pendingNew = null;
-    return selectWorkspace(pending.id);
+    state.workspace = pending.id;
+    return selectTab(pending.tabs.length - 1);
   }
   // A workspace woken up here has its terminals now: show it if it is still the one on screen.
   const woken = state.waking != null && workspace(state.waking);
