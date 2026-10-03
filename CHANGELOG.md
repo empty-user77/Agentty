@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-10-03
+
 ### Added
 - Remote access opens on a home page: what waits for you, what is working, every workspace and
   your plugins with their state and what each automation is doing.
