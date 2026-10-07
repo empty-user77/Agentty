@@ -5,7 +5,7 @@ description: SDK 背后的 JSON-RPC 线上格式、WebAssembly 模块 ABI，以�
 
 不借助 SDK 编写插件时用到的线上格式。[Node.js SDK](/docs/plugin-sdk) 和 [Rust SDK](/docs/plugin-rust) 都已经封装了全部内容；无论哪种方式，建议先读[快速开始](/docs/plugin-quickstart)。
 
-API **版本 1** 是本页中除 `host/timer` 和 `pane/status` 之外的全部内容，这两者属于**版本 2**。
+API **版本 1** 是本页中除 `host/timer` 和 `pane/status` 之外的全部内容，这两者属于**版本 2**；[UI 树](#ui)中标为 API 4 的面板元素属于**版本 4**。
 
 ## 传输方式
 
@@ -48,7 +48,7 @@ Agentty 以插件文件夹作为工作目录启动程序：
 | `ui/notify` | | `{ message, kind }` —— `info`、`success`、`warning`、`error` | `null` |
 | `ui/setBadge` | | `{ text }`，最多 8 个字符 | `null` |
 | `context/get` | | `{}` | 上下文 |
-| `host/info` | | `{}` | `{ version, apiVersion, language }` |
+| `host/info` | | `{}` | `{ version, apiVersion, language, uiFeatures }` |
 | `host/openUrl` | | `{ url }` —— http/https | `null` |
 | `host/copy` | | `{ text }` —— 最多 100,000 个字符 | `null` |
 | `host/timer` | | `{ ms }` —— API 2 | 到点后返回 `{ elapsedMs }` |
@@ -151,11 +151,33 @@ toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
 spinner  { text? }
 divider  {}
+flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }] }
+         state: off | on | active | done | error — 自动化的步骤，自上而下
+popover  { id, title, children }           面板旁边的卡片；树中第一个会被打开
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   浮起的方框；tone 决定图标和边框颜色
+grid     { children, columns?, gap? }      等宽的列（1–6，默认 2），放不下时换到下一行
+tabs     { id, tabs: [{ id, label, icon?, badge? }], value, children }
+         children：只放选中标签页的内容
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+         align: start | center | end；grow：所占宽度比例（1–12）；每列一个单元格
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value 取 0 到 1；detail 代替百分比显示
+callout  { text, title?, icon?, tone? }     tone 默认为 info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }       按 language（rust、json、ts、sh 等）着色，带复制按钮
 ```
 
 事件：`button` 发送 `click`；`input` 发送带 `value` 的 `change` 与 `submit`；`list` 发送带 `item` 的 `select`，行内按钮发送带 `item` 和 `action` 的 `action`；`choice` 发送带选项值的 `change`；`toggle` 发送带新布尔值的 `change`。
 
 列表项的 `tone` 决定其图标颜色，取值与 `badge` 相同。
+
+`flow` 以步骤 id 作为 `item` 发送 `select`；`popover` 的关闭按钮发送 `close`。自 API 4 起：`tabs` 发送带标签页 id 的 `change`；`table` 以行 id 作为 `item` 发送 `select`；`select` 发送带选项值的 `change`；`checkbox` 发送带新布尔值的 `change`。
+
+使用 API 4 元素的插件需在清单中写上 `"apiVersion": 4`。当前运行的 Agentty 能绘制哪些元素，见 `host/info` 的 `uiFeatures`。什么内容该用哪个元素，见 [设计面板](/docs/plugin-ui-guide)。
 
 ## 不用 Agentty 也能测试
 

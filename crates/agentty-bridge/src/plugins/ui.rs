@@ -110,6 +110,196 @@ pub enum Node {
         #[serde(default)]
         children: Vec<Node>,
     },
+    /// A raised box around what belongs together, with an optional heading (API 4).
+    Card {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        subtitle: Option<String>,
+        #[serde(default)]
+        icon: Option<String>,
+        /// Colors the icon, and the card's edge when it is not `neutral`.
+        #[serde(default)]
+        tone: Tone,
+        #[serde(default)]
+        children: Vec<Node>,
+    },
+    /// Children in equal columns, wrapping onto new rows (API 4).
+    Grid {
+        #[serde(default)]
+        children: Vec<Node>,
+        /// 1 to [`MAX_COLUMNS`]; 2 when left out.
+        #[serde(default = "two")]
+        columns: usize,
+        #[serde(default)]
+        gap: Gap,
+    },
+    /// A tab strip. The plugin sends only the picked tab's content as `children`; picking another
+    /// sends `change` with its id (API 4).
+    Tabs {
+        id: String,
+        #[serde(default)]
+        tabs: Vec<TabItem>,
+        #[serde(default)]
+        value: String,
+        #[serde(default)]
+        children: Vec<Node>,
+    },
+    /// Rows under column headings. Clicking a row sends `select` with its id (API 4).
+    Table {
+        id: String,
+        #[serde(default)]
+        columns: Vec<TableColumn>,
+        #[serde(default)]
+        rows: Vec<TableRow>,
+        #[serde(default)]
+        empty: Option<String>,
+        /// The row drawn highlighted.
+        #[serde(default)]
+        selected: Option<String>,
+    },
+    /// Label and value pairs, one per line (API 4).
+    KeyValue {
+        #[serde(default)]
+        items: Vec<KeyValueItem>,
+    },
+    /// One number that matters, large, with what it is and how it moved (API 4).
+    Stat {
+        label: String,
+        value: String,
+        #[serde(default)]
+        detail: Option<String>,
+        #[serde(default)]
+        icon: Option<String>,
+        /// Colors the detail and the icon.
+        #[serde(default)]
+        tone: Tone,
+    },
+    /// A bar filled `value` of the way (0 to 1) (API 4).
+    Progress {
+        #[serde(default)]
+        value: f64,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        detail: Option<String>,
+        #[serde(default)]
+        tone: Tone,
+    },
+    /// A tinted note: a hint, a warning, what went wrong (API 4).
+    Callout {
+        text: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        icon: Option<String>,
+        #[serde(default = "info")]
+        tone: Tone,
+    },
+    /// A drop-down of options: `change` with the picked value (API 4).
+    Select {
+        id: String,
+        #[serde(default)]
+        options: Vec<ChoiceOption>,
+        #[serde(default)]
+        value: String,
+        #[serde(default)]
+        placeholder: Option<String>,
+        #[serde(default)]
+        disabled: bool,
+    },
+    /// A box to tick: `change` with the new boolean (API 4).
+    Checkbox {
+        id: String,
+        label: String,
+        #[serde(default)]
+        value: bool,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        disabled: bool,
+    },
+    /// Monospaced text, colored by `language` when Agentty knows it, with a copy button (API 4).
+    Code {
+        text: String,
+        /// A language name or file extension: `rust`, `json`, `ts`, `sh`, …
+        #[serde(default)]
+        language: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+    },
+}
+
+fn two() -> usize {
+    2
+}
+
+fn info() -> Tone {
+    Tone::Info
+}
+
+/// Columns a `grid` may have.
+pub const MAX_COLUMNS: usize = 6;
+
+/// One tab of a `tabs` strip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TabItem {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// A count or a word after the label.
+    #[serde(default)]
+    pub badge: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableColumn {
+    pub label: String,
+    #[serde(default)]
+    pub align: Align,
+    /// Share of the width against the other columns (1 when left out).
+    #[serde(default = "one")]
+    pub grow: u32,
+}
+
+fn one() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Align {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRow {
+    pub id: String,
+    /// One per column, in the same order.
+    #[serde(default)]
+    pub cells: Vec<String>,
+    /// Colors the row's first cell: a failed run in red.
+    #[serde(default)]
+    pub tone: Tone,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyValueItem {
+    pub label: String,
+    pub value: String,
+    #[serde(default)]
+    pub tone: Tone,
+    /// Monospaced: ids, hashes, paths.
+    #[serde(default)]
+    pub mono: bool,
 }
 
 /// One card of a `flow`.
@@ -229,9 +419,9 @@ pub enum Tone {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiEvent {
-    /// Id of the element (button, input, list, choice, toggle).
+    /// Id of the element (button, input, list, choice, toggle, tabs, table, select, checkbox).
     pub element: String,
-    /// `click`, `change`, `submit`, `select` or `action`.
+    /// `click`, `change`, `submit`, `select`, `action` or `close`.
     pub event: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<serde_json::Value>,
@@ -335,32 +525,133 @@ impl Node {
                 }
             }
             Node::Divider => {}
+            Node::Card { title, subtitle, icon, children, .. } => {
+                for text in [title.as_mut(), subtitle.as_mut(), icon.as_mut()].into_iter().flatten() {
+                    cut(text);
+                }
+                for child in children {
+                    child.check(depth + 1, count)?;
+                }
+            }
+            Node::Grid { children, columns, .. } => {
+                *columns = (*columns).clamp(1, MAX_COLUMNS);
+                for child in children {
+                    child.check(depth + 1, count)?;
+                }
+            }
+            Node::Tabs { tabs, value, children, .. } => {
+                more(count, tabs.len())?;
+                cut(value);
+                for tab in tabs {
+                    cut(&mut tab.id);
+                    cut(&mut tab.label);
+                    for text in [tab.icon.as_mut(), tab.badge.as_mut()].into_iter().flatten() {
+                        cut(text);
+                    }
+                }
+                for child in children {
+                    child.check(depth + 1, count)?;
+                }
+            }
+            Node::Table { columns, rows, empty, selected, .. } => {
+                more(count, columns.len())?;
+                for column in columns.iter_mut() {
+                    cut(&mut column.label);
+                    column.grow = column.grow.clamp(1, 12);
+                }
+                for text in [empty.as_mut(), selected.as_mut()].into_iter().flatten() {
+                    cut(text);
+                }
+                for row in rows {
+                    // A row draws one cell per column and no more.
+                    row.cells.truncate(columns.len());
+                    more(count, 1 + row.cells.len())?;
+                    cut(&mut row.id);
+                    row.cells.iter_mut().for_each(cut);
+                }
+            }
+            Node::KeyValue { items } => {
+                more(count, items.len())?;
+                for item in items {
+                    cut(&mut item.label);
+                    cut(&mut item.value);
+                }
+            }
+            Node::Stat { label, value, detail, icon, .. } => {
+                cut(label);
+                cut(value);
+                for text in [detail.as_mut(), icon.as_mut()].into_iter().flatten() {
+                    cut(text);
+                }
+            }
+            Node::Progress { value, label, detail, .. } => {
+                *value = if value.is_finite() { value.clamp(0., 1.) } else { 0. };
+                for text in [label.as_mut(), detail.as_mut()].into_iter().flatten() {
+                    cut(text);
+                }
+            }
+            Node::Callout { text, title, icon, .. } => {
+                cut(text);
+                for text in [title.as_mut(), icon.as_mut()].into_iter().flatten() {
+                    cut(text);
+                }
+            }
+            Node::Select { options, value, placeholder, .. } => {
+                more(count, options.len())?;
+                cut(value);
+                if let Some(placeholder) = placeholder.as_mut() {
+                    cut(placeholder);
+                }
+                for option in options {
+                    cut(&mut option.label);
+                    cut(&mut option.value);
+                }
+            }
+            Node::Checkbox { label, description, .. } => {
+                cut(label);
+                if let Some(description) = description.as_mut() {
+                    cut(description);
+                }
+            }
+            Node::Code { text, language, title } => {
+                cut(text);
+                for text in [language.as_mut(), title.as_mut()].into_iter().flatten() {
+                    cut(text);
+                }
+            }
         }
         Ok(())
+    }
+
+    /// The nodes this one holds, for walking the tree.
+    pub fn children(&self) -> &[Node] {
+        match self {
+            Node::Column { children, .. }
+            | Node::Row { children, .. }
+            | Node::Section { children, .. }
+            | Node::Popover { children, .. }
+            | Node::Card { children, .. }
+            | Node::Grid { children, .. }
+            | Node::Tabs { children, .. } => children,
+            _ => &[],
+        }
     }
 
     /// The popover the tree holds, if any (the first one: there is room for one beside a panel).
     pub fn popover(&self) -> Option<&Node> {
         match self {
             Node::Popover { .. } => Some(self),
-            Node::Column { children, .. } | Node::Row { children, .. } | Node::Section { children, .. } => {
-                children.iter().find_map(Node::popover)
-            }
-            _ => None,
+            _ => self.children().iter().find_map(Node::popover),
         }
     }
 
     /// Every input's id and plugin-provided value, for syncing text fields.
     pub fn inputs(&self, out: &mut Vec<InputField>) {
         match self {
-            Node::Column { children, .. }
-            | Node::Row { children, .. }
-            | Node::Section { children, .. }
-            | Node::Popover { children, .. } => children.iter().for_each(|c| c.inputs(out)),
             Node::Input { id, placeholder, value, rows } => {
                 out.push(InputField { id: id.clone(), placeholder: placeholder.clone(), value: value.clone(), rows: (*rows).min(MAX_ROWS) })
             }
-            _ => {}
+            _ => self.children().iter().for_each(|c| c.inputs(out)),
         }
     }
 }
@@ -460,6 +751,48 @@ mod tests {
         let drawn = serde_json::to_string(&node).expect("it serializes");
         let longest = drawn.split('"').map(|part| part.chars().count()).max().unwrap_or(0);
         assert!(longest <= MAX_TEXT + 1, "a string of {longest} characters reaches the panel");
+    }
+
+    #[test]
+    fn parses_the_api_4_elements() {
+        let tree = Node::from_value(json!({ "type": "tabs", "id": "t", "value": "runs",
+            "tabs": [{ "id": "runs", "label": "Runs", "badge": "3" }, { "id": "settings", "label": "Settings" }],
+            "children": [
+                { "type": "grid", "columns": 40, "children": [
+                    { "type": "stat", "label": "Passed", "value": "128", "detail": "+4", "tone": "success" },
+                    { "type": "stat", "label": "Failed", "value": "2" },
+                ] },
+                { "type": "card", "title": "Latest", "children": [
+                    { "type": "keyValue", "items": [{ "label": "Commit", "value": "ebfe735", "mono": true }] },
+                    { "type": "progress", "value": 3.5, "label": "Upload" },
+                    { "type": "input", "id": "note" },
+                ] },
+                { "type": "table", "id": "tbl", "columns": [{ "label": "Name" }, { "label": "Time", "align": "end", "grow": 99 }],
+                  "rows": [{ "id": "a", "cells": ["build", "2m", "extra"] }] },
+                { "type": "callout", "text": "Heads up" },
+                { "type": "select", "id": "s", "options": [{ "value": "a", "label": "A" }], "value": "a" },
+                { "type": "checkbox", "id": "c", "label": "Notify me", "value": true },
+                { "type": "code", "text": "fn main() {}", "language": "rust" },
+            ] }))
+        .unwrap();
+        let mut inputs = Vec::new();
+        tree.inputs(&mut inputs);
+        assert_eq!(inputs.len(), 1, "a field inside a card inside a tab is found");
+        let Node::Tabs { children, .. } = &tree else { panic!("tabs") };
+        assert!(matches!(children[0], Node::Grid { columns: MAX_COLUMNS, .. }), "columns are capped");
+        let Node::Card { children: card, .. } = &children[1] else { panic!("card") };
+        assert!(matches!(card[1], Node::Progress { value, .. } if value == 1.), "progress is clamped to 0..1");
+        let Node::Table { rows, columns, .. } = &children[2] else { panic!("table") };
+        assert_eq!(rows[0].cells.len(), 2, "a row has no more cells than there are columns");
+        assert_eq!((columns[0].grow, columns[1].grow, columns[1].align), (1, 12, Align::End));
+        assert!(matches!(children[3], Node::Callout { tone: Tone::Info, .. }), "a callout is a hint unless it says otherwise");
+    }
+
+    #[test]
+    fn a_table_counts_its_cells() {
+        let rows: Vec<_> = (0..MAX_NODES / 2).map(|i| json!({ "id": i.to_string(), "cells": ["a", "b"] })).collect();
+        let table = json!({ "type": "table", "id": "t", "columns": [{ "label": "A" }, { "label": "B" }], "rows": rows });
+        assert!(Node::from_value(table).is_err());
     }
 
     #[test]

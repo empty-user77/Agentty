@@ -7,7 +7,7 @@
   "icon": "sparkles",
   "main": "main.mjs",
   "runtime": "node",
-  "apiVersion": 1,
+  "apiVersion": 4,
   "permissions": ["prompt.inject", "workspace.read"],
   "contributes": {
     "panel": { "title": "{{name}}", "icon": "sparkles" },

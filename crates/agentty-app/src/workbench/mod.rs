@@ -42,6 +42,7 @@ mod picker;
 pub mod plugin_browser;
 mod plugin_host;
 mod plugin_panel;
+mod plugin_ui;
 mod plugin_window;
 mod plugin_workspace;
 mod plugins_page;
@@ -652,6 +653,12 @@ pub struct Workbench {
     /// it as the user closing the panel.
     plugin_windows_closing: std::collections::HashSet<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
+    /// The `select` of a plugin panel whose options are showing: (input scope, element id).
+    plugin_select_open: Option<(String, String)>,
+    /// Colors of the `code` blocks plugin panels show, by their text and language.
+    plugin_code_colors: plugin_ui::CodeColors,
+    /// The grammars `code` blocks are colored with are loading.
+    plugin_grammars_loading: bool,
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
     /// Context last sent to plugins (serialized), to send only changes.
@@ -904,6 +911,9 @@ impl Workbench {
             plugin_windows_opening: std::collections::HashSet::new(),
             plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),
+            plugin_select_open: None,
+            plugin_code_colors: Default::default(),
+            plugin_grammars_loading: false,
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
             plugin_context_key: serde_json::Value::Null,

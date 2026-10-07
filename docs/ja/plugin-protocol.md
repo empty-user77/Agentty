@@ -5,7 +5,7 @@ description: SDK の背後の JSON-RPC ワイヤーフォーマット、WebAssem
 
 SDK なしでプラグインを書くためのワイヤーフォーマットです。[Node.js SDK](/docs/plugin-sdk) と [Rust SDK](/docs/plugin-rust) がすべて包んでくれます。どちらにせよ[クイックスタート](/docs/plugin-quickstart)を先に読むとよいでしょう。
 
-API **バージョン 1** は、このページから `host/timer` と `pane/status` を除いたすべてです。この 2 つは**バージョン 2** です。
+API **バージョン 1** は、このページから `host/timer` と `pane/status` を除いたすべてです。この 2 つは**バージョン 2**、[UI ツリー](#ui-ツリー)で API 4 と記した要素は**バージョン 4** です。
 
 ## 通信方式
 
@@ -48,7 +48,7 @@ stdin が閉じるか `shutdown` が来たら終了してください。`shutdow
 | `ui/notify` | | `{ message, kind }` — `info`、`success`、`warning`、`error` | `null` |
 | `ui/setBadge` | | `{ text }`、最大 8 文字 | `null` |
 | `context/get` | | `{}` | コンテキスト |
-| `host/info` | | `{}` | `{ version, apiVersion, language }` |
+| `host/info` | | `{}` | `{ version, apiVersion, language, uiFeatures }` |
 | `host/openUrl` | | `{ url }` — http/https | `null` |
 | `host/copy` | | `{ text }` — 最大 100,000 文字 | `null` |
 | `host/timer` | | `{ ms }` — API 2 | 時間が経つと `{ elapsedMs }` |
@@ -152,11 +152,33 @@ toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
 spinner  { text? }
 divider  {}
+flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }] }
+         state: off | on | active | done | error — 自動化の手順を上から下へ
+popover  { id, title, children }           パネルの横のカード。ツリーの最初のものが開きます
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   浮いた箱。tone はアイコンと縁の色
+grid     { children, columns?, gap? }      等幅の列（1–6、既定 2）、あふれたら次の行へ
+tabs     { id, tabs: [{ id, label, icon?, badge? }], value, children }
+         children: 選ばれたタブの中身だけ
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+         align: start | center | end、grow: 幅の割合（1–12）、列ごとにセル 1 つ
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value は 0 から 1、detail はパーセントの代わりに表示
+callout  { text, title?, icon?, tone? }     tone の既定は info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }       language（rust、json、ts、sh など）で色分け、コピーボタン付き
 ```
 
 イベント: `button` は `click`、`input` は `value` を伴う `change`・`submit`、`list` は `item` を伴う `select`（行のボタンは `item`・`action` を伴う `action`）、`choice` は選んだ値を伴う `change`、`toggle` は新しい真偽値を伴う `change` を送ります。
 
 リスト項目の `tone` はアイコンの色を決め、`badge` と同じ値を使います。
+
+`flow` は手順の id を `item` にして `select` を、`popover` は閉じるボタンから `close` を送ります。API 4 から：`tabs` はタブの id 付きで `change`、`table` は行の id を `item` にして `select`、`select` は選択肢の値付きで `change`、`checkbox` は新しい真偽値付きで `change` を送ります。
+
+API 4 の要素を使うプラグインはマニフェストに `"apiVersion": 4` と書きます。実行中の Agentty が描ける要素は `host/info` の `uiFeatures` にあります。何にどの要素を使うかは [パネルのデザイン](/docs/plugin-ui-guide) を参照してください。
 
 ## Agentty なしでテストする
 

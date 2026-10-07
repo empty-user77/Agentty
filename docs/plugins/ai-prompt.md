@@ -49,6 +49,27 @@ plugin can:
 10. Show user-facing text in the user's language when practical (`context.language`: en, ko, ja, zh).
 11. Handle failures with `plugin.notify(message, 'error')` instead of crashing.
 
+## Designing the panel
+
+Agentty draws the panel from the tree you send, in its own colors and spacing, so a good-looking
+panel comes from choosing the right element — there is no styling to do. `PLUGIN_GUIDE.md`
+(**Panel UI → Making it look right**) has the full list; in short:
+
+- things to pick → `list`; records with the same fields → `table`; one item's details →
+  `keyValue` inside a `card`; a number that matters → `stat` (several in a `grid`); several views
+  → `tabs`; a hint, warning or failure → `callout`; code or output → `code`; how far a job got →
+  `progress`; settings → `input`, `select`, `checkbox`, `toggle` grouped in `section`s;
+- one `primary` button per screen; `ghost` for Cancel; `danger` only for what cannot be undone;
+- every `list` / `table` gets an `empty` text, every failure a `callout` with a way to retry, every
+  slow action a `spinner` or `progress` right away;
+- tones (`success`, `warning`, `error`, `info`) mean something — never use them as decoration;
+- the panel starts 360 px wide: `grid` of 2 columns, `table` of 3–4 columns at most.
+
+`card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`
+and `code` need `"apiVersion": 4` in `agentty-plugin.json`. The **UI Gallery** plugin (Plugins
+page) shows every element and whole example screens; suggest it to the user when they want to see
+the options.
+
 ## Workflow
 
 1. Read `PLUGIN_GUIDE.md` and `agentty-plugin.d.ts`.

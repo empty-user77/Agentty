@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Plugin panels have eleven new elements (plugin API 4): cards, grids, tabs, tables, label/value
+  lists, stats, progress bars, callouts, drop-downs, checkboxes and code blocks with syntax colors
+  and a copy button.
+- UI Gallery, a plugin that comes with Agentty: every panel element live with the code that draws
+  it, and whole example screens to start a plugin from. A new guide, "Designing a panel", says
+  which element to use for what.
+
+### Changed
+- Plugin panels look more like the rest of Agentty: buttons and fields share one height, list rows
+  show their icon in a tinted tile, and titles, badges, switches and empty lists were redrawn.
+
 ## [0.2.13] - 2026-10-03
 
 ### Added

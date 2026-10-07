@@ -12,8 +12,8 @@
 
 import { createInterface } from 'node:readline';
 
-export const SDK_VERSION = '1.0.0';
-export const API_VERSION = 3;
+export const SDK_VERSION = '1.1.0';
+export const API_VERSION = 4;
 
 /** Builders for the panel UI tree. Every interactive element needs an `id` unique in the panel. */
 export const ui = {
@@ -35,6 +35,35 @@ export const ui = {
   badge: (text, tone = 'neutral') => ({ type: 'badge', text, tone }),
   spinner: (text = '') => ({ type: 'spinner', text }),
   divider: () => ({ type: 'divider' }),
+  /** steps: [{ id, title, subtitle?, icon?, state?: off | on | active | done | error, selected?, side? }] */
+  flow: (id, steps) => ({ type: 'flow', id, steps }),
+  /** A card beside the panel; its close button sends `close`. */
+  popover: (id, title, children) => ({ type: 'popover', id, title, children: compact(children) }),
+
+  // API 4 — check `uiFeatures` from `plugin.hostInfo()` before using these on an older Agentty.
+
+  /** A raised box around what belongs together. tone colors the icon and the edge. */
+  card: (children, { title, subtitle, icon, tone = 'neutral' } = {}) => ({ type: 'card', title, subtitle, icon, tone, children: compact(children) }),
+  /** Children in equal columns (1–6), wrapping onto new rows. */
+  grid: (children, { columns = 2, gap = 'medium' } = {}) => ({ type: 'grid', columns, gap, children: compact(children) }),
+  /** tabs: [{ id, label, icon?, badge? }]. Send only the picked tab's content as children; picking one sends `change`. */
+  tabs: (id, tabs, value, children) => ({ type: 'tabs', id, tabs, value, children: compact(children) }),
+  /** columns: [{ label, align?: start | center | end, grow? }]; rows: [{ id, cells: [string], tone? }]. A row click sends `select`. */
+  table: (id, columns, rows, { empty, selected } = {}) => ({ type: 'table', id, columns, rows, empty, selected }),
+  /** items: [{ label, value, tone?, mono? }] */
+  keyValue: (items) => ({ type: 'keyValue', items }),
+  /** One number that matters: stat('Passed', '128', { detail: '+4 today', tone: 'success' }) */
+  stat: (label, value, { detail, icon, tone = 'neutral' } = {}) => ({ type: 'stat', label, value: String(value ?? ''), detail, icon, tone }),
+  /** value from 0 to 1. detail replaces the percentage on the right. */
+  progress: (value, { label, detail, tone = 'neutral' } = {}) => ({ type: 'progress', value: Number(value) || 0, label, detail, tone }),
+  /** A tinted note. tone: info (default) | success | warning | error | neutral */
+  callout: (text, { title, icon, tone = 'info' } = {}) => ({ type: 'callout', text: String(text ?? ''), title, icon, tone }),
+  /** A drop-down; picking sends `change` with the option's value. options: [{ value, label }] */
+  select: (id, options, value = '', { placeholder, disabled = false } = {}) => ({ type: 'select', id, options, value, placeholder, disabled }),
+  /** A box to tick; sends `change` with the new boolean. */
+  checkbox: (id, label, value = false, { description, disabled = false } = {}) => ({ type: 'checkbox', id, label, value, description, disabled }),
+  /** Monospaced, colored by language (rust, json, ts, sh, …), with a copy button. */
+  code: (text, { language, title } = {}) => ({ type: 'code', text: String(text ?? ''), language, title }),
 };
 
 function compact(children) {
@@ -159,6 +188,10 @@ export function createPlugin(streams = {}) {
     },
     getContext() {
       return call('context/get', {});
+    },
+    /** { version, apiVersion, language, utcOffsetMinutes, uiFeatures } — uiFeatures lists the panel elements this Agentty draws. */
+    hostInfo() {
+      return call('host/info', {});
     },
     /**
      * Sends a prompt to an agent. target: ask (dialog, default) | active | newWorkspace | newTab |

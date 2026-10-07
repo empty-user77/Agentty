@@ -45,6 +45,7 @@ plugin.start();
 | `notify(message, kind)` — `info`、`success`、`warning`、`error` | |
 | `setBadge(text)` — タブ領域のボタンに最大 8 文字 | |
 | `getContext()` | |
+| `hostInfo()` — Agentty のバージョン、API バージョン、言語、描けるパネル要素（`uiFeatures`） | |
 | `openUrl(url)` — http/https | |
 | `copy(text)` — クリップボードにコピー | |
 | `revealPath(path)` — ファイルマネージャーで表示 | `workspace.read` |
@@ -76,8 +77,23 @@ plugin.start();
 | `ui.badge(text, tone)` | `neutral`、`info`、`success`、`warning`、`error` | |
 | `ui.spinner(text)` | | |
 | `ui.divider()` | | |
+| `ui.flow(id, steps)` | 手順 `{ id, title, subtitle, icon, state, selected, side }`、`state`: `off`、`on`、`active`、`done`、`error` | `event.item` を伴う `select` |
+| `ui.popover(id, title, children)` | パネルの横のカード | `close` |
+| `ui.card(children, { title, subtitle, icon, tone })` | 浮いた箱。`tone` はアイコンと縁の色（API 4） | |
+| `ui.grid(children, { columns, gap })` | 等幅の列 1–6（API 4） | |
+| `ui.tabs(id, [{ id, label, icon, badge }], value, children)` | タブ。children は選ばれたタブの中身（API 4） | タブの id を伴う `change` |
+| `ui.table(id, [{ label, align, grow }], [{ id, cells, tone }], { empty, selected })` | 見出しの下の行（API 4） | `event.item` を伴う `select` |
+| `ui.keyValue([{ label, value, tone, mono }])` | ラベルと値の組（API 4） | |
+| `ui.stat(label, value, { detail, icon, tone })` | 大きく見せる数字ひとつ（API 4） | |
+| `ui.progress(value, { label, detail, tone })` | バー、`value` は 0 から 1（API 4） | |
+| `ui.callout(text, { title, icon, tone })` | 色付きの注記、既定は `info`（API 4） | |
+| `ui.select(id, [{ value, label }], value, { placeholder, disabled })` | ドロップダウン（API 4） | 値を伴う `change` |
+| `ui.checkbox(id, label, value, { description, disabled })` | チェックボックス（API 4） | 新しい真偽値を伴う `change` |
+| `ui.code(text, { language, title })` | 色分けされたコードとコピーボタン（API 4） | |
 
 null と false の子要素は飛ばされるので、`条件 && ui.text('…')` がそのまま動きます。
+
+何にどの要素を使うか、そのまま出発点にできる画面一式は [パネルのデザイン](/docs/plugin-ui-guide) にあります。API 4 と記した要素を使うにはマニフェストに `"apiVersion": 4` が必要です。
 
 ```js
 plugin.onPanelOpen(async (context) => {

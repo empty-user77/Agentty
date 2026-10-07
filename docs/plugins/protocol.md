@@ -1,4 +1,4 @@
-# Agentty plugin protocol (API version 3)
+# Agentty plugin protocol (API version 4)
 
 For writing plugins without the Node.js SDK. Read the [plugin guide](README.md) first; this page
 only describes the wire format.
@@ -8,6 +8,7 @@ only describes the wire format.
 | 1 | the panel, commands, links, `storage/*`, `net/fetch`, `prompt/inject`, `session/get` |
 | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
 | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
+| 4 | panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code` |
 
 A plugin that uses something a version added says so, with `apiVersion` in its manifest and in its
 marketplace entry. An Agentty that speaks less than that says to update rather than installing a
@@ -68,7 +69,7 @@ when you don't care.
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
 | `context/get` | | `{}` | context |
-| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`), missing on older Agentty |
+| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`, and from API 4 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`), missing on older Agentty |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
@@ -425,8 +426,30 @@ flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }
 popover  { id, title, children }            a card beside the panel, over the page next to it
                                             (hidden while it is open); the first one in the tree
                                             is shown, none: closed
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   a raised box; tone colors the icon and edge
+grid     { children, columns?, gap? }       equal columns (1–6, default 2), wrapping onto new rows
+tabs     { id, tabs: [{ id, label, icon?, badge? }], value, children }
+                                            children: the picked tab's content only
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+                                            align: start | center | end; grow: share of the width
+                                            (1–12); one cell per column; tone marks the first cell
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value from 0 to 1; detail replaces the percentage
+callout  { text, title?, icon?, tone? }     tone defaults to info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }        colored by language (rust, json, ts, sh, …), with a
+                                            copy button
 ```
 
 Events: `button` → `click`; `input` → `change` / `submit` with `value`; `list` → `select` with
 `item`, row buttons → `action` with `item` and `action`; `choice` → `change` with the option value;
 `toggle` → `change` with the new boolean; `flow` → `select` with the step's id as `item`; `popover` → `close` from its close button.
+From API 4: `tabs` → `change` with the tab's id; `table` → `select` with the row's id as `item`;
+`select` → `change` with the option's value; `checkbox` → `change` with the new boolean.
+
+Which element to use for what, and whole screens to start from: the **UI Gallery** plugin (it
+comes with Agentty) and https://www.agentty.run/docs/plugin-ui-guide.
