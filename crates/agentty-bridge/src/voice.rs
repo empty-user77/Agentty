@@ -293,12 +293,7 @@ mod tests {
     #[test]
     fn wav_decodes_to_16k_mono() {
         // A 0.5 s 16 kHz mono 16-bit PCM clip, round-tripped through the decoder.
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 16_000,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
+        let spec = hound::WavSpec { channels: 1, sample_rate: 16_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
         let mut buf = std::io::Cursor::new(Vec::new());
         {
             let mut w = hound::WavWriter::new(&mut buf, spec).unwrap();
@@ -316,12 +311,7 @@ mod tests {
     #[cfg(feature = "voice")]
     #[test]
     fn stereo_44k_is_downmixed_and_resampled() {
-        let spec = hound::WavSpec {
-            channels: 2,
-            sample_rate: 44_100,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
+        let spec = hound::WavSpec { channels: 2, sample_rate: 44_100, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
         let mut buf = std::io::Cursor::new(Vec::new());
         {
             let mut w = hound::WavWriter::new(&mut buf, spec).unwrap();
