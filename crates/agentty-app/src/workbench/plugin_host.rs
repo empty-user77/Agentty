@@ -482,6 +482,17 @@ impl Workbench {
                 let result = self.set_instance_title(&call.plugin, instance, title, cx);
                 call.reply(result.map(|()| Value::Null).map_err(|e| (codes::INVALID_PARAMS, e)), cx);
             }
+            "workspace/openWindow" => {
+                // Windows open only because the user asked: right after they used the plugin.
+                let recent = self.plugin_gesture.get(&call.plugin).is_some_and(|at| at.elapsed() < PLUGIN_GESTURE_WINDOW);
+                if recent {
+                    self.plugin_gesture.remove(&call.plugin);
+                    crate::open_plugin_window(call.plugin.clone(), cx);
+                    call.reply(Ok(Value::Null), cx);
+                } else {
+                    call.reply(Err((codes::PERMISSION_DENIED, "a plugin opens a window only right after the user used it".into())), cx);
+                }
+            }
             "workspace/closeInstance" => {
                 let instance = call.params["instance"].as_str().unwrap_or_default().to_string();
                 let result = self.close_instance(&call.plugin, &instance, window, cx);
@@ -795,6 +806,20 @@ impl Workbench {
         match link::parse(url) {
             Err(error) => self.set_status(tf(cx, "plugins.link_failed", &[("name", &error)]), cx),
             Ok(Link::Store { plugin }) => self.open_plugins_page(plugin, cx),
+            Ok(Link::Open { plugin, new_window }) => match plugins::plugin(cx, &plugin) {
+                Some(installed) if installed.active() => {
+                    if new_window {
+                        crate::open_plugin_window(plugin, cx);
+                    } else {
+                        self.show_plugin(&plugin, window, cx);
+                    }
+                }
+                Some(_) => {
+                    self.open_plugins_page(Some(plugin.clone()), cx);
+                    self.plugins_page.message = Some((tf(cx, "plugins.link_disabled", &[("name", &plugin)]), true));
+                }
+                None => self.set_status(tf(cx, "plugins.link_unknown", &[("name", &plugin)]), cx),
+            },
             Ok(Link::Prompt(mut request)) => {
                 request.target = PromptTarget::Ask;
                 // Any website can open a link: the text is typed in for the user to read and send

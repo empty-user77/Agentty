@@ -144,6 +144,8 @@ text     { text, style? }                  style: body | title | muted | small |
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
 input    { id, placeholder?, value?, rows?, mono? }
          mono: monospace font (API 4)
+         completions (API 4): [{ label, insert?, detail? }] suggested for the word being typed;
+         a {{ before it and }} after it are replaced too
          rows > 1: a text area that many lines tall (max 24); Enter adds a
          line and a paste keeps its line breaks
 list     { id, items, empty? }
@@ -162,6 +164,7 @@ API 4:
 card     { children, title?, subtitle?, icon?, tone? }   a raised box; tone colors the icon and edge
 grid     { children, columns?, gap?, widths? }      equal columns (1–6, default 2), wrapping onto new rows
          widths: per column, "240px" fixed or "2" a share — replaces columns
+         id?, resizable? (API 4): the first fixed column can be dragged; resize with the width
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
          closable: a close button that sends close
          children: the picked tab's content only

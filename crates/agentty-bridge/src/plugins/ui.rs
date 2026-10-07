@@ -65,6 +65,11 @@ pub enum Node {
         /// Drawn in the monospace font: code, JSON, a script (API 4).
         #[serde(default)]
         mono: bool,
+        /// Suggestions for the word being typed, shown under the field: any that contain it
+        /// (case aside) are listed, ↑ ↓ pick, Enter or Tab inserts. A `{{` right before the word
+        /// and a `}}` right after it are replaced too, so `{{base` becomes `{{baseUrl}}` (API 4).
+        #[serde(default)]
+        completions: Vec<Completion>,
     },
     /// Rows with a title, optional subtitle and per-row buttons. Clicking a row sends `select`.
     List {
@@ -140,6 +145,14 @@ pub enum Node {
         /// twice the share of a `"1"` — a sidebar beside a page is `["240px", "1"]` (API 4).
         #[serde(default)]
         widths: Vec<String>,
+        /// Names the grid for `resize` events.
+        #[serde(default)]
+        id: Option<String>,
+        /// The first fixed column gets a handle on its right edge: dragging it resizes the
+        /// column, and sends `resize` with the new width in pixels once the drag ends, for the
+        /// plugin to keep (API 4).
+        #[serde(default)]
+        resizable: bool,
     },
     /// A tab strip. The plugin sends only the picked tab's content as `children`; picking another
     /// sends `change` with its id (API 4).
@@ -409,6 +422,23 @@ pub struct ItemAction {
     pub tooltip: Option<String>,
 }
 
+/// One suggestion of an `input`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Completion {
+    /// What is matched against the word typed, and shown.
+    pub label: String,
+    /// What replaces the word (and the braces around it); the label when left out.
+    #[serde(default)]
+    pub insert: Option<String>,
+    /// A hint on the right: the variable's value, where it comes from.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+/// Suggestions an `input` may carry.
+pub const MAX_COMPLETIONS: usize = 500;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChoiceOption {
     pub value: String,
@@ -547,9 +577,17 @@ impl Node {
                     }
                 }
             }
-            Node::Input { value, placeholder, .. } => {
+            Node::Input { value, placeholder, completions, .. } => {
                 cut(value);
                 cut(placeholder);
+                completions.truncate(MAX_COMPLETIONS);
+                more(count, completions.len())?;
+                for completion in completions {
+                    cut(&mut completion.label);
+                    for text in [completion.insert.as_mut(), completion.detail.as_mut()].into_iter().flatten() {
+                        cut(text);
+                    }
+                }
             }
             Node::Button { label, icon, .. } => {
                 cut(label);
@@ -583,7 +621,10 @@ impl Node {
                     child.check(depth + 1, count)?;
                 }
             }
-            Node::Grid { children, columns, widths, .. } => {
+            Node::Grid { children, columns, widths, id, .. } => {
+                if let Some(id) = id.as_mut() {
+                    cut(id);
+                }
                 widths.truncate(MAX_COLUMNS);
                 for width in widths.iter_mut() {
                     cut(width);
@@ -703,9 +744,13 @@ impl Node {
     /// Every input's id and plugin-provided value, for syncing text fields.
     pub fn inputs(&self, out: &mut Vec<InputField>) {
         match self {
-            Node::Input { id, placeholder, value, rows, .. } => {
-                out.push(InputField { id: id.clone(), placeholder: placeholder.clone(), value: value.clone(), rows: (*rows).min(MAX_ROWS) })
-            }
+            Node::Input { id, placeholder, value, rows, completions, .. } => out.push(InputField {
+                id: id.clone(),
+                placeholder: placeholder.clone(),
+                value: value.clone(),
+                rows: (*rows).min(MAX_ROWS),
+                completions: completions.clone(),
+            }),
             _ => self.children().iter().for_each(|c| c.inputs(out)),
         }
     }
@@ -718,6 +763,56 @@ pub struct InputField {
     pub value: String,
     /// More than one: a text area of that many lines.
     pub rows: usize,
+    pub completions: Vec<Completion>,
+}
+
+/// The word a suggestion would replace, with the cursor at `cursor`: its range in `text` (a `{{`
+/// before it and a `}}` after it included) and the word itself. None when the cursor is not at
+/// the end of a word, or of a `{{` just typed.
+pub fn completion_word(text: &str, cursor: usize) -> Option<(std::ops::Range<usize>, &str)> {
+    if cursor > text.len() || !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '$');
+    let before = &text[..cursor];
+    let start = before.char_indices().rev().take_while(|(_, c)| is_word(*c)).last().map_or(cursor, |(i, _)| i);
+    // The cursor in the middle of a word is editing it, not finishing it.
+    if text[cursor..].chars().next().is_some_and(is_word) {
+        return None;
+    }
+    let word = &text[start..cursor];
+    let braced = before[..start].ends_with("{{");
+    if word.is_empty() && !braced {
+        return None;
+    }
+    let from = if braced { start - 2 } else { start };
+    let to = if braced && text[cursor..].starts_with("}}") { cursor + 2 } else { cursor };
+    Some((from..to, word))
+}
+
+/// The suggestions that fit `word`, best first: those starting with it, then those holding it.
+/// Typed without braces a word takes two letters before anything is offered; one that is already
+/// a whole suggestion offers nothing.
+pub fn matching_completions<'a>(completions: &'a [Completion], word: &str, braced: bool) -> Vec<&'a Completion> {
+    if !braced && word.chars().count() < 2 {
+        return Vec::new();
+    }
+    let lower = word.to_lowercase();
+    let mut starts = Vec::new();
+    let mut holds = Vec::new();
+    for completion in completions {
+        let label = completion.label.to_lowercase();
+        if label == lower && !braced {
+            return Vec::new();
+        }
+        if label.starts_with(&lower) {
+            starts.push(completion);
+        } else if label.contains(&lower) {
+            holds.push(completion);
+        }
+    }
+    starts.extend(holds);
+    starts
 }
 
 #[cfg(test)]
@@ -749,6 +844,27 @@ mod tests {
         let Node::Column { children, .. } = &tree else { panic!("not a column") };
         let Node::List { items, .. } = &children[2] else { panic!("not a list") };
         assert_eq!((items[0].tone, items[1].tone), (Tone::Neutral, Tone::Success));
+    }
+
+    #[test]
+    fn the_word_a_suggestion_replaces() {
+        let text = "{{base}}/users";
+        assert_eq!(completion_word(text, 6), Some((0..8, "base")), "braces on both sides go");
+        assert_eq!(completion_word("{{ba", 4), Some((0..4, "ba")));
+        assert_eq!(completion_word("{{", 2), Some((0..2, "")), "a brace pair alone lists everything");
+        assert_eq!(completion_word("http://ho", 9), Some((7..9, "ho")));
+        assert_eq!(completion_word("abc", 1), None, "inside a word");
+        assert_eq!(completion_word("a ", 2), None);
+        let all = vec![
+            Completion { label: "baseUrl".into(), insert: Some("{{baseUrl}}".into()), detail: None },
+            Completion { label: "authBase".into(), insert: None, detail: None },
+            Completion { label: "token".into(), insert: None, detail: None },
+        ];
+        let labels = |found: Vec<&Completion>| found.iter().map(|c| c.label.clone()).collect::<Vec<_>>();
+        assert_eq!(labels(matching_completions(&all, "base", true)), ["baseUrl", "authBase"], "prefix first");
+        assert_eq!(labels(matching_completions(&all, "", true)).len(), 3);
+        assert!(matching_completions(&all, "b", false).is_empty(), "one letter without braces is too little");
+        assert!(matching_completions(&all, "token", false).is_empty(), "already whole");
     }
 
     #[test]

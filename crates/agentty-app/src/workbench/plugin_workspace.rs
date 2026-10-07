@@ -87,6 +87,24 @@ impl Workbench {
         }
     }
 
+    /// A window opened for `plugin` alone: its workspace in front, and the empty terminal a new
+    /// window starts with gone, so the window is the plugin and nothing else.
+    pub fn open_plugin_alone(&mut self, plugin: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let before: Vec<u64> = self.workspaces.iter().filter(|ws| ws.plugin.is_none()).map(|ws| ws.id).collect();
+        self.open_plugin_workspace(plugin, window, cx);
+        // Only a fresh window's own starting workspace, never one the user had (a reused slot).
+        if before.len() == 1 && self.plugin_workspace(plugin).is_some() {
+            let untouched = self.workspaces.iter().find(|ws| ws.id == before[0]).is_some_and(|ws| ws.tabs.len() == 1 && ws.name.is_none());
+            if untouched {
+                self.close_workspace(before[0], window, cx);
+                if let Some(index) = self.plugin_workspace(plugin) {
+                    self.activate_workspace(index, window, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
     /// Another place was chosen while a plugin's workspace is current (behind a page or not): back to
     /// the workspace the user came from, any of theirs, or — with none — the start page. The plugin
     /// is not told to stop: its automations go on out of sight.
@@ -239,7 +257,10 @@ impl Workbench {
                 open.chain(asleep).chain(closed).map(|i| i.id.clone())
             })
             .collect();
-        TabInstance { id: unused_instance_id(&taken, || self.next_id()), title: None }
+        // Windows count their ids from the same start: another window's tabs get a prefix, so two
+        // windows never hand the plugin the same automation.
+        let prefix = if self.slot == 0 { "a".to_string() } else { format!("w{}a", self.slot) };
+        TabInstance { id: unused_instance_id(&taken, &prefix, || self.next_id()), title: None }
     }
 
     /// The automation in front, when `plugin`'s workspace is.
@@ -626,9 +647,9 @@ impl Workbench {
 }
 
 /// The first `a<n>` from `next` that is not in `taken`.
-fn unused_instance_id(taken: &std::collections::HashSet<String>, mut next: impl FnMut() -> u64) -> String {
+fn unused_instance_id(taken: &std::collections::HashSet<String>, prefix: &str, mut next: impl FnMut() -> u64) -> String {
     loop {
-        let id = format!("a{}", next());
+        let id = format!("{prefix}{}", next());
         if !taken.contains(&id) {
             return id;
         }
@@ -645,11 +666,12 @@ mod tests {
         // After a restart the counter starts low again while tabs a3..a5 came back from the layout.
         let taken: HashSet<String> = ["a3", "a4", "a5"].map(String::from).into_iter().collect();
         let mut counter = 3;
-        let id = unused_instance_id(&taken, || {
+        let id = unused_instance_id(&taken, "a", || {
             counter += 1;
             counter
         });
         assert_eq!(id, "a6");
-        assert_eq!(unused_instance_id(&HashSet::new(), || 7), "a7");
+        assert_eq!(unused_instance_id(&HashSet::new(), "a", || 7), "a7");
+        assert_eq!(unused_instance_id(&HashSet::new(), "w2a", || 7), "w2a7", "another window's tabs");
     }
 }

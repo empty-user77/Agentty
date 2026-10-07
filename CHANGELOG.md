@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Plugin panels for real tools, continued: text fields suggest as you type (`completions` — the
+  variables of an API client from `{{` or a few letters), a grid's sidebar column can be dragged
+  wider or narrower (`resizable`, the width sent back to keep), and a plugin can open itself in an
+  Agentty window of its own (`workspace/openWindow`, or the link `agentty://open/<id>?window=new`).
 - Plugin panels have eleven new elements (plugin API 4): cards, grids, tabs, tables, label/value
   lists, stats, progress bars, callouts, drop-downs, checkboxes and code blocks with syntax colors
   and a copy button.

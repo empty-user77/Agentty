@@ -653,6 +653,9 @@ pub struct Workbench {
     /// it as the user closing the panel.
     plugin_windows_closing: std::collections::HashSet<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
+    /// Widths the user dragged a plugin grid's resizable column to, by (plugin, grid id), and the
+    /// drag's count so only its last move is sent to the plugin.
+    plugin_grid_widths: HashMap<(String, String), (f32, u64)>,
     /// The `select` of a plugin panel whose options are showing: (input scope, element id).
     plugin_select_open: Option<(String, String)>,
     /// Colors of the `code` blocks plugin panels show, by their text and language.
@@ -911,6 +914,7 @@ impl Workbench {
             plugin_windows_opening: std::collections::HashSet::new(),
             plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),
+            plugin_grid_widths: HashMap::new(),
             plugin_select_open: None,
             plugin_code_colors: Default::default(),
             plugin_grammars_loading: false,

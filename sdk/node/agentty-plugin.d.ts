@@ -15,6 +15,7 @@ export type FlowState = 'off' | 'on' | 'active' | 'done' | 'error';
 export interface ItemAction { id: string; label?: string; icon?: string; tooltip?: string }
 export interface ListItem { id: string; title: string; subtitle?: string; detail?: string; icon?: string; tone?: Tone; actions?: ItemAction[]; depth?: number; tag?: string; tagTone?: Tone }
 export interface ChoiceOption { value: string; label: string }
+export interface Completion { label: string; insert?: string; detail?: string }
 export interface FlowStep { id: string; title: string; subtitle?: string; icon?: string; state?: FlowState; selected?: boolean; side?: boolean }
 export interface TabItem { id: string; label: string; icon?: string; badge?: string; closable?: boolean }
 export interface TableColumn { label: string; align?: Align; grow?: number }
@@ -27,7 +28,7 @@ export type UiNode =
   | { type: 'section'; title: string; children: UiNode[] }
   | { type: 'text'; text: string; style?: TextStyle }
   | { type: 'button'; id: string; label: string; icon?: string; variant?: Variant; disabled?: boolean }
-  | { type: 'input'; id: string; placeholder?: string; value?: string; rows?: number; mono?: boolean }
+  | { type: 'input'; id: string; placeholder?: string; value?: string; rows?: number; mono?: boolean; completions?: Completion[] }
   | { type: 'list'; id: string; items: ListItem[]; empty?: string }
   | { type: 'choice'; id: string; options: ChoiceOption[]; value?: string }
   | { type: 'toggle'; id: string; label: string; value?: boolean }
@@ -38,7 +39,7 @@ export type UiNode =
   | { type: 'popover'; id: string; title: string; children: UiNode[] }
   // API 4
   | { type: 'card'; children: UiNode[]; title?: string; subtitle?: string; icon?: string; tone?: Tone }
-  | { type: 'grid'; children: UiNode[]; columns?: number; gap?: Gap; widths?: string[] }
+  | { type: 'grid'; children: UiNode[]; columns?: number; gap?: Gap; widths?: string[]; id?: string; resizable?: boolean }
   | { type: 'tabs'; id: string; tabs: TabItem[]; value: string; children: UiNode[] }
   | { type: 'table'; id: string; columns: TableColumn[]; rows: TableRow[]; empty?: string; selected?: string }
   | { type: 'keyValue'; items: KeyValueItem[] }
@@ -213,6 +214,8 @@ export interface Plugin {
   setInstanceTitle(instance: string, title: string): Promise<void>;
   /** Closes one of the plugin's own automations (its tab), e.g. after the user deleted it. */
   closeInstance(instance: string): Promise<void>;
+  /** Another Agentty window with the plugin's workspace in front (right after the user used the plugin). */
+  openWindow(): Promise<void>;
   onInstanceOpen(handler: (event: { instance: string; title: string | null }) => unknown): Plugin;
   onInstanceClose(handler: (event: { instance: string }) => unknown): Plugin;
   showPanel(): Promise<void>;

@@ -65,11 +65,12 @@ when you don't care.
 | `workspace/setInstanceTitle` | | `{ instance, title }` | `null` — what the automation's tab is called |
 | `workspace/setInstanceStatus` | | `{ instance?, state: "working" \| "idle" \| "error", text? }` — `instance` omitted or empty is the plugin's panel outside a workspace; `text` is a short one-line status (max 120 characters), e.g. `"Collecting @sama (3/6)"` | `null` — what the automation (or the plugin, with no workspace) is doing, shown next to its workspace card and in the menu bar popover without opening it |
 | `workspace/closeInstance` | | `{ instance }` | `null` — closes that automation's tab (one of the plugin's own, open); it is not offered among the recently closed tabs |
+| `workspace/openWindow` | | `{}` | `null` — another Agentty window with the plugin's workspace in front and nothing else, for the plugin on its own beside the user's work; only right after the user used the plugin (a click in its panel), else a permission error |
 | `ui/showPanel` | | `{}` | `null` |
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
 | `context/get` | | `{}` | context |
-| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`, and from API 4 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`, and the fields `gridWidths`, `listTree` (list `depth` / `tag`), `tabClose` and `monoInput`), missing on older Agentty |
+| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`, and from API 4 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`, and the fields `gridWidths`, `listTree` (list `depth` / `tag`), `tabClose`, `monoInput`, `completions`, `gridResize` and `openWindow`), missing on older Agentty |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
@@ -415,7 +416,13 @@ button   { id, label, icon?, variant?, disabled? }   variant: primary | secondar
 input    { id, placeholder?, value?, rows?, mono? }
                                             rows > 1: a text area that many lines tall (max 24);
                                             Enter adds a line and a paste keeps its line breaks;
-                                            mono (API 4): the monospace font, for code and JSON
+                                            mono (API 4): the monospace font, for code and JSON;
+                                            completions (API 4): [{ label, insert?, detail? }]
+                                            listed under a one-line field while a word that one
+                                            of them contains is typed (two letters, or any after
+                                            {{); ↑ ↓ pick, Enter / Tab insert `insert` (the label
+                                            if left out) in place of the word and of a {{ before
+                                            it and a }} after it — variables in a URL
 list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }], depth?, tag?, tagTone? }], empty? }
                                             item tone colors its icon (same values as badge);
                                             API 4: depth indents the row (0–8) for a tree, tag is a
@@ -439,7 +446,10 @@ API 4:
 card     { children, title?, subtitle?, icon?, tone? }   a raised box; tone colors the icon and edge
 grid     { children, columns?, gap?, widths? }   equal columns (1–6, default 2), wrapping onto
                                             new rows; widths sets each column instead: "240px"
-                                            fixed (40–1200), "2" twice the share of a "1"
+                                            fixed (40–1200), "2" twice the share of a "1";
+                                            id + resizable: the first fixed column gets a handle
+                                            the user drags (160–720), and resize comes back with
+                                            the width in pixels for the plugin to keep
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
                                             children: the picked tab's content only; closable
                                             draws a close button, which sends close
@@ -460,7 +470,7 @@ Events: `button` → `click`; `input` → `change` / `submit` with `value`; `lis
 `item`, row buttons → `action` with `item` and `action`; `choice` → `change` with the option value;
 `toggle` → `change` with the new boolean; `flow` → `select` with the step's id as `item`; `popover` → `close` from its close button.
 From API 4: `tabs` → `change` with the tab's id, and `close` with the tab's id as `value` from a `closable` tab's button; `table` → `select` with the row's id as `item`;
-`select` → `change` with the option's value; `checkbox` → `change` with the new boolean.
+`select` → `change` with the option's value; `checkbox` → `change` with the new boolean; a resizable `grid` → `resize` with the column's width in pixels as `value`.
 
 Which element to use for what, and whole screens to start from: the **UI Gallery** plugin (it
 comes with Agentty) and https://www.agentty.run/docs/plugin-ui-guide.

@@ -220,6 +220,25 @@ impl TextInput {
         &self.content
     }
 
+    /// Where the caret is, in bytes.
+    pub fn cursor(&self) -> usize {
+        self.cursor_offset()
+    }
+
+    /// Puts `text` in place of `range` (bytes) and the caret after it: a suggestion picked.
+    pub fn replace_range(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
+        let end = range.end.min(self.content.len());
+        let start = range.start.min(end);
+        if !self.content.is_char_boundary(start) || !self.content.is_char_boundary(end) {
+            return;
+        }
+        self.content = (self.content[..start].to_owned() + text + &self.content[end..]).into();
+        self.selected_range = start + text.len()..start + text.len();
+        self.marked_range = None;
+        cx.emit(TextInputEvent::Changed);
+        cx.notify();
+    }
+
     /// Gives this field the keyboard and selects what is in it (⌘L in the browser's address bar).
     pub fn focus_and_select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);

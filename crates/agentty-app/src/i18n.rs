@@ -1952,6 +1952,7 @@ strings! {
     "plugins.disable" => ["Disable", "사용 안 함", "無効にする", "停用"],
     "plugins.open_panel" => ["Open Panel", "패널 열기", "パネルを開く", "打开面板"],
     "plugins.restart" => ["Restart", "재시작", "再起動", "重新启动"],
+    "plugins.open_window" => ["Open in a new window", "새 창으로 열기", "新しいウインドウで開く", "在新窗口中打开"],
     "plugins.ui.copy" => ["Copy", "복사", "コピー", "复制"],
     "plugins.ui.copied" => ["Copied", "복사됨", "コピーしました", "已复制"],
     "plugins.ui.choose" => ["Choose…", "선택…", "選択…", "选择…"],

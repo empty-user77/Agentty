@@ -914,6 +914,23 @@ pub fn new_window(cx: &mut App) {
     }
 }
 
+/// Opens another Agentty window with `plugin`'s workspace in front, as if its icon was pressed
+/// there: the plugin on its own, in a window the user places where they like.
+pub fn open_plugin_window(plugin: String, cx: &mut App) {
+    cx.defer(move |cx| {
+        let slot = NEXT_WINDOW_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(handle) = open_window(slot, cx) else {
+            eprintln!("agentty: could not open window {slot}");
+            return;
+        };
+        metrics::track(cx, "window_opened", serde_json::json!({ "plugin": true }));
+        let _ = handle.update(cx, |workbench, window, cx| {
+            workbench.open_plugin_alone(&plugin, window, cx);
+            window.activate_window();
+        });
+    });
+}
+
 /// Opens a recently closed window again, or brings it forward if it is already open.
 pub(crate) fn reopen_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench>> {
     if let Some(open) = workbenches(cx).into_iter().find(|w| w.read(cx).is_ok_and(|wb| wb.slot == slot)) {

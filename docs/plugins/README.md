@@ -349,6 +349,7 @@ Agentty registers `agentty://`:
 | `agentty://plugin/<id>/<path>?key=value` | starts plugin `<id>` and calls its `onUrl(path)` handler with the query |
 | `agentty://prompt?text=…&title=…&agent=…&cwd=…` | opens **Send to…** with the text (`file=` attaches an absolute `.md`/`.txt` path) |
 | `agentty://plugins/<id>` | opens the Plugins page at that plugin |
+| `agentty://open/<id>` | brings up the plugin (its workspace, or its panel); `?window=new` in an Agentty window of its own |
 
 From a shell: `open "agentty://plugin/cosmica/continue?path=%2FUsers%2Fme%2FNote%2Fa.md"`. From
 Electron: `shell.openExternal(url)`; from Swift: `NSWorkspace.shared.open(url)`. Encode every value

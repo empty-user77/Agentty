@@ -144,6 +144,8 @@ text     { text, style? }                  style: body | title | muted | small |
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
 input    { id, placeholder?, value?, rows?, mono? }
          mono: 等宽字体 (API 4)
+         completions (API 4): [{ label, insert?, detail? }] 正在输入的词的补全建议，
+         前面的 {{ 和后面的 }} 一并替换
          rows > 1：该行数的文本域（最多 24）；回车换行，粘贴保留换行
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
@@ -161,6 +163,7 @@ API 4:
 card     { children, title?, subtitle?, icon?, tone? }   浮起的方框；tone 决定图标和边框颜色
 grid     { children, columns?, gap?, widths? }      等宽的列（1–6，默认 2），放不下时换到下一行
          widths: 每列 "240px"（固定）或 "2"（比例）— 代替 columns
+         id?, resizable? (API 4): 拖动第一个固定列调整宽度，结束后发送 resize（宽度）
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
          closable: 关闭按钮，点击发送 close
          children：只放选中标签页的内容

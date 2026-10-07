@@ -144,6 +144,8 @@ text     { text, style? }                  style: body | title | muted | small |
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
 input    { id, placeholder?, value?, rows?, mono? }
          mono: 고정폭 글꼴 (API 4)
+         completions (API 4): [{ label, insert?, detail? }] 입력 중인 단어의 자동완성.
+         앞의 {{ 와 뒤의 }} 도 함께 바뀝니다
          rows > 1: 그만큼의 줄을 가진 텍스트 영역(최대 24). Enter는 줄을
          바꾸고, 붙여넣기는 줄바꿈을 유지합니다
 list     { id, items, empty? }
@@ -162,6 +164,7 @@ API 4:
 card     { children, title?, subtitle?, icon?, tone? }   떠 있는 상자. tone은 아이콘과 테두리 색
 grid     { children, columns?, gap?, widths? }      같은 폭의 열(1–6, 기본 2), 넘치면 다음 줄로
          widths: 열마다 "240px"(고정) 또는 "2"(비율) — columns 대신
+         id?, resizable? (API 4): 첫 고정 열을 끌어서 폭 조절, 끝나면 resize(폭)
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
          closable: 닫기 버튼, 누르면 close
          children: 선택된 탭의 내용만

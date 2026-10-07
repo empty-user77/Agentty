@@ -33,7 +33,36 @@ pub struct PluginInput {
     generation: u64,
     /// Enter was pressed and the plugin has not answered yet.
     submitted: bool,
+    /// What the plugin suggests for the word being typed.
+    pub completions: Vec<agentty_bridge::plugins::ui::Completion>,
+    /// The suggestions on screen under the field.
+    pub suggest: Option<Suggest>,
     _subscription: Subscription,
+}
+
+/// Suggestions shown under a field: the range they replace, which of the plugin's completions fit
+/// (best first), and the one ↑ ↓ are on.
+pub struct Suggest {
+    pub range: std::ops::Range<usize>,
+    pub items: Vec<usize>,
+    pub selected: usize,
+}
+
+/// Rows of suggestions shown at once.
+pub(super) const MAX_SUGGESTIONS: usize = 8;
+
+/// The suggestions for a field showing `text` with the caret at `cursor`.
+fn suggest_for(completions: &[agentty_bridge::plugins::ui::Completion], text: &str, cursor: usize) -> Option<Suggest> {
+    use agentty_bridge::plugins::ui::{completion_word, matching_completions};
+    if completions.is_empty() {
+        return None;
+    }
+    let (range, word) = completion_word(text, cursor)?;
+    let braced = text[range.clone()].starts_with("{{");
+    let found = matching_completions(completions, word, braced);
+    let items: Vec<usize> =
+        found.iter().take(MAX_SUGGESTIONS).filter_map(|c| completions.iter().position(|o| std::ptr::eq(o, *c))).collect();
+    (!items.is_empty()).then_some(Suggest { range, items, selected: 0 })
 }
 
 /// A popover's card: wide enough for a step's settings, and scrolling past this height.
@@ -133,9 +162,10 @@ impl Workbench {
         }
         let scope = self.plugin_input_scope(&plugin, cx);
         self.plugin_inputs.retain(|(owner, id), _| *owner == scope && fields.iter().any(|field| field.id == *id));
-        for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows } in fields {
+        for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows, completions } in fields {
             let key = (scope.clone(), id.clone());
             if let Some(existing) = self.plugin_inputs.get_mut(&key) {
+                existing.completions = completions;
                 existing.input.update(cx, |i, cx| i.set_placeholder(placeholder.clone(), cx));
                 let input = existing.input.clone();
                 let typed = input.read(cx).text().to_string();
@@ -156,6 +186,57 @@ impl Workbench {
             let subscription = cx.subscribe(&input, move |this, input, event: &TextInputEvent, cx| {
                 let text = input.read(cx).text().to_string();
                 let key = (scope.clone(), element.clone());
+                // Suggestions open take the keys that move through and pick them.
+                let suggesting = this.plugin_inputs.get(&key).is_some_and(|f| f.suggest.is_some());
+                match event {
+                    TextInputEvent::Up | TextInputEvent::Down if suggesting => {
+                        if let Some(suggest) = this.plugin_inputs.get_mut(&key).and_then(|f| f.suggest.as_mut()) {
+                            let n = suggest.items.len();
+                            suggest.selected = if matches!(event, TextInputEvent::Up) {
+                                (suggest.selected + n - 1) % n
+                            } else {
+                                (suggest.selected + 1) % n
+                            };
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    TextInputEvent::Confirmed | TextInputEvent::Next if suggesting => {
+                        let selected = this.plugin_inputs.get(&key).and_then(|f| f.suggest.as_ref()).map_or(0, |s| s.selected);
+                        this.apply_plugin_completion(&key, selected, cx);
+                        return;
+                    }
+                    TextInputEvent::Cancelled if suggesting => {
+                        if let Some(field) = this.plugin_inputs.get_mut(&key) {
+                            field.suggest = None;
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    TextInputEvent::Blurred if suggesting => {
+                        // Later, so a click on a suggestion (which takes the focus) still lands.
+                        let key = key.clone();
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(Duration::from_millis(200)).await;
+                            let _ = this.update(cx, |this, cx| {
+                                if let Some(field) = this.plugin_inputs.get_mut(&key) {
+                                    field.suggest = None;
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                        return;
+                    }
+                    _ => {}
+                }
+                if matches!(event, TextInputEvent::Changed) {
+                    let cursor = input.read(cx).cursor();
+                    if let Some(field) = this.plugin_inputs.get_mut(&key) {
+                        // The plugin putting its value in (another tab picked) is not typing.
+                        field.suggest = if text == field.from_plugin { None } else { suggest_for(&field.completions, &text, cursor) };
+                    }
+                }
                 match event {
                     TextInputEvent::Confirmed => {
                         // The plugin now has this text: a value it sends back that differs (an
@@ -217,10 +298,23 @@ impl Workbench {
                     applied: value,
                     generation: 0,
                     submitted: false,
+                    completions,
+                    suggest: None,
                     _subscription: subscription,
                 },
             );
         }
+    }
+
+    /// Puts suggestion `index` (of those on screen) into the field, in place of the word typed.
+    pub(super) fn apply_plugin_completion(&mut self, key: &(String, String), index: usize, cx: &mut Context<Self>) {
+        let Some(field) = self.plugin_inputs.get_mut(key) else { return };
+        let Some(suggest) = field.suggest.take() else { return };
+        let Some(completion) = suggest.items.get(index).and_then(|i| field.completions.get(*i)) else { return };
+        let text = completion.insert.clone().unwrap_or_else(|| completion.label.clone());
+        let input = field.input.clone();
+        input.update(cx, |i, cx| i.replace_range(suggest.range, &text, cx));
+        cx.notify();
     }
 
     /// Sends the plugin any typing it has not seen yet, right before a button, list action,
@@ -267,6 +361,16 @@ impl Workbench {
         let panel_logo = agentty_bridge::plugins::store::logo_file(&plugin);
 
         let restart_id = plugin_id.clone();
+        let window_id = plugin_id.clone();
+        // A plugin with a workspace of its own can have a window of its own too.
+        let pop_out = self.wants_workspace(&plugin_id, cx).then(|| {
+            crate::ui::icon_only(
+                "plugin-panel-window",
+                "external-link",
+                cx.listener(move |_, _: &ClickEvent, _, cx| crate::open_plugin_window(window_id.clone(), cx)),
+            )
+            .tooltip(Tooltip::text(t(cx, "plugins.open_window"), None))
+        });
         let header = div()
             .h(px(36.))
             .flex_shrink_0()
@@ -298,6 +402,7 @@ impl Workbench {
                 )
                 .tooltip(Tooltip::text(t(cx, "plugins.restart"), None)),
             )
+            .children(pop_out)
             .child(
                 crate::ui::icon_only(
                     "plugin-panel-layout",

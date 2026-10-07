@@ -164,6 +164,10 @@ export function createPlugin(streams = {}) {
     closeInstance(instance) {
       return call('workspace/closeInstance', { instance });
     },
+    /** Another Agentty window with the plugin's workspace in front (right after the user used the plugin). */
+    openWindow() {
+      return call('workspace/openWindow', {});
+    },
     /** A new automation (tab) in the plugin's workspace, or one that exists when the plugin starts: handler({ instance, title }). */
     onInstanceOpen(handler) {
       listeners.instanceOpen.push(handler);

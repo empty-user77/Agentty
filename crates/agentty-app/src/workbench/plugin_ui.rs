@@ -20,6 +20,20 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+/// Dragging a plugin grid's column edge. Which grid is in the handler's own closure; the payload
+/// only has to exist for GPUI to track the drag.
+#[derive(Clone, Copy)]
+pub struct PluginGridDrag;
+
+impl gpui::Render for PluginGridDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// The narrowest and widest a resizable column is dragged to.
+const RESIZE_RANGE: (f32, f32) = (160., 720.);
+
 /// Behind fields, code and the track of a bar: a step darker than the panel.
 const SUNKEN: u32 = 0x1a1a1d;
 /// Cards and stats: a step lighter than the panel.
@@ -210,6 +224,49 @@ impl Workbench {
         colors
     }
 
+    /// The bar on a resizable grid column's right edge, in the gap beside it: dragging it moves the
+    /// edge, and the plugin hears the width once the drag pauses.
+    fn grid_resize_handle(&self, plugin: &str, grid: &str, current: f32, gap: gpui::Pixels, cx: &mut Context<Self>) -> impl IntoElement {
+        let (owner, element) = (plugin.to_string(), grid.to_string());
+        let half = f32::from(gap) / 2.;
+        div()
+            .id(SharedString::from(format!("plugin-grid-resize-{plugin}-{grid}")))
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(-half - 3.))
+            .w(px(6.))
+            .flex()
+            .justify_center()
+            .cursor(gpui::CursorStyle::ResizeLeftRight)
+            .group("grid-resize")
+            .child(div().w(px(1.)).h_full().bg(hex(Chrome::BORDER)).group_hover("grid-resize", |s| s.w(px(2.)).bg(hex(Chrome::ACCENT))))
+            .on_drag(PluginGridDrag, |_, _, _, cx| cx.new(|_| PluginGridDrag))
+            .on_drag_move(cx.listener(move |this, event: &gpui::DragMoveEvent<PluginGridDrag>, _, cx| {
+                // How far the pointer is from the bar drawn in the last frame.
+                let delta = f32::from(event.event.position.x) - (f32::from(event.bounds.origin.x) + 3.);
+                if delta.abs() < 0.5 {
+                    return;
+                }
+                let key = (owner.clone(), element.clone());
+                let (width, count) = this.plugin_grid_widths.get(&key).copied().unwrap_or((current, 0));
+                let width = (width + delta).clamp(RESIZE_RANGE.0, RESIZE_RANGE.1).round();
+                this.plugin_grid_widths.insert(key.clone(), (width, count + 1));
+                cx.notify();
+                let (owner, element) = (owner.clone(), element.clone());
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.plugin_grid_widths.get(&key).is_some_and(|(_, c)| *c == count + 1) {
+                            let event = UiEvent { element, event: "resize".into(), value: Some(width.into()), item: None, action: None };
+                            this.send_plugin_event(&owner, event, cx);
+                        }
+                    });
+                })
+                .detach();
+            }))
+    }
+
     pub(super) fn render_plugin_node(&self, plugin: &str, node: &Node, path: &mut Vec<usize>, cx: &mut Context<Self>) -> AnyElement {
         let key = |id: &str, path: &[usize]| SharedString::from(format!("plugin-{plugin}-{id}-{path:?}"));
         match node {
@@ -305,8 +362,10 @@ impl Workbench {
                     .child(label.clone())
                     .into_any_element()
             }
-            Node::Input { id, rows, mono, .. } => match self.plugin_inputs.get(&(self.plugin_input_scope(plugin, cx), id.clone())) {
-                Some(field) => div()
+            Node::Input { id, rows, mono, .. } => {
+                let scope = self.plugin_input_scope(plugin, cx);
+                let Some(field) = self.plugin_inputs.get(&(scope.clone(), id.clone())) else { return div().into_any_element() };
+                let boxed = div()
                     .w_full()
                     .when(*mono, |d| d.font_family(MONO))
                     .px_2p5()
@@ -318,10 +377,78 @@ impl Workbench {
                     .bg(hex(SUNKEN))
                     .t_small()
                     .text_color(hex(Chrome::BRIGHT))
-                    .child(div().w_full().child(field.input.clone()))
-                    .into_any_element(),
-                None => div().into_any_element(),
-            },
+                    .child(div().w_full().child(field.input.clone()));
+                let Some(suggest) = field.suggest.as_ref() else { return boxed.into_any_element() };
+                let mut menu = div()
+                    .id(SharedString::from(format!("plugin-suggest-{plugin}-{id}")))
+                    .w(px(380.))
+                    .p_1()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hex(Chrome::OVERLAY_BORDER))
+                    .bg(hex(RAISED))
+                    .shadow_lg()
+                    .occlude();
+                for (row, index) in suggest.items.iter().enumerate() {
+                    let Some(completion) = field.completions.get(*index) else { continue };
+                    let active = row == suggest.selected;
+                    let key = (scope.clone(), id.clone());
+                    menu = menu.child(
+                        div()
+                            .id(SharedString::from(format!("plugin-suggest-{plugin}-{id}-{row}")))
+                            .h(px(26.))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .when(active, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.28)))
+                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    let input = this.plugin_inputs.get(&key).map(|f| f.input.clone());
+                                    this.apply_plugin_completion(&key, row, cx);
+                                    if let Some(input) = input {
+                                        window.focus(&gpui::Focusable::focus_handle(&input, cx));
+                                    }
+                                    cx.stop_propagation();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .max_w(px(200.))
+                                    .truncate()
+                                    .font_family(MONO)
+                                    .t_small()
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .child(completion.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_right()
+                                    .t_caption()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .child(completion.detail.clone().unwrap_or_default()),
+                            ),
+                    );
+                }
+                let anchored = gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(menu);
+                div()
+                    .w_full()
+                    .relative()
+                    .child(boxed)
+                    .child(div().absolute().left_0().top(px(CONTROL_HEIGHT + 4.)).child(gpui::deferred(anchored).with_priority(3)))
+                    .into_any_element()
+            }
             Node::List { id, items, empty } => {
                 if items.is_empty() {
                     return empty_state(empty.clone().unwrap_or_else(|| t(cx, "plugins.ui.no_rows").to_string())).into_any_element();
@@ -588,25 +715,41 @@ impl Workbench {
                     })
                     .into_any_element()
             }
-            Node::Grid { children, columns, gap: g, widths } => {
+            Node::Grid { children, columns, gap: g, widths, id: grid_id, resizable } => {
                 let columns = (*columns).max(1);
-                let widths: Vec<GridWidth> =
+                let mut widths: Vec<GridWidth> =
                     (0..columns).map(|i| widths.get(i).map_or(GridWidth::Share(1), |w| GridWidth::parse(w))).collect();
-                // A fixed column keeps its width; the others share what is left, by their weight.
+                // The column the user drags: the first fixed one, at the width they left it.
+                let handle = grid_id.as_ref().filter(|_| *resizable).and_then(|grid| {
+                    let column = widths.iter().position(|w| matches!(w, GridWidth::Px(_)))?;
+                    if let Some((dragged, _)) = self.plugin_grid_widths.get(&(plugin.to_string(), grid.clone())) {
+                        widths[column] = GridWidth::Px(*dragged);
+                    }
+                    Some((column, grid.clone()))
+                });
+                let shares: u32 = widths.iter().map(|w| if let GridWidth::Share(s) = w { *s } else { 0 }).sum::<u32>().max(1);
+                // A fixed column keeps its width; the others start at their share of the row and
+                // give back what the fixed columns and gaps take. A share is a definite width, not
+                // a basis of nothing: text in a cell is measured against it, where a basis of zero
+                // had it wrap a character a line.
                 let cell = |column: usize| match widths[column] {
                     GridWidth::Px(px_width) => div().w(px(px_width)).flex_shrink_0().min_w_0(),
-                    GridWidth::Share(share) => div().flex_grow().flex_basis(px(0.)).min_w_0().map(|d| {
-                        let mut d = d;
-                        d.style().flex_grow = Some(share as f32);
-                        d
-                    }),
+                    GridWidth::Share(share) => div().flex_basis(relative(share as f32 / shares as f32)).flex_shrink().min_w_0(),
                 };
                 let mut grid = div().flex().flex_col().gap(gap(*g)).min_w_0();
                 for (row_index, chunk) in children.chunks(columns).enumerate() {
                     let mut row = div().flex().items_start().gap(gap(*g)).min_w_0();
                     for (offset, child) in chunk.iter().enumerate() {
                         path.push(row_index * columns + offset);
-                        row = row.child(cell(offset).flex().flex_col().child(self.render_plugin_node(plugin, child, path, cx)));
+                        let mut column = cell(offset).flex().flex_col().child(self.render_plugin_node(plugin, child, path, cx));
+                        if let Some((resized, grid)) = handle.as_ref().filter(|(c, _)| row_index == 0 && *c == offset) {
+                            let current = match widths[*resized] {
+                                GridWidth::Px(w) => w,
+                                GridWidth::Share(_) => RESIZE_RANGE.0,
+                            };
+                            column = column.relative().child(self.grid_resize_handle(plugin, grid, current, gap(*g), cx));
+                        }
+                        row = row.child(column);
                         path.pop();
                     }
                     // The last row keeps the others' column widths.
@@ -1057,7 +1200,15 @@ impl Workbench {
         let mut container = container;
         for (index, child) in children.iter().enumerate() {
             path.push(index);
-            container = container.child(self.render_plugin_node(plugin, child, path, cx));
+            let rendered = self.render_plugin_node(plugin, child, path, cx);
+            // Text takes the column's width. Measured on its own in a narrow place (a grid cell, a
+            // card in a sidebar) it shrinks to its narrowest wrap — a character a line for Korean,
+            // Japanese and Chinese — and spills into the column beside it.
+            container = container.child(if matches!(child, Node::Text { .. }) {
+                div().w_full().min_w_0().child(rendered).into_any_element()
+            } else {
+                rendered
+            });
             path.pop();
         }
         container

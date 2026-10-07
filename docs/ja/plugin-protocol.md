@@ -144,6 +144,8 @@ text     { text, style? }                  style: body | title | muted | small |
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
 input    { id, placeholder?, value?, rows?, mono? }
          mono: 等幅フォント (API 4)
+         completions (API 4): [{ label, insert?, detail? }] 入力中の単語の候補。
+         前の {{ と後ろの }} も置き換えます
          rows > 1: その行数のテキストエリア（最大 24）。Enter は改行し、
          貼り付けは改行を保ちます
 list     { id, items, empty? }
@@ -162,6 +164,7 @@ API 4:
 card     { children, title?, subtitle?, icon?, tone? }   浮いた箱。tone はアイコンと縁の色
 grid     { children, columns?, gap?, widths? }      等幅の列（1–6、既定 2）、あふれたら次の行へ
          widths: 列ごとに "240px"（固定）か "2"（比率）— columns の代わり
+         id?, resizable? (API 4): 最初の固定列をドラッグで幅変更、resize（幅）を送信
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
          closable: 閉じるボタン、押すと close
          children: 選ばれたタブの中身だけ
