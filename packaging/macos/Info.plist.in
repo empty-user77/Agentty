@@ -58,5 +58,7 @@
     <string>Copyright © Agentty contributors. Apache-2.0.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Agentty shows notifications when coding agents finish or need your input.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Agentty lets coding agents in your terminals use voice dictation, which records from your microphone.</string>
 </dict>
 </plist>

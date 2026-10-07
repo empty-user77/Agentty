@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Voice dictation in an agent that records from the microphone (for example Claude Code or Codex
+  `/voice`) now works inside Agentty's terminals: the app carries the microphone entitlement and
+  usage description, so macOS asks for microphone access the first time instead of silently
+  denying it.
+
 ## [0.2.13] - 2026-10-03
 
 ### Added
