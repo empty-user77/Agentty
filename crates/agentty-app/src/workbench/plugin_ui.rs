@@ -44,6 +44,29 @@ impl gpui::Render for PluginTabStripDrag {
     }
 }
 
+/// A `flow` step being dragged to a new place: its flow (`plugin/element`), id and title.
+#[derive(Clone)]
+pub struct PluginFlowDrag {
+    flow: String,
+    step: String,
+    title: String,
+}
+
+impl gpui::Render for PluginFlowDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(hex(Chrome::ACCENT))
+            .bg(hex(RAISED))
+            .t_small()
+            .text_color(hex(Chrome::BRIGHT))
+            .child(self.title.clone())
+    }
+}
+
 /// The narrowest and widest a resizable column is dragged to.
 const RESIZE_RANGE: (f32, f32) = (160., 720.);
 
@@ -53,6 +76,10 @@ const SUNKEN: u32 = 0x1a1a1d;
 const RAISED: u32 = 0x27272b;
 /// Secondary buttons.
 const CONTROL: u32 = 0x2e2e33;
+/// Height of a tab strip, its rule included: two strips side by side draw it on one line.
+const TAB_STRIP_HEIGHT: f32 = 36.;
+/// Row buttons shown on hover; the rest go in a "more" menu.
+const INLINE_ROW_ACTIONS: usize = 3;
 /// Height of a button, a select and a one-line field, so a row of them lines up.
 const CONTROL_HEIGHT: f32 = 28.;
 const MONO: &str = "JetBrains Mono";
@@ -142,7 +169,7 @@ fn select_width(options: &[agentty_bridge::plugins::ui::ChoiceOption], placehold
 
 /// Whether the tree shows a `code` block (and so needs the grammars).
 pub(super) fn has_code(node: &Node) -> bool {
-    matches!(node, Node::Code { .. }) || node.children().iter().any(has_code)
+    matches!(node, Node::Code { .. } | Node::Input { language: Some(_), .. }) || node.children().iter().any(has_code)
 }
 
 /// The extension a `code` block's language reads as, for finding its grammar.
@@ -238,6 +265,171 @@ impl Workbench {
         }
         cache.insert(key, colors.clone());
         colors
+    }
+
+    /// A menu under the control it belongs to, while it is the open one (`key`): each entry sends
+    /// its event when picked. Placed against the control's right edge when `right`.
+    fn plugin_menu(
+        &self,
+        plugin: &str,
+        key: &str,
+        entries: Vec<(String, Option<String>, UiEvent)>,
+        right: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if self.plugin_tab_menu.as_deref() != Some(key) {
+            return None;
+        }
+        let mut menu = div()
+            .id(SharedString::from(format!("plugin-menu-{key}")))
+            .min_w(px(180.))
+            .p_1()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .rounded_md()
+            .border_1()
+            .border_color(hex(Chrome::OVERLAY_BORDER))
+            .bg(hex(RAISED))
+            .shadow_lg()
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if let Some(closed) = this.plugin_tab_menu.take() {
+                    this.plugin_menu_closed = Some((closed, Instant::now()));
+                }
+                cx.notify();
+            }));
+        for (index, (label, glyph, event)) in entries.into_iter().enumerate() {
+            let owner = plugin.to_string();
+            menu = menu.child(
+                div()
+                    .id(SharedString::from(format!("plugin-menu-{key}-{index}")))
+                    .h(px(28.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_sm()
+                    .t_small()
+                    .text_color(hex(Chrome::BRIGHT))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.plugin_tab_menu = None;
+                        this.flush_plugin_inputs(&owner, cx);
+                        this.send_plugin_event(&owner, event.clone(), cx);
+                        cx.notify();
+                    }))
+                    .when_some(glyph.as_deref(), |d, g| d.child(icon(icon_named(Some(g)), IconSize::INLINE, hex(Chrome::MUTED))))
+                    .child(label),
+            );
+        }
+        let corner = if right { gpui::Corner::TopRight } else { gpui::Corner::TopLeft };
+        let anchored = gpui::anchored().anchor(corner).snap_to_window_with_margin(px(8.)).child(menu);
+        let place = div().absolute().top(px(CONTROL_HEIGHT + 4.));
+        Some(if right { place.right_0() } else { place.left_0() }.child(self.overlay(anchored)).into_any_element())
+    }
+
+    /// The gap between two `flow` steps: the line joining them, and on hover "+ block" in the
+    /// middle of a dashed rule, which opens the flow's insert menu.
+    #[allow(clippy::too_many_arguments)]
+    fn flow_gap(
+        &self,
+        plugin: &str,
+        id: &str,
+        after: &str,
+        index: usize,
+        lit: bool,
+        insert_menu: &[agentty_bridge::plugins::ui::ChoiceOption],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let line = div().w(px(2.)).h_full().bg(if lit { hex_alpha(Chrome::SUCCESS, 0.55) } else { hex(Chrome::BORDER) });
+        if insert_menu.is_empty() {
+            return div().ml(px(FLOW_LINE_LEFT)).h(px(12.)).child(line).into_any_element();
+        }
+        let key = format!("flowins:{plugin}/{id}/{after}");
+        let open = self.plugin_tab_menu.as_deref() == Some(key.as_str());
+        let group = SharedString::from(format!("plugin-flow-gap-{plugin}-{id}-{index}"));
+        let entries = insert_menu
+            .iter()
+            .map(|o| {
+                let event = UiEvent {
+                    element: id.to_string(),
+                    event: "insert".into(),
+                    value: Some(o.value.clone().into()),
+                    item: Some(after.to_string()),
+                    action: None,
+                };
+                (o.label.clone(), None, event)
+            })
+            .collect();
+        let rule = || div().flex_1().h(px(1.)).border_t_1().border_dashed().border_color(hex_alpha(Chrome::ACCENT, 0.6));
+        let control = div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(!open, |d| d.invisible().group_hover(group.clone(), |s| s.visible()))
+            .child(rule())
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("plugin-flow-insert-{plugin}-{id}-{index}")))
+                            .h(px(20.))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(hex_alpha(Chrome::ACCENT, 0.6))
+                            .bg(hex(Chrome::PANEL))
+                            .t_caption()
+                            .text_color(hex(Chrome::BRIGHT))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                            .on_click(cx.listener(Self::toggle_plugin_menu(key.clone())))
+                            .child(icon("plus", IconSize::INLINE, hex(Chrome::ACCENT)))
+                            .child(t(cx, "plugins.ui.add_block").to_string()),
+                    )
+                    .children(self.plugin_menu(plugin, &key, entries, false, cx)),
+            )
+            .child(rule());
+        div()
+            .id(group.clone())
+            .group(group)
+            .relative()
+            .h(px(22.))
+            .child(div().ml(px(FLOW_LINE_LEFT)).h_full().child(line))
+            .child(control)
+            .into_any_element()
+    }
+
+    /// A menu or a list of suggestions over everything else: deferred, unless it is in a popover,
+    /// which is deferred itself.
+    fn overlay(&self, anchored: gpui::Anchored) -> AnyElement {
+        if self.plugin_in_popover.get() {
+            anchored.into_any_element()
+        } else {
+            gpui::deferred(anchored).with_priority(3).into_any_element()
+        }
+    }
+
+    /// Opens or closes the menu `key`.
+    fn toggle_plugin_menu(key: String) -> impl Fn(&mut Workbench, &ClickEvent, &mut Window, &mut Context<Workbench>) + 'static {
+        move |this, _, _, cx| {
+            cx.stop_propagation();
+            // Pressing the button of an open menu closes it: the press outside the menu already
+            // did, and this click is the same press.
+            let just_closed = this.plugin_menu_closed.take().is_some_and(|(k, at)| k == key && at.elapsed() < Duration::from_millis(400));
+            this.plugin_tab_menu =
+                if just_closed || this.plugin_tab_menu.as_deref() == Some(key.as_str()) { None } else { Some(key.clone()) };
+            cx.notify();
+        }
     }
 
     /// The bar on a resizable grid column's right edge, in the gap beside it: dragging it moves the
@@ -356,7 +548,7 @@ impl Workbench {
                 .child(text.clone())
                 .into_any_element()
             }
-            Node::Button { id, label, icon: glyph, variant, disabled } => {
+            Node::Button { id, label, icon: glyph, variant, disabled, menu } => {
                 let (bg, hover, border, fg) = match variant {
                     Variant::Primary => (hex(Chrome::ACCENT), lighten(Chrome::ACCENT, 0.12), hex(Chrome::ACCENT), hex(Chrome::BRIGHT)),
                     Variant::Secondary => (hex(CONTROL), lighten(CONTROL, 0.06), hex(Chrome::OVERLAY_BORDER), hex(Chrome::BRIGHT)),
@@ -367,7 +559,9 @@ impl Workbench {
                 };
                 // An icon alone is a square: the padding of a labelled button spread icons apart.
                 let icon_only = label.trim().is_empty() && glyph.is_some();
-                div()
+                let menu_key = format!("button:{plugin}/{id}");
+                let has_menu = !menu.is_empty();
+                let button = div()
                     .id(key(id, path))
                     .flex_shrink_0()
                     .h(px(CONTROL_HEIGHT))
@@ -385,7 +579,7 @@ impl Workbench {
                     .bg(bg)
                     .text_color(fg)
                     .when(*disabled, |d| d.opacity(0.4))
-                    .when(!*disabled, |d| {
+                    .when(!*disabled && !has_menu, |d| {
                         d.cursor_pointer().hover(move |s| s.bg(hover)).on_click(cx.listener(emit(
                             plugin.to_string(),
                             id.clone(),
@@ -394,13 +588,49 @@ impl Workbench {
                             None,
                         )))
                     })
+                    .when(!*disabled && has_menu, |d| {
+                        d.cursor_pointer().hover(move |s| s.bg(hover)).on_click(cx.listener(Self::toggle_plugin_menu(menu_key.clone())))
+                    })
                     .children(glyph.as_deref().map(|g| icon(icon_named(Some(g)), IconSize::INLINE, fg)))
                     .when(!icon_only, |d| d.child(label.clone()))
+                    .when(has_menu && !icon_only, |d| d.child(icon("chevron-down", IconSize::INLINE, fg)));
+                if !has_menu {
+                    return button.into_any_element();
+                }
+                // A button with a menu: picking an entry sends `select` with its value.
+                let entries = menu
+                    .iter()
+                    .map(|o| {
+                        (
+                            o.label.clone(),
+                            None,
+                            UiEvent {
+                                element: id.clone(),
+                                event: "select".into(),
+                                value: Some(o.value.clone().into()),
+                                item: None,
+                                action: None,
+                            },
+                        )
+                    })
+                    .collect();
+                div()
+                    .relative()
+                    .flex_shrink_0()
+                    .child(button)
+                    .children(self.plugin_menu(plugin, &menu_key, entries, false, cx))
                     .into_any_element()
             }
-            Node::Input { id, rows, mono, .. } => {
+            Node::Input { id, rows, mono, language, .. } => {
                 let scope = self.plugin_input_scope(plugin, cx);
                 let Some(field) = self.plugin_inputs.get(&(scope.clone(), id.clone())) else { return div().into_any_element() };
+                // A text area of code is colored as it is typed (the colors are kept per text, so
+                // an unchanged one costs a lookup).
+                if let Some(language) = language.as_deref().filter(|_| *rows > 1) {
+                    let text = field.input.read(cx).text().to_string();
+                    let colors = self.code_colors(&text, Some(language));
+                    field.input.update(cx, |input, cx| input.set_colors(colors, cx));
+                }
                 let boxed = div()
                     .w_full()
                     .when(*mono, |d| d.font_family(MONO))
@@ -485,7 +715,7 @@ impl Workbench {
                     .w_full()
                     .relative()
                     .child(boxed)
-                    .child(div().absolute().left_0().top(px(CONTROL_HEIGHT + 4.)).child(gpui::deferred(anchored).with_priority(3)))
+                    .child(div().absolute().left_0().top(px(CONTROL_HEIGHT + 4.)).child(self.overlay(anchored)))
                     .into_any_element()
             }
             Node::List { id, items, empty } => {
@@ -500,7 +730,11 @@ impl Workbench {
                     let mut actions =
                         div().absolute().top_0().bottom_0().right(px(4.)).pl_2().flex().items_center().gap_0p5().bg(hex(Chrome::HOVER));
                     let has_actions = !item.actions.is_empty();
-                    for (action_index, action) in item.actions.iter().enumerate() {
+                    // Its "more" menu open, the row keeps its buttons while the pointer is on the menu.
+                    let menu_open = self.plugin_tab_menu.as_deref() == Some(format!("row:{plugin}/{id}/{}", item.id).as_str());
+                    // The first few on the row, the rest behind "more".
+                    let inline = if item.actions.len() > INLINE_ROW_ACTIONS + 1 { INLINE_ROW_ACTIONS } else { item.actions.len() };
+                    for (action_index, action) in item.actions.iter().enumerate().take(inline) {
                         let (owner, element, item_id, action_id) = (plugin.to_string(), id.clone(), item.id.clone(), action.id.clone());
                         let mut button = div()
                             .id(SharedString::from(format!("plugin-row-action-{plugin}-{id}-{index}-{action_index}")))
@@ -534,6 +768,41 @@ impl Workbench {
                             button = button.tooltip(Tooltip::text(tooltip, None));
                         }
                         actions = actions.child(button);
+                    }
+                    if inline < item.actions.len() {
+                        let menu_key = format!("row:{plugin}/{id}/{}", item.id);
+                        let entries = item.actions[inline..]
+                            .iter()
+                            .map(|a| {
+                                let label = a.label.clone().or_else(|| a.tooltip.clone()).unwrap_or_else(|| a.id.clone());
+                                let event = UiEvent {
+                                    element: id.clone(),
+                                    event: "action".into(),
+                                    value: None,
+                                    item: Some(item.id.clone()),
+                                    action: Some(a.id.clone()),
+                                };
+                                (label, a.icon.clone(), event)
+                            })
+                            .collect();
+                        actions = actions.child(
+                            div()
+                                .relative()
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("plugin-row-more-{plugin}-{id}-{index}")))
+                                        .px_1()
+                                        .h(px(22.))
+                                        .flex()
+                                        .items_center()
+                                        .rounded_sm()
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(hex(Chrome::SELECTED)))
+                                        .on_click(cx.listener(Self::toggle_plugin_menu(menu_key.clone())))
+                                        .child(icon("ellipsis", IconSize::INLINE, hex(Chrome::FOREGROUND))),
+                                )
+                                .children(self.plugin_menu(plugin, &menu_key, entries, true, cx)),
+                        );
                     }
                     list = list.child(
                         div()
@@ -590,7 +859,9 @@ impl Workbench {
                                             .map(|d| div().t_caption().text_color(hex_alpha(Chrome::MUTED, 0.8)).truncate().child(d)),
                                     ),
                             )
-                            .when(has_actions, |d| d.child(actions.invisible().group_hover(group, |s| s.visible()))),
+                            .when(has_actions, |d| {
+                                d.child(if menu_open { actions } else { actions.invisible().group_hover(group, |s| s.visible()) })
+                            }),
                     );
                 }
                 list.into_any_element()
@@ -646,18 +917,15 @@ impl Workbench {
             Node::Divider => div().my_1().h(px(1.)).w_full().bg(hex(Chrome::BORDER)).into_any_element(),
             // Drawn beside the panel (`render_plugin_popover`), not in its flow.
             Node::Popover { .. } => div().into_any_element(),
-            Node::Flow { id, steps } => {
+            Node::Flow { id, steps, reorderable, insert_menu } => {
                 // Cards top to bottom, each joined to the next by a short line under its icon: the
                 // line is faint where the step it leads to is off.
+                let flow_key = format!("{plugin}/{id}");
                 let mut flow = div().flex().flex_col().min_w_0();
                 for (index, step) in steps.iter().enumerate() {
                     if index > 0 {
                         let lit = step.state != FlowState::Off && steps[index - 1].state != FlowState::Off;
-                        flow = flow.child(div().ml(px(FLOW_LINE_LEFT)).w(px(2.)).h(px(12.)).bg(if lit {
-                            hex_alpha(Chrome::SUCCESS, 0.55)
-                        } else {
-                            hex(Chrome::BORDER)
-                        }));
+                        flow = flow.child(self.flow_gap(plugin, id, &steps[index - 1].id, index, lit, insert_menu, cx));
                     }
                     let color = match step.state {
                         FlowState::Off => Chrome::MUTED,
@@ -691,6 +959,27 @@ impl Workbench {
                             .hover(|s| s.bg(hex(Chrome::HOVER)))
                             .when(step.state == FlowState::Off, |d| d.opacity(0.55))
                             .on_click(cx.listener(emit(plugin.to_string(), id.clone(), "select", None, Some(step.id.clone()))))
+                            .when(*reorderable, |d| {
+                                let drag = PluginFlowDrag { flow: flow_key.clone(), step: step.id.clone(), title: step.title.clone() };
+                                let (owner, element, target, key) = (plugin.to_string(), id.clone(), step.id.clone(), flow_key.clone());
+                                d.on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                                    .drag_over::<PluginFlowDrag>(|s, _, _, _| {
+                                        s.border_color(hex(Chrome::ACCENT)).bg(hex_alpha(Chrome::ACCENT, 0.12))
+                                    })
+                                    .on_drop(cx.listener(move |this, drag: &PluginFlowDrag, _, cx| {
+                                        if drag.flow != key || drag.step == target {
+                                            return;
+                                        }
+                                        let event = UiEvent {
+                                            element: element.clone(),
+                                            event: "move".into(),
+                                            value: Some(target.clone().into()),
+                                            item: Some(drag.step.clone()),
+                                            action: None,
+                                        };
+                                        this.send_plugin_event(&owner, event, cx);
+                                    }))
+                            })
                             .child(icon_tile(step.icon.as_deref(), FLOW_ICON, color))
                             .child(
                                 div()
@@ -713,6 +1002,10 @@ impl Workbench {
                                 _ => d.child(icon("chevron-right", IconSize::INLINE, hex(Chrome::MUTED))),
                             }),
                     );
+                }
+                // After the last step too, so a block can be added at the end.
+                if let Some(last) = steps.last().filter(|_| !insert_menu.is_empty()) {
+                    flow = flow.child(self.flow_gap(plugin, id, &last.id, steps.len(), false, insert_menu, cx));
                 }
                 flow.into_any_element()
             }
@@ -755,7 +1048,7 @@ impl Workbench {
                     })
                     .into_any_element()
             }
-            Node::Grid { children, columns, gap: g, widths, id: grid_id, resizable, fill } => {
+            Node::Grid { children, columns, gap: g, widths, id: grid_id, resizable, fill, align } => {
                 let columns = (*columns).max(1);
                 let mut widths: Vec<GridWidth> =
                     (0..columns).map(|i| widths.get(i).map_or(GridWidth::Share(1), |w| GridWidth::parse(w))).collect();
@@ -783,8 +1076,13 @@ impl Workbench {
                     // Filling, the first row is the panel's height and each of its cells scrolls
                     // by itself.
                     let filling = *fill && row_index == 0;
-                    let mut row =
-                        div().flex().gap(gap(*g)).min_w_0().when(!filling, |d| d.items_start()).when(filling, |d| d.flex_1().min_h_0());
+                    let mut row = div()
+                        .flex()
+                        .gap(gap(*g))
+                        .min_w_0()
+                        .when(!filling && *align == Align::Center, |d| d.items_center())
+                        .when(!filling && *align != Align::Center, |d| d.items_start())
+                        .when(filling, |d| d.flex_1().min_h_0());
                     for (offset, child) in chunk.iter().enumerate() {
                         path.push(row_index * columns + offset);
                         let rendered = self.render_plugin_node(plugin, child, path, cx);
@@ -944,89 +1242,56 @@ impl Workbench {
                             }),
                     );
                 }
-                let menu_key = format!("{plugin}/{id}");
+                let menu_key = format!("tab:{plugin}/{id}");
                 let add = (!add_menu.is_empty()).then(|| {
                     let open = self.plugin_tab_menu.as_deref() == Some(menu_key.as_str());
-                    let toggle_key = menu_key.clone();
-                    let mut button = div().relative().flex_shrink_0().child(
-                        div()
-                            .id(SharedString::from(format!("plugin-tab-add-{plugin}-{id}")))
-                            .size(px(CONTROL_HEIGHT))
-                            .mb_0p5()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(open, |d| d.bg(hex(Chrome::HOVER)))
-                            .hover(|s| s.bg(hex(Chrome::HOVER)))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.plugin_tab_menu = if this.plugin_tab_menu.as_deref() == Some(toggle_key.as_str()) {
-                                    None
-                                } else {
-                                    Some(toggle_key.clone())
-                                };
-                                cx.notify();
-                            }))
-                            .child(icon("plus", IconSize::INLINE, hex(Chrome::FOREGROUND))),
-                    );
-                    if open {
-                        let mut menu = div()
-                            .id(SharedString::from(format!("plugin-tab-menu-{plugin}-{id}")))
-                            .min_w(px(200.))
-                            .p_1()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(hex(Chrome::OVERLAY_BORDER))
-                            .bg(hex(RAISED))
-                            .shadow_lg()
-                            .occlude()
-                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                this.plugin_tab_menu = None;
-                                cx.notify();
-                            }));
-                        for (index, option) in add_menu.iter().enumerate() {
-                            let (owner, element, value) = (plugin.to_string(), id.clone(), option.value.clone());
-                            menu = menu.child(
-                                div()
-                                    .id(SharedString::from(format!("plugin-tab-menu-{plugin}-{id}-{index}")))
-                                    .h(px(28.))
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .rounded_sm()
-                                    .t_small()
-                                    .text_color(hex(Chrome::BRIGHT))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(hex(Chrome::HOVER)))
-                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        this.plugin_tab_menu = None;
-                                        this.flush_plugin_inputs(&owner, cx);
-                                        let event = UiEvent {
-                                            element: element.clone(),
-                                            event: "add".into(),
-                                            value: Some(value.clone().into()),
-                                            item: None,
-                                            action: None,
-                                        };
-                                        this.send_plugin_event(&owner, event, cx);
-                                        cx.notify();
-                                    }))
-                                    .child(option.label.clone()),
-                            );
-                        }
-                        let anchored = gpui::anchored().anchor(gpui::Corner::TopRight).snap_to_window_with_margin(px(8.)).child(menu);
-                        button = button.child(
-                            div().absolute().right_0().top(px(CONTROL_HEIGHT + 4.)).child(gpui::deferred(anchored).with_priority(3)),
-                        );
-                    }
-                    button
+                    let entries = add_menu
+                        .iter()
+                        .map(|o| {
+                            (
+                                o.label.clone(),
+                                None,
+                                UiEvent {
+                                    element: id.clone(),
+                                    event: "add".into(),
+                                    value: Some(o.value.clone().into()),
+                                    item: None,
+                                    action: None,
+                                },
+                            )
+                        })
+                        .collect();
+                    div()
+                        .relative()
+                        .flex_shrink_0()
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("plugin-tab-add-{plugin}-{id}")))
+                                .size(px(CONTROL_HEIGHT))
+                                .mb_0p5()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .when(open, |d| d.bg(hex(Chrome::HOVER)))
+                                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                                .on_click(cx.listener(Self::toggle_plugin_menu(menu_key.clone())))
+                                .child(icon("plus", IconSize::INLINE, hex(Chrome::FOREGROUND))),
+                        )
+                        .children(self.plugin_menu(plugin, &menu_key, entries, true, cx))
                 });
-                let strip =
-                    div().flex().items_end().gap_1().min_w_0().border_b_1().border_color(hex(Chrome::BORDER)).child(strip).children(add);
+                let strip = div()
+                    .h(px(TAB_STRIP_HEIGHT))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_end()
+                    .gap_1()
+                    .min_w_0()
+                    .border_b_1()
+                    .border_color(hex(Chrome::BORDER))
+                    .child(strip)
+                    .children(add);
                 let content_fills = children.iter().any(Node::fills_height);
                 let content = self.render_plugin_children(
                     plugin,
@@ -1327,7 +1592,7 @@ impl Workbench {
                         .child(menu);
                     let anchored =
                         gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(div().mt_1().child(card));
-                    div().absolute().top(px(CONTROL_HEIGHT)).left_0().child(gpui::deferred(anchored).with_priority(3))
+                    div().absolute().top(px(CONTROL_HEIGHT)).left_0().child(self.overlay(anchored))
                 });
                 // A column, so the trigger is stretched: as a block its width was not settled when
                 // the label was laid out, and the arrow sat right after the words.
@@ -1379,13 +1644,26 @@ impl Workbench {
                 let copy = crate::ui::icon_only(
                     SharedString::from(format!("plugin-code-copy-{plugin}-{path:?}")),
                     "copy",
-                    move |_: &ClickEvent, _: &mut Window, cx: &mut gpui::App| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()))
-                    },
+                    // Says so: a copy button that does nothing visible looks broken.
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()));
+                        this.show_toast(t(cx, "plugins.ui.copied").to_string(), cx);
+                    }),
                 )
                 .tooltip(Tooltip::text(t(cx, "plugins.ui.copy"), None));
                 let caption = title.clone().or_else(|| language.clone());
                 let group = SharedString::from(format!("plugin-code-{plugin}-{path:?}"));
+                // Long lines scroll sideways: a trackpad, Shift and the wheel, or dragging the code.
+                let scroll_key = format!("code:{plugin}/{path:?}");
+                let scroll = self
+                    .plugin_tab_strips
+                    .borrow_mut()
+                    .entry(scroll_key.clone())
+                    .or_insert_with(|| (gpui::ScrollHandle::new(), String::new()))
+                    .0
+                    .clone();
+                let dragged = scroll.clone();
+                let bar_handle = scroll.clone();
                 div()
                     .group(group.clone())
                     .relative()
@@ -1413,15 +1691,45 @@ impl Workbench {
                         None => d.child(div().absolute().top_1().right_1().invisible().group_hover(group, |s| s.visible()).child(copy)),
                     })
                     .child(
+                        // A bar along the bottom while the pointer is over a block wider than its
+                        // place: dragged with any mouse.
                         div()
-                            .id(SharedString::from(format!("plugin-code-body-{plugin}-{path:?}")))
-                            .px_3()
-                            .py_2p5()
-                            .overflow_x_scroll()
-                            .font_family(MONO)
-                            .t_small()
-                            .text_color(hex(highlight::FOREGROUND))
-                            .child(div().whitespace_nowrap().child(styled)),
+                            .relative()
+                            .group(crate::ui::SCROLL_GROUP)
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("plugin-code-body-{plugin}-{path:?}")))
+                                    .px_3()
+                                    .py_2p5()
+                                    // As wide as the block, so a long line scrolls inside it (a trackpad
+                                    // sideways, a wheel with Shift) instead of widening the block.
+                                    .w_full()
+                                    .min_w_0()
+                                    .overflow_x_scroll()
+                                    .track_scroll(&scroll)
+                                    .cursor(gpui::CursorStyle::OpenHand)
+                                    .on_drag(PluginTabStripDrag { strip: scroll_key.clone(), last_x: Rc::default() }, |drag, _, _, cx| {
+                                        cx.new(|_| drag.clone())
+                                    })
+                                    .on_drag_move(cx.listener(move |_, event: &gpui::DragMoveEvent<PluginTabStripDrag>, window, cx| {
+                                        let drag = event.drag(cx);
+                                        if drag.strip != scroll_key {
+                                            return;
+                                        }
+                                        let x = f32::from(event.event.position.x);
+                                        if let Some(last) = drag.last_x.replace(Some(x)) {
+                                            let offset = dragged.offset();
+                                            let max = dragged.max_offset().width;
+                                            dragged.set_offset(gpui::point((offset.x + px(x - last)).clamp(-max, px(0.)), offset.y));
+                                            window.refresh();
+                                        }
+                                    }))
+                                    .font_family(MONO)
+                                    .t_small()
+                                    .text_color(hex(highlight::FOREGROUND))
+                                    .child(div().whitespace_nowrap().child(styled)),
+                            )
+                            .child(crate::ui::scrollbar_h(bar_handle)),
                     )
                     .into_any_element()
             }

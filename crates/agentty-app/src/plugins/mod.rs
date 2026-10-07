@@ -861,7 +861,7 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 // older Agentty without guessing from the version number.
                 "uiFeatures": [
                     "flow", "popover", "card", "grid", "tabs", "table", "keyValue", "stat", "progress", "callout", "select", "checkbox", "code",
-                    "gridWidths", "listTree", "tabClose", "monoInput", "completions", "gridResize", "openWindow", "gridFill", "tabsAdd", "listSelected"
+                    "gridWidths", "listTree", "tabClose", "monoInput", "completions", "gridResize", "openWindow", "gridFill", "tabsAdd", "listSelected", "inputLanguage", "flowReorder", "flowInsert", "buttonMenu"
                 ],
             })),
             cx,

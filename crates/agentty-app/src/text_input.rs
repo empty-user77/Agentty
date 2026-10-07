@@ -100,6 +100,8 @@ pub struct TextInput {
     last_lines: Vec<(usize, ShapedLine)>,
     /// Right-click menu, at the position it was opened.
     menu_at: Option<Point<Pixels>>,
+    /// Syntax colors of a text area (byte range, color), for the text it holds now.
+    colors: std::rc::Rc<Vec<(Range<usize>, u32)>>,
     _blur: Option<gpui::Subscription>,
 }
 
@@ -139,6 +141,7 @@ impl TextInput {
             scroll_line: 0,
             last_lines: Vec::new(),
             menu_at: None,
+            colors: std::rc::Rc::default(),
             _blur: Some(blur),
         }
     }
@@ -218,6 +221,14 @@ impl TextInput {
 
     pub fn text(&self) -> &str {
         &self.content
+    }
+
+    /// Colors a text area's text (code, JSON); the same list again changes nothing.
+    pub fn set_colors(&mut self, colors: std::rc::Rc<Vec<(Range<usize>, u32)>>, cx: &mut Context<Self>) {
+        if !std::rc::Rc::ptr_eq(&self.colors, &colors) {
+            self.colors = colors;
+            cx.notify();
+        }
     }
 
     /// Where the caret is, in bytes.
@@ -777,6 +788,7 @@ impl TextElement {
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = window.line_height();
+        let colors = self.input.read(cx).colors.clone();
         let (content, selected_range, cursor, rows, placeholder) = {
             let input = self.input.read(cx);
             let placeholder = input
@@ -843,7 +855,29 @@ impl TextElement {
                 continue;
             }
             let row_text = &text[start..end];
-            let shaped = shape(window, row_text);
+            let shaped = if placeholder.is_none() && !colors.is_empty() {
+                // The row in its syntax colors: runs cut where the colored stretches begin and end.
+                let mut runs = Vec::new();
+                let mut at = start;
+                let mut push = |len: usize, color| {
+                    if len > 0 {
+                        runs.push(TextRun { len, font: style.font(), color, background_color: None, underline: None, strikethrough: None });
+                    }
+                };
+                for (range, rgb) in colors.iter().filter(|(r, _)| r.end > start && r.start < end) {
+                    let (from, to) = (range.start.max(start), range.end.min(end));
+                    if from < at || !text.is_char_boundary(from) || !text.is_char_boundary(to) {
+                        continue;
+                    }
+                    push(from - at, style.color);
+                    push(to - from, hex(*rgb));
+                    at = to;
+                }
+                push(end - at, style.color);
+                window.text_system().shape_line(SharedString::from(row_text.to_string()), font_size, &runs, None)
+            } else {
+                shape(window, row_text)
+            };
             let top = bounds.top() + line_height * (index - scroll) as f32;
             if placeholder.is_none() {
                 if selected_range.is_empty() {

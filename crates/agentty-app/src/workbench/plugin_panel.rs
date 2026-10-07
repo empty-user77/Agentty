@@ -68,6 +68,9 @@ fn suggest_for(completions: &[agentty_bridge::plugins::ui::Completion], text: &s
 /// A popover's card: wide enough for a step's settings, and scrolling past this height.
 pub(super) const POPOVER_WIDTH: f32 = 380.;
 const POPOVER_MAX_HEIGHT: f32 = 640.;
+/// The window above a popover's body and a margin under it: title bar, panel header, the card's
+/// own heading.
+const POPOVER_TOP_ROOM: f32 = 200.;
 
 /// A tree arrived with `value` for a field showing `typed`: whether that text is replaced by it.
 /// `applied` is what the plugin has seen or set (typing waiting for the pause before it is sent
@@ -127,6 +130,7 @@ impl Workbench {
     }
 
     pub(super) fn prepare_plugin_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.plugin_window_height.set(f32::from(window.viewport_size().height));
         // A plugin's workspace in front whose plugin just came back (turned off and on, updated)
         // gets its panel again: nothing else switches workspaces meanwhile to bring it up.
         self.sync_plugin_workspace(cx);
@@ -639,11 +643,13 @@ impl Workbench {
         // Full width: a text field inside takes the card's width, not its own (none).
         let mut body = div().w_full().flex().flex_col().gap_2().min_w_0();
         let mut path = vec![usize::MAX];
+        self.plugin_in_popover.set(true);
         for (index, child) in children.iter().enumerate() {
             path.push(index);
             body = body.child(self.render_plugin_node(plugin, child, &mut path, cx));
             path.pop();
         }
+        self.plugin_in_popover.set(false);
         let card = div()
             .ml_2()
             .w(px(POPOVER_WIDTH))
@@ -688,7 +694,8 @@ impl Workbench {
                 div()
                     .id(SharedString::from(format!("plugin-popover-body-{plugin}-{id}")))
                     .w_full()
-                    .max_h(px(POPOVER_MAX_HEIGHT))
+                    // What fits under the panel's header in this window, and scrolls past that.
+                    .max_h(px((self.plugin_window_height.get() - POPOVER_TOP_ROOM).clamp(160., POPOVER_MAX_HEIGHT)))
                     .overflow_y_scroll()
                     .p_3()
                     .child(body),

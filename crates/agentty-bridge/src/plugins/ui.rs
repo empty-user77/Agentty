@@ -49,6 +49,10 @@ pub enum Node {
         variant: Variant,
         #[serde(default)]
         disabled: bool,
+        /// Opens these as a menu instead of sending `click`; picking one sends `select` with its
+        /// value (API 4).
+        #[serde(default)]
+        menu: Vec<ChoiceOption>,
     },
     /// Single-line text field: `change` events while typing (debounced), `submit` on Enter.
     Input {
@@ -70,6 +74,10 @@ pub enum Node {
         /// and a `}}` right after it are replaced too, so `{{base` becomes `{{baseUrl}}` (API 4).
         #[serde(default)]
         completions: Vec<Completion>,
+        /// A text area's text colored as this language (`json`, `xml`, `js`, …) while it is
+        /// edited (API 4).
+        #[serde(default)]
+        language: Option<String>,
     },
     /// Rows with a title, optional subtitle and per-row buttons. Clicking a row sends `select`.
     List {
@@ -109,6 +117,14 @@ pub enum Node {
         id: String,
         #[serde(default)]
         steps: Vec<FlowStep>,
+        /// Steps can be dragged onto another: `move` with the dragged step as `item` and the one
+        /// it was dropped on as `value` (API 4).
+        #[serde(default)]
+        reorderable: bool,
+        /// Hovering the gap after a step shows "+": these as a menu, and picking one sends
+        /// `insert` with its value and the step above as `item` (API 4).
+        #[serde(default, rename = "insertMenu")]
+        insert_menu: Vec<ChoiceOption>,
     },
     /// Settings shown in a card beside the panel (over the page next to it) instead of in it:
     /// the one found in the tree is open, none is closed. Its close button sends `close`.
@@ -148,6 +164,9 @@ pub enum Node {
         /// Names the grid for `resize` events.
         #[serde(default)]
         id: Option<String>,
+        /// How cells of a row line up: `start` (default) or `center` — a checkbox beside fields.
+        #[serde(default)]
+        align: Align,
         /// The first fixed column gets a handle on its right edge: dragging it resizes the
         /// column, and sends `resize` with the new width in pixels once the drag ends, for the
         /// plugin to keep (API 4).
@@ -404,7 +423,7 @@ pub struct ListItem {
 /// The deepest a list row is indented.
 pub const MAX_LIST_DEPTH: u8 = 8;
 /// The narrowest and widest a fixed grid column may be, in pixels.
-pub const GRID_PX: (f32, f32) = (40., 1200.);
+pub const GRID_PX: (f32, f32) = (16., 1200.);
 
 /// A grid column's width, as `widths` gives it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -593,9 +612,12 @@ impl Node {
                     }
                 }
             }
-            Node::Input { value, placeholder, completions, .. } => {
+            Node::Input { value, placeholder, completions, language, .. } => {
                 cut(value);
                 cut(placeholder);
+                if let Some(language) = language.as_mut() {
+                    cut(language);
+                }
                 completions.truncate(MAX_COMPLETIONS);
                 more(count, completions.len())?;
                 for completion in completions {
@@ -605,7 +627,12 @@ impl Node {
                     }
                 }
             }
-            Node::Button { label, icon, .. } => {
+            Node::Button { label, icon, menu, .. } => {
+                more(count, menu.len())?;
+                for option in menu.iter_mut() {
+                    cut(&mut option.label);
+                    cut(&mut option.value);
+                }
                 cut(label);
                 if let Some(icon) = icon.as_mut() {
                     cut(icon);
@@ -619,8 +646,12 @@ impl Node {
                 }
             }
             Node::Toggle { label, .. } => cut(label),
-            Node::Flow { steps, .. } => {
-                more(count, steps.len())?;
+            Node::Flow { steps, insert_menu, .. } => {
+                more(count, steps.len() + insert_menu.len())?;
+                for option in insert_menu.iter_mut() {
+                    cut(&mut option.label);
+                    cut(&mut option.value);
+                }
                 for step in steps {
                     cut(&mut step.title);
                     for text in [step.subtitle.as_mut(), step.icon.as_mut()].into_iter().flatten() {
