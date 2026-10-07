@@ -505,12 +505,6 @@ impl Workbench {
         let panel = self.render_plugin_panel_contents(plugin, cx);
         let browser = self.render_browser(cx);
         let has_browser = browser.is_some();
-        let terminals = div()
-            .flex()
-            .flex_col()
-            .min_h_0()
-            .map(|d| if has_browser { d.h(px(terminal_height)).flex_shrink_0() } else { d.flex_1() })
-            .child(div().flex_1().min_h_0().children(main));
         let handle = |id: &'static str, vertical: bool| {
             div()
                 .id(id)
@@ -533,6 +527,42 @@ impl Workbench {
                         .group_hover(id, |d| d.bg(hex(Chrome::ACCENT))),
                 )
         };
+        // A plugin without pages of its own (no `browser.control`: an API client, a dashboard) is its
+        // panel: the panel takes the room, and the tab's terminals come up under it only once a job
+        // runs beside the tab's own shell — a left column of a few hundred pixels and a whole screen
+        // of idle shell was the wrong way round for it.
+        let pages =
+            crate::plugins::plugin(cx, plugin).and_then(|p| p.manifest.as_ref()).is_some_and(|m| m.has_permission("browser.control"));
+        if !pages {
+            let jobs = self
+                .workspaces
+                .get(self.active_workspace)
+                .and_then(|ws| ws.tabs.get(ws.active_tab))
+                .is_some_and(|tab| matches!(tab.root, super::panes::PaneNode::Split { .. }));
+            let body = div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .children(panel.map(|panel| div().flex_1().min_h_0().w_full().child(panel)))
+                .when(jobs, |d| {
+                    d.child(handle("plugin-ws-terminal-edge", false).on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            this.plugin_ws_drag = Some(PluginWorkspaceDrag::Terminals(f32::from(event.position.y), terminal_height));
+                            cx.stop_propagation();
+                        }),
+                    ))
+                    .child(div().h(px(terminal_height)).flex_shrink_0().min_h_0().flex().flex_col().children(main))
+                });
+            return div().flex_1().min_h_0().flex().flex_col().child(self.render_tab_strip(cx)).child(body).into_any_element();
+        }
+        let terminals = div()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .map(|d| if has_browser { d.h(px(terminal_height)).flex_shrink_0() } else { d.flex_1() })
+            .child(div().flex_1().min_h_0().children(main));
         // One tab is one automation: switching it switches the panel, the browser and the
         // terminals below together.
         let body = div()

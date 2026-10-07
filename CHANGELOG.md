@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 - Plugin panels have eleven new elements (plugin API 4): cards, grids, tabs, tables, label/value
   lists, stats, progress bars, callouts, drop-downs, checkboxes and code blocks with syntax colors
   and a copy button.
+- A plugin workspace without pages (a plugin that does not drive the browser) is the plugin's
+  panel across the whole area, with the tab's terminals under it only while a job runs; a
+  drop-down beside a field takes the width of its options instead of half the row.
 - Layout for real tools: a grid's columns can be given widths (`["240px", "1"]` is a sidebar
   beside a page), list rows can be indented as a tree and carry a colored tag (an HTTP method),
   tabs can have a close button, and text fields can use the monospace font for code and JSON.

@@ -381,6 +381,10 @@ and puts the window back as it was — the start page when the user has no works
 Out of sight the plugin and its automations keep running. With every tab closed, the panel offers a
 new automation.
 
+A plugin without `browser.control` has no pages to show, and its workspace is its panel: the panel
+takes the whole area, and a tab's terminals come up under it (their edge can be dragged) only once
+a job runs beside the tab's own shell — an AI session the plugin started with `target: "own"`, say.
+
 In that workspace **a tab is an automation**. Each has its own panel (`ui/setPanel` with its
 `instance`; UI events from it carry the same `instance`), its own browser pages (`browser/open`
 with `instance`: the browser shows the pages of the tab in front, the others keep running out of

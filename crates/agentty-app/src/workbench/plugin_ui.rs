@@ -102,6 +102,14 @@ fn fills_row(node: &Node) -> bool {
     )
 }
 
+/// How wide a drop-down in a row is: its longest label, between a short word and a long name.
+fn select_width(options: &[agentty_bridge::plugins::ui::ChoiceOption], placeholder: Option<&str>) -> f32 {
+    // Wide characters (Korean, Japanese, Chinese) take about two narrow ones.
+    let width = |text: &str| text.chars().map(|c| if c.len_utf8() > 2 { 2.0 } else { 1.0 }).sum::<f32>();
+    let longest = options.iter().map(|o| width(&o.label)).chain(placeholder.map(width)).fold(0.0, f32::max);
+    (longest * 7.2 + 48.).clamp(96., 280.)
+}
+
 /// Whether the tree shows a `code` block (and so needs the grammars).
 pub(super) fn has_code(node: &Node) -> bool {
     matches!(node, Node::Code { .. }) || node.children().iter().any(has_code)
@@ -222,7 +230,15 @@ impl Workbench {
                 for (index, child) in children.iter().enumerate() {
                     path.push(index);
                     let rendered = self.render_plugin_node(plugin, child, path, cx);
-                    row = row.child(if fills_row(child) { div().flex_1().min_w_0().child(rendered).into_any_element() } else { rendered });
+                    row = row.child(match child {
+                        // A drop-down beside a field is a control, not the field: it takes the width
+                        // of its longest option (an HTTP method beside a URL), not half the row.
+                        Node::Select { options, placeholder, .. } => {
+                            div().flex_shrink_0().w(px(select_width(options, placeholder.as_deref()))).child(rendered).into_any_element()
+                        }
+                        _ if fills_row(child) => div().flex_1().min_w_0().child(rendered).into_any_element(),
+                        _ => rendered,
+                    });
                     path.pop();
                 }
                 row.into_any_element()
