@@ -155,11 +155,13 @@ pub fn download_model(m: &Model, mut progress: impl FnMut(u64, u64)) -> Result<(
 }
 
 /// A loaded whisper model, kept alive so repeated prompts do not reload the file each time. Loading
-/// is the slow part; transcription of a short clip is quick once it is in memory.
+/// is the slow part; transcription of a short clip is quick once it is in memory. The context is an
+/// `Arc` so a transcription can clone it and run with the cache lock released — otherwise every
+/// request would serialize behind one lock held for the whole (slow) transcription.
 #[cfg(feature = "voice")]
 struct Loaded {
     path: PathBuf,
-    ctx: whisper_rs::WhisperContext,
+    ctx: std::sync::Arc<whisper_rs::WhisperContext>,
 }
 
 #[cfg(feature = "voice")]
@@ -179,13 +181,17 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
         bail!("voice model {} is not installed", model.id);
     }
 
-    let mut guard = LOADED.lock().unwrap_or_else(|e| e.into_inner());
-    if guard.as_ref().map(|l| l.path != path).unwrap_or(true) {
-        let ctx = WhisperContext::new_with_params(&path.to_string_lossy() as &str, WhisperContextParameters::default())
-            .map_err(|e| anyhow::anyhow!("load voice model: {e}"))?;
-        *guard = Some(Loaded { path: path.clone(), ctx });
-    }
-    let ctx = &guard.as_ref().expect("just set").ctx;
+    // Load (or reload, if the model changed) under the lock, then clone the `Arc` and release it,
+    // so the slow transcription below runs without blocking other requests.
+    let ctx = {
+        let mut guard = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.as_ref().map(|l| l.path != path).unwrap_or(true) {
+            let ctx = WhisperContext::new_with_params(&path.to_string_lossy() as &str, WhisperContextParameters::default())
+                .map_err(|e| anyhow::anyhow!("load voice model: {e}"))?;
+            *guard = Some(Loaded { path: path.clone(), ctx: std::sync::Arc::new(ctx) });
+        }
+        guard.as_ref().expect("just set").ctx.clone()
+    };
 
     let mut state = ctx.create_state().map_err(|e| anyhow::anyhow!("voice state: {e}"))?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });

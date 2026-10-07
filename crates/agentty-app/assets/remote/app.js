@@ -273,6 +273,9 @@ function onOverview(data) {
   state.sessions = sessions;
   state.plugins = data.plugins || [];
   state.voice = !!data.voice;
+  // If a recording is running and its terminal just closed, or voice was turned off, stop the mic
+  // — its button is about to be hidden, which would otherwise leave no way to stop it.
+  if (recorder && (!state.voice || !sessions.some((s) => s.pane === state.pane))) stopRecording();
   if (!state.started) {
     state.started = true;
     return pickStart();
@@ -347,6 +350,7 @@ function selectPane(pane) {
 
 function switchPane(pane) {
   const changed = pane !== state.pane;
+  if (changed) stopRecording(); // don't let a recording carry over to another terminal
   state.pane = pane;
   if (changed) {
     state.rows = [];
@@ -1095,29 +1099,71 @@ function setupPrompt() {
 // the person stops recording, and the transcript only fills the box — it is never auto-sent.
 
 let recorder = null; // { stream, ctx, node, source, chunks, rate } while recording
+let voiceStarting = false; // guards the getUserMedia await against a second tap
 
 function setupVoice() {
   const btn = $("mic-button");
   btn.setAttribute("aria-label", T.micStart);
   btn.title = T.micStart;
-  btn.addEventListener("click", async () => {
-    if (btn.disabled) return;
-    if (recorder) {
-      await finishVoice(btn);
-    } else {
-      await beginVoice(btn);
-    }
+  btn.addEventListener("click", () => {
+    if (btn.disabled || voiceStarting) return;
+    if (recorder) finishVoice(btn);
+    else beginVoice(btn);
   });
+  // A recording must never outlive the moment: if the tab is hidden or closed, stop the mic so it
+  // can't stay on with no button to stop it.
+  window.addEventListener("pagehide", stopRecording);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopRecording();
+  });
+}
+
+// Tear down an in-progress recording without transcribing — used when the pane goes away, the
+// user navigates, or the tab is hidden. Safe to call when nothing is recording.
+function stopRecording() {
+  const rec = recorder;
+  recorder = null;
+  if (!rec) return;
+  try {
+    rec.node.onaudioprocess = null;
+    rec.node.disconnect();
+    rec.source.disconnect();
+  } catch (_) {
+    /* already gone */
+  }
+  rec.stream.getTracks().forEach((t) => t.stop());
+  rec.ctx.close().catch(() => {});
+  const btn = $("mic-button");
+  if (btn) {
+    btn.classList.remove("recording");
+    btn.setAttribute("aria-pressed", "false");
+    btn.setAttribute("aria-label", T.micStart);
+    btn.title = T.micStart;
+  }
 }
 
 async function beginVoice(btn) {
   if (state.pane == null) return;
+  voiceStarting = true;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
+    // The pane may have gone while the permission prompt was up.
+    if (state.pane == null) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
     const Ctx = window.AudioContext || window.webkitAudioContext;
     const ctx = new Ctx();
+    // iOS Safari starts the context suspended; without this the capture is silent.
+    if (ctx.state === "suspended") {
+      try {
+        await ctx.resume();
+      } catch (_) {
+        /* best effort */
+      }
+    }
     const source = ctx.createMediaStreamSource(stream);
     const node = ctx.createScriptProcessor(4096, 1, 1);
     const chunks = [];
@@ -1131,33 +1177,43 @@ async function beginVoice(btn) {
     btn.title = T.micRecording;
   } catch (_) {
     flashMic(btn, T.micDenied);
+  } finally {
+    voiceStarting = false;
   }
 }
 
 async function finishVoice(btn) {
   const rec = recorder;
   recorder = null;
+  if (!rec) return;
   btn.classList.remove("recording");
   btn.setAttribute("aria-pressed", "false");
+  rec.node.onaudioprocess = null;
   rec.node.disconnect();
   rec.source.disconnect();
-  rec.node.onaudioprocess = null;
   rec.stream.getTracks().forEach((t) => t.stop());
   const blob = pcmToWav(flatten(rec.chunks), rec.rate);
-  rec.ctx.close();
+  rec.ctx.close().catch(() => {});
+  const pane = state.pane;
+  if (pane == null) return;
 
   btn.disabled = true;
   btn.classList.add("busy");
   btn.setAttribute("aria-label", T.micBusy);
   btn.title = T.micBusy;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
   try {
     const lang = (navigator.language || "").slice(0, 2);
-    const q = `?pane=${state.pane}` + (/^[a-z]{2}$/.test(lang) ? `&lang=${lang}` : "");
+    const q = `?pane=${pane}` + (/^[a-z]{2}$/.test(lang) ? `&lang=${lang}` : "");
+    // The body is a WAV blob; the JSON content type is only here to satisfy the same-origin
+    // (CSRF) check — the server reads /api/voice as raw bytes, not as JSON.
     const res = await fetch("/api/voice" + q, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "audio/wav", "X-Agentty": "1" },
+      headers: { "Content-Type": "application/json", "X-Agentty": "1" },
       body: blob,
+      signal: controller.signal,
     });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
@@ -1173,6 +1229,7 @@ async function finishVoice(btn) {
   } catch (_) {
     flashMic(btn, T.micFailed);
   } finally {
+    clearTimeout(timer);
     btn.disabled = false;
     btn.classList.remove("busy");
   }
@@ -1317,5 +1374,6 @@ window.addEventListener("DOMContentLoaded", () => {
   new ResizeObserver(() => fitTerm()).observe($("term-wrap"), { box: "border-box" });
   setupKeyboard();
   setupPrompt();
+  setupVoice();
   start();
 });

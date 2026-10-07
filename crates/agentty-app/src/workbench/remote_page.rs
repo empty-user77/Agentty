@@ -579,7 +579,11 @@ impl Workbench {
                         true
                     }
                     None => {
-                        cx.notify();
+                        // Only the Remote page shows the bar; don't redraw the whole workbench
+                        // several times a second while the user is on a terminal.
+                        if wb.page == Some(super::Page::Remote) {
+                            cx.notify();
+                        }
                         false
                     }
                 }
@@ -625,6 +629,9 @@ impl Workbench {
                     )
             } else if installed {
                 div().t_body().text_color(hex(NEON_GREEN)).child(format!("✓ {}", t(cx, "remote.voice.installed")))
+            } else if self.remote_page.voice_dl.is_some() {
+                // Another model is downloading; don't offer a second one that would just no-op.
+                div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "remote.voice.download"))
             } else {
                 let m = model;
                 div().child(action_button(

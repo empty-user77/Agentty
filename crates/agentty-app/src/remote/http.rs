@@ -144,8 +144,10 @@ pub fn read_request(
         None => 0,
     };
     // A voice upload is a short audio clip (16 kHz mono WAV, capped to two minutes on decode), so
-    // it needs more room than the small JSON bodies every other route sends.
-    let max_body = if request.path == "/api/voice" { VOICE_MAX_BODY } else { MAX_BODY };
+    // it needs more room than the small JSON bodies every other route sends. The secret path
+    // prefix (TCP listener) is still on `path` here — it is stripped only after this returns — so
+    // match the suffix to cover both the plain and secret-prefixed forms.
+    let max_body = if request.path.ends_with("/api/voice") { VOICE_MAX_BODY } else { MAX_BODY };
     if length > max_body {
         return Err(HttpError::BodyTooLarge);
     }
