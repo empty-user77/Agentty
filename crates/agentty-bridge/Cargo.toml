@@ -26,6 +26,14 @@ ring = "0.17"
 base64 = "0.22"
 url = "2.5.8"
 memchr = "2"
+whisper-rs = { version = "0.16", optional = true }
+hound = { version = "3.5", optional = true }
+
+[features]
+# On-device voice-to-text. Compiles whisper.cpp (needs cmake + a C/C++ toolchain); on by default
+# so release builds have it, but `--no-default-features` lets a contributor without cmake skip it.
+default = ["voice"]
+voice = ["dep:whisper-rs", "dep:hound"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
