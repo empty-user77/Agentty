@@ -1215,10 +1215,13 @@ async function finishVoice(btn) {
       body: blob,
       signal: controller.signal,
     });
+    if (res.status === 401) return showLogin(); // session expired: bounce to sign-in, like other calls
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
     const text = (data.text || "").trim();
-    if (text) {
+    // The user may have switched terminals while transcribing; don't drop the text into the wrong
+    // prompt box.
+    if (text && state.pane === pane) {
       const prompt = $("prompt");
       prompt.value = prompt.value ? prompt.value.replace(/\s*$/, "") + " " + text : text;
       prompt.dispatchEvent(new Event("input"));
