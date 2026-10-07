@@ -142,11 +142,13 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: 고정폭 글꼴 (API 4)
          rows > 1: 그만큼의 줄을 가진 텍스트 영역(최대 24). Enter는 줄을
          바꾸고, 붙여넣기는 줄바꿈을 유지합니다
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: 트리 들여쓰기 0–8, tag: 제목 앞 짧은 라벨(8자 이하), 색은 tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
@@ -158,8 +160,10 @@ popover  { id, title, children }           패널 옆의 카드. 트리의 첫 �
 
 API 4:
 card     { children, title?, subtitle?, icon?, tone? }   떠 있는 상자. tone은 아이콘과 테두리 색
-grid     { children, columns?, gap? }      같은 폭의 열(1–6, 기본 2), 넘치면 다음 줄로
-tabs     { id, tabs: [{ id, label, icon?, badge? }], value, children }
+grid     { children, columns?, gap?, widths? }      같은 폭의 열(1–6, 기본 2), 넘치면 다음 줄로
+         widths: 열마다 "240px"(고정) 또는 "2"(비율) — columns 대신
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: 닫기 버튼, 누르면 close
          children: 선택된 탭의 내용만
 table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
          align: start | center | end, grow: 폭의 비율(1–12), 열마다 셀 하나

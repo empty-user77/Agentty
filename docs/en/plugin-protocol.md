@@ -142,11 +142,13 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: monospace font (API 4)
          rows > 1: a text area that many lines tall (max 24); Enter adds a
          line and a paste keeps its line breaks
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: tree indent 0–8, tag: label before the title (≤ 8 chars) in tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
@@ -158,8 +160,10 @@ popover  { id, title, children }            a card beside the panel; the first o
 
 API 4:
 card     { children, title?, subtitle?, icon?, tone? }   a raised box; tone colors the icon and edge
-grid     { children, columns?, gap? }      equal columns (1–6, default 2), wrapping onto new rows
-tabs     { id, tabs: [{ id, label, icon?, badge? }], value, children }
+grid     { children, columns?, gap?, widths? }      equal columns (1–6, default 2), wrapping onto new rows
+         widths: per column, "240px" fixed or "2" a share — replaces columns
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: a close button that sends close
          children: the picked tab's content only
 table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
          align: start | center | end; grow: share of the width (1–12); one cell per column

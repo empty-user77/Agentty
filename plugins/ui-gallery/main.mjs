@@ -71,6 +71,8 @@ const state = {
   row: 'build',
   item: 'a',
   progress: 0.42,
+  openRequests: ['users', 'create'],
+  request: 'create',
 };
 
 // ---------------------------------------------------------------- examples
@@ -306,6 +308,32 @@ const FEEDBACK = [
 
 const RECIPES = [
   {
+    id: 'apiClient',
+    label: 'API client',
+    draw: () =>
+      ui.grid(
+        [
+          ui.list('recipe.tree', [
+            { id: 'fleet', title: 'Fleet API', icon: 'package', tone: 'info' },
+            { id: 'vehicles', title: 'vehicles', icon: 'folder-open', depth: 1 },
+            { id: 'users', title: 'List vehicles', tag: 'GET', tagTone: 'success', depth: 2 },
+            { id: 'create', title: 'Create vehicle', tag: 'POST', tagTone: 'warning', depth: 2 },
+            { id: 'remove', title: 'Delete vehicle', tag: 'DEL', tagTone: 'error', depth: 2 },
+          ]),
+          ui.tabs(
+            'recipe.requests',
+            state.openRequests.map((id) => ({ id, label: id === 'users' ? 'GET List vehicles' : 'POST Create vehicle', closable: true })),
+            state.request,
+            [
+              ui.row([ui.select('recipe.method', [{ value: 'GET', label: 'GET' }, { value: 'POST', label: 'POST' }], state.request === 'users' ? 'GET' : 'POST'), ui.input('recipe.url2', { value: '{{baseUrl}}/vehicles' }), ui.button('recipe.send', 'Send', { variant: 'primary', icon: 'send' })]),
+              ui.input('recipe.body', { value: '{\n  "make": "Volvo",\n  "year": 2024\n}', rows: 5, mono: true }),
+            ],
+          ),
+        ],
+        { widths: ['200px', '1'], gap: 'small' },
+      ),
+  },
+  {
     id: 'listDetail',
     label: 'List + detail',
     draw: () =>
@@ -455,6 +483,22 @@ plugin
   .onEvent('demo.agree', set('agree'))
   .onEvent('demo.table', (event) => {
     state.row = event.item;
+    return render();
+  })
+  .onEvent('recipe.tree', (event) => {
+    if (['users', 'create'].includes(event.item)) {
+      if (!state.openRequests.includes(event.item)) state.openRequests.push(event.item);
+      state.request = event.item;
+    }
+    return render();
+  })
+  .onEvent('recipe.requests', (event) => {
+    if (event.event === 'close') {
+      state.openRequests = state.openRequests.filter((id) => id !== event.value);
+      if (state.request === event.value) state.request = state.openRequests[0] ?? '';
+    } else {
+      state.request = event.value;
+    }
     return render();
   })
   .onEvent('recipe.items', (event) => {

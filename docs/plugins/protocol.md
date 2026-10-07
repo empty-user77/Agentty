@@ -69,7 +69,7 @@ when you don't care.
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
 | `context/get` | | `{}` | context |
-| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`, and from API 4 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`), missing on older Agentty |
+| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`, and from API 4 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`, and the fields `gridWidths`, `listTree` (list `depth` / `tag`), `tabClose` and `monoInput`), missing on older Agentty |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
@@ -408,11 +408,15 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                   style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
                                             rows > 1: a text area that many lines tall (max 24);
-                                            Enter adds a line and a paste keeps its line breaks
-list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }], empty? }
-                                            item tone colors its icon (same values as badge)
+                                            Enter adds a line and a paste keeps its line breaks;
+                                            mono (API 4): the monospace font, for code and JSON
+list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }], depth?, tag?, tagTone? }], empty? }
+                                            item tone colors its icon (same values as badge);
+                                            API 4: depth indents the row (0–8) for a tree, tag is a
+                                            short label before the title (an HTTP method, ≤ 8
+                                            characters) in tagTone's color
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                    tone: neutral | info | success | warning | error
@@ -429,9 +433,12 @@ popover  { id, title, children }            a card beside the panel, over the pa
 
 API 4:
 card     { children, title?, subtitle?, icon?, tone? }   a raised box; tone colors the icon and edge
-grid     { children, columns?, gap? }       equal columns (1–6, default 2), wrapping onto new rows
-tabs     { id, tabs: [{ id, label, icon?, badge? }], value, children }
-                                            children: the picked tab's content only
+grid     { children, columns?, gap?, widths? }   equal columns (1–6, default 2), wrapping onto
+                                            new rows; widths sets each column instead: "240px"
+                                            fixed (40–1200), "2" twice the share of a "1"
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+                                            children: the picked tab's content only; closable
+                                            draws a close button, which sends close
 table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
                                             align: start | center | end; grow: share of the width
                                             (1–12); one cell per column; tone marks the first cell
@@ -448,7 +455,7 @@ code     { text, language?, title? }        colored by language (rust, json, ts,
 Events: `button` → `click`; `input` → `change` / `submit` with `value`; `list` → `select` with
 `item`, row buttons → `action` with `item` and `action`; `choice` → `change` with the option value;
 `toggle` → `change` with the new boolean; `flow` → `select` with the step's id as `item`; `popover` → `close` from its close button.
-From API 4: `tabs` → `change` with the tab's id; `table` → `select` with the row's id as `item`;
+From API 4: `tabs` → `change` with the tab's id, and `close` with the tab's id as `value` from a `closable` tab's button; `table` → `select` with the row's id as `item`;
 `select` → `change` with the option's value; `checkbox` → `change` with the new boolean.
 
 Which element to use for what, and whole screens to start from: the **UI Gallery** plugin (it

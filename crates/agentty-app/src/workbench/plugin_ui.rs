@@ -10,7 +10,7 @@ use crate::editor::language::Language;
 use crate::i18n::t;
 use crate::theme::{hex, hex_alpha, lighten, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
-use agentty_bridge::plugins::ui::{Align, FlowState, Gap, Node, TextStyle, Tone, UiEvent, Variant};
+use agentty_bridge::plugins::ui::{Align, FlowState, Gap, GridWidth, Node, TextStyle, Tone, UiEvent, Variant};
 use gpui::{div, prelude::*, px, relative, AnyElement, ClickEvent, Context, Div, HighlightStyle, SharedString, StyledText, Window};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -289,9 +289,10 @@ impl Workbench {
                     .child(label.clone())
                     .into_any_element()
             }
-            Node::Input { id, rows, .. } => match self.plugin_inputs.get(&(self.plugin_input_scope(plugin, cx), id.clone())) {
+            Node::Input { id, rows, mono, .. } => match self.plugin_inputs.get(&(self.plugin_input_scope(plugin, cx), id.clone())) {
                 Some(field) => div()
                     .w_full()
+                    .when(*mono, |d| d.font_family(MONO))
                     .px_2p5()
                     .when(*rows <= 1, |d| d.min_h(px(CONTROL_HEIGHT)).flex().items_center())
                     .when(*rows > 1, |d| d.py_1p5())
@@ -366,10 +367,26 @@ impl Workbench {
                             .cursor_pointer()
                             .hover(|s| s.bg(hex(Chrome::HOVER)))
                             .on_click(cx.listener(emit(plugin.to_string(), id.clone(), "select", None, Some(item.id.clone()))))
+                            // A tree: each level a step in.
+                            .when(item.depth > 0, |d| d.pl(px(8. + f32::from(item.depth) * 14.)))
                             .when_some(item.icon.as_deref(), |d, g| {
                                 // A neutral icon keeps the text's color; a tone tints it.
                                 let color = if item.tone == Tone::Neutral { Chrome::FOREGROUND } else { tone_color(item.tone) };
                                 d.child(icon_tile(Some(g), ROW_ICON, color))
+                            })
+                            .when_some(item.tag.clone().filter(|t| !t.is_empty()), |d, tag| {
+                                // An HTTP method or a status, in a column of its own so titles line up.
+                                let color = if item.tag_tone == Tone::Neutral { Chrome::MUTED } else { tone_color(item.tag_tone) };
+                                d.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .min_w(px(38.))
+                                        .t_caption()
+                                        .font_family(MONO)
+                                        .font_weight(crate::theme::EMPHASIS)
+                                        .text_color(hex(color))
+                                        .child(tag),
+                                )
                             })
                             .child(
                                 div()
@@ -555,19 +572,30 @@ impl Workbench {
                     })
                     .into_any_element()
             }
-            Node::Grid { children, columns, gap: g } => {
+            Node::Grid { children, columns, gap: g, widths } => {
                 let columns = (*columns).max(1);
+                let widths: Vec<GridWidth> =
+                    (0..columns).map(|i| widths.get(i).map_or(GridWidth::Share(1), |w| GridWidth::parse(w))).collect();
+                // A fixed column keeps its width; the others share what is left, by their weight.
+                let cell = |column: usize| match widths[column] {
+                    GridWidth::Px(px_width) => div().w(px(px_width)).flex_shrink_0().min_w_0(),
+                    GridWidth::Share(share) => div().flex_grow().flex_basis(px(0.)).min_w_0().map(|d| {
+                        let mut d = d;
+                        d.style().flex_grow = Some(share as f32);
+                        d
+                    }),
+                };
                 let mut grid = div().flex().flex_col().gap(gap(*g)).min_w_0();
                 for (row_index, chunk) in children.chunks(columns).enumerate() {
-                    let mut row = div().flex().gap(gap(*g)).min_w_0();
+                    let mut row = div().flex().items_start().gap(gap(*g)).min_w_0();
                     for (offset, child) in chunk.iter().enumerate() {
                         path.push(row_index * columns + offset);
-                        row = row.child(div().flex_1().min_w_0().flex().flex_col().child(self.render_plugin_node(plugin, child, path, cx)));
+                        row = row.child(cell(offset).flex().flex_col().child(self.render_plugin_node(plugin, child, path, cx)));
                         path.pop();
                     }
                     // The last row keeps the others' column widths.
-                    for _ in chunk.len()..columns {
-                        row = row.child(div().flex_1());
+                    for column in chunk.len()..columns {
+                        row = row.child(cell(column));
                     }
                     grid = grid.child(row);
                 }
@@ -606,6 +634,32 @@ impl Workbench {
                                         .t_caption()
                                         .text_color(hex(fg))
                                         .child(badge),
+                                )
+                            })
+                            .when(tab.closable, |d| {
+                                let (owner, element, tab_id) = (plugin.to_string(), id.clone(), tab.id.clone());
+                                d.child(
+                                    div()
+                                        .id(SharedString::from(format!("plugin-tab-close-{plugin}-{id}-{index}")))
+                                        .ml_0p5()
+                                        .rounded_sm()
+                                        .flex()
+                                        .items_center()
+                                        .hover(|s| s.bg(hex(Chrome::HOVER)))
+                                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                            // Closing is not picking.
+                                            cx.stop_propagation();
+                                            this.flush_plugin_inputs(&owner, cx);
+                                            let event = UiEvent {
+                                                element: element.clone(),
+                                                event: "close".into(),
+                                                value: Some(tab_id.clone().into()),
+                                                item: None,
+                                                action: None,
+                                            };
+                                            this.send_plugin_event(&owner, event, cx);
+                                        }))
+                                        .child(icon("x", IconSize::INLINE, hex(Chrome::MUTED))),
                                 )
                             }),
                     );

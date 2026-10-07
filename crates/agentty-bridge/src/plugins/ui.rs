@@ -62,6 +62,9 @@ pub enum Node {
         /// keeps its line breaks, and the field is that many lines tall (at most 24).
         #[serde(default)]
         rows: usize,
+        /// Drawn in the monospace font: code, JSON, a script (API 4).
+        #[serde(default)]
+        mono: bool,
     },
     /// Rows with a title, optional subtitle and per-row buttons. Clicking a row sends `select`.
     List {
@@ -133,6 +136,10 @@ pub enum Node {
         columns: usize,
         #[serde(default)]
         gap: Gap,
+        /// Each column's width, which sets the number of columns: `"240px"` is fixed, `"2"` takes
+        /// twice the share of a `"1"` — a sidebar beside a page is `["240px", "1"]` (API 4).
+        #[serde(default)]
+        widths: Vec<String>,
     },
     /// A tab strip. The plugin sends only the picked tab's content as `children`; picking another
     /// sends `change` with its id (API 4).
@@ -252,6 +259,9 @@ pub struct TabItem {
     /// A count or a word after the label.
     #[serde(default)]
     pub badge: Option<String>,
+    /// Shows a close button, which sends `close` with the tab's id as `value`.
+    #[serde(default)]
+    pub closable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -351,6 +361,40 @@ pub struct ListItem {
     pub tone: Tone,
     #[serde(default)]
     pub actions: Vec<ItemAction>,
+    /// How far the row is indented, for a tree (0 to [`MAX_LIST_DEPTH`]).
+    #[serde(default)]
+    pub depth: u8,
+    /// A short label before the title in its own color — an HTTP method, a status (at most 8
+    /// characters).
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub tag_tone: Tone,
+}
+
+/// The deepest a list row is indented.
+pub const MAX_LIST_DEPTH: u8 = 8;
+/// The narrowest and widest a fixed grid column may be, in pixels.
+pub const GRID_PX: (f32, f32) = (40., 1200.);
+
+/// A grid column's width, as `widths` gives it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridWidth {
+    /// Pixels, fixed.
+    Px(f32),
+    /// A share of what the fixed columns leave.
+    Share(u32),
+}
+
+impl GridWidth {
+    /// `"240px"` or `"2"`; anything else is a share of 1.
+    pub fn parse(text: &str) -> GridWidth {
+        let text = text.trim();
+        match text.strip_suffix("px").and_then(|n| n.trim().parse::<f32>().ok()) {
+            Some(px) if px.is_finite() => GridWidth::Px(px.clamp(GRID_PX.0, GRID_PX.1)),
+            _ => GridWidth::Share(text.parse::<u32>().unwrap_or(1).clamp(1, 12)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -486,6 +530,12 @@ impl Node {
                 more(count, items.len())?;
                 for item in items {
                     more(count, item.actions.len())?;
+                    item.depth = item.depth.min(MAX_LIST_DEPTH);
+                    if let Some(tag) = item.tag.as_mut() {
+                        if let Some((at, _)) = tag.char_indices().nth(8) {
+                            tag.truncate(at);
+                        }
+                    }
                     cut(&mut item.title);
                     for text in [item.subtitle.as_mut(), item.detail.as_mut(), item.icon.as_mut()].into_iter().flatten() {
                         cut(text);
@@ -533,8 +583,13 @@ impl Node {
                     child.check(depth + 1, count)?;
                 }
             }
-            Node::Grid { children, columns, .. } => {
-                *columns = (*columns).clamp(1, MAX_COLUMNS);
+            Node::Grid { children, columns, widths, .. } => {
+                widths.truncate(MAX_COLUMNS);
+                for width in widths.iter_mut() {
+                    cut(width);
+                }
+                // Widths say how many columns there are.
+                *columns = if widths.is_empty() { (*columns).clamp(1, MAX_COLUMNS) } else { widths.len() };
                 for child in children {
                     child.check(depth + 1, count)?;
                 }
@@ -648,7 +703,7 @@ impl Node {
     /// Every input's id and plugin-provided value, for syncing text fields.
     pub fn inputs(&self, out: &mut Vec<InputField>) {
         match self {
-            Node::Input { id, placeholder, value, rows } => {
+            Node::Input { id, placeholder, value, rows, .. } => {
                 out.push(InputField { id: id.clone(), placeholder: placeholder.clone(), value: value.clone(), rows: (*rows).min(MAX_ROWS) })
             }
             _ => self.children().iter().for_each(|c| c.inputs(out)),
@@ -786,6 +841,29 @@ mod tests {
         assert_eq!(rows[0].cells.len(), 2, "a row has no more cells than there are columns");
         assert_eq!((columns[0].grow, columns[1].grow, columns[1].align), (1, 12, Align::End));
         assert!(matches!(children[3], Node::Callout { tone: Tone::Info, .. }), "a callout is a hint unless it says otherwise");
+    }
+
+    #[test]
+    fn layout_and_tree_additions() {
+        let tree = Node::from_value(json!({ "type": "column", "children": [
+            { "type": "grid", "widths": ["240px", "2", "nonsense", "9000px", "1", "1", "1", "1"], "children": [] },
+            { "type": "list", "id": "tree", "items": [
+                { "id": "a", "title": "Create", "depth": 40, "tag": "OPTIONS-LONG", "tagTone": "warning" },
+            ] },
+            { "type": "tabs", "id": "t", "value": "a", "tabs": [{ "id": "a", "label": "GET Users", "closable": true }] },
+            { "type": "input", "id": "body", "rows": 8, "mono": true },
+        ] }))
+        .unwrap();
+        let Node::Column { children, .. } = &tree else { panic!("column") };
+        let Node::Grid { columns, widths, .. } = &children[0] else { panic!("grid") };
+        assert_eq!((*columns, widths.len()), (MAX_COLUMNS, MAX_COLUMNS), "widths set the columns, capped");
+        let parsed: Vec<GridWidth> = widths.iter().map(|w| GridWidth::parse(w)).collect();
+        assert_eq!(&parsed[..4], &[GridWidth::Px(240.), GridWidth::Share(2), GridWidth::Share(1), GridWidth::Px(GRID_PX.1)]);
+        let Node::List { items, .. } = &children[1] else { panic!("list") };
+        assert_eq!((items[0].depth, items[0].tag.as_deref(), items[0].tag_tone), (MAX_LIST_DEPTH, Some("OPTIONS-"), Tone::Warning));
+        let Node::Tabs { tabs, .. } = &children[2] else { panic!("tabs") };
+        assert!(tabs[0].closable);
+        assert!(matches!(children[3], Node::Input { mono: true, rows: 8, .. }));
     }
 
     #[test]

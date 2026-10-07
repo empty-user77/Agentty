@@ -860,7 +860,8 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 // Panel elements newer than the first API version, for a plugin to fall back on
                 // older Agentty without guessing from the version number.
                 "uiFeatures": [
-                    "flow", "popover", "card", "grid", "tabs", "table", "keyValue", "stat", "progress", "callout", "select", "checkbox", "code"
+                    "flow", "popover", "card", "grid", "tabs", "table", "keyValue", "stat", "progress", "callout", "select", "checkbox", "code",
+                    "gridWidths", "listTree", "tabClose", "monoInput"
                 ],
             })),
             cx,

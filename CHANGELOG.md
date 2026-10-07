@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 - Plugin panels have eleven new elements (plugin API 4): cards, grids, tabs, tables, label/value
   lists, stats, progress bars, callouts, drop-downs, checkboxes and code blocks with syntax colors
   and a copy button.
+- Layout for real tools: a grid's columns can be given widths (`["240px", "1"]` is a sidebar
+  beside a page), list rows can be indented as a tree and carry a colored tag (an HTTP method),
+  tabs can have a close button, and text fields can use the monospace font for code and JSON.
 - UI Gallery, a plugin that comes with Agentty: every panel element live with the code that draws
   it, and whole example screens to start a plugin from. A new guide, "Designing a panel", says
   which element to use for what.

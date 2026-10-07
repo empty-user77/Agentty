@@ -142,10 +142,12 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: 等宽字体 (API 4)
          rows > 1：该行数的文本域（最多 24）；回车换行，粘贴保留换行
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: 树的缩进 0–8，tag: 标题前的短标签（≤ 8 个字符），颜色为 tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
@@ -157,8 +159,10 @@ popover  { id, title, children }           面板旁边的卡片；树中第一�
 
 API 4:
 card     { children, title?, subtitle?, icon?, tone? }   浮起的方框；tone 决定图标和边框颜色
-grid     { children, columns?, gap? }      等宽的列（1–6，默认 2），放不下时换到下一行
-tabs     { id, tabs: [{ id, label, icon?, badge? }], value, children }
+grid     { children, columns?, gap?, widths? }      等宽的列（1–6，默认 2），放不下时换到下一行
+         widths: 每列 "240px"（固定）或 "2"（比例）— 代替 columns
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: 关闭按钮，点击发送 close
          children：只放选中标签页的内容
 table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
          align: start | center | end；grow：所占宽度比例（1–12）；每列一个单元格

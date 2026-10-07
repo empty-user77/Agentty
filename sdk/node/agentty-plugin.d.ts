@@ -13,10 +13,10 @@ export type Align = 'start' | 'center' | 'end';
 export type FlowState = 'off' | 'on' | 'active' | 'done' | 'error';
 
 export interface ItemAction { id: string; label?: string; icon?: string; tooltip?: string }
-export interface ListItem { id: string; title: string; subtitle?: string; detail?: string; icon?: string; tone?: Tone; actions?: ItemAction[] }
+export interface ListItem { id: string; title: string; subtitle?: string; detail?: string; icon?: string; tone?: Tone; actions?: ItemAction[]; depth?: number; tag?: string; tagTone?: Tone }
 export interface ChoiceOption { value: string; label: string }
 export interface FlowStep { id: string; title: string; subtitle?: string; icon?: string; state?: FlowState; selected?: boolean; side?: boolean }
-export interface TabItem { id: string; label: string; icon?: string; badge?: string }
+export interface TabItem { id: string; label: string; icon?: string; badge?: string; closable?: boolean }
 export interface TableColumn { label: string; align?: Align; grow?: number }
 export interface TableRow { id: string; cells: string[]; tone?: Tone }
 export interface KeyValueItem { label: string; value: string; tone?: Tone; mono?: boolean }
@@ -27,7 +27,7 @@ export type UiNode =
   | { type: 'section'; title: string; children: UiNode[] }
   | { type: 'text'; text: string; style?: TextStyle }
   | { type: 'button'; id: string; label: string; icon?: string; variant?: Variant; disabled?: boolean }
-  | { type: 'input'; id: string; placeholder?: string; value?: string; rows?: number }
+  | { type: 'input'; id: string; placeholder?: string; value?: string; rows?: number; mono?: boolean }
   | { type: 'list'; id: string; items: ListItem[]; empty?: string }
   | { type: 'choice'; id: string; options: ChoiceOption[]; value?: string }
   | { type: 'toggle'; id: string; label: string; value?: boolean }
@@ -38,7 +38,7 @@ export type UiNode =
   | { type: 'popover'; id: string; title: string; children: UiNode[] }
   // API 4
   | { type: 'card'; children: UiNode[]; title?: string; subtitle?: string; icon?: string; tone?: Tone }
-  | { type: 'grid'; children: UiNode[]; columns?: number; gap?: Gap }
+  | { type: 'grid'; children: UiNode[]; columns?: number; gap?: Gap; widths?: string[] }
   | { type: 'tabs'; id: string; tabs: TabItem[]; value: string; children: UiNode[] }
   | { type: 'table'; id: string; columns: TableColumn[]; rows: TableRow[]; empty?: string; selected?: string }
   | { type: 'keyValue'; items: KeyValueItem[] }
@@ -57,7 +57,7 @@ export const ui: {
   section(title: string, children: Child[]): UiNode;
   text(text: string, style?: TextStyle): UiNode;
   button(id: string, label: string, options?: { icon?: string; variant?: Variant; disabled?: boolean }): UiNode;
-  input(id: string, options?: { placeholder?: string; value?: string; rows?: number }): UiNode;
+  input(id: string, options?: { placeholder?: string; value?: string; rows?: number; mono?: boolean }): UiNode;
   list(id: string, items: ListItem[], options?: { empty?: string }): UiNode;
   choice(id: string, options: ChoiceOption[], value?: string): UiNode;
   toggle(id: string, label: string, value?: boolean): UiNode;
@@ -68,7 +68,7 @@ export const ui: {
   popover(id: string, title: string, children: Child[]): UiNode;
   // API 4
   card(children: Child[], options?: { title?: string; subtitle?: string; icon?: string; tone?: Tone }): UiNode;
-  grid(children: Child[], options?: { columns?: number; gap?: Gap }): UiNode;
+  grid(children: Child[], options?: { columns?: number; gap?: Gap; widths?: string[] }): UiNode;
   tabs(id: string, tabs: TabItem[], value: string, children: Child[]): UiNode;
   table(id: string, columns: TableColumn[], rows: TableRow[], options?: { empty?: string; selected?: string }): UiNode;
   keyValue(items: KeyValueItem[]): UiNode;

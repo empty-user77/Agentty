@@ -64,7 +64,7 @@ test('every tab and recipe draws only elements Agentty knows, with unique ids', 
       host.event('gallery.tabs', 'change', { value: tab });
       trees.push((await host.next('ui/setPanel')).params.tree);
     }
-    for (const recipe of ['settings', 'dashboard', 'job', 'states']) {
+    for (const recipe of ['apiClient', 'settings', 'dashboard', 'job', 'states']) {
       host.event('gallery.recipe', 'change', { value: recipe });
       trees.push((await host.next('ui/setPanel')).params.tree);
     }

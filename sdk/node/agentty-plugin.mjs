@@ -25,7 +25,7 @@ export const ui = {
   /** variant: primary | secondary | ghost | danger */
   button: (id, label, { icon, variant = 'secondary', disabled = false } = {}) => ({ type: 'button', id, label, icon, variant, disabled }),
   /** rows > 1: a text area that many lines tall (max 24), where Enter adds a line. */
-  input: (id, { placeholder = '', value = '', rows } = {}) => ({ type: 'input', id, placeholder, value, ...(rows ? { rows } : {}) }),
+  input: (id, { placeholder = '', value = '', rows, mono } = {}) => ({ type: 'input', id, placeholder, value, ...(rows ? { rows } : {}), ...(mono ? { mono } : {}) }),
   /** items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }] — tone colors the icon */
   list: (id, items, { empty } = {}) => ({ type: 'list', id, items, empty }),
   /** options: [{ value, label }] */
@@ -45,7 +45,7 @@ export const ui = {
   /** A raised box around what belongs together. tone colors the icon and the edge. */
   card: (children, { title, subtitle, icon, tone = 'neutral' } = {}) => ({ type: 'card', title, subtitle, icon, tone, children: compact(children) }),
   /** Children in equal columns (1–6), wrapping onto new rows. */
-  grid: (children, { columns = 2, gap = 'medium' } = {}) => ({ type: 'grid', columns, gap, children: compact(children) }),
+  grid: (children, { columns = 2, gap = 'medium', widths } = {}) => ({ type: 'grid', columns, gap, ...(widths?.length ? { widths } : {}), children: compact(children) }),
   /** tabs: [{ id, label, icon?, badge? }]. Send only the picked tab's content as children; picking one sends `change`. */
   tabs: (id, tabs, value, children) => ({ type: 'tabs', id, tabs, value, children: compact(children) }),
   /** columns: [{ label, align?: start | center | end, grow? }]; rows: [{ id, cells: [string], tone? }]. A row click sends `select`. */

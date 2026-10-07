@@ -142,11 +142,13 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: 等幅フォント (API 4)
          rows > 1: その行数のテキストエリア（最大 24）。Enter は改行し、
          貼り付けは改行を保ちます
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: ツリーの字下げ 0–8、tag: タイトル前の短いラベル（8 文字まで）、色は tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
@@ -158,8 +160,10 @@ popover  { id, title, children }           パネルの横のカード。ツリ�
 
 API 4:
 card     { children, title?, subtitle?, icon?, tone? }   浮いた箱。tone はアイコンと縁の色
-grid     { children, columns?, gap? }      等幅の列（1–6、既定 2）、あふれたら次の行へ
-tabs     { id, tabs: [{ id, label, icon?, badge? }], value, children }
+grid     { children, columns?, gap?, widths? }      等幅の列（1–6、既定 2）、あふれたら次の行へ
+         widths: 列ごとに "240px"（固定）か "2"（比率）— columns の代わり
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: 閉じるボタン、押すと close
          children: 選ばれたタブの中身だけ
 table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
          align: start | center | end、grow: 幅の割合（1–12）、列ごとにセル 1 つ
