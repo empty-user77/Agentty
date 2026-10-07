@@ -528,6 +528,14 @@ fn voice_config() -> Option<server::VoiceConfig> {
     Some(server::VoiceConfig { model, language: None })
 }
 
+/// Re-read which voice model is installed and tell the running server, so voice turns on (or off)
+/// without a restart — called after the setup flow finishes a download.
+pub fn refresh_voice(cx: &App) {
+    if let Some(hub) = hub(cx) {
+        hub.set_voice(voice_config());
+    }
+}
+
 pub fn hub(cx: &App) -> Option<Arc<Hub>> {
     cx.try_global::<Remote>().and_then(|r| r.hub.clone())
 }

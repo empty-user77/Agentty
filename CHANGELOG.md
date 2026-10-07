@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Voice prompts from the remote page: tap the microphone, speak, and the words appear in the
+  prompt box to check and send. The clip is transcribed on your Mac by a local model you install
+  from Settings → Remote access (a one-time download, verified and kept on the machine); no audio
+  ever leaves your computer.
+
 ## [0.2.13] - 2026-10-03
 
 ### Added

@@ -1543,6 +1543,19 @@ strings! {
     "remote.unlock" => ["Unlock", "잠금 해제", "ロック解除", "解除锁定"],
     "remote.hide_workspace" => ["Hide from remote access", "원격 접속에서 숨기기", "リモートアクセスで非表示", "在远程访问中隐藏"],
     "remote.options" => ["Options", "옵션", "オプション", "选项"],
+    "remote.voice.title" => ["Voice to text", "음성 입력", "音声入力", "语音输入"],
+    "remote.voice.intro" => [
+        "Speak prompts from the remote page. Audio is transcribed on this Mac — nothing is sent to any service.",
+        "원격 페이지에서 음성으로 프롬프트를 보냅니다. 음성은 이 Mac에서 변환되며 외부로 전송되지 않습니다.",
+        "リモートページから音声でプロンプトを送れます。音声はこの Mac で文字起こしされ、外部には送信されません。",
+        "在远程页面用语音发送提示。音频在本机转写，不会发送到任何服务。"
+    ],
+    "remote.voice.tiny" => ["Tiny — fastest, less accurate", "Tiny — 가장 빠름, 정확도 낮음", "Tiny — 最速・精度は低め", "Tiny — 最快，准确度较低"],
+    "remote.voice.base" => ["Base — recommended", "Base — 권장", "Base — おすすめ", "Base — 推荐"],
+    "remote.voice.size" => ["{mb} MB download", "{mb} MB 다운로드", "{mb} MB ダウンロード", "{mb} MB 下载"],
+    "remote.voice.installed" => ["Installed", "설치됨", "インストール済み", "已安装"],
+    "remote.voice.download" => ["Download", "다운로드", "ダウンロード", "下载"],
+    "remote.voice.downloading" => ["Downloading… {pct}%", "다운로드 중… {pct}%", "ダウンロード中… {pct}%", "正在下载… {pct}%"],
     "page.remote" => ["Remote access", "원격 접속", "リモートアクセス", "远程访问"],
     "settings.remote_feature" => ["Remote access feature", "원격 접속 기능 사용", "リモートアクセス機能を使う", "使用远程访问功能"],
     "settings.remote_feature_hint" => [

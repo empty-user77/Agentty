@@ -12,7 +12,11 @@ use crate::terminal::AgentStatus;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{action_button, TypeScale};
+use agentty_bridge::voice;
 use gpui::{div, prelude::*, ClickEvent, Context, Div, Entity, Window};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 const TAILSCALE_ADMIN_DNS: &str = "https://login.tailscale.com/admin/dns";
 const TAILSCALE_IOS: &str = "https://apps.apple.com/app/tailscale/id1470499037";
@@ -33,6 +37,19 @@ pub(super) struct RemotePageState {
     dialog_error: Option<String>,
     input_events: Vec<gpui::Subscription>,
     looked_up: bool,
+    /// A voice model being downloaded in the setup flow, if any.
+    voice_dl: Option<VoiceDl>,
+    /// The last voice-setup error to show (a failed or corrupt download).
+    voice_error: Option<String>,
+}
+
+/// A voice model download in flight: shared counters the background task writes and the page reads
+/// each tick for its progress bar, and where the task leaves its result.
+struct VoiceDl {
+    model_id: &'static str,
+    done: Arc<AtomicU64>,
+    total: Arc<AtomicU64>,
+    finished: Arc<Mutex<Option<Result<(), String>>>>,
 }
 
 impl Workbench {
@@ -520,6 +537,119 @@ impl Workbench {
         )
     }
 
+    /// Begin downloading a voice model: the fetch runs on a background thread while a ticker task
+    /// re-renders the progress bar, and when it finishes voice turns itself on.
+    fn start_voice_download(&mut self, model: &'static voice::Model, cx: &mut Context<Self>) {
+        if self.remote_page.voice_dl.is_some() {
+            return;
+        }
+        let dl = VoiceDl {
+            model_id: model.id,
+            done: Arc::new(AtomicU64::new(0)),
+            total: Arc::new(AtomicU64::new(model.bytes.max(1))),
+            finished: Arc::new(Mutex::new(None)),
+        };
+        let (done, total, finished) = (dl.done.clone(), dl.total.clone(), dl.finished.clone());
+        self.remote_page.voice_dl = Some(dl);
+        self.remote_page.voice_error = None;
+        cx.notify();
+
+        cx.background_executor()
+            .spawn(async move {
+                let result = voice::download_model(model, |d, t| {
+                    done.store(d, Ordering::Relaxed);
+                    total.store(t.max(1), Ordering::Relaxed);
+                });
+                *finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.map_err(|e| e.to_string()));
+            })
+            .detach();
+
+        cx.spawn(async move |page, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(250)).await;
+            let stop = page.update(cx, |wb, cx| {
+                let outcome = wb.remote_page.voice_dl.as_ref().and_then(|d| d.finished.lock().unwrap_or_else(|e| e.into_inner()).take());
+                match outcome {
+                    Some(result) => {
+                        wb.remote_page.voice_dl = None;
+                        match result {
+                            Ok(()) => remote::refresh_voice(cx),
+                            Err(err) => wb.remote_page.voice_error = Some(err),
+                        }
+                        cx.notify();
+                        true
+                    }
+                    None => {
+                        cx.notify();
+                        false
+                    }
+                }
+            });
+            if !matches!(stop, Ok(false)) {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// The voice-to-text card: pick a model, download it (with a progress bar), and voice input
+    /// becomes available on the remote page. Models are small, pinned, and verified on download.
+    fn render_voice_card(&self, cx: &mut Context<Self>) -> Div {
+        let muted = |text: String| div().t_small().text_color(hex(Chrome::MUTED)).child(text);
+        let mut body = card("VOX.STT", t(cx, "remote.voice.title")).child(muted(t(cx, "remote.voice.intro").to_string()));
+        for model in voice::MODELS {
+            let installed = voice::model_present(model);
+            let mb = tf(cx, "remote.voice.size", &[("mb", &((model.bytes + 500_000) / 1_000_000).to_string())]);
+            let name = if model.id == "tiny" { t(cx, "remote.voice.tiny") } else { t(cx, "remote.voice.base") };
+            let dl = self.remote_page.voice_dl.as_ref().filter(|d| d.model_id == model.id);
+            let right = if let Some(d) = dl {
+                let done = d.done.load(Ordering::Relaxed);
+                let total = d.total.load(Ordering::Relaxed).max(1);
+                let pct = done.saturating_mul(100).checked_div(total).unwrap_or(0).min(100);
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .w(gpui::px(170.))
+                    .child(div().t_caption().text_color(hex(NEON_CYAN)).child(tf(
+                        cx,
+                        "remote.voice.downloading",
+                        &[("pct", &pct.to_string())],
+                    )))
+                    .child(
+                        div()
+                            .w(gpui::px(170.))
+                            .h(gpui::px(6.))
+                            .rounded_full()
+                            .bg(hex(0x0b0e11))
+                            .child(div().h(gpui::px(6.)).rounded_full().bg(hex(NEON_CYAN)).w(gpui::px(170.0 * pct as f32 / 100.0))),
+                    )
+            } else if installed {
+                div().t_body().text_color(hex(NEON_GREEN)).child(format!("✓ {}", t(cx, "remote.voice.installed")))
+            } else {
+                let m = model;
+                div().child(action_button(
+                    gpui::SharedString::from(format!("voice-dl-{}", model.id)),
+                    t(cx, "remote.voice.download"),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.start_voice_download(m, cx)),
+                ))
+            };
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .py_2()
+                    .child(div().flex().flex_col().child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(name)).child(muted(mb)))
+                    .child(right),
+            );
+        }
+        if let Some(err) = &self.remote_page.voice_error {
+            body = body.child(div().t_small().text_color(hex(Chrome::ERROR)).child(err.clone()));
+        }
+        body
+    }
+
     /// The Remote access page as a dashboard: a status panel with the address and its QR code,
     /// live counters, the security checks, the activity log, and the cards to set it up.
     pub(super) fn render_remote_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -1000,6 +1130,8 @@ impl Workbench {
                 ),
             ));
 
+        let voice_card = self.render_voice_card(cx);
+
         // Two columns where there is room, one otherwise.
         let column = || div().flex_1().min_w(gpui::px(340.)).flex().flex_col().gap_4();
         div()
@@ -1015,7 +1147,7 @@ impl Workbench {
                     .gap_4()
                     .items_start()
                     .child(column().child(security).child(options))
-                    .child(column().child(activity))
+                    .child(column().child(activity).child(voice_card))
                     .child(column().child(password).child(guide)),
             )
             .child(muted(tf(cx, "remote.warning", &[("login", &login_text)])))
