@@ -165,6 +165,7 @@ card     { children, title?, subtitle?, icon?, tone? }   浮いた箱。tone は
 grid     { children, columns?, gap?, widths? }      等幅の列（1–6、既定 2）、あふれたら次の行へ
          widths: 列ごとに "240px"（固定）か "2"（比率）— columns の代わり
          id?, resizable? (API 4): 最初の固定列をドラッグで幅変更、resize（幅）を送信
+         fill: 残りの高さを埋め、列ごとにスクロール (API 4)
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
          closable: 閉じるボタン、押すと close
          children: 選ばれたタブの中身だけ

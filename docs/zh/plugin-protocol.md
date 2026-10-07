@@ -164,6 +164,7 @@ card     { children, title?, subtitle?, icon?, tone? }   浮起的方框；tone 
 grid     { children, columns?, gap?, widths? }      等宽的列（1–6，默认 2），放不下时换到下一行
          widths: 每列 "240px"（固定）或 "2"（比例）— 代替 columns
          id?, resizable? (API 4): 拖动第一个固定列调整宽度，结束后发送 resize（宽度）
+         fill: 占满剩余高度，每列单独滚动 (API 4)
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
          closable: 关闭按钮，点击发送 close
          children：只放选中标签页的内容

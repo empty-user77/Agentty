@@ -165,6 +165,7 @@ card     { children, title?, subtitle?, icon?, tone? }   떠 있는 상자. tone
 grid     { children, columns?, gap?, widths? }      같은 폭의 열(1–6, 기본 2), 넘치면 다음 줄로
          widths: 열마다 "240px"(고정) 또는 "2"(비율) — columns 대신
          id?, resizable? (API 4): 첫 고정 열을 끌어서 폭 조절, 끝나면 resize(폭)
+         fill: 남은 높이를 채우고 열마다 따로 스크롤 (API 4)
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
          closable: 닫기 버튼, 누르면 close
          children: 선택된 탭의 내용만

@@ -31,6 +31,19 @@ impl gpui::Render for PluginGridDrag {
     }
 }
 
+/// Dragging a plugin tab strip sideways: which strip, and where the pointer was last.
+#[derive(Clone)]
+pub struct PluginTabStripDrag {
+    strip: String,
+    last_x: Rc<std::cell::Cell<Option<f32>>>,
+}
+
+impl gpui::Render for PluginTabStripDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
 /// The narrowest and widest a resizable column is dragged to.
 const RESIZE_RANGE: (f32, f32) = (160., 720.);
 
@@ -100,10 +113,13 @@ fn icon_tile(name: Option<&str>, size: f32, color: u32) -> Div {
 /// Elements that read as a block: in a `row` they share the width instead of shrinking to their
 /// narrowest. Text left to its own size wraps one character a line for Korean, Japanese and Chinese.
 fn fills_row(node: &Node) -> bool {
+    // A heading is as wide as its words: what follows it in the row sits beside it.
+    if let Node::Text { style, .. } = node {
+        return *style != TextStyle::Title;
+    }
     matches!(
         node,
-        Node::Text { .. }
-            | Node::Input { .. }
+        Node::Input { .. }
             | Node::Select { .. }
             | Node::Card { .. }
             | Node::Stat { .. }
@@ -271,7 +287,15 @@ impl Workbench {
         let key = |id: &str, path: &[usize]| SharedString::from(format!("plugin-{plugin}-{id}-{path:?}"));
         match node {
             Node::Column { children, gap: g } => {
-                self.render_plugin_children(plugin, children, path, div().flex().flex_col().gap(gap(*g)).min_w_0(), cx).into_any_element()
+                let fills = node.fills_height();
+                self.render_plugin_children(
+                    plugin,
+                    children,
+                    path,
+                    div().flex().flex_col().gap(gap(*g)).min_w_0().when(fills, |d| d.flex_1().min_h_0()),
+                    cx,
+                )
+                .into_any_element()
             }
             Node::Section { title, children } => div()
                 .pt_3()
@@ -294,6 +318,8 @@ impl Workbench {
                             div().flex_shrink_0().w(px(select_width(options, placeholder.as_deref()))).child(rendered).into_any_element()
                         }
                         _ if fills_row(child) => div().flex_1().min_w_0().child(rendered).into_any_element(),
+                        // A heading is as wide as its words, up to most of the row.
+                        Node::Text { .. } => div().flex_shrink_0().max_w(relative(0.6)).min_w_0().child(rendered).into_any_element(),
                         _ => rendered,
                     });
                     path.pop();
@@ -303,7 +329,14 @@ impl Workbench {
             Node::Text { text, style } => {
                 let base = div().min_w_0().whitespace_normal();
                 match style {
-                    TextStyle::Title => base.t_large().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)),
+                    // One line, cut with an ellipsis: a heading wrapped in a narrow place broke a
+                    // letter a line.
+                    TextStyle::Title => {
+                        // Cut in a flex line of its own: a cut line measured straight in a column
+                        // has no width and shows only its ellipsis.
+                        return cut_line(div().t_large().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)), text.clone())
+                            .into_any_element();
+                    }
                     TextStyle::Muted => base.t_small().text_color(hex(Chrome::MUTED)),
                     TextStyle::Small => base.t_caption().text_color(hex(Chrome::MUTED)),
                     TextStyle::Code => base
@@ -332,11 +365,14 @@ impl Workbench {
                         (hex_alpha(Chrome::ERROR, 0.14), hex_alpha(Chrome::ERROR, 0.24), hex_alpha(Chrome::ERROR, 0.4), hex(Chrome::ERROR))
                     }
                 };
+                // An icon alone is a square: the padding of a labelled button spread icons apart.
+                let icon_only = label.trim().is_empty() && glyph.is_some();
                 div()
                     .id(key(id, path))
                     .flex_shrink_0()
                     .h(px(CONTROL_HEIGHT))
-                    .px_3()
+                    .when(icon_only, |d| d.w(px(CONTROL_HEIGHT)))
+                    .when(!icon_only, |d| d.px_3())
                     .flex()
                     .items_center()
                     .justify_center()
@@ -359,7 +395,7 @@ impl Workbench {
                         )))
                     })
                     .children(glyph.as_deref().map(|g| icon(icon_named(Some(g)), IconSize::INLINE, fg)))
-                    .child(label.clone())
+                    .when(!icon_only, |d| d.child(label.clone()))
                     .into_any_element()
             }
             Node::Input { id, rows, mono, .. } => {
@@ -370,14 +406,17 @@ impl Workbench {
                     .when(*mono, |d| d.font_family(MONO))
                     .px_2p5()
                     .when(*rows <= 1, |d| d.min_h(px(CONTROL_HEIGHT)).flex().items_center())
-                    .when(*rows > 1, |d| d.py_1p5())
+                    .when(*rows > 1, |d| d.py_1p5().flex().flex_col())
+                    .overflow_hidden()
                     .rounded_md()
                     .border_1()
                     .border_color(hex(Chrome::OVERLAY_BORDER))
                     .bg(hex(SUNKEN))
                     .t_small()
                     .text_color(hex(Chrome::BRIGHT))
-                    .child(div().w_full().child(field.input.clone()));
+                    // A column, so the field is stretched to the box: measured on its own a text
+                    // area had no width and wrapped a letter a line.
+                    .child(div().w_full().min_w_0().flex().flex_col().child(field.input.clone()));
                 let Some(suggest) = field.suggest.as_ref() else { return boxed.into_any_element() };
                 let mut menu = div()
                     .id(SharedString::from(format!("plugin-suggest-{plugin}-{id}")))
@@ -508,6 +547,7 @@ impl Workbench {
                             .gap_2p5()
                             .rounded_md()
                             .cursor_pointer()
+                            .when(item.selected, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.22)))
                             .hover(|s| s.bg(hex(Chrome::HOVER)))
                             .on_click(cx.listener(emit(plugin.to_string(), id.clone(), "select", None, Some(item.id.clone()))))
                             // A tree: each level a step in.
@@ -715,7 +755,7 @@ impl Workbench {
                     })
                     .into_any_element()
             }
-            Node::Grid { children, columns, gap: g, widths, id: grid_id, resizable } => {
+            Node::Grid { children, columns, gap: g, widths, id: grid_id, resizable, fill } => {
                 let columns = (*columns).max(1);
                 let mut widths: Vec<GridWidth> =
                     (0..columns).map(|i| widths.get(i).map_or(GridWidth::Share(1), |w| GridWidth::parse(w))).collect();
@@ -736,12 +776,41 @@ impl Workbench {
                     GridWidth::Px(px_width) => div().w(px(px_width)).flex_shrink_0().min_w_0(),
                     GridWidth::Share(share) => div().flex_basis(relative(share as f32 / shares as f32)).flex_shrink().min_w_0(),
                 };
-                let mut grid = div().flex().flex_col().gap(gap(*g)).min_w_0();
+                // Heights flow down by flex (a percentage of a flexed height is not settled, and
+                // the columns grew with their content instead of scrolling).
+                let mut grid = div().flex().flex_col().gap(gap(*g)).min_w_0().when(*fill, |d| d.flex_1().min_h_0());
                 for (row_index, chunk) in children.chunks(columns).enumerate() {
-                    let mut row = div().flex().items_start().gap(gap(*g)).min_w_0();
+                    // Filling, the first row is the panel's height and each of its cells scrolls
+                    // by itself.
+                    let filling = *fill && row_index == 0;
+                    let mut row =
+                        div().flex().gap(gap(*g)).min_w_0().when(!filling, |d| d.items_start()).when(filling, |d| d.flex_1().min_h_0());
                     for (offset, child) in chunk.iter().enumerate() {
                         path.push(row_index * columns + offset);
-                        let mut column = cell(offset).flex().flex_col().child(self.render_plugin_node(plugin, child, path, cx));
+                        let rendered = self.render_plugin_node(plugin, child, path, cx);
+                        let mut column = if filling {
+                            // Tabs that fill keep their strip and scroll their content themselves.
+                            let inner = if matches!(child, Node::Tabs { fill: true, .. }) {
+                                div().flex_1().min_h_0().flex().flex_col().child(rendered).into_any_element()
+                            } else {
+                                let scroll_id = SharedString::from(format!("plugin-grid-scroll-{plugin}-{path:?}"));
+                                // A block, like a tab's scrolling content: as a flex column its text was
+                                // measured at no width and wrapped a letter a line.
+                                div()
+                                    .id(scroll_id)
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    .overflow_y_scroll()
+                                    .flex()
+                                    .flex_col()
+                                    .child(div().w_full().flex_shrink_0().flex().flex_col().child(rendered))
+                                    .into_any_element()
+                            };
+                            cell(offset).min_h_0().flex().flex_col().child(inner)
+                        } else {
+                            cell(offset).flex().flex_col().child(rendered)
+                        };
                         if let Some((resized, grid)) = handle.as_ref().filter(|(c, _)| row_index == 0 && *c == offset) {
                             let current = match widths[*resized] {
                                 GridWidth::Px(w) => w,
@@ -760,8 +829,58 @@ impl Workbench {
                 }
                 grid.into_any_element()
             }
-            Node::Tabs { id, tabs, value, children } => {
-                let mut strip = div().flex().items_end().gap_1().min_w_0().border_b_1().border_color(hex(Chrome::BORDER));
+            Node::Tabs { id, tabs, value, children, fill, add_menu } => {
+                // Tabs keep their size and the strip scrolls sideways when they do not fit: by
+                // dragging it, by the wheel either way, and to a tab when it is picked.
+                let strip_key = format!("{plugin}/{id}");
+                let scroll = {
+                    let mut strips = self.plugin_tab_strips.borrow_mut();
+                    let entry = strips.entry(strip_key.clone()).or_insert_with(|| (gpui::ScrollHandle::new(), String::new()));
+                    if entry.1 != *value {
+                        entry.1 = value.clone();
+                        if let Some(index) = tabs.iter().position(|t| t.id == *value) {
+                            entry.0.scroll_to_item(index);
+                        }
+                    }
+                    entry.0.clone()
+                };
+                let (wheel, dragged) = (scroll.clone(), scroll.clone());
+                let mut strip = div()
+                    .id(SharedString::from(format!("plugin-tab-strip-{plugin}-{id}")))
+                    .flex()
+                    .items_end()
+                    .gap_1()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .track_scroll(&scroll)
+                    .on_scroll_wheel(move |event, window, _| {
+                        // A mouse wheel only turns up and down: that moves the strip sideways.
+                        let delta = event.delta.pixel_delta(window.line_height());
+                        if delta.y.abs() > delta.x.abs() {
+                            let offset = wheel.offset();
+                            let max = wheel.max_offset().width;
+                            wheel.set_offset(gpui::point((offset.x + delta.y).clamp(-max, px(0.)), offset.y));
+                            window.refresh();
+                        }
+                    })
+                    .on_drag(PluginTabStripDrag { strip: strip_key.clone(), last_x: Rc::default() }, |drag, _, _, cx| {
+                        cx.new(|_| drag.clone())
+                    })
+                    .on_drag_move(cx.listener(move |_, event: &gpui::DragMoveEvent<PluginTabStripDrag>, window, cx| {
+                        // Follows the pointer: the strip moves by how far it went since the last move.
+                        let drag = event.drag(cx);
+                        if drag.strip != strip_key {
+                            return;
+                        }
+                        let x = f32::from(event.event.position.x);
+                        if let Some(last) = drag.last_x.replace(Some(x)) {
+                            let offset = dragged.offset();
+                            let max = dragged.max_offset().width;
+                            dragged.set_offset(gpui::point((offset.x + px(x - last)).clamp(-max, px(0.)), offset.y));
+                            window.refresh();
+                        }
+                    }));
                 for (index, tab) in tabs.iter().enumerate() {
                     let active = tab.id == *value;
                     let fg = if active { Chrome::BRIGHT } else { Chrome::MUTED };
@@ -771,6 +890,8 @@ impl Workbench {
                             .px_2p5()
                             .py_1p5()
                             .flex()
+                            .flex_shrink_0()
+                            .max_w(px(220.))
                             .items_center()
                             .gap_1p5()
                             .min_w_0()
@@ -823,14 +944,125 @@ impl Workbench {
                             }),
                     );
                 }
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .min_w_0()
-                    .child(strip)
-                    .child(self.render_plugin_children(plugin, children, path, div().flex().flex_col().gap_2().min_w_0(), cx))
-                    .into_any_element()
+                let menu_key = format!("{plugin}/{id}");
+                let add = (!add_menu.is_empty()).then(|| {
+                    let open = self.plugin_tab_menu.as_deref() == Some(menu_key.as_str());
+                    let toggle_key = menu_key.clone();
+                    let mut button = div().relative().flex_shrink_0().child(
+                        div()
+                            .id(SharedString::from(format!("plugin-tab-add-{plugin}-{id}")))
+                            .size(px(CONTROL_HEIGHT))
+                            .mb_0p5()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .when(open, |d| d.bg(hex(Chrome::HOVER)))
+                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.plugin_tab_menu = if this.plugin_tab_menu.as_deref() == Some(toggle_key.as_str()) {
+                                    None
+                                } else {
+                                    Some(toggle_key.clone())
+                                };
+                                cx.notify();
+                            }))
+                            .child(icon("plus", IconSize::INLINE, hex(Chrome::FOREGROUND))),
+                    );
+                    if open {
+                        let mut menu = div()
+                            .id(SharedString::from(format!("plugin-tab-menu-{plugin}-{id}")))
+                            .min_w(px(200.))
+                            .p_1()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(hex(Chrome::OVERLAY_BORDER))
+                            .bg(hex(RAISED))
+                            .shadow_lg()
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.plugin_tab_menu = None;
+                                cx.notify();
+                            }));
+                        for (index, option) in add_menu.iter().enumerate() {
+                            let (owner, element, value) = (plugin.to_string(), id.clone(), option.value.clone());
+                            menu = menu.child(
+                                div()
+                                    .id(SharedString::from(format!("plugin-tab-menu-{plugin}-{id}-{index}")))
+                                    .h(px(28.))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .rounded_sm()
+                                    .t_small()
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(hex(Chrome::HOVER)))
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.plugin_tab_menu = None;
+                                        this.flush_plugin_inputs(&owner, cx);
+                                        let event = UiEvent {
+                                            element: element.clone(),
+                                            event: "add".into(),
+                                            value: Some(value.clone().into()),
+                                            item: None,
+                                            action: None,
+                                        };
+                                        this.send_plugin_event(&owner, event, cx);
+                                        cx.notify();
+                                    }))
+                                    .child(option.label.clone()),
+                            );
+                        }
+                        let anchored = gpui::anchored().anchor(gpui::Corner::TopRight).snap_to_window_with_margin(px(8.)).child(menu);
+                        button = button.child(
+                            div().absolute().right_0().top(px(CONTROL_HEIGHT + 4.)).child(gpui::deferred(anchored).with_priority(3)),
+                        );
+                    }
+                    button
+                });
+                let strip =
+                    div().flex().items_end().gap_1().min_w_0().border_b_1().border_color(hex(Chrome::BORDER)).child(strip).children(add);
+                let content_fills = children.iter().any(Node::fills_height);
+                let content = self.render_plugin_children(
+                    plugin,
+                    children,
+                    path,
+                    div().flex().flex_col().gap_2().min_w_0().when(content_fills, |d| d.flex_1().min_h_0()),
+                    cx,
+                );
+                if *fill && content_fills {
+                    // A page that splits itself into columns scrolls them one by one.
+                    return div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .min_w_0()
+                        .child(strip.flex_shrink_0())
+                        .child(div().flex_1().min_h_0().flex().flex_col().child(content))
+                        .into_any_element();
+                }
+                if *fill {
+                    // The strip stays; what is under it scrolls.
+                    let scroll_id = SharedString::from(format!("plugin-tabs-scroll-{plugin}-{id}"));
+                    return div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .min_w_0()
+                        .child(strip.flex_shrink_0())
+                        .child(div().id(scroll_id).flex_1().min_h_0().overflow_y_scroll().pr_1().child(content))
+                        .into_any_element();
+                }
+                div().flex().flex_col().gap_3().min_w_0().child(strip).child(content).into_any_element()
             }
             Node::Table { id, columns, rows, empty, selected } => {
                 let total: u32 = columns.iter().map(|c| c.grow).sum::<u32>().max(1);
@@ -895,7 +1127,13 @@ impl Workbench {
                             .py_1p5()
                             .when(index + 1 < items.len(), |d| d.border_b_1().border_color(hex_alpha(Chrome::BORDER, 0.6)))
                             .child(
-                                div().w(relative(0.38)).flex_shrink_0().t_small().text_color(hex(Chrome::MUTED)).child(item.label.clone()),
+                                div()
+                                    .w(relative(0.38))
+                                    .max_w(px(200.))
+                                    .flex_shrink_0()
+                                    .t_small()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .child(item.label.clone()),
                             )
                             .child(
                                 div()
@@ -1091,7 +1329,9 @@ impl Workbench {
                         gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(div().mt_1().child(card));
                     div().absolute().top(px(CONTROL_HEIGHT)).left_0().child(gpui::deferred(anchored).with_priority(3))
                 });
-                div().relative().w_full().min_w_0().child(trigger).children(menu).into_any_element()
+                // A column, so the trigger is stretched: as a block its width was not settled when
+                // the label was laid out, and the arrow sat right after the words.
+                div().relative().w_full().min_w_0().flex().flex_col().child(trigger).children(menu).into_any_element()
             }
             Node::Checkbox { id, label, value, description, disabled } => div()
                 .id(key(id, path))
@@ -1199,8 +1439,17 @@ impl Workbench {
     ) -> Div {
         let mut container = container;
         for (index, child) in children.iter().enumerate() {
+            // Drawn beside the panel, not in it: in a column it would add a gap for nothing.
+            if matches!(child, Node::Popover { .. }) {
+                continue;
+            }
             path.push(index);
             let rendered = self.render_plugin_node(plugin, child, path, cx);
+            if child.fills_height() {
+                container = container.child(div().flex_1().min_h_0().flex().flex_col().child(rendered));
+                path.pop();
+                continue;
+            }
             // Text takes the column's width. Measured on its own in a narrow place (a grid cell, a
             // card in a sidebar) it shrinks to its narrowest wrap — a character a line for Korean,
             // Japanese and Chinese — and spills into the column beside it.

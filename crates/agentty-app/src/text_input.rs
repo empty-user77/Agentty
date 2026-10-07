@@ -952,6 +952,9 @@ impl Render for TextInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
+            // Lines are cut to the field's width: a text area as wide as its own content had
+            // none in some places (a card in a grid) and wrapped a letter a line.
+            .when(self.is_multiline(), |d| d.w_full())
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)

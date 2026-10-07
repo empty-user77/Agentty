@@ -434,6 +434,8 @@ impl Workbench {
         }
         .map(|popover| self.render_plugin_popover(&plugin_id, &popover, cx));
 
+        // A tree that takes the panel's height scrolls inside itself, column by column.
+        let fills_panel = matches!(state, RunState::Running) && tree.as_ref().is_some_and(|t| t.fills_height()) && !no_automation;
         let body: AnyElement = match (tree, state) {
             (_, RunState::NeedsConsent) => {
                 let owner = plugin_id.clone();
@@ -497,11 +499,17 @@ impl Workbench {
             }
             (Some(tree), _) => {
                 let mut path = Vec::new();
-                div().p_3().child(self.render_plugin_node(&plugin_id, &tree, &mut path, cx)).into_any_element()
+                let fills = tree.fills_height();
+                div()
+                    .p_3()
+                    .when(fills, |d| d.flex_1().min_h_0().flex().flex_col())
+                    .child(self.render_plugin_node(&plugin_id, &tree, &mut path, cx))
+                    .into_any_element()
             }
             (None, _) => crate::ui::loading_row(t(cx, "plugins.starting")).into_any_element(),
         };
 
+        let mut body_slot = Some(body);
         Some(
             div()
                 .size_full()
@@ -510,18 +518,23 @@ impl Workbench {
                 .bg(hex(Chrome::PANEL))
                 .relative()
                 .child(header)
-                .child(
-                    div()
-                        .id("plugin-panel-scroll")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.plugin_scroll)
-                        .relative()
-                        .child(body)
-                        .group(crate::ui::SCROLL_GROUP)
-                        .child(crate::ui::scrollbar(self.plugin_scroll.clone())),
-                )
+                .when(fills_panel, |d| {
+                    d.child(div().flex_1().min_h_0().flex().flex_col().child(body_slot.take().unwrap_or_else(|| div().into_any_element())))
+                })
+                .when(!fills_panel, |d| {
+                    d.child(
+                        div()
+                            .id("plugin-panel-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.plugin_scroll)
+                            .relative()
+                            .child(body_slot.take().unwrap_or_else(|| div().into_any_element()))
+                            .group(crate::ui::SCROLL_GROUP)
+                            .child(crate::ui::scrollbar(self.plugin_scroll.clone())),
+                    )
+                })
                 // Last, so it paints over the panel's body instead of under it.
                 .children(mode_menu)
                 .children(popover)

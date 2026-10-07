@@ -656,6 +656,11 @@ pub struct Workbench {
     /// Widths the user dragged a plugin grid's resizable column to, by (plugin, grid id), and the
     /// drag's count so only its last move is sent to the plugin.
     plugin_grid_widths: HashMap<(String, String), (f32, u64)>,
+    /// The plugin tab strip whose `+` menu is open, as `plugin/element`.
+    plugin_tab_menu: Option<String>,
+    /// Each plugin tab strip's scroll, and the tab it last showed (to bring a newly picked one
+    /// into view), as `plugin/element`.
+    plugin_tab_strips: RefCell<HashMap<String, (gpui::ScrollHandle, String)>>,
     /// The `select` of a plugin panel whose options are showing: (input scope, element id).
     plugin_select_open: Option<(String, String)>,
     /// Colors of the `code` blocks plugin panels show, by their text and language.
@@ -915,6 +920,8 @@ impl Workbench {
             plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),
             plugin_grid_widths: HashMap::new(),
+            plugin_tab_menu: None,
+            plugin_tab_strips: RefCell::new(HashMap::new()),
             plugin_select_open: None,
             plugin_code_colors: Default::default(),
             plugin_grammars_loading: false,

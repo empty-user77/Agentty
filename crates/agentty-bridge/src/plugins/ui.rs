@@ -153,6 +153,11 @@ pub enum Node {
         /// plugin to keep (API 4).
         #[serde(default)]
         resizable: bool,
+        /// Takes the height left in the panel, and each column scrolls on its own: a sidebar that
+        /// stays put while the page beside it scrolls. In the panel's top column (or columns
+        /// inside it); what comes before it stays on screen (API 4).
+        #[serde(default)]
+        fill: bool,
     },
     /// A tab strip. The plugin sends only the picked tab's content as `children`; picking another
     /// sends `change` with its id (API 4).
@@ -164,6 +169,14 @@ pub enum Node {
         value: String,
         #[serde(default)]
         children: Vec<Node>,
+        /// In a `fill` grid's column: the strip stays and only the picked tab's content scrolls
+        /// (API 4).
+        #[serde(default)]
+        fill: bool,
+        /// A `+` at the end of the strip that opens these as a menu; picking one sends `add`
+        /// with its value (API 4).
+        #[serde(default, rename = "addMenu")]
+        add_menu: Vec<ChoiceOption>,
     },
     /// Rows under column headings. Clicking a row sends `select` with its id (API 4).
     Table {
@@ -383,6 +396,9 @@ pub struct ListItem {
     pub tag: Option<String>,
     #[serde(default)]
     pub tag_tone: Tone,
+    /// Drawn highlighted: the row whose page is open (API 4).
+    #[serde(default)]
+    pub selected: bool,
 }
 
 /// The deepest a list row is indented.
@@ -635,8 +651,12 @@ impl Node {
                     child.check(depth + 1, count)?;
                 }
             }
-            Node::Tabs { tabs, value, children, .. } => {
-                more(count, tabs.len())?;
+            Node::Tabs { tabs, value, children, add_menu, .. } => {
+                more(count, tabs.len() + add_menu.len())?;
+                for option in add_menu.iter_mut() {
+                    cut(&mut option.label);
+                    cut(&mut option.value);
+                }
                 cut(value);
                 for tab in tabs {
                     cut(&mut tab.id);
@@ -730,6 +750,15 @@ impl Node {
             | Node::Grid { children, .. }
             | Node::Tabs { children, .. } => children,
             _ => &[],
+        }
+    }
+
+    /// Whether this node takes the panel's height (a `fill` grid, or a column holding one).
+    pub fn fills_height(&self) -> bool {
+        match self {
+            Node::Grid { fill, .. } => *fill,
+            Node::Column { children, .. } => children.iter().any(Node::fills_height),
+            _ => false,
         }
     }
 

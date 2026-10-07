@@ -165,6 +165,7 @@ card     { children, title?, subtitle?, icon?, tone? }   a raised box; tone colo
 grid     { children, columns?, gap?, widths? }      equal columns (1–6, default 2), wrapping onto new rows
          widths: per column, "240px" fixed or "2" a share — replaces columns
          id?, resizable? (API 4): the first fixed column can be dragged; resize with the width
+         fill: takes the height left, each column scrolling on its own (API 4)
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
          closable: a close button that sends close
          children: the picked tab's content only

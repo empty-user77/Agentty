@@ -70,7 +70,7 @@ when you don't care.
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
 | `context/get` | | `{}` | context |
-| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`, and from API 4 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`, and the fields `gridWidths`, `listTree` (list `depth` / `tag`), `tabClose`, `monoInput`, `completions`, `gridResize` and `openWindow`), missing on older Agentty |
+| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`, and from API 4 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`, and the fields `gridWidths`, `listTree` (list `depth` / `tag`), `tabClose`, `monoInput`, `completions`, `gridResize`, `openWindow`, `gridFill`, `tabsAdd` and `listSelected`), missing on older Agentty |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
@@ -427,7 +427,7 @@ list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: 
                                             item tone colors its icon (same values as badge);
                                             API 4: depth indents the row (0–8) for a tree, tag is a
                                             short label before the title (an HTTP method, ≤ 8
-                                            characters) in tagTone's color
+                                            characters) in tagTone's color; selected: drawn highlighted (the row whose page is open)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                    tone: neutral | info | success | warning | error
@@ -449,10 +449,17 @@ grid     { children, columns?, gap?, widths? }   equal columns (1–6, default 2
                                             fixed (40–1200), "2" twice the share of a "1";
                                             id + resizable: the first fixed column gets a handle
                                             the user drags (160–720), and resize comes back with
-                                            the width in pixels for the plugin to keep
+                                            the width in pixels for the plugin to keep; fill: the
+                                            grid takes the height left in the panel and each
+                                            column scrolls on its own (in the top column, or a
+                                            column inside it, or a fill tab's content)
 tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
                                             children: the picked tab's content only; closable
-                                            draws a close button, which sends close
+                                            draws a close button, which sends close; fill (in a
+                                            fill grid's column): the strip stays and the content
+                                            scrolls; the strip scrolls sideways (drag, wheel) and
+                                            keeps the picked tab in view; addMenu: [{ value,
+                                            label }] behind a + at the strip's end, sends add
 table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
                                             align: start | center | end; grow: share of the width
                                             (1–12); one cell per column; tone marks the first cell

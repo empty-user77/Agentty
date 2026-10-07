@@ -10,6 +10,10 @@ All notable changes to this project are documented here. The format follows
   variables of an API client from `{{` or a few letters), a grid's sidebar column can be dragged
   wider or narrower (`resizable`, the width sent back to keep), and a plugin can open itself in an
   Agentty window of its own (`workspace/openWindow`, or the link `agentty://open/<id>?window=new`).
+  A grid can take the panel's height with each column scrolling on its own (`fill`), tabs keep
+  their strip while their content scrolls, scroll sideways when they do not fit and can carry a
+  `+` menu (`addMenu`), list rows can be marked `selected`, and a button with only an icon is a
+  square.
 - Plugin panels have eleven new elements (plugin API 4): cards, grids, tabs, tables, label/value
   lists, stats, progress bars, callouts, drop-downs, checkboxes and code blocks with syntax colors
   and a copy button.
