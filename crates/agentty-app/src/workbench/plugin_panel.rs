@@ -387,7 +387,7 @@ impl Workbench {
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .bg(hex(Chrome::SIDE_BAR))
-            .child(crate::ui::plugin_mark(panel_logo, panel_icon, IconSize::BUTTON, hex(Chrome::BRIGHT)))
+            .child(crate::ui::plugin_mark(panel_logo.clone(), panel_icon, IconSize::BUTTON, hex(Chrome::BRIGHT)))
             .child(
                 div()
                     .flex_1()
@@ -440,8 +440,9 @@ impl Workbench {
         }
         .map(|popover| self.render_plugin_popover(&plugin_id, &popover, cx));
 
-        // A tree that takes the panel's height scrolls inside itself, column by column.
-        let fills_panel = matches!(state, RunState::Running) && tree.as_ref().is_some_and(|t| t.fills_height()) && !no_automation;
+        // A tree that takes the panel's height scrolls inside itself, column by column. The empty
+        // state fills the panel too, so it can sit centred in all the room there is.
+        let fills_panel = no_automation || (matches!(state, RunState::Running) && tree.as_ref().is_some_and(|t| t.fills_height()));
         let body: AnyElement = match (tree, state) {
             (_, RunState::NeedsConsent) => {
                 let owner = plugin_id.clone();
@@ -485,22 +486,74 @@ impl Workbench {
             _ if no_automation => {
                 let owner = plugin_id.clone();
                 div()
-                    .p_3()
+                    .flex_1()
+                    .min_h_0()
                     .flex()
                     .flex_col()
-                    .gap_2()
-                    .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "plugins.no_automation")))
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.no_automation.hint")))
-                    .child(crate::ui::action_button(
-                        "plugin-new-automation",
-                        t(cx, "plugins.new_automation"),
-                        cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                            // A double click is one automation, not two.
-                            if this.workspaces.get(this.active_workspace).is_some_and(|ws| ws.tabs.is_empty()) {
-                                this.new_plugin_instance(&owner, cx);
-                            }
-                        }),
-                    ))
+                    .items_center()
+                    .justify_center()
+                    .gap_4()
+                    .p_6()
+                    .child(
+                        // The plugin's own mark, dimmed, in a soft tile — the same badge for every plugin.
+                        div()
+                            .size(px(60.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_xl()
+                            .bg(hex_alpha(Chrome::BRIGHT, 0.05))
+                            .border_1()
+                            .border_color(hex(Chrome::BORDER))
+                            .child(crate::ui::plugin_mark(panel_logo, panel_icon, IconSize::ACTIVITY, hex(Chrome::MUTED))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .t_large()
+                                    .font_weight(crate::theme::EMPHASIS)
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .child(t(cx, "plugins.no_automation")),
+                            )
+                            .child(
+                                div()
+                                    .max_w(px(260.))
+                                    .text_center()
+                                    .t_small()
+                                    .text_color(hex(Chrome::MUTED))
+                                    .child(t(cx, "plugins.no_automation.hint")),
+                            ),
+                    )
+                    .child(
+                        // Primary call to action: start a fresh one.
+                        div()
+                            .id("plugin-new-automation")
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .px_3()
+                            .py_1p5()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .t_small()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .bg(hex(Chrome::ACCENT))
+                            .text_color(hex(Chrome::BRIGHT))
+                            .hover(|s| s.bg(hex_alpha(Chrome::ACCENT, 0.82)))
+                            .child(icon("plus", IconSize::INLINE, hex(Chrome::BRIGHT)))
+                            .child(t(cx, "plugins.new_automation"))
+                            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                                // A double click is one instance, not two.
+                                if this.workspaces.get(this.active_workspace).is_some_and(|ws| ws.tabs.is_empty()) {
+                                    this.new_plugin_instance(&owner, cx);
+                                }
+                            })),
+                    )
                     .into_any_element()
             }
             (Some(tree), _) => {
