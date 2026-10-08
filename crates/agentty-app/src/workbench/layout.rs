@@ -33,7 +33,10 @@ impl Workbench {
 
     fn render_node(&self, node: &PaneNode<Pane>, path: Vec<usize>, split: bool, active: &Pane, cx: &mut Context<Self>) -> AnyElement {
         match node {
-            PaneNode::Leaf(pane) => self.render_pane(pane, split, pane == active, cx),
+            // A chat's lead is drawn as the chat.
+            PaneNode::Leaf(pane) => {
+                self.render_chat(pane, split, pane == active, cx).unwrap_or_else(|| self.render_pane(pane, split, pane == active, cx))
+            }
             PaneNode::Split { axis, children, sizes } => {
                 let axis = *axis;
                 let bounds = self.split_bounds.clone();
@@ -60,11 +63,14 @@ impl Workbench {
                         Some(zoomed) => zoom_sizes(children.len(), zoomed)[index],
                         None => *size,
                     };
+                    // A chat keeps room to read and write in, however the grid below it grows.
+                    let chat = axis == Axis::Vertical && matches!(child, PaneNode::Leaf(p) if self.chats.contains_key(&p.entity_id()));
                     container = container.child(
                         div()
                             .flex_basis(relative(0.))
                             .min_w_0()
                             .min_h_0()
+                            .when(chat, |d| d.min_h(px(super::chat::CHAT_MIN_HEIGHT)))
                             .map(|mut d| {
                                 d.style().flex_grow = Some(size);
                                 d
@@ -135,7 +141,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn render_pane(&self, pane: &Pane, split: bool, active: bool, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_pane(&self, pane: &Pane, split: bool, active: bool, cx: &mut Context<Self>) -> AnyElement {
         let mut chip = pane.read(cx).git_branch.clone().filter(|_| split).map(|b| self.branch_chip(pane, b, cx));
         let mut tree_chip = split.then(|| self.worktree_chip(pane, cx)).flatten();
         let mut collab = split.then(|| self.render_collab_chips(pane, cx)).flatten();
@@ -216,6 +222,18 @@ impl Workbench {
                         )
                         .child(crate::brand::avatar(view.tool_id(), 16.)),
                 )
+                // A chat's worker says which one it is: the grid shows several side by side.
+                .when_some(self.chat_worker_title(pane, cx), |d, title| {
+                    d.child(
+                        div()
+                            .flex_shrink_0()
+                            .max_w(px(180.))
+                            .truncate()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(title),
+                    )
+                })
                 // The items of the status bar, in the user's order (Settings → Appearance), in a row of
                 // their own: where the pane is too narrow for all of them, they give way at its end,
                 // never the pane's own buttons after it.
@@ -1012,6 +1030,8 @@ impl Workbench {
         let (status, status_color) = status_label_sized(view, width < COMPACT_METER_WIDTH, cx);
         let name = crate::brand::brand(crate::brand::kind_id(kind)).name;
         let working = view.working_since.is_some();
+        // A chat's worker says which one it is: the grid shows several side by side.
+        let worker = self.chat_worker_title(pane, cx);
         Some(
             div()
                 .h(px(28.))
@@ -1025,6 +1045,17 @@ impl Workbench {
                 .map(|d| if bars_below(cx) { d.border_t_1() } else { d.border_b_1() })
                 .border_color(hex(Chrome::BORDER))
                 .t_small()
+                .when_some(worker, |d, title| {
+                    d.child(
+                        div()
+                            .flex_shrink_0()
+                            .max_w(px(180.))
+                            .truncate()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(title),
+                    )
+                })
                 // The items of the status bar, in the user's order (Settings → Appearance).
                 .map(|mut d| {
                     for entry in hud.iter().filter(|e| e.visible) {

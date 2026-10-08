@@ -32,7 +32,8 @@ actions!(
         MoveUp,
         MoveDown,
         NextField,
-        PreviousField
+        PreviousField,
+        NewLine
     ]
 );
 
@@ -53,6 +54,7 @@ pub fn bind_keys(cx: &mut App) {
         crate::key("home", Home, Some(CONTEXT)),
         crate::key("end", End, Some(CONTEXT)),
         crate::key("enter", Confirm, Some(CONTEXT)),
+        crate::key("shift-enter", NewLine, Some(CONTEXT)),
         crate::key("escape", Cancel, Some(CONTEXT)),
         crate::key("tab", NextField, Some(CONTEXT)),
         crate::key("shift-tab", PreviousField, Some(CONTEXT)),
@@ -94,6 +96,8 @@ pub struct TextInput {
     keep_pasted_lines: bool,
     /// Rows shown when the field holds many lines; 0 is the usual one-line field.
     rows: usize,
+    /// A message composer: Enter sends (Confirmed) and Shift+Enter adds a line.
+    enter_sends: bool,
     /// First line drawn, when the text is taller than `rows`.
     scroll_line: usize,
     /// Each visible line of the last paint: where it starts in the content, and its layout.
@@ -136,6 +140,7 @@ impl TextInput {
             masked: false,
             keep_pasted_lines: false,
             rows: 0,
+            enter_sends: false,
             scroll_line: 0,
             last_lines: Vec::new(),
             menu_at: None,
@@ -164,6 +169,14 @@ impl TextInput {
     /// keeps its line breaks. One row or none is the usual single-line field.
     pub fn multiline(mut self, rows: usize) -> Self {
         self.rows = rows;
+        self
+    }
+
+    /// A field of `rows` lines where Enter sends what was written (Confirmed) and Shift+Enter starts
+    /// a new line, as in a chat.
+    pub fn composer(mut self, rows: usize) -> Self {
+        self.rows = rows;
+        self.enter_sends = true;
         self
     }
 
@@ -950,8 +963,13 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::copy))
             // In a field of many lines Enter adds one, and Up and Down walk through them; in a
             // one-line field they mean what they always did to whoever owns it.
-            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+            .on_action(cx.listener(|this, _: &NewLine, window, cx| {
                 if this.is_multiline() {
+                    this.replace_text_in_range(None, "\n", window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+                if this.is_multiline() && !this.enter_sends {
                     this.replace_text_in_range(None, "\n", window, cx);
                 } else {
                     cx.emit(TextInputEvent::Confirmed);

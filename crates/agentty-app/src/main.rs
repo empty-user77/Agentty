@@ -803,6 +803,16 @@ fn main() {
                                     }
                                 }
                             }
+                            agent_signal::SocketMessage::TasksCtl(request) => {
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.answer_tasks_ctl(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
                             agent_signal::SocketMessage::Db(request) => {
                                 // The window holding the asking pane shows the approval dialog.
                                 match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {

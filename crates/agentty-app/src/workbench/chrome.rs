@@ -2468,6 +2468,16 @@ impl Workbench {
                 Box::new(|this, w, cx| this.open_new_workspace_page(w, cx)),
                 cx,
             ))
+            .when(self.is_installed("claude"), |menu| {
+                menu.child(entry(
+                    "launch-chat-workspace".into(),
+                    Some("claude"),
+                    t(cx, "new.chat_workspace").into(),
+                    "",
+                    Box::new(|this, w, cx| this.request_launch(LaunchChoice::Chat, LaunchTarget::NewWorkspace, w, cx)),
+                    cx,
+                ))
+            })
             // Last: what opens something new comes first, putting something back comes after it.
             .children(self.render_reopen_tabs(cx));
         // Right-clicked on the tab strip: open where the click was; else under the + button.
@@ -2582,6 +2592,11 @@ impl Workbench {
         } else {
             missing("claude", "Claude Code", CLAUDE_INSTALL_URL, cx)
         });
+        // A chat runs Claude Code as its lead.
+        if self.is_installed("claude") {
+            let body = t(cx, "welcome.chat_body").to_string();
+            cards = cards.child(card("welcome-chat".into(), "claude", t(cx, "welcome.chat").into(), body, LaunchChoice::Chat, cx));
+        }
         cards = cards.child(if self.is_installed("codex") {
             let body = tf(cx, "welcome.maker_body", &[("maker", "OpenAI")]);
             card("welcome-codex".into(), "codex", "Codex".into(), body, PaneKind::Codex.into(), cx)

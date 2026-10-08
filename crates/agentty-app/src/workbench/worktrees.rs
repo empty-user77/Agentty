@@ -53,7 +53,7 @@ impl TreeRequest {
 fn label(choice: &LaunchChoice) -> String {
     match choice {
         LaunchChoice::Kind(PaneKind::Codex) | LaunchChoice::Model(PaneKind::Codex, _) => "codex".into(),
-        LaunchChoice::Kind(_) | LaunchChoice::Model(..) => "claude".into(),
+        LaunchChoice::Kind(_) | LaunchChoice::Model(..) | LaunchChoice::Chat => "claude".into(),
         LaunchChoice::Command { title, .. } => title.split_whitespace().next().unwrap_or("agent").to_lowercase(),
     }
 }
@@ -129,7 +129,8 @@ impl Workbench {
     /// When the working tree at `cwd` is taken, asks whether `choice` gets a tree of its own or joins
     /// the one in use. Returns whether it took over the launch (the answer starts it).
     pub(super) fn launch_in_own_tree(&mut self, choice: &LaunchChoice, target: LaunchTarget, cwd: &Path, cx: &mut Context<Self>) -> bool {
-        if !crate::settings::settings(cx).auto_worktree || matches!(choice, LaunchChoice::Kind(PaneKind::Shell)) {
+        // A chat's lead works in the project itself: it reviews and merges what its workers did.
+        if !crate::settings::settings(cx).auto_worktree || matches!(choice, LaunchChoice::Kind(PaneKind::Shell) | LaunchChoice::Chat) {
             return false;
         }
         let Some(root) = tree_root(cwd) else { return false };

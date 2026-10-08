@@ -40,6 +40,9 @@ pub struct TabSnapshot {
     /// The pane in focus view (⇧⌘↩), by its place among the tab's panes.
     #[serde(default)]
     pub zoomed_pane: Option<usize>,
+    /// A chat tab: its first pane is the lead agent drawn as a chat, the others its workers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chat: bool,
 }
 
 /// A tab of a plugin's workspace as one automation: an id the plugin knows it by, and the name it
@@ -663,6 +666,7 @@ mod tests {
                 }),
                 active_pane: 0,
                 zoomed_pane: None,
+                chat: true,
             }],
             ..loaded
         };
