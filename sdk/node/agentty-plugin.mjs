@@ -12,8 +12,8 @@
 
 import { createInterface } from 'node:readline';
 
-export const SDK_VERSION = '1.0.0';
-export const API_VERSION = 3;
+export const SDK_VERSION = '1.1.0';
+export const API_VERSION = 4;
 
 /** Builders for the panel UI tree. Every interactive element needs an `id` unique in the panel. */
 export const ui = {
@@ -56,6 +56,7 @@ export function createPlugin(streams = {}) {
   const input = streams.input ?? process.stdin;
   const output = streams.output ?? process.stdout;
   const commands = new Map();
+  const tools = new Map();
   const events = new Map();
   const urls = new Map();
   const listeners = { activate: [], panelOpen: [], panelClose: [], context: [], event: [], url: [], shutdown: [], browserHidden: [], instanceOpen: [], instanceClose: [] };
@@ -74,6 +75,15 @@ export function createPlugin(streams = {}) {
 
     command(id, handler) {
       commands.set(id, handler);
+      return plugin;
+    },
+    /**
+     * Answers an AI agent's call of a tool listed in `contributes.tools` (needs the `mcp.tools`
+     * permission): handler({ args, context }) → a string, any JSON value, or MCP content
+     * `{ content: [{ type: 'text', text }], isError? }`. A thrown error goes back to the agent.
+     */
+    tool(name, handler) {
+      tools.set(name, handler);
       return plugin;
     },
     /** Handler for events of one element id: (event, context) => … */
@@ -340,6 +350,22 @@ export function createPlugin(streams = {}) {
           return;
         }
         await guarded(() => handler({ context: params.context, args: params.args ?? {} }));
+        return;
+      }
+      case 'tools/call': {
+        const handler = tools.get(params.name);
+        if (message.id === undefined) return;
+        if (!handler) {
+          send({ id: message.id, error: { code: -32601, message: `no handler for tool ${params.name}` } });
+          return;
+        }
+        try {
+          const result = await handler({ args: params.arguments ?? {}, context: params.context });
+          send({ id: message.id, result: result === undefined ? null : result });
+        } catch (err) {
+          plugin.log(err?.stack ?? String(err));
+          send({ id: message.id, error: { code: -32603, message: err?.message ?? String(err) } });
+        }
         return;
       }
       case 'ui/event': {

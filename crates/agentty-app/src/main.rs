@@ -43,6 +43,7 @@ mod native;
 mod notifications;
 mod platform;
 mod plugins;
+mod plugins_mcp;
 mod procinfo;
 mod remote;
 mod settings;
@@ -539,6 +540,10 @@ fn main() {
         std::process::exit(browser_mcp::serve());
     }
 
+    if args.get(1).map(String::as_str) == Some("mcp-plugins") {
+        std::process::exit(plugins_mcp::serve());
+    }
+
     if args.get(1).map(String::as_str) == Some("browser") {
         std::process::exit(browser_cli::run(&args[2..]));
     }
@@ -811,6 +816,23 @@ fn main() {
                                     }
                                     None => {
                                         let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
+                            agent_signal::SocketMessage::Plugins(request) => {
+                                // Plugins are shared by every window: no window is involved.
+                                let args = &request.args;
+                                match args["action"].as_str() {
+                                    Some("call") => plugins::mcp::call(
+                                        request.pane,
+                                        args["plugin"].as_str().unwrap_or_default(),
+                                        args["tool"].as_str().unwrap_or_default(),
+                                        args["arguments"].clone(),
+                                        request.reply,
+                                        cx,
+                                    ),
+                                    _ => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Ok(plugins::mcp::list(cx).to_string())));
                                     }
                                 }
                             }

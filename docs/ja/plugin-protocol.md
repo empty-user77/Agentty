@@ -5,7 +5,7 @@ description: SDK の背後の JSON-RPC ワイヤーフォーマット、WebAssem
 
 SDK なしでプラグインを書くためのワイヤーフォーマットです。[Node.js SDK](/docs/plugin-sdk) と [Rust SDK](/docs/plugin-rust) がすべて包んでくれます。どちらにせよ[クイックスタート](/docs/plugin-quickstart)を先に読むとよいでしょう。
 
-API **バージョン 1** は、このページから `host/timer` と `pane/status` を除いたすべてです。この 2 つは**バージョン 2** です。
+API **バージョン 1** は、このページから `host/timer` と `pane/status` を除いたすべてです。この 2 つは**バージョン 2** で、`tools/call` は**バージョン 4** です。
 
 ## 通信方式
 
@@ -33,6 +33,7 @@ stdin が閉じるか `shutdown` が来たら終了してください。`shutdow
 | `context/changed` | 通知 | `{ context }` |
 | `url/open` | 通知 | `{ path, query, url, context }` |
 | `pane/status` | 通知 | `{ paneId, status, running, agent, title, cwd }` — このプラグインが開始したペインの状態が変わった（`workspace.read`、API 2） |
+| `tools/call` | リクエスト — 応答が必要 | `{ name, arguments, context }` — AI エージェントがツールを呼び出している（`mcp.tools`、API 4） |
 | `shutdown` | 通知 | `{}` |
 
 `initialize` が最初に来て、その直後にプラグインを起動させたもの（コマンド、パネルを開く、リンク）が続きます。`initialize` には任意の結果で応答すれば十分です（例: `{}`）。
@@ -67,6 +68,12 @@ stdin が閉じるか `shutdown` が来たら終了してください。`shutdow
 ### ネットワークに届く
 
 `net/fetch` はプラグインがネットワークに届く唯一の方法です。Agentty が課す範囲 — メソッド、ヘッダ、サイズ、タイムアウト、リダイレクト — は[権限](/docs/plugin-permissions#net-request)にあります。要点は、リクエストにあなたのものは何も載らないということです。クッキーも保存された資格情報もなく、プラグインが自分で入れたものだけが行きます。
+
+### エージェントのツール呼び出しに応答する (API 4)
+
+AI エージェントがあなたのツールを呼び出すとき、Agentty は `tools/call` を `{ name, arguments, context }` で送ります。文字列、任意の JSON 値、または MCP 形式のコンテンツ `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }` で応答してください。他のコンテンツタイプは削除されます。または JSON-RPC エラーで応答してください。そのメッセージはエージェントのエラーとして渡されます。
+
+プラグインは 120 秒以内に応答する必要があります。1 つのプラグインで最大 8 件の呼び出しが待つことができます。引数は最大 256 KB です。エージェントに渡されるテキストは 100,000 文字で切られます。
 
 ### 待つ、そしてエージェントが終わったのを聞く
 

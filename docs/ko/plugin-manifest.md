@@ -49,7 +49,7 @@ description: agentty-plugin.json의 모든 필드 — 식별 정보, 실행 방�
 |---|---|---|
 | `main` | 필수 | 플러그인 폴더 기준 진입점 |
 | `runtime` | `node` | `node`(로그인 셸 `PATH`의 Node.js 18+), `python`(`python3 <main>`), `executable`(`<main>`을 직접 실행), 또는 `wasm` — `<main>`이 Agentty가 직접 실행하는 WebAssembly 모듈. [Rust와 WebAssembly](/docs/plugin-rust) 참고 |
-| `apiVersion` | `1` | 작성 기준이 된 플러그인 API 버전. `2`는 [AgentOS 플러그인](/docs/plugin-agentos)에 필요한 `host/timer`와 `pane/status`를 더합니다. 더 낮은 버전만 아는 Agentty는 실행할 수 없는 것을 설치하는 대신 그렇다고 알립니다 |
+| `apiVersion` | `1` | 작성 기준이 된 플러그인 API 버전. `2`는 [AgentOS 플러그인](/docs/plugin-agentos)에 필요한 `host/timer`와 `pane/status`를 더하고, `4`는 MCP용 `tools/call`을 더합니다. 더 낮은 버전만 아는 Agentty는 실행할 수 없는 것을 설치하는 대신 그렇다고 알립니다 |
 | `activationEvents` | `[]` | `["onStartup"]`이면 Agentty와 함께 시작하고, 아니면 처음 사용할 때 시작 |
 
 Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 실행합니다. `wasm` 플러그인은 프로그램을 시작하지 않습니다. 모듈이 Agentty 안에서 실행되며 작업 디렉터리도, 환경 변수도, 파일도 없습니다.
@@ -64,7 +64,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 ## 권한
 
 ```json
-"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read"]
+"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read", "mcp.tools"]
 ```
 
 | 권한 | 허용되는 일 |
@@ -74,6 +74,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 | `terminal.write` | 열린 페인에 입력 |
 | `session.read` | AI 대화 읽기 |
 | `workspace.read` | 워크스페이스 목록 조회, 컨텍스트의 폴더·제목 필드 확인 |
+| `mcp.tools` | AI 에이전트에 도구 제공. `apiVersion: 4`와 `contributes.tools` 필요 |
 
 쓰는 것만 요청하세요. 목록은 설치 전에 이용자에게 표시되고, 권한 없는 호출은 실패합니다. [플러그인 권한](/docs/plugin-permissions)을 참고하세요.
 
@@ -131,6 +132,37 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 | `palette` | `false`면 명령 팔레트에서 숨김 |
 
 명령은 명령 팔레트에서 실행합니다. `paneBar`와 `when`은 없어졌습니다. 두 필드가 남아 있는 매니페스트도 그대로 설치·실행되고 필드는 무시되지만, **그 버튼에 의존해 만든 플러그인은 버튼을 잃고** 명령은 팔레트에서 실행하게 됩니다.
+
+### AI 에이전트의 도구
+
+```json
+"contributes": {
+  "tools": [
+    {
+      "name": "list_containers",
+      "description": "Lists the Docker containers this plugin manages, with their state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "all": { "type": "boolean" }
+        }
+      },
+      "readOnly": true
+    }
+  ]
+}
+```
+
+플러그인은 Agentty에서 실행되는 AI 에이전트(Claude Code, Codex)에 도구를 제공할 수 있습니다. `mcp.tools` 권한과 `apiVersion: 4`가 필수이고 함께 선언돼야 합니다.
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `name` | 예 | 1–48자. `a-z`, `0-9`, `_` 사용, 문자로 시작 |
+| `description` | 예 | 1–1000자. 에이전트가 도구에 대해 아는 전부 |
+| `inputSchema` | | JSON Schema, type은 `object`, 최대 16KB |
+| `readOnly` | | 불값(기본값 `false`). 에이전트에 대한 힌트 |
+
+플러그인당 최대 32개 도구. 플러그인은 `tools/call` 요청에 문자열, 어떤 JSON 값, 또는 MCP 형식 컨텐츠(`{ "content": [...], "isError": false }`)로 응답합니다. 상세는 [플러그인 프로토콜](/docs/plugin-protocol)을 참고하세요.
 
 ## 아이콘
 

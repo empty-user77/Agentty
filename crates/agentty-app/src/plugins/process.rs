@@ -508,4 +508,74 @@ mod tests {
         let _ = std::fs::remove_dir(plugin_data_dir("proc-test"));
         let _ = std::fs::remove_dir(plugin_data_dir("proc-test").parent().unwrap_or(&dir));
     }
+
+    /// An agent's tool call reaches the real Node SDK's `plugin.tool` handler and its answer, or
+    /// its error, comes back under the call's id.
+    #[test]
+    fn a_node_plugin_answers_tool_calls() {
+        let Some(_) = find_program("node", &std::env::var("PATH").unwrap_or_default()) else { return };
+        let dir = std::env::temp_dir().join(format!("agentty-plugin-tools-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("agentty-plugin.mjs"), agentty_bridge::plugins::store::NODE_SDK).unwrap();
+        std::fs::write(
+            dir.join("main.mjs"),
+            "import { createPlugin } from './agentty-plugin.mjs';\n\
+             const plugin = createPlugin();\n\
+             plugin.tool('count', async ({ args }) => ({ items: Array.from({ length: args.n }, (_, i) => i) }));\n\
+             plugin.tool('fail', async () => { throw new Error('broken on purpose'); });\n\
+             plugin.start();\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("agentty-plugin.json"),
+            r#"{"id":"tools-test","name":"T","version":"1.0.0","main":"main.mjs","apiVersion":4,"permissions":["mcp.tools"],
+                "contributes":{"tools":[{"name":"count","description":"Counts."},{"name":"fail","description":"Fails."}]}}"#,
+        )
+        .unwrap();
+        let manifest = agentty_bridge::plugins::manifest::Manifest::load(&dir).unwrap();
+        assert!(manifest.supports_mcp());
+        let plugin = InstalledPlugin {
+            id: "tools-test".into(),
+            dir: dir.clone(),
+            manifest: Some(manifest),
+            error: None,
+            enabled: true,
+            source: agentty_bridge::plugins::store::Source::Dev,
+        };
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let process = PluginProcess::start(&plugin, "en", move |event| {
+            let _ = tx.lock().unwrap().send(event);
+        });
+        let call = |id: u64, name: &str, arguments: serde_json::Value| {
+            agentty_bridge::plugins::request(id, "tools/call", serde_json::json!({ "name": name, "arguments": arguments }))
+        };
+        process.send(agentty_bridge::plugins::request(1, "initialize", serde_json::json!({ "plugin": { "id": "tools-test" } })));
+        process.send(call(2, "count", serde_json::json!({ "n": 3 })));
+        process.send(call(3, "fail", serde_json::json!({})));
+        process.send(call(4, "missing", serde_json::json!({})));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut answers = std::collections::HashMap::new();
+        while std::time::Instant::now() < deadline && answers.len() < 3 {
+            match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+                Ok(ProcessEvent::Message(Incoming::Response { id, result })) if id != serde_json::json!(1) => {
+                    answers.insert(id.as_u64().unwrap(), result);
+                }
+                // Whatever the plugin asks of Agentty meanwhile is answered.
+                Ok(ProcessEvent::Message(Incoming::Request { id, .. })) => {
+                    process.send(agentty_bridge::plugins::response(&id, Ok(serde_json::Value::Null)));
+                }
+                Ok(ProcessEvent::Failed(err)) => panic!("{err}"),
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        process.stop();
+        assert_eq!(answers.get(&2), Some(&Ok(serde_json::json!({ "items": [0, 1, 2] }))));
+        assert_eq!(answers.get(&3), Some(&Err("broken on purpose".to_string())));
+        assert!(answers.get(&4).is_some_and(|a| a.as_ref().is_err_and(|e| e.contains("missing"))));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir(plugin_data_dir("tools-test"));
+    }
 }

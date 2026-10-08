@@ -26,6 +26,7 @@ plugin.start();
 |---|---|
 | `onActivate(info => …)` | プラグインが起動した。`info` に `plugin.dataDir`、`language`、`context` |
 | `command(id, ({ context, args }) => …)` | コマンドパレットからコマンドが実行された |
+| `tool(name, handler)` | AI エージェントがツールを呼び出した。ハンドラが `{ args, context }` を受け取り応答を返す。エラーはツールエラーとして送信される |
 | `onPanelOpen(context => …)` | パネルが表示された — ここで描画します |
 | `onPanelClose(context => …)` | パネルが隠れた |
 | `onEvent(elementId, (event, context) => …)` | その id の UI 要素が使われた |
@@ -164,6 +165,19 @@ await plugin.injectPrompt({
 - 60,000 バイトを超えるプロンプトは `~/.agentty/prompts/` に保存され、そのファイルを読むようエージェントに伝えられます。
 
 他のアプリやリンクから始まるものには `ask` を使ってください。
+
+## AI エージェント向けツール
+
+```js
+plugin.tool('list_containers', async ({ args }) => {
+  const containers = await listContainers({ all: args.all === true });
+  return containers.map((c) => `${c.name}: ${c.state}`).join('\n');
+});
+```
+
+`plugin.start()` 呼び出しの前にツールを登録してください。エージェントがツールを呼び出すと、あなたの応答（文字列、任意の JSON 値、MCP 形式のコンテンツ）が受け取られます。ハンドラで投げたエラーはツールエラーとしてエージェントに送信されます。
+
+プラグインはツールを提供するために `mcp.tools` 権限と `apiVersion: 4` を宣言する必要があります。プラグインあたり最大 32 個のツール。スキーマと制限は[マニフェストリファレンス](/docs/plugin-manifest)を参照してください。
 
 ## セッションとターミナル
 

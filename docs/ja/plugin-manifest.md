@@ -64,7 +64,7 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 ## 権限
 
 ```json
-"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read"]
+"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read", "mcp.tools"]
 ```
 
 | 権限 | できること |
@@ -74,6 +74,7 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 | `terminal.write` | 開いているペインへの入力 |
 | `session.read` | AI 会話の読み取り |
 | `workspace.read` | ワークスペース一覧の取得、コンテキストのフォルダ・タイトル項目の参照 |
+| `mcp.tools` | AI エージェントにツールを提供。`apiVersion: 4` と `contributes.tools` が必須 |
 
 使うものだけを求めてください。一覧はインストール前に利用者へ表示され、権限のない呼び出しは失敗します。[プラグインの権限](/docs/plugin-permissions)を参照してください。
 
@@ -131,6 +132,37 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 | `palette` | `false` でコマンドパレットから隠す |
 
 コマンドはコマンドパレットから実行します。`paneBar` と `when` はなくなりました。これらが残っているマニフェストもこれまで通りインストール・実行でき、フィールドは無視されます。ただし**そのボタンを前提に作られたプラグインはボタンを失い**、コマンドはパレットから実行することになります。
+
+### AI エージェント向けツール
+
+```json
+"contributes": {
+  "tools": [
+    {
+      "name": "list_containers",
+      "description": "Lists the Docker containers this plugin manages, with their state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "all": { "type": "boolean" }
+        }
+      },
+      "readOnly": true
+    }
+  ]
+}
+```
+
+プラグインは Agentty で動いている AI エージェント (Claude Code、Codex) へツールを提供できます。`mcp.tools` 権限と `apiVersion: 4` が必須で、一緒に宣言する必要があります。
+
+| フィールド | 必須 | 説明 |
+|---|---|---|
+| `name` | はい | 1～48 文字。`a-z`、`0-9`、`_` のみ、文字で始まる |
+| `description` | はい | 1～1000 文字。エージェントが知るツールのすべて |
+| `inputSchema` | | JSON Schema、型は `object`、最大 16 KB |
+| `readOnly` | | ブール値（既定値 `false`）。エージェントへのヒント |
+
+プラグインあたり最大 32 個のツール。プラグインは `tools/call` リクエストに文字列、任意の JSON 値、または MCP 形式のコンテンツ (`{ "content": [...], "isError": false }`) で応答します。詳細は[プラグインプロトコル](/docs/plugin-protocol)を参照してください。
 
 ## アイコン
 

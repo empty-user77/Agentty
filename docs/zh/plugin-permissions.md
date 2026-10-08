@@ -14,6 +14,7 @@ description: 五项权限、没有权限时插件能看到什么，以及为什�
 | `terminal.write` | 向终端输入并回车 | `terminal/send` |
 | `session.read` | 读取 Agentty 中已打开 AI 会话的对话 | `session/get` |
 | `workspace.read` | 查看打开的工作区、标签页、文件夹和智能体状态 | `workspace/list`、`host/revealPath`、`pane/status` |
+| `mcp.tools` | 通过它提供的工具回应 Agentty 中运行的 AI 智能体 (MCP) | `tools/call` |
 
 插件自己的存储和它的面板不需要权限。`storage/get`、`storage/set` 和 `storage/keys` 是它自己的文件夹（`<数据目录>/plugin-data/<id>/storage.json`，以 `0600` 创建），最多 64 个键、共 1 MB。WebAssembly 插件没有自己的文件，所以这是它记住任何东西的唯一办法。
 
@@ -100,6 +101,20 @@ Agentty 分不出地址的好坏，所以这一段归你负责：把链接交给
 | UI 树 | 2,000 个元素、12 层深、每个字符串 20,000 字符。`choice` 的选项和列表项的按钮也各自计入元素 |
 | 行长度 | stdout 和 stderr 各 16 MB |
 | WebAssembly | 模块 64 MB、内存 64 MB、每条消息 16 MB、处理一条消息期间 256 条消息 —— `send` 与 `log` 合计 |
+
+## AI 智能体的工具 (MCP)
+
+插件可以向 Agentty 中运行的 AI 智能体 (Claude Code、Codex) 提供工具。通过 Agentty 自带的 MCP 服务器（`agentty-plugins` MCP 服务器）工作。当至少一个启用的插件声明了 `mcp.tools` 权限并在 `contributes.tools` 下列出工具时，智能体会自动收到该服务器。
+
+插件必须同时声明权限和工具。只有权限或只有工具是清单错误。`mcp.tools` 权限需要 API 版本 4。
+
+不声明 `mcp.tools` 的插件不支持 MCP：智能体看不到它。它的插件页面显示"MCP 连接 — 不支持"。
+
+声明了 `mcp.tools` 的插件的权限选项卡上有**"允许 MCP 连接"**开关，默认为 ON。用户关闭它时，智能体将无法再列出或调用该插件的工具。
+
+每个插件最多 32 个工具。工具 `name` 是 1–48 个字符，仅限小写字母、数字、下划线，以字母开头。每个调用在 120 秒后超时。参数和发送给智能体的文本有大小限制——见协议详情。
+
+插件的应答进入智能体上下文，应如同其他工具输出一样处理。每次调用都写进日志（"日志"选项卡），显示调用它的面板。
 
 ## 写一个配得上这些权限的插件
 

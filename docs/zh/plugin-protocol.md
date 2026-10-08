@@ -5,7 +5,7 @@ description: SDK 背后的 JSON-RPC 线上格式、WebAssembly 模块 ABI，以�
 
 不借助 SDK 编写插件时用到的线上格式。[Node.js SDK](/docs/plugin-sdk) 和 [Rust SDK](/docs/plugin-rust) 都已经封装了全部内容；无论哪种方式，建议先读[快速开始](/docs/plugin-quickstart)。
 
-API **版本 1** 是本页中除 `host/timer` 和 `pane/status` 之外的全部内容，这两者属于**版本 2**。
+API **版本 1** 是本页中除 `host/timer` 和 `pane/status` 之外的全部内容，这两者属于**版本 2**，`tools/call` 属于**版本 4**。
 
 ## 传输方式
 
@@ -33,6 +33,7 @@ Agentty 以插件文件夹作为工作目录启动程序：
 | `context/changed` | 通知 | `{ context }` |
 | `url/open` | 通知 | `{ path, query, url, context }` |
 | `pane/status` | 通知 | `{ paneId, status, running, agent, title, cwd }` —— 这个插件启动的某个窗格状态变了（`workspace.read`，API 2） |
+| `tools/call` | 请求 —— 需要应答 | `{ name, arguments, context }` —— 某个 AI 智能体在调用工具（`mcp.tools`，API 4） |
 | `shutdown` | 通知 | `{}` |
 
 `initialize` 最先到达，紧接着是启动该插件的那件事（命令、打开面板或链接）。对 `initialize` 用任意结果应答即可，例如 `{}`。
@@ -67,6 +68,12 @@ Agentty 以插件文件夹作为工作目录启动程序：
 ### 接触网络
 
 `net/fetch` 是插件接触网络的唯一途径。Agentty 给它划下的边界——方法、请求头、大小、超时、重定向——都在[权限](/docs/plugin-permissions#net-request)里。一句话说完：请求里不会带上任何属于你的东西，没有 cookie，没有已保存的凭据，只有插件自己放进去的内容。
+
+### 回应智能体的工具调用 (API 4)
+
+当某个 AI 智能体调用你的工具时，Agentty 用 `{ name, arguments, context }` 发送 `tools/call`。用字符串、任意 JSON 值或 MCP 格式的内容 `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }` 应答。其他内容类型会被丢弃。或者用 JSON-RPC 错误应答；其消息会作为错误传给智能体。
+
+插件必须在 120 秒内应答。同一个插件最多有 8 个调用在等待。参数最多 256 KB；传给智能体的文本在 100,000 字符处被截断。
 
 ### 等待，以及听到智能体干完了
 

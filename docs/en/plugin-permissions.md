@@ -14,6 +14,7 @@ What a plugin may do is declared in advance, in `agentty-plugin.json`, and shown
 | `terminal.write` | Type into terminals and press Enter | `terminal/send` |
 | `session.read` | Read the conversation of AI sessions open in Agentty | `session/get` |
 | `workspace.read` | See open workspaces, tabs, folders and agent status | `workspace/list`, `host/revealPath`, `pane/status` |
+| `mcp.tools` | Answer AI agents in Agentty through the tools it offers (MCP) | `tools/call` |
 
 A plugin's own storage and its panel need no permission. `storage/get`, `storage/set` and `storage/keys` are its own folder (`<data dir>/plugin-data/<id>/storage.json`, created `0600`), up to 64 keys and a megabyte. A WebAssembly plugin has no files of its own, so that is how it remembers anything.
 
@@ -100,6 +101,20 @@ Agentty protects itself from a plugin behaving badly, whether or not it meant to
 | UI tree | 2,000 elements, 12 levels deep, 20,000 characters per string. A `choice`'s options and a list item's buttons each count as elements |
 | Line length | 16 MB on stdout and stderr |
 | WebAssembly | 64 MB module, 64 MB memory, 16 MB per message, 256 messages while handling one — `send` and `log` together |
+
+## Tools for AI agents (MCP)
+
+A plugin can offer tools to AI agents running in Agentty — Claude Code and Codex — through an MCP server Agentty ships (`agentty-plugins` MCP server). Agents automatically get the server when at least one enabled plugin declares the `mcp.tools` permission and lists tools under `contributes.tools`.
+
+A plugin must declare both the permission and the tools together: the permission without tools, or tools without the permission, is a manifest error. The permission requires API version 4.
+
+A plugin that does not declare `mcp.tools` is not supported for MCP: agents never see it. Its page shows "MCP connection — Not supported".
+
+A plugin that declares it has an **"Allow MCP connection"** switch on its Permissions tab, ON by default. When the user turns it OFF, agents can no longer list or call that plugin's tools.
+
+At most 32 tools per plugin; tool `name` is 1–48 lower-case letters, digits or `_`, starting with a letter. Each call times out after 120 seconds. Arguments and text handed to the agent have size limits — see the protocol for details.
+
+The plugin's answers go into the agent's context — treat them like any other tool output. Each call is logged (Logs tab) with the pane that called it.
 
 ## Writing a plugin that deserves it
 

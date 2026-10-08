@@ -5,7 +5,7 @@ description: SDK 뒤에서 오가는 JSON-RPC 와이어 포맷, WebAssembly 모�
 
 SDK 없이 플러그인을 작성하기 위한 와이어 포맷입니다. [Node.js SDK](/docs/plugin-sdk)와 [Rust SDK](/docs/plugin-rust)가 전부 감싸 주며, 어느 쪽이든 [빠른 시작](/docs/plugin-quickstart)을 먼저 읽는 편이 좋습니다.
 
-API **버전 1**은 이 페이지에서 `host/timer`와 `pane/status`를 뺀 전부입니다. 그 둘은 **버전 2**입니다.
+API **버전 1**은 이 페이지에서 `host/timer`와 `pane/status`를 뺀 전부입니다. 그 둘은 **버전 2**이고, `tools/call`은 **버전 4**입니다.
 
 ## 전송 방식
 
@@ -33,6 +33,7 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 | `context/changed` | 알림 | `{ context }` |
 | `url/open` | 알림 | `{ path, query, url, context }` |
 | `pane/status` | 알림 | `{ paneId, status, running, agent, title, cwd }` — 이 플러그인이 시작한 페인의 상태가 바뀜 (`workspace.read`, API 2) |
+| `tools/call` | 요청 — 응답 필요 | `{ name, arguments, context }` — AI 에이전트가 도구를 호출함 (`mcp.tools`, API 4) |
 | `shutdown` | 알림 | `{}` |
 
 `initialize`가 먼저 오고, 곧바로 플러그인을 시작시킨 것(명령, 패널 열기, 링크)이 뒤따릅니다. `initialize`에는 아무 결과나 응답하면 됩니다(예: `{}`).
@@ -67,6 +68,12 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 ### 네트워크에 닿기
 
 `net/fetch`는 플러그인이 네트워크에 닿는 유일한 방법입니다. Agentty가 거는 제한 — 메서드, 헤더, 크기, 타임아웃, 리다이렉트 — 은 [권한](/docs/plugin-permissions#net-request로-할-수-있는-일)에 있습니다. 요약하면, 요청에는 여러분의 것이 아무것도 실리지 않습니다. 쿠키도 저장된 자격 증명도 없고, 플러그인이 직접 넣은 것만 갑니다.
+
+### 에이전트의 도구 호출에 응답하기 (API 4)
+
+AI 에이전트가 `tools/call`을 `{ name, arguments, context }`로 호출하면, 문자열, 어떤 JSON 값, 또는 MCP 형식 컨텐츠 `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }`로 응답하세요. 다른 컨텐츠 타입은 폐기됩니다. 또는 JSON-RPC 오류로 응답하세요. 그 메시지는 에이전트로 전달됩니다.
+
+플러그인은 120초 이내에 응답해야 합니다. 한 플러그인에서는 최대 8개 호출이 기다릴 수 있습니다. 인수는 최대 256KB입니다. 에이전트에 전달되는 텍스트는 100,000자에서 잘립니다.
 
 ### 기다리기, 그리고 에이전트가 끝난 것을 듣기
 

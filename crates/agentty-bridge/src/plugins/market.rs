@@ -85,6 +85,9 @@ pub struct Entry {
     /// The AI agents the plugin works with (left out: Claude Code), shown on the card.
     #[serde(default)]
     pub agents: Vec<PluginAgent>,
+    /// Tools the plugin offers agents through Agentty's MCP server (with `mcp.tools`).
+    #[serde(default)]
+    pub tools: Vec<super::manifest::ToolContribution>,
     pub module: Module,
 }
 
@@ -224,6 +227,7 @@ impl Entry {
                     surface: self.surface,
                     mode: self.mode,
                 }),
+                tools: self.tools.clone(),
             },
             permissions: self.permissions.clone(),
             browser: self.browser.clone(),

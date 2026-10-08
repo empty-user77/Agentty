@@ -7,6 +7,14 @@ description: 技能、子智能体、命令、MCP 服务器，以及你自己的
 
 在这里可以一键添加官方 MCP 服务器，或把其中任何一个插入并运行在当前活动的智能体中。智能体窗格的状态栏会显示该智能体实际拥有的技能、子智能体和 MCP 服务器。
 
+## 插件作为工具
+
+安装在 Agentty 中的插件可以为 Agentty 中运行的 AI 智能体 (Claude Code、Codex) 提供工具。通过 Agentty 自带的 MCP 服务器（`agentty-plugins` MCP 服务器）工作。当至少有一个启用的插件声明了 `mcp.tools` 权限并在 `contributes.tools` 下列出工具时，智能体会自动获得服务器。
+
+提供工具的每个插件的权限标签页上都有**"允许 MCP 连接"**开关，默认为 ON。用户将其关闭时，智能体就不能再列出或调用该插件的工具。
+
+要编写提供工具的插件，参见[清单参考](/docs/plugin-manifest)中的 `contributes.tools` 结构，以及 [Node.js SDK](/docs/plugin-sdk) 中的 `plugin.tool()` 处理器。
+
 ## MCP 服务器
 
 Agentty 不做中转，而是把服务器注册给智能体 CLI：服务器被加入项目或智能体自身的配置，智能体直接与它通信。

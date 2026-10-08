@@ -5,7 +5,7 @@ description: The JSON-RPC wire format behind the SDKs, the WebAssembly module AB
 
 The wire format, for writing a plugin without an SDK. The [Node.js SDK](/docs/plugin-sdk) and the [Rust SDK](/docs/plugin-rust) wrap all of it; read the [quick start](/docs/plugin-quickstart) first either way.
 
-API version **1** is everything on this page except `host/timer` and `pane/status`, which are version **2**.
+API version **1** is everything on this page except `host/timer` and `pane/status`, which are version **2**, and `tools/call`, which is version **4**.
 
 ## Transport
 
@@ -33,6 +33,7 @@ When stdin closes or `shutdown` arrives, exit. A plugin still running 1.5 second
 | `context/changed` | notification | `{ context }` |
 | `url/open` | notification | `{ path, query, url, context }` |
 | `pane/status` | notification | `{ paneId, status, running, agent, title, cwd }` — a pane this plugin started changed what it is doing (`workspace.read`, API 2) |
+| `tools/call` | request — answer it | `{ name, arguments, context }` — an AI agent is calling a tool (`mcp.tools`, API 4) |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin — a command, the panel opening, or a link. Answer `initialize` with any result, for example `{}`.
@@ -67,6 +68,12 @@ Agentty drops `ui/notify` calls arriving faster than one per 700 ms, answering t
 ### Reaching the network
 
 `net/fetch` is the only way a plugin reaches the network. [Permissions](/docs/plugin-permissions#what-net-request-is-allowed) has the bounds Agentty puts on it — methods, headers, sizes, timeouts, redirects — and the short version is that nothing of yours travels with the request: no cookie, no stored credential, only what the plugin put in it.
+
+### Answering tool calls from agents (API 4)
+
+When an AI agent calls one of your tools, Agentty sends `tools/call` with `{ name, arguments, context }`. Answer with a result — a string, any JSON value, or MCP-shaped content `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }`. Other content types are dropped. Or answer with a JSON-RPC error; its message goes to the agent as an error.
+
+The plugin must answer within 120 seconds. At most 8 calls may wait on one plugin. Arguments are at most 256 KB; text handed to the agent is cut at 100,000 characters.
 
 ### Waiting, and hearing that an agent finished
 
