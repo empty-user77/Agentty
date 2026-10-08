@@ -511,6 +511,9 @@ impl Workbench {
                             div().flex_shrink_0().w(px(select_width(options, placeholder.as_deref()))).child(rendered).into_any_element()
                         }
                         _ if fills_row(child) => div().flex_1().min_w_0().child(rendered).into_any_element(),
+                        // A checkbox keeps its label on one line: squeezed by a text beside it,
+                        // the label wrapped a letter a line.
+                        Node::Checkbox { .. } => div().flex_shrink_0().child(rendered).into_any_element(),
                         // A heading is as wide as its words, up to most of the row.
                         Node::Text { .. } => div().flex_shrink_0().max_w(relative(0.6)).min_w_0().child(rendered).into_any_element(),
                         _ => rendered,
