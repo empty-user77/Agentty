@@ -68,6 +68,7 @@
         <div id="ws-sub" class="ws-sub"></div>
       </div>
       <span id="pane-status" class="chip"></span>
+      <button id="chat-toggle" type="button" class="ghost chat-toggle" hidden></button>
       <button id="panes-button" type="button" class="icon-button" aria-label="Panes" hidden>
         <span class="split-icon"><i></i><i></i></span>
         <span id="panes-count" class="count"></span>
@@ -77,6 +78,10 @@
     <div id="home" class="home" hidden></div>
     <div id="asks" class="asks" hidden></div>
     <div id="placeholder" class="placeholder" hidden></div>
+    <div id="chat" class="chat" hidden>
+      <div id="chat-head" class="chat-head"></div>
+      <div id="chat-log" class="chat-log"></div>
+    </div>
     <div id="term-wrap" class="term-wrap">
       <div id="term" class="term" tabindex="0" aria-label="Terminal"></div>
       <textarea id="keyboard" class="keyboard" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Type into the terminal"></textarea>

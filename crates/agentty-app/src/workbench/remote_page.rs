@@ -79,7 +79,9 @@ impl Workbench {
         for (ws, group) in order {
             let name = self.workspace_label(ws, cx);
             let active = ws.tabs.get(ws.active_tab).map(|t| t.active.read(cx));
-            let cwd = active.map(|v| v.display_cwd()).unwrap_or_else(|| ws.cwd.clone());
+            // A chat's lead works in a worktree of the chat's own: the workspace is its project's.
+            let cwd =
+                if self.is_chat_workspace(ws) { ws.cwd.clone() } else { active.map(|v| v.display_cwd()).unwrap_or_else(|| ws.cwd.clone()) };
             let branch = active
                 .and_then(|v| v.git_branch.clone())
                 .or_else(|| self.folder_branch(&cwd).map(str::to_string))
@@ -87,7 +89,12 @@ impl Workbench {
             let mut tabs = Vec::new();
             for (index, tab) in ws.tabs.iter().enumerate() {
                 let panes: Vec<u64> = tab.root.leaves().iter().map(|p| p.read(cx).pane_id).collect();
-                tabs.push(TabInfo { title: tab.active.read(cx).display_title(), active_pane: tab.active.read(cx).pane_id, panes });
+                tabs.push(TabInfo {
+                    title: tab.active.read(cx).display_title(),
+                    active_pane: tab.active.read(cx).pane_id,
+                    panes,
+                    chat: self.remote_chat(tab, cx),
+                });
                 for pane in tab.root.leaves() {
                     let view = pane.read(cx);
                     let (status, color) = super::status_label(view, cx);
@@ -140,6 +147,13 @@ impl Workbench {
         match command {
             Command::Wake { workspace } => return self.remote_wake(*workspace, cx),
             Command::NewTab { workspace, kind } => return self.remote_new_tab(*workspace, *kind, cx),
+            // To a chat's lead the page may reach (in a workspace it is allowed in).
+            Command::Chat { pane, text } => {
+                if !self.remote_panes().any(|(_, p)| p.read(cx).pane_id == *pane) {
+                    return false;
+                }
+                return self.remote_chat_message(*pane, text.clone(), cx);
+            }
             _ => {}
         }
         let Some((_, pane)) = self.remote_panes().find(|(_, p)| Some(p.read(cx).pane_id) == command.pane()) else { return false };
@@ -152,7 +166,7 @@ impl Workbench {
             Command::Prompt { text, .. } => view.submit_prompt(text.clone(), cx),
             Command::Resize { cols, rows, .. } => view.set_remote_size(Some((*cols as usize, *rows as usize)), cx),
             Command::Release { .. } => view.set_remote_size(None, cx),
-            Command::Wake { .. } | Command::NewTab { .. } => {}
+            Command::Wake { .. } | Command::NewTab { .. } | Command::Chat { .. } => {}
         });
         true
     }
@@ -281,6 +295,13 @@ impl Workbench {
             ("on", _) if dev => remote::set_enabled(true, cx),
             ("off", _) => remote::set_enabled(false, cx),
             ("dialog", _) if dev => self.open_password_dialog(window, cx),
+            // A throwaway password for testing the page (saved the real way, in this data folder's
+            // Keychain item); `forget` removes it again.
+            ("password", password) if dev => {
+                let saved = |result: Result<(), String>, _: &mut gpui::App| eprintln!("remote: saved: {:?}", result.is_ok()); // audit: ok — whether the save worked, never the value
+                remote::set_password(password.to_string(), cx, saved)
+            }
+            ("forget", _) if dev => remote::remove_password(cx),
             // What the page's "Disable remote access" button does, from inside a workbench update as it is.
             ("disable", _) => {
                 remote::set_feature(false, cx);

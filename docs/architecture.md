@@ -82,7 +82,13 @@ while reviews are on), held back only while the lead waits on the user. `agentty
 worker's folder with `LaunchSpec.read_only` (Claude Code without its editing tools, Codex `--sandbox read-only`).
 `workbench/chat_team.rs` holds the chat's choices (`ChatRoles`: the worker and reviewer agents, saved in
 `TabSnapshot.chat_roles`), the reviewer's prompt and what the lead is told about its folder.
-Debug driver: `chat <folder>|send:<text>|terminal|worker|reviewer|state`.
+Each chat reads the plan usage of the agents it runs on (`limits::latest`, every minute, in the background) and keeps
+the window closest to running out per agent; from `chat_team::WARN_AT` (85 %) the chat warns, and the reply to the
+lead's `agentty tasks` carries `limits` notes. The remote page gets a chat tab's `TabInfo.chat` (`ChatInfo`: the lead's
+pane, the newest 40 entries cut at 3 000 characters, branch, choices, usage, warning) and sends `{"kind":"chat"}`
+input, which reaches `say_to_lead` like the app's own composer.
+Debug driver: `chat <folder>|send:<text>|terminal|worker|reviewer|state`; `remote password <pw>|forget` (debug builds)
+sets a throwaway web password for testing the page locally (`AGENTTY_REMOTE_DEV=1`).
 
 ## Git page
 

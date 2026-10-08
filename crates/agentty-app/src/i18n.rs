@@ -376,6 +376,8 @@ strings! {
     "chat.role_worker" => ["Workers: {agent}", "워커: {agent}", "ワーカー: {agent}", "工作智能体: {agent}"],
     "chat.role_reviewer" => ["Reviewers: {agent}", "리뷰어: {agent}", "レビュアー: {agent}", "审查者: {agent}"],
     "chat.role_off" => ["off", "끔", "オフ", "关闭"],
+    "chat.limit_warning" => ["{agent} has used {percent}% of its {window} limit ({resets}), with {n} agents working on it now. Reaching it stops them all midway.", "{agent} {window} 한도를 {percent}% 썼습니다({resets}). 지금 에이전트 {n}개가 함께 쓰고 있어서, 한도에 닿으면 모두 중간에 멈춥니다.", "{agent} は {window} の上限の {percent}% を使いました（{resets}）。いま {n} 個のエージェントが動いていて、上限に達すると全員が途中で止まります。", "{agent} 已用掉 {window} 额度的 {percent}%（{resets}），当前有 {n} 个智能体在用，达到上限后它们都会中途停止。"],
+    "chat.limit_warning_idle" => ["{agent} has used {percent}% of its {window} limit ({resets}). Reaching it stops every agent working on it midway.", "{agent} {window} 한도를 {percent}% 썼습니다({resets}). 한도에 닿으면 그때 일하던 에이전트가 모두 중간에 멈춥니다.", "{agent} は {window} の上限の {percent}% を使いました（{resets}）。上限に達すると、そのとき動いているエージェントはすべて途中で止まります。", "{agent} 已用掉 {window} 额度的 {percent}%（{resets}）。达到上限后，当时在工作的智能体都会中途停止。"],
     "chat.branch_hint" => ["This chat's branch: the lead works on it, workers start from it and are merged back into it. Your project folder is left alone until you ask for the result.", "이 채팅의 브랜치입니다. 리드가 여기서 일하고, 워커는 여기서 시작해 다시 여기로 머지됩니다. 결과를 요청하기 전까지 프로젝트 폴더는 건드리지 않습니다.", "このチャットのブランチです。リードはここで作業し、ワーカーはここから始まってここへマージされます。結果を求めるまでプロジェクトフォルダには触れません。", "此聊天的分支：主控智能体在此工作，工作智能体从这里开始并合并回这里。在你要求结果之前，项目文件夹不会被改动。"],
     "welcome.chat" => ["Chat · team", "채팅 · 팀", "チャット · チーム", "聊天 · 团队"],
     "welcome.chat_body" => ["A lead agent and up to 4 workers", "리드 에이전트 + 워커 최대 4개", "リード 1 人とワーカー最大 4 人", "一个主控智能体 + 最多 4 个工作智能体"],
