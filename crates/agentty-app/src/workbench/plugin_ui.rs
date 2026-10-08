@@ -495,7 +495,8 @@ impl Workbench {
                 .flex_col()
                 .gap_2()
                 .min_w_0()
-                .child(div().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title.to_uppercase()))
+                // One line as wide as the section: measured alone it wrapped a character a line.
+                .child(cut_line(div().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)), title.to_uppercase()))
                 .child(self.render_plugin_children(plugin, children, path, div().flex().flex_col().gap_2().min_w_0(), cx))
                 .into_any_element(),
             Node::Row { children, gap: g, wrap } => {
@@ -1549,8 +1550,18 @@ impl Workbench {
                     .when(!*disabled, |d| {
                         d.cursor_pointer().hover(|s| s.border_color(hex(lighten_u32(Chrome::OVERLAY_BORDER)))).on_click(cx.listener(
                             move |this, _: &ClickEvent, _, cx| {
-                                this.plugin_select_open =
-                                    if this.plugin_select_open.as_ref() == Some(&toggle_key) { None } else { Some(toggle_key.clone()) };
+                                // Pressing an open drop-down closes it: the press outside its list
+                                // already did, and this click is the same press.
+                                let menu_key = format!("select:{}/{}", toggle_key.0, toggle_key.1);
+                                let just_closed = this
+                                    .plugin_menu_closed
+                                    .take()
+                                    .is_some_and(|(k, at)| k == menu_key && at.elapsed() < Duration::from_millis(400));
+                                this.plugin_select_open = if just_closed || this.plugin_select_open.as_ref() == Some(&toggle_key) {
+                                    None
+                                } else {
+                                    Some(toggle_key.clone())
+                                };
                                 cx.notify();
                             },
                         ))
@@ -1606,7 +1617,9 @@ impl Workbench {
                     }
                     let card = crate::ui::popover()
                         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.plugin_select_open = None;
+                            if let Some((scope, id)) = this.plugin_select_open.take() {
+                                this.plugin_menu_closed = Some((format!("select:{scope}/{id}"), Instant::now()));
+                            }
                             cx.notify();
                         }))
                         .child(menu);
