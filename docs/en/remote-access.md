@@ -70,6 +70,14 @@ A sleeping Mac or a closed laptop cannot be reached.
 
 Remote access stays on across restarts until you turn it off. It uses Tailscale port 8743 and does not interfere with anything else you serve with Tailscale. If something else is already using port 8743, Agentty shows an error instead.
 
+## Voice prompts
+
+From the remote page you can speak a prompt instead of typing it. Tap the microphone in the prompt bar, say your prompt, then tap again to stop; the words are transcribed and dropped into the prompt box for you to check and send.
+
+The audio is transcribed **on your Mac** by a local model — nothing is sent to any outside service. Install the model once from **Settings → Remote access → Voice to text**: choose **Base** (recommended) or the smaller, faster **Tiny**, and it downloads to your Mac, verified and kept there. Once a model is installed, the microphone button appears on the remote page by itself.
+
+Your browser asks for microphone permission the first time, and the page must be served over HTTPS — it is, through Tailscale.
+
 ## Hiding the feature
 
 Don't use remote access at all? Turn off **Settings → General → Remote access feature** (on by default), or press **Disable remote access** on the Remote access page. Its icon leaves the side menu and remote access turns off. Turn the setting back on to bring it back.

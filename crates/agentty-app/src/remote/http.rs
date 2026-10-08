@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 
 pub const MAX_HEAD: usize = 16 * 1024;
 pub const MAX_BODY: usize = 64 * 1024;
+/// Larger cap for `POST /api/voice` only: an uploaded voice clip. 8 MiB is ~4 minutes of 16 kHz
+/// mono 16-bit audio, well above the two-minute decode cap, and still bounds memory per request.
+pub const VOICE_MAX_BODY: usize = 8 * 1024 * 1024;
 const MAX_HEADERS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +143,12 @@ pub fn read_request(
         Some(_) => return Err(HttpError::Bad),
         None => 0,
     };
-    if length > MAX_BODY {
+    // A voice upload is a short audio clip (16 kHz mono WAV, capped to two minutes on decode), so
+    // it needs more room than the small JSON bodies every other route sends. The secret path
+    // prefix (TCP listener) is still on `path` here — it is stripped only after this returns — so
+    // match the suffix to cover both the plain and secret-prefixed forms.
+    let max_body = if request.path.ends_with("/api/voice") { VOICE_MAX_BODY } else { MAX_BODY };
+    if length > max_body {
         return Err(HttpError::BodyTooLarge);
     }
     let mut body = buf[head_end + 4..].to_vec();
@@ -274,7 +282,9 @@ pub const SECURITY_HEADERS: &[(&str, &str)] = &[
     ("Cache-Control", "no-store"),
     ("Cross-Origin-Opener-Policy", "same-origin"),
     ("Cross-Origin-Resource-Policy", "same-origin"),
-    ("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
+    // Microphone is allowed for same-origin only, so the page can record a voice prompt; camera,
+    // location, payment and USB stay fully off.
+    ("Permissions-Policy", "camera=(), microphone=(self), geolocation=(), payment=(), usb=()"),
 ];
 
 #[cfg(test)]

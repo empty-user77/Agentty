@@ -14,6 +14,7 @@ const STRINGS = {
     failed: "Couldn't reach Agentty.", signOut: "Sign out", notify: "Notify me", notifyOn: "Notifying",
     noWorkspaces: "No workspaces are open in Agentty.", sleeping: "This workspace is asleep. Wake it up to start its terminals again.",
     send: "Send", promptHint: "Prompt for this terminal…", live: "Connected", offline: "Reconnecting…",
+    micStart: "Dictate a prompt", micRecording: "Recording — tap to stop", micBusy: "Transcribing…", micDenied: "Microphone access was blocked.", micFailed: "Couldn't transcribe. Try again.",
     privacy: "Privacy Policy", terms: "Terms of Service", eula: "License Agreement", device: "Device", ip: "Tailnet IP", account: "Account", target: "Connecting to", secure: "Security", secureValue: "Tailscale (WireGuard) · HTTPS", browser: "Browser", shownOnly: "Shown here only; nothing is stored.",
     tooLong: "Too long.", busy: "Agentty is busy; try again.", finished: "Finished", asks: "Asks you", panes: "Split panes",
     home: "Home", needsYou: "Needs you", workingNow: "Working", workspacesTitle: "Workspaces", plugins: "Plugins",
@@ -30,6 +31,7 @@ const STRINGS = {
     failed: "Agentty에 연결하지 못했습니다.", signOut: "로그아웃", notify: "알림 받기", notifyOn: "알림 켜짐",
     noWorkspaces: "Agentty에 열린 작업공간이 없습니다.", sleeping: "쉬고 있는 작업공간입니다. 깨우면 터미널이 다시 시작됩니다.",
     send: "보내기", promptHint: "이 터미널에 보낼 프롬프트…", live: "연결됨", offline: "다시 연결하는 중…",
+    micStart: "음성으로 입력", micRecording: "녹음 중 — 눌러서 멈추기", micBusy: "변환 중…", micDenied: "마이크 사용이 차단되었습니다.", micFailed: "변환하지 못했습니다. 다시 시도하세요.",
     privacy: "개인정보처리방침", terms: "이용약관", eula: "라이선스 계약", device: "접속 기기", ip: "Tailnet IP", account: "계정", target: "접속 대상", secure: "보안", secureValue: "Tailscale(WireGuard) 암호화 · HTTPS", browser: "브라우저", shownOnly: "이 화면에 보여 주기만 하며 저장하지 않습니다.",
     tooLong: "너무 깁니다.", busy: "Agentty가 바쁩니다. 다시 시도하세요.", finished: "작업 완료", asks: "요청", panes: "분할창",
     home: "홈", needsYou: "응답 대기", workingNow: "작업 중", workspacesTitle: "작업공간", plugins: "플러그인",
@@ -46,6 +48,7 @@ const STRINGS = {
     failed: "Agentty に接続できませんでした。", signOut: "サインアウト", notify: "通知を受け取る", notifyOn: "通知オン",
     noWorkspaces: "Agentty で開いているワークスペースはありません。", sleeping: "休止中のワークスペースです。起こすとターミナルがまた始まります。",
     send: "送信", promptHint: "このターミナルへのプロンプト…", live: "接続中", offline: "再接続しています…",
+    micStart: "音声で入力", micRecording: "録音中 — タップで停止", micBusy: "文字起こし中…", micDenied: "マイクの使用がブロックされました。", micFailed: "文字起こしできませんでした。もう一度お試しください。",
     privacy: "プライバシーポリシー", terms: "利用規約", eula: "ライセンス契約", device: "接続端末", ip: "Tailnet IP", account: "アカウント", target: "接続先", secure: "セキュリティ", secureValue: "Tailscale（WireGuard）暗号化 · HTTPS", browser: "ブラウザ", shownOnly: "表示するだけで、保存はしません。",
     tooLong: "長すぎます。", busy: "Agentty が混み合っています。もう一度お試しください。", finished: "完了", asks: "質問", panes: "分割ペイン",
     home: "ホーム", needsYou: "応答待ち", workingNow: "作業中", workspacesTitle: "ワークスペース", plugins: "プラグイン",
@@ -62,6 +65,7 @@ const STRINGS = {
     failed: "无法连接 Agentty。", signOut: "退出登录", notify: "接收通知", notifyOn: "通知已开启",
     noWorkspaces: "Agentty 中没有打开的工作区。", sleeping: "这个工作区处于休眠状态。唤醒后终端会重新启动。",
     send: "发送", promptHint: "发送给此终端的提示…", live: "已连接", offline: "正在重新连接…",
+    micStart: "语音输入", micRecording: "录音中 — 点按停止", micBusy: "转写中…", micDenied: "麦克风访问被阻止。", micFailed: "转写失败，请重试。",
     privacy: "隐私政策", terms: "服务条款", eula: "许可协议", device: "接入设备", ip: "Tailnet IP", account: "账号", target: "连接目标", secure: "安全", secureValue: "Tailscale（WireGuard）加密 · HTTPS", browser: "浏览器", shownOnly: "仅在此显示，不会保存。",
     tooLong: "太长了。", busy: "Agentty 正忙，请重试。", finished: "已完成", asks: "询问", panes: "分屏",
     home: "主页", needsYou: "等待回应", workingNow: "工作中", workspacesTitle: "工作区", plugins: "插件",
@@ -96,6 +100,7 @@ const state = {
   workspaces: [],
   sessions: [],
   plugins: [],
+  voice: false, // whether the Mac offers voice-to-text (a model is installed)
   previous: new Map(),
   // The first overview decides where to start; after that the page stays where the user is.
   started: false,
@@ -267,6 +272,10 @@ function onOverview(data) {
   state.workspaces = data.workspaces || [];
   state.sessions = sessions;
   state.plugins = data.plugins || [];
+  state.voice = !!data.voice;
+  // If a recording is running and its terminal just closed, or voice was turned off, stop the mic
+  // — its button is about to be hidden, which would otherwise leave no way to stop it.
+  if (recorder && (!state.voice || !sessions.some((s) => s.pane === state.pane))) stopRecording();
   if (!state.started) {
     state.started = true;
     return pickStart();
@@ -341,6 +350,7 @@ function selectPane(pane) {
 
 function switchPane(pane) {
   const changed = pane !== state.pane;
+  if (changed) stopRecording(); // don't let a recording carry over to another terminal
   state.pane = pane;
   if (changed) {
     state.rows = [];
@@ -535,6 +545,8 @@ function renderBody() {
     placeholder.append(actions);
   }
   for (const id of ["term-wrap", "keys", "prompt-form"]) $(id).hidden = home || !!note || !s;
+  // The mic sits in the prompt bar, but only when the Mac offers voice-to-text.
+  $("mic-button").hidden = home || !!note || !s || !state.voice;
   $("asks").hidden = !(s && s.asks);
   $("asks").textContent = (s && s.asks) || "";
   renderKeys(s && s.needs_user);
@@ -1079,6 +1091,205 @@ function setupPrompt() {
   });
 }
 
+// ---- Voice ----
+//
+// Record a short clip in the browser, upload it to the Mac, and drop the transcript into the
+// prompt box for the person to check and send. The audio is 16-bit PCM WAV captured through
+// WebAudio (not MediaRecorder's Opus), so the Mac needs no audio decoder. Nothing is uploaded until
+// the person stops recording, and the transcript only fills the box — it is never auto-sent.
+
+let recorder = null; // { stream, ctx, node, source, chunks, rate } while recording
+let voiceStarting = false; // guards the getUserMedia await against a second tap
+
+function setupVoice() {
+  const btn = $("mic-button");
+  btn.setAttribute("aria-label", T.micStart);
+  btn.title = T.micStart;
+  btn.addEventListener("click", () => {
+    if (btn.disabled || voiceStarting) return;
+    if (recorder) finishVoice(btn);
+    else beginVoice(btn);
+  });
+  // A recording must never outlive the moment: if the tab is hidden or closed, stop the mic so it
+  // can't stay on with no button to stop it.
+  window.addEventListener("pagehide", stopRecording);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopRecording();
+  });
+}
+
+// Tear down an in-progress recording without transcribing — used when the pane goes away, the
+// user navigates, or the tab is hidden. Safe to call when nothing is recording.
+function stopRecording() {
+  const rec = recorder;
+  recorder = null;
+  if (!rec) return;
+  try {
+    rec.node.onaudioprocess = null;
+    rec.node.disconnect();
+    rec.source.disconnect();
+  } catch (_) {
+    /* already gone */
+  }
+  rec.stream.getTracks().forEach((t) => t.stop());
+  rec.ctx.close().catch(() => {});
+  const btn = $("mic-button");
+  if (btn) {
+    btn.classList.remove("recording");
+    btn.setAttribute("aria-pressed", "false");
+    btn.setAttribute("aria-label", T.micStart);
+    btn.title = T.micStart;
+  }
+}
+
+async function beginVoice(btn) {
+  if (state.pane == null) return;
+  voiceStarting = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+    // The pane may have gone while the permission prompt was up.
+    if (state.pane == null) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    // iOS Safari starts the context suspended; without this the capture is silent.
+    if (ctx.state === "suspended") {
+      try {
+        await ctx.resume();
+      } catch (_) {
+        /* best effort */
+      }
+    }
+    const source = ctx.createMediaStreamSource(stream);
+    const node = ctx.createScriptProcessor(4096, 1, 1);
+    const chunks = [];
+    node.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    source.connect(node);
+    node.connect(ctx.destination);
+    recorder = { stream, ctx, node, source, chunks, rate: ctx.sampleRate };
+    btn.classList.add("recording");
+    btn.setAttribute("aria-pressed", "true");
+    btn.setAttribute("aria-label", T.micRecording);
+    btn.title = T.micRecording;
+  } catch (_) {
+    flashMic(btn, T.micDenied);
+  } finally {
+    voiceStarting = false;
+  }
+}
+
+async function finishVoice(btn) {
+  const rec = recorder;
+  recorder = null;
+  if (!rec) return;
+  btn.classList.remove("recording");
+  btn.setAttribute("aria-pressed", "false");
+  rec.node.onaudioprocess = null;
+  rec.node.disconnect();
+  rec.source.disconnect();
+  rec.stream.getTracks().forEach((t) => t.stop());
+  const blob = pcmToWav(flatten(rec.chunks), rec.rate);
+  rec.ctx.close().catch(() => {});
+  const pane = state.pane;
+  if (pane == null) return;
+
+  btn.disabled = true;
+  btn.classList.add("busy");
+  btn.setAttribute("aria-label", T.micBusy);
+  btn.title = T.micBusy;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    const lang = (navigator.language || "").slice(0, 2);
+    const q = `?pane=${pane}` + (/^[a-z]{2}$/.test(lang) ? `&lang=${lang}` : "");
+    // The body is a WAV blob; the JSON content type is only here to satisfy the same-origin
+    // (CSRF) check — the server reads /api/voice as raw bytes, not as JSON.
+    const res = await fetch("/api/voice" + q, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Agentty": "1" },
+      body: blob,
+      signal: controller.signal,
+    });
+    if (res.status === 401) return showLogin(); // session expired: bounce to sign-in, like other calls
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    const text = (data.text || "").trim();
+    // The user may have switched terminals while transcribing; don't drop the text into the wrong
+    // prompt box.
+    if (text && state.pane === pane) {
+      const prompt = $("prompt");
+      prompt.value = prompt.value ? prompt.value.replace(/\s*$/, "") + " " + text : text;
+      prompt.dispatchEvent(new Event("input"));
+      prompt.focus();
+    }
+    btn.setAttribute("aria-label", T.micStart);
+    btn.title = T.micStart;
+  } catch (_) {
+    flashMic(btn, T.micFailed);
+  } finally {
+    clearTimeout(timer);
+    btn.disabled = false;
+    btn.classList.remove("busy");
+  }
+}
+
+function flatten(chunks) {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Float32Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}
+
+// 16-bit PCM mono WAV. The Mac resamples to 16 kHz, so the capture rate is written as-is.
+function pcmToWav(samples, rate) {
+  const n = samples.length;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const tag = (o, s) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  tag(0, "RIFF");
+  v.setUint32(4, 36 + n * 2, true);
+  tag(8, "WAVE");
+  tag(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  tag(36, "data");
+  v.setUint32(40, n * 2, true);
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    o += 2;
+  }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+function flashMic(btn, message) {
+  btn.classList.remove("recording", "busy");
+  btn.setAttribute("aria-pressed", "false");
+  btn.title = message;
+  btn.setAttribute("aria-label", message);
+  setTimeout(() => {
+    btn.title = T.micStart;
+    btn.setAttribute("aria-label", T.micStart);
+  }, 2500);
+}
+
 // ---- Notifications ----
 
 function notifyChanges(sessions) {
@@ -1166,5 +1377,6 @@ window.addEventListener("DOMContentLoaded", () => {
   new ResizeObserver(() => fitTerm()).observe($("term-wrap"), { box: "border-box" });
   setupKeyboard();
   setupPrompt();
+  setupVoice();
   start();
 });

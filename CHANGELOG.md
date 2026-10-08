@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Voice prompts from the remote page: tap the microphone, speak, and the words appear in the
+  prompt box to check and send. The clip is transcribed on your Mac by a local model you install
+  from Settings → Remote access (a one-time download, verified and kept on the machine); no audio
+  ever leaves your computer.
 - Plugin panels for real tools, continued: text fields suggest as you type (`completions` — the
   variables of an API client from `{{` or a few letters), a grid's sidebar column can be dragged
   wider or narrower (`resizable`, the width sent back to keep), and a plugin can open itself in an

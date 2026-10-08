@@ -183,6 +183,17 @@ pub struct Hub {
     streams: Mutex<HashMap<String, usize>>,
     /// When the page last opened tabs, for `MAX_NEW_TABS`.
     new_tabs: Mutex<VecDeque<Instant>>,
+    /// Voice-to-text settings, or `None` when voice is off (no model set up). Read on every
+    /// `/api/voice`.
+    voice: RwLock<Option<VoiceConfig>>,
+}
+
+/// What `POST /api/voice` transcribes with: a model (already installed) and an optional language
+/// hint. Set from the app's settings; `None` in the hub means voice is off.
+#[derive(Clone)]
+pub struct VoiceConfig {
+    pub model: &'static agentty_bridge::voice::Model,
+    pub language: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -287,6 +298,7 @@ impl Hub {
             last_whois: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
             new_tabs: Mutex::new(VecDeque::new()),
+            voice: RwLock::new(None),
         });
         let accept = hub.clone();
         std::thread::Builder::new().name("agentty-remote".into()).spawn(move || accept.accept_loop(listener))?;
@@ -343,6 +355,16 @@ impl Hub {
     }
 
     /// A new password (or none): every session ends.
+    /// Set which model (and optional language) `/api/voice` uses, or `None` to turn voice off.
+    pub fn set_voice(&self, config: Option<VoiceConfig>) {
+        *self.voice.write().unwrap_or_else(|e| e.into_inner()) = config;
+    }
+
+    /// Whether the page should offer the microphone: voice is configured and its model is installed.
+    fn voice_available(&self) -> bool {
+        self.voice.read().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|c| agentty_bridge::voice::model_present(c.model))
+    }
+
     pub fn set_password(&self, password: Option<String>) {
         let mut auth = self.auth.lock().unwrap_or_else(|e| e.into_inner());
         auth.password = password;
@@ -607,8 +629,9 @@ impl Hub {
                 Routed::Response(Response::json(200, &json!({ "ok": true })).with("Set-Cookie", expired_cookie(&config)))
             }
             ("GET", "/api/sessions") => {
+                let voice = self.voice_available();
                 let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
-                Routed::Response(Response::json(200, &overview(&view)))
+                Routed::Response(Response::json(200, &overview(&view, voice)))
             }
             ("GET", "/api/events") => {
                 let pane = match request.query_param("pane") {
@@ -621,6 +644,7 @@ impl Hub {
                 Routed::Events { token, login, pane }
             }
             ("POST", "/api/input") => Routed::Response(self.input(request)),
+            ("POST", "/api/voice") => Routed::Response(self.voice(request)),
             ("POST", "/api/workspace") => Routed::Response(self.workspace_action(request)),
             _ => Routed::Response(Response::json(404, &json!({ "error": "not found" }))),
         }
@@ -760,6 +784,39 @@ impl Hub {
         Response::json(200, &json!({ "ok": true }))
     }
 
+    /// Transcribes an uploaded voice clip (16 kHz mono WAV in the body) on the Mac and returns the
+    /// text for the page to place in its prompt box. The audio is never stored or forwarded; it is
+    /// only transcribed in memory. The clip is tied to a real session, so a stranger with a cookie
+    /// still cannot aim it at a terminal that is not the user's.
+    fn voice(&self, request: &Request) -> Response {
+        let Some(pane) = request.query_param("pane").and_then(|t| t.parse::<u64>().ok()) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        if !self.is_session(pane) {
+            return Response::json(404, &json!({ "error": "no such session" }));
+        }
+        let Some(config) = self.voice.read().unwrap_or_else(|e| e.into_inner()).clone() else {
+            return Response::json(503, &json!({ "error": "voice off" }));
+        };
+        if !agentty_bridge::voice::model_present(config.model) {
+            return Response::json(503, &json!({ "error": "no model" }));
+        }
+        // A language hint from the page (`ko`, `en`), else the configured one, else auto-detect.
+        let lang = request
+            .query_param("lang")
+            .filter(|l| (1..=8).contains(&l.len()) && l.bytes().all(|b| b.is_ascii_alphabetic()))
+            .or_else(|| config.language.clone());
+        let samples = match agentty_bridge::voice::wav_to_samples(&request.body) {
+            Ok(samples) if !samples.is_empty() => samples,
+            Ok(_) => return Response::json(422, &json!({ "error": "no audio" })),
+            Err(_) => return Response::json(400, &json!({ "error": "bad audio" })),
+        };
+        match agentty_bridge::voice::transcribe(config.model, &samples, lang.as_deref()) {
+            Ok(text) => Response::json(200, &json!({ "text": text })),
+            Err(_) => Response::json(500, &json!({ "error": "transcribe failed" })),
+        }
+    }
+
     /// Wakes a sleeping workspace, or opens a tab in one. Only workspaces the page is shown (the
     /// user's own, not left out of remote access) can be named.
     fn workspace_action(&self, request: &Request) -> Response {
@@ -879,12 +936,13 @@ impl Hub {
                 let _ = event(stream, "signedout", "{}");
                 break;
             }
+            let voice = self.voice_available();
             let (seen, sessions, screen) = {
                 let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
                 let seen = view.version;
                 let sessions = (view.sessions_version > sent_sessions || sent_sessions == 0).then(|| {
                     sent_sessions = view.sessions_version.max(1);
-                    overview(&view).to_string()
+                    overview(&view, voice).to_string()
                 });
                 let screen = pane.and_then(|pane| view.screens.get(&pane)).filter(|(v, _)| *v > sent_screen).map(|(v, s)| {
                     sent_screen = *v;
@@ -926,8 +984,8 @@ impl Hub {
 }
 
 /// What the page lists: workspaces, terminals and plugins.
-fn overview(view: &View) -> serde_json::Value {
-    json!({ "workspaces": view.workspaces, "sessions": view.sessions, "plugins": view.plugins })
+fn overview(view: &View, voice: bool) -> serde_json::Value {
+    json!({ "workspaces": view.workspaces, "sessions": view.sessions, "plugins": view.plugins, "voice": voice })
 }
 
 /// `path` without the secret prefix (`/<secret>/app.js` → `/app.js`), or `None` when it does not

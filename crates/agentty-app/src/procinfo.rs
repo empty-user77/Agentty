@@ -938,8 +938,17 @@ mod windows_tests {
         let mut child =
             std::process::Command::new("cmd.exe").args(["/d", "/c", "ping -n 30 127.0.0.1 >NUL"]).current_dir(&dir).spawn().unwrap();
         let pid = child.id();
-        std::thread::sleep(std::time::Duration::from_millis(600));
-        let found = group_pids(me).contains(&pid);
+        // Wait until the child shows up in the process tree instead of assuming a fixed delay: a
+        // larger test binary or a busy CI runner can take a moment to register it, and a single
+        // 600 ms check raced on Windows CI.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        let mut found = false;
+        while !found && std::time::Instant::now() < deadline {
+            found = group_pids(me).contains(&pid);
+            if !found {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
         let parent = parent_pid(pid);
         let cwd = cwd_of(pid).and_then(|p| p.canonicalize().ok());
         let args = process_args(pid);

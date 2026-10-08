@@ -170,6 +170,11 @@ button:disabled { opacity: .5; cursor: default; }
 .keys button.on { background: var(--accent); color: #1b1206; border-color: var(--accent); }
 .prompt { display: flex; gap: 8px; padding: 8px 10px; padding-bottom: calc(8px + var(--safe-bottom)); background: var(--panel); flex-shrink: 0; align-items: flex-end; }
 .prompt textarea { flex: 1; min-width: 0; resize: none; max-height: 30vh; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); line-height: 1.35; }
+.prompt .mic { flex-shrink: 0; width: 42px; padding: 0; display: flex; align-items: center; justify-content: center; color: var(--text); }
+.prompt .mic.recording { background: #e5484d; border-color: #e5484d; color: #fff; animation: mic-pulse 1.2s ease-in-out infinite; }
+.prompt .mic.busy { opacity: .55; }
+@keyframes mic-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .prompt .mic.recording { animation: none; } }
 
 /* Home link, above the workspaces */
 .home-link { display: flex; align-items: center; gap: 8px; margin: 0 8px 4px; padding: 9px 11px; border-radius: 10px; text-align: left;

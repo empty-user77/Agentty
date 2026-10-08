@@ -38,6 +38,7 @@ pub mod service_status;
 pub mod sync;
 pub mod update;
 pub mod usage;
+pub mod voice;
 pub mod worktree;
 
 use anyhow::{Context as _, Result};
