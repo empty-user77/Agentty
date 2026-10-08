@@ -643,13 +643,11 @@ impl Workbench {
         // Full width: a text field inside takes the card's width, not its own (none).
         let mut body = div().w_full().flex().flex_col().gap_2().min_w_0();
         let mut path = vec![usize::MAX];
-        self.plugin_in_popover.set(true);
         for (index, child) in children.iter().enumerate() {
             path.push(index);
             body = body.child(self.render_plugin_node(plugin, child, &mut path, cx));
             path.pop();
         }
-        self.plugin_in_popover.set(false);
         let card = div()
             .ml_2()
             .w(px(POPOVER_WIDTH))
@@ -698,10 +696,16 @@ impl Workbench {
                     .max_h(px((self.plugin_window_height.get() - POPOVER_TOP_ROOM).clamp(160., POPOVER_MAX_HEIGHT)))
                     .overflow_y_scroll()
                     .p_3()
-                    .child(body),
+                    // A column, so the body is the card's width: a long line in it (a code
+                    // snippet) scrolls inside its block instead of being cut at the card's edge.
+                    .flex()
+                    .flex_col()
+                    .child(body.flex_shrink_0()),
             );
         let anchored = gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(card);
-        div().absolute().top(px(44.)).right_0().child(gpui::deferred(anchored).with_priority(2)).into_any_element()
+        // Not deferred: it is the panel's last child, so it is drawn over the page already, and a
+        // drop-down inside it can be deferred (over the card) without nesting deferred drawing.
+        div().absolute().top(px(44.)).right_0().child(anchored).into_any_element()
     }
 
     /// Enabled plugins whose panel sits on `surface`: (id, title, icon, badge).

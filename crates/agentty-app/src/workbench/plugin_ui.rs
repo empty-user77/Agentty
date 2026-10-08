@@ -1009,7 +1009,14 @@ impl Workbench {
                 }
                 flow.into_any_element()
             }
-            Node::Card { title, subtitle, icon: glyph, tone, children } => {
+            Node::Card { title, subtitle, icon: glyph, tone, children, id: card_id, closable } => {
+                let close = card_id.as_ref().filter(|_| *closable).map(|card| {
+                    crate::ui::icon_only(
+                        SharedString::from(format!("plugin-card-close-{plugin}-{card}")),
+                        "x",
+                        cx.listener(emit(plugin.to_string(), card.clone(), "close", None, None)),
+                    )
+                });
                 let heading = (title.is_some() || subtitle.is_some() || glyph.is_some()).then(|| {
                     div()
                         .flex()
@@ -1031,6 +1038,7 @@ impl Workbench {
                                 }))
                                 .children(subtitle.clone().map(|s| div().t_small().text_color(hex(Chrome::MUTED)).child(s))),
                         )
+                        .children(close)
                 });
                 div()
                     .p_3()
@@ -1324,7 +1332,19 @@ impl Workbench {
                         .gap_3()
                         .min_w_0()
                         .child(strip.flex_shrink_0())
-                        .child(div().id(scroll_id).flex_1().min_h_0().overflow_y_scroll().pr_1().child(content))
+                        // A column holding a full-width wrapper: as a block, a short page (a sidebar
+                        // list) was laid out at its own width and its search box shrank to nothing.
+                        .child(
+                            div()
+                                .id(scroll_id)
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .pr_1()
+                                .flex()
+                                .flex_col()
+                                .child(div().w_full().flex_shrink_0().flex().flex_col().child(content)),
+                        )
                         .into_any_element();
                 }
                 div().flex().flex_col().gap_3().min_w_0().child(strip).child(content).into_any_element()
@@ -1655,13 +1675,17 @@ impl Workbench {
                 let group = SharedString::from(format!("plugin-code-{plugin}-{path:?}"));
                 // Long lines scroll sideways: a trackpad, Shift and the wheel, or dragging the code.
                 let scroll_key = format!("code:{plugin}/{path:?}");
-                let scroll = self
-                    .plugin_tab_strips
-                    .borrow_mut()
-                    .entry(scroll_key.clone())
-                    .or_insert_with(|| (gpui::ScrollHandle::new(), String::new()))
-                    .0
-                    .clone();
+                let scroll = {
+                    let mut strips = self.plugin_tab_strips.borrow_mut();
+                    let entry = strips.entry(scroll_key.clone()).or_insert_with(|| (gpui::ScrollHandle::new(), String::new()));
+                    // Other code in the same place (another language picked) starts at its left edge.
+                    let stamp = format!("{}:{}", text.len(), text.chars().take(64).collect::<String>());
+                    if entry.1 != stamp {
+                        entry.1 = stamp;
+                        entry.0.set_offset(gpui::point(px(0.), px(0.)));
+                    }
+                    entry.0.clone()
+                };
                 let dragged = scroll.clone();
                 let bar_handle = scroll.clone();
                 div()
@@ -1695,6 +1719,9 @@ impl Workbench {
                         // place: dragged with any mouse.
                         div()
                             .relative()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
                             .group(crate::ui::SCROLL_GROUP)
                             .child(
                                 div()
@@ -1727,7 +1754,11 @@ impl Workbench {
                                     .font_family(MONO)
                                     .t_small()
                                     .text_color(hex(highlight::FOREGROUND))
-                                    .child(div().whitespace_nowrap().child(styled)),
+                                    // A row whose one child is as wide as its longest line: text
+                                    // spilling out of a box does not widen it, and the block saw
+                                    // nothing to scroll.
+                                    .flex()
+                                    .child(div().flex_shrink_0().whitespace_nowrap().child(styled)),
                             )
                             .child(crate::ui::scrollbar_h(bar_handle)),
                     )

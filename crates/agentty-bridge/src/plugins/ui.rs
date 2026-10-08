@@ -147,6 +147,11 @@ pub enum Node {
         tone: Tone,
         #[serde(default)]
         children: Vec<Node>,
+        /// With `closable`: a ✕ in the heading that sends `close` (a tip the user can dismiss).
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        closable: bool,
     },
     /// Children in equal columns, wrapping onto new rows (API 4).
     Grid {
@@ -660,8 +665,8 @@ impl Node {
                 }
             }
             Node::Divider => {}
-            Node::Card { title, subtitle, icon, children, .. } => {
-                for text in [title.as_mut(), subtitle.as_mut(), icon.as_mut()].into_iter().flatten() {
+            Node::Card { title, subtitle, icon, children, id, .. } => {
+                for text in [title.as_mut(), subtitle.as_mut(), icon.as_mut(), id.as_mut()].into_iter().flatten() {
                     cut(text);
                 }
                 for child in children {
