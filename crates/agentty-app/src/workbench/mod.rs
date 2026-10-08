@@ -42,6 +42,7 @@ mod picker;
 pub mod plugin_browser;
 mod plugin_host;
 mod plugin_panel;
+mod plugin_ui;
 mod plugin_window;
 mod plugin_workspace;
 mod plugins_page;
@@ -652,6 +653,28 @@ pub struct Workbench {
     /// it as the user closing the panel.
     plugin_windows_closing: std::collections::HashSet<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
+    /// Widths the user dragged a plugin grid's resizable column to, by (plugin, grid id), and the
+    /// drag's count so only its last move is sent to the plugin.
+    plugin_grid_widths: HashMap<(String, String), (f32, u64)>,
+    /// The plugin tab strip whose `+` menu is open, as `plugin/element`.
+    plugin_tab_menu: Option<String>,
+    /// The menu a click outside just closed, and when: the same click landing on its own button
+    /// must not open it again.
+    plugin_menu_closed: Option<(String, std::time::Instant)>,
+    /// A popover's contents are being built: they are drawn deferred already, and a menu inside
+    /// must not ask for that again (GPUI panics on deferred drawing inside deferred drawing).
+    plugin_in_popover: std::cell::Cell<bool>,
+    /// The window's height at the last panel update: a popover is never taller than what is left.
+    plugin_window_height: std::cell::Cell<f32>,
+    /// Each plugin tab strip's scroll, and the tab it last showed (to bring a newly picked one
+    /// into view), as `plugin/element`.
+    plugin_tab_strips: RefCell<HashMap<String, (gpui::ScrollHandle, String)>>,
+    /// The `select` of a plugin panel whose options are showing: (input scope, element id).
+    plugin_select_open: Option<(String, String)>,
+    /// Colors of the `code` blocks plugin panels show, by their text and language.
+    plugin_code_colors: plugin_ui::CodeColors,
+    /// The grammars `code` blocks are colored with are loading.
+    plugin_grammars_loading: bool,
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
     /// Context last sent to plugins (serialized), to send only changes.
@@ -904,6 +927,15 @@ impl Workbench {
             plugin_windows_opening: std::collections::HashSet::new(),
             plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),
+            plugin_grid_widths: HashMap::new(),
+            plugin_tab_menu: None,
+            plugin_menu_closed: None,
+            plugin_in_popover: std::cell::Cell::new(false),
+            plugin_window_height: std::cell::Cell::new(900.),
+            plugin_tab_strips: RefCell::new(HashMap::new()),
+            plugin_select_open: None,
+            plugin_code_colors: Default::default(),
+            plugin_grammars_loading: false,
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
             plugin_context_key: serde_json::Value::Null,
@@ -3522,8 +3554,17 @@ impl Workbench {
         Some(
             // Spans the window so a long message wraps at its left edge instead of running off it; a short one
             // keeps its own width, right-aligned as before.
-            div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).left(px(16.)).right(px(16. + docked)).flex().justify_end().child(
-                crate::ui::fade_in(
+            // A column aligned right: its width is fit to the text and never more than the window's,
+            // where a row let a long one run off the left edge.
+            div()
+                .absolute()
+                .top(px(chrome::TITLE_BAR_HEIGHT + 44.))
+                .left(px(16.))
+                .right(px(16. + docked))
+                .flex()
+                .flex_col()
+                .items_end()
+                .child(crate::ui::fade_in(
                     SharedString::from(format!("toast-{id}")),
                     div()
                         .min_w_0()
@@ -3541,7 +3582,7 @@ impl Workbench {
                         .text_color(hex(Chrome::BRIGHT))
                         .child(crate::ui::icon("circle-check", crate::ui::IconSize::INLINE, hex(Chrome::SUCCESS)))
                         // A long message (a translation, a path) wraps instead of running off the window.
-                        .child(div().min_w_0().child(text))
+                        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
                         // Closes it now instead of waiting out its timer.
                         .child(
                             div()
@@ -3556,8 +3597,7 @@ impl Workbench {
                                     cx.notify();
                                 })),
                         ),
-                ),
-            ),
+                )),
         )
     }
 

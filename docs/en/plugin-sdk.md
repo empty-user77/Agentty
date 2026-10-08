@@ -45,6 +45,7 @@ Every call returns a promise.
 | `notify(message, kind)` — `info`, `success`, `warning`, `error` | |
 | `setBadge(text)` — up to 8 characters on the tab-strip button | |
 | `getContext()` | |
+| `hostInfo()` — Agentty's version, API version, language, and the panel elements it draws (`uiFeatures`) | |
 | `openUrl(url)` — http/https | |
 | `copy(text)` — put text on the clipboard | |
 | `revealPath(path)` — show a file in the file manager | `workspace.read` |
@@ -76,8 +77,23 @@ The panel is 360 px wide and scrolls vertically. The plugin describes it as a tr
 | `ui.badge(text, tone)` | `neutral`, `info`, `success`, `warning`, `error` | |
 | `ui.spinner(text)` | | |
 | `ui.divider()` | | |
+| `ui.flow(id, steps)` | Steps `{ id, title, subtitle, icon, state, selected, side }`; `state`: `off`, `on`, `active`, `done`, `error` | `select` with `event.item` |
+| `ui.popover(id, title, children)` | A card beside the panel | `close` |
+| `ui.card(children, { title, subtitle, icon, tone })` | Raised box; `tone` colors the icon and edge (API 4) | |
+| `ui.grid(children, { columns, gap })` | Equal columns, 1–6 (API 4) | |
+| `ui.tabs(id, [{ id, label, icon, badge }], value, children)` | Tab strip; children are the picked tab's content (API 4) | `change` with the tab's id |
+| `ui.table(id, [{ label, align, grow }], [{ id, cells, tone }], { empty, selected })` | Rows under headings (API 4) | `select` with `event.item` |
+| `ui.keyValue([{ label, value, tone, mono }])` | Label and value pairs (API 4) | |
+| `ui.stat(label, value, { detail, icon, tone })` | One number, large (API 4) | |
+| `ui.progress(value, { label, detail, tone })` | Bar, `value` from 0 to 1 (API 4) | |
+| `ui.callout(text, { title, icon, tone })` | Tinted note, `info` unless told otherwise (API 4) | |
+| `ui.select(id, [{ value, label }], value, { placeholder, disabled })` | Drop-down (API 4) | `change` with the value |
+| `ui.checkbox(id, label, value, { description, disabled })` | Box to tick (API 4) | `change` with the new boolean |
+| `ui.code(text, { language, title })` | Colored code with a copy button (API 4) | |
 
 Null and false children are skipped, so `condition && ui.text('…')` works.
+
+Which element to use for what, with whole screens to start from: [Designing a panel](/docs/plugin-ui-guide). The elements marked API 4 need `"apiVersion": 4` in the manifest.
 
 ```js
 plugin.onPanelOpen(async (context) => {

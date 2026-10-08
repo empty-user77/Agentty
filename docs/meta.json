@@ -264,6 +264,15 @@
           }
         },
         {
+          "slug": "plugin-ui-guide",
+          "title": {
+            "en": "Designing a panel",
+            "ko": "패널 디자인",
+            "ja": "パネルのデザイン",
+            "zh": "设计面板"
+          }
+        },
+        {
           "slug": "plugin-agentos",
           "title": {
             "en": "AgentOS plugins",

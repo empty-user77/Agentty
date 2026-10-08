@@ -5,6 +5,32 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Plugin panels for real tools, continued: text fields suggest as you type (`completions` — the
+  variables of an API client from `{{` or a few letters), a grid's sidebar column can be dragged
+  wider or narrower (`resizable`, the width sent back to keep), and a plugin can open itself in an
+  Agentty window of its own (`workspace/openWindow`, or the link `agentty://open/<id>?window=new`).
+  A grid can take the panel's height with each column scrolling on its own (`fill`), tabs keep
+  their strip while their content scrolls, scroll sideways when they do not fit and can carry a
+  `+` menu (`addMenu`), list rows can be marked `selected`, and a button with only an icon is a
+  square.
+- Plugin panels have eleven new elements (plugin API 4): cards, grids, tabs, tables, label/value
+  lists, stats, progress bars, callouts, drop-downs, checkboxes and code blocks with syntax colors
+  and a copy button.
+- A plugin workspace without pages (a plugin that does not drive the browser) is the plugin's
+  panel across the whole area, with the tab's terminals under it only while a job runs; a
+  drop-down beside a field takes the width of its options instead of half the row.
+- Layout for real tools: a grid's columns can be given widths (`["240px", "1"]` is a sidebar
+  beside a page), list rows can be indented as a tree and carry a colored tag (an HTTP method),
+  tabs can have a close button, and text fields can use the monospace font for code and JSON.
+- UI Gallery, a plugin that comes with Agentty: every panel element live with the code that draws
+  it, and whole example screens to start a plugin from. A new guide, "Designing a panel", says
+  which element to use for what.
+
+### Changed
+- Plugin panels look more like the rest of Agentty: buttons and fields share one height, list rows
+  show their icon in a tinted tile, and titles, badges, switches and empty lists were redrawn.
+
 ### Fixed
 - Voice dictation in an agent that records from the microphone (for example Claude Code or Codex
   `/voice`) now works inside Agentty's terminals: the app carries the microphone entitlement and
