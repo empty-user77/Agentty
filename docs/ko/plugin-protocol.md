@@ -185,13 +185,24 @@ callout  { text, title?, icon?, tone? }     tone 기본값은 info
 select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
 checkbox { id, label, value?, description?, disabled? }
 code     { text, language?, title? }       language(rust, json, ts, sh, …)로 색칠, 복사 버튼 포함
+
+API 5:
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                           플러그인 자기 폴더(files/*)의 그림: PNG·JPEG·WebP·GIF만, SVG는 그리지 않음;
+                                           높이 기본 240; fit: contain | cover; src가 없으면 빈 칸; drop(id와 함께,
+                                           files 권한 필요)은 Finder에서 끌어 놓은 그림을 받음
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                           캔버스의 x, y에 놓인 노드 카드를 와이어로 잇는 그래프(이미지 파이프라인처럼); fill이면 패널의
+                                           남은 높이를 차지; 그 안에서 스크롤·확대/축소(− % + 맞춤, ⌘/Ctrl + 스크롤)
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?, children?, state?, selected? }]
+         edges: [{ from: { node, port }, to: { node, port }, tone?, idle? }]
 ```
 
 이벤트: `button`은 `click`, `input`은 `value`와 함께 `change`·`submit`, `list`는 `item`과 함께 `select`(행 버튼은 `item`·`action`과 함께 `action`), `choice`는 선택한 값과 함께 `change`, `toggle`은 새 불리언과 함께 `change`를 보냅니다.
 
 리스트 항목의 `tone`은 아이콘 색을 정하며 `badge`와 같은 값을 씁니다.
 
-`flow`는 단계 id를 `item`으로 담아 `select`를, `popover`는 닫기 버튼에서 `close`를 보냅니다. API 4부터: `tabs`는 탭 id와 함께 `change`, `table`은 행 id를 `item`으로 담아 `select`, `select`는 옵션 값과 함께 `change`, `checkbox`는 새 불리언과 함께 `change`를 보냅니다.
+`flow`는 단계 id를 `item`으로 담아 `select`를, `popover`는 닫기 버튼에서 `close`를 보냅니다. API 4부터: `tabs`는 탭 id와 함께 `change`, `table`은 행 id를 `item`으로 담아 `select`, `select`는 옵션 값과 함께 `change`, `checkbox`는 새 불리언과 함께 `change`를 보냅니다. API 5부터: `image`는 `click`을, 그리고 `[{ path, name, size }]`와 함께 `drop`을 보냅니다(`files/pick`처럼 플러그인 폴더에 복사된 경로). `graph`는 노드 헤더를 누르면 노드 id를 `item`으로 담아 `select`를, `movable`이면 헤더를 끌어 놓았을 때 노드를 `item`, `{ x, y }`를 `value`로 담아 `move`를 보냅니다 — 그 위치를 기억해 다시 보내 주세요.
 
 API 4 요소를 쓰는 플러그인은 매니페스트에 `"apiVersion": 4`를 적습니다. 실행 중인 Agentty가 그릴 수 있는 요소는 `host/info`의 `uiFeatures`에 있습니다. 무엇에 어떤 요소를 쓸지는 [패널 디자인](/docs/plugin-ui-guide)을 보세요.
 

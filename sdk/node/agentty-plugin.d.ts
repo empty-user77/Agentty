@@ -48,7 +48,28 @@ export type UiNode =
   | { type: 'callout'; text: string; title?: string; icon?: string; tone?: Tone }
   | { type: 'select'; id: string; options: ChoiceOption[]; value?: string; placeholder?: string; disabled?: boolean }
   | { type: 'checkbox'; id: string; label: string; value?: boolean; description?: string; disabled?: boolean }
-  | { type: 'code'; text: string; language?: string; title?: string };
+  | { type: 'code'; text: string; language?: string; title?: string }
+  // API 5
+  | { type: 'image'; src?: string; id?: string; alt?: string; width?: number; height?: number; fit?: 'contain' | 'cover'; caption?: string; placeholder?: string; drop?: boolean; into?: string }
+  | { type: 'graph'; id: string; nodes: GraphNode[]; edges?: GraphEdge[]; height?: number; movable?: boolean; fill?: boolean };
+
+export interface GraphPort { id: string; label?: string; tone?: Tone }
+export interface GraphNode {
+  id: string;
+  title: string;
+  subtitle?: string;
+  icon?: string;
+  tone?: Tone;
+  x: number;
+  y: number;
+  width?: number;
+  inputs?: GraphPort[];
+  outputs?: GraphPort[];
+  children?: Child[];
+  state?: 'off' | 'on' | 'active' | 'done' | 'error';
+  selected?: boolean;
+}
+export interface GraphEdge { from: { node: string; port: string }; to: { node: string; port: string }; tone?: Tone; idle?: boolean }
 
 type Child = UiNode | null | undefined | false | Child[];
 
@@ -79,6 +100,9 @@ export const ui: {
   select(id: string, options: ChoiceOption[], value?: string, extra?: { placeholder?: string; disabled?: boolean }): UiNode;
   checkbox(id: string, label: string, value?: boolean, options?: { description?: string; disabled?: boolean }): UiNode;
   code(text: string, options?: { language?: string; title?: string }): UiNode;
+  // API 5
+  image(src: string | null | undefined, options?: { id?: string; alt?: string; width?: number; height?: number; fit?: 'contain' | 'cover'; caption?: string; placeholder?: string; drop?: boolean; into?: string }): UiNode;
+  graph(id: string, nodes: GraphNode[], edges?: GraphEdge[], options?: { height?: number; movable?: boolean; fill?: boolean }): UiNode;
 };
 
 export type AgentStatus = 'shell' | 'idle' | 'working' | 'thinking' | 'finished' | 'permission' | 'question' | 'interrupted' | 'exited';

@@ -71,9 +71,9 @@ impl gpui::Render for PluginFlowDrag {
 const RESIZE_RANGE: (f32, f32) = (160., 720.);
 
 /// Behind fields, code and the track of a bar: a step darker than the panel.
-const SUNKEN: u32 = 0x1a1a1d;
+pub(super) const SUNKEN: u32 = 0x1a1a1d;
 /// Cards and stats: a step lighter than the panel.
-const RAISED: u32 = 0x27272b;
+pub(super) const RAISED: u32 = 0x27272b;
 /// Secondary buttons.
 const CONTROL: u32 = 0x2e2e33;
 /// Height of a tab strip, its rule included: two strips side by side draw it on one line.
@@ -82,7 +82,7 @@ const TAB_STRIP_HEIGHT: f32 = 36.;
 const INLINE_ROW_ACTIONS: usize = 3;
 /// Height of a button, a select and a one-line field, so a row of them lines up.
 const CONTROL_HEIGHT: f32 = 28.;
-const MONO: &str = "JetBrains Mono";
+pub(super) const MONO: &str = "JetBrains Mono";
 
 /// A `flow` step's icon box, and where the line joining the steps runs: under its middle.
 const FLOW_ICON: f32 = 26.;
@@ -107,7 +107,7 @@ fn gap(gap: Gap) -> gpui::Pixels {
     })
 }
 
-fn tone_color(tone: Tone) -> u32 {
+pub(super) fn tone_color(tone: Tone) -> u32 {
     match tone {
         Tone::Neutral => Chrome::MUTED,
         Tone::Info => Chrome::BLUE,
@@ -169,7 +169,7 @@ fn select_width(options: &[agentty_bridge::plugins::ui::ChoiceOption], placehold
 
 /// Whether the tree shows a `code` block (and so needs the grammars).
 pub(super) fn has_code(node: &Node) -> bool {
-    matches!(node, Node::Code { .. } | Node::Input { language: Some(_), .. }) || node.children().iter().any(has_code)
+    matches!(node, Node::Code { .. } | Node::Input { language: Some(_), .. }) || node.descendants().any(has_code)
 }
 
 /// The extension a `code` block's language reads as, for finding its grammar.
@@ -192,7 +192,7 @@ fn code_extension(language: &str) -> String {
 }
 
 /// Sends a plugin an event from one of its controls, after any typing it has not seen yet.
-fn emit(
+pub(super) fn emit(
     owner: String,
     element: String,
     event: &'static str,
@@ -1671,6 +1671,8 @@ impl Workbench {
                         ),
                 )
                 .into_any_element(),
+            Node::Image { .. } => self.render_plugin_image(plugin, node, path, cx),
+            Node::Graph { .. } => self.render_plugin_graph(plugin, node, path, cx),
             Node::Code { text, language, title } => {
                 let colors = self.code_colors(text, language.as_deref());
                 let styled = StyledText::new(text.clone()).with_highlights(
@@ -1784,7 +1786,7 @@ impl Workbench {
     }
 
     /// `children` drawn into `container`, each under its own index in `path`.
-    fn render_plugin_children(
+    pub(super) fn render_plugin_children(
         &self,
         plugin: &str,
         children: &[Node],

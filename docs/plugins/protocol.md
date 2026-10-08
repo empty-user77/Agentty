@@ -480,6 +480,36 @@ select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
 checkbox { id, label, value?, description?, disabled? }
 code     { text, language?, title? }        colored by language (rust, json, ts, sh, …), with a
                                             copy button
+
+API 5 (`uiFeatures`: image, imageDrop, graph):
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                            a picture from the plugin's own folder (a files/*
+                                            path): PNG, JPEG, WebP or GIF by its bytes, never an
+                                            SVG; height defaults to 240, width to the place's;
+                                            fit: contain (default) | cover; no src (or not a
+                                            picture) draws an empty slot with the placeholder;
+                                            id makes it clickable; drop (with id, needs files):
+                                            pictures dropped on it from the Finder are copied into
+                                            into (default dropped); a picture that changes on disk
+                                            is read again
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                            node cards on a canvas joined by wires (at most 64
+                                            nodes, 512 wires); the canvas is height pixels tall
+                                            (default 560), or with fill takes the height left in
+                                            the panel (what comes before it stays on screen); the
+                                            user scrolls inside it and zooms with its − % + fit
+                                            buttons or ⌘/Ctrl + scroll — far out, the cards show
+                                            their pictures only
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?,
+                   children?, state?, selected? }]
+                                            a card at x, y (pixels, 0–20000), width 240 by
+                                            default (120–900); inputs on its left edge and outputs
+                                            on its right, one row each under the heading:
+                                            [{ id, label?, tone? }] (12 a side), tone colors the
+                                            port and its wires; children: elements inside the
+                                            card; state as a flow step's
+         edges:  [{ from: { node, port }, to: { node, port }, tone?, idle? }]
+                                            an output to an input; idle draws it faint
 ```
 
 Events: `button` → `click`; `input` → `change` / `submit` with `value`; `list` → `select` with
@@ -487,6 +517,7 @@ Events: `button` → `click`; `input` → `change` / `submit` with `value`; `lis
 `toggle` → `change` with the new boolean; `flow` → `select` with the step's id as `item`; `popover` → `close` from its close button.
 From API 4: `tabs` → `change` with the tab's id, and `close` with the tab's id as `value` from a `closable` tab's button; `table` → `select` with the row's id as `item`;
 `select` → `change` with the option's value; `checkbox` → `change` with the new boolean; a resizable `grid` → `resize` with the column's width in pixels as `value`.
+From API 5: `image` → `click`, and `drop` with `[{ path, name, size }]` as `value` (paths in the plugin's folder, as `files/pick` answers); `graph` → `select` with the node's id as `item` from a heading click, and with `movable` `move` with the node as `item` and `{ x, y }` as `value` once a heading is dragged — keep it and send the node there, or it goes back.
 
 Which element to use for what, and whole screens to start from: the **UI Gallery** plugin (it
 comes with Agentty) and https://www.agentty.run/docs/plugin-ui-guide.

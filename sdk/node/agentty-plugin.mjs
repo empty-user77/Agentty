@@ -64,6 +64,25 @@ export const ui = {
   checkbox: (id, label, value = false, { description, disabled = false } = {}) => ({ type: 'checkbox', id, label, value, description, disabled }),
   /** Monospaced, colored by language (rust, json, ts, sh, …), with a copy button. */
   code: (text, { language, title } = {}) => ({ type: 'code', text: String(text ?? ''), language, title }),
+
+  // API 5 — `uiFeatures` has `image` and `graph`.
+
+  /**
+   * A picture from the plugin's own folder (`files/*`): PNG, JPEG, WebP or GIF. With `id`, clicking
+   * sends `click`; with `drop` as well, pictures dragged on from the Finder are copied into `into`
+   * (default `dropped`) and sent as `drop` with `[{ path, name, size }]` (needs `files`).
+   */
+  image: (src, { id, alt, width, height, fit, caption, placeholder, drop = false, into } = {}) =>
+    ({ type: 'image', src: src || undefined, id, alt, width, height, fit, caption, placeholder, drop, into }),
+  /**
+   * Node cards on a canvas joined by wires. nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?,
+   * inputs?: [{ id, label?, tone? }], outputs?: [...], children?, state?, selected? }]; edges:
+   * [{ from: { node, port }, to: { node, port }, tone?, idle? }]. A heading click sends `select` with
+   * the node as `item`; with `movable`, a dragged heading sends `move` with `{ x, y }` as `value`.
+   * `fill` takes the panel's height instead of `height`; the user scrolls and zooms inside it.
+   */
+  graph: (id, nodes, edges = [], { height, movable = false, fill = false } = {}) =>
+    ({ type: 'graph', id, nodes: nodes.map((n) => ({ ...n, children: compact(n.children) })), edges, height, movable, fill }),
 };
 
 function compact(children) {

@@ -42,6 +42,7 @@ pub mod panes;
 mod persist;
 mod picker;
 pub mod plugin_browser;
+mod plugin_graph;
 mod plugin_host;
 mod plugin_panel;
 mod plugin_ui;
@@ -675,6 +676,16 @@ pub struct Workbench {
     plugin_select_open: Option<(String, String)>,
     /// Colors of the `code` blocks plugin panels show, by their text and language.
     plugin_code_colors: plugin_ui::CodeColors,
+    /// Where plugin picture slots that take dropped files were drawn in the last frame.
+    plugin_drop_zones: plugin_graph::PluginDropZones,
+    /// Which plugin pictures are pictures by their bytes.
+    plugin_image_checks: plugin_graph::ImageChecks,
+    /// Graph nodes the user dragged, until the plugin sends the tree back.
+    plugin_graph_moves: plugin_graph::GraphMoves,
+    /// How the user zoomed each graph, and the place it is shown in.
+    plugin_graph_views: plugin_graph::GraphViews,
+    /// The zoom of the graph node being drawn, for the pictures inside it (1 elsewhere).
+    plugin_graph_scale: std::cell::Cell<f32>,
     /// The grammars `code` blocks are colored with are loading.
     plugin_grammars_loading: bool,
     plugin_scroll: gpui::ScrollHandle,
@@ -940,6 +951,11 @@ impl Workbench {
             plugin_tab_strips: RefCell::new(HashMap::new()),
             plugin_select_open: None,
             plugin_code_colors: Default::default(),
+            plugin_drop_zones: Default::default(),
+            plugin_image_checks: Default::default(),
+            plugin_graph_moves: Default::default(),
+            plugin_graph_views: Default::default(),
+            plugin_graph_scale: std::cell::Cell::new(1.),
             plugin_grammars_loading: false,
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
@@ -1294,6 +1310,10 @@ impl Workbench {
     /// Files dropped at `position` (window coordinates): typed as paths into the pane under it.
     pub fn drop_files_at(&mut self, position: (f32, f32), paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         let point = gpui::point(px(position.0), px(position.1));
+        // A plugin's picture slot under the pointer takes the pictures.
+        if self.drop_on_plugin(point, paths, cx) {
+            return;
+        }
         let visible: Vec<Pane> =
             self.workspaces.get(self.active_workspace).and_then(|w| w.tabs.get(w.active_tab)).map(|t| t.root.leaves()).unwrap_or_default();
         let bounds = self.pane_bounds.borrow().clone();

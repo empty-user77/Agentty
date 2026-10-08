@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Plugin panels can show pictures and node graphs (plugin API 5): `image` draws a picture from the
+  plugin's own folder and can take pictures dropped from the Finder, and `graph` lays out node cards
+  on a canvas joined by wires, with ports, states and nodes the user can drag — the way an image
+  pipeline is drawn. A graph can take the panel's height, and the user zooms it (buttons, or ⌘ /
+  Ctrl with the scroll wheel) and scrolls inside it.
 - Voice prompts from the remote page: tap the microphone, speak, and the words appear in the
   prompt box to check and send. The clip is transcribed on your Mac by a local model you install
   from Settings → Remote access (a one-time download, verified and kept on the machine); no audio

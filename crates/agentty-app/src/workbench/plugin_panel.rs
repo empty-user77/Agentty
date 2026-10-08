@@ -131,6 +131,8 @@ impl Workbench {
 
     pub(super) fn prepare_plugin_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.plugin_window_height.set(f32::from(window.viewport_size().height));
+        // Drawn again below: a slot gone from the panel takes no more drops.
+        self.plugin_drop_zones.borrow_mut().clear();
         // A plugin's workspace in front whose plugin just came back (turned off and on, updated)
         // gets its panel again: nothing else switches workspaces meanwhile to bring it up.
         self.sync_plugin_workspace(cx);
