@@ -1045,14 +1045,14 @@ pub(crate) mod tests {
             assert!(denied.split(',').any(|t| t == tool), "{tool} is not denied: {denied}");
         }
         assert!(!denied.split(',').any(|t| t == "Bash"), "it still runs tests and git");
-        assert!(!args.iter().any(|a| a == "--dangerously-skip-permissions"));
+        assert!(!args.iter().any(|a| a.starts_with("--dangerously")), "a reviewer never skips its checks");
 
         let mut codex = LaunchSpec::with_prompt(Agent::Codex, "review".into(), String::new(), std::env::temp_dir());
         codex.read_only = true;
         let args = codex.command().unwrap();
         assert!(args.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "read-only"));
         assert!(args.windows(2).any(|w| w[0] == "--ask-for-approval" && w[1] == "never"));
-        assert!(!args.iter().any(|a| a == "--dangerously-bypass-approvals-and-sandbox"));
+        assert!(!args.iter().any(|a| a.starts_with("--dangerously")), "a reviewer never skips its checks");
         assert_eq!(args[1], "-c", "an interactive session, not a one-off `exec` job");
     }
 
