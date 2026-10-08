@@ -440,9 +440,12 @@ impl Workbench {
         }
         .map(|popover| self.render_plugin_popover(&plugin_id, &popover, cx));
 
-        // A tree that takes the panel's height scrolls inside itself, column by column. The empty
-        // state fills the panel too, so it can sit centred in all the room there is.
-        let fills_panel = no_automation || (matches!(state, RunState::Running) && tree.as_ref().is_some_and(|t| t.fills_height()));
+        // The empty state renders only when no earlier arm (consent, failure) claims the body.
+        let shows_empty = no_automation && !matches!(state, RunState::NeedsConsent | RunState::Failed(_));
+        // A tree that takes the panel's height scrolls inside itself, column by column; the empty
+        // state fills it too, so it can sit centred. A failure's logs or a consent notice stay in
+        // the scrolling branch, so they never overflow out of reach.
+        let fills_panel = shows_empty || (matches!(state, RunState::Running) && tree.as_ref().is_some_and(|t| t.fills_height()));
         let body: AnyElement = match (tree, state) {
             (_, RunState::NeedsConsent) => {
                 let owner = plugin_id.clone();
