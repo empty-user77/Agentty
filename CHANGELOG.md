@@ -5,7 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-10-08
+
 ### Added
+- Chat workspaces: chat with one lead agent that plans the work and starts up to four workers, each
+  in its own terminal and git worktree, reporting back as they finish a turn. In a git repository
+  the chat gets its own branch — workers start from it and are merged back, and your project folder
+  is left alone until you ask for the result. Optional reviewers read and run the workers' changes
+  without editing; pick the worker and reviewer agents (Claude Code or Codex) from the chat's bar.
+  Start one from the start page or the + menu, and drive it from the remote page too, voice included.
+- A chat workspace watches the plan usage of the agents it runs and shows the window closest to
+  running out in its bar — amber from 70%, red from 85% — with how full it is and when it resets.
+- Plugins can offer tools to the AI agents you run: a plugin that asks for the new `mcp.tools`
+  permission exposes its tools to Claude Code and Codex in Agentty over MCP, with an "Allow MCP
+  connection" switch on its Permissions tab (on by default) and every call checked and logged on
+  the host side.
 - Plugin panels can show pictures and node graphs (plugin API 5): `image` draws a picture from the
   plugin's own folder and can take pictures dropped from the Finder, and `graph` lays out node cards
   on a canvas joined by wires, with ports, states and nodes the user can drag — the way an image
@@ -45,6 +59,7 @@ All notable changes to this project are documented here. The format follows
   `/voice`) now works inside Agentty's terminals: the app carries the microphone entitlement and
   usage description, so macOS asks for microphone access the first time instead of silently
   denying it.
+- A program plugin's Permissions tab no longer fails to draw its warning icon when opened.
 
 ## [0.2.13] - 2026-10-03
 
