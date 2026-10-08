@@ -26,7 +26,7 @@ if [[ "${1:-}" == "--in-container" ]]; then
   export PATH="/root/.cargo/bin:$PATH"
   dnf -y -q install dnf-plugins-core >/dev/null
   dnf config-manager --set-enabled crb
-  dnf -y -q install gcc gcc-c++ make cmake git pkgconf-pkg-config libxkbcommon-devel libxkbcommon-x11-devel \
+  dnf -y -q install gcc gcc-c++ make cmake clang clang-devel git pkgconf-pkg-config libxkbcommon-devel libxkbcommon-x11-devel \
     wayland-devel libxcb-devel libX11-devel vulkan-loader-devel fontconfig-devel freetype-devel libzstd-devel >/dev/null
   command -v rustup >/dev/null || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --no-modify-path
   rustup toolchain install
