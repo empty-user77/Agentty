@@ -43,6 +43,9 @@ pub struct TabSnapshot {
     /// A chat tab: its first pane is the lead agent drawn as a chat, the others its workers.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub chat: bool,
+    /// A chat's choice of agents for its workers and reviewers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_roles: Option<super::chat_team::ChatRoles>,
 }
 
 /// A tab of a plugin's workspace as one automation: an id the plugin knows it by, and the name it
@@ -667,6 +670,7 @@ mod tests {
                 active_pane: 0,
                 zoomed_pane: None,
                 chat: true,
+                chat_roles: None,
             }],
             ..loaded
         };

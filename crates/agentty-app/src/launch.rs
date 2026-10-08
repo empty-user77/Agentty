@@ -88,12 +88,18 @@ pub struct LaunchSpec {
     /// tools (so not the in-app browser, which is signed in as the user). A prompt hidden in that
     /// text then has nothing to reach with.
     pub restricted: bool,
+    /// A reviewer: it reads and runs what it needs to judge the work, but does not edit files
+    /// (Claude Code without its editing tools, Codex in a read-only sandbox).
+    pub read_only: bool,
 }
 
 /// Claude Code tools a restricted agent does not get: everything that runs a program, reaches the
 /// network or starts other agents. What is left reads and writes files.
 const RESTRICTED_DENIED_TOOLS: &[&str] =
     &["Bash", "BashOutput", "KillShell", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit", "Skill", "SlashCommand"];
+
+/// Claude Code tools a reviewer does not get: the ones that edit files.
+const READ_ONLY_DENIED_TOOLS: &[&str] = &["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
 /// What the user picked in the launcher.
 #[derive(Debug, Clone, PartialEq)]
@@ -170,7 +176,18 @@ impl LaunchSpec {
             PaneKind::Codex => "Codex".to_string(),
         };
         let session_id = (kind == PaneKind::Claude).then(|| uuid::Uuid::new_v4().to_string());
-        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None, missing_cwd: None, restricted: false }
+        Self {
+            kind,
+            title,
+            cwd,
+            start: Start::New,
+            session_id,
+            model: None,
+            advisor: None,
+            missing_cwd: None,
+            restricted: false,
+            read_only: false,
+        }
     }
 
     pub fn shell_command(command: String, title: String, cwd: PathBuf) -> Self {
@@ -184,6 +201,7 @@ impl LaunchSpec {
             advisor: None,
             missing_cwd: None,
             restricted: false,
+            read_only: false,
         }
     }
 
@@ -202,6 +220,7 @@ impl LaunchSpec {
             advisor: None,
             missing_cwd: None,
             restricted: false,
+            read_only: false,
         }
     }
 
@@ -272,6 +291,9 @@ impl LaunchSpec {
                     args.extend(["--permission-mode".into(), "acceptEdits".into()]);
                     args.extend(["--disallowedTools".into(), RESTRICTED_DENIED_TOOLS.join(",")]);
                     args.extend(["--strict-mcp-config".into()]);
+                } else if self.read_only {
+                    // A reviewer keeps the user's permission mode; only its editing tools go.
+                    args.extend(["--disallowedTools".into(), READ_ONLY_DENIED_TOOLS.join(",")]);
                 } else if crate::settings::always_bypass() {
                     // The user turned on "always Bypass" in Settings (off by default). The flag alone
                     // leaves the starting mode to the user's `defaultMode` (`auto` stayed `auto` in a
@@ -312,7 +334,11 @@ impl LaunchSpec {
                 if let Some(guide) = crate::agent_guide::codex_override() {
                     args.extend(["-c".into(), guide]);
                 }
-                if self.restricted {
+                if self.read_only && !self.restricted {
+                    // A reviewer: it may read and run commands, never write, and never stops to ask
+                    // (a command the sandbox refuses fails, and the review goes on).
+                    args.extend(["--sandbox".into(), "read-only".into(), "--ask-for-approval".into(), "never".into()]);
+                } else if self.restricted {
                     // Its folder only, no network, never asking (it works unattended; `exec` does
                     // not ask anyway and takes no approval option).
                     args.extend(["--sandbox".into(), "workspace-write".into()]);
@@ -1047,6 +1073,29 @@ pub(crate) mod tests {
 
         let open = LaunchSpec::with_prompt(Agent::Claude, "x".into(), String::new(), std::env::temp_dir());
         assert!(!open.command().unwrap().iter().any(|a| a == "--disallowedTools"), "other agents are left as they were");
+    }
+
+    /// A chat's reviewer reads and runs commands but has no way to edit files.
+    #[test]
+    fn a_reviewer_cannot_edit() {
+        let mut spec = LaunchSpec::with_prompt(Agent::Claude, "review".into(), String::new(), std::env::temp_dir());
+        spec.read_only = true;
+        let args = spec.command().unwrap();
+        let after = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
+        let denied = after("--disallowedTools").unwrap();
+        for tool in ["Edit", "MultiEdit", "Write", "NotebookEdit"] {
+            assert!(denied.split(',').any(|t| t == tool), "{tool} is not denied: {denied}");
+        }
+        assert!(!denied.split(',').any(|t| t == "Bash"), "it still runs tests and git");
+        assert!(!args.iter().any(|a| a.starts_with("--dangerously")), "a reviewer never skips its checks");
+
+        let mut codex = LaunchSpec::with_prompt(Agent::Codex, "review".into(), String::new(), std::env::temp_dir());
+        codex.read_only = true;
+        let args = codex.command().unwrap();
+        assert!(args.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "read-only"));
+        assert!(args.windows(2).any(|w| w[0] == "--ask-for-approval" && w[1] == "never"));
+        assert!(!args.iter().any(|a| a.starts_with("--dangerously")), "a reviewer never skips its checks");
+        assert_eq!(args[1], "-c", "an interactive session, not a one-off `exec` job");
     }
 
     /// Runs the generated hook commands through `sh` against a real socket.

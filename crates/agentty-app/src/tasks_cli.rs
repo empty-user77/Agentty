@@ -13,6 +13,9 @@ pub const HELP: &str = "agentty tasks — start work in parallel sessions next t
   agentty tasks --plan <plan.json>
   agentty tasks status
   agentty tasks send --to <title> --prompt <text>
+  agentty tasks result --to <title>
+  agentty tasks stop --to <title>
+  agentty tasks review --worker <title> [--prompt <focus>] [--agent claude|codex]
 
 A plan is a JSON array of up to 6 tasks: [{\"title\": \"…\", \"prompt\": \"…\", \"agent\": \"claude\"}, …].
 Agentty shows the tasks to the user, who starts or declines them. Each started task runs in a
@@ -25,8 +28,14 @@ Prints the started tasks as JSON (title, branch, folder); exits 1 when the user 
 Agentty could not start them. Works in terminals opened by Agentty (uses $AGENTTY_SOCKET).
 
 In a chat workspace the lead agent's tasks start at once as workers in the grid below the chat
-(at most 4; a finished worker makes room for a new one). There `status` lists the workers and
-what each is doing, and `send` gives one of them a follow-up message.";
+(at most 4; a finished worker makes room for a new one), each from the latest commit of the
+lead's branch. There, for the lead only:
+  status   lists the workers and what each is doing
+  send     gives a worker a follow-up message
+  result   prints a worker's last reply again
+  stop     closes a worker (its branch and session stay)
+  review   starts a reviewer in a worker's folder: it reads and runs, never edits, and reports
+           back like a worker. Without --agent it uses the chat's reviewer choice.";
 
 /// The tasks named on the command line: one from `--title` / `--prompt[-file]` / `--agent`, or all
 /// of `--plan`.
@@ -65,21 +74,22 @@ fn tasks_from_args(args: &[String]) -> Result<serde_json::Value, String> {
 /// The request of `agentty tasks status` / `send …`.
 fn control_from_args(args: &[String]) -> Result<serde_json::Value, String> {
     let (action, rest) = args.split_first().ok_or("no action")?;
-    let (mut to, mut prompt) = (None, None);
+    let (mut to, mut prompt, mut agent) = (None, None, None);
     let mut rest = rest.iter();
     while let Some(flag) = rest.next() {
         let mut value = || rest.next().cloned().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
-            "--to" => to = Some(value()?),
+            "--to" | "--worker" => to = Some(value()?),
             "--prompt" => prompt = Some(value()?),
             "--prompt-file" => {
                 let path = value()?;
                 prompt = Some(std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?);
             }
+            "--agent" => agent = Some(value()?),
             other => return Err(format!("unknown option {other} (see agentty tasks --help)")),
         }
     }
-    let request = serde_json::json!({ "action": action, "to": to, "prompt": prompt });
+    let request = serde_json::json!({ "action": action, "to": to, "prompt": prompt, "agent": agent });
     crate::agent_signal::parse_tasks_ctl(&request)?;
     Ok(request)
 }
@@ -120,9 +130,10 @@ pub fn run(args: &[String]) -> i32 {
         println!("{HELP}");
         return 0;
     }
-    if matches!(args[0].as_str(), "status" | "send") {
+    if matches!(args[0].as_str(), "status" | "send" | "result" | "stop" | "review") {
         return match control_from_args(args) {
-            Ok(request) => ask(format!("tasksctl\t{request}"), Duration::from_secs(15)),
+            // `result` reads a transcript, `review` makes nothing new but a pane: seconds at most.
+            Ok(request) => ask(format!("tasksctl\t{request}"), Duration::from_secs(30)),
             Err(err) => {
                 eprintln!("agentty tasks: {err}");
                 1
@@ -179,5 +190,9 @@ mod tests {
         assert_eq!((send["to"].as_str(), send["prompt"].as_str()), (Some("API"), Some("Add tests")));
         assert!(control_from_args(&strings(&["send", "--to", "API"])).is_err());
         assert!(control_from_args(&strings(&["send", "--bogus"])).is_err());
+        let review = control_from_args(&strings(&["review", "--worker", "API", "--agent", "codex", "--prompt", "auth"])).unwrap();
+        assert_eq!((review["to"].as_str(), review["agent"].as_str()), (Some("API"), Some("codex")));
+        assert!(control_from_args(&strings(&["stop"])).is_err());
+        assert!(control_from_args(&strings(&["result", "--to", "API"])).is_ok());
     }
 }

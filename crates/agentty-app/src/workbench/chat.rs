@@ -13,6 +13,7 @@
 //! its last reply goes to the lead as a message starting with [`REPORT_MARK`]; the lead reviews it
 //! and reports in the chat, or sends the worker a follow-up (`agentty tasks send`).
 
+use super::chat_team::{folder_brief, review_prompt, ChatRoles, RoleAgent, REVIEW_PREFIX};
 use super::panes::{Axis, PaneNode};
 use super::{status_label_sized, Pane, Tab, Workbench};
 use crate::agent_signal::{browser_reply, TasksCtlRequest, TasksRequest};
@@ -55,20 +56,25 @@ const BRIEF: &str = "\
 You are the lead agent of an Agentty chat workspace. The user talks to you in this chat. You plan the work and hand \
 pieces of it to worker agents; each worker runs in a terminal of its own, which the user watches in a grid below the chat.
 
+{folder}
+
 How to work:
 - Answer questions and make small changes yourself.
 - For anything bigger, make a short plan, then start workers with `agentty tasks` (`agentty tasks --plan <plan.json>` \
 with a JSON array of {\"title\", \"prompt\", \"agent\"}, or `agentty tasks --title <title> --prompt-file <file>`). Here \
-they start at once, without asking the user again. At most 4 workers run at a time; a finished worker makes room for a \
-new one. Each worker gets its own git worktree on a new branch from the project's default branch.
+they start at once, without asking the user again. At most 4 run at a time, reviewers included; a finished one makes \
+room for a new one. Each worker gets its own git worktree on a new branch. Leave \"agent\" out to use the agent the \
+user chose for this chat's workers.
 - Every worker prompt must stand on its own: the goal, the files involved, the constraints, how to verify, and to commit \
 its work on its branch when done. Workers do not push or open pull requests unless the user asked for that.
 - After starting workers, tell the user in a few lines who does what, then end your turn. Do not wait, poll or sleep.
 - When a worker ends a turn, Agentty sends you a message that starts with \"[Agentty]\", with the worker's title, \
-branch, folder and last reply. Review its work (read the diff in its folder), then report to the user, or give the \
-worker a follow-up with `agentty tasks send --to \"<title>\" --prompt \"<text>\"`.
-- `agentty tasks status` lists your workers and what each one is doing.
-- Merge a worker's branch only when the user asks for it or approved a plan that includes merging.
+branch, folder and last reply (and whether reviews are on). Review its work (read the diff in its folder), then merge \
+it, report to the user, or give the worker a follow-up with `agentty tasks send --to \"<title>\" --prompt \"<text>\"`.
+- `agentty tasks status` lists your workers; `agentty tasks result --to \"<title>\"` prints a worker's last reply again; \
+`agentty tasks stop --to \"<title>\"` closes a worker you no longer need (its branch stays); \
+`agentty tasks review --worker \"<title>\"` starts a reviewer that reads the worker's work without editing it and \
+reports back like a worker.
 - Keep replies in the chat short: what happened, what comes next, what you need from the user.
 
 Talk to the user in {language}.";
@@ -84,6 +90,8 @@ pub enum ChatItem {
 
 pub struct ChatState {
     pub lead: Pane,
+    /// The agents its workers and reviewers run as.
+    roles: ChatRoles,
     input: Option<(Entity<TextInput>, Subscription)>,
     /// From the transcript.
     items: Vec<ChatItem>,
@@ -108,9 +116,39 @@ pub struct ChatState {
     _watch: Task<()>,
 }
 
-/// The lead's first message: its instructions, then what the user wrote.
-fn briefed_prompt(text: &str, language: &str) -> String {
-    format!("{BRIEF_START}\n{}\n{BRIEF_END}\n\n{text}", BRIEF.replace("{language}", language))
+/// The lead's first message: its instructions (with where it works, see [`folder_brief`]), then what
+/// the user wrote.
+fn briefed_prompt(text: &str, language: &str, folder: &str) -> String {
+    format!("{BRIEF_START}\n{}\n{BRIEF_END}\n\n{text}", BRIEF.replace("{language}", language).replace("{folder}", folder))
+}
+
+/// Waits (a few seconds at most) until `path` stops growing: the turn's last lines reach the
+/// transcript a moment after the hook that says it ended.
+fn settle(path: &std::path::Path) {
+    let len = || std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let mut last = len();
+    for _ in 0..10 {
+        std::thread::sleep(Duration::from_millis(400));
+        let now = len();
+        if now == last {
+            return;
+        }
+        last = now;
+    }
+}
+
+/// The last thing `agent` said in session `session`, whole and without its tool steps; else
+/// `fallback` (the first line its hook reported). Reads a transcript: call it off the main thread.
+fn last_reply(agent: Option<agentty_bridge::model::Agent>, session: Option<String>, fallback: Option<String>) -> Option<String> {
+    let from_transcript = agent.zip(session).and_then(|(agent, id)| {
+        let path = agentty_bridge::transcript_path(agent, &id)?;
+        settle(&path);
+        let (_, turns) = agentty_bridge::load(agent, &id).ok()?;
+        let last = turns.into_iter().rev().find(|turn| turn.role == Role::Assistant)?;
+        let text: Vec<&str> = last.text.lines().filter(|line| !line.starts_with("[tool: ")).collect();
+        Some(text.join("\n").trim().to_string()).filter(|text| !text.is_empty())
+    });
+    from_transcript.or(fallback)
 }
 
 /// Text typed in as a paste, without the `<pasted_content id="…">` tags Claude Code keeps around it.
@@ -219,14 +257,16 @@ fn is_setup_screen(lines: &[String]) -> bool {
 }
 
 /// Whether `view` waits on the user: its status says so, or its screen shows a selection (an
-/// approval, a question) the hooks have not reported yet. Text typed in then, with its Enter, would
-/// pick whatever option is highlighted.
+/// approval, a question, a first-run question such as Codex's "Trust this folder?" in a new
+/// worktree) the hooks have not reported. Text typed in then, with its Enter, would pick whatever
+/// option is highlighted.
 fn waits_on_user(view: &crate::terminal::TerminalView) -> bool {
     if view.status.needs_user() {
         return true;
     }
-    let screen = crate::terminal::classify_screen(&view.screen_lines(40));
-    screen.permission.is_some() || screen.question
+    let lines = view.screen_lines(40);
+    let screen = crate::terminal::classify_screen(&lines);
+    screen.permission.is_some() || screen.question || is_setup_screen(&lines)
 }
 
 fn status_word(status: &AgentStatus, running: bool) -> &'static str {
@@ -254,13 +294,25 @@ fn truncate(text: &str, limit: usize) -> String {
 }
 
 impl Workbench {
-    /// A new workspace in `cwd` whose first tab is a chat.
+    /// A new workspace in `cwd` whose first tab is a chat. In a git repository the lead works in a
+    /// worktree of its own, on a new branch: the chat's integration branch, which its workers start
+    /// from and are merged back into, away from the project folder until the user asks for the
+    /// result. A repository without a commit has nothing to branch from: the lead works in it.
     pub(super) fn create_chat_workspace(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "chat_workspace" }));
-        self.create_workspace(LaunchChoice::Chat.spec(cwd), window, cx);
+        let tree = agentty_bridge::worktree::tree_root(&cwd).and_then(|_| agentty_bridge::worktree::create(&cwd, "chat").ok());
+        let folder = tree.as_ref().map(|t| t.path.clone()).unwrap_or_else(|| cwd.clone());
+        if tree.is_some() {
+            self.refresh_files_panel(cx);
+        }
+        self.create_workspace(LaunchChoice::Chat.spec(folder), window, cx);
+        // The workspace is the project's, wherever its lead works.
+        if let Some(ws) = self.workspaces.last_mut() {
+            ws.cwd = cwd;
+        }
         let lead = self.workspaces.last().and_then(|ws| ws.tabs.first()).map(|tab| tab.active.clone());
         if let Some(lead) = lead {
-            self.register_chat(&lead, cx);
+            self.register_chat(&lead, ChatRoles::default(), cx);
             // The composer is made at the next frame; the keyboard goes there then.
             self.refocus = true;
         }
@@ -269,7 +321,7 @@ impl Workbench {
     }
 
     /// Makes `lead` the lead of a chat (its tab's first pane).
-    pub(super) fn register_chat(&mut self, lead: &Pane, cx: &mut Context<Self>) {
+    pub(super) fn register_chat(&mut self, lead: &Pane, roles: ChatRoles, cx: &mut Context<Self>) {
         let id = lead.entity_id();
         if self.chats.contains_key(&id) {
             return;
@@ -290,6 +342,7 @@ impl Workbench {
             id,
             ChatState {
                 lead: lead.clone(),
+                roles,
                 input: None,
                 items: Vec::new(),
                 echo: Vec::new(),
@@ -306,6 +359,32 @@ impl Workbench {
                 _watch: watch,
             },
         );
+    }
+
+    /// The choices of the chat led by `lead`.
+    pub(super) fn chat_roles(&self, lead: &Pane) -> Option<ChatRoles> {
+        self.chats.get(&lead.entity_id()).map(|state| state.roles)
+    }
+
+    fn set_chat_roles(&mut self, id: EntityId, change: impl FnOnce(ChatRoles, bool) -> ChatRoles, cx: &mut Context<Self>) {
+        let codex = self.is_installed("codex");
+        let Some(state) = self.chats.get_mut(&id) else { return };
+        state.roles = change(state.roles, codex);
+        self.persist(cx);
+        cx.notify();
+    }
+
+    /// The branch the lead works on, and whether it is the chat's own (integration) branch — the
+    /// lead in a linked worktree — rather than the project folder's.
+    fn lead_branch(lead: &Pane, cx: &App) -> (Option<String>, bool) {
+        let view = lead.read(cx);
+        (view.git_branch.clone(), view.worktree.is_some())
+    }
+
+    /// Whether `ws` holds a chat: a live chat tab, or one in its saved layout while it sleeps.
+    pub(super) fn is_chat_workspace(&self, ws: &super::Workspace) -> bool {
+        ws.tabs.iter().any(|tab| self.chat_lead_of_tab(tab).is_some())
+            || ws.dormant.as_ref().is_some_and(|dormant| dormant.tabs.iter().any(|tab| tab.chat))
     }
 
     /// The lead of `tab` when it is a chat tab.
@@ -452,7 +531,11 @@ impl Workbench {
         let language = agentty_bridge::idea::language_name(crate::settings::settings(cx).language.resolved().code());
         let Some(state) = self.chats.get_mut(&id) else { return };
         // A slash command is for Claude Code itself, not a message to brief the lead with.
-        let prompt = if state.briefed || text.starts_with('/') { text.clone() } else { briefed_prompt(&text, language) };
+        let prompt = if state.briefed || text.starts_with('/') {
+            text.clone()
+        } else {
+            briefed_prompt(&text, language, &Self::lead_folder_brief(&state.lead, cx))
+        };
         state.briefed |= !text.starts_with('/');
         state.echo.push(text);
         // What the user just wrote is what they look at: back to the newest entry.
@@ -465,6 +548,22 @@ impl Workbench {
             state.lead.update(cx, |view, cx| view.submit_prompt(prompt, cx));
         }
         cx.notify();
+    }
+
+    /// Where the lead works, for its instructions. Asks git once (the first message only).
+    fn lead_folder_brief(lead: &Pane, cx: &App) -> String {
+        let view = lead.read(cx);
+        let cwd = view.display_cwd();
+        let linked = agentty_bridge::worktree::tree_root(&cwd).is_some_and(|root| agentty_bridge::worktree::is_linked(&root));
+        if !linked {
+            return folder_brief(None);
+        }
+        let branch = view.git_branch.clone().or_else(|| agentty_bridge::git::head(&cwd).and_then(|(branch, _)| branch));
+        let project = agentty_bridge::worktree::main_tree(&cwd);
+        match (branch, project) {
+            (Some(branch), Some(project)) => folder_brief(Some((&branch, &project))),
+            _ => folder_brief(None),
+        }
     }
 
     /// A message for the lead from Agentty. Claude Code takes messages typed during a turn and reads
@@ -499,27 +598,23 @@ impl Workbench {
         let title = view.spec.title.clone();
         let branch = view.git_branch.clone();
         let folder = view.display_cwd();
-        let session = (view.agent_kind() == Some(PaneKind::Claude)).then(|| view.current_session()).flatten();
+        let (agent, session) = (view.agent_kind().and_then(PaneKind::agent), view.current_session());
         let lead_id = lead.entity_id();
-        let task = cx.background_spawn(async move {
-            let from_transcript = session.and_then(|id| {
-                let path = agentty_bridge::claude::find(&id).ok()?;
-                let (_, turns) = agentty_bridge::claude::transcript(&path).ok()?;
-                let last = turns.into_iter().rev().find(|turn| turn.role == Role::Assistant)?;
-                let text: Vec<&str> = last.text.lines().filter(|line| !line.starts_with("[tool: ")).collect();
-                Some(text.join("\n").trim().to_string()).filter(|text| !text.is_empty())
-            });
-            from_transcript.or(message)
-        });
+        let reviewer = title.starts_with(REVIEW_PREFIX);
+        // Reviews are asked for in the report itself, so a choice changed mid-chat counts at once.
+        let hint = if reviewer { None } else { self.chat_roles(&lead).and_then(|roles| roles.review_hint(&title)) };
+        let task = cx.background_spawn(async move { last_reply(agent, session, message) });
         cx.spawn(async move |this, cx| {
-            // The hook fires as the turn ends; give the transcript's last line time to land.
-            cx.background_executor().timer(Duration::from_millis(300)).await;
             let reply = task.await.unwrap_or_else(|| "(no reply text found)".into());
-            let mut report = format!("{REPORT_MARK} Worker \"{title}\" finished its turn.\n");
+            let who = if reviewer { "Reviewer" } else { "Worker" };
+            let mut report = format!("{REPORT_MARK} {who} \"{title}\" finished its turn.\n");
             if let Some(branch) = branch {
                 report.push_str(&format!("Branch: {branch}\n"));
             }
             report.push_str(&format!("Folder: {}\nIts last reply:\n{}", folder.display(), truncate(&reply, REPORT_REPLY_LIMIT)));
+            if let Some(hint) = hint {
+                report.push_str(&format!("\n\n{hint}"));
+            }
             let _ = this.update(cx, |this, cx| this.deliver_to_lead(lead_id, report, cx));
         })
         .detach();
@@ -535,19 +630,34 @@ impl Workbench {
     pub(super) fn start_chat_tasks(&mut self, request: TasksRequest, cx: &mut Context<Self>) -> Option<TasksRequest> {
         let Some(id) = self.chat_by_pane_id(request.pane, cx) else { return Some(request) };
         let (cwd, tasks) = (request.cwd.clone(), request.tasks.clone());
+        let (lead, roles) = match self.chats.get(&id) {
+            Some(state) => (state.lead.clone(), state.roles),
+            None => return Some(request),
+        };
+        // On the chat's own branch, workers build on what was merged into it so far.
+        let base = match Self::lead_branch(&lead, cx) {
+            (Some(branch), true) => Some(branch),
+            _ => None,
+        };
         cx.spawn(async move |this, cx| {
             let mut started: Vec<serde_json::Value> = Vec::new();
             let mut problems: Vec<String> = Vec::new();
             for task in tasks {
                 // No tree is made for a task that would find no room.
-                if !this.read_with(cx, |this, cx| this.chat_has_room(id, cx)).unwrap_or(false) {
+                if !this.read_with(cx, |this, cx| this.chat_has_room(id, None, cx)).unwrap_or(false) {
                     problems.push(format!("{}: all {MAX_WORKERS} workers are busy; start it when one of them has finished", task.title));
                     continue;
                 }
                 let in_git = agentty_bridge::worktree::tree_root(&cwd).is_some();
-                let (source, label) = (cwd.clone(), task.title.clone());
+                let (source, label, base) = (cwd.clone(), task.title.clone(), base.clone());
                 let tree = if in_git {
-                    match cx.background_spawn(async move { agentty_bridge::worktree::create(&source, &label) }).await {
+                    let made = cx.background_spawn(async move {
+                        match base {
+                            Some(base) => agentty_bridge::worktree::create_from(&source, &label, &base),
+                            None => agentty_bridge::worktree::create(&source, &label),
+                        }
+                    });
+                    match made.await {
                         Ok(tree) => Some(tree),
                         Err(err) => {
                             problems.push(format!("{}: {err:#}", task.title));
@@ -559,13 +669,9 @@ impl Workbench {
                 };
                 let folder = tree.as_ref().map(|t| t.path.clone()).unwrap_or_else(|| cwd.clone());
                 let branch = tree.as_ref().and_then(|t| t.branch.clone());
-                let spec = LaunchSpec::with_prompt(
-                    super::tasks::agent_of(task.agent.as_deref()),
-                    task.prompt.clone(),
-                    task.title.clone(),
-                    folder.clone(),
-                );
-                match this.update(cx, |this, cx| this.add_chat_worker(id, spec, cx)) {
+                let agent = task.agent.as_deref().and_then(RoleAgent::from_label).unwrap_or(roles.worker);
+                let spec = LaunchSpec::with_prompt(agent.agent(), task.prompt.clone(), task.title.clone(), folder.clone());
+                match this.update(cx, |this, cx| this.add_chat_worker(id, spec, None, cx)) {
                     Ok(Ok(replaced)) => {
                         started.push(serde_json::json!({ "title": task.title, "branch": branch, "folder": folder, "replaced": replaced }));
                         if tree.is_none() {
@@ -595,31 +701,39 @@ impl Workbench {
         None
     }
 
-    /// A worker that is done (not in a turn, not waiting on the user) can make room for a new one.
-    fn idle_worker(&self, lead: &Pane, cx: &App) -> Option<Pane> {
+    /// A worker that is done (not in a turn, not waiting on the user) can make room for a new one —
+    /// never `keep` (the worker a new reviewer is about to look at).
+    fn idle_worker(&self, lead: &Pane, keep: Option<&Pane>, cx: &App) -> Option<Pane> {
         self.chat_workers(lead)
             .into_iter()
+            .filter(|p| Some(p) != keep)
             .filter(|p| {
                 let view = p.read(cx);
-                !view.status.in_turn() && !view.status.needs_user()
+                !view.status.in_turn() && !waits_on_user(view)
             })
             .min_by_key(|p| p.read(cx).launched_at_ms)
     }
 
-    fn chat_has_room(&self, id: EntityId, cx: &App) -> bool {
+    fn chat_has_room(&self, id: EntityId, keep: Option<&Pane>, cx: &App) -> bool {
         let Some(state) = self.chats.get(&id) else { return false };
-        self.chat_workers(&state.lead).len() < MAX_WORKERS || self.idle_worker(&state.lead, cx).is_some()
+        self.chat_workers(&state.lead).len() < MAX_WORKERS || self.idle_worker(&state.lead, keep, cx).is_some()
     }
 
     /// Adds a worker running `spec` to the grid of chat `id`; with every place taken, the worker
     /// that finished longest ago closes for it (its branch and session stay). Returns the title of
     /// the worker it replaced.
-    fn add_chat_worker(&mut self, id: EntityId, spec: LaunchSpec, cx: &mut Context<Self>) -> Result<Option<String>, String> {
+    fn add_chat_worker(
+        &mut self,
+        id: EntityId,
+        spec: LaunchSpec,
+        keep: Option<&Pane>,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<String>, String> {
         let lead = self.chats.get(&id).map(|s| s.lead.clone()).ok_or("the chat was closed")?;
         let mut workers = self.chat_workers(&lead);
         let mut replaced = None;
         if workers.len() >= MAX_WORKERS {
-            let old = self.idle_worker(&lead, cx).ok_or(format!("all {MAX_WORKERS} workers are busy"))?;
+            let old = self.idle_worker(&lead, keep, cx).ok_or(format!("all {MAX_WORKERS} workers are busy"))?;
             replaced = Some(old.read(cx).spec.title.clone());
             self.remove_pane(&old, cx);
             workers.retain(|p| *p != old);
@@ -635,45 +749,92 @@ impl Workbench {
         Ok(replaced)
     }
 
-    /// `agentty tasks status` / `send` from a chat's lead.
+    /// `agentty tasks status|send|result|stop|review` from a chat's lead.
     pub fn answer_tasks_ctl(&mut self, request: TasksCtlRequest, cx: &mut Context<Self>) {
+        if request.ctl.action == "result" {
+            return self.answer_result(request, cx);
+        }
         let answer = self.tasks_ctl(&request, cx);
         let _ = request.reply.send(browser_reply(answer));
     }
 
-    fn tasks_ctl(&mut self, request: &TasksCtlRequest, cx: &mut Context<Self>) -> Result<String, String> {
+    /// The lead's chat and the worker `to` names in it.
+    fn lead_and_worker(&self, request: &TasksCtlRequest, cx: &App) -> Result<(EntityId, Pane, Pane), String> {
         let id = self
             .chat_by_pane_id(request.pane, cx)
             .ok_or("only the lead agent of an Agentty chat has workers (open a chat workspace to use this)")?;
         let lead = self.chats.get(&id).map(|s| s.lead.clone()).ok_or("the chat was closed")?;
         let workers = self.chat_workers(&lead);
-        match request.action.as_str() {
-            "status" => {
-                let list: Vec<serde_json::Value> = workers
-                    .iter()
-                    .map(|pane| {
-                        let view = pane.read(cx);
-                        serde_json::json!({
-                            "title": view.spec.title,
-                            "agent": crate::brand::kind_id(view.spec.kind),
-                            "status": status_word(&view.status, view.is_running()),
-                            "branch": view.git_branch,
-                            "folder": view.display_cwd(),
-                        })
-                    })
-                    .collect();
-                Ok(serde_json::json!({ "workers": list, "max": MAX_WORKERS }).to_string())
+        let to = request.ctl.to.as_str();
+        let worker = workers.iter().find(|p| p.read(cx).spec.title.eq_ignore_ascii_case(to)).cloned().ok_or_else(|| {
+            let names: Vec<String> = workers.iter().map(|p| format!("\"{}\"", p.read(cx).spec.title)).collect();
+            format!("no worker \"{to}\" (workers: {})", if names.is_empty() { "none".into() } else { names.join(", ") })
+        })?;
+        Ok((id, lead, worker))
+    }
+
+    /// `agentty tasks result`: the worker's last reply, read from its transcript in the background.
+    fn answer_result(&mut self, request: TasksCtlRequest, cx: &mut Context<Self>) {
+        let (_, _, worker) = match self.lead_and_worker(&request, cx) {
+            Ok(found) => found,
+            Err(problem) => {
+                let _ = request.reply.send(browser_reply(Err(problem)));
+                return;
             }
+        };
+        let view = worker.read(cx);
+        let title = view.spec.title.clone();
+        let (agent, session) = (view.agent_kind().and_then(PaneKind::agent), view.current_session());
+        let fallback = match &view.status {
+            AgentStatus::Finished(Some(message)) => Some(message.clone()),
+            _ => None,
+        };
+        let status = status_word(&view.status, view.is_running());
+        cx.background_spawn(async move {
+            let reply = last_reply(agent, session, fallback);
+            let answer = serde_json::json!({ "title": title, "status": status, "reply": reply });
+            let _ = request.reply.send(browser_reply(Ok(answer.to_string())));
+        })
+        .detach();
+    }
+
+    fn tasks_ctl(&mut self, request: &TasksCtlRequest, cx: &mut Context<Self>) -> Result<String, String> {
+        if request.ctl.action == "status" {
+            let id = self
+                .chat_by_pane_id(request.pane, cx)
+                .ok_or("only the lead agent of an Agentty chat has workers (open a chat workspace to use this)")?;
+            let lead = self.chats.get(&id).map(|s| s.lead.clone()).ok_or("the chat was closed")?;
+            let roles = self.chat_roles(&lead).unwrap_or_default();
+            let list: Vec<serde_json::Value> = self
+                .chat_workers(&lead)
+                .iter()
+                .map(|pane| {
+                    let view = pane.read(cx);
+                    serde_json::json!({
+                        "title": view.spec.title,
+                        "role": if view.spec.title.starts_with(REVIEW_PREFIX) { "reviewer" } else { "worker" },
+                        "agent": crate::brand::kind_id(view.spec.kind),
+                        "status": status_word(&view.status, view.is_running()),
+                        "branch": view.git_branch,
+                        "folder": view.display_cwd(),
+                    })
+                })
+                .collect();
+            let (branch, integration) = Self::lead_branch(&lead, cx);
+            return Ok(serde_json::json!({
+                "workers": list,
+                "max": MAX_WORKERS,
+                "workerAgent": roles.worker.label(),
+                "reviewerAgent": roles.reviewer.map(RoleAgent::label),
+                "leadBranch": branch,
+                "integrationBranch": integration,
+            })
+            .to_string());
+        }
+        let (id, lead, worker) = self.lead_and_worker(request, cx)?;
+        let to = worker.read(cx).spec.title.clone();
+        match request.ctl.action.as_str() {
             "send" => {
-                let to = request.to.trim();
-                let prompt = request.prompt.trim();
-                if to.is_empty() || prompt.is_empty() {
-                    return Err("send needs --to <title> and --prompt <text>".into());
-                }
-                let worker = workers.iter().find(|p| p.read(cx).spec.title.eq_ignore_ascii_case(to)).cloned().ok_or_else(|| {
-                    let names: Vec<String> = workers.iter().map(|p| format!("\"{}\"", p.read(cx).spec.title)).collect();
-                    format!("no worker \"{to}\" (workers: {})", if names.is_empty() { "none".into() } else { names.join(", ") })
-                })?;
                 if !worker.read(cx).is_running() {
                     return Err(format!("worker \"{to}\" is no longer running"));
                 }
@@ -683,9 +844,47 @@ impl Workbench {
                         "worker \"{to}\" is waiting for the user (an approval or a question in its terminal); tell the user, and send this once it is answered"
                     ));
                 }
-                let text = prompt.to_string();
+                let text = request.ctl.prompt.trim().to_string();
                 worker.update(cx, |view, cx| view.submit_prompt(text, cx));
                 Ok(serde_json::json!({ "sent": to }).to_string())
+            }
+            "stop" => {
+                self.remove_pane(&worker, cx);
+                self.persist(cx);
+                cx.notify();
+                Ok(serde_json::json!({ "stopped": to, "note": "its branch and session stay" }).to_string())
+            }
+            "review" => {
+                if to.starts_with(REVIEW_PREFIX) {
+                    return Err(format!("\"{to}\" is a reviewer; review the worker it looked at instead"));
+                }
+                if !self.chat_has_room(id, Some(&worker), cx) {
+                    return Err(format!("all {MAX_WORKERS} places are busy; start the review when one of them has finished"));
+                }
+                let roles = self.chat_roles(&lead).unwrap_or_default();
+                // Asked for by name, a review runs even with reviews off: the choice decides the agent.
+                let agent = request.ctl.agent.as_deref().and_then(RoleAgent::from_label).or(roles.reviewer).unwrap_or_default();
+                let view = worker.read(cx);
+                let (folder, branch) = (view.display_cwd(), view.git_branch.clone());
+                let base = match Self::lead_branch(&lead, cx) {
+                    (Some(branch), _) => branch,
+                    _ => agentty_bridge::worktree::base_ref(&folder),
+                };
+                let mut spec = LaunchSpec::with_prompt(
+                    agent.agent(),
+                    review_prompt(&to, branch.as_deref(), &base, &request.ctl.prompt),
+                    format!("{REVIEW_PREFIX}{to}"),
+                    folder.clone(),
+                );
+                spec.read_only = true;
+                let replaced = self.add_chat_worker(id, spec, Some(&worker), cx)?;
+                Ok(serde_json::json!({
+                    "reviewer": format!("{REVIEW_PREFIX}{to}"),
+                    "agent": agent.label(),
+                    "folder": folder,
+                    "replaced": replaced,
+                })
+                .to_string())
             }
             other => Err(format!("unknown action {other}")),
         }
@@ -720,7 +919,7 @@ impl Workbench {
                     .rounded_md()
                     .max_w(px(160.))
                     .cursor_pointer()
-                    .bg(hex_alpha(dot, if wview.status.needs_user() { 0.25 } else { 0.1 }))
+                    .bg(hex_alpha(dot, if waits_on_user(wview) { 0.25 } else { 0.1 }))
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(dot)))
                     .child(div().t_caption().truncate().text_color(hex(Chrome::FOREGROUND)).child(title))
@@ -728,6 +927,29 @@ impl Workbench {
             );
         }
         let toggle_label = t(cx, if terminal { "chat.show_chat" } else { "chat.show_terminal" });
+        // The chat's own branch, when the lead works on one: where its workers' work comes together.
+        let integration = match Self::lead_branch(pane, cx) {
+            (Some(branch), true) => Some(branch),
+            _ => None,
+        };
+        let roles = state.roles;
+        let reviewer = match roles.reviewer {
+            Some(agent) => agent.name().to_string(),
+            None => t(cx, "chat.role_off").to_string(),
+        };
+        let role_button = |id: &'static str, label: String| {
+            div()
+                .id(id)
+                .flex_shrink_0()
+                .px_1p5()
+                .py_0p5()
+                .rounded_md()
+                .cursor_pointer()
+                .t_caption()
+                .text_color(hex(Chrome::FOREGROUND))
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .child(label)
+        };
         let header = div()
             .flex_shrink_0()
             .h(px(32.))
@@ -748,6 +970,21 @@ impl Workbench {
                     .child(t(cx, "chat.title")),
             )
             .child(div().flex_shrink_0().t_caption().text_color(hex(color)).child(status))
+            .when_some(integration, |d, branch| {
+                d.child(
+                    div()
+                        .id("chat-branch")
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .t_caption()
+                        .text_color(hex(Chrome::MUTED))
+                        .tooltip(crate::ui::Tooltip::text(t(cx, "chat.branch_hint"), None))
+                        .child(icon("git-branch", 11., hex(Chrome::MUTED)))
+                        .child(div().truncate().max_w(px(220.)).child(branch)),
+                )
+            })
             .child(div().flex_1())
             .child(chips)
             .child(div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(tf(
@@ -755,6 +992,14 @@ impl Workbench {
                 "chat.workers",
                 &[("n", &workers.len().to_string()), ("max", &MAX_WORKERS.to_string())],
             )))
+            .child(
+                role_button("chat-role-worker", tf(cx, "chat.role_worker", &[("agent", roles.worker.name())]))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_chat_roles(id, ChatRoles::next_worker, cx))),
+            )
+            .child(
+                role_button("chat-role-reviewer", tf(cx, "chat.role_reviewer", &[("agent", &reviewer)]))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_chat_roles(id, ChatRoles::next_reviewer, cx))),
+            )
             .when(!forced, |d| {
                 d.child(
                     div()
@@ -849,7 +1094,7 @@ impl Workbench {
         // A worker waiting on the user is said here too: the chat is where the user looks.
         let waiting: Vec<AnyElement> = workers
             .iter()
-            .filter(|p| p.read(cx).status.needs_user())
+            .filter(|p| waits_on_user(p.read(cx)))
             .enumerate()
             .map(|(index, worker)| {
                 let title = worker.read(cx).spec.title.clone();
@@ -885,7 +1130,7 @@ impl Workbench {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(icon("loader-circle", 12., hex(Chrome::ORANGE)))
+                .child(crate::ui::spinner(12., hex(Chrome::ORANGE)))
                 .child(div().t_caption().truncate().text_color(hex(Chrome::MUTED)).child(text))
         });
         let composer = state.input.as_ref().map(|(input, _)| {
@@ -953,6 +1198,11 @@ impl Workbench {
                     self.toggle_chat_terminal(id, window, cx);
                 }
             }
+            ("worker", _) | ("reviewer", _) => {
+                let Some(id) = front else { return eprintln!("agentty: no chat in front") };
+                let next = if argument == "worker" { ChatRoles::next_worker } else { ChatRoles::next_reviewer };
+                self.set_chat_roles(id, next, cx);
+            }
             ("state", _) => {
                 let Some(state) = front.and_then(|id| self.chats.get(&id)) else { return eprintln!("agentty: no chat in front") };
                 let workers: Vec<String> = self
@@ -964,8 +1214,9 @@ impl Workbench {
                     })
                     .collect();
                 eprintln!(
-                    "agentty: chat lead={} briefed={} setup={} terminal={} pending={} items={:?} workers={workers:?}",
+                    "agentty: chat lead={} roles={:?} briefed={} setup={} terminal={} pending={} items={:?} workers={workers:?}",
                     status_word(&state.lead.read(cx).status, state.lead.read(cx).is_running()),
+                    state.roles,
                     state.briefed,
                     state.setup_screen,
                     state.show_terminal,
@@ -1126,8 +1377,9 @@ mod tests {
 
     #[test]
     fn the_brief_is_left_out_and_reports_stand_apart() {
-        let first = briefed_prompt("Build a todo app", "Korean");
-        assert!(first.contains("Talk to the user in Korean."));
+        let first = briefed_prompt("Build a todo app", "Korean", "Your folder is the project folder itself.");
+        assert!(first.contains("Talk to the user in Korean.") && first.contains("Your folder is the project folder itself."));
+        assert!(!first.contains("{folder}") && !first.contains("{language}"));
         let turns = vec![
             turn(Role::User, &first),
             turn(Role::Assistant, "Plan: two workers."),
@@ -1184,6 +1436,7 @@ mod tests {
     #[test]
     fn first_run_screens_need_the_terminal() {
         assert!(is_setup_screen(&["Do you trust the files in this folder?".into()]));
+        assert!(is_setup_screen(&["Trust this folder? Codex can read, edit, and run files here".into()]));
         assert!(!is_setup_screen(&["> what should we build".into()]));
     }
 }
