@@ -31,6 +31,12 @@ All notable changes to this project are documented here. The format follows
 - Plugin panels look more like the rest of Agentty: buttons and fields share one height, list rows
   show their icon in a tinted tile, and titles, badges, switches and empty lists were redrawn.
 
+### Fixed
+- Voice dictation in an agent that records from the microphone (for example Claude Code or Codex
+  `/voice`) now works inside Agentty's terminals: the app carries the microphone entitlement and
+  usage description, so macOS asks for microphone access the first time instead of silently
+  denying it.
+
 ## [0.2.13] - 2026-10-03
 
 ### Added
