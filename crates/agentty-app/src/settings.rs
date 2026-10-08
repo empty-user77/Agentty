@@ -222,6 +222,10 @@ pub struct Settings {
     /// update asks for more).
     #[serde(default)]
     pub plugin_permission_grants: std::collections::BTreeMap<String, Vec<String>>,
+    /// Plugins whose MCP connection the user turned off: their tools are not offered to agents.
+    /// Only plugins that offer tools (`mcp.tools`) have the switch; it is on until turned off.
+    #[serde(default)]
+    pub plugin_mcp_off: std::collections::BTreeSet<String>,
     /// A plugin's own workspace: the width of its panel and the height of its terminals.
     pub plugin_workspace_panel_width: f32,
     pub plugin_workspace_terminal_height: f32,
@@ -650,6 +654,7 @@ impl Default for Settings {
             plugin_browser_modes: std::collections::BTreeMap::new(),
             plugin_browser_grants: std::collections::BTreeMap::new(),
             plugin_permission_grants: std::collections::BTreeMap::new(),
+            plugin_mcp_off: std::collections::BTreeSet::new(),
             plugin_workspace_panel_width: 380.,
             plugin_workspace_terminal_height: 280.,
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
@@ -846,6 +851,16 @@ impl SettingsStore {
 /// Read from the settings file (launch specs are built without an `App`).
 pub fn browser_tools_enabled() -> bool {
     std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.browser.agent_tools)
+}
+
+/// Plugins whose MCP connection the user turned off, read from the settings file like
+/// [`browser_tools_enabled`] (for launching agents, where there is no `App`).
+pub fn plugin_mcp_off() -> std::collections::BTreeSet<String> {
+    std::fs::read(Settings::path())
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+        .map(|s| s.plugin_mcp_off)
+        .unwrap_or_default()
 }
 
 /// Whether agents get Agentty's guide, read from the settings file like [`browser_tools_enabled`].

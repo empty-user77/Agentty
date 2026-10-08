@@ -64,7 +64,7 @@ Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启�
 ## 权限
 
 ```json
-"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read"]
+"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read", "mcp.tools"]
 ```
 
 | 权限 | 允许的事 |
@@ -74,6 +74,7 @@ Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启�
 | `terminal.write` | 向已打开的窗格输入 |
 | `session.read` | 读取 AI 对话 |
 | `workspace.read` | 列出工作区，查看上下文中的文件夹与标题字段 |
+| `mcp.tools` | 为 AI 智能体提供工具。需要 `apiVersion: 5` 和 `contributes.tools` |
 
 只申请你会用到的。清单会在安装前展示给用户，没有权限的调用会失败。参见[插件权限](/docs/plugin-permissions)。
 
@@ -131,6 +132,37 @@ Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启�
 | `palette` | 为 `false` 时从命令面板中隐藏 |
 
 命令从命令面板中调用。`paneBar` 和 `when` 已经取消：仍带着这两个字段的清单照常安装和运行，字段会被忽略；但**依赖这些按钮构建的插件会失去按钮**，其命令改为从命令面板中调用。
+
+### AI 智能体的工具
+
+```json
+"contributes": {
+  "tools": [
+    {
+      "name": "list_containers",
+      "description": "Lists the Docker containers this plugin manages, with their state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "all": { "type": "boolean" }
+        }
+      },
+      "readOnly": true
+    }
+  ]
+}
+```
+
+插件可以向 Agentty 中运行的 AI 智能体 (Claude Code、Codex) 提供工具。`mcp.tools` 权限和 `apiVersion: 5` 是必需的，且必须一起声明。
+
+| 字段 | 必需 | 说明 |
+|---|---|---|
+| `name` | 是 | 1～48 个字符。仅限 `a-z`、`0-9`、`_`，以字母开头 |
+| `description` | 是 | 1～1000 个字符。智能体知道的关于工具的全部内容 |
+| `inputSchema` | | JSON Schema，类型为 `object`，最大 16 KB |
+| `readOnly` | | 布尔值（默认 `false`）。给智能体的提示 |
+
+每个插件最多 32 个工具。插件用字符串、任意 JSON 值或 MCP 格式的内容（`{ "content": [...], "isError": false }`）回应 `tools/call` 请求。详见[插件协议](/docs/plugin-protocol)。
 
 ## 图标
 

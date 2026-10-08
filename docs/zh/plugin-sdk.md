@@ -26,6 +26,7 @@ plugin.start();
 |---|---|
 | `onActivate(info => …)` | 插件已启动；`info` 中有 `plugin.dataDir`、`language`、`context` |
 | `command(id, ({ context, args }) => …)` | 命令从命令面板被执行 |
+| `tool(name, handler)` | AI 智能体调用工具；处理器接收 `{ args, context }` 并返回答复。错误作为工具错误发送 |
 | `onPanelOpen(context => …)` | 面板变为可见 —— 在这里绘制 |
 | `onPanelClose(context => …)` | 面板被隐藏 |
 | `onEvent(elementId, (event, context) => …)` | 该 id 的 UI 元素被操作 |
@@ -180,6 +181,19 @@ await plugin.injectPrompt({
 - 超过 60,000 字节的提示词会保存到 `~/.agentty/prompts/`，并让智能体去读取该文件。
 
 凡是由其他应用或链接发起的，请使用 `ask`。
+
+## AI 智能体的工具
+
+```js
+plugin.tool('list_containers', async ({ args }) => {
+  const containers = await listContainers({ all: args.all === true });
+  return containers.map((c) => `${c.name}: ${c.state}`).join('\n');
+});
+```
+
+在调用 `plugin.start()` 前注册工具。当智能体调用工具时，它会获得你的答复（字符串、任意 JSON 值或 MCP 格式的内容）。处理器中抛出的错误会作为工具错误发送给智能体。
+
+为了提供工具，插件必须声明 `mcp.tools` 权限和 `apiVersion: 5`。每个插件最多 32 个工具。查看[清单参考](/docs/plugin-manifest)了解架构和限制。
 
 ## 会话与终端
 

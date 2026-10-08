@@ -7,5 +7,10 @@
          osascript is used for notifications (see NSAppleEventsUsageDescription). -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+    <!-- Microphone access, so an agent's own voice dictation (e.g. Claude Code / Codex `/voice`)
+         running in a terminal can record. Under the hardened runtime the host app needs this
+         entitlement for macOS to grant the microphone to the processes it starts. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

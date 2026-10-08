@@ -521,7 +521,7 @@ pub(super) fn toggle(
 
 /// The on/off switch of [`toggle`], for a choice kept somewhere other than the settings.
 pub(super) fn switch(
-    id: &'static str,
+    id: impl Into<gpui::ElementId>,
     on: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> gpui::Stateful<Div> {

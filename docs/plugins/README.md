@@ -91,7 +91,7 @@ appears in the tab strip and the command in the palette (⇧⌘P).
 | `name`, `version` | required | shown in the store; `version` is `major.minor.patch` |
 | `main` | required | entry point, relative to the plugin folder |
 | `runtime` | `node` | `node` (Node.js 18+ from the login shell PATH), `python` (`python3 main`), `executable`, or `wasm` (see [Rust and WebAssembly](#rust-and-webassembly)) |
-| `apiVersion` | `1` | the plugin protocol this was written for — `2` for anything using `host/timer` or `pane/status`. Left out it is `1`, and an Agentty that speaks less than it says to update rather than running what it cannot |
+| `apiVersion` | `1` | the plugin protocol this was written for — `2` for anything using `host/timer` or `pane/status`, `4` for tools offered to AI agents. Left out it is `1`, and an Agentty that speaks less than it says to update rather than running what it cannot |
 | `description`, `publisher`, `homepage`, `keywords` | | store listing; `homepage` must be `https://` |
 | `links` | `[]` | up to 6 `{ "label", "url" }` (https) shown as buttons on the store card — project site, docs, source |
 | `requires` | | `{ "name", "url", "note" }`: the app or service the plugin is for. The card says whether it was found (see `detect`) and offers the link when it wasn't |
@@ -103,6 +103,7 @@ appears in the tab strip and the command in the palette (⇧⌘P).
 | `detect` | `[]` | paths (`~` allowed) of an app the plugin integrates with; found → "Recommended" in the store |
 | `contributes.panel` | | `{ "title", "icon", "surface", "mode" }` — the panel the plugin fills with UI. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom). `mode` picks how it opens: `push` (docked beside the terminals), `overlay` (floating over them), `window` (a window of its own), `full` (the whole area) or `workspace` (a workspace of its own with terminals and the browser, for work the user watches). Without `mode`: `push` for a plugin with `prompt.inject` or `terminal.write`, `full` otherwise. The user can change the mode and their choice is kept |
 | `contributes.commands[]` | | `{ "id", "title", "description", "icon", "palette" }` |
+| `contributes.tools[]` | | `{ "name", "description", "inputSchema?", "readOnly?" }` — tools the plugin offers to AI agents; requires `mcp.tools` permission and `apiVersion: 5` |
 
 Commands appear in the command palette (unless `"palette": false`) and run through
 `plugin.command(id, …)`. There is no icon button above the terminals any more — that bar had no
@@ -126,6 +127,7 @@ plugin.start(); // after registering handlers
 | `onPanelOpen(context => …)` / `onPanelClose` | the panel is shown / hidden — render in `onPanelOpen` |
 | `onEvent(elementId, (event, context) => …)` | a UI element with that id was used |
 | `onAnyEvent((event, context) => …)` | any UI event not handled by `onEvent` |
+| `tool(name, handler)` | an AI agent calls a tool; handler receives `{ args, context }` and returns the answer (string, JSON value, or MCP content); errors are sent as tool errors |
 | `onContextChange(context => …)` | the focused pane, its status or folder changed |
 | `onUrl(path, ({ path, query, url }) => …)` | `agentty://plugin/<id>/<path>?…` was opened |
 | `onShutdown(() => …)` | Agentty stops the plugin |
@@ -273,7 +275,7 @@ whole screens (list + detail, settings form, dashboard, running job, empty and e
 ### Icons
 
 Use these names for `icon` fields (anything else shows a puzzle piece):
-`app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bell bell-dot blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud cloud-alert cloud-check cloud-off cloud-upload code columns-2 command container copy database download ellipsis external-link eye file-input file-plus file-text fold-vertical folder folder-git-2 folder-open folder-plus git-branch git-commit-horizontal git-pull-request globe grip-vertical hammer hash history house image info key-round laptop layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question message-square minimize-2 minus monitor network notebook notebook-pen package panel-left-close panel-left-open pencil picture-in-picture-2 play plug plus power puzzle refresh-cw remote-desktop rocket rotate-cw rows-2 save scroll-text search send settings shield-alert smartphone sparkles square square-plus square-terminal star sticky-note tag terminal trash-2 undo-2 unlink upload users wand-sparkles workflow wrench x zap git-fork file lock lock-open graduation-cap x-twitter`.
+`app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bell bell-dot blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud cloud-alert cloud-check cloud-off cloud-upload code columns-2 command container copy database download ellipsis external-link eye file-input file-plus file-text fold-vertical folder folder-git-2 folder-open folder-plus git-branch git-commit-horizontal git-pull-request globe grip-vertical hammer hash history house image info key-round laptop layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question message-square minimize-2 minus monitor network notebook notebook-pen package panel-left-close panel-left-open pencil picture-in-picture-2 play plug plus power puzzle refresh-cw remote-desktop rocket rotate-cw rows-2 save scroll-text search send settings shield-alert smartphone sparkles square square-plus square-terminal star sticky-note tag terminal trash-2 triangle-alert undo-2 unlink upload users wand-sparkles workflow wrench x zap git-fork file lock lock-open graduation-cap x-twitter`.
 
 ## Context
 
@@ -413,6 +415,7 @@ be served from a release of a repository, or from the same host as the list itse
 | `session.read` | `getSession` — reading AI conversations |
 | `workspace.read` | `listWorkspaces` |
 | `net.request` | `net/fetch` — HTTP requests to addresses the plugin chooses |
+| `mcp.tools` | tools the plugin offers to AI agents (Claude Code, Codex); requires `apiVersion: 5` and `contributes.tools` |
 | `browser.control` | `browser/*` — pages of the sites in `browser.sites`, in the browser the user is signed in to: reading them and acting there in the user's name. The user allows it in a dialog the first time; signing in is always the user's, and cookies never reach the plugin |
 
 `storage/get`, `storage/set` and `storage/keys` need no permission: they are the plugin's own

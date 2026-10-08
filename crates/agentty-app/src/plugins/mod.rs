@@ -1,6 +1,7 @@
 //! Plugin host: starts plugins on demand, keeps what they show (panel, badge, log) and routes
 //! their calls to the window they concern. Plugins are shared by every Agentty window.
 
+pub mod mcp;
 pub mod process;
 pub mod wasm;
 
@@ -256,6 +257,8 @@ pub struct PluginHost {
     pub consent_pending: Vec<String>,
     /// Plugins the user did not allow, this run: not asked about again until the user asks.
     pub consent_refused: std::collections::HashSet<String>,
+    /// Agents' tool calls (`agentty mcp-plugins`) waiting for a plugin's answer, by request id.
+    tool_calls: HashMap<u64, mcp::PendingCall>,
 }
 
 impl Global for PluginHost {}
@@ -275,6 +278,7 @@ pub fn init(cx: &mut App) -> UnboundedReceiver<Envelope> {
         refresh_queued: false,
         consent_pending: Vec::new(),
         consent_refused: std::collections::HashSet::new(),
+        tool_calls: HashMap::new(),
     });
     // Built-in plugins are updated in place when Agentty ships a newer version.
     let outdated: Vec<String> = host(cx).installed.iter().filter(|p| store::builtin_update_available(p)).map(|p| p.id.clone()).collect();
@@ -630,6 +634,7 @@ pub fn send_if_running(id: &str, method: &str, params: Value, cx: &App) {
 }
 
 pub fn stop(id: &str, cx: &mut App) {
+    mcp::abandon(id, cx);
     if let Some(runtime) = host_mut(cx).runtimes.get_mut(id) {
         if let Some(process) = runtime.process.take() {
             runtime.stopping = true;
@@ -751,6 +756,7 @@ pub fn handle(envelope: Envelope, cx: &mut App) {
             touch(cx);
         }
         ProcessEvent::Failed(error) => {
+            mcp::abandon(&id, cx);
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
                 runtime.log(format!("error: {error}"));
                 runtime.state = RunState::Failed(error);
@@ -771,6 +777,7 @@ pub fn handle(envelope: Envelope, cx: &mut App) {
             touch(cx);
         }
         ProcessEvent::Exited(code) => {
+            mcp::abandon(&id, cx);
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
                 runtime.process = None;
                 let status = code.map_or_else(|| "was terminated".to_string(), |c| format!("exited with code {c}"));
@@ -780,6 +787,7 @@ pub fn handle(envelope: Envelope, cx: &mut App) {
             }
             touch(cx);
         }
+        ProcessEvent::Message(Incoming::Response { id: request_id, result }) if mcp::answered(&id, &request_id, result.clone(), cx) => {}
         ProcessEvent::Message(Incoming::Response { result: Err(error), .. }) => {
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
                 runtime.log(format!("error from plugin: {error}"));

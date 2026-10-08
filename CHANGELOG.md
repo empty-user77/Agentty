@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Voice prompts from the remote page: tap the microphone, speak, and the words appear in the
+  prompt box to check and send. The clip is transcribed on your Mac by a local model you install
+  from Settings → Remote access (a one-time download, verified and kept on the machine); no audio
+  ever leaves your computer.
 - Plugin panels for real tools, continued: text fields suggest as you type (`completions` — the
   variables of an API client from `{{` or a few letters), a grid's sidebar column can be dragged
   wider or narrower (`resizable`, the width sent back to keep), and a plugin can open itself in an
@@ -30,6 +34,12 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 - Plugin panels look more like the rest of Agentty: buttons and fields share one height, list rows
   show their icon in a tinted tile, and titles, badges, switches and empty lists were redrawn.
+
+### Fixed
+- Voice dictation in an agent that records from the microphone (for example Claude Code or Codex
+  `/voice`) now works inside Agentty's terminals: the app carries the microphone entitlement and
+  usage description, so macOS asks for microphone access the first time instead of silently
+  denying it.
 
 ## [0.2.13] - 2026-10-03
 

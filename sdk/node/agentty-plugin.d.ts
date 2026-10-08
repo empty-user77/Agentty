@@ -200,6 +200,14 @@ export interface Plugin {
   info: InitializeParams | null;
   context: Context | null;
   command(id: string, handler: (call: { context: Context; args: Record<string, unknown> }) => unknown): Plugin;
+  /**
+   * Answers an AI agent's call of a tool listed in `contributes.tools` (needs `mcp.tools`). Return a
+   * string, any JSON value, or MCP content; a thrown error goes back to the agent as one.
+   */
+  tool(
+    name: string,
+    handler: (call: { args: Record<string, unknown>; context: Context }) => unknown | Promise<unknown>,
+  ): Plugin;
   onEvent(elementId: string, handler: (event: UiEvent, context: Context) => unknown): Plugin;
   onAnyEvent(handler: (event: UiEvent, context: Context) => unknown): Plugin;
   onUrl(path: string, handler: (open: UrlOpen) => unknown): Plugin;

@@ -26,6 +26,7 @@ All handlers may be async. Errors are logged and shown to the user as a notifica
 |---|---|
 | `onActivate(info => …)` | The plugin started. `info` has `plugin.dataDir`, `language` and `context` |
 | `command(id, ({ context, args }) => …)` | A command runs, from the command palette |
+| `tool(name, handler)` | An AI agent calls a tool; handler receives `{ args, context }` and returns the answer (string, JSON value, or MCP content); errors are caught and sent as tool errors |
 | `onPanelOpen(context => …)` | The panel became visible — render here |
 | `onPanelClose(context => …)` | The panel was hidden |
 | `onEvent(elementId, (event, context) => …)` | A UI element with that id was used |
@@ -180,6 +181,19 @@ await plugin.injectPrompt({
 - Prompts over 60 000 bytes are saved to `~/.agentty/prompts/` and the agent is asked to read the file.
 
 Prefer `ask` for anything the user starts from another app or from a link.
+
+## Tools for AI agents
+
+```js
+plugin.tool('list_containers', async ({ args }) => {
+  const containers = await listContainers({ all: args.all === true });
+  return containers.map((c) => `${c.name}: ${c.state}`).join('\n');
+});
+```
+
+Register tools before calling `plugin.start()`. An agent calling the tool receives your answer (string, JSON value, or MCP-shaped content). Errors thrown in the handler are sent to the agent as tool errors.
+
+A plugin must declare the `mcp.tools` permission and `apiVersion: 5` to offer tools. At most 32 tools per plugin. See [Manifest reference](/docs/plugin-manifest) for schema and limits.
 
 ## Sessions and terminals
 
