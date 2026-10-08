@@ -24,6 +24,7 @@ const STRINGS = {
     open: "{n} open", asleep: "Asleep", running: "{n} running",
     pstate: { running: "Running", starting: "Starting", stopped: "Stopped", failed: "Stopped with an error", consent: "Waiting for your OK", off: "Off" },
     astate: { working: "Working", idle: "Idle", error: "Error" },
+    chat: "Chat", chatHint: "Message the lead agent…", chatEmpty: "Write to the lead agent. It plans the work and starts workers on the Mac; their terminals are in the pane list.", leadWaits: "The lead is waiting for you in its terminal.",
   },
   ko: {
     signIn: "로그인", password: "비밀번호",
@@ -41,6 +42,7 @@ const STRINGS = {
     open: "{n}개 열림", asleep: "쉬는 중", running: "{n}개 실행 중",
     pstate: { running: "실행 중", starting: "시작하는 중", stopped: "멈춤", failed: "오류로 멈춤", consent: "허용 대기", off: "꺼짐" },
     astate: { working: "작업 중", idle: "대기", error: "오류" },
+    chat: "채팅", chatHint: "리드 에이전트에게 메시지…", chatEmpty: "리드 에이전트에게 말해 보세요. 작업을 계획하고 Mac에서 워커를 띄웁니다. 워커 터미널은 분할 창 목록에 있습니다.", leadWaits: "리드가 터미널에서 응답을 기다리고 있습니다.",
   },
   ja: {
     signIn: "サインイン", password: "パスワード",
@@ -58,6 +60,7 @@ const STRINGS = {
     open: "{n} 件 開いています", asleep: "休止中", running: "{n} 件 実行中",
     pstate: { running: "実行中", starting: "起動中", stopped: "停止", failed: "エラーで停止", consent: "許可待ち", off: "オフ" },
     astate: { working: "作業中", idle: "待機", error: "エラー" },
+    chat: "チャット", chatHint: "リードエージェントにメッセージ…", chatEmpty: "リードエージェントに書いてください。作業を計画し、Mac でワーカーを起動します。ワーカーのターミナルはペイン一覧にあります。", leadWaits: "リードがターミナルで返答を待っています。",
   },
   zh: {
     signIn: "登录", password: "密码",
@@ -75,6 +78,7 @@ const STRINGS = {
     open: "{n} 个已打开", asleep: "休眠中", running: "{n} 个运行中",
     pstate: { running: "运行中", starting: "正在启动", stopped: "已停止", failed: "因错误停止", consent: "等待你的允许", off: "已关闭" },
     astate: { working: "工作中", idle: "空闲", error: "错误" },
+    chat: "聊天", chatHint: "给主控智能体发消息…", chatEmpty: "给主控智能体写消息。它会规划工作并在 Mac 上启动工作智能体，它们的终端在窗格列表中。", leadWaits: "主控智能体正在终端中等你回应。",
   },
 };
 const lang = (navigator.language || "en").slice(0, 2);
@@ -127,11 +131,29 @@ const state = {
     return DEFAULT_SIZE;
   })(),
   ctrl: false,
+  // A chat's lead is shown as its chat (false: as its terminal).
+  chatView: true,
   // The size last asked of the terminal being looked at ("pane:cols:rows").
   sized: null,
 };
 
 const session = (pane) => state.sessions.find((s) => s.pane === pane);
+
+/// The chat of the tab on screen, if it is a chat tab.
+function currentChat() {
+  const ws = workspace(state.workspace);
+  const tab = ws && ws.tabs[state.tab];
+  return (tab && tab.chat) || null;
+}
+
+/// Whether the lead is on screen as its chat. While it waits on an approval or a question, its
+/// terminal is shown instead: only there can that be answered.
+function inChat() {
+  const chat = currentChat();
+  if (!chat || state.pane !== chat.lead || !state.chatView) return false;
+  const lead = session(chat.lead);
+  return !(lead && lead.needs_user);
+}
 const workspace = (id) => state.workspaces.find((w) => w.id === id);
 
 async function api(path, body) {
@@ -387,7 +409,8 @@ function render() {
   redraw("header", [ws, shown(session(state.pane)), state.tab], renderHeader);
   redraw("tabs", [ws && ws.tabs, state.tab, marks], renderTabs);
   redraw("panes", [tab, tab && tab.panes.map((p) => [shown(session(p)), session(p)?.elapsed]), state.pane], renderPanes);
-  redraw("body", [state.workspace, state.workspaces.length, ws && ws.sleeping, state.waking, shown(session(state.pane)), state.ctrl, state.size], renderBody);
+  redraw("body", [state.workspace, state.workspaces.length, ws && ws.sleeping, state.waking, shown(session(state.pane)), state.ctrl, state.size, inChat(), !!currentChat()], renderBody);
+  redraw("chat", [inChat() && currentChat()], renderChat);
   if (state.workspace == null) {
     const busy = state.sessions.map((s) => [shown(s), s.working ? s.elapsed : null]);
     redraw("home", [state.workspaces, busy, state.plugins, state.waking], renderHome);
@@ -544,12 +567,88 @@ function renderBody() {
     actions.append(wakeButton(ws, "primary"));
     placeholder.append(actions);
   }
-  for (const id of ["term-wrap", "keys", "prompt-form"]) $(id).hidden = home || !!note || !s;
+  const chatting = inChat();
+  for (const id of ["term-wrap", "keys"]) $(id).hidden = home || !!note || !s || chatting;
+  $("prompt-form").hidden = home || !!note || !s;
+  $("chat").hidden = !chatting;
+  $("prompt").placeholder = chatting ? T.chatHint : T.promptHint;
+  // The lead of a chat: one switch between its chat and its terminal.
+  const chat = currentChat();
+  const toggle = $("chat-toggle");
+  toggle.hidden = !(chat && state.pane === chat.lead && s && !s.needs_user);
+  toggle.textContent = chatting ? T.terminal : T.chat;
+  if (!chatting && !home) requestAnimationFrame(fitTerm);
   // The mic sits in the prompt bar, but only when the Mac offers voice-to-text.
   $("mic-button").hidden = home || !!note || !s || !state.voice;
   $("asks").hidden = !(s && s.asks);
   $("asks").textContent = (s && s.asks) || "";
   renderKeys(s && s.needs_user);
+}
+
+/// The lead of a chat tab, as the chat: what the team runs on, then the conversation.
+function renderChat() {
+  const chat = inChat() && currentChat();
+  const head = $("chat-head");
+  const log = $("chat-log");
+  if (!chat) {
+    head.replaceChildren();
+    log.replaceChildren();
+    return;
+  }
+  // At the bottom (or close), the log follows what comes in; scrolled up, it stays put.
+  const following = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  head.replaceChildren();
+  const line = el("div", "chat-meta");
+  if (chat.branch) line.append(el("span", "chat-branch", "⎇ " + chat.branch));
+  for (const role of chat.roles || []) line.append(el("span", "muted", role));
+  for (const u of chat.usage || []) {
+    const chip = el("span", "chip usage level-" + (Number(u.level) || 0), u.label);
+    chip.title = u.resets || "";
+    line.append(chip);
+  }
+  head.append(line);
+  if (chat.warning) head.append(el("div", "chat-warning", chat.warning));
+  log.replaceChildren();
+  const entries = chat.entries || [];
+  if (!entries.length) log.append(el("div", "chat-empty", T.chatEmpty));
+  for (const entry of entries) log.append(chatEntry(entry));
+  if (following) log.scrollTop = log.scrollHeight;
+}
+
+/// One entry: the user's bubble, the lead's reply (tool steps folded to a few muted lines), or a
+/// worker's report.
+function chatEntry(entry) {
+  const role = ["user", "lead", "report"].includes(entry.role) ? entry.role : "lead";
+  const box = el("div", "msg " + role);
+  if (role !== "lead") {
+    box.append(el("div", "text", entry.text || ""));
+    return box;
+  }
+  let prose = [];
+  let steps = [];
+  const flushProse = () => {
+    const text = prose.join("\n").replace(/\*\*/g, "").trim();
+    if (text) box.append(el("div", "text", text));
+    prose = [];
+  };
+  const flushSteps = () => {
+    steps.slice(0, 3).forEach((step) => box.append(el("div", "step", step)));
+    if (steps.length > 3) box.append(el("div", "step", "+" + (steps.length - 3)));
+    steps = [];
+  };
+  for (const line of (entry.text || "").split("\n")) {
+    const tool = line.match(/^\[tool: (.*)\]$/);
+    if (tool) {
+      flushProse();
+      steps.push(tool[1]);
+    } else {
+      flushSteps();
+      prose.push(line);
+    }
+  }
+  flushSteps();
+  flushProse();
+  return box;
 }
 
 function renderKeys(needs) {
@@ -1065,6 +1164,13 @@ function setupKeyboard() {
   });
 }
 
+function setupChat() {
+  $("chat-toggle").addEventListener("click", () => {
+    state.chatView = !state.chatView;
+    render();
+  });
+}
+
 function setupPrompt() {
   const prompt = $("prompt");
   prompt.placeholder = T.promptHint;
@@ -1085,7 +1191,8 @@ function setupPrompt() {
     e.preventDefault();
     const text = prompt.value;
     if (!text.trim() || state.pane == null) return;
-    input({ pane: state.pane, kind: "prompt", text });
+    // To a chat's lead, as the chat sends it (its instructions go in front the first time).
+    input({ pane: state.pane, kind: inChat() ? "chat" : "prompt", text });
     prompt.value = "";
     grow();
   });
@@ -1377,6 +1484,7 @@ window.addEventListener("DOMContentLoaded", () => {
   new ResizeObserver(() => fitTerm()).observe($("term-wrap"), { box: "border-box" });
   setupKeyboard();
   setupPrompt();
+  setupChat();
   setupVoice();
   start();
 });

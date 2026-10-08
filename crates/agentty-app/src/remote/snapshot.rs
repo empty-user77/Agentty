@@ -34,6 +34,42 @@ pub struct TabInfo {
     pub active_pane: u64,
     /// Its split panes, in layout order.
     pub panes: Vec<u64>,
+    /// A chat tab: its first pane is the lead, shown as this chat; the others are its workers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatInfo>,
+}
+
+/// A chat tab, as the page shows its lead: the conversation and what the team runs on.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChatInfo {
+    /// The lead's pane: messages go to it, and its terminal is one switch away.
+    pub lead: u64,
+    /// The chat's own branch, when the lead works on one.
+    pub branch: Option<String>,
+    /// "Workers: Claude", "Reviewers: off", in the app's language.
+    pub roles: Vec<String>,
+    /// Plan usage of the agents the chat runs on ("Claude 5h 62%").
+    pub usage: Vec<UsageInfo>,
+    /// Said above the conversation while a plan limit is nearly used up.
+    pub warning: Option<String>,
+    /// The newest entries of the conversation, oldest first.
+    pub entries: Vec<ChatEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UsageInfo {
+    pub label: String,
+    /// 0 calm, 1 getting full, 2 nearly used up.
+    pub level: u8,
+    /// "resets in 2h 10m".
+    pub resets: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChatEntry {
+    /// `user`, `lead` or `report`.
+    pub role: &'static str,
+    pub text: String,
 }
 
 /// One terminal, as the session list shows it.

@@ -13,12 +13,14 @@
 //! its last reply goes to the lead as a message starting with [`REPORT_MARK`]; the lead reviews it
 //! and reports in the chat, or sends the worker a follow-up (`agentty tasks send`).
 
-use super::chat_team::{folder_brief, review_prompt, ChatRoles, RoleAgent, REVIEW_PREFIX};
+use super::account_usage::Limit;
+use super::chat_team::{folder_brief, limit_note, review_prompt, tightest, usage_level, ChatRoles, RoleAgent, REVIEW_PREFIX, WARN_AT};
 use super::panes::{Axis, PaneNode};
 use super::{status_label_sized, Pane, Tab, Workbench};
 use crate::agent_signal::{browser_reply, TasksCtlRequest, TasksRequest};
 use crate::i18n::{t, tf};
 use crate::launch::{LaunchChoice, LaunchSpec, PaneKind};
+use crate::remote::snapshot::{ChatEntry, ChatInfo, UsageInfo};
 use crate::terminal::AgentStatus;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -47,6 +49,11 @@ const REPORT_REPLY_LIMIT: usize = 4_000;
 const DEFAULT_TOP: f32 = 0.6;
 /// The chat never gets less height than this while workers share the tab with it.
 pub const CHAT_MIN_HEIGHT: f32 = 360.;
+/// How often the plan usage of the chat's agents is read again.
+const USAGE_EVERY: Duration = Duration::from_secs(60);
+/// What the remote page gets of a chat: its newest entries, each cut at this length.
+const REMOTE_ENTRIES: usize = 40;
+const REMOTE_TEXT: usize = 3_000;
 /// Tool steps of one reply shown before the rest fold into a count.
 const TOOL_STEPS_SHOWN: usize = 3;
 
@@ -92,6 +99,10 @@ pub struct ChatState {
     pub lead: Pane,
     /// The agents its workers and reviewers run as.
     roles: ChatRoles,
+    /// Plan usage of the agents the chat runs on: the window of each closest to running out.
+    usage: Vec<(RoleAgent, Limit)>,
+    usage_checked: Option<std::time::Instant>,
+    usage_loading: bool,
     input: Option<(Entity<TextInput>, Subscription)>,
     /// From the transcript.
     items: Vec<ChatItem>,
@@ -343,6 +354,9 @@ impl Workbench {
             ChatState {
                 lead: lead.clone(),
                 roles,
+                usage: Vec::new(),
+                usage_checked: None,
+                usage_loading: false,
                 input: None,
                 items: Vec::new(),
                 echo: Vec::new(),
@@ -444,8 +458,81 @@ impl Workbench {
         }
     }
 
+    /// The agents a chat runs on: Claude Code (its lead), and Codex when its workers or reviewers do.
+    fn chat_agents(&self, id: EntityId, cx: &App) -> Vec<RoleAgent> {
+        let Some(state) = self.chats.get(&id) else { return Vec::new() };
+        let codex = state.roles.worker == RoleAgent::Codex
+            || state.roles.reviewer == Some(RoleAgent::Codex)
+            || self.chat_workers(&state.lead).iter().any(|p| p.read(cx).spec.kind == PaneKind::Codex);
+        if codex {
+            vec![RoleAgent::Claude, RoleAgent::Codex]
+        } else {
+            vec![RoleAgent::Claude]
+        }
+    }
+
+    /// Reads the plan usage of the chat's agents again, in the background, at most every
+    /// [`USAGE_EVERY`].
+    fn refresh_chat_usage(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        let agents = self.chat_agents(id, cx);
+        let Some(state) = self.chats.get_mut(&id) else { return };
+        if state.usage_loading || state.usage_checked.is_some_and(|at| at.elapsed() < USAGE_EVERY) {
+            return;
+        }
+        state.usage_loading = true;
+        let task = cx.background_spawn(async move {
+            let now = crate::ui::now_ms();
+            agents
+                .into_iter()
+                .filter_map(|agent| {
+                    let limits = agentty_bridge::limits::latest(agent.agent(), now)?;
+                    let (label, window) = tightest(&limits)?;
+                    Some((agent, Limit { label, used_percent: window.used_percent, resets_at: window.resets_at }))
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let usage = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(state) = this.chats.get_mut(&id) {
+                    state.usage = usage;
+                    state.usage_loading = false;
+                    state.usage_checked = Some(std::time::Instant::now());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The warning while a plan window of the chat's agents is nearly used up: which, how full,
+    /// how many agents are working on it now, and when it resets.
+    fn chat_limit_warning(&self, state: &ChatState, cx: &App) -> Option<String> {
+        let (agent, limit) = state
+            .usage
+            .iter()
+            .filter(|(_, limit)| limit.used_percent >= WARN_AT)
+            .max_by(|a, b| a.1.used_percent.total_cmp(&b.1.used_percent))?;
+        let working =
+            std::iter::once(state.lead.clone()).chain(self.chat_workers(&state.lead)).filter(|p| p.read(cx).status.in_turn()).count();
+        // With nobody at work it is a caution before starting more, not a count of who is.
+        let key = if working == 0 { "chat.limit_warning_idle" } else { "chat.limit_warning" };
+        Some(tf(
+            cx,
+            key,
+            &[
+                ("agent", agent.name()),
+                ("window", t(cx, limit.label)),
+                ("percent", &format!("{:.0}", limit.used_percent)),
+                ("n", &working.to_string()),
+                ("resets", &limit.resets_in(cx)),
+            ],
+        ))
+    }
+
     /// Reads the lead's transcript again when it grew. False once the chat is gone (the watch ends).
     fn poll_chat(&mut self, id: EntityId, cx: &mut Context<Self>) -> bool {
+        self.refresh_chat_usage(id, cx);
         let Some(state) = self.chats.get_mut(&id) else { return false };
         let view = state.lead.read(cx);
         // Until the lead has its instructions, its first-run screens may be in the way.
@@ -634,6 +721,19 @@ impl Workbench {
             Some(state) => (state.lead.clone(), state.roles),
             None => return Some(request),
         };
+        // Starting more agents on a plan window that is nearly used up: the lead is told so.
+        let now = crate::ui::now_ms();
+        let limit_notes: Vec<String> = self.chats.get(&id).map_or_else(Vec::new, |state| {
+            state
+                .usage
+                .iter()
+                .filter(|(_, limit)| limit.used_percent >= WARN_AT)
+                .map(|(agent, limit)| {
+                    let window = if limit.label == "tray.weekly" { "weekly" } else { "5-hour" };
+                    limit_note(*agent, window, limit.used_percent, agentty_bridge::limits::time_left(limit.resets_at, now))
+                })
+                .collect()
+        });
         // On the chat's own branch, workers build on what was merged into it so far.
         let base = match Self::lead_branch(&lead, cx) {
             (Some(branch), true) => Some(branch),
@@ -689,7 +789,7 @@ impl Workbench {
             let answer = if started.is_empty() {
                 browser_reply(Err(if problems.is_empty() { "nothing was started".into() } else { problems.join("; ") }))
             } else {
-                browser_reply(Ok(serde_json::json!({ "started": started, "problems": problems }).to_string()))
+                browser_reply(Ok(serde_json::json!({ "started": started, "problems": problems, "limits": limit_notes }).to_string()))
             };
             let _ = request.reply.send(answer);
             let _ = this.update(cx, |this, cx| {
@@ -890,6 +990,55 @@ impl Workbench {
         }
     }
 
+    /// What the remote page shows of a chat tab: its lead, the newest entries of the conversation,
+    /// its branch, choices and plan usage, in the app's language.
+    pub(super) fn remote_chat(&self, tab: &Tab, cx: &App) -> Option<ChatInfo> {
+        let lead = self.chat_lead_of_tab(tab)?;
+        let state = self.chats.get(&lead.entity_id())?;
+        let (branch, integration) = Self::lead_branch(&lead, cx);
+        let reviewer = state.roles.reviewer.map_or_else(|| t(cx, "chat.role_off").to_string(), |agent| agent.name().to_string());
+        let roles = vec![
+            tf(cx, "chat.role_worker", &[("agent", state.roles.worker.name())]),
+            tf(cx, "chat.role_reviewer", &[("agent", &reviewer)]),
+        ];
+        let usage = state
+            .usage
+            .iter()
+            .map(|(agent, limit)| UsageInfo {
+                label: format!("{} {} {:.0}%", agent.name(), t(cx, limit.label), limit.used_percent),
+                level: usage_level(limit.used_percent),
+                resets: limit.resets_in(cx),
+            })
+            .collect();
+        let skip = state.shown.len().saturating_sub(REMOTE_ENTRIES);
+        let entries = state
+            .shown
+            .iter()
+            .skip(skip)
+            .map(|item| match item {
+                ChatItem::User(text) => ChatEntry { role: "user", text: truncate(text, REMOTE_TEXT) },
+                ChatItem::Lead(text) => ChatEntry { role: "lead", text: truncate(text, REMOTE_TEXT) },
+                ChatItem::Report(text) => ChatEntry { role: "report", text: truncate(text, REMOTE_TEXT) },
+            })
+            .collect();
+        Some(ChatInfo {
+            lead: lead.read(cx).pane_id,
+            branch: branch.filter(|_| integration),
+            roles,
+            usage,
+            warning: self.chat_limit_warning(state, cx),
+            entries,
+        })
+    }
+
+    /// A message written in the remote page's chat: sent to the lead the way the app's own
+    /// composer sends it. False when `pane` is not a chat's lead.
+    pub(super) fn remote_chat_message(&mut self, pane: u64, text: String, cx: &mut Context<Self>) -> bool {
+        let Some(id) = self.chat_by_pane_id(pane, cx) else { return false };
+        self.say_to_lead(id, text.trim().to_string(), cx);
+        true
+    }
+
     /// The lead's place in its tab, drawn as the chat (or as its terminal, with the chat's bar on top).
     pub(super) fn render_chat(&self, pane: &Pane, split: bool, active: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.chats.get(&pane.entity_id())?;
@@ -1000,6 +1149,21 @@ impl Workbench {
                 role_button("chat-role-reviewer", tf(cx, "chat.role_reviewer", &[("agent", &reviewer)]))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_chat_roles(id, ChatRoles::next_reviewer, cx))),
             )
+            // What the team runs on: each agent's plan window closest to running out.
+            .children(state.usage.iter().enumerate().map(|(index, (agent, limit))| {
+                let color = match usage_level(limit.used_percent) {
+                    2 => Chrome::ERROR,
+                    1 => Chrome::ORANGE,
+                    _ => Chrome::MUTED,
+                };
+                div()
+                    .id(SharedString::from(format!("chat-usage-{index}")))
+                    .flex_shrink_0()
+                    .t_caption()
+                    .text_color(hex(color))
+                    .tooltip(crate::ui::Tooltip::text(limit.resets_in(cx), None))
+                    .child(format!("{} {} {:.0}%", agent.name(), t(cx, limit.label), limit.used_percent))
+            }))
             .when(!forced, |d| {
                 d.child(
                     div()
@@ -1118,6 +1282,22 @@ impl Workbench {
                     .into_any_element()
             })
             .collect();
+        // A plan window nearly used up: said where the user looks, before the team stops midway.
+        let limit_warning = self.chat_limit_warning(state, cx).map(|text| {
+            div()
+                .flex_shrink_0()
+                .mx_4()
+                .mt_2()
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .flex()
+                .items_center()
+                .gap_2()
+                .bg(hex_alpha(Chrome::ERROR, 0.15))
+                .child(icon("shield-alert", 12., hex(Chrome::ERROR)))
+                .child(div().t_small().text_color(hex(Chrome::BRIGHT)).child(text))
+        });
         let activity = working.then(|| {
             let text = match last_tool {
                 Some(tool) => format!("{} · {tool}", t(cx, "chat.lead_working")),
@@ -1169,6 +1349,7 @@ impl Workbench {
             .min_h_0()
             .flex()
             .flex_col()
+            .children(limit_warning)
             .child(messages)
             .children(waiting)
             .children(activity)

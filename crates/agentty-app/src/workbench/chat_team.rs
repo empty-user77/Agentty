@@ -136,6 +136,38 @@ pub fn folder_brief(integration: Option<(&str, &Path)>) -> String {
     }
 }
 
+/// From this share of a plan window on, the chat warns that the team may run out midway.
+pub const WARN_AT: f64 = 85.;
+
+/// The window of `limits` closest to running out: (`tray.session` / `tray.weekly`, the window).
+pub fn tightest(limits: &agentty_bridge::limits::AgentLimits) -> Option<(&'static str, agentty_bridge::limits::LimitWindow)> {
+    [("tray.session", limits.session), ("tray.weekly", limits.weekly)]
+        .into_iter()
+        .filter_map(|(label, window)| window.map(|w| (label, w)))
+        .max_by(|a, b| a.1.used_percent.total_cmp(&b.1.used_percent))
+}
+
+/// 0 calm, 1 getting full (70 %), 2 nearly used up ([`WARN_AT`]).
+pub fn usage_level(percent: f64) -> u8 {
+    if percent >= WARN_AT {
+        2
+    } else if percent >= 70. {
+        1
+    } else {
+        0
+    }
+}
+
+/// What the lead hears when it starts workers on a plan window that is nearly used up.
+pub fn limit_note(agent: RoleAgent, window: &str, percent: f64, (days, hours, minutes): (i64, i64, i64)) -> String {
+    let left = if days > 0 { format!("{days}d {hours}h") } else { format!("{hours}h {minutes}m") };
+    format!(
+        "{}'s {window} plan limit is {percent:.0}% used (resets in {left}). Every running agent draws on it, and \
+         reaching it stops them all midway: tell the user, and start no more workers than needed.",
+        agent.name()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +209,23 @@ mod tests {
         assert!(prompt.contains("Do not edit") && prompt.contains("Verdict: approve"));
         assert!(prompt.ends_with("the auth checks"));
         assert!(!review_prompt("API", None, "main", " ").contains("in particular"));
+    }
+
+    #[test]
+    fn the_fullest_window_decides_and_warns_late() {
+        use agentty_bridge::limits::{AgentLimits, LimitWindow};
+        let limits = AgentLimits {
+            session: Some(LimitWindow { used_percent: 40., resets_at: 10 }),
+            weekly: Some(LimitWindow { used_percent: 91., resets_at: 20 }),
+            captured_ms: 0,
+        };
+        let (label, window) = tightest(&limits).unwrap();
+        assert_eq!((label, window.used_percent), ("tray.weekly", 91.));
+        assert!(tightest(&AgentLimits::default()).is_none());
+        assert_eq!((usage_level(50.), usage_level(75.), usage_level(WARN_AT)), (0, 1, 2));
+        let note = limit_note(RoleAgent::Claude, "5-hour", 92.4, (0, 1, 5));
+        assert!(note.starts_with("Claude's 5-hour plan limit is 92% used (resets in 1h 5m)"));
+        assert!(limit_note(RoleAgent::Codex, "weekly", 90., (2, 3, 0)).contains("resets in 2d 3h"));
     }
 
     #[test]

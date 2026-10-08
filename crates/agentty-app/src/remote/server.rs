@@ -92,6 +92,9 @@ pub enum Command {
     Text { pane: u64, text: String },
     /// A prompt: pasted, then Enter.
     Prompt { pane: u64, text: String },
+    /// A message written in a chat, for its lead (`pane`): sent as the app's own chat sends it,
+    /// with the lead's instructions in front the first time.
+    Chat { pane: u64, text: String },
     /// The page shows this terminal at this size: the terminal takes it while watched.
     Resize { pane: u64, cols: u16, rows: u16 },
     /// No page shows this terminal any more: back to the pane's own size.
@@ -109,6 +112,7 @@ impl Command {
             Command::Key { pane, .. }
             | Command::Text { pane, .. }
             | Command::Prompt { pane, .. }
+            | Command::Chat { pane, .. }
             | Command::Resize { pane, .. }
             | Command::Release { pane } => Some(*pane),
             Command::Wake { .. } | Command::NewTab { .. } => None,
@@ -754,6 +758,7 @@ impl Hub {
             }
             "text" if !body.text.is_empty() => Command::Text { pane: body.pane, text: body.text },
             "prompt" if !body.text.trim().is_empty() => Command::Prompt { pane: body.pane, text: body.text },
+            "chat" if !body.text.trim().is_empty() => Command::Chat { pane: body.pane, text: body.text },
             "resize" if COLS.contains(&body.cols) && ROWS.contains(&body.rows) => {
                 Command::Resize { pane: body.pane, cols: body.cols, rows: body.rows }
             }
@@ -1408,6 +1413,9 @@ mod tests {
         assert!(body.contains("\"pane\":7"));
         let input = |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/input", body) }.raw()).0;
         assert_eq!(input(json!({ "pane": 7, "kind": "prompt", "text": "run the tests" })), 200);
+        assert_eq!(input(json!({ "pane": 7, "kind": "chat", "text": "add a login page" })), 200);
+        assert_eq!(input(json!({ "pane": 7, "kind": "chat", "text": "  " })), 400, "an empty chat message");
+        assert_eq!(input(json!({ "pane": 8, "kind": "chat", "text": "x" })), 404, "a chat message for a pane not on the list");
         assert_eq!(input(json!({ "pane": 7, "kind": "key", "key": "c", "ctrl": true })), 200);
         assert_eq!(input(json!({ "pane": 8, "kind": "text", "text": "x" })), 404, "a pane that is not on the list");
         assert_eq!(input(json!({ "pane": 7, "kind": "key", "key": "cmd-q" })), 400, "unknown key");
@@ -1425,6 +1433,7 @@ mod tests {
             hub.take_commands(),
             vec![
                 Command::Prompt { pane: 7, text: "run the tests".into() },
+                Command::Chat { pane: 7, text: "add a login page".into() },
                 Command::Key { pane: 7, key: "c".into(), ctrl: true, alt: false, shift: false },
                 Command::Resize { pane: 7, cols: 50, rows: 30 }
             ],

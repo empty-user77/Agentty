@@ -64,6 +64,16 @@ Answer there and the chat comes back. Messages that arrive meanwhile wait until 
 
 These commands only work for the lead of a chat workspace, and only on its own workers.
 
+## Plan usage
+
+Every worker and reviewer draws on the same plans as the lead. The chat's bar shows how much of each plan the chat runs on is used: Claude, and Codex too when a worker or reviewer uses it. It shows the window closer to running out, the 5-hour one or the weekly one; hover it for when that window resets. The chip turns orange from 70 % and red from 85 %.
+
+From 85 % a warning above the conversation says how full the plan is and how many agents are working on it now: reaching the limit stops them all midway. The lead hears the same when it starts workers, so it can tell you and start no more than needed.
+
+## From your phone
+
+With [remote access](/docs/remote-access) on, a chat workspace opens on the page as its chat: the conversation, the chat's branch, the worker and reviewer choices and plan usage, with the box at the bottom to write to the lead. **Terminal** at the top switches to the lead's terminal and **Chat** back; while the lead waits for an approval or an answer, its terminal shows by itself. The workers' terminals are in the list of split panes.
+
 ## Good to know
 
 - Workers commit on their own branches. They push or open pull requests only if you ask the lead for that.

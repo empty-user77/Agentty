@@ -14,6 +14,7 @@ The page is laid out like Agentty itself:
 - **Tabs** — the chosen workspace's tabs across the top. A dot shows a tab that is working or waiting for you; ▥2 marks a tab split into two panes.
 - **Split panes** — when the tab is split, the button at the top right opens the list of its panes, with each one's state and what it asks; tap one to switch to it.
 - **The terminal** — the chosen pane's live screen in the middle.
+- **Chat workspaces** — a [chat workspace](/docs/chat-workspace) opens as its chat: the conversation, plan usage and a box to write to its lead; **Terminal** switches to the lead's terminal.
 
 **New tabs** — **+** at the end of the tabs (or beside a workspace on Home) opens a new tab in that workspace with a terminal, Claude Code or Codex, started in the workspace's folder. The page switches to it.
 
