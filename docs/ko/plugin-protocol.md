@@ -5,7 +5,7 @@ description: SDK 뒤에서 오가는 JSON-RPC 와이어 포맷, WebAssembly 모�
 
 SDK 없이 플러그인을 작성하기 위한 와이어 포맷입니다. [Node.js SDK](/docs/plugin-sdk)와 [Rust SDK](/docs/plugin-rust)가 전부 감싸 주며, 어느 쪽이든 [빠른 시작](/docs/plugin-quickstart)을 먼저 읽는 편이 좋습니다.
 
-API **버전 1**은 이 페이지에서 `host/timer`와 `pane/status`를 뺀 전부입니다. 그 둘은 **버전 2**입니다.
+API **버전 1**은 이 페이지에서 `host/timer`와 `pane/status`를 뺀 전부입니다. 그 둘은 **버전 2**이고, [UI 트리](#ui-트리)에서 API 4로 표시된 패널 요소는 **버전 4**입니다.
 
 ## 전송 방식
 
@@ -48,7 +48,7 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 | `ui/notify` | | `{ message, kind }` — `info`, `success`, `warning`, `error` | `null` |
 | `ui/setBadge` | | `{ text }`, 최대 8자 | `null` |
 | `context/get` | | `{}` | 컨텍스트 |
-| `host/info` | | `{}` | `{ version, apiVersion, language }` |
+| `host/info` | | `{}` | `{ version, apiVersion, language, uiFeatures }` |
 | `host/openUrl` | | `{ url }` — http/https | `null` |
 | `host/copy` | | `{ text }` — 최대 100,000자 | `null` |
 | `host/timer` | | `{ ms }` — API 2 | 시간이 지나면 `{ elapsedMs }` |
@@ -142,21 +142,51 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: 고정폭 글꼴 (API 4)
+         completions (API 4): [{ label, insert?, detail? }] 입력 중인 단어의 자동완성.
+         앞의 {{ 와 뒤의 }} 도 함께 바뀝니다
          rows > 1: 그만큼의 줄을 가진 텍스트 영역(최대 24). Enter는 줄을
          바꾸고, 붙여넣기는 줄바꿈을 유지합니다
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: 트리 들여쓰기 0–8, tag: 제목 앞 짧은 라벨(8자 이하), 색은 tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
 spinner  { text? }
 divider  {}
+flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }] }
+         state: off | on | active | done | error — 자동화의 단계를 위에서 아래로
+popover  { id, title, children }           패널 옆의 카드. 트리의 첫 번째 것이 열립니다
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   떠 있는 상자. tone은 아이콘과 테두리 색
+grid     { children, columns?, gap?, widths? }      같은 폭의 열(1–6, 기본 2), 넘치면 다음 줄로
+         widths: 열마다 "240px"(고정) 또는 "2"(비율) — columns 대신
+         id?, resizable? (API 4): 첫 고정 열을 끌어서 폭 조절, 끝나면 resize(폭)
+         fill: 남은 높이를 채우고 열마다 따로 스크롤 (API 4)
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: 닫기 버튼, 누르면 close
+         children: 선택된 탭의 내용만
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+         align: start | center | end, grow: 폭의 비율(1–12), 열마다 셀 하나
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value는 0부터 1까지, detail은 퍼센트 대신 표시
+callout  { text, title?, icon?, tone? }     tone 기본값은 info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }       language(rust, json, ts, sh, …)로 색칠, 복사 버튼 포함
 ```
 
 이벤트: `button`은 `click`, `input`은 `value`와 함께 `change`·`submit`, `list`는 `item`과 함께 `select`(행 버튼은 `item`·`action`과 함께 `action`), `choice`는 선택한 값과 함께 `change`, `toggle`은 새 불리언과 함께 `change`를 보냅니다.
 
 리스트 항목의 `tone`은 아이콘 색을 정하며 `badge`와 같은 값을 씁니다.
+
+`flow`는 단계 id를 `item`으로 담아 `select`를, `popover`는 닫기 버튼에서 `close`를 보냅니다. API 4부터: `tabs`는 탭 id와 함께 `change`, `table`은 행 id를 `item`으로 담아 `select`, `select`는 옵션 값과 함께 `change`, `checkbox`는 새 불리언과 함께 `change`를 보냅니다.
+
+API 4 요소를 쓰는 플러그인은 매니페스트에 `"apiVersion": 4`를 적습니다. 실행 중인 Agentty가 그릴 수 있는 요소는 `host/info`의 `uiFeatures`에 있습니다. 무엇에 어떤 요소를 쓸지는 [패널 디자인](/docs/plugin-ui-guide)을 보세요.
 
 ## Agentty 없이 테스트하기
 

@@ -87,6 +87,24 @@ impl Workbench {
         }
     }
 
+    /// A window opened for `plugin` alone: its workspace in front, and the empty terminal a new
+    /// window starts with gone, so the window is the plugin and nothing else.
+    pub fn open_plugin_alone(&mut self, plugin: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let before: Vec<u64> = self.workspaces.iter().filter(|ws| ws.plugin.is_none()).map(|ws| ws.id).collect();
+        self.open_plugin_workspace(plugin, window, cx);
+        // Only a fresh window's own starting workspace, never one the user had (a reused slot).
+        if before.len() == 1 && self.plugin_workspace(plugin).is_some() {
+            let untouched = self.workspaces.iter().find(|ws| ws.id == before[0]).is_some_and(|ws| ws.tabs.len() == 1 && ws.name.is_none());
+            if untouched {
+                self.close_workspace(before[0], window, cx);
+                if let Some(index) = self.plugin_workspace(plugin) {
+                    self.activate_workspace(index, window, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
     /// Another place was chosen while a plugin's workspace is current (behind a page or not): back to
     /// the workspace the user came from, any of theirs, or — with none — the start page. The plugin
     /// is not told to stop: its automations go on out of sight.
@@ -239,7 +257,10 @@ impl Workbench {
                 open.chain(asleep).chain(closed).map(|i| i.id.clone())
             })
             .collect();
-        TabInstance { id: unused_instance_id(&taken, || self.next_id()), title: None }
+        // Windows count their ids from the same start: another window's tabs get a prefix, so two
+        // windows never hand the plugin the same automation.
+        let prefix = if self.slot == 0 { "a".to_string() } else { format!("w{}a", self.slot) };
+        TabInstance { id: unused_instance_id(&taken, &prefix, || self.next_id()), title: None }
     }
 
     /// The automation in front, when `plugin`'s workspace is.
@@ -505,12 +526,6 @@ impl Workbench {
         let panel = self.render_plugin_panel_contents(plugin, cx);
         let browser = self.render_browser(cx);
         let has_browser = browser.is_some();
-        let terminals = div()
-            .flex()
-            .flex_col()
-            .min_h_0()
-            .map(|d| if has_browser { d.h(px(terminal_height)).flex_shrink_0() } else { d.flex_1() })
-            .child(div().flex_1().min_h_0().children(main));
         let handle = |id: &'static str, vertical: bool| {
             div()
                 .id(id)
@@ -533,6 +548,42 @@ impl Workbench {
                         .group_hover(id, |d| d.bg(hex(Chrome::ACCENT))),
                 )
         };
+        // A plugin without pages of its own (no `browser.control`: an API client, a dashboard) is its
+        // panel: the panel takes the room, and the tab's terminals come up under it only once a job
+        // runs beside the tab's own shell — a left column of a few hundred pixels and a whole screen
+        // of idle shell was the wrong way round for it.
+        let pages =
+            crate::plugins::plugin(cx, plugin).and_then(|p| p.manifest.as_ref()).is_some_and(|m| m.has_permission("browser.control"));
+        if !pages {
+            let jobs = self
+                .workspaces
+                .get(self.active_workspace)
+                .and_then(|ws| ws.tabs.get(ws.active_tab))
+                .is_some_and(|tab| matches!(tab.root, super::panes::PaneNode::Split { .. }));
+            let body = div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .children(panel.map(|panel| div().flex_1().min_h_0().w_full().child(panel)))
+                .when(jobs, |d| {
+                    d.child(handle("plugin-ws-terminal-edge", false).on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            this.plugin_ws_drag = Some(PluginWorkspaceDrag::Terminals(f32::from(event.position.y), terminal_height));
+                            cx.stop_propagation();
+                        }),
+                    ))
+                    .child(div().h(px(terminal_height)).flex_shrink_0().min_h_0().flex().flex_col().children(main))
+                });
+            return div().flex_1().min_h_0().flex().flex_col().child(self.render_tab_strip(cx)).child(body).into_any_element();
+        }
+        let terminals = div()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .map(|d| if has_browser { d.h(px(terminal_height)).flex_shrink_0() } else { d.flex_1() })
+            .child(div().flex_1().min_h_0().children(main));
         // One tab is one automation: switching it switches the panel, the browser and the
         // terminals below together.
         let body = div()
@@ -596,9 +647,9 @@ impl Workbench {
 }
 
 /// The first `a<n>` from `next` that is not in `taken`.
-fn unused_instance_id(taken: &std::collections::HashSet<String>, mut next: impl FnMut() -> u64) -> String {
+fn unused_instance_id(taken: &std::collections::HashSet<String>, prefix: &str, mut next: impl FnMut() -> u64) -> String {
     loop {
-        let id = format!("a{}", next());
+        let id = format!("{prefix}{}", next());
         if !taken.contains(&id) {
             return id;
         }
@@ -615,11 +666,12 @@ mod tests {
         // After a restart the counter starts low again while tabs a3..a5 came back from the layout.
         let taken: HashSet<String> = ["a3", "a4", "a5"].map(String::from).into_iter().collect();
         let mut counter = 3;
-        let id = unused_instance_id(&taken, || {
+        let id = unused_instance_id(&taken, "a", || {
             counter += 1;
             counter
         });
         assert_eq!(id, "a6");
-        assert_eq!(unused_instance_id(&HashSet::new(), || 7), "a7");
+        assert_eq!(unused_instance_id(&HashSet::new(), "a", || 7), "a7");
+        assert_eq!(unused_instance_id(&HashSet::new(), "w2a", || 7), "w2a7", "another window's tabs");
     }
 }

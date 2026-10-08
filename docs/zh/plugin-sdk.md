@@ -45,6 +45,7 @@ plugin.start();
 | `notify(message, kind)` —— `info`、`success`、`warning`、`error` | |
 | `setBadge(text)` —— 标签栏按钮上最多 8 个字符 | |
 | `getContext()` | |
+| `hostInfo()` — Agentty 版本、API 版本、语言，以及能绘制的面板元素（`uiFeatures`） | |
 | `openUrl(url)` —— http/https | |
 | `copy(text)` —— 复制到剪贴板 | |
 | `revealPath(path)` —— 在文件管理器中显示 | `workspace.read` |
@@ -76,8 +77,23 @@ plugin.start();
 | `ui.badge(text, tone)` | `neutral`、`info`、`success`、`warning`、`error` | |
 | `ui.spinner(text)` | | |
 | `ui.divider()` | | |
+| `ui.flow(id, steps)` | 步骤 `{ id, title, subtitle, icon, state, selected, side }`；`state`: `off`、`on`、`active`、`done`、`error` | 带 `event.item` 的 `select` |
+| `ui.popover(id, title, children)` | 面板旁边的卡片 | `close` |
+| `ui.card(children, { title, subtitle, icon, tone })` | 浮起的方框；`tone` 决定图标和边框颜色（API 4） | |
+| `ui.grid(children, { columns, gap })` | 1–6 个等宽列（API 4） | |
+| `ui.tabs(id, [{ id, label, icon, badge }], value, children)` | 标签页；children 是选中标签页的内容（API 4） | 带标签页 id 的 `change` |
+| `ui.table(id, [{ label, align, grow }], [{ id, cells, tone }], { empty, selected })` | 表头下的行（API 4） | 带 `event.item` 的 `select` |
+| `ui.keyValue([{ label, value, tone, mono }])` | 标签与值（API 4） | |
+| `ui.stat(label, value, { detail, icon, tone })` | 醒目显示的一个数字（API 4） | |
+| `ui.progress(value, { label, detail, tone })` | 进度条，`value` 取 0 到 1（API 4） | |
+| `ui.callout(text, { title, icon, tone })` | 带颜色的提示，默认 `info`（API 4） | |
+| `ui.select(id, [{ value, label }], value, { placeholder, disabled })` | 下拉框（API 4） | 带取值的 `change` |
+| `ui.checkbox(id, label, value, { description, disabled })` | 复选框（API 4） | 带新布尔值的 `change` |
+| `ui.code(text, { language, title })` | 着色的代码和复制按钮（API 4） | |
 
 null 与 false 的子元素会被跳过，因此 `条件 && ui.text('…')` 可以直接使用。
+
+什么内容该用哪个元素，以及可以直接起步的完整界面，见 [设计面板](/docs/plugin-ui-guide)。标为 API 4 的元素需要在清单中写上 `"apiVersion": 4`。
 
 ```js
 plugin.onPanelOpen(async (context) => {

@@ -9,9 +9,18 @@ export type TextStyle = 'body' | 'title' | 'muted' | 'small' | 'code' | 'error' 
 export type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 export type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'error';
 
+export type Align = 'start' | 'center' | 'end';
+export type FlowState = 'off' | 'on' | 'active' | 'done' | 'error';
+
 export interface ItemAction { id: string; label?: string; icon?: string; tooltip?: string }
-export interface ListItem { id: string; title: string; subtitle?: string; detail?: string; icon?: string; actions?: ItemAction[] }
+export interface ListItem { id: string; title: string; subtitle?: string; detail?: string; icon?: string; tone?: Tone; actions?: ItemAction[]; depth?: number; tag?: string; tagTone?: Tone }
 export interface ChoiceOption { value: string; label: string }
+export interface Completion { label: string; insert?: string; detail?: string }
+export interface FlowStep { id: string; title: string; subtitle?: string; icon?: string; state?: FlowState; selected?: boolean; side?: boolean }
+export interface TabItem { id: string; label: string; icon?: string; badge?: string; closable?: boolean }
+export interface TableColumn { label: string; align?: Align; grow?: number }
+export interface TableRow { id: string; cells: string[]; tone?: Tone }
+export interface KeyValueItem { label: string; value: string; tone?: Tone; mono?: boolean }
 
 export type UiNode =
   | { type: 'column'; children: UiNode[]; gap?: Gap }
@@ -19,13 +28,27 @@ export type UiNode =
   | { type: 'section'; title: string; children: UiNode[] }
   | { type: 'text'; text: string; style?: TextStyle }
   | { type: 'button'; id: string; label: string; icon?: string; variant?: Variant; disabled?: boolean }
-  | { type: 'input'; id: string; placeholder?: string; value?: string }
+  | { type: 'input'; id: string; placeholder?: string; value?: string; rows?: number; mono?: boolean; completions?: Completion[] }
   | { type: 'list'; id: string; items: ListItem[]; empty?: string }
   | { type: 'choice'; id: string; options: ChoiceOption[]; value?: string }
   | { type: 'toggle'; id: string; label: string; value?: boolean }
   | { type: 'badge'; text: string; tone?: Tone }
   | { type: 'spinner'; text?: string }
-  | { type: 'divider' };
+  | { type: 'divider' }
+  | { type: 'flow'; id: string; steps: FlowStep[] }
+  | { type: 'popover'; id: string; title: string; children: UiNode[] }
+  // API 4
+  | { type: 'card'; children: UiNode[]; title?: string; subtitle?: string; icon?: string; tone?: Tone }
+  | { type: 'grid'; children: UiNode[]; columns?: number; gap?: Gap; widths?: string[]; id?: string; resizable?: boolean }
+  | { type: 'tabs'; id: string; tabs: TabItem[]; value: string; children: UiNode[] }
+  | { type: 'table'; id: string; columns: TableColumn[]; rows: TableRow[]; empty?: string; selected?: string }
+  | { type: 'keyValue'; items: KeyValueItem[] }
+  | { type: 'stat'; label: string; value: string; detail?: string; icon?: string; tone?: Tone }
+  | { type: 'progress'; value: number; label?: string; detail?: string; tone?: Tone }
+  | { type: 'callout'; text: string; title?: string; icon?: string; tone?: Tone }
+  | { type: 'select'; id: string; options: ChoiceOption[]; value?: string; placeholder?: string; disabled?: boolean }
+  | { type: 'checkbox'; id: string; label: string; value?: boolean; description?: string; disabled?: boolean }
+  | { type: 'code'; text: string; language?: string; title?: string };
 
 type Child = UiNode | null | undefined | false | Child[];
 
@@ -35,13 +58,27 @@ export const ui: {
   section(title: string, children: Child[]): UiNode;
   text(text: string, style?: TextStyle): UiNode;
   button(id: string, label: string, options?: { icon?: string; variant?: Variant; disabled?: boolean }): UiNode;
-  input(id: string, options?: { placeholder?: string; value?: string; rows?: number }): UiNode;
+  input(id: string, options?: { placeholder?: string; value?: string; rows?: number; mono?: boolean }): UiNode;
   list(id: string, items: ListItem[], options?: { empty?: string }): UiNode;
   choice(id: string, options: ChoiceOption[], value?: string): UiNode;
   toggle(id: string, label: string, value?: boolean): UiNode;
   badge(text: string, tone?: Tone): UiNode;
   spinner(text?: string): UiNode;
   divider(): UiNode;
+  flow(id: string, steps: FlowStep[]): UiNode;
+  popover(id: string, title: string, children: Child[]): UiNode;
+  // API 4
+  card(children: Child[], options?: { title?: string; subtitle?: string; icon?: string; tone?: Tone }): UiNode;
+  grid(children: Child[], options?: { columns?: number; gap?: Gap; widths?: string[] }): UiNode;
+  tabs(id: string, tabs: TabItem[], value: string, children: Child[]): UiNode;
+  table(id: string, columns: TableColumn[], rows: TableRow[], options?: { empty?: string; selected?: string }): UiNode;
+  keyValue(items: KeyValueItem[]): UiNode;
+  stat(label: string, value: string | number, options?: { detail?: string; icon?: string; tone?: Tone }): UiNode;
+  progress(value: number, options?: { label?: string; detail?: string; tone?: Tone }): UiNode;
+  callout(text: string, options?: { title?: string; icon?: string; tone?: Tone }): UiNode;
+  select(id: string, options: ChoiceOption[], value?: string, extra?: { placeholder?: string; disabled?: boolean }): UiNode;
+  checkbox(id: string, label: string, value?: boolean, options?: { description?: string; disabled?: boolean }): UiNode;
+  code(text: string, options?: { language?: string; title?: string }): UiNode;
 };
 
 export type AgentStatus = 'shell' | 'idle' | 'working' | 'thinking' | 'finished' | 'permission' | 'question' | 'interrupted' | 'exited';
@@ -177,12 +214,16 @@ export interface Plugin {
   setInstanceTitle(instance: string, title: string): Promise<void>;
   /** Closes one of the plugin's own automations (its tab), e.g. after the user deleted it. */
   closeInstance(instance: string): Promise<void>;
+  /** Another Agentty window with the plugin's workspace in front (right after the user used the plugin). */
+  openWindow(): Promise<void>;
   onInstanceOpen(handler: (event: { instance: string; title: string | null }) => unknown): Plugin;
   onInstanceClose(handler: (event: { instance: string }) => unknown): Plugin;
   showPanel(): Promise<void>;
   notify(message: string, kind?: 'info' | 'success' | 'warning' | 'error'): Promise<void>;
   setBadge(text: string): Promise<void>;
   getContext(): Promise<Context>;
+  /** uiFeatures lists the panel elements this Agentty draws (`card`, `table`, … from API 4). */
+  hostInfo(): Promise<{ version: string; apiVersion: number; language: string; utcOffsetMinutes: number; uiFeatures?: string[] }>;
   /** `submitted: false` when the text was typed but Enter left to the user (always, once a link reached the plugin). */
   injectPrompt(request: PromptRequest): Promise<{ status: 'sent' | 'asked'; paneId?: number; submitted?: boolean }>;
   sendToTerminal(request: { paneId?: number; text: string; submit?: boolean }): Promise<{ paneId: number; submitted?: boolean }>;

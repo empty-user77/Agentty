@@ -49,7 +49,7 @@ description: agentty-plugin.json 的所有字段 —— 标识信息、运行方
 |---|---|---|
 | `main` | 必填 | 相对于插件文件夹的入口点 |
 | `runtime` | `node` | `node`（登录 shell `PATH` 中的 Node.js 18+）、`python`（`python3 <main>`）、`executable`（直接运行 `<main>`），或 `wasm` —— `<main>` 是 Agentty 自己运行的 WebAssembly 模块，见 [Rust 与 WebAssembly](/docs/plugin-rust) |
-| `apiVersion` | `1` | 编写时依据的插件 API 版本。`2` 增加了 [AgentOS 插件](/docs/plugin-agentos)所需的 `host/timer` 和 `pane/status`。只懂旧版本的 Agentty 会直说，而不是安装一个自己跑不了的东西 |
+| `apiVersion` | `1` | 编写时依据的插件 API 版本。`2` 增加了 [AgentOS 插件](/docs/plugin-agentos)所需的 `host/timer` 和 `pane/status`；`3` 增加了应用内浏览器（`browser.control`）；`4` 增加了面板元素 `card`、`grid`、`tabs`、`table`、`keyValue`、`stat`、`progress`、`callout`、`select`、`checkbox` 和 `code`（[设计面板](/docs/plugin-ui-guide)）。只懂旧版本的 Agentty 会直说，而不是安装一个自己跑不了的东西 |
 | `activationEvents` | `[]` | `["onStartup"]` 表示随 Agentty 一起启动，否则在首次使用时启动 |
 
 Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启动任何程序：模块在 Agentty 内部运行，没有工作目录、没有环境变量、也没有文件。

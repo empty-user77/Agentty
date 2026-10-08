@@ -13,10 +13,11 @@ pub const MANIFEST_FILE: &str = "agentty-plugin.json";
 /// | 1 | the panel, commands, links, storage, `net/fetch`, `prompt/inject`, `session/get` |
 /// | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
 /// | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
+/// | 4 | panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code` |
 ///
 /// A plugin that uses something a version added says so, and an Agentty that speaks less than
 /// that tells the user to update instead of installing a module it cannot run.
-pub const API_VERSION: u32 = 3;
+pub const API_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

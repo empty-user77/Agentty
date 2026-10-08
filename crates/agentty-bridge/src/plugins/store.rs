@@ -261,6 +261,15 @@ pub const BUILTIN: &[BuiltinPlugin] = &[
             ("agentty-plugin.mjs", NODE_SDK),
         ],
     },
+    BuiltinPlugin {
+        manifest_json: embedded!("plugins/ui-gallery/agentty-plugin.json"),
+        files: &[
+            ("agentty-plugin.json", embedded!("plugins/ui-gallery/agentty-plugin.json")),
+            ("main.mjs", embedded!("plugins/ui-gallery/main.mjs")),
+            ("README.md", embedded!("plugins/ui-gallery/README.md")),
+            ("agentty-plugin.mjs", NODE_SDK),
+        ],
+    },
 ];
 
 /// Files of a new plugin made with "New plugin" (`{{id}}` and `{{name}}` are filled in).
