@@ -189,6 +189,9 @@ pub enum SocketMessage {
     /// `db\t{"cwd":…,"action":…}` from `agentty db`: an agent reads a project database, or asks to
     /// change it; answered on `reply` (writes only after the user approved the exact statement).
     Db(DbRequest),
+    /// `plugins\t{"action":"list"|"call",…}` from `agentty mcp-plugins`: an agent lists or calls
+    /// the tools plugins offer; answered on `reply` once the plugin answered.
+    Plugins(PluginsRequest),
     /// `debug\t<command>\t<argument>`; only accepted when `AGENTTY_DEBUG=1`.
     Debug(String, String),
     /// `open\t["agentty://…", "/folder", …]` from a second launch (Windows / Linux single instance).
@@ -300,6 +303,17 @@ pub struct TasksRequest {
     /// The asking agent's folder: the project the working trees are made from.
     pub cwd: std::path::PathBuf,
     pub tasks: Vec<TaskSpec>,
+    /// One JSON line, as [`browser_reply`] makes it.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// An agent lists or calls the tools plugins offer (`agentty mcp-plugins`).
+#[derive(Debug, Clone)]
+pub struct PluginsRequest {
+    /// The pane the connection belongs to (the asking agent).
+    pub pane: u64,
+    /// `{"action": "list"}` or `{"action": "call", "plugin": …, "tool": …, "arguments": {…}}`.
+    pub args: serde_json::Value,
     /// One JSON line, as [`browser_reply`] makes it.
     pub reply: std::sync::mpsc::Sender<String>,
 }
@@ -587,6 +601,26 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 answer
                     .recv_timeout(Duration::from_secs(15 * 60))
                     .unwrap_or_else(|_| browser_reply(Err("no answer in time (a write needs the user's approval in Agentty)".into())))
+            } else {
+                browser_reply(Err("bad request".into()))
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("plugins\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let response = if matches!(request["action"].as_str(), Some("list" | "call")) {
+                let (reply, answer) = std::sync::mpsc::channel();
+                if tx.unbounded_send(SocketMessage::Plugins(PluginsRequest { pane, args: request, reply })).is_err() {
+                    return;
+                }
+                // The app gives up on a plugin after `plugins::mcp::CALL_TIMEOUT`; a little more here.
+                answer
+                    .recv_timeout(crate::plugins::mcp::CALL_TIMEOUT + Duration::from_secs(10))
+                    .unwrap_or_else(|_| browser_reply(Err("the plugin did not answer in time".into())))
             } else {
                 browser_reply(Err("bad request".into()))
             };

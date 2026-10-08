@@ -26,6 +26,7 @@ plugin.start();
 |---|---|
 | `onActivate(info => …)` | 플러그인이 시작됨. `info`에 `plugin.dataDir`, `language`, `context` |
 | `command(id, ({ context, args }) => …)` | 명령 팔레트에서 명령 실행 |
+| `tool(name, handler)` | AI 에이전트가 도구를 호출. 핸들러는 `{ args, context }`를 받고 응답을 반환. 오류는 도구 오류로 전송됨 |
 | `onPanelOpen(context => …)` | 패널이 보이게 됨 — 여기서 그립니다 |
 | `onPanelClose(context => …)` | 패널이 숨겨짐 |
 | `onEvent(elementId, (event, context) => …)` | 해당 id의 UI 요소가 사용됨 |
@@ -180,6 +181,19 @@ await plugin.injectPrompt({
 - 60,000바이트가 넘는 프롬프트는 `~/.agentty/prompts/`에 저장되고 에이전트에게 그 파일을 읽으라고 전달됩니다.
 
 다른 앱이나 링크에서 시작된 것이라면 `ask`를 쓰세요.
+
+## AI 에이전트의 도구
+
+```js
+plugin.tool('list_containers', async ({ args }) => {
+  const containers = await listContainers({ all: args.all === true });
+  return containers.map((c) => `${c.name}: ${c.state}`).join('\n');
+});
+```
+
+`plugin.start()` 호출 전에 도구를 등록하세요. 에이전트가 도구를 호출하면 여러분의 응답(문자열, 어떤 JSON 값, MCP 형식 컨텐츠)을 받습니다. 핸들러에서 던진 오류는 도구 오류로 에이전트에 전송됩니다.
+
+플러그인은 `mcp.tools` 권한과 `apiVersion: 5`를 선언해야 도구를 제공할 수 있습니다. 플러그인당 최대 32개 도구입니다. 스키마와 제한은 [매니페스트 레퍼런스](/docs/plugin-manifest)를 보세요.
 
 ## 세션과 터미널
 

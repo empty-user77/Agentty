@@ -49,7 +49,7 @@ description: Every field of agentty-plugin.json — identity, runtime, permissio
 |---|---|---|
 | `main` | required | Entry point, relative to the plugin folder |
 | `runtime` | `node` | `node` (Node.js 18+ from the login shell `PATH`), `python` (`python3 <main>`), `executable` (`<main>` is run directly), or `wasm` — `<main>` is a WebAssembly module Agentty runs itself. See [Rust and WebAssembly](/docs/plugin-rust) |
-| `apiVersion` | `1` | The plugin API version the plugin was written for. `2` adds `host/timer` and `pane/status`, which [AgentOS plugins](/docs/plugin-agentos) need; `3` the in-app browser (`browser.control`); `4` the panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox` and `code` ([Designing a panel](/docs/plugin-ui-guide)). An Agentty that speaks an older version says so instead of installing something it cannot run |
+| `apiVersion` | `1` | The plugin API version the plugin was written for. `2` adds `host/timer` and `pane/status`, which [AgentOS plugins](/docs/plugin-agentos) need; `3` the in-app browser (`browser.control`); `4` the panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox` and `code` ([Designing a panel](/docs/plugin-ui-guide)); `5` `tools/call`, tools for AI agents (`mcp.tools`). An Agentty that speaks an older version says so instead of installing something it cannot run |
 | `activationEvents` | `[]` | `["onStartup"]` starts the plugin with Agentty; otherwise it starts on first use |
 
 Agentty starts the program with the plugin folder as its working directory. A `wasm` plugin starts no program: the module runs inside Agentty and has no working directory, no environment and no files.
@@ -64,7 +64,7 @@ Agentty starts the program with the plugin folder as its working directory. A `w
 ## Permissions
 
 ```json
-"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read"]
+"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read", "mcp.tools"]
 ```
 
 | Permission | Allows |
@@ -74,6 +74,7 @@ Agentty starts the program with the plugin folder as its working directory. A `w
 | `terminal.write` | Typing into open panes |
 | `session.read` | Reading AI conversations |
 | `workspace.read` | Listing workspaces, and seeing folder and title fields in the context |
+| `mcp.tools` | Offering tools to AI agents; requires `apiVersion: 5` and `contributes.tools` |
 
 Ask only for what you use — the list is shown to the user before installation. A call without its permission fails. See [Plugin permissions](/docs/plugin-permissions).
 
@@ -131,6 +132,37 @@ A docked panel never takes so much room that the rest of the window is squeezed:
 | `palette` | `false` hides it from the command palette |
 
 Commands are reached from the command palette. `paneBar` and `when` are gone: a manifest that still carries them installs and runs as before and the two fields are ignored — but a plugin built around those buttons no longer has them, and its commands are reached from the palette instead.
+
+### Tools for AI agents
+
+```json
+"contributes": {
+  "tools": [
+    {
+      "name": "list_containers",
+      "description": "Lists the Docker containers this plugin manages, with their state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "all": { "type": "boolean" }
+        }
+      },
+      "readOnly": true
+    }
+  ]
+}
+```
+
+A plugin offers tools to AI agents (Claude Code, Codex) that are running in Agentty. The `mcp.tools` permission and `apiVersion: 5` are required; they must be declared together.
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | 1–48 characters: `a-z`, `0-9`, `_`, starting with a letter |
+| `description` | yes | 1–1000 characters; all the agent knows about the tool |
+| `inputSchema` | | JSON Schema, type `object`, max 16 KB; optional |
+| `readOnly` | | Boolean (default `false`); a hint to the agent |
+
+At most 32 tools per plugin. The plugin answers `tools/call` requests with a string, any JSON value, or MCP-shaped content (`{ "content": [...], "isError": false }`). See [Plugin protocol](/docs/plugin-protocol) for details.
 
 ## Icons
 

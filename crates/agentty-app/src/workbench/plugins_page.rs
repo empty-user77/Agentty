@@ -453,6 +453,7 @@ impl Workbench {
                 crate::settings::update_settings(cx, move |s| {
                     s.plugin_browser_modes.remove(&gone);
                     s.plugin_permission_grants.remove(&gone);
+                    s.plugin_mcp_off.remove(&gone);
                 });
                 plugins::reload(cx);
                 if self.plugins_page.selected.as_deref() == Some(id) {
@@ -1452,9 +1453,11 @@ impl Workbench {
             );
         }
         // Reading the user's work and sending requests out is the pair that makes a leak possible.
-        let reads = ["session.read", "workspace.read"].iter().any(|p| manifest.has_permission(p));
+        // Tools count as reading it: agents hand them what they are working on as arguments.
+        let reads = ["session.read", "workspace.read", "mcp.tools"].iter().any(|p| manifest.has_permission(p));
         let combo = reads && manifest.has_permission("net.request");
         let browser = manifest.has_permission("browser.control").then(|| self.render_browser_access(manifest, cx));
+        let mcp = self.render_mcp_access(manifest, cx);
         // A program plugin is limited by nothing but the user's own rights: the list above is what it
         // may ask of Agentty, not a sandbox, and should not read as one.
         let process = manifest.runtime.is_process().then(|| {
@@ -1467,7 +1470,7 @@ impl Workbench {
                 .child(icon("triangle-alert", 14., hex(Chrome::WARNING)))
                 .child(div().flex_1().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "plugins.perm.process_note")))
         });
-        div().pt_4().flex().flex_col().gap_3().child(list).children(browser).children(process).when(combo, |d| {
+        div().pt_4().flex().flex_col().gap_3().child(list).children(browser).child(mcp).children(process).when(combo, |d| {
             d.child(
                 div()
                     .p_3()
@@ -1479,6 +1482,96 @@ impl Workbench {
                     .child(div().flex_1().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "plugins.perm.combo"))),
             )
         })
+    }
+
+    /// Whether AI agents may reach the plugin's tools through Agentty's MCP server. A plugin that
+    /// declares no tools (`mcp.tools`) cannot be reached at all and says so; one that does is
+    /// reachable until the user turns the switch off.
+    fn render_mcp_access(&self, manifest: &Manifest, cx: &mut Context<Self>) -> AnyElement {
+        let heading = |cx: &mut Context<Self>| {
+            div().flex_1().t_small().font_weight(FontWeight::MEDIUM).text_color(hex(Chrome::BRIGHT)).child(t(cx, "plugins.mcp.title"))
+        };
+        if !manifest.supports_mcp() {
+            return div()
+                .p_3()
+                .rounded_md()
+                .flex()
+                .gap_2()
+                .bg(hex_alpha(Chrome::MUTED, 0.08))
+                .child(div().flex_shrink_0().pt_0p5().child(icon("info", 14., hex(Chrome::MUTED))))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(heading(cx))
+                        .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.mcp.unsupported"))),
+                )
+                .into_any_element();
+        }
+        let on = plugins::mcp::allowed_by_user(&manifest.id, cx);
+        let id = manifest.id.clone();
+        let toggle = super::settings_page::switch(SharedString::from(format!("plugin-mcp-{}", manifest.id)), on, move |_, _, cx| {
+            let id = id.clone();
+            crate::settings::update_settings(cx, move |settings| {
+                if !settings.plugin_mcp_off.remove(&id) {
+                    settings.plugin_mcp_off.insert(id);
+                }
+            });
+        });
+        let mut tools = div().flex().flex_col().gap_1p5();
+        for tool in &manifest.contributes.tools {
+            let (kind, tone) =
+                if tool.read_only { ("plugins.mcp.read_only", Chrome::SUCCESS) } else { ("plugins.mcp.changes", Chrome::WARNING) };
+            tools = tools.child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .items_start()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .t_small()
+                            .font_family("JetBrains Mono")
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(tool.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_1p5()
+                            .rounded_sm()
+                            .bg(hex_alpha(tone, 0.14))
+                            .t_caption()
+                            .text_color(hex(tone))
+                            .child(t(cx, kind)),
+                    )
+                    .child(div().flex_1().min_w_0().t_caption().text_color(hex(Chrome::MUTED)).child(tool.description.clone())),
+            );
+        }
+        div()
+            .p_3()
+            .rounded_md()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .bg(hex_alpha(Chrome::ACCENT, 0.06))
+            .border_1()
+            .border_color(hex_alpha(Chrome::ACCENT, 0.25))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(icon("plug", 14., hex(Chrome::ACCENT)))
+                    .child(heading(cx))
+                    .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.mcp.allow")))
+                    .child(toggle),
+            )
+            .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, if on { "plugins.mcp.body" } else { "plugins.mcp.off" })))
+            .when(on, |d| d.child(tools))
+            .into_any_element()
     }
 
     /// The sites a `browser.control` plugin may use, whether the user allowed it, and where its
@@ -1784,6 +1877,7 @@ fn permission_strings(permission: &str) -> (&'static str, &'static str) {
         "net.request" => ("plugins.perm.net", "plugins.perm.net.body"),
         "browser.control" => ("plugins.perm.browser", "plugins.perm.browser.body"),
         "files" => ("plugins.perm.files", "plugins.perm.files.body"),
+        "mcp.tools" => ("plugins.perm.mcp", "plugins.perm.mcp.body"),
         _ => ("plugins.perm.unknown", "plugins.perm.unknown"),
     }
 }

@@ -14,10 +14,11 @@ pub const MANIFEST_FILE: &str = "agentty-plugin.json";
 /// | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
 /// | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
 /// | 4 | panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code` |
+/// | 5 | `tools/call` — tools a plugin offers AI agents through Agentty's MCP server (`mcp.tools`) |
 ///
 /// A plugin that uses something a version added says so, and an Agentty that speaks less than
 /// that tells the user to update instead of installing a module it cannot run.
-pub const API_VERSION: u32 = 4;
+pub const API_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,6 +140,63 @@ pub struct Contributes {
     /// A panel docked right of the terminals that the plugin fills with UI.
     #[serde(default)]
     pub panel: Option<PanelContribution>,
+    /// Tools AI agents in Agentty may call through its MCP server (`agentty mcp-plugins`). Only
+    /// with the `mcp.tools` permission, and only while the user leaves the plugin's MCP
+    /// connection on.
+    #[serde(default)]
+    pub tools: Vec<ToolContribution>,
+}
+
+/// One tool a plugin offers agents. Agentty sends `tools/call` with its `name` and the agent's
+/// arguments; what the plugin answers goes back to the agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolContribution {
+    /// Lower-case letters, digits and `_`, starting with a letter: `list_containers`.
+    pub name: String,
+    /// What it does and when to use it — this is all the agent knows about it.
+    pub description: String,
+    /// JSON Schema of the arguments (an object schema). Left out: no arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
+    /// Only reads: changes nothing in the plugin or anywhere else. Told to the agent, which may
+    /// then run it without asking.
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+/// Most tools one plugin may offer.
+pub const MAX_TOOLS: usize = 32;
+/// Longest tool description, and the largest input schema (as JSON).
+const MAX_TOOL_DESCRIPTION: usize = 1_000;
+const MAX_TOOL_SCHEMA_BYTES: usize = 16 * 1024;
+
+impl ToolContribution {
+    fn validate(&self) -> std::result::Result<(), String> {
+        let name_ok = (1..=48).contains(&self.name.len())
+            && self.name.starts_with(|c: char| c.is_ascii_lowercase())
+            && self.name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if !name_ok {
+            return Err(format!("tool \"{}\": a name is 1–48 lower-case letters, digits or '_', starting with a letter", self.name));
+        }
+        if self.description.trim().is_empty() || self.description.chars().count() > MAX_TOOL_DESCRIPTION {
+            return Err(format!("tool {}: a description of 1–{MAX_TOOL_DESCRIPTION} characters", self.name));
+        }
+        if let Some(schema) = &self.input_schema {
+            if schema.get("type").and_then(serde_json::Value::as_str) != Some("object") {
+                return Err(format!("tool {}: inputSchema must be an object schema (\"type\": \"object\")", self.name));
+            }
+            if schema.to_string().len() > MAX_TOOL_SCHEMA_BYTES {
+                return Err(format!("tool {}: inputSchema is larger than {MAX_TOOL_SCHEMA_BYTES} bytes", self.name));
+            }
+        }
+        Ok(())
+    }
+
+    /// The schema the agent is given: the declared one, or "no arguments".
+    pub fn schema(&self) -> serde_json::Value {
+        self.input_schema.clone().unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -248,6 +306,7 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("workspace.read", "See open workspaces, tabs, folders and agent status"),
     ("browser.control", "Use the in-app browser on the sites it names, signed in as you"),
     ("files", "Keep files in a folder of its own (pictures, videos, drafts)"),
+    ("mcp.tools", "Answer AI agents in Agentty through the tools it offers (MCP)"),
 ];
 
 impl Manifest {
@@ -320,6 +379,24 @@ impl Manifest {
         if self.has_permission("browser.control") && self.api_version < 3 {
             bail!("plugin \"{}\": browser.control needs apiVersion 3", self.id);
         }
+        // Offering tools to agents is something a plugin says it does; without the permission its
+        // tools are never listed, so a list without it is refused rather than silently ignored.
+        if self.has_permission("mcp.tools") != !self.contributes.tools.is_empty() {
+            bail!("plugin \"{}\": mcp.tools and contributes.tools come together", self.id);
+        }
+        if self.has_permission("mcp.tools") && self.api_version < 5 {
+            bail!("plugin \"{}\": mcp.tools needs apiVersion 5", self.id);
+        }
+        if self.contributes.tools.len() > MAX_TOOLS {
+            bail!("plugin \"{}\": at most {MAX_TOOLS} tools", self.id);
+        }
+        let mut tools = std::collections::HashSet::new();
+        for tool in &self.contributes.tools {
+            tool.validate().map_err(|error| anyhow::anyhow!("plugin \"{}\": {error}", self.id))?;
+            if !tools.insert(tool.name.as_str()) {
+                bail!("plugin \"{}\": duplicate tool {}", self.id, tool.name);
+            }
+        }
         let mut agents = std::collections::HashSet::new();
         if !self.agents.iter().all(|agent| agents.insert(*agent)) {
             bail!("plugin \"{}\": an agent is listed twice in \"agents\"", self.id);
@@ -338,6 +415,16 @@ impl Manifest {
 
     pub fn has_permission(&self, permission: &str) -> bool {
         self.permissions.iter().any(|p| p == permission)
+    }
+
+    /// Whether the plugin offers tools to agents at all (`mcp.tools`). One that does not is never
+    /// reachable through MCP, whatever the user's settings say.
+    pub fn supports_mcp(&self) -> bool {
+        self.has_permission("mcp.tools") && !self.contributes.tools.is_empty()
+    }
+
+    pub fn tool(&self, name: &str) -> Option<&ToolContribution> {
+        self.contributes.tools.iter().find(|tool| tool.name == name).filter(|_| self.supports_mcp())
     }
 
     /// Where this plugin's panel is reached from (`Pane` when it contributes no panel).
@@ -591,6 +678,45 @@ mod tests {
         // A site that is not a site.
         let bad = serde_json::json!({ "sites": [{ "host": "*.example.com" }] });
         assert!(with(serde_json::json!(["browser.control"]), Some(bad), 3).is_err());
+    }
+
+    #[test]
+    fn mcp_tools_come_with_their_permission() {
+        let with = |permissions: serde_json::Value, tools: serde_json::Value, api: u32| {
+            let mut value = sample();
+            value["permissions"] = permissions;
+            value["apiVersion"] = serde_json::json!(api);
+            value["contributes"]["tools"] = tools;
+            Manifest::parse(value.to_string().as_bytes())
+        };
+        let tools = serde_json::json!([{
+            "name": "list_items",
+            "description": "Lists the items.",
+            "inputSchema": { "type": "object", "properties": { "limit": { "type": "number" } } },
+            "readOnly": true,
+        }]);
+        let manifest = with(serde_json::json!(["mcp.tools"]), tools.clone(), 5).unwrap();
+        assert!(manifest.supports_mcp());
+        assert!(manifest.tool("list_items").is_some_and(|t| t.read_only));
+        assert!(manifest.tool("other").is_none());
+        // A plugin that says nothing about MCP is not reachable through it.
+        let plain = Manifest::parse(sample().to_string().as_bytes()).unwrap();
+        assert!(!plain.supports_mcp());
+        assert!(plain.tool("list_items").is_none());
+        // The permission without tools, tools without the permission, or an older protocol.
+        assert!(with(serde_json::json!(["mcp.tools"]), serde_json::json!([]), 5).is_err());
+        assert!(with(serde_json::json!([]), tools.clone(), 5).is_err());
+        assert!(with(serde_json::json!(["mcp.tools"]), tools, 4).is_err());
+        // Tools that are not tools.
+        for bad in [
+            serde_json::json!([{ "name": "List Items", "description": "x" }]),
+            serde_json::json!([{ "name": "_x", "description": "x" }]),
+            serde_json::json!([{ "name": "x", "description": "" }]),
+            serde_json::json!([{ "name": "x", "description": "x", "inputSchema": { "type": "string" } }]),
+            serde_json::json!([{ "name": "x", "description": "x" }, { "name": "x", "description": "y" }]),
+        ] {
+            assert!(with(serde_json::json!(["mcp.tools"]), bad.clone(), 5).is_err(), "{bad}");
+        }
     }
 
     #[test]

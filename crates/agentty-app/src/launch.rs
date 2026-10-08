@@ -285,11 +285,15 @@ impl LaunchSpec {
                     // `"defaultMode": "auto"` in the project's own settings is ignored.
                     args.extend(["--permission-mode".into(), "auto".into()]);
                 }
-                if crate::settings::browser_tools_enabled() && !self.restricted {
-                    // The in-app browser as MCP tools (added to the user's own servers). `--mcp-config`
-                    // takes any number of values, so it must not be the last option: a prompt right
-                    // after it is read as another config file ("Invalid MCP configuration").
-                    args.extend(["--mcp-config".into(), inline_or_file("browser-mcp.json", browser_mcp_config())]);
+                let browser = crate::settings::browser_tools_enabled() && !self.restricted;
+                let plugins = !self.restricted && plugin_tools_offered();
+                if browser || plugins {
+                    // The in-app browser and the plugins' tools as MCP servers (added to the user's
+                    // own). `--mcp-config` takes any number of values, so it must not be the last
+                    // option: a prompt right after it is read as another config file ("Invalid MCP
+                    // configuration").
+                    let (name, config) = mcp_config(browser, plugins);
+                    args.extend(["--mcp-config".into(), inline_or_file(name, config)]);
                 }
                 // What Agentty offers the agent (guide + skills), passed along, never written into its settings.
                 args.extend(crate::agent_guide::claude_args());
@@ -323,7 +327,10 @@ impl LaunchSpec {
                         args.push(full_access.into());
                     }
                     if crate::settings::browser_tools_enabled() {
-                        args.extend(["-c".into(), codex_browser_mcp_override()]);
+                        args.extend(["-c".into(), codex_mcp_override("agentty_browser", "mcp-browser")]);
+                    }
+                    if plugin_tools_offered() {
+                        args.extend(["-c".into(), codex_mcp_override("agentty_plugins", "mcp-plugins")]);
                     }
                 }
                 if let Some(model) = &self.model {
@@ -582,8 +589,30 @@ fn agentty_exe() -> String {
     std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "agentty".into())
 }
 
-fn browser_mcp_config() -> String {
-    serde_json::json!({ "mcpServers": { "agentty-browser": { "command": agentty_exe(), "args": ["mcp-browser"] } } }).to_string()
+/// Agentty's own MCP servers for Claude Code's `--mcp-config`, and the file name it gets on Windows.
+fn mcp_config(browser: bool, plugins: bool) -> (&'static str, String) {
+    let mut servers = serde_json::Map::new();
+    if browser {
+        servers.insert("agentty-browser".into(), serde_json::json!({ "command": agentty_exe(), "args": ["mcp-browser"] }));
+    }
+    if plugins {
+        servers.insert("agentty-plugins".into(), serde_json::json!({ "command": agentty_exe(), "args": ["mcp-plugins"] }));
+    }
+    let name = match (browser, plugins) {
+        (true, true) => "agentty-mcp.json",
+        (false, true) => "plugins-mcp.json",
+        _ => "browser-mcp.json",
+    };
+    (name, serde_json::json!({ "mcpServers": servers }).to_string())
+}
+
+/// Whether some plugin offers tools to agents now: enabled, with `mcp.tools`, and its MCP
+/// connection left on. Without one, agents are not given the plugins' MCP server at all.
+fn plugin_tools_offered() -> bool {
+    let off = crate::settings::plugin_mcp_off();
+    agentty_bridge::plugins::store::installed()
+        .iter()
+        .any(|p| p.active() && !off.contains(&p.id) && p.manifest.as_ref().is_some_and(|m| m.supports_mcp()))
 }
 
 /// A TOML string for `codex -c`. Windows uses literal ('…') strings: Windows PowerShell 5.1 would
@@ -596,7 +625,7 @@ fn toml_string(s: &str) -> String {
     }
 }
 
-fn codex_browser_mcp_override() -> String {
+fn codex_mcp_override(server: &str, subcommand: &str) -> String {
     // Codex passes only listed environment variables to MCP servers.
     let mut env = vec!["AGENTTY_SOCKET", "AGENTTY_PANE_ID"];
     if cfg!(windows) {
@@ -604,9 +633,9 @@ fn codex_browser_mcp_override() -> String {
     }
     let env: Vec<String> = env.into_iter().map(toml_string).collect();
     format!(
-        "mcp_servers.agentty_browser={{command={},args=[{}],env_vars=[{}]}}",
+        "mcp_servers.{server}={{command={},args=[{}],env_vars=[{}]}}",
         toml_string(&agentty_exe()),
-        toml_string("mcp-browser"),
+        toml_string(subcommand),
         env.join(",")
     )
 }
@@ -915,6 +944,19 @@ pub(crate) mod tests {
             // Windows passes the JSON as a file; the hook forwards through `agentty signal`.
             assert!(stop.ends_with(" signal stop"), "{stop}");
         }
+    }
+
+    #[test]
+    fn agenttys_mcp_servers_go_in_one_config() {
+        let servers = |browser, plugins| {
+            let (_, config) = mcp_config(browser, plugins);
+            let config: serde_json::Value = serde_json::from_str(&config).unwrap();
+            config["mcpServers"].as_object().unwrap().keys().cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(servers(true, false), ["agentty-browser"]);
+        assert_eq!(servers(false, true), ["agentty-plugins"]);
+        assert_eq!(servers(true, true), ["agentty-browser", "agentty-plugins"]);
+        assert!(codex_mcp_override("agentty_plugins", "mcp-plugins").starts_with("mcp_servers.agentty_plugins="));
     }
 
     #[test]

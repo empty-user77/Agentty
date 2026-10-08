@@ -9,6 +9,7 @@ only describes the wire format.
 | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
 | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
 | 4 | panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code` |
+| 5 | `tools/call` — tools a plugin offers to AI agents (`mcp.tools`) |
 
 A plugin that uses something a version added says so, with `apiVersion` in its manifest and in its
 marketplace entry. An Agentty that speaks less than that says to update rather than installing a
@@ -48,6 +49,7 @@ with the same 16 MB line limit as stdout.
 | `browser/hidden` | notification | `{ tabId }` — the user took one of the plugin's pages out of the browser panel; it keeps running out of sight (`browser.control`) |
 | `instance/open` | notification | `{ instance, title }` — an automation (a tab of the plugin's workspace) exists: each one when the plugin starts, then every new one |
 | `instance/close` | notification | `{ instance }` — the user closed an automation's tab; its pages are closed already |
+| `tools/call` | request (answer it) | `{ name, arguments, context }` — an AI agent is calling a tool (`mcp.tools`, API 5) |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin (a command, the panel
@@ -119,6 +121,13 @@ opens with the text typed in and unsent (`{ status: "sent", paneId, submitted: f
 such tab every 5 seconds, the rest go to `ask` — every other prompt goes to `ask`, and
 `terminal/send` types without Enter, into Claude Code or Codex only (never a shell, where the text
 would run with the user's next command), under the rules above (`{ paneId, submitted: false }`).
+
+**Tools for AI agents.** When an agent calls a tool, Agentty sends `tools/call` with `{ name, arguments, context }`. Answer with a
+result — a string, any JSON value, or MCP-shaped content `{ "content": [{ "type": "text", "text": "…" }
+| { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }`. Other
+content types are dropped. Or answer with a JSON-RPC error; its message goes to the agent as an error.
+The plugin must answer within 120 seconds. At most 8 calls may wait on one plugin. Arguments are at
+most 256 KB; text handed to the agent is cut at 100,000 characters.
 
 Agentty drops `ui/notify` calls that arrive faster than one per 700 ms (answering them normally), and
 stops a plugin that sends more than 240 messages a second. `host/openUrl` is metered the same way —
