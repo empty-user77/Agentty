@@ -183,6 +183,9 @@ pub enum SocketMessage {
     /// `tasks\t{"cwd":…,"tasks":[…]}` from `agentty tasks`: an agent asks to start work in parallel
     /// sessions; answered on `reply` once the user said yes or no.
     Tasks(TasksRequest),
+    /// `tasksctl\t{"action":"status"|"send",…}` from `agentty tasks status|send`: a chat's lead
+    /// asks about its workers or sends one a message; answered on `reply`.
+    TasksCtl(TasksCtlRequest),
     /// `db\t{"cwd":…,"action":…}` from `agentty db`: an agent reads a project database, or asks to
     /// change it; answered on `reply` (writes only after the user approved the exact statement).
     Db(DbRequest),
@@ -313,6 +316,35 @@ pub struct PluginsRequest {
     pub args: serde_json::Value,
     /// One JSON line, as [`browser_reply`] makes it.
     pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// A chat's lead asks about its workers (`status`) or sends one of them a message (`send`).
+#[derive(Debug, Clone)]
+pub struct TasksCtlRequest {
+    /// The pane the connection belongs to (the asking agent).
+    pub pane: u64,
+    pub action: String,
+    /// The worker's title (`send`).
+    pub to: String,
+    pub prompt: String,
+    /// One JSON line, as [`browser_reply`] makes it.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// Parses a `tasksctl` request: the action and, for `send`, the worker and the message (bounded).
+pub fn parse_tasks_ctl(value: &serde_json::Value) -> Result<(String, String, String), String> {
+    let action = value["action"].as_str().unwrap_or_default().to_string();
+    let to: String = value["to"].as_str().unwrap_or_default().chars().filter(|c| !c.is_control()).collect();
+    let prompt = value["prompt"].as_str().unwrap_or_default().to_string();
+    match action.as_str() {
+        "status" => Ok((action, String::new(), String::new())),
+        "send" if to.trim().is_empty() || prompt.trim().is_empty() => Err("send needs --to <title> and --prompt <text>".into()),
+        "send" if to.chars().count() > MAX_TITLE || prompt.chars().count() > MAX_PROMPT => {
+            Err(format!("the title is at most {MAX_TITLE} characters and the prompt at most {MAX_PROMPT}"))
+        }
+        "send" => Ok((action, to.trim().to_string(), prompt)),
+        _ => Err("unknown action (status or send)".into()),
+    }
 }
 
 /// An agent asks something of a database of its project (`agentty db`).
@@ -531,6 +563,24 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                         .unwrap_or_else(|_| browser_reply(Err("no answer from the user in time".into())))
                 }
                 Ok(_) => browser_reply(Err("bad request".into())),
+                Err(error) => browser_reply(Err(error)),
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("tasksctl\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let response = match parse_tasks_ctl(&request) {
+                Ok((action, to, prompt)) => {
+                    let (reply, answer) = std::sync::mpsc::channel();
+                    if tx.unbounded_send(SocketMessage::TasksCtl(TasksCtlRequest { pane, action, to, prompt, reply })).is_err() {
+                        return;
+                    }
+                    answer.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| browser_reply(Err("timed out".into())))
+                }
                 Err(error) => browser_reply(Err(error)),
             };
             if let Some(writer) = writer.as_mut() {
@@ -763,6 +813,11 @@ mod tests {
         let many: Vec<_> = (0..MAX_TASKS + 1).map(|i| serde_json::json!({ "title": format!("t{i}"), "prompt": "x" })).collect();
         assert!(parse_tasks(&serde_json::Value::Array(many)).is_err());
         assert!(parse_tasks(&serde_json::json!({ "title": "a" })).is_err());
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "status" })).is_ok());
+        let (_, to, prompt) = parse_tasks_ctl(&serde_json::json!({ "action": "send", "to": " API\n", "prompt": "go on" })).unwrap();
+        assert_eq!((to.as_str(), prompt.as_str()), ("API", "go on"));
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "send", "to": "API" })).is_err());
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "rm" })).is_err());
     }
 
     #[test]

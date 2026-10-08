@@ -8,7 +8,7 @@ use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
 use agentty_bridge::plugins::manifest::{PanelMode, Surface};
-use agentty_bridge::plugins::ui::{FlowState, Gap, Node, TextStyle, Tone, UiEvent, Variant};
+use agentty_bridge::plugins::ui::{Node, UiEvent};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, SharedString, Subscription, Window};
 use std::time::Duration;
 
@@ -33,36 +33,44 @@ pub struct PluginInput {
     generation: u64,
     /// Enter was pressed and the plugin has not answered yet.
     submitted: bool,
+    /// What the plugin suggests for the word being typed.
+    pub completions: Vec<agentty_bridge::plugins::ui::Completion>,
+    /// The suggestions on screen under the field.
+    pub suggest: Option<Suggest>,
     _subscription: Subscription,
 }
 
-fn gap(gap: Gap) -> gpui::Pixels {
-    px(match gap {
-        Gap::None => 0.,
-        Gap::Small => 4.,
-        Gap::Medium => 8.,
-        Gap::Large => 14.,
-    })
+/// Suggestions shown under a field: the range they replace, which of the plugin's completions fit
+/// (best first), and the one ↑ ↓ are on.
+pub struct Suggest {
+    pub range: std::ops::Range<usize>,
+    pub items: Vec<usize>,
+    pub selected: usize,
+}
+
+/// Rows of suggestions shown at once.
+pub(super) const MAX_SUGGESTIONS: usize = 8;
+
+/// The suggestions for a field showing `text` with the caret at `cursor`.
+fn suggest_for(completions: &[agentty_bridge::plugins::ui::Completion], text: &str, cursor: usize) -> Option<Suggest> {
+    use agentty_bridge::plugins::ui::{completion_word, matching_completions};
+    if completions.is_empty() {
+        return None;
+    }
+    let (range, word) = completion_word(text, cursor)?;
+    let braced = text[range.clone()].starts_with("{{");
+    let found = matching_completions(completions, word, braced);
+    let items: Vec<usize> =
+        found.iter().take(MAX_SUGGESTIONS).filter_map(|c| completions.iter().position(|o| std::ptr::eq(o, *c))).collect();
+    (!items.is_empty()).then_some(Suggest { range, items, selected: 0 })
 }
 
 /// A popover's card: wide enough for a step's settings, and scrolling past this height.
 pub(super) const POPOVER_WIDTH: f32 = 380.;
 const POPOVER_MAX_HEIGHT: f32 = 640.;
-
-/// A `flow` step's icon box, and where the line joining the steps runs: under its middle.
-const FLOW_ICON: f32 = 26.;
-const FLOW_LINE_LEFT: f32 = 8. + FLOW_ICON / 2. - 1.;
-const FLOW_SIDE_INDENT: f32 = 28.;
-
-fn tone_color(tone: Tone) -> u32 {
-    match tone {
-        Tone::Neutral => Chrome::MUTED,
-        Tone::Info => Chrome::BLUE,
-        Tone::Success => Chrome::SUCCESS,
-        Tone::Warning => Chrome::WARNING,
-        Tone::Error => Chrome::ERROR,
-    }
-}
+/// The window above a popover's body and a margin under it: title bar, panel header, the card's
+/// own heading.
+const POPOVER_TOP_ROOM: f32 = 200.;
 
 /// A tree arrived with `value` for a field showing `typed`: whether that text is replaced by it.
 /// `applied` is what the plugin has seen or set (typing waiting for the pause before it is sent
@@ -114,7 +122,7 @@ impl Workbench {
     /// Creates and syncs the panel's text fields; called from render before drawing.
     /// Whose fields the panel shows: an automation's are its own (the same id in another tab is
     /// another field), so they are made and looked up under the automation in front.
-    fn plugin_input_scope(&self, plugin: &str, cx: &gpui::App) -> String {
+    pub(super) fn plugin_input_scope(&self, plugin: &str, cx: &gpui::App) -> String {
         match self.active_instance(plugin, cx) {
             Some(instance) => format!("{plugin}#{instance}"),
             None => plugin.to_string(),
@@ -122,6 +130,7 @@ impl Workbench {
     }
 
     pub(super) fn prepare_plugin_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.plugin_window_height.set(f32::from(window.viewport_size().height));
         // A plugin's workspace in front whose plugin just came back (turned off and on, updated)
         // gets its panel again: nothing else switches workspaces meanwhile to bring it up.
         self.sync_plugin_workspace(cx);
@@ -147,14 +156,20 @@ impl Workbench {
         }
         self.reconcile_plugin_windows(window, cx);
         let mut fields = Vec::new();
+        let mut shows_code = false;
         if let Some(tree) = self.plugin_tree(&plugin, cx) {
             tree.inputs(&mut fields);
+            shows_code = super::plugin_ui::has_code(tree);
+        }
+        if shows_code {
+            self.load_plugin_grammars(cx);
         }
         let scope = self.plugin_input_scope(&plugin, cx);
         self.plugin_inputs.retain(|(owner, id), _| *owner == scope && fields.iter().any(|field| field.id == *id));
-        for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows } in fields {
+        for agentty_bridge::plugins::ui::InputField { id, placeholder, value, rows, completions } in fields {
             let key = (scope.clone(), id.clone());
             if let Some(existing) = self.plugin_inputs.get_mut(&key) {
+                existing.completions = completions;
                 existing.input.update(cx, |i, cx| i.set_placeholder(placeholder.clone(), cx));
                 let input = existing.input.clone();
                 let typed = input.read(cx).text().to_string();
@@ -175,6 +190,57 @@ impl Workbench {
             let subscription = cx.subscribe(&input, move |this, input, event: &TextInputEvent, cx| {
                 let text = input.read(cx).text().to_string();
                 let key = (scope.clone(), element.clone());
+                // Suggestions open take the keys that move through and pick them.
+                let suggesting = this.plugin_inputs.get(&key).is_some_and(|f| f.suggest.is_some());
+                match event {
+                    TextInputEvent::Up | TextInputEvent::Down if suggesting => {
+                        if let Some(suggest) = this.plugin_inputs.get_mut(&key).and_then(|f| f.suggest.as_mut()) {
+                            let n = suggest.items.len();
+                            suggest.selected = if matches!(event, TextInputEvent::Up) {
+                                (suggest.selected + n - 1) % n
+                            } else {
+                                (suggest.selected + 1) % n
+                            };
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    TextInputEvent::Confirmed | TextInputEvent::Next if suggesting => {
+                        let selected = this.plugin_inputs.get(&key).and_then(|f| f.suggest.as_ref()).map_or(0, |s| s.selected);
+                        this.apply_plugin_completion(&key, selected, cx);
+                        return;
+                    }
+                    TextInputEvent::Cancelled if suggesting => {
+                        if let Some(field) = this.plugin_inputs.get_mut(&key) {
+                            field.suggest = None;
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    TextInputEvent::Blurred if suggesting => {
+                        // Later, so a click on a suggestion (which takes the focus) still lands.
+                        let key = key.clone();
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(Duration::from_millis(200)).await;
+                            let _ = this.update(cx, |this, cx| {
+                                if let Some(field) = this.plugin_inputs.get_mut(&key) {
+                                    field.suggest = None;
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                        return;
+                    }
+                    _ => {}
+                }
+                if matches!(event, TextInputEvent::Changed) {
+                    let cursor = input.read(cx).cursor();
+                    if let Some(field) = this.plugin_inputs.get_mut(&key) {
+                        // The plugin putting its value in (another tab picked) is not typing.
+                        field.suggest = if text == field.from_plugin { None } else { suggest_for(&field.completions, &text, cursor) };
+                    }
+                }
                 match event {
                     TextInputEvent::Confirmed => {
                         // The plugin now has this text: a value it sends back that differs (an
@@ -236,10 +302,23 @@ impl Workbench {
                     applied: value,
                     generation: 0,
                     submitted: false,
+                    completions,
+                    suggest: None,
                     _subscription: subscription,
                 },
             );
         }
+    }
+
+    /// Puts suggestion `index` (of those on screen) into the field, in place of the word typed.
+    pub(super) fn apply_plugin_completion(&mut self, key: &(String, String), index: usize, cx: &mut Context<Self>) {
+        let Some(field) = self.plugin_inputs.get_mut(key) else { return };
+        let Some(suggest) = field.suggest.take() else { return };
+        let Some(completion) = suggest.items.get(index).and_then(|i| field.completions.get(*i)) else { return };
+        let text = completion.insert.clone().unwrap_or_else(|| completion.label.clone());
+        let input = field.input.clone();
+        input.update(cx, |i, cx| i.replace_range(suggest.range, &text, cx));
+        cx.notify();
     }
 
     /// Sends the plugin any typing it has not seen yet, right before a button, list action,
@@ -248,7 +327,7 @@ impl Workbench {
     /// sends). Every input of the panel is marked `submitted` regardless, so an empty value the
     /// plugin answers with right after is applied as a clear rather than held back as a stale
     /// echo of what the user is still typing.
-    fn flush_plugin_inputs(&mut self, plugin: &str, cx: &mut Context<Self>) {
+    pub(super) fn flush_plugin_inputs(&mut self, plugin: &str, cx: &mut Context<Self>) {
         let scope = self.plugin_input_scope(plugin, cx);
         let keys: Vec<(String, String)> = self.plugin_inputs.keys().filter(|(owner, _)| *owner == scope).cloned().collect();
         let mut to_send = Vec::new();
@@ -286,6 +365,16 @@ impl Workbench {
         let panel_logo = agentty_bridge::plugins::store::logo_file(&plugin);
 
         let restart_id = plugin_id.clone();
+        let window_id = plugin_id.clone();
+        // A plugin with a workspace of its own can have a window of its own too.
+        let pop_out = self.wants_workspace(&plugin_id, cx).then(|| {
+            crate::ui::icon_only(
+                "plugin-panel-window",
+                "external-link",
+                cx.listener(move |_, _: &ClickEvent, _, cx| crate::open_plugin_window(window_id.clone(), cx)),
+            )
+            .tooltip(Tooltip::text(t(cx, "plugins.open_window"), None))
+        });
         let header = div()
             .h(px(36.))
             .flex_shrink_0()
@@ -317,6 +406,7 @@ impl Workbench {
                 )
                 .tooltip(Tooltip::text(t(cx, "plugins.restart"), None)),
             )
+            .children(pop_out)
             .child(
                 crate::ui::icon_only(
                     "plugin-panel-layout",
@@ -348,6 +438,8 @@ impl Workbench {
         }
         .map(|popover| self.render_plugin_popover(&plugin_id, &popover, cx));
 
+        // A tree that takes the panel's height scrolls inside itself, column by column.
+        let fills_panel = matches!(state, RunState::Running) && tree.as_ref().is_some_and(|t| t.fills_height()) && !no_automation;
         let body: AnyElement = match (tree, state) {
             (_, RunState::NeedsConsent) => {
                 let owner = plugin_id.clone();
@@ -411,11 +503,17 @@ impl Workbench {
             }
             (Some(tree), _) => {
                 let mut path = Vec::new();
-                div().p_3().child(self.render_plugin_node(&plugin_id, &tree, &mut path, cx)).into_any_element()
+                let fills = tree.fills_height();
+                div()
+                    .p_3()
+                    .when(fills, |d| d.flex_1().min_h_0().flex().flex_col())
+                    .child(self.render_plugin_node(&plugin_id, &tree, &mut path, cx))
+                    .into_any_element()
             }
             (None, _) => crate::ui::loading_row(t(cx, "plugins.starting")).into_any_element(),
         };
 
+        let mut body_slot = Some(body);
         Some(
             div()
                 .size_full()
@@ -424,18 +522,23 @@ impl Workbench {
                 .bg(hex(Chrome::PANEL))
                 .relative()
                 .child(header)
-                .child(
-                    div()
-                        .id("plugin-panel-scroll")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.plugin_scroll)
-                        .relative()
-                        .child(body)
-                        .group(crate::ui::SCROLL_GROUP)
-                        .child(crate::ui::scrollbar(self.plugin_scroll.clone())),
-                )
+                .when(fills_panel, |d| {
+                    d.child(div().flex_1().min_h_0().flex().flex_col().child(body_slot.take().unwrap_or_else(|| div().into_any_element())))
+                })
+                .when(!fills_panel, |d| {
+                    d.child(
+                        div()
+                            .id("plugin-panel-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.plugin_scroll)
+                            .relative()
+                            .child(body_slot.take().unwrap_or_else(|| div().into_any_element()))
+                            .group(crate::ui::SCROLL_GROUP)
+                            .child(crate::ui::scrollbar(self.plugin_scroll.clone())),
+                    )
+                })
                 // Last, so it paints over the panel's body instead of under it.
                 .children(mode_menu)
                 .children(popover)
@@ -474,6 +577,8 @@ impl Workbench {
                 .w(px(self.plugin_panel_shown_width(cx)))
                 .flex()
                 .shadow_lg()
+                // Floating over the page: a click on the panel is the panel's, never the page's.
+                .occlude()
                 .child(self.render_side_splitter(super::side_panels::SidePanel::Plugin, cx))
                 .child(div().flex_1().min_w_0().h_full().border_l_1().border_color(hex(Chrome::BORDER)).child(contents)),
             // The whole area the terminals and pages use.
@@ -528,381 +633,6 @@ impl Workbench {
             );
         }
         menu.into_any_element()
-    }
-
-    fn render_plugin_node(&self, plugin: &str, node: &Node, path: &mut Vec<usize>, cx: &mut Context<Self>) -> AnyElement {
-        let key = |id: &str, path: &[usize]| SharedString::from(format!("plugin-{plugin}-{id}-{path:?}"));
-        match node {
-            Node::Column { children, gap: g } => {
-                let mut column = div().flex().flex_col().gap(gap(*g)).min_w_0();
-                for (index, child) in children.iter().enumerate() {
-                    path.push(index);
-                    column = column.child(self.render_plugin_node(plugin, child, path, cx));
-                    path.pop();
-                }
-                column.into_any_element()
-            }
-            Node::Section { title, children } => {
-                let mut column = div().flex().flex_col().gap_2().min_w_0();
-                for (index, child) in children.iter().enumerate() {
-                    path.push(index);
-                    column = column.child(self.render_plugin_node(plugin, child, path, cx));
-                    path.pop();
-                }
-                div()
-                    .pt_2()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(div().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title.to_uppercase()))
-                    .child(column)
-                    .into_any_element()
-            }
-            Node::Row { children, gap: g, wrap } => {
-                let mut row = div().flex().items_center().gap(gap(*g)).min_w_0().when(*wrap, |d| d.flex_wrap());
-                for (index, child) in children.iter().enumerate() {
-                    path.push(index);
-                    let rendered = self.render_plugin_node(plugin, child, path, cx);
-                    // Text takes the room the buttons leave. Left to its own size it shrinks to its
-                    // narrowest wrap — one character a line for Korean, Japanese and Chinese.
-                    row = row.child(if matches!(child, Node::Text { .. }) {
-                        div().flex_1().min_w_0().child(rendered).into_any_element()
-                    } else {
-                        rendered
-                    });
-                    path.pop();
-                }
-                row.into_any_element()
-            }
-            Node::Text { text, style } => {
-                let base = div().min_w_0().whitespace_normal();
-                match style {
-                    TextStyle::Title => base.t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)),
-                    TextStyle::Muted => base.t_small().text_color(hex(Chrome::MUTED)),
-                    TextStyle::Small => base.t_caption().text_color(hex(Chrome::MUTED)),
-                    TextStyle::Code => base
-                        .t_small()
-                        .font_family("JetBrains Mono")
-                        .p_2()
-                        .rounded_md()
-                        .bg(hex(0x1a1a1a))
-                        .text_color(hex(Chrome::FOREGROUND)),
-                    TextStyle::Error => base.t_small().text_color(hex(Chrome::ERROR)),
-                    TextStyle::Success => base.t_small().text_color(hex(Chrome::SUCCESS)),
-                    TextStyle::Body => base.t_body().text_color(hex(Chrome::FOREGROUND)),
-                }
-                .child(text.clone())
-                .into_any_element()
-            }
-            Node::Button { id, label, icon: glyph, variant, disabled } => {
-                let (bg, fg) = match variant {
-                    Variant::Primary => (hex(Chrome::ACCENT), hex(Chrome::BRIGHT)),
-                    Variant::Secondary => (hex(0x2d2d30), hex(Chrome::FOREGROUND)),
-                    Variant::Ghost => (hex_alpha(0, 0.), hex(Chrome::FOREGROUND)),
-                    Variant::Danger => (hex_alpha(Chrome::ERROR, 0.2), hex(Chrome::ERROR)),
-                };
-                let (owner, element) = (plugin.to_string(), id.clone());
-                div()
-                    .id(key(id, path))
-                    .flex_shrink_0()
-                    .px_2()
-                    .py_1()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .rounded_md()
-                    .t_small()
-                    .bg(bg)
-                    .text_color(fg)
-                    .when(*disabled, |d| d.opacity(0.45))
-                    .when(!*disabled, |d| {
-                        d.cursor_pointer().hover(|s| s.opacity(0.85)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.flush_plugin_inputs(&owner, cx);
-                            let event = UiEvent { element: element.clone(), event: "click".into(), value: None, item: None, action: None };
-                            this.send_plugin_event(&owner, event, cx);
-                        }))
-                    })
-                    .children(glyph.as_deref().map(|g| icon(icon_named(Some(g)), IconSize::INLINE, fg)))
-                    .child(label.clone())
-                    .into_any_element()
-            }
-            Node::Input { id, .. } => match self.plugin_inputs.get(&(self.plugin_input_scope(plugin, cx), id.clone())) {
-                Some(field) => div()
-                    .w_full()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(hex(Chrome::BORDER))
-                    .bg(hex(0x1a1a1a))
-                    .t_small()
-                    .text_color(hex(Chrome::BRIGHT))
-                    .child(field.input.clone())
-                    .into_any_element(),
-                None => div().into_any_element(),
-            },
-            Node::List { id, items, empty } => {
-                if items.is_empty() {
-                    return div().t_small().text_color(hex(Chrome::MUTED)).children(empty.clone()).into_any_element();
-                }
-                let mut list = div().flex().flex_col().gap_0p5();
-                for (index, item) in items.iter().enumerate() {
-                    let (owner, element, item_id) = (plugin.to_string(), id.clone(), item.id.clone());
-                    let group = SharedString::from(format!("plugin-row-{plugin}-{id}-{index}"));
-                    // Shown over the right end of the row while it is hovered, so they take no room
-                    // (and leave no gap) the rest of the time.
-                    let mut actions =
-                        div().absolute().top_0().bottom_0().right(px(4.)).pl_2().flex().items_center().gap_0p5().bg(hex(Chrome::HOVER));
-                    let has_actions = !item.actions.is_empty();
-                    for (action_index, action) in item.actions.iter().enumerate() {
-                        let (owner, element, item_id, action_id) = (plugin.to_string(), id.clone(), item.id.clone(), action.id.clone());
-                        let mut button = div()
-                            .id(SharedString::from(format!("plugin-row-action-{plugin}-{id}-{index}-{action_index}")))
-                            .px_1()
-                            .h(px(22.))
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .t_caption()
-                            .text_color(hex(Chrome::FOREGROUND))
-                            .hover(|s| s.bg(hex(Chrome::SELECTED)))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                cx.stop_propagation();
-                                this.flush_plugin_inputs(&owner, cx);
-                                let event = UiEvent {
-                                    element: element.clone(),
-                                    event: "action".into(),
-                                    value: None,
-                                    item: Some(item_id.clone()),
-                                    action: Some(action_id.clone()),
-                                };
-                                this.send_plugin_event(&owner, event, cx);
-                            }))
-                            .when_some(action.icon.as_deref(), |d, g| {
-                                d.child(icon(icon_named(Some(g)), IconSize::INLINE, hex(Chrome::FOREGROUND)))
-                            })
-                            .when_some(action.label.clone(), |d, label| d.child(label));
-                        if let Some(tooltip) = action.tooltip.clone() {
-                            button = button.tooltip(Tooltip::text(tooltip, None));
-                        }
-                        actions = actions.child(button);
-                    }
-                    list = list.child(
-                        div()
-                            .id(SharedString::from(format!("plugin-row-{plugin}-{id}-{index}")))
-                            .group(group.clone())
-                            .relative()
-                            .px_2()
-                            .py_1p5()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(hex(Chrome::HOVER)))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.flush_plugin_inputs(&owner, cx);
-                                let event = UiEvent {
-                                    element: element.clone(),
-                                    event: "select".into(),
-                                    value: None,
-                                    item: Some(item_id.clone()),
-                                    action: None,
-                                };
-                                this.send_plugin_event(&owner, event, cx);
-                            }))
-                            .when_some(item.icon.as_deref(), |d, g| {
-                                d.child(icon(icon_named(Some(g)), IconSize::INLINE, hex(tone_color(item.tone))))
-                            })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(div().t_small().text_color(hex(Chrome::BRIGHT)).truncate().child(item.title.clone()))
-                                    .children(
-                                        item.subtitle.clone().map(|s| div().t_caption().text_color(hex(Chrome::MUTED)).truncate().child(s)),
-                                    )
-                                    // The detail is a line of its own under them: beside them it took
-                                    // the width the title needs as soon as the panel is narrow.
-                                    .children(
-                                        item.detail
-                                            .clone()
-                                            .map(|d| div().t_caption().text_color(hex_alpha(Chrome::MUTED, 0.8)).truncate().child(d)),
-                                    ),
-                            )
-                            .when(has_actions, |d| d.child(actions.invisible().group_hover(group, |s| s.visible()))),
-                    );
-                }
-                list.into_any_element()
-            }
-            Node::Choice { id, options, value } => {
-                let mut row = div().flex().flex_wrap().gap_1();
-                for (index, option) in options.iter().enumerate() {
-                    let (owner, element, picked) = (plugin.to_string(), id.clone(), option.value.clone());
-                    row = row.child(crate::ui::chip(
-                        SharedString::from(format!("plugin-choice-{plugin}-{id}-{index}")),
-                        option.label.clone(),
-                        *value == option.value,
-                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.flush_plugin_inputs(&owner, cx);
-                            let event = UiEvent {
-                                element: element.clone(),
-                                event: "change".into(),
-                                value: Some(picked.clone().into()),
-                                item: None,
-                                action: None,
-                            };
-                            this.send_plugin_event(&owner, event, cx);
-                        }),
-                    ));
-                }
-                row.into_any_element()
-            }
-            Node::Toggle { id, label, value } => {
-                let (owner, element, next) = (plugin.to_string(), id.clone(), !*value);
-                div()
-                    .id(key(id, path))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .t_small()
-                    .text_color(hex(Chrome::FOREGROUND))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.flush_plugin_inputs(&owner, cx);
-                        let event = UiEvent {
-                            element: element.clone(),
-                            event: "change".into(),
-                            value: Some(next.into()),
-                            item: None,
-                            action: None,
-                        };
-                        this.send_plugin_event(&owner, event, cx);
-                    }))
-                    .child(
-                        div()
-                            .w(px(26.))
-                            .h(px(14.))
-                            .rounded_full()
-                            .p(px(2.))
-                            .flex()
-                            .when(*value, |d| d.justify_end())
-                            .bg(if *value { hex(Chrome::ACCENT) } else { hex(0x3a3a3a) })
-                            .child(div().size(px(10.)).rounded_full().bg(hex(Chrome::BRIGHT))),
-                    )
-                    .child(label.clone())
-                    .into_any_element()
-            }
-            Node::Badge { text, tone } => div()
-                .flex_shrink_0()
-                .px_1p5()
-                .py_0p5()
-                .rounded_sm()
-                .bg(hex_alpha(tone_color(*tone), 0.18))
-                .t_caption()
-                .text_color(hex(tone_color(*tone)))
-                .child(text.clone())
-                .into_any_element(),
-            Node::Spinner { text } => crate::ui::loading_row(text.clone()).into_any_element(),
-            Node::Divider => div().h(px(1.)).w_full().bg(hex(Chrome::BORDER)).into_any_element(),
-            // Drawn beside the panel (`render_plugin_popover`), not in its flow.
-            Node::Popover { .. } => div().into_any_element(),
-            Node::Flow { id, steps } => {
-                // Cards top to bottom, each joined to the next by a short line under its icon: the
-                // line is faint where the step it leads to is off.
-                let mut flow = div().flex().flex_col().min_w_0();
-                for (index, step) in steps.iter().enumerate() {
-                    if index > 0 {
-                        let lit = step.state != FlowState::Off && steps[index - 1].state != FlowState::Off;
-                        flow = flow.child(div().ml(px(FLOW_LINE_LEFT)).w(px(2.)).h(px(12.)).bg(if lit {
-                            hex_alpha(Chrome::SUCCESS, 0.55)
-                        } else {
-                            hex(Chrome::BORDER)
-                        }));
-                    }
-                    let color = match step.state {
-                        FlowState::Off => Chrome::MUTED,
-                        FlowState::On => Chrome::BLUE,
-                        FlowState::Active => Chrome::ORANGE,
-                        FlowState::Done => Chrome::SUCCESS,
-                        FlowState::Error => Chrome::ERROR,
-                    };
-                    let (owner, element, item_id) = (plugin.to_string(), id.clone(), step.id.clone());
-                    let border = if step.selected {
-                        hex(Chrome::ACCENT)
-                    } else if step.state == FlowState::Active {
-                        hex_alpha(Chrome::ORANGE, 0.6)
-                    } else {
-                        hex(Chrome::BORDER)
-                    };
-                    flow = flow.child(
-                        div()
-                            .id(SharedString::from(format!("plugin-flow-{plugin}-{id}-{index}")))
-                            // An optional step branches off the main line.
-                            .when(step.side, |d| d.ml(px(FLOW_SIDE_INDENT)))
-                            .px_2()
-                            .py_1p5()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(border)
-                            .bg(hex(if step.selected { Chrome::SELECTED } else { Chrome::OVERLAY }))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(hex(Chrome::HOVER)))
-                            .when(step.state == FlowState::Off, |d| d.opacity(0.55))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.flush_plugin_inputs(&owner, cx);
-                                let event = UiEvent {
-                                    element: element.clone(),
-                                    event: "select".into(),
-                                    value: None,
-                                    item: Some(item_id.clone()),
-                                    action: None,
-                                };
-                                this.send_plugin_event(&owner, event, cx);
-                            }))
-                            .child(
-                                div()
-                                    .size(px(FLOW_ICON))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_md()
-                                    .bg(hex_alpha(color, 0.18))
-                                    .child(icon(icon_named(step.icon.as_deref()), IconSize::INLINE, hex(color))),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(div().t_small().text_color(hex(Chrome::BRIGHT)).truncate().child(step.title.clone()))
-                                    .children(
-                                        step.subtitle.clone().map(|s| div().t_caption().text_color(hex(Chrome::MUTED)).truncate().child(s)),
-                                    ),
-                            )
-                            .map(|d| match step.state {
-                                FlowState::Active => d.child(crate::ui::dot_spinner(
-                                    SharedString::from(format!("plugin-flow-spin-{plugin}-{id}-{index}")),
-                                    12.,
-                                    hex(Chrome::ORANGE),
-                                )),
-                                FlowState::Error => d.child(icon("circle-x", IconSize::INLINE, hex(Chrome::ERROR))),
-                                _ => d.child(icon("chevron-right", IconSize::INLINE, hex(Chrome::MUTED))),
-                            }),
-                    );
-                }
-                flow.into_any_element()
-            }
-        }
     }
 
     /// A popover of the panel: a card at the panel's right edge, over the page beside it (which is
@@ -962,13 +692,20 @@ impl Workbench {
                 div()
                     .id(SharedString::from(format!("plugin-popover-body-{plugin}-{id}")))
                     .w_full()
-                    .max_h(px(POPOVER_MAX_HEIGHT))
+                    // What fits under the panel's header in this window, and scrolls past that.
+                    .max_h(px((self.plugin_window_height.get() - POPOVER_TOP_ROOM).clamp(160., POPOVER_MAX_HEIGHT)))
                     .overflow_y_scroll()
                     .p_3()
-                    .child(body),
+                    // A column, so the body is the card's width: a long line in it (a code
+                    // snippet) scrolls inside its block instead of being cut at the card's edge.
+                    .flex()
+                    .flex_col()
+                    .child(body.flex_shrink_0()),
             );
         let anchored = gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(card);
-        div().absolute().top(px(44.)).right_0().child(gpui::deferred(anchored).with_priority(2)).into_any_element()
+        // Not deferred: it is the panel's last child, so it is drawn over the page already, and a
+        // drop-down inside it can be deferred (over the card) without nesting deferred drawing.
+        div().absolute().top(px(44.)).right_0().child(anchored).into_any_element()
     }
 
     /// Enabled plugins whose panel sits on `surface`: (id, title, icon, badge).

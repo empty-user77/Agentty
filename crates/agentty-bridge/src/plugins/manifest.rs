@@ -13,11 +13,12 @@ pub const MANIFEST_FILE: &str = "agentty-plugin.json";
 /// | 1 | the panel, commands, links, storage, `net/fetch`, `prompt/inject`, `session/get` |
 /// | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
 /// | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
-/// | 4 | `tools/call` — tools a plugin offers AI agents through Agentty's MCP server (`mcp.tools`) |
+/// | 4 | panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code` |
+/// | 5 | `tools/call` — tools a plugin offers AI agents through Agentty's MCP server (`mcp.tools`) |
 ///
 /// A plugin that uses something a version added says so, and an Agentty that speaks less than
 /// that tells the user to update instead of installing a module it cannot run.
-pub const API_VERSION: u32 = 4;
+pub const API_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -383,8 +384,8 @@ impl Manifest {
         if self.has_permission("mcp.tools") != !self.contributes.tools.is_empty() {
             bail!("plugin \"{}\": mcp.tools and contributes.tools come together", self.id);
         }
-        if self.has_permission("mcp.tools") && self.api_version < 4 {
-            bail!("plugin \"{}\": mcp.tools needs apiVersion 4", self.id);
+        if self.has_permission("mcp.tools") && self.api_version < 5 {
+            bail!("plugin \"{}\": mcp.tools needs apiVersion 5", self.id);
         }
         if self.contributes.tools.len() > MAX_TOOLS {
             bail!("plugin \"{}\": at most {MAX_TOOLS} tools", self.id);
@@ -694,7 +695,7 @@ mod tests {
             "inputSchema": { "type": "object", "properties": { "limit": { "type": "number" } } },
             "readOnly": true,
         }]);
-        let manifest = with(serde_json::json!(["mcp.tools"]), tools.clone(), 4).unwrap();
+        let manifest = with(serde_json::json!(["mcp.tools"]), tools.clone(), 5).unwrap();
         assert!(manifest.supports_mcp());
         assert!(manifest.tool("list_items").is_some_and(|t| t.read_only));
         assert!(manifest.tool("other").is_none());
@@ -703,9 +704,9 @@ mod tests {
         assert!(!plain.supports_mcp());
         assert!(plain.tool("list_items").is_none());
         // The permission without tools, tools without the permission, or an older protocol.
-        assert!(with(serde_json::json!(["mcp.tools"]), serde_json::json!([]), 4).is_err());
-        assert!(with(serde_json::json!([]), tools.clone(), 4).is_err());
-        assert!(with(serde_json::json!(["mcp.tools"]), tools, 3).is_err());
+        assert!(with(serde_json::json!(["mcp.tools"]), serde_json::json!([]), 5).is_err());
+        assert!(with(serde_json::json!([]), tools.clone(), 5).is_err());
+        assert!(with(serde_json::json!(["mcp.tools"]), tools, 4).is_err());
         // Tools that are not tools.
         for bad in [
             serde_json::json!([{ "name": "List Items", "description": "x" }]),
@@ -714,7 +715,7 @@ mod tests {
             serde_json::json!([{ "name": "x", "description": "x", "inputSchema": { "type": "string" } }]),
             serde_json::json!([{ "name": "x", "description": "x" }, { "name": "x", "description": "y" }]),
         ] {
-            assert!(with(serde_json::json!(["mcp.tools"]), bad.clone(), 4).is_err(), "{bad}");
+            assert!(with(serde_json::json!(["mcp.tools"]), bad.clone(), 5).is_err(), "{bad}");
         }
     }
 

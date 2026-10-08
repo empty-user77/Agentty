@@ -529,7 +529,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("agentty-plugin.json"),
-            r#"{"id":"tools-test","name":"T","version":"1.0.0","main":"main.mjs","apiVersion":4,"permissions":["mcp.tools"],
+            r#"{"id":"tools-test","name":"T","version":"1.0.0","main":"main.mjs","apiVersion":5,"permissions":["mcp.tools"],
                 "contributes":{"tools":[{"name":"count","description":"Counts."},{"name":"fail","description":"Fails."}]}}"#,
         )
         .unwrap();

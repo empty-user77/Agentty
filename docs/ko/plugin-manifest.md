@@ -49,7 +49,7 @@ description: agentty-plugin.json의 모든 필드 — 식별 정보, 실행 방�
 |---|---|---|
 | `main` | 필수 | 플러그인 폴더 기준 진입점 |
 | `runtime` | `node` | `node`(로그인 셸 `PATH`의 Node.js 18+), `python`(`python3 <main>`), `executable`(`<main>`을 직접 실행), 또는 `wasm` — `<main>`이 Agentty가 직접 실행하는 WebAssembly 모듈. [Rust와 WebAssembly](/docs/plugin-rust) 참고 |
-| `apiVersion` | `1` | 작성 기준이 된 플러그인 API 버전. `2`는 [AgentOS 플러그인](/docs/plugin-agentos)에 필요한 `host/timer`와 `pane/status`를 더하고, `4`는 MCP용 `tools/call`을 더합니다. 더 낮은 버전만 아는 Agentty는 실행할 수 없는 것을 설치하는 대신 그렇다고 알립니다 |
+| `apiVersion` | `1` | 작성 기준이 된 플러그인 API 버전. `2`는 [AgentOS 플러그인](/docs/plugin-agentos)에 필요한 `host/timer`와 `pane/status`를, `3`은 인앱 브라우저(`browser.control`)를, `4`는 패널 요소 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`를, `5`는 AI 에이전트용 도구인 `tools/call`(`mcp.tools`)을 더합니다([패널 디자인](/docs/plugin-ui-guide)). 더 낮은 버전만 아는 Agentty는 실행할 수 없는 것을 설치하는 대신 그렇다고 알립니다 |
 | `activationEvents` | `[]` | `["onStartup"]`이면 Agentty와 함께 시작하고, 아니면 처음 사용할 때 시작 |
 
 Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 실행합니다. `wasm` 플러그인은 프로그램을 시작하지 않습니다. 모듈이 Agentty 안에서 실행되며 작업 디렉터리도, 환경 변수도, 파일도 없습니다.
@@ -74,7 +74,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 | `terminal.write` | 열린 페인에 입력 |
 | `session.read` | AI 대화 읽기 |
 | `workspace.read` | 워크스페이스 목록 조회, 컨텍스트의 폴더·제목 필드 확인 |
-| `mcp.tools` | AI 에이전트에 도구 제공. `apiVersion: 4`와 `contributes.tools` 필요 |
+| `mcp.tools` | AI 에이전트에 도구 제공. `apiVersion: 5`와 `contributes.tools` 필요 |
 
 쓰는 것만 요청하세요. 목록은 설치 전에 이용자에게 표시되고, 권한 없는 호출은 실패합니다. [플러그인 권한](/docs/plugin-permissions)을 참고하세요.
 
@@ -153,7 +153,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 }
 ```
 
-플러그인은 Agentty에서 실행되는 AI 에이전트(Claude Code, Codex)에 도구를 제공할 수 있습니다. `mcp.tools` 권한과 `apiVersion: 4`가 필수이고 함께 선언돼야 합니다.
+플러그인은 Agentty에서 실행되는 AI 에이전트(Claude Code, Codex)에 도구를 제공할 수 있습니다. `mcp.tools` 권한과 `apiVersion: 5`가 필수이고 함께 선언돼야 합니다.
 
 | 필드 | 필수 | 설명 |
 |---|---|---|

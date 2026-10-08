@@ -49,7 +49,7 @@ description: agentty-plugin.json 的所有字段 —— 标识信息、运行方
 |---|---|---|
 | `main` | 必填 | 相对于插件文件夹的入口点 |
 | `runtime` | `node` | `node`（登录 shell `PATH` 中的 Node.js 18+）、`python`（`python3 <main>`）、`executable`（直接运行 `<main>`），或 `wasm` —— `<main>` 是 Agentty 自己运行的 WebAssembly 模块，见 [Rust 与 WebAssembly](/docs/plugin-rust) |
-| `apiVersion` | `1` | 编写时依据的插件 API 版本。`2` 增加了 [AgentOS 插件](/docs/plugin-agentos)所需的 `host/timer` 和 `pane/status`。只懂旧版本的 Agentty 会直说，而不是安装一个自己跑不了的东西 |
+| `apiVersion` | `1` | 编写时依据的插件 API 版本。`2` 增加了 [AgentOS 插件](/docs/plugin-agentos)所需的 `host/timer` 和 `pane/status`；`3` 增加了应用内浏览器（`browser.control`）；`4` 增加了面板元素 `card`、`grid`、`tabs`、`table`、`keyValue`、`stat`、`progress`、`callout`、`select`、`checkbox` 和 `code`（[设计面板](/docs/plugin-ui-guide)）。只懂旧版本的 Agentty 会直说，而不是安装一个自己跑不了的东西 |
 | `activationEvents` | `[]` | `["onStartup"]` 表示随 Agentty 一起启动，否则在首次使用时启动 |
 
 Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启动任何程序：模块在 Agentty 内部运行，没有工作目录、没有环境变量、也没有文件。
@@ -74,7 +74,7 @@ Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启�
 | `terminal.write` | 向已打开的窗格输入 |
 | `session.read` | 读取 AI 对话 |
 | `workspace.read` | 列出工作区，查看上下文中的文件夹与标题字段 |
-| `mcp.tools` | 为 AI 智能体提供工具。需要 `apiVersion: 4` 和 `contributes.tools` |
+| `mcp.tools` | 为 AI 智能体提供工具。需要 `apiVersion: 5` 和 `contributes.tools` |
 
 只申请你会用到的。清单会在安装前展示给用户，没有权限的调用会失败。参见[插件权限](/docs/plugin-permissions)。
 
@@ -153,7 +153,7 @@ Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启�
 }
 ```
 
-插件可以向 Agentty 中运行的 AI 智能体 (Claude Code、Codex) 提供工具。`mcp.tools` 权限和 `apiVersion: 4` 是必需的，且必须一起声明。
+插件可以向 Agentty 中运行的 AI 智能体 (Claude Code、Codex) 提供工具。`mcp.tools` 权限和 `apiVersion: 5` 是必需的，且必须一起声明。
 
 | 字段 | 必需 | 说明 |
 |---|---|---|

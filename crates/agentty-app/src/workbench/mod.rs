@@ -10,6 +10,7 @@ mod browser;
 mod browser_budget;
 mod browser_control;
 mod browsers_page;
+mod chat;
 mod chrome;
 mod confirm;
 mod content_search;
@@ -42,6 +43,7 @@ mod picker;
 pub mod plugin_browser;
 mod plugin_host;
 mod plugin_panel;
+mod plugin_ui;
 mod plugin_window;
 mod plugin_workspace;
 mod plugins_page;
@@ -652,6 +654,28 @@ pub struct Workbench {
     /// it as the user closing the panel.
     plugin_windows_closing: std::collections::HashSet<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
+    /// Widths the user dragged a plugin grid's resizable column to, by (plugin, grid id), and the
+    /// drag's count so only its last move is sent to the plugin.
+    plugin_grid_widths: HashMap<(String, String), (f32, u64)>,
+    /// The plugin tab strip whose `+` menu is open, as `plugin/element`.
+    plugin_tab_menu: Option<String>,
+    /// The menu a click outside just closed, and when: the same click landing on its own button
+    /// must not open it again.
+    plugin_menu_closed: Option<(String, std::time::Instant)>,
+    /// A popover's contents are being built: they are drawn deferred already, and a menu inside
+    /// must not ask for that again (GPUI panics on deferred drawing inside deferred drawing).
+    plugin_in_popover: std::cell::Cell<bool>,
+    /// The window's height at the last panel update: a popover is never taller than what is left.
+    plugin_window_height: std::cell::Cell<f32>,
+    /// Each plugin tab strip's scroll, and the tab it last showed (to bring a newly picked one
+    /// into view), as `plugin/element`.
+    plugin_tab_strips: RefCell<HashMap<String, (gpui::ScrollHandle, String)>>,
+    /// The `select` of a plugin panel whose options are showing: (input scope, element id).
+    plugin_select_open: Option<(String, String)>,
+    /// Colors of the `code` blocks plugin panels show, by their text and language.
+    plugin_code_colors: plugin_ui::CodeColors,
+    /// The grammars `code` blocks are colored with are loading.
+    plugin_grammars_loading: bool,
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
     /// Context last sent to plugins (serialized), to send only changes.
@@ -662,6 +686,9 @@ pub struct Workbench {
     prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
     /// Parallel tasks agents asked for (`agentty tasks`), waiting for the user; the first is shown.
     task_requests: std::collections::VecDeque<crate::agent_signal::TasksRequest>,
+    /// Chat tabs, by their lead agent's pane: the tab's first pane is drawn as a chat, the others
+    /// are the workers it started.
+    chats: HashMap<gpui::EntityId, chat::ChatState>,
     /// The "Clone from Git" dialog, while open.
     clone_dialog: Option<git_clone::CloneDialog>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
@@ -904,12 +931,22 @@ impl Workbench {
             plugin_windows_opening: std::collections::HashSet::new(),
             plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),
+            plugin_grid_widths: HashMap::new(),
+            plugin_tab_menu: None,
+            plugin_menu_closed: None,
+            plugin_in_popover: std::cell::Cell::new(false),
+            plugin_window_height: std::cell::Cell::new(900.),
+            plugin_tab_strips: RefCell::new(HashMap::new()),
+            plugin_select_open: None,
+            plugin_code_colors: Default::default(),
+            plugin_grammars_loading: false,
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
             plugin_context_key: serde_json::Value::Null,
             prompt_dialog: None,
             prompt_queue: std::collections::VecDeque::new(),
             task_requests: std::collections::VecDeque::new(),
+            chats: HashMap::new(),
             clone_dialog: None,
             welcome: false,
             install_hint: None,
@@ -1078,6 +1115,7 @@ impl Workbench {
                     let pane_id = pane.read(cx).pane_id;
                     this.flow_agent_finished(pane_id, cx);
                     this.sync_after_turn(pane_id, cx);
+                    this.chat_turn_finished(&pane, message.clone(), cx);
                 }
             }
             // A `cd` moves where the pane works, and that is part of the saved layout. Saving it
@@ -1099,6 +1137,8 @@ impl Workbench {
                 // It may also have landed on another branch, whose pull request the card shows.
                 this.refresh_pull_requests(cx);
                 this.warn_about_shared_tree(&pane, cx);
+                // A chat's lead that is free again reads the reports that waited for it.
+                this.flush_chat_pending(&pane, cx);
                 cx.notify();
             }
             // A link in a terminal opens in that terminal's tab.
@@ -1159,6 +1199,10 @@ impl Workbench {
     }
 
     fn focus_pane(&self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
+        // A chat's lead shown as the chat: the keyboard goes to its composer.
+        if let Some(input) = self.chat_input_for(pane, cx) {
+            return window.focus(&input.focus_handle(cx));
+        }
         let handle = pane.read(cx).focus_handle(cx);
         window.focus(&handle);
     }
@@ -1623,6 +1667,9 @@ impl Workbench {
     ) {
         let remembered = project.map(std::path::Path::to_path_buf).unwrap_or_else(|| cwd.clone());
         update_settings(cx, |s| s.remember_dir(remembered));
+        if choice == crate::launch::LaunchChoice::Chat {
+            return self.create_chat_workspace(cwd, window, cx);
+        }
         let spec = choice.spec(cwd);
         match target {
             LaunchTarget::NewTab => self.open_tab(spec, window, cx),
@@ -2276,6 +2323,9 @@ impl Workbench {
         let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(restored_spec(pane, &mut claimed), cx));
         let leaves = root.leaves();
         let active = leaves.get(snapshot.active_pane).unwrap_or(&leaves[0]).clone();
+        if snapshot.chat {
+            self.register_chat(&leaves[0], cx);
+        }
         let ws = &mut self.workspaces[w];
         ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
         ws.active_tab = ws.tabs.len() - 1;
@@ -2700,11 +2750,21 @@ impl Workbench {
     }
 
     fn snapshot_tab(&self, tab: &Tab, cx: &gpui::App) -> TabSnapshot {
+        let lead = self.chat_lead_of_tab(tab);
+        let layout = tab.root.map(&mut |pane| {
+            let mut snapshot = Self::snapshot_pane(pane, cx);
+            // A chat's worker keeps the title its lead gave it: the lead names it by that title.
+            if lead.as_ref().is_some_and(|lead| lead != pane) {
+                snapshot.title = pane.read(cx).spec.title.clone();
+            }
+            snapshot
+        });
         TabSnapshot {
             instance: tab.instance.clone(),
-            layout: NodeSnapshot::from_tree(&tab.root.map(&mut |pane| Self::snapshot_pane(pane, cx))),
+            layout: NodeSnapshot::from_tree(&layout),
             active_pane: tab.root.leaves().iter().position(|p| *p == tab.active).unwrap_or(0),
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
+            chat: lead.is_some(),
         }
     }
 
@@ -2899,6 +2959,9 @@ impl Workbench {
             if self.zoomed.is_none() {
                 self.zoomed = tab.zoomed_pane.and_then(|index| leaves.get(index)).cloned();
             }
+            if tab.chat {
+                self.register_chat(&leaves[0], cx);
+            }
             tabs.push(Tab { root, active, instance: tab.instance.clone() });
         }
         let ws = &mut self.workspaces[index];
@@ -3032,6 +3095,7 @@ impl Render for Workbench {
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);
+        self.prepare_chats(window, cx);
         if std::mem::take(&mut self.refocus) && self.page.is_none() && !self.welcome {
             self.focus_active(window, cx);
         }
@@ -3522,8 +3586,17 @@ impl Workbench {
         Some(
             // Spans the window so a long message wraps at its left edge instead of running off it; a short one
             // keeps its own width, right-aligned as before.
-            div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).left(px(16.)).right(px(16. + docked)).flex().justify_end().child(
-                crate::ui::fade_in(
+            // A column aligned right: its width is fit to the text and never more than the window's,
+            // where a row let a long one run off the left edge.
+            div()
+                .absolute()
+                .top(px(chrome::TITLE_BAR_HEIGHT + 44.))
+                .left(px(16.))
+                .right(px(16. + docked))
+                .flex()
+                .flex_col()
+                .items_end()
+                .child(crate::ui::fade_in(
                     SharedString::from(format!("toast-{id}")),
                     div()
                         .min_w_0()
@@ -3541,7 +3614,7 @@ impl Workbench {
                         .text_color(hex(Chrome::BRIGHT))
                         .child(crate::ui::icon("circle-check", crate::ui::IconSize::INLINE, hex(Chrome::SUCCESS)))
                         // A long message (a translation, a path) wraps instead of running off the window.
-                        .child(div().min_w_0().child(text))
+                        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
                         // Closes it now instead of waiting out its timer.
                         .child(
                             div()
@@ -3556,8 +3629,7 @@ impl Workbench {
                                     cx.notify();
                                 })),
                         ),
-                ),
-            ),
+                )),
         )
     }
 
@@ -4612,6 +4684,9 @@ impl Workbench {
                 view.update(cx, |view, cx| view.debug_action(argument, cx));
             }
             "launch" => self.open_launch(cx),
+            // `chat <folder>` opens a chat workspace; `chat send:<text>` sends from the composer of
+            // the chat in front, `chat terminal` flips its view, `chat state` prints it.
+            "chat" => self.debug_chat(argument, window, cx),
             "type" => {
                 if let Some(pane) = self.active_pane() {
                     let bytes = crate::debug::unescape(argument).into_bytes();

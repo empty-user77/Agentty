@@ -103,7 +103,7 @@ appears in the tab strip and the command in the palette (⇧⌘P).
 | `detect` | `[]` | paths (`~` allowed) of an app the plugin integrates with; found → "Recommended" in the store |
 | `contributes.panel` | | `{ "title", "icon", "surface", "mode" }` — the panel the plugin fills with UI. `surface` picks where its icon sits: `pane` (default, the tab strip above the terminals), `sidebar` (the activity bar on the left) or `status` (the status bar at the bottom). `mode` picks how it opens: `push` (docked beside the terminals), `overlay` (floating over them), `window` (a window of its own), `full` (the whole area) or `workspace` (a workspace of its own with terminals and the browser, for work the user watches). Without `mode`: `push` for a plugin with `prompt.inject` or `terminal.write`, `full` otherwise. The user can change the mode and their choice is kept |
 | `contributes.commands[]` | | `{ "id", "title", "description", "icon", "palette" }` |
-| `contributes.tools[]` | | `{ "name", "description", "inputSchema?", "readOnly?" }` — tools the plugin offers to AI agents; requires `mcp.tools` permission and `apiVersion: 4` |
+| `contributes.tools[]` | | `{ "name", "description", "inputSchema?", "readOnly?" }` — tools the plugin offers to AI agents; requires `mcp.tools` permission and `apiVersion: 5` |
 
 Commands appear in the command palette (unless `"palette": false`) and run through
 `plugin.command(id, …)`. There is no icon button above the terminals any more — that bar had no
@@ -229,18 +229,48 @@ something changes; text fields keep what the user typed unless you send a differ
 | `ui.section(title, children)` | titled group | |
 | `ui.text(text, style)` | `body` `title` `muted` `small` `code` `error` `success` | |
 | `ui.button(id, label, { icon, variant, disabled })` | `primary` `secondary` `ghost` `danger` | `click` |
-| `ui.input(id, { placeholder, value })` | single-line field | `change` (after typing pauses), `submit` (Enter); `event.value` is the text |
+| `ui.input(id, { placeholder, value, rows })` | single-line field; `rows` > 1 makes a text area | `change` (after typing pauses), `submit` (Enter); `event.value` is the text |
 | `ui.list(id, items, { empty })` | rows `{ id, title, subtitle, detail, icon, actions: [{ id, icon, label, tooltip }] }` | `select` (row, `event.item`), `action` (`event.item`, `event.action`) |
 | `ui.choice(id, [{ value, label }], value)` | segmented choice | `change` with the value |
 | `ui.toggle(id, label, value)` | switch | `change` with the new boolean |
 | `ui.badge(text, tone)` | `neutral` `info` `success` `warning` `error` | |
 | `ui.spinner(text)` · `ui.divider()` | | |
+| `ui.flow(id, steps)` | steps `{ id, title, subtitle, icon, state, selected, side }`; state `off` `on` `active` `done` `error` | `select` (`event.item`) |
+| `ui.popover(id, title, children)` | a card beside the panel | `close` |
+| `ui.card(children, { title, subtitle, icon, tone })` | raised box; tone colors icon and edge (API 4) | |
+| `ui.grid(children, { columns, gap })` | equal columns, 1–6 (API 4) | |
+| `ui.tabs(id, [{ id, label, icon, badge }], value, children)` | tab strip; children = the picked tab's content (API 4) | `change` with the tab id |
+| `ui.table(id, [{ label, align, grow }], [{ id, cells, tone }], { empty, selected })` | rows under headings (API 4) | `select` (`event.item`) |
+| `ui.keyValue([{ label, value, tone, mono }])` | label/value pairs (API 4) | |
+| `ui.stat(label, value, { detail, icon, tone })` | one number, large (API 4) | |
+| `ui.progress(value, { label, detail, tone })` | bar, value 0–1 (API 4) | |
+| `ui.callout(text, { title, icon, tone })` | tinted note, `info` by default (API 4) | |
+| `ui.select(id, [{ value, label }], value, { placeholder, disabled })` | drop-down (API 4) | `change` with the value |
+| `ui.checkbox(id, label, value, { description, disabled })` | box to tick (API 4) | `change` with the new boolean |
+| `ui.code(text, { language, title })` | colored code with a copy button (API 4) | |
 
 Limits: 2 000 elements, 12 levels, 20 000 characters per string. An element is anything drawn, so
 a choice's options and a list item's buttons count as well as the nodes around them; every string
 is cut, not only the text ones. Null/false children are skipped, so `cond && ui.text(…)` works.
 Panel updates are drawn at most every 50 ms, notifications at most one per 700 ms, and a plugin
 that sends more than 240 messages a second is stopped as a runaway.
+
+### Making it look right
+
+Install **UI Gallery** from the Plugins page: every element live, the code under each one, and
+whole screens (list + detail, settings form, dashboard, running job, empty and error) to copy.
+
+- Pick the element for the job: things to pick → `list`; records → `table`; one item's details →
+  `keyValue` in a `card`; a number → `stat` in a `grid`; several views → `tabs`; a hint or a
+  failure → `callout`; code or output → `code`; settings → `input` / `select` / `checkbox` /
+  `toggle` in `section`s.
+- One `primary` button per screen; `ghost` for Cancel; `danger` only for what cannot be undone.
+- Group with `card` or `section` and leave spacing to Agentty (`gap: 'medium'` almost everywhere).
+- Tones mean something: success, warning, error, info. Never decoration.
+- Every `list` and `table` gets an `empty` text; every failure a `callout` with a way to retry;
+  every slow action a `spinner` or `progress` right away.
+- The panel starts 360 px wide: `grid` of 2 columns, `table` of 3–4 columns at most.
+- Elements marked API 4 need `"apiVersion": 4` in the manifest.
 
 ### Icons
 
@@ -321,6 +351,7 @@ Agentty registers `agentty://`:
 | `agentty://plugin/<id>/<path>?key=value` | starts plugin `<id>` and calls its `onUrl(path)` handler with the query |
 | `agentty://prompt?text=…&title=…&agent=…&cwd=…` | opens **Send to…** with the text (`file=` attaches an absolute `.md`/`.txt` path) |
 | `agentty://plugins/<id>` | opens the Plugins page at that plugin |
+| `agentty://open/<id>` | brings up the plugin (its workspace, or its panel); `?window=new` in an Agentty window of its own |
 
 From a shell: `open "agentty://plugin/cosmica/continue?path=%2FUsers%2Fme%2FNote%2Fa.md"`. From
 Electron: `shell.openExternal(url)`; from Swift: `NSWorkspace.shared.open(url)`. Encode every value
@@ -384,7 +415,7 @@ be served from a release of a repository, or from the same host as the list itse
 | `session.read` | `getSession` — reading AI conversations |
 | `workspace.read` | `listWorkspaces` |
 | `net.request` | `net/fetch` — HTTP requests to addresses the plugin chooses |
-| `mcp.tools` | tools the plugin offers to AI agents (Claude Code, Codex); requires `apiVersion: 4` and `contributes.tools` |
+| `mcp.tools` | tools the plugin offers to AI agents (Claude Code, Codex); requires `apiVersion: 5` and `contributes.tools` |
 | `browser.control` | `browser/*` — pages of the sites in `browser.sites`, in the browser the user is signed in to: reading them and acting there in the user's name. The user allows it in a dialog the first time; signing in is always the user's, and cookies never reach the plugin |
 
 `storage/get`, `storage/set` and `storage/keys` need no permission: they are the plugin's own

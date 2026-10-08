@@ -106,7 +106,7 @@ Agentty 分不出地址的好坏，所以这一段归你负责：把链接交给
 
 插件可以向 Agentty 中运行的 AI 智能体 (Claude Code、Codex) 提供工具。通过 Agentty 自带的 MCP 服务器（`agentty-plugins` MCP 服务器）工作。当至少一个启用的插件声明了 `mcp.tools` 权限并在 `contributes.tools` 下列出工具时，智能体会自动收到该服务器。
 
-插件必须同时声明权限和工具。只有权限或只有工具是清单错误。`mcp.tools` 权限需要 API 版本 4。
+插件必须同时声明权限和工具。只有权限或只有工具是清单错误。`mcp.tools` 权限需要 API 版本 5。
 
 不声明 `mcp.tools` 的插件不支持 MCP：智能体看不到它。它的插件页面显示"MCP 连接 — 不支持"。
 

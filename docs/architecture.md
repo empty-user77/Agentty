@@ -61,6 +61,21 @@ Dragging from a node's handle to another node creates an edge. The source transc
 `handoff::create_share` into a Markdown document under `~/.agentty/handoffs/`, and a prompt asking the target agent to
 read it is submitted to the target pane (bracketed paste + Enter).
 
+## Chat workspaces
+
+`workbench/chat.rs`. A chat tab is an ordinary tab whose first pane is the lead (Claude Code, `LaunchChoice::Chat`)
+and whose other panes are its workers; `TabSnapshot.chat` marks it, and `Workbench::chats` holds each lead's state
+(composer, transcript items, reports waiting). `layout.rs` draws the lead as the chat (or as its terminal when the
+user asks, or when it waits on an approval, a question or a first-run screen). The chat is read from the lead's
+transcript every 700 ms while the file grows; what is written in it is typed into the lead's terminal, the first
+message with the lead's instructions in front (between `<!-- agentty:chat-lead -->` markers the chat leaves out).
+
+`agentty tasks` from a lead skips the dialog (`start_chat_tasks`) and rebuilds the tab as `chat_tree`: the lead on
+top, workers in rows of two, at most 4; a finished worker closes for a new one. A worker's `Stop` sends the lead a
+`[Agentty] Worker "…" finished its turn` message with its branch, folder and last reply, held back only while the lead
+waits on the user. `agentty tasks status|send` (`tasksctl` on the socket) answer the lead about its own workers only.
+Debug driver: `chat <folder>|send:<text>|terminal|state`.
+
 ## Git page
 
 `git_view.rs` resolves repository roots from the working directories of open panes (the active pane's repository is

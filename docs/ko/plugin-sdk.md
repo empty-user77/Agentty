@@ -46,6 +46,7 @@ plugin.start();
 | `notify(message, kind)` — `info`, `success`, `warning`, `error` | |
 | `setBadge(text)` — 탭 영역 버튼에 최대 8자 | |
 | `getContext()` | |
+| `hostInfo()` — Agentty 버전, API 버전, 언어, 그릴 수 있는 패널 요소(`uiFeatures`) | |
 | `openUrl(url)` — http/https | |
 | `copy(text)` — 클립보드에 복사 | |
 | `revealPath(path)` — 파일 관리자에서 보기 | `workspace.read` |
@@ -77,8 +78,23 @@ plugin.start();
 | `ui.badge(text, tone)` | `neutral`, `info`, `success`, `warning`, `error` | |
 | `ui.spinner(text)` | | |
 | `ui.divider()` | | |
+| `ui.flow(id, steps)` | 단계 `{ id, title, subtitle, icon, state, selected, side }`, `state`: `off`, `on`, `active`, `done`, `error` | `event.item`과 함께 `select` |
+| `ui.popover(id, title, children)` | 패널 옆의 카드 | `close` |
+| `ui.card(children, { title, subtitle, icon, tone })` | 떠 있는 상자. `tone`은 아이콘과 테두리 색(API 4) | |
+| `ui.grid(children, { columns, gap })` | 같은 폭의 열 1–6개(API 4) | |
+| `ui.tabs(id, [{ id, label, icon, badge }], value, children)` | 탭. children은 선택된 탭의 내용(API 4) | 탭 id와 함께 `change` |
+| `ui.table(id, [{ label, align, grow }], [{ id, cells, tone }], { empty, selected })` | 머리글 아래의 행(API 4) | `event.item`과 함께 `select` |
+| `ui.keyValue([{ label, value, tone, mono }])` | 이름과 값 쌍(API 4) | |
+| `ui.stat(label, value, { detail, icon, tone })` | 크게 보여 주는 숫자 하나(API 4) | |
+| `ui.progress(value, { label, detail, tone })` | 진행 막대, `value`는 0부터 1(API 4) | |
+| `ui.callout(text, { title, icon, tone })` | 색이 있는 안내, 기본 `info`(API 4) | |
+| `ui.select(id, [{ value, label }], value, { placeholder, disabled })` | 드롭다운(API 4) | 값과 함께 `change` |
+| `ui.checkbox(id, label, value, { description, disabled })` | 체크박스(API 4) | 새 불리언과 함께 `change` |
+| `ui.code(text, { language, title })` | 색이 입혀진 코드와 복사 버튼(API 4) | |
 
 null과 false인 자식은 건너뛰므로 `조건 && ui.text('…')`가 그대로 동작합니다.
+
+무엇에 어떤 요소를 쓸지, 그리고 그대로 시작할 수 있는 완성 화면은 [패널 디자인](/docs/plugin-ui-guide)에 있습니다. API 4로 표시된 요소를 쓰려면 매니페스트에 `"apiVersion": 4`가 필요합니다.
 
 ```js
 plugin.onPanelOpen(async (context) => {
@@ -177,7 +193,7 @@ plugin.tool('list_containers', async ({ args }) => {
 
 `plugin.start()` 호출 전에 도구를 등록하세요. 에이전트가 도구를 호출하면 여러분의 응답(문자열, 어떤 JSON 값, MCP 형식 컨텐츠)을 받습니다. 핸들러에서 던진 오류는 도구 오류로 에이전트에 전송됩니다.
 
-플러그인은 `mcp.tools` 권한과 `apiVersion: 4`를 선언해야 도구를 제공할 수 있습니다. 플러그인당 최대 32개 도구입니다. 스키마와 제한은 [매니페스트 레퍼런스](/docs/plugin-manifest)를 보세요.
+플러그인은 `mcp.tools` 권한과 `apiVersion: 5`를 선언해야 도구를 제공할 수 있습니다. 플러그인당 최대 32개 도구입니다. 스키마와 제한은 [매니페스트 레퍼런스](/docs/plugin-manifest)를 보세요.
 
 ## 세션과 터미널
 
