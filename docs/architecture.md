@@ -70,11 +70,19 @@ user asks, or when it waits on an approval, a question or a first-run screen). T
 transcript every 700 ms while the file grows; what is written in it is typed into the lead's terminal, the first
 message with the lead's instructions in front (between `<!-- agentty:chat-lead -->` markers the chat leaves out).
 
+In a repository with a commit, `create_chat_workspace` gives the lead a worktree on a new branch (`agentty/chat-…`):
+the chat's integration branch. Workers are made with `worktree::create_from` at its tip, so they build on what the lead
+merged; a lead in the project folder (no commit yet, or a chat from before) sends them to the default branch.
+
 `agentty tasks` from a lead skips the dialog (`start_chat_tasks`) and rebuilds the tab as `chat_tree`: the lead on
 top, workers in rows of two, at most 4; a finished worker closes for a new one. A worker's `Stop` sends the lead a
-`[Agentty] Worker "…" finished its turn` message with its branch, folder and last reply, held back only while the lead
-waits on the user. `agentty tasks status|send` (`tasksctl` on the socket) answer the lead about its own workers only.
-Debug driver: `chat <folder>|send:<text>|terminal|state`.
+`[Agentty] Worker "…" finished its turn` message with its branch, folder and last reply (plus a reminder to review it
+while reviews are on), held back only while the lead waits on the user. `agentty tasks status|send|result|stop|review`
+(`tasksctl` on the socket) answer the lead about its own workers only. A reviewer (`Review: <worker>`) starts in the
+worker's folder with `LaunchSpec.read_only` (Claude Code without its editing tools, Codex `--sandbox read-only`).
+`workbench/chat_team.rs` holds the chat's choices (`ChatRoles`: the worker and reviewer agents, saved in
+`TabSnapshot.chat_roles`), the reviewer's prompt and what the lead is told about its folder.
+Debug driver: `chat <folder>|send:<text>|terminal|worker|reviewer|state`.
 
 ## Git page
 

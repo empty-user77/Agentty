@@ -1351,6 +1351,11 @@ impl TerminalView {
             }
             return;
         }
+        // Codex finishing the side conversation that names its session: the turn goes on, and that
+        // conversation (it has no transcript) is not the session this pane follows.
+        if kind == SignalKind::Stop && crate::agent_signal::is_codex_titling(message.as_deref()) {
+            return;
+        }
         self.last_activity_ms = crate::ui::now_ms();
         if let Some(session) = detail.session.clone() {
             if self.hook_session.as_ref() != Some(&session) {

@@ -11,6 +11,7 @@ mod browser_budget;
 mod browser_control;
 mod browsers_page;
 mod chat;
+mod chat_team;
 mod chrome;
 mod confirm;
 mod content_search;
@@ -2320,11 +2321,12 @@ impl Workbench {
         let snapshot = self.workspaces[w].closed_tabs.remove(index);
         let Some(tree) = snapshot.layout.to_tree() else { return };
         let mut claimed = self.running_sessions(cx);
-        let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(restored_spec(pane, &mut claimed), cx));
+        let chat = snapshot.chat;
+        let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(chat_spec(restored_spec(pane, &mut claimed), chat), cx));
         let leaves = root.leaves();
         let active = leaves.get(snapshot.active_pane).unwrap_or(&leaves[0]).clone();
         if snapshot.chat {
-            self.register_chat(&leaves[0], cx);
+            self.register_chat(&leaves[0], snapshot.chat_roles.unwrap_or_default(), cx);
         }
         let ws = &mut self.workspaces[w];
         ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
@@ -2765,6 +2767,7 @@ impl Workbench {
             active_pane: tab.root.leaves().iter().position(|p| *p == tab.active).unwrap_or(0),
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
             chat: lead.is_some(),
+            chat_roles: lead.as_ref().and_then(|lead| self.chat_roles(lead)),
         }
     }
 
@@ -2953,14 +2956,15 @@ impl Workbench {
             let Some(tree) = tab.layout.without(&|pane| persist::plugin_job(pane, &plugin_data)).and_then(|layout| layout.to_tree()) else {
                 continue;
             };
-            let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(restored_spec(pane, &mut claimed), cx));
+            let chat = tab.chat;
+            let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(chat_spec(restored_spec(pane, &mut claimed), chat), cx));
             let leaves = root.leaves();
             let active = leaves.get(tab.active_pane).unwrap_or(&leaves[0]).clone();
             if self.zoomed.is_none() {
                 self.zoomed = tab.zoomed_pane.and_then(|index| leaves.get(index)).cloned();
             }
             if tab.chat {
-                self.register_chat(&leaves[0], cx);
+                self.register_chat(&leaves[0], tab.chat_roles.unwrap_or_default(), cx);
             }
             tabs.push(Tab { root, active, instance: tab.instance.clone() });
         }
@@ -3814,6 +3818,14 @@ pub fn other_agent(agent: Agent) -> Agent {
 /// How a saved pane comes back: resuming its session only if no other terminal here does already.
 /// Two agents on one transcript write over each other — a synced session continued in a new tab
 /// next to the one it came from, or two Codex panes that were both given the newest rollout.
+/// A pane of a chat tab comes back as what it was: a reviewer (by its title) still cannot edit.
+fn chat_spec(mut spec: LaunchSpec, chat: bool) -> LaunchSpec {
+    if chat && spec.title.starts_with(chat_team::REVIEW_PREFIX) {
+        spec.read_only = true;
+    }
+    spec
+}
+
 fn restored_spec(pane: &PaneSnapshot, claimed: &mut HashSet<String>) -> LaunchSpec {
     let spec = pane.launch_spec();
     match &spec.start {

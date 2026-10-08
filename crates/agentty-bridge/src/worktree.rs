@@ -230,10 +230,16 @@ fn pick_base(remote_default: Option<&str>, exists: impl Fn(&str) -> bool) -> Str
 /// project's default branch ([`base_ref`]). Uncommitted changes stay where they are, in the tree
 /// they were made.
 pub fn create(path: &Path, label: &str) -> Result<Worktree> {
-    create_in(path, label, &managed_dir())
+    create_in(path, label, None, &managed_dir())
 }
 
-fn create_in(path: &Path, label: &str, managed: &Path) -> Result<Worktree> {
+/// Like [`create`], but the new branch starts at `base` (a branch or commit of the repository)
+/// instead of the default branch — a chat's workers start from its integration branch.
+pub fn create_from(path: &Path, label: &str, base: &str) -> Result<Worktree> {
+    create_in(path, label, Some(base), &managed_dir())
+}
+
+fn create_in(path: &Path, label: &str, base: Option<&str>, managed: &Path) -> Result<Worktree> {
     let trees = list_in(path, managed)?;
     let main = trees.iter().find(|t| t.main).context("the repository has no working tree")?;
     let home = home_for(&main.path, managed);
@@ -244,7 +250,7 @@ fn create_in(path: &Path, label: &str, managed: &Path) -> Result<Worktree> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(managed, std::fs::Permissions::from_mode(0o700));
     }
-    let base = base_ref(path);
+    let base = base.map(str::to_string).unwrap_or_else(|| base_ref(path));
     let stamp = chrono::Local::now().format("%m%d-%H%M").to_string();
     // The name is free when it is picked, but another session may take it a moment later (two tabs
     // opened at once): pick again, a few times, instead of failing the launch.
@@ -1178,11 +1184,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&unborn);
         std::fs::create_dir_all(&unborn).unwrap();
         git(&unborn, &["init", "-q", "-b", "main"]).unwrap();
-        assert!(create_in(&unborn, "claude", &data).is_err());
+        assert!(create_in(&unborn, "claude", None, &data).is_err());
         assert_eq!(std::fs::read_dir(&data).unwrap().count(), 0, "nothing is left in the worktree folder");
         let _ = std::fs::remove_dir_all(&unborn);
 
-        let tree = create_in(&repo, "claude", &data).unwrap();
+        let tree = create_in(&repo, "claude", None, &data).unwrap();
         assert!(tree.managed && tree.path.join("a.txt").exists());
         assert!(tree.branch.as_deref().is_some_and(|b| b.starts_with("agentty/claude-")));
         let listed = list_in(&repo, &data).unwrap();
@@ -1221,8 +1227,12 @@ mod tests {
         std::fs::write(repo.join("feature.txt"), "wip\n").unwrap();
         git(&repo, &["add", "feature.txt"]).unwrap();
         git(&repo, &["commit", "-q", "-m", "wip"]).unwrap();
-        let tree = create_in(&repo, "codex", &data).unwrap();
+        let tree = create_in(&repo, "codex", None, &data).unwrap();
         assert!(tree.path.join("a.txt").exists() && !tree.path.join("feature.txt").exists());
+        remove_in(&tree.path, true, &data).unwrap();
+        // Named, the base is where the branch starts: a chat's workers build on its integration branch.
+        let tree = create_in(&repo, "worker", Some("feature"), &data).unwrap();
+        assert!(tree.path.join("feature.txt").exists());
         remove_in(&tree.path, true, &data).unwrap();
 
         for dir in [&data, &repo] {

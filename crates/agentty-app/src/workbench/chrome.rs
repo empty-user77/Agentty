@@ -1021,9 +1021,12 @@ impl Workbench {
         // A plugin's workspace works in the plugin's own folder: say whose it is instead, or what
         // one of its automations is doing right now while it works.
         let plugin_working_text = ws.plugin.as_deref().and_then(|id| crate::plugins::plugin_working_text(cx, id));
+        // A chat says so, and names its project: its lead works in a worktree of the chat's own.
+        let chat = ws.plugin.is_none() && self.is_chat_workspace(ws);
         let path = match (&ws.plugin, &plugin_working_text) {
             (Some(_), Some(text)) => text.clone(),
             (Some(_), None) => t(cx, "workspace.plugin_card").to_string(),
+            (None, _) if chat => tf(cx, "workspace.chat_card", &[("folder", &tilde(&ws.cwd))]),
             (None, _) => tilde(&cwd),
         };
         // The path is shortened on its own; the counts are short and go after it whole, so a cut
@@ -1068,7 +1071,11 @@ impl Workbench {
             );
             crate::ui::plugin_mark(agentty_bridge::plugins::store::logo_file(plugin), glyph, 16., hex(ink))
         });
-        let indent = px(if show_logo { 24. } else { 2. });
+        // A chat carries a chat mark, like a plugin its own: told apart at a glance in the list.
+        if chat {
+            plugin_mark = Some(crate::ui::icon("message-square", 16., hex(ink)).into_any_element());
+        }
+        let indent = px(if show_logo || chat { 24. } else { 2. });
         let compact = settings(cx).compact_workspaces;
 
         // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
@@ -1157,7 +1164,7 @@ impl Workbench {
                     // One logo: which agent it is, without a pile of icons down the sidebar. It
                     // breathes while a turn is running.
                     .map(|d| {
-                        if let Some(mark) = plugin_mark.take().filter(|_| show_logo) {
+                        if let Some(mark) = plugin_mark.take().filter(|_| show_logo || chat) {
                             // A turn running in there still shows, beside the mark.
                             d.child(mark)
                                 .when(working, |d| d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(ink, 0.9))))
