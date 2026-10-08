@@ -185,13 +185,24 @@ callout  { text, title?, icon?, tone? }     tone の既定は info
 select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
 checkbox { id, label, value?, description?, disabled? }
 code     { text, language?, title? }       language（rust、json、ts、sh など）で色分け、コピーボタン付き
+
+API 5:
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                           プラグイン自身のフォルダ（files/*）の画像：PNG・JPEG・WebP・GIF のみ、SVG は
+                                           描かない；高さは既定 240；fit: contain | cover；src がなければ空の枠；drop（id と
+                                           一緒に、files 権限が必要）は Finder からドロップした画像を受け取る
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                           キャンバスの x, y に置いたノードカードをワイヤーでつなぐ（画像パイプラインのように）；fill で
+                                           パネルの残りの高さを使う；中でスクロール・ズーム（− % + 全体表示、⌘/Ctrl + スクロール）
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?, children?, state?, selected? }]
+         edges: [{ from: { node, port }, to: { node, port }, tone?, idle? }]
 ```
 
 イベント: `button` は `click`、`input` は `value` を伴う `change`・`submit`、`list` は `item` を伴う `select`（行のボタンは `item`・`action` を伴う `action`）、`choice` は選んだ値を伴う `change`、`toggle` は新しい真偽値を伴う `change` を送ります。
 
 リスト項目の `tone` はアイコンの色を決め、`badge` と同じ値を使います。
 
-`flow` は手順の id を `item` にして `select` を、`popover` は閉じるボタンから `close` を送ります。API 4 から：`tabs` はタブの id 付きで `change`、`table` は行の id を `item` にして `select`、`select` は選択肢の値付きで `change`、`checkbox` は新しい真偽値付きで `change` を送ります。
+`flow` は手順の id を `item` にして `select` を、`popover` は閉じるボタンから `close` を送ります。API 4 から：`tabs` はタブの id 付きで `change`、`table` は行の id を `item` にして `select`、`select` は選択肢の値付きで `change`、`checkbox` は新しい真偽値付きで `change` を送ります。API 5 から：`image` は `click` と、`[{ path, name, size }]` 付きの `drop`（`files/pick` と同じく、プラグインのフォルダにコピーされたパス）を送ります。`graph` はノードの見出しをクリックするとノードの id を `item` にして `select` を、`movable` なら見出しをドラッグしたときノードを `item`、`{ x, y }` を `value` にして `move` を送ります — その位置を覚えて送り返してください。
 
 API 4 の要素を使うプラグインはマニフェストに `"apiVersion": 4` と書きます。実行中の Agentty が描ける要素は `host/info` の `uiFeatures` にあります。何にどの要素を使うかは [パネルのデザイン](/docs/plugin-ui-guide) を参照してください。
 

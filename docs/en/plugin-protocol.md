@@ -185,13 +185,24 @@ callout  { text, title?, icon?, tone? }     tone defaults to info
 select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
 checkbox { id, label, value?, description?, disabled? }
 code     { text, language?, title? }       colored by language (rust, json, ts, sh, …), with a copy button
+
+API 5:
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                           a picture from the plugin's own folder (files/*): PNG, JPEG, WebP or GIF,
+                                           never an SVG; height 240 by default; fit: contain | cover; without src an
+                                           empty slot; drop (with id, needs files) takes pictures dropped from the Finder
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                           node cards at x, y on a canvas joined by wires, like an image pipeline; fill takes
+                                           the panel's height; the user scrolls and zooms inside it (− % + fit, ⌘/Ctrl + scroll)
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?, children?, state?, selected? }]
+         edges: [{ from: { node, port }, to: { node, port }, tone?, idle? }]
 ```
 
 Events: `button` sends `click`; `input` sends `change` and `submit` with `value`; `list` sends `select` with `item`, and row buttons send `action` with `item` and `action`; `choice` sends `change` with the option value; `toggle` sends `change` with the new boolean.
 
 A list item's `tone` colors its icon, using the same values as `badge`.
 
-`flow` sends `select` with the step's id as `item`; `popover` sends `close` from its close button. From API 4: `tabs` sends `change` with the tab's id; `table` sends `select` with the row's id as `item`; `select` sends `change` with the option's value; `checkbox` sends `change` with the new boolean.
+`flow` sends `select` with the step's id as `item`; `popover` sends `close` from its close button. From API 4: `tabs` sends `change` with the tab's id; `table` sends `select` with the row's id as `item`; `select` sends `change` with the option's value; `checkbox` sends `change` with the new boolean. From API 5: `image` sends `click`, and `drop` with `[{ path, name, size }]` (copied into the plugin's folder, as `files/pick` answers); `graph` sends `select` with the node's id as `item` when its heading is clicked, and, when `movable`, `move` with the node as `item` and `{ x, y }` as `value` once a heading is dragged — keep the place and send it back.
 
 A plugin that uses the API 4 elements says `"apiVersion": 4` in its manifest. `host/info` lists the elements the running Agentty draws in `uiFeatures`. [Designing a panel](/docs/plugin-ui-guide) says which one to use for what.
 

@@ -869,7 +869,8 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
                 // older Agentty without guessing from the version number.
                 "uiFeatures": [
                     "flow", "popover", "card", "grid", "tabs", "table", "keyValue", "stat", "progress", "callout", "select", "checkbox", "code",
-                    "gridWidths", "listTree", "tabClose", "monoInput", "completions", "gridResize", "openWindow", "gridFill", "tabsAdd", "listSelected", "inputLanguage", "flowReorder", "flowInsert", "buttonMenu"
+                    "gridWidths", "listTree", "tabClose", "monoInput", "completions", "gridResize", "openWindow", "gridFill", "tabsAdd", "listSelected", "inputLanguage", "flowReorder", "flowInsert", "buttonMenu",
+                    "image", "imageDrop", "graph"
                 ],
             })),
             cx,
@@ -1331,7 +1332,7 @@ fn pick_files(plugin_id: &str, request_id: Option<Value>, params: Value, cx: &mu
 
 /// Copies picked files into `folder` under names not taken yet: `[{ path, name, size }]`, `path`
 /// relative to the plugin's folder.
-fn copy_picked(picked: &[std::path::PathBuf], folder: &std::path::Path, into: &str) -> anyhow::Result<Value> {
+pub(crate) fn copy_picked(picked: &[std::path::PathBuf], folder: &std::path::Path, into: &str) -> anyhow::Result<Value> {
     std::fs::create_dir_all(folder)?;
     let mut out = Vec::new();
     for source in picked.iter().filter(|p| p.is_file()) {

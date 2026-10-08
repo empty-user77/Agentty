@@ -184,13 +184,24 @@ callout  { text, title?, icon?, tone? }     tone 默认为 info
 select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
 checkbox { id, label, value?, description?, disabled? }
 code     { text, language?, title? }       按 language（rust、json、ts、sh 等）着色，带复制按钮
+
+API 5:
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                           插件自己文件夹（files/*）中的图片：仅 PNG、JPEG、WebP、GIF，不绘制 SVG；
+                                           高度默认 240；fit: contain | cover；没有 src 时为空位；drop（与 id 一起，
+                                           需要 files 权限）接收从 Finder 拖放的图片
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                           把放在画布 x, y 处的节点卡片用连线连起来（像图像流水线那样）；fill 时占满面板剩余高度；
+                                           可在其中滚动与缩放（− % + 适应，⌘/Ctrl + 滚动）
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?, children?, state?, selected? }]
+         edges: [{ from: { node, port }, to: { node, port }, tone?, idle? }]
 ```
 
 事件：`button` 发送 `click`；`input` 发送带 `value` 的 `change` 与 `submit`；`list` 发送带 `item` 的 `select`，行内按钮发送带 `item` 和 `action` 的 `action`；`choice` 发送带选项值的 `change`；`toggle` 发送带新布尔值的 `change`。
 
 列表项的 `tone` 决定其图标颜色，取值与 `badge` 相同。
 
-`flow` 以步骤 id 作为 `item` 发送 `select`；`popover` 的关闭按钮发送 `close`。自 API 4 起：`tabs` 发送带标签页 id 的 `change`；`table` 以行 id 作为 `item` 发送 `select`；`select` 发送带选项值的 `change`；`checkbox` 发送带新布尔值的 `change`。
+`flow` 以步骤 id 作为 `item` 发送 `select`；`popover` 的关闭按钮发送 `close`。自 API 4 起：`tabs` 发送带标签页 id 的 `change`；`table` 以行 id 作为 `item` 发送 `select`；`select` 发送带选项值的 `change`；`checkbox` 发送带新布尔值的 `change`。自 API 5 起：`image` 发送 `click`，以及带 `[{ path, name, size }]` 的 `drop`（与 `files/pick` 一样，是复制到插件文件夹中的路径）；`graph` 在点击节点标题时以节点 id 作为 `item` 发送 `select`，设置 `movable` 时，拖动标题后以节点为 `item`、`{ x, y }` 为 `value` 发送 `move` — 请记住这个位置并发回。
 
 使用 API 4 元素的插件需在清单中写上 `"apiVersion": 4`。当前运行的 Agentty 能绘制哪些元素，见 `host/info` 的 `uiFeatures`。什么内容该用哪个元素，见 [设计面板](/docs/plugin-ui-guide)。
 

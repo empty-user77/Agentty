@@ -285,6 +285,160 @@ pub enum Node {
         #[serde(default)]
         title: Option<String>,
     },
+    /// A picture from the plugin's own folder (`files/*`): PNG, JPEG, WebP or GIF, never an SVG.
+    /// With `id`, clicking it sends `click`; with `drop` as well, files dragged onto it from the
+    /// Finder are copied into the plugin's folder and sent as `drop`, the way `files/pick` answers
+    /// (needs `files`). A picture that changes is read again.
+    Image {
+        /// A path in the plugin's folder; none draws the placeholder (an empty slot to drop on).
+        #[serde(default)]
+        src: Option<String>,
+        #[serde(default)]
+        alt: Option<String>,
+        /// Pixels; the width is the place's own when left out.
+        #[serde(default)]
+        width: Option<f32>,
+        /// Pixels; [`IMAGE_HEIGHT`] when left out.
+        #[serde(default)]
+        height: Option<f32>,
+        #[serde(default)]
+        fit: ImageFit,
+        /// A line under the picture: its size, its name.
+        #[serde(default)]
+        caption: Option<String>,
+        /// Shown in the empty slot.
+        #[serde(default)]
+        placeholder: Option<String>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        drop: bool,
+        /// The folder of the plugin's own that dropped files are copied into (`dropped` when left
+        /// out).
+        #[serde(default)]
+        into: Option<String>,
+    },
+    /// Nodes on a canvas joined by wires, the way a pipeline is drawn: each node is a card at
+    /// `x`, `y` with input ports on its left edge, output ports on its right and any elements
+    /// inside. Clicking a node's heading sends `select` with its id; with `movable`, dragging the
+    /// heading sends `move` with the node as `item` and `{ x, y }` as `value`, for the plugin to
+    /// keep and send back.
+    Graph {
+        id: String,
+        #[serde(default)]
+        nodes: Vec<GraphNode>,
+        #[serde(default)]
+        edges: Vec<GraphEdge>,
+        /// Pixels tall; [`GRAPH_HEIGHT`] when left out. The canvas scrolls when nodes lie beyond.
+        #[serde(default)]
+        height: Option<f32>,
+        #[serde(default)]
+        movable: bool,
+        /// Takes the height left in the panel instead of `height`: the graph is the page, with what
+        /// comes before it staying on screen. The user zooms and scrolls inside it either way.
+        #[serde(default)]
+        fill: bool,
+    },
+}
+
+/// How tall a picture is when the plugin does not say.
+pub const IMAGE_HEIGHT: f32 = 240.;
+/// The smallest and largest a picture is drawn, in pixels.
+pub const IMAGE_PX: (f32, f32) = (16., 2400.);
+/// How tall a graph's canvas is when the plugin does not say, and the range it may ask for.
+pub const GRAPH_HEIGHT: f32 = 560.;
+pub const GRAPH_HEIGHT_PX: (f32, f32) = (160., 4000.);
+/// A graph node's width when left out, and the range.
+pub const GRAPH_NODE_WIDTH: f32 = 240.;
+pub const GRAPH_NODE_WIDTH_PX: (f32, f32) = (120., 900.);
+/// How far from the canvas's corner a node may be placed.
+pub const GRAPH_EXTENT: f32 = 20_000.;
+pub const MAX_GRAPH_NODES: usize = 64;
+pub const MAX_GRAPH_PORTS: usize = 12;
+pub const MAX_GRAPH_EDGES: usize = 512;
+
+/// How a picture fills its box.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageFit {
+    /// All of it, letterboxed.
+    #[default]
+    Contain,
+    /// The whole box, cropped.
+    Cover,
+}
+
+/// One card of a `graph`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNode {
+    pub id: String,
+    pub title: String,
+    /// Right of the title, small: what kind of node it is.
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// The heading's dot, and the edge of a node that is not `neutral`.
+    #[serde(default)]
+    pub tone: Tone,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub width: Option<f32>,
+    #[serde(default)]
+    pub inputs: Vec<GraphPort>,
+    #[serde(default)]
+    pub outputs: Vec<GraphPort>,
+    #[serde(default)]
+    pub children: Vec<Node>,
+    /// `active` draws a spinner in the heading, `done` and `error` a mark, `off` dims the node.
+    #[serde(default)]
+    pub state: FlowState,
+    #[serde(default)]
+    pub selected: bool,
+}
+
+/// A port on a node's edge: where a wire starts or ends.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPort {
+    pub id: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The port's color, and its wires': one per kind of thing that flows (pictures, text).
+    #[serde(default)]
+    pub tone: Tone,
+}
+
+/// A wire from an output port to an input port.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdge {
+    pub from: GraphEnd,
+    pub to: GraphEnd,
+    /// The wire's color; the output port's when left out.
+    #[serde(default)]
+    pub tone: Option<Tone>,
+    /// Drawn faint: nothing flows yet.
+    #[serde(default)]
+    pub idle: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEnd {
+    pub node: String,
+    pub port: String,
+}
+
+impl GraphNode {
+    /// Pixels wide.
+    pub fn shown_width(&self) -> f32 {
+        self.width.unwrap_or(GRAPH_NODE_WIDTH)
+    }
 }
 
 fn two() -> usize {
@@ -771,6 +925,60 @@ impl Node {
                     cut(text);
                 }
             }
+            Node::Image { src, alt, width, height, caption, placeholder, id, into, .. } => {
+                for text in
+                    [src.as_mut(), alt.as_mut(), caption.as_mut(), placeholder.as_mut(), id.as_mut(), into.as_mut()].into_iter().flatten()
+                {
+                    cut(text);
+                }
+                for size in [width.as_mut(), height.as_mut()].into_iter().flatten() {
+                    *size = if size.is_finite() { size.clamp(IMAGE_PX.0, IMAGE_PX.1) } else { IMAGE_HEIGHT };
+                }
+            }
+            Node::Graph { nodes, edges, height, .. } => {
+                if nodes.len() > MAX_GRAPH_NODES {
+                    return Err(format!("a graph has more than {MAX_GRAPH_NODES} nodes"));
+                }
+                edges.truncate(MAX_GRAPH_EDGES);
+                if let Some(height) = height.as_mut() {
+                    *height = if height.is_finite() { height.clamp(GRAPH_HEIGHT_PX.0, GRAPH_HEIGHT_PX.1) } else { GRAPH_HEIGHT };
+                }
+                more(count, nodes.len() + edges.len())?;
+                let place = |v: &mut f32| *v = if v.is_finite() { v.clamp(0., GRAPH_EXTENT) } else { 0. };
+                for node in nodes.iter_mut() {
+                    cut(&mut node.id);
+                    cut(&mut node.title);
+                    for text in [node.subtitle.as_mut(), node.icon.as_mut()].into_iter().flatten() {
+                        cut(text);
+                    }
+                    place(&mut node.x);
+                    place(&mut node.y);
+                    if let Some(width) = node.width.as_mut() {
+                        *width =
+                            if width.is_finite() { width.clamp(GRAPH_NODE_WIDTH_PX.0, GRAPH_NODE_WIDTH_PX.1) } else { GRAPH_NODE_WIDTH };
+                    }
+                    node.inputs.truncate(MAX_GRAPH_PORTS);
+                    node.outputs.truncate(MAX_GRAPH_PORTS);
+                    more(count, node.inputs.len() + node.outputs.len())?;
+                    for port in node.inputs.iter_mut().chain(node.outputs.iter_mut()) {
+                        cut(&mut port.id);
+                        if let Some(label) = port.label.as_mut() {
+                            cut(label);
+                        }
+                    }
+                    // A node's elements sit two levels down: the graph, then the node.
+                    for child in node.children.iter_mut() {
+                        child.check(depth + 2, count)?;
+                    }
+                }
+                // A wire is drawn between ports that are there, and only once.
+                let has = |end: &GraphEnd, outputs: bool| {
+                    nodes
+                        .iter()
+                        .any(|n| n.id == end.node && (if outputs { &n.outputs } else { &n.inputs }).iter().any(|p| p.id == end.port))
+                };
+                edges.retain(|e| has(&e.from, true) && has(&e.to, false));
+            }
         }
         Ok(())
     }
@@ -792,7 +1000,7 @@ impl Node {
     /// Whether this node takes the panel's height (a `fill` grid, or a column holding one).
     pub fn fills_height(&self) -> bool {
         match self {
-            Node::Grid { fill, .. } => *fill,
+            Node::Grid { fill, .. } | Node::Graph { fill, .. } => *fill,
             Node::Column { children, .. } => children.iter().any(Node::fills_height),
             _ => false,
         }
@@ -816,8 +1024,18 @@ impl Node {
                 rows: (*rows).min(MAX_ROWS),
                 completions: completions.clone(),
             }),
-            _ => self.children().iter().for_each(|c| c.inputs(out)),
+            _ => self.descendants().for_each(|c| c.inputs(out)),
         }
+    }
+
+    /// The nodes inside this one, a graph's node cards included (which `children` leaves out: they
+    /// are not laid out in the flow of the panel).
+    pub fn descendants(&self) -> impl Iterator<Item = &Node> {
+        let graph: &[GraphNode] = match self {
+            Node::Graph { nodes, .. } => nodes,
+            _ => &[],
+        };
+        self.children().iter().chain(graph.iter().flat_map(|n| n.children.iter()))
     }
 }
 
@@ -1045,6 +1263,68 @@ mod tests {
         let Node::Tabs { tabs, .. } = &children[2] else { panic!("tabs") };
         assert!(tabs[0].closable);
         assert!(matches!(children[3], Node::Input { mono: true, rows: 8, .. }));
+    }
+
+    #[test]
+    fn parses_images_and_graphs() {
+        let tree = Node::from_value(json!({ "type": "graph", "id": "g", "height": 99999, "movable": true,
+            "nodes": [
+                { "id": "base", "title": "Load Image", "x": -40, "y": 1e9, "width": 5,
+                  "outputs": [{ "id": "image", "label": "IMAGE", "tone": "info" }],
+                  "children": [
+                      { "type": "image", "id": "base-img", "src": "picked/model.png", "height": 1e9, "drop": true },
+                      { "type": "input", "id": "note" },
+                  ] },
+                { "id": "out", "title": "Save Image", "x": 400, "y": 40, "state": "active",
+                  "inputs": [{ "id": "image", "tone": "info" }] },
+            ],
+            "edges": [
+                { "from": { "node": "base", "port": "image" }, "to": { "node": "out", "port": "image" } },
+                { "from": { "node": "base", "port": "nope" }, "to": { "node": "out", "port": "image" } },
+                { "from": { "node": "out", "port": "image" }, "to": { "node": "base", "port": "image" } },
+            ] }))
+        .unwrap();
+        let Node::Graph { nodes, edges, height, movable, .. } = &tree else { panic!("graph") };
+        assert!(*movable);
+        assert!(!tree.fills_height(), "a graph has its own height unless it fills the panel");
+        assert_eq!(*height, Some(GRAPH_HEIGHT_PX.1), "the canvas is not taller than the most");
+        assert_eq!((nodes[0].x, nodes[0].y, nodes[0].shown_width()), (0., GRAPH_EXTENT, GRAPH_NODE_WIDTH_PX.0), "placed on the canvas");
+        assert_eq!(nodes[1].state, FlowState::Active);
+        assert_eq!(edges.len(), 1, "only wires from an output to an input that are there");
+        let Node::Image { height, drop, fit, .. } = &nodes[0].children[0] else { panic!("image") };
+        assert_eq!((*height, *drop, *fit), (Some(IMAGE_PX.1), true, ImageFit::Contain));
+        let mut fields = Vec::new();
+        tree.inputs(&mut fields);
+        assert_eq!(fields.len(), 1, "a field inside a graph node is synced like any other");
+    }
+
+    #[test]
+    fn a_graph_can_fill_the_panel() {
+        let tree = Node::from_value(json!({ "type": "column", "children": [
+            { "type": "text", "text": "toolbar" },
+            { "type": "graph", "id": "g", "fill": true, "nodes": [] },
+        ] }))
+        .unwrap();
+        assert!(tree.fills_height());
+    }
+
+    #[test]
+    fn a_graph_is_bounded() {
+        let many: Vec<_> = (0..=MAX_GRAPH_NODES).map(|i| json!({ "id": i.to_string(), "title": "n" })).collect();
+        assert!(Node::from_value(json!({ "type": "graph", "id": "g", "nodes": many })).is_err());
+        let ports: Vec<_> = (0..100).map(|i| json!({ "id": i.to_string() })).collect();
+        let tree =
+            Node::from_value(json!({ "type": "graph", "id": "g", "nodes": [{ "id": "a", "title": "A", "inputs": ports }] })).unwrap();
+        let Node::Graph { nodes, .. } = tree else { panic!("graph") };
+        assert_eq!(nodes[0].inputs.len(), MAX_GRAPH_PORTS);
+        // A node's elements count towards the depth too.
+        let mut deep = json!({ "type": "text", "text": "x" });
+        for _ in 0..MAX_DEPTH - 1 {
+            deep = json!({ "type": "column", "children": [deep] });
+        }
+        assert!(
+            Node::from_value(json!({ "type": "graph", "id": "g", "nodes": [{ "id": "a", "title": "A", "children": [deep] }] })).is_err()
+        );
     }
 
     #[test]
