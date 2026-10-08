@@ -106,6 +106,8 @@ pub enum LaunchChoice {
         title: String,
         command: String,
     },
+    /// A chat workspace: Claude Code as the lead the user chats with, starting workers below it.
+    Chat,
 }
 
 impl From<PaneKind> for LaunchChoice {
@@ -119,6 +121,7 @@ impl LaunchChoice {
         match self {
             LaunchChoice::Kind(kind) | LaunchChoice::Model(kind, _) => *kind,
             LaunchChoice::Command { .. } => PaneKind::Shell,
+            LaunchChoice::Chat => PaneKind::Claude,
         }
     }
 
@@ -128,6 +131,7 @@ impl LaunchChoice {
             LaunchChoice::Kind(_) => None,
             LaunchChoice::Model(kind, model) => Some(format!("{} · {model}", LaunchSpec::new(*kind, PathBuf::new()).title)),
             LaunchChoice::Command { title, .. } => Some(title.clone()),
+            LaunchChoice::Chat => Some(CHAT_TITLE.to_string()),
         }
     }
 
@@ -140,9 +144,17 @@ impl LaunchChoice {
                 spec
             }
             LaunchChoice::Command { title, command } => LaunchSpec::shell_command(command.clone(), title.clone(), cwd),
+            LaunchChoice::Chat => {
+                let mut spec = LaunchSpec::new(PaneKind::Claude, cwd);
+                spec.title = CHAT_TITLE.to_string();
+                spec
+            }
         }
     }
 }
+
+/// Title of the lead agent's pane in a chat workspace.
+pub const CHAT_TITLE: &str = "Chat";
 
 static NEXT_PANE_ID: AtomicU64 = AtomicU64::new(1);
 

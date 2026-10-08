@@ -17,7 +17,7 @@ use agentty_bridge::model::Agent;
 use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, Context, SharedString, Window};
 use std::path::PathBuf;
 
-fn agent_of(name: Option<&str>) -> Agent {
+pub(super) fn agent_of(name: Option<&str>) -> Agent {
     if name == Some("codex") {
         Agent::Codex
     } else {
@@ -38,6 +38,8 @@ impl Workbench {
             return;
         }
         request.cwd = self.tasks_project(&request, cx);
+        // A chat's lead starts its workers without asking: opening the chat was the user's yes.
+        let Some(request) = self.start_chat_tasks(request, cx) else { return };
         self.task_requests.push_back(request);
         cx.notify();
     }

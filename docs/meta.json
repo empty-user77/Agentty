@@ -91,6 +91,15 @@
           }
         },
         {
+          "slug": "chat-workspace",
+          "title": {
+            "en": "Chat workspace",
+            "ko": "채팅 작업공간",
+            "ja": "チャットワークスペース",
+            "zh": "聊天工作区"
+          }
+        },
+        {
           "slug": "session-flow",
           "title": {
             "en": "Session Flow",

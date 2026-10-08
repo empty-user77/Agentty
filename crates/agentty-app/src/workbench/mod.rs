@@ -10,6 +10,7 @@ mod browser;
 mod browser_budget;
 mod browser_control;
 mod browsers_page;
+mod chat;
 mod chrome;
 mod confirm;
 mod content_search;
@@ -685,6 +686,9 @@ pub struct Workbench {
     prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
     /// Parallel tasks agents asked for (`agentty tasks`), waiting for the user; the first is shown.
     task_requests: std::collections::VecDeque<crate::agent_signal::TasksRequest>,
+    /// Chat tabs, by their lead agent's pane: the tab's first pane is drawn as a chat, the others
+    /// are the workers it started.
+    chats: HashMap<gpui::EntityId, chat::ChatState>,
     /// The "Clone from Git" dialog, while open.
     clone_dialog: Option<git_clone::CloneDialog>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
@@ -942,6 +946,7 @@ impl Workbench {
             prompt_dialog: None,
             prompt_queue: std::collections::VecDeque::new(),
             task_requests: std::collections::VecDeque::new(),
+            chats: HashMap::new(),
             clone_dialog: None,
             welcome: false,
             install_hint: None,
@@ -1110,6 +1115,7 @@ impl Workbench {
                     let pane_id = pane.read(cx).pane_id;
                     this.flow_agent_finished(pane_id, cx);
                     this.sync_after_turn(pane_id, cx);
+                    this.chat_turn_finished(&pane, message.clone(), cx);
                 }
             }
             // A `cd` moves where the pane works, and that is part of the saved layout. Saving it
@@ -1131,6 +1137,8 @@ impl Workbench {
                 // It may also have landed on another branch, whose pull request the card shows.
                 this.refresh_pull_requests(cx);
                 this.warn_about_shared_tree(&pane, cx);
+                // A chat's lead that is free again reads the reports that waited for it.
+                this.flush_chat_pending(&pane, cx);
                 cx.notify();
             }
             // A link in a terminal opens in that terminal's tab.
@@ -1191,6 +1199,10 @@ impl Workbench {
     }
 
     fn focus_pane(&self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
+        // A chat's lead shown as the chat: the keyboard goes to its composer.
+        if let Some(input) = self.chat_input_for(pane, cx) {
+            return window.focus(&input.focus_handle(cx));
+        }
         let handle = pane.read(cx).focus_handle(cx);
         window.focus(&handle);
     }
@@ -1655,6 +1667,9 @@ impl Workbench {
     ) {
         let remembered = project.map(std::path::Path::to_path_buf).unwrap_or_else(|| cwd.clone());
         update_settings(cx, |s| s.remember_dir(remembered));
+        if choice == crate::launch::LaunchChoice::Chat {
+            return self.create_chat_workspace(cwd, window, cx);
+        }
         let spec = choice.spec(cwd);
         match target {
             LaunchTarget::NewTab => self.open_tab(spec, window, cx),
@@ -2308,6 +2323,9 @@ impl Workbench {
         let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(restored_spec(pane, &mut claimed), cx));
         let leaves = root.leaves();
         let active = leaves.get(snapshot.active_pane).unwrap_or(&leaves[0]).clone();
+        if snapshot.chat {
+            self.register_chat(&leaves[0], cx);
+        }
         let ws = &mut self.workspaces[w];
         ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
         ws.active_tab = ws.tabs.len() - 1;
@@ -2732,11 +2750,21 @@ impl Workbench {
     }
 
     fn snapshot_tab(&self, tab: &Tab, cx: &gpui::App) -> TabSnapshot {
+        let lead = self.chat_lead_of_tab(tab);
+        let layout = tab.root.map(&mut |pane| {
+            let mut snapshot = Self::snapshot_pane(pane, cx);
+            // A chat's worker keeps the title its lead gave it: the lead names it by that title.
+            if lead.as_ref().is_some_and(|lead| lead != pane) {
+                snapshot.title = pane.read(cx).spec.title.clone();
+            }
+            snapshot
+        });
         TabSnapshot {
             instance: tab.instance.clone(),
-            layout: NodeSnapshot::from_tree(&tab.root.map(&mut |pane| Self::snapshot_pane(pane, cx))),
+            layout: NodeSnapshot::from_tree(&layout),
             active_pane: tab.root.leaves().iter().position(|p| *p == tab.active).unwrap_or(0),
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
+            chat: lead.is_some(),
         }
     }
 
@@ -2931,6 +2959,9 @@ impl Workbench {
             if self.zoomed.is_none() {
                 self.zoomed = tab.zoomed_pane.and_then(|index| leaves.get(index)).cloned();
             }
+            if tab.chat {
+                self.register_chat(&leaves[0], cx);
+            }
             tabs.push(Tab { root, active, instance: tab.instance.clone() });
         }
         let ws = &mut self.workspaces[index];
@@ -3064,6 +3095,7 @@ impl Render for Workbench {
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);
+        self.prepare_chats(window, cx);
         if std::mem::take(&mut self.refocus) && self.page.is_none() && !self.welcome {
             self.focus_active(window, cx);
         }
@@ -4652,6 +4684,9 @@ impl Workbench {
                 view.update(cx, |view, cx| view.debug_action(argument, cx));
             }
             "launch" => self.open_launch(cx),
+            // `chat <folder>` opens a chat workspace; `chat send:<text>` sends from the composer of
+            // the chat in front, `chat terminal` flips its view, `chat state` prints it.
+            "chat" => self.debug_chat(argument, window, cx),
             "type" => {
                 if let Some(pane) = self.active_pane() {
                     let bytes = crate::debug::unescape(argument).into_bytes();
