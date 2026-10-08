@@ -91,6 +91,15 @@
           }
         },
         {
+          "slug": "chat-workspace",
+          "title": {
+            "en": "Chat workspace",
+            "ko": "채팅 작업공간",
+            "ja": "チャットワークスペース",
+            "zh": "聊天工作区"
+          }
+        },
+        {
           "slug": "session-flow",
           "title": {
             "en": "Session Flow",
@@ -261,6 +270,15 @@
             "ko": "Node.js SDK",
             "ja": "Node.js SDK",
             "zh": "Node.js SDK"
+          }
+        },
+        {
+          "slug": "plugin-ui-guide",
+          "title": {
+            "en": "Designing a panel",
+            "ko": "패널 디자인",
+            "ja": "パネルのデザイン",
+            "zh": "设计面板"
           }
         },
         {

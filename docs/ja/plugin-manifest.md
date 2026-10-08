@@ -49,7 +49,7 @@ description: agentty-plugin.json のすべてのフィールド — 識別情報
 |---|---|---|
 | `main` | 必須 | プラグインフォルダからの相対パスのエントリポイント |
 | `runtime` | `node` | `node`（ログインシェル `PATH` の Node.js 18+）、`python`（`python3 <main>`）、`executable`（`<main>` を直接実行）、または `wasm` — `<main>` が Agentty 自身の実行する WebAssembly モジュール。[Rust と WebAssembly](/docs/plugin-rust) を参照 |
-| `apiVersion` | `1` | 作成時に基準としたプラグイン API のバージョン。`2` は [AgentOS プラグイン](/docs/plugin-agentos)に必要な `host/timer` と `pane/status` を加えます。古いバージョンしか話せない Agentty は、実行できないものを入れる代わりにその旨を伝えます |
+| `apiVersion` | `1` | 作成時に基準としたプラグイン API のバージョン。`2` は [AgentOS プラグイン](/docs/plugin-agentos)に必要な `host/timer` と `pane/status` を、`3` はアプリ内ブラウザ（`browser.control`）を、`4` はパネル要素 `card`、`grid`、`tabs`、`table`、`keyValue`、`stat`、`progress`、`callout`、`select`、`checkbox`、`code` を加えます（[パネルのデザイン](/docs/plugin-ui-guide)）。古いバージョンしか話せない Agentty は、実行できないものを入れる代わりにその旨を伝えます |
 | `activationEvents` | `[]` | `["onStartup"]` なら Agentty と同時に起動、なければ最初の使用時 |
 
 Agentty はプラグインフォルダを作業ディレクトリとしてプログラムを起動します。`wasm` プラグインはプログラムを起動しません。モジュールは Agentty の中で動き、作業ディレクトリも環境変数もファイルもありません。

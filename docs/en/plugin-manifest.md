@@ -49,7 +49,7 @@ description: Every field of agentty-plugin.json — identity, runtime, permissio
 |---|---|---|
 | `main` | required | Entry point, relative to the plugin folder |
 | `runtime` | `node` | `node` (Node.js 18+ from the login shell `PATH`), `python` (`python3 <main>`), `executable` (`<main>` is run directly), or `wasm` — `<main>` is a WebAssembly module Agentty runs itself. See [Rust and WebAssembly](/docs/plugin-rust) |
-| `apiVersion` | `1` | The plugin API version the plugin was written for. `2` adds `host/timer` and `pane/status`, which [AgentOS plugins](/docs/plugin-agentos) need. An Agentty that speaks an older version says so instead of installing something it cannot run |
+| `apiVersion` | `1` | The plugin API version the plugin was written for. `2` adds `host/timer` and `pane/status`, which [AgentOS plugins](/docs/plugin-agentos) need; `3` the in-app browser (`browser.control`); `4` the panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox` and `code` ([Designing a panel](/docs/plugin-ui-guide)). An Agentty that speaks an older version says so instead of installing something it cannot run |
 | `activationEvents` | `[]` | `["onStartup"]` starts the plugin with Agentty; otherwise it starts on first use |
 
 Agentty starts the program with the plugin folder as its working directory. A `wasm` plugin starts no program: the module runs inside Agentty and has no working directory, no environment and no files.

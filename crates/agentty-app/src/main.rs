@@ -803,6 +803,16 @@ fn main() {
                                     }
                                 }
                             }
+                            agent_signal::SocketMessage::TasksCtl(request) => {
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.answer_tasks_ctl(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
                             agent_signal::SocketMessage::Db(request) => {
                                 // The window holding the asking pane shows the approval dialog.
                                 match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
@@ -912,6 +922,23 @@ pub fn new_window(cx: &mut App) {
         }
         None => eprintln!("agentty: could not open window {slot}"),
     }
+}
+
+/// Opens another Agentty window with `plugin`'s workspace in front, as if its icon was pressed
+/// there: the plugin on its own, in a window the user places where they like.
+pub fn open_plugin_window(plugin: String, cx: &mut App) {
+    cx.defer(move |cx| {
+        let slot = NEXT_WINDOW_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(handle) = open_window(slot, cx) else {
+            eprintln!("agentty: could not open window {slot}");
+            return;
+        };
+        metrics::track(cx, "window_opened", serde_json::json!({ "plugin": true }));
+        let _ = handle.update(cx, |workbench, window, cx| {
+            workbench.open_plugin_alone(&plugin, window, cx);
+            window.activate_window();
+        });
+    });
 }
 
 /// Opens a recently closed window again, or brings it forward if it is already open.

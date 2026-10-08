@@ -49,7 +49,7 @@ description: agentty-plugin.json의 모든 필드 — 식별 정보, 실행 방�
 |---|---|---|
 | `main` | 필수 | 플러그인 폴더 기준 진입점 |
 | `runtime` | `node` | `node`(로그인 셸 `PATH`의 Node.js 18+), `python`(`python3 <main>`), `executable`(`<main>`을 직접 실행), 또는 `wasm` — `<main>`이 Agentty가 직접 실행하는 WebAssembly 모듈. [Rust와 WebAssembly](/docs/plugin-rust) 참고 |
-| `apiVersion` | `1` | 작성 기준이 된 플러그인 API 버전. `2`는 [AgentOS 플러그인](/docs/plugin-agentos)에 필요한 `host/timer`와 `pane/status`를 더합니다. 더 낮은 버전만 아는 Agentty는 실행할 수 없는 것을 설치하는 대신 그렇다고 알립니다 |
+| `apiVersion` | `1` | 작성 기준이 된 플러그인 API 버전. `2`는 [AgentOS 플러그인](/docs/plugin-agentos)에 필요한 `host/timer`와 `pane/status`를, `3`은 인앱 브라우저(`browser.control`)를, `4`는 패널 요소 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`를 더합니다([패널 디자인](/docs/plugin-ui-guide)). 더 낮은 버전만 아는 Agentty는 실행할 수 없는 것을 설치하는 대신 그렇다고 알립니다 |
 | `activationEvents` | `[]` | `["onStartup"]`이면 Agentty와 함께 시작하고, 아니면 처음 사용할 때 시작 |
 
 Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 실행합니다. `wasm` 플러그인은 프로그램을 시작하지 않습니다. 모듈이 Agentty 안에서 실행되며 작업 디렉터리도, 환경 변수도, 파일도 없습니다.

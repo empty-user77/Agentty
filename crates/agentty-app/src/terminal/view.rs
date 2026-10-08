@@ -1267,6 +1267,12 @@ impl TerminalView {
     }
 
     /// Title for tabs and lists: shell titles like `user@host:~/code` are shortened to the path.
+    /// The Claude Code session this pane's agent writes to now: the one its hooks named last (a
+    /// `/clear` starts another), else the one it was started or found with.
+    pub fn current_session(&self) -> Option<String> {
+        self.hook_session.clone().or_else(|| self.session_id_live.clone()).or_else(|| self.spec.session_id.clone())
+    }
+
     pub fn display_title(&self) -> String {
         let title = self.title.trim();
         let title = match title.split_once(':') {

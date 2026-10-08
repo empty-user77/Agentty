@@ -11,6 +11,8 @@ pub const HELP: &str = "agentty tasks — start work in parallel sessions next t
   agentty tasks --title <title> --prompt-file <file> [--agent claude|codex]
   agentty tasks --title <title> --prompt <text> [--agent claude|codex]
   agentty tasks --plan <plan.json>
+  agentty tasks status
+  agentty tasks send --to <title> --prompt <text>
 
 A plan is a JSON array of up to 6 tasks: [{\"title\": \"…\", \"prompt\": \"…\", \"agent\": \"claude\"}, …].
 Agentty shows the tasks to the user, who starts or declines them. Each started task runs in a
@@ -20,7 +22,11 @@ when this one is outside git), and receives its prompt as the first message: mak
 how to verify, whether to commit and open a pull request).
 
 Prints the started tasks as JSON (title, branch, folder); exits 1 when the user declined or
-Agentty could not start them. Works in terminals opened by Agentty (uses $AGENTTY_SOCKET).";
+Agentty could not start them. Works in terminals opened by Agentty (uses $AGENTTY_SOCKET).
+
+In a chat workspace the lead agent's tasks start at once as workers in the grid below the chat
+(at most 4; a finished worker makes room for a new one). There `status` lists the workers and
+what each is doing, and `send` gives one of them a follow-up message.";
 
 /// The tasks named on the command line: one from `--title` / `--prompt[-file]` / `--agent`, or all
 /// of `--plan`.
@@ -56,28 +62,38 @@ fn tasks_from_args(args: &[String]) -> Result<serde_json::Value, String> {
     }
 }
 
-pub fn run(args: &[String]) -> i32 {
-    if args.is_empty() || args.iter().any(|a| matches!(a.as_str(), "help" | "-h" | "--help")) {
-        println!("{HELP}");
-        return 0;
-    }
-    let tasks = match tasks_from_args(args).and_then(|t| crate::agent_signal::parse_tasks(&t).map(|_| t)) {
-        Ok(tasks) => tasks,
-        Err(err) => {
-            eprintln!("agentty tasks: {err}");
-            return 1;
+/// The request of `agentty tasks status` / `send …`.
+fn control_from_args(args: &[String]) -> Result<serde_json::Value, String> {
+    let (action, rest) = args.split_first().ok_or("no action")?;
+    let (mut to, mut prompt) = (None, None);
+    let mut rest = rest.iter();
+    while let Some(flag) = rest.next() {
+        let mut value = || rest.next().cloned().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--to" => to = Some(value()?),
+            "--prompt" => prompt = Some(value()?),
+            "--prompt-file" => {
+                let path = value()?;
+                prompt = Some(std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?);
+            }
+            other => return Err(format!("unknown option {other} (see agentty tasks --help)")),
         }
-    };
+    }
+    let request = serde_json::json!({ "action": action, "to": to, "prompt": prompt });
+    crate::agent_signal::parse_tasks_ctl(&request)?;
+    Ok(request)
+}
+
+/// Sends one line to Agentty and prints its answer; `wait` is how long the answer may take.
+fn ask(line: String, wait: Duration) -> i32 {
     let Ok(socket) = std::env::var("AGENTTY_SOCKET") else {
         eprintln!("agentty tasks: not running inside an Agentty terminal ($AGENTTY_SOCKET is not set)");
         return 1;
     };
-    let cwd = std::env::current_dir().unwrap_or_default();
     let reply = (|| -> std::io::Result<String> {
         let mut stream = crate::ipc::connect(&socket)?;
-        writeln!(stream, "tasks\t{}", serde_json::json!({ "cwd": cwd, "tasks": tasks }))?;
-        // The user answers in a dialog: wait for them (Agentty gives up after 15 minutes).
-        stream.set_read_timeout(Some(Duration::from_secs(16 * 60)))?;
+        writeln!(stream, "{line}")?;
+        stream.set_read_timeout(Some(wait))?;
         let mut line = String::new();
         BufReader::new(stream).read_line(&mut line)?;
         Ok(line)
@@ -97,6 +113,32 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("agentty tasks: {}", reply["error"].as_str().unwrap_or("no response from Agentty"));
         1
     }
+}
+
+pub fn run(args: &[String]) -> i32 {
+    if args.is_empty() || args.iter().any(|a| matches!(a.as_str(), "help" | "-h" | "--help")) {
+        println!("{HELP}");
+        return 0;
+    }
+    if matches!(args[0].as_str(), "status" | "send") {
+        return match control_from_args(args) {
+            Ok(request) => ask(format!("tasksctl\t{request}"), Duration::from_secs(15)),
+            Err(err) => {
+                eprintln!("agentty tasks: {err}");
+                1
+            }
+        };
+    }
+    let tasks = match tasks_from_args(args).and_then(|t| crate::agent_signal::parse_tasks(&t).map(|_| t)) {
+        Ok(tasks) => tasks,
+        Err(err) => {
+            eprintln!("agentty tasks: {err}");
+            return 1;
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_default();
+    // The user answers in a dialog: wait for them (Agentty gives up after 15 minutes).
+    ask(format!("tasks\t{}", serde_json::json!({ "cwd": cwd, "tasks": tasks })), Duration::from_secs(16 * 60))
 }
 
 #[cfg(test)]
@@ -128,5 +170,14 @@ mod tests {
         assert!(tasks_from_args(&strings(&["--plan", "/nonexistent/plan.json"])).is_err());
         assert!(tasks_from_args(&strings(&["--title"])).is_err());
         assert!(tasks_from_args(&strings(&["--bogus", "x"])).is_err());
+    }
+
+    #[test]
+    fn status_and_send_are_checked_before_they_are_sent() {
+        assert_eq!(control_from_args(&strings(&["status"])).unwrap()["action"], "status");
+        let send = control_from_args(&strings(&["send", "--to", "API", "--prompt", "Add tests"])).unwrap();
+        assert_eq!((send["to"].as_str(), send["prompt"].as_str()), (Some("API"), Some("Add tests")));
+        assert!(control_from_args(&strings(&["send", "--to", "API"])).is_err());
+        assert!(control_from_args(&strings(&["send", "--bogus"])).is_err());
     }
 }
