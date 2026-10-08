@@ -106,6 +106,7 @@ pub const ICONS: &[&str] = &[
     "panel-left-open",
     "message-circle-question",
     "shield-alert",
+    "triangle-alert",
     "circle-pause",
     "link",
     "unlink",
@@ -969,6 +970,43 @@ mod tests {
             let asset = crate::assets::Assets.load(&format!("icons/{name}.svg")).ok().flatten();
             assert!(asset.is_some(), "icons/{name}.svg is not embedded");
         }
+    }
+
+    /// Every `icon("…")` written in the source names a registered icon: a name missing from
+    /// [`ICONS`] aborts a debug build the moment it is drawn, and a hand-kept list of names misses
+    /// new ones (`triangle-alert` on the Permissions tab did).
+    #[test]
+    fn every_icon_in_the_source_is_registered() {
+        fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("source folder").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    sources(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        let mut missing = Vec::new();
+        for file in files {
+            let text = std::fs::read_to_string(&file).expect("readable source");
+            for (at, _) in text.match_indices("icon(\"") {
+                // `icon(` itself, not the end of a longer name (`with_icon(`).
+                if text[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let rest = &text[at + "icon(\"".len()..];
+                let name = &rest[..rest.find('"').unwrap_or(0)];
+                // An icon's name, not prose about icons (this test's own doc comment).
+                let is_name = !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+                if is_name && !ICONS.contains(&name) {
+                    missing.push(format!("{name} ({})", file.display()));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "icons not in ICONS: {missing:?}");
     }
 
     #[test]
