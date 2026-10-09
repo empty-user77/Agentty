@@ -37,6 +37,8 @@ pub enum SettingsSection {
     #[default]
     General,
     Project,
+    /// The development board: on or off, how tickets run, Jira.
+    Board,
     Accounts,
     Appearance,
     Browser,
@@ -57,9 +59,10 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 13] = [
+    pub const ALL: [SettingsSection; 14] = [
         Self::General,
         Self::Project,
+        Self::Board,
         Self::Windows,
         Self::Accounts,
         Self::Notifications,
@@ -85,6 +88,7 @@ impl SettingsSection {
         match self {
             Self::General => "settings.general",
             Self::Project => "settings.project",
+            Self::Board => "settings.board",
             Self::Accounts => "settings.accounts",
             Self::Appearance => "settings.appearance",
             Self::Browser => "settings.browser",
@@ -103,6 +107,7 @@ impl SettingsSection {
         match self {
             Self::General => "settings",
             Self::Project => "folder-open",
+            Self::Board => "square-kanban",
             Self::Accounts => "key-round",
             Self::Appearance => "terminal",
             Self::Browser => "globe",
@@ -1462,6 +1467,7 @@ impl Workbench {
                 )
                 .into_any_element(),
             SettingsSection::Project => self.render_project_settings(window, cx).into_any_element(),
+            SettingsSection::Board => self.render_board_settings(window, cx).into_any_element(),
             SettingsSection::Accounts => self.render_accounts(window, cx).into_any_element(),
             SettingsSection::Appearance => div()
                 .flex()

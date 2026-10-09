@@ -6,6 +6,8 @@ mod agent_panel;
 pub mod ai_resolve;
 mod ask;
 mod backup;
+mod board;
+mod board_settings;
 mod browser;
 mod browser_budget;
 mod browser_control;
@@ -311,6 +313,8 @@ pub enum Page {
     Database,
     /// Remote access over Tailscale (when the feature is on in Settings → General).
     Remote,
+    /// The board: tickets an agent works on, from the backlog to the user's sign-off.
+    Board,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -428,6 +432,8 @@ pub struct Workbench {
     /// Docker of the active pane's project: the status bar chip and the panel docked at the right.
     docker: docker_panel::DockerState,
     db: db_page::DbState,
+    board: board::BoardState,
+    board_jira: board_settings::JiraUi,
     /// Window width at the last render, for sizing the panels docked at the right.
     viewport_width: f32,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
@@ -806,6 +812,8 @@ impl Workbench {
             browser_net_drag: None,
             docker: Default::default(),
             db: Default::default(),
+            board: Default::default(),
+            board_jira: Default::default(),
             viewport_width: 1400.,
             browser_home_input: None,
             chat_notify: Default::default(),
@@ -1118,7 +1126,11 @@ impl Workbench {
         crate::metrics::track(cx, "pane_opened", serde_json::json!({ "tool": tool }));
         let pane = cx.new(|cx| TerminalView::new(spec, cx));
         let subscription = cx.subscribe(&pane, |this, pane, event: &TerminalEvent, cx| match event {
-            TerminalEvent::Exited => this.pane_exited(pane.clone(), cx),
+            TerminalEvent::Exited => {
+                let pane_id = pane.read(cx).pane_id;
+                this.pane_exited(pane.clone(), cx);
+                this.board_pane_exited(pane_id, cx);
+            }
             TerminalEvent::Activated => {
                 let pane_id = pane.read(cx).pane_id;
                 if this.mark_pane_read(pane_id) {
@@ -1133,6 +1145,7 @@ impl Workbench {
                     this.flow_agent_finished(pane_id, cx);
                     this.sync_after_turn(pane_id, cx);
                     this.chat_turn_finished(&pane, message.clone(), cx);
+                    this.board_turn_finished(&pane, cx);
                 }
             }
             // A `cd` moves where the pane works, and that is part of the saved layout. Saving it
@@ -1156,6 +1169,8 @@ impl Workbench {
                 this.warn_about_shared_tree(&pane, cx);
                 // A chat's lead that is free again reads the reports that waited for it.
                 this.flush_chat_pending(&pane, cx);
+                // A ticket's agent at work moves its ticket on the board.
+                this.board_status_changed(&pane, cx);
                 cx.notify();
             }
             // A link in a terminal opens in that terminal's tab.
@@ -3191,6 +3206,7 @@ impl Render for Workbench {
             Some(Page::Plugins) => self.render_plugins_page(cx).into_any_element(),
             Some(Page::Remote) => self.render_remote_page(window, cx).into_any_element(),
             Some(Page::Database) => self.render_db_page(cx),
+            Some(Page::Board) => self.render_board_page(cx),
             Some(Page::Idea) => {
                 gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
@@ -3683,7 +3699,7 @@ impl Workbench {
 
     /// Pages next to which the workspace list stays useful.
     pub(super) fn page_keeps_sidebar(page: Page) -> bool {
-        matches!(page, Page::Flow | Page::Git)
+        matches!(page, Page::Flow | Page::Git | Page::Board)
     }
 
     fn open_page(&mut self, page: Page, cx: &mut Context<Self>) {
@@ -3702,6 +3718,7 @@ impl Workbench {
             Page::Remote => "remote",
             Page::Idea => "idea",
             Page::Database => "database",
+            Page::Board => "board",
         };
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
         self.page = if self.page == Some(page) { None } else { Some(page) };
@@ -4045,6 +4062,7 @@ impl Workbench {
                     "remote" => Some(Page::Remote),
                     "idea" => Some(Page::Idea),
                     "db" => Some(Page::Database),
+                    "board" if settings(cx).board.enabled => Some(Page::Board),
                     "git" => Some(Page::Git),
                     _ => None,
                 };

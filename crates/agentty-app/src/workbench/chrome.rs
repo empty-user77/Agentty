@@ -295,6 +295,16 @@ impl Workbench {
                         Box::new(|this, cx| this.open_page(Page::Flow, cx)),
                         cx,
                     ))
+                    .when(settings(cx).board.enabled, |d| {
+                        d.child(item(
+                            "activity-board",
+                            "square-kanban",
+                            self.page == Some(Page::Board),
+                            "page.board",
+                            Box::new(|this, cx| this.open_board(cx)),
+                            cx,
+                        ))
+                    })
                     .child(item(
                         "activity-git",
                         "git-branch",
@@ -1913,6 +1923,7 @@ impl Workbench {
                 Page::Remote => vec![(page, None, t(cx, "page.remote"))],
                 Page::Idea => vec![(page, None, t(cx, "page.idea"))],
                 Page::Database => vec![(page, None, t(cx, "page.database"))],
+                Page::Board => vec![(page, None, t(cx, "page.board"))],
             };
             for (tab_page, tab_category, label) in pages {
                 let active = tab_page == page && tab_category.is_none_or(|c| c == category);
