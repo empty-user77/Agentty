@@ -132,7 +132,8 @@ impl Workbench {
         }
         ws.settle_active_tab();
         if ws.tabs.is_empty() && ws.dormant.is_none() {
-            self.workspaces.remove(source);
+            let removed = self.workspaces.remove(source);
+            self.board_workspace_closed(removed.id);
             if self.active_workspace >= self.workspaces.len() {
                 self.active_workspace = self.workspaces.len().saturating_sub(1);
             } else if source < self.active_workspace {
@@ -234,7 +235,8 @@ impl Workbench {
                     }
                     ws.settle_active_tab();
                     if ws.tabs.is_empty() && ws.dormant.is_none() {
-                        self.workspaces.remove(source_workspace);
+                        let removed = self.workspaces.remove(source_workspace);
+                        self.board_workspace_closed(removed.id);
                         if self.active_workspace >= self.workspaces.len() {
                             self.active_workspace = self.workspaces.len().saturating_sub(1);
                         } else if source_workspace < self.active_workspace {
