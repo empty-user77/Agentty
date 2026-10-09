@@ -12,7 +12,7 @@ use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, TypeScale};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Focusable, WeakEntity, Window};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 /// Longest recording: a prompt, not a dictation session (the transcriber caps clips there too).
@@ -20,7 +20,7 @@ const MAX_RECORDING: Duration = Duration::from_secs(120);
 /// Shorter than this is a stray click: thrown away without transcribing.
 const MIN_RECORDING: Duration = Duration::from_millis(400);
 /// How often the bar redraws while recording, for the clock and the level meter.
-const TICK: Duration = Duration::from_millis(150);
+const TICK: Duration = Duration::from_millis(250);
 /// How long a note next to the mic ("nothing heard", an error) stays.
 const NOTE_FOR: Duration = Duration::from_secs(5);
 /// A recording file older than this is left over from a crash, never one in use.
@@ -31,6 +31,25 @@ const MENU_KEY: &str = "status-mic";
 static RECORDING: AtomicBool = AtomicBool::new(false);
 /// Numbers each recording: its file name, and which result or ticker still belongs to it.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// Whether a model is installed, as last looked up: 0 not yet, 1 no, 2 yes. Shared by every
+/// window, so the status bar never touches the disk to draw the mic; refreshed when the mic is
+/// clicked, the setup opens or a download finishes.
+static INSTALLED: AtomicU8 = AtomicU8::new(0);
+
+/// Looks up again whether a model is installed (a few file lookups) and remembers it.
+pub(super) fn refresh_installed() -> bool {
+    let installed = agentty_bridge::voice::installed_model().is_some();
+    INSTALLED.store(if installed { 2 } else { 1 }, Ordering::Relaxed);
+    installed
+}
+
+/// Whether a model is installed, as last looked up (the first call looks).
+fn installed() -> bool {
+    match INSTALLED.load(Ordering::Relaxed) {
+        0 => refresh_installed(),
+        known => known == 2,
+    }
+}
 
 /// Whether this Mac build can record and transcribe at all (voice compiled in, a processor that
 /// runs it, and a microphone recorder for the platform).
@@ -107,6 +126,16 @@ fn as_typed(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).collect()
 }
 
+/// The transcript as put into a chat's composer after `before` (what is left of the caret): set
+/// apart from a word already there, and a space after it for the next words.
+fn spliced(before: &str, text: &str) -> String {
+    if before.is_empty() || before.ends_with(char::is_whitespace) {
+        format!("{text} ")
+    } else {
+        format!(" {text} ")
+    }
+}
+
 /// `0:07` for a recording's length.
 fn clock(elapsed: Duration) -> String {
     let secs = elapsed.as_secs();
@@ -142,11 +171,12 @@ impl Workbench {
         }
         // The click that closed the setup from outside doesn't reopen it — but once a model is
         // installed there, the same click records straight away.
-        if self.just_dismissed(MENU_KEY) && agentty_bridge::voice::installed_model().is_none() {
+        let installed = refresh_installed();
+        if self.just_dismissed(MENU_KEY) && !installed {
             return;
         }
         self.voice_input.note = None;
-        if agentty_bridge::voice::installed_model().is_none() {
+        if !installed {
             self.voice_input.setup_open = !self.voice_input.setup_open;
             return cx.notify();
         }
@@ -227,6 +257,10 @@ impl Workbench {
         if self.page.is_none() {
             self.focus_pane(&pane, window, cx);
         }
+        // The model's file is checked against its hash while the person speaks, not after.
+        if let Some(model) = agentty_bridge::voice::installed_model() {
+            agentty_bridge::voice::verify_in_background(model);
+        }
         self.voice_input.phase = Phase::Recording { id, recorder, file, pane: pane.downgrade(), started: Instant::now() };
         cx.notify();
         // Redraw for the clock and the level meter, and stop at the longest a prompt may run. The
@@ -269,18 +303,43 @@ impl Workbench {
         if m.platform || m.control || m.alt || m.shift || self.page.is_some() {
             return false;
         }
-        // The terminal, or nothing in particular (the workbench itself, right after a click on the
-        // mic); a text field, dialog or palette with the keyboard keeps its Enter and Esc.
-        let terminal_focused = self.active_pane().is_some_and(|pane| pane.read(cx).focus_handle(cx).contains_focused(window, cx));
+        // The terminal, a chat's composer standing for it, or nothing in particular (the workbench
+        // itself, right after a click on the mic); a text field, dialog or palette with the
+        // keyboard keeps its Enter and Esc.
+        let terminal_focused = self.active_pane().is_some_and(|pane| {
+            pane.read(cx).focus_handle(cx).contains_focused(window, cx)
+                || self.chat_input_for(&pane, cx).is_some_and(|input| input.focus_handle(cx).contains_focused(window, cx))
+        });
         if !terminal_focused && window.focused(cx).is_some_and(|focused| focused != self.focus_handle) {
             return false;
         }
         match event.keystroke.key.as_str() {
             "enter" => self.finish_recording(true, window, cx),
+            // A menu open over the window closes first; the recording goes only once nothing is.
+            "escape" if self.close_menus(cx) => {}
             "escape" => self.cancel_recording(cx),
             _ => return false,
         }
         true
+    }
+
+    /// Closes the menus that leave the keyboard where it was (TODO list, tab and pane menus, the
+    /// status bar's menus, the plugins' menus, the mic's setup). Returns whether one was open.
+    fn close_menus(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = self.tab_menu.take().is_some()
+            | self.todo_menu.take().is_some()
+            | self.pane_menu.take().is_some()
+            | self.resume_menu.take().is_some()
+            | self.status_menu.take().is_some()
+            | std::mem::take(&mut self.plugin_mode_menu)
+            | std::mem::take(&mut self.plugin_group_menu)
+            | self.plugin_pin_menu.take().is_some()
+            | self.plugin_tab_menu.take().is_some()
+            | std::mem::take(&mut self.voice_input.setup_open);
+        if open {
+            cx.notify();
+        }
+        open
     }
 
     fn cancel_recording(&mut self, cx: &mut Context<Self>) {
@@ -334,6 +393,21 @@ impl Workbench {
                 match result.map(|text| as_typed(&text)) {
                     Ok(text) if text.is_empty() => this.mic_note(t(cx, "voice.nothing_heard").to_string(), false, cx),
                     Ok(text) => match pane.upgrade() {
+                        // A lead shown as its chat: the words go to the composer the person sees,
+                        // and Enter sends it the way the chat's own Send does.
+                        Some(pane) if this.page.is_none() && this.chat_input_for(&pane, cx).is_some() => {
+                            let input = this.chat_input_for(&pane, cx).expect("checked above");
+                            input.update(cx, |input, cx| {
+                                let at = input.cursor();
+                                let typed = spliced(input.text().get(..at).unwrap_or(""), &text);
+                                input.replace_range(at..at, &typed, cx);
+                            });
+                            if send {
+                                this.send_chat_message(pane.entity_id(), window, cx);
+                            }
+                            this.focus_pane(&pane, window, cx);
+                            cx.notify();
+                        }
                         Some(pane) => {
                             if send && sends_to(pane.read(cx)) {
                                 pane.update(cx, |view, cx| view.submit_prompt(text, cx));
@@ -383,7 +457,7 @@ impl Workbench {
         if !busy && self.active_pane().is_none() {
             return None;
         }
-        let installed = agentty_bridge::voice::installed_model().is_some();
+        let installed = installed();
         let (glyph_color, label, tooltip): (u32, Option<(String, u32)>, String) = match &self.voice_input.phase {
             Phase::Idle => {
                 let note = self.voice_input.note.as_ref().filter(|(text, _, _)| !text.is_empty());
@@ -472,6 +546,13 @@ mod tests {
         assert_eq!(as_typed("  hello\nworld \t again "), "hello world again");
         assert_eq!(as_typed("run\u{1b}[2J this\r"), "run[2J this");
         assert_eq!(as_typed(""), "");
+    }
+
+    #[test]
+    fn transcript_is_set_apart_in_the_composer() {
+        assert_eq!(spliced("", "hello"), "hello ");
+        assert_eq!(spliced("fix the ", "tests"), "tests ");
+        assert_eq!(spliced("fix the", "tests"), " tests ");
     }
 
     #[test]

@@ -117,7 +117,7 @@ pub struct CommandAlias {
     pub command: String,
 }
 
-pub const SETTINGS_VERSION: u32 = 6;
+pub const SETTINGS_VERSION: u32 = 7;
 
 pub const BUNDLED_FONT: &str = "JetBrains Mono";
 /// The coding font Korean developers reach for: its Hangul is exactly two cells wide. Not bundled
@@ -249,6 +249,10 @@ pub struct Settings {
     /// Sidebar plugins kept as icons of their own in the activity bar, by plugin id, however many
     /// are installed (the rest fold into one group once there are enough of them).
     pub pinned_plugins: Vec<String>,
+    /// Set by the v7 migration, for this run only: the sidebar plugins installed before grouping
+    /// came in are pinned once the plugins are known, so an upgrade keeps their icons.
+    #[serde(skip)]
+    pub pin_sidebar_plugins: bool,
     /// Notify even while Agentty is the focused app.
     pub notify_when_focused: bool,
     /// An agent asking for an answer (permission, question) always notifies, unless its pane is the
@@ -774,6 +778,7 @@ impl Default for Settings {
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
             pinned_plugins: Vec::new(),
+            pin_sidebar_plugins: false,
             resume_bar: true,
             agent_bar: true,
             agent_bar_position: crate::hud::HudPosition::default(),
@@ -896,6 +901,12 @@ impl Settings {
             // shortcuts (word moves, Claude Code's model and thinking keys) work. It was off
             // unless turned on, so "off" was the old default rather than a choice.
             self.option_as_meta = true;
+        }
+        if self.settings_version < 7 && self.pinned_plugins.is_empty() {
+            // v7: from three sidebar plugins on, the unpinned ones share one activity-bar item.
+            // Whoever had them before kept an icon for each: those are pinned (see
+            // `workbench::pin_installed_sidebar_plugins`).
+            self.pin_sidebar_plugins = true;
         }
         self.settings_version = SETTINGS_VERSION;
         self
@@ -1157,6 +1168,15 @@ mod browser_settings_tests {
         // Turned off once this version is in use: a choice, kept.
         let current = Settings { option_as_meta: false, ..Settings::default().migrate() };
         assert!(!current.migrate().option_as_meta);
+    }
+
+    #[test]
+    fn an_upgrade_pins_the_sidebar_plugins_it_had() {
+        assert!(!Settings::default().migrate().pin_sidebar_plugins, "a new installation groups from the start");
+        assert!(Settings { settings_version: 6, ..Settings::default() }.migrate().pin_sidebar_plugins);
+        // A pinned list already saved is a choice, kept.
+        let chosen = Settings { settings_version: 6, pinned_plugins: vec!["example".into()], ..Settings::default() };
+        assert!(!chosen.migrate().pin_sidebar_plugins);
     }
 
     #[test]

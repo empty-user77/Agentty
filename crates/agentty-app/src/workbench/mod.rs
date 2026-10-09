@@ -188,6 +188,7 @@ pub fn next_free_window_slot() -> usize {
 pub use account_usage::AccountUsage;
 pub(crate) use layout::format_elapsed;
 pub use persist::ClosedWindows;
+pub use plugin_panel::pin_installed_sidebar_plugins;
 pub use voice_input::available as voice_input_available;
 
 /// The place and size window `slot` had at the last save.
@@ -3269,7 +3270,8 @@ impl Render for Workbench {
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && this.connect_pick.is_some() {
                     this.cancel_connect_pick(cx);
-                    cx.stop_propagation();
+                    // One Esc does one thing: a recording goes on until the next.
+                    return cx.stop_propagation();
                 }
                 // While the mic records, Enter sends what was said and Esc drops it — before the
                 // terminal sees either key.

@@ -673,6 +673,7 @@ fn main() {
 
         notifications::prepare();
         let mut plugin_events = plugins::init(cx);
+        workbench::pin_installed_sidebar_plugins(cx);
         browser_keeper::start(cx);
         remote::init(cx);
         cx.spawn(async move |cx| {
