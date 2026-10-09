@@ -131,6 +131,11 @@ pub fn managed_dir() -> PathBuf {
     crate::fsutil::data_dir().join("worktrees")
 }
 
+/// Whether `path` is a folder Agentty made in its own worktree folder ([`managed_dir`]).
+pub fn made_by_agentty(path: &Path) -> bool {
+    is_managed(path, &managed_dir())
+}
+
 /// Whether `path` really is inside Agentty's worktree folder. Both sides are resolved, so neither a
 /// symlink nor `..` can make a folder elsewhere pass; a folder that is gone is nobody's.
 fn is_managed(path: &Path, managed: &Path) -> bool {

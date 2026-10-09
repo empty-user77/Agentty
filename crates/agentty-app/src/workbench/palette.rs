@@ -201,6 +201,7 @@ impl Workbench {
         );
         for (page, key, shortcut) in [
             (Page::Flow, "page.flow", "⇧⌘F"),
+            (Page::Board, "page.board", ""),
             (Page::Browsers, "page.monitoring", "⌥⌘U"),
             (Page::Usage, "page.usage", ""),
             (Page::Processes, "page.processes", ""),
@@ -216,6 +217,9 @@ impl Workbench {
             (Page::Settings, "page.settings", "⌘,"),
         ] {
             if page == Page::Remote && !crate::settings::settings(cx).remote.feature {
+                continue;
+            }
+            if page == Page::Board && !crate::settings::settings(cx).board.enabled {
                 continue;
             }
             if page == Page::Idea && !crate::settings::settings(cx).idea_mode {
