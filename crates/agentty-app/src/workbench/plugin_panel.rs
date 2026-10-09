@@ -4,6 +4,7 @@
 use super::Workbench;
 use crate::i18n::{t, tf};
 use crate::plugins::{self, RunState};
+use crate::settings::settings;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_named, IconSize, Tooltip, TypeScale};
@@ -13,6 +14,9 @@ use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusab
 use std::time::Duration;
 
 /// One plugin's entry on a surface: which plugin, what to call it, and what to draw for it.
+/// From this many sidebar plugins on, those not pinned share one activity-bar item.
+const PLUGIN_GROUP_FROM: usize = 3;
+
 struct SurfaceEntry {
     id: String,
     title: String,
@@ -834,49 +838,218 @@ impl Workbench {
     }
 
     /// Activity-bar items of plugins that ask for the sidebar. They look and behave like
-    /// Agentty's own items, and the bar scrolls once there are more than fit.
+    /// Agentty's own items, and the bar scrolls once there are more than fit. From
+    /// [`PLUGIN_GROUP_FROM`] plugins on, those not pinned fold into one group item whose list opens
+    /// to the right; pinned ones keep an item of their own however many there are.
     pub(super) fn render_plugin_activity_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        self.plugin_surface_entries(Surface::Sidebar, cx)
-            .into_iter()
-            .map(|SurfaceEntry { id, title, glyph, logo, badge }| {
-                let open = self.plugin_panel_open(&id);
-                let target = id.clone();
-                let element_id = SharedString::from(format!("activity-plugin-{id}"));
-                div()
-                    .id(element_id.clone())
-                    .group(element_id.clone())
-                    .tooltip(Tooltip::text(title, None))
-                    .w_full()
-                    .h(px(48.))
-                    .flex_shrink_0()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .border_l_2()
-                    .border_color(if open { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_plugin_surface(&target, window, cx)))
-                    .child(crate::ui::plugin_mark(logo, glyph, IconSize::ACTIVITY, if open { hex(Chrome::BRIGHT) } else { hex(0x858585) }))
-                    .when(!badge.is_empty(), |d| {
-                        // The bar is only so wide: enough of the badge to read at a glance.
-                        let badge: String = badge.chars().take(3).collect();
-                        d.child(
-                            div()
-                                .absolute()
-                                .bottom(px(6.))
-                                .right(px(4.))
-                                .px_1()
-                                .rounded_sm()
-                                .bg(hex(Chrome::ACCENT))
-                                .t_caption()
-                                .text_color(hex(Chrome::BRIGHT))
-                                .child(badge),
-                        )
-                    })
-                    .into_any_element()
+        let entries = self.plugin_surface_entries(Surface::Sidebar, cx);
+        if entries.len() < PLUGIN_GROUP_FROM {
+            return entries.into_iter().map(|entry| self.render_plugin_activity_item(entry, cx)).collect();
+        }
+        let pinned = settings(cx).pinned_plugins.clone();
+        let (shown, grouped): (Vec<_>, Vec<_>) = entries.into_iter().partition(|entry| pinned.contains(&entry.id));
+        let group_open = grouped.iter().any(|entry| self.plugin_panel_open(&entry.id));
+        let group_badge = grouped.iter().any(|entry| !entry.badge.is_empty());
+        let mut items: Vec<AnyElement> = shown.into_iter().map(|entry| self.render_plugin_activity_item(entry, cx)).collect();
+        items.push(self.render_plugin_group_item(group_open, group_badge, cx));
+        items
+    }
+
+    fn render_plugin_activity_item(
+        &self,
+        SurfaceEntry { id, title, glyph, logo, badge }: SurfaceEntry,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let open = self.plugin_panel_open(&id);
+        let target = id.clone();
+        let menu_id = id.clone();
+        let element_id = SharedString::from(format!("activity-plugin-{id}"));
+        div()
+            .id(element_id.clone())
+            .group(element_id.clone())
+            .tooltip(Tooltip::text(title, None))
+            .w_full()
+            .h(px(48.))
+            .flex_shrink_0()
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .border_l_2()
+            .border_color(if open { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_plugin_surface(&target, window, cx)))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    this.plugin_pin_menu = Some((menu_id.clone(), event.position));
+                    cx.notify();
+                }),
+            )
+            .child(crate::ui::plugin_mark(logo, glyph, IconSize::ACTIVITY, if open { hex(Chrome::BRIGHT) } else { hex(0x858585) }))
+            .when(!badge.is_empty(), |d| {
+                // The bar is only so wide: enough of the badge to read at a glance.
+                let badge: String = badge.chars().take(3).collect();
+                d.child(
+                    div()
+                        .absolute()
+                        .bottom(px(6.))
+                        .right(px(4.))
+                        .px_1()
+                        .rounded_sm()
+                        .bg(hex(Chrome::ACCENT))
+                        .t_caption()
+                        .text_color(hex(Chrome::BRIGHT))
+                        .child(badge),
+                )
             })
-            .collect()
+            .children(self.render_plugin_pin_menu(&id, cx))
+            .into_any_element()
+    }
+
+    /// The right-click menu of a plugin's activity-bar item: pin it there, or let it go back into
+    /// the group.
+    fn render_plugin_pin_menu(&self, id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, position) = self.plugin_pin_menu.as_ref().filter(|(menu, _)| menu == id)?;
+        let pinned = settings(cx).pinned_plugins.iter().any(|p| p == id);
+        let target = id.to_string();
+        let menu = crate::ui::popover()
+            .min_w(px(200.))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.plugin_pin_menu = None;
+                cx.notify();
+            }))
+            .child(crate::ui::menu_item(
+                SharedString::from(format!("activity-plugin-pin-{id}")),
+                t(cx, if pinned { "plugins.unpin" } else { "plugins.pin" }),
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.plugin_pin_menu = None;
+                    toggle_plugin_pin(&target, cx);
+                    cx.notify();
+                }),
+            ));
+        let anchored = gpui::anchored().position(*position).snap_to_window_with_margin(px(8.)).child(menu);
+        Some(gpui::deferred(anchored).with_priority(3).into_any_element())
+    }
+
+    /// The item standing for the sidebar plugins not pinned: lit while one of their panels is open,
+    /// a dot while one of them has a badge, and the list of all of them beside it once clicked.
+    fn render_plugin_group_item(&self, open: bool, badge: bool, cx: &mut Context<Self>) -> AnyElement {
+        const ID: &str = "activity-plugin-group";
+        let lit = open || self.plugin_group_menu;
+        div()
+            .id(ID)
+            .group(ID)
+            .tooltip(Tooltip::text(t(cx, "plugins.group"), None))
+            .w_full()
+            .h(px(48.))
+            .flex_shrink_0()
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .border_l_2()
+            .border_color(if open { hex(Chrome::BRIGHT) } else { hex_alpha(0, 0.) })
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                // The click that closed the list from outside must not open it again.
+                if !this.just_dismissed(ID) {
+                    this.plugin_group_menu = !this.plugin_group_menu;
+                }
+                cx.notify();
+            }))
+            .child(
+                icon("blocks", IconSize::ACTIVITY, if lit { hex(Chrome::BRIGHT) } else { hex(0x858585) })
+                    .group_hover(ID, |s| s.text_color(hex(Chrome::BRIGHT))),
+            )
+            .when(badge, |d| d.child(div().absolute().bottom(px(10.)).right(px(10.)).size(px(7.)).rounded_full().bg(hex(Chrome::ACCENT))))
+            .when(self.plugin_group_menu, |d| d.child(self.render_plugin_group_menu(cx)))
+            .into_any_element()
+    }
+
+    /// Every sidebar plugin, pinned ones first, each with its pin: a click opens its panel.
+    fn render_plugin_group_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let pinned = settings(cx).pinned_plugins.clone();
+        let mut entries = self.plugin_surface_entries(Surface::Sidebar, cx);
+        // Stable: within pinned and not pinned the order stays the activity bar's.
+        entries.sort_by_key(|entry| !pinned.contains(&entry.id));
+        let rows = entries.into_iter().map(|SurfaceEntry { id, title, glyph, logo, badge }| {
+            let open = self.plugin_panel_open(&id);
+            let is_pinned = pinned.contains(&id);
+            let target = id.clone();
+            let pin_id = id.clone();
+            let pin = div()
+                .id(SharedString::from(format!("plugin-group-pin-{id}")))
+                .tooltip(Tooltip::text(t(cx, if is_pinned { "plugins.unpin" } else { "plugins.pin" }), None))
+                .flex_shrink_0()
+                .size(px(22.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    // The pin only pins: the row's own click (open the panel) stays out of it.
+                    cx.stop_propagation();
+                    toggle_plugin_pin(&pin_id, cx);
+                }))
+                // Unpinned rows show their pin on hover only, so the list reads as plugins first.
+                .child(
+                    icon("pin", IconSize::INLINE, hex(if is_pinned { Chrome::BRIGHT } else { Chrome::MUTED }))
+                        .when(!is_pinned, |i| i.invisible().group_hover(format!("plugin-group-row-{id}"), |s| s.visible())),
+                );
+            div()
+                .id(SharedString::from(format!("plugin-group-row-{id}")))
+                .group(format!("plugin-group-row-{id}"))
+                .h(px(30.))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded_md()
+                .cursor_pointer()
+                .t_small()
+                .when(open, |d| d.bg(hex(Chrome::SELECTED)).text_color(hex(Chrome::BRIGHT)))
+                .hover(|s| s.bg(hex(Chrome::HOVER)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.plugin_group_menu = false;
+                    this.toggle_plugin_surface(&target, window, cx);
+                    cx.notify();
+                }))
+                .child(crate::ui::plugin_mark(logo, glyph, IconSize::BUTTON, hex(if open { Chrome::BRIGHT } else { Chrome::FOREGROUND })))
+                .child(div().flex_1().min_w_0().truncate().child(title))
+                .when(!badge.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .flex_shrink_0()
+                            .px_1()
+                            .rounded_sm()
+                            .bg(hex(Chrome::ACCENT))
+                            .t_caption()
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(badge),
+                    )
+                })
+                .child(pin)
+        });
+        let menu = crate::ui::popover()
+            .w(px(240.))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.plugin_group_menu = false;
+                this.note_dismissed("activity-plugin-group");
+                cx.notify();
+            }))
+            .child(div().px_2().pt_1().pb_1p5().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "plugins.group")))
+            .children(rows);
+        // Right of the bar, level with the item: deferred, so the scrolling bar does not clip it.
+        let anchored = gpui::anchored().anchor(gpui::Corner::TopLeft).snap_to_window_with_margin(px(8.)).child(menu);
+        div()
+            .absolute()
+            .top_0()
+            .left(px(super::chrome::ACTIVITY_BAR_WIDTH + 4.))
+            .child(gpui::deferred(crate::ui::fade_in("plugin-group-fade", anchored)).with_priority(3))
+            .into_any_element()
     }
 
     /// Status-bar items of plugins that ask for the bottom bar, at the left end of it.
@@ -905,6 +1078,18 @@ impl Workbench {
             })
             .collect()
     }
+}
+
+/// Pins a sidebar plugin to the activity bar, or unpins it.
+fn toggle_plugin_pin(id: &str, cx: &mut gpui::App) {
+    let id = id.to_string();
+    crate::settings::update_settings(cx, move |s| {
+        if let Some(at) = s.pinned_plugins.iter().position(|p| *p == id) {
+            s.pinned_plugins.remove(at);
+        } else {
+            s.pinned_plugins.push(id);
+        }
+    });
 }
 
 fn icon_only_close(cx: &mut Context<Workbench>) -> impl IntoElement {
