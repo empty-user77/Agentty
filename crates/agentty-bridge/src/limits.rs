@@ -45,15 +45,9 @@ pub fn parse_claude(rate_limits: &Value, now_ms: u64) -> Option<AgentLimits> {
 }
 
 pub fn save_claude(limits: &AgentLimits) {
-    let path = claude_file();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
+    // Private file in a private folder (0600 / 0700), written through a temporary name.
     if let Ok(json) = serde_json::to_vec(limits) {
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(tmp, path);
-        }
+        let _ = fsutil::write_private(&claude_file(), &json);
     }
 }
 

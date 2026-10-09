@@ -2,7 +2,7 @@
 //! tickets in the backlog. The token lives in the Keychain (service `run.agentty.jira`); the site,
 //! the e-mail address and the search are plain settings.
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::Result;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -27,6 +27,50 @@ pub fn delete_token() -> Result<()> {
     crate::secret_store::delete(&service(), ACCOUNT)
 }
 
+/// Why a Jira call failed. The `Display` text is English (logs, tests); the app shows its own
+/// translation of each kind.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JiraError {
+    NotWebAddress,
+    NotHttps,
+    CredentialsInUrl,
+    NoHost,
+    NoEmail,
+    NoSearch,
+    NoToken,
+    Unexpected,
+    /// Jira refused the e-mail address or API token.
+    Refused,
+    /// Jira could not run the search; its own explanation, when it gave one.
+    SearchFailed(Option<String>),
+    Status(u16),
+    /// The site could not be reached (the origin).
+    Unreachable(String),
+}
+
+impl std::fmt::Display for JiraError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotWebAddress => f.write_str("the Jira site is not a web address"),
+            Self::NotHttps => f.write_str("the Jira site must use https"),
+            Self::CredentialsInUrl => f.write_str("the Jira site must not carry a user name or password"),
+            Self::NoHost => f.write_str("the Jira site has no host"),
+            Self::NoEmail => f.write_str("the Jira e-mail address is missing"),
+            Self::NoSearch => f.write_str("the Jira search (JQL) is empty"),
+            Self::NoToken => f.write_str("no Jira API token is saved"),
+            Self::Unexpected => f.write_str("Jira sent something unexpected"),
+            Self::Refused => f.write_str("Jira refused the e-mail address or API token"),
+            Self::SearchFailed(detail) => {
+                write!(f, "Jira could not run the search{}", detail.as_ref().map(|d| format!(": {d}")).unwrap_or_default())
+            }
+            Self::Status(status) => write!(f, "Jira answered {status}"),
+            Self::Unreachable(origin) => write!(f, "could not reach {origin}"),
+        }
+    }
+}
+
+impl std::error::Error for JiraError {}
+
 /// An issue as a ticket needs it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Issue {
@@ -43,10 +87,14 @@ pub struct Issue {
 pub fn site_origin(site: &str) -> Result<String> {
     let site = site.trim();
     let with_scheme = if site.contains("://") { site.to_string() } else { format!("https://{site}") };
-    let url = url::Url::parse(&with_scheme).map_err(|_| anyhow!("the Jira site is not a web address"))?;
-    ensure!(url.scheme() == "https", "the Jira site must use https");
-    ensure!(url.username().is_empty() && url.password().is_none(), "the Jira site must not carry a user name or password");
-    let host = url.host_str().ok_or_else(|| anyhow!("the Jira site has no host"))?;
+    let url = url::Url::parse(&with_scheme).map_err(|_| JiraError::NotWebAddress)?;
+    if url.scheme() != "https" {
+        return Err(JiraError::NotHttps.into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(JiraError::CredentialsInUrl.into());
+    }
+    let host = url.host_str().ok_or(JiraError::NoHost)?;
     Ok(match url.port() {
         Some(port) => format!("https://{host}:{port}"),
         None => format!("https://{host}"),
@@ -109,9 +157,13 @@ fn issues_from(value: &Value, origin: &str) -> Vec<Issue> {
 /// The issues `jql` finds on `site`, signed in as `email` with the token in the Keychain.
 pub fn search(site: &str, email: &str, jql: &str) -> Result<Vec<Issue>> {
     let origin = site_origin(site)?;
-    ensure!(!email.trim().is_empty(), "the Jira e-mail address is missing");
-    ensure!(!jql.trim().is_empty(), "the Jira search (JQL) is empty");
-    let token = crate::secret_store::load(&service(), ACCOUNT).map_err(|_| anyhow!("no Jira API token is saved"))?;
+    if email.trim().is_empty() {
+        return Err(JiraError::NoEmail.into());
+    }
+    if jql.trim().is_empty() {
+        return Err(JiraError::NoSearch.into());
+    }
+    let token = crate::secret_store::load(&service(), ACCOUNT).map_err(|_| JiraError::NoToken)?;
     use base64::Engine as _;
     let auth = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", email.trim(), token));
     let agent = crate::http::agent_builder().redirects(0).timeout(Duration::from_secs(20)).build();
@@ -125,18 +177,18 @@ pub fn search(site: &str, email: &str, jql: &str) -> Result<Vec<Issue>> {
         .set("User-Agent", "Agentty")
         .call();
     let value: Value = match response {
-        Ok(response) => response.into_json().map_err(|_| anyhow!("Jira sent something unexpected"))?,
-        Err(ureq::Error::Status(401 | 403, _)) => bail!("Jira refused the e-mail address or API token"),
+        Ok(response) => response.into_json().map_err(|_| JiraError::Unexpected)?,
+        Err(ureq::Error::Status(401 | 403, _)) => return Err(JiraError::Refused.into()),
         Err(ureq::Error::Status(400, response)) => {
             // Jira explains a bad search ("Field 'x' does not exist"); its text never holds the token.
             let detail = response
                 .into_json::<Value>()
                 .ok()
                 .and_then(|v| v["errorMessages"][0].as_str().map(|m| m.chars().take(160).collect::<String>()));
-            bail!("Jira could not run the search{}", detail.map(|d| format!(": {d}")).unwrap_or_default())
+            return Err(JiraError::SearchFailed(detail).into());
         }
-        Err(ureq::Error::Status(status, _)) => bail!("Jira answered {status}"),
-        Err(_) => bail!("could not reach {origin}"),
+        Err(ureq::Error::Status(status, _)) => return Err(JiraError::Status(status).into()),
+        Err(_) => return Err(JiraError::Unreachable(origin).into()),
     };
     Ok(issues_from(&value, &origin))
 }
