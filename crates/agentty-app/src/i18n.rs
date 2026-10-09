@@ -943,6 +943,7 @@ strings! {
     "shortcuts.next_prev_workspace" => ["Next / previous workspace", "다음 / 이전 작업공간", "次 / 前のワークスペース", "下一个 / 上一个工作区"],
     "shortcuts.jump_unread" => ["Jump to latest unread", "읽지 않은 최근 알림으로 이동", "最新の未読へ移動", "跳到最新未读"],
     "shortcuts.palette" => ["Command palette", "명령 팔레트", "コマンドパレット", "命令面板"],
+    "shortcuts.voice" => ["Voice input", "음성 입력", "音声入力", "语音输入"],
     "shortcuts.search_sessions" => ["Search local sessions", "로컬 세션 빠른 검색", "ローカルセッションを検索", "搜索本地会话"],
     "shortcuts.toggle_sidebar" => ["Show / hide sidebar", "사이드바 보이기 / 숨기기", "サイドバーの表示 / 非表示", "显示 / 隐藏侧边栏"],
     "shortcuts.git_commit" => ["Commit", "커밋", "コミット", "提交"],
@@ -1566,11 +1567,46 @@ strings! {
     "remote.options" => ["Options", "옵션", "オプション", "选项"],
     "remote.voice.title" => ["Voice to text", "음성 입력", "音声入力", "语音输入"],
     "remote.voice.intro" => [
-        "Speak prompts from the remote page. Audio is transcribed on this Mac — nothing is sent to any service.",
-        "원격 페이지에서 음성으로 프롬프트를 보냅니다. 음성은 이 Mac에서 변환되며 외부로 전송되지 않습니다.",
-        "リモートページから音声でプロンプトを送れます。音声はこの Mac で文字起こしされ、外部には送信されません。",
-        "在远程页面用语音发送提示。音频在本机转写，不会发送到任何服务。"
+        "Speak prompts instead of typing — from the mic in the status bar or on the remote page. Audio is transcribed on this Mac — nothing is sent to any service.",
+        "타이핑 대신 음성으로 프롬프트를 입력합니다 — 상태바의 마이크나 원격 페이지에서. 음성은 이 Mac에서 변환되며 외부로 전송되지 않습니다.",
+        "入力の代わりに音声でプロンプトを入れられます — ステータスバーのマイクやリモートページから。音声はこの Mac で文字起こしされ、外部には送信されません。",
+        "用语音代替打字输入提示 — 通过状态栏的麦克风或远程页面。音频在本机转写，不会发送到任何服务。"
     ],
+    "voice.idle" => [
+        "Voice input (⇧⌘M) — ready. Speak, then ⏎ sends it, or click to just type it in",
+        "음성 입력 (⇧⌘M) — 대기 중. 말한 뒤 ⏎ 누르면 바로 전송, 클릭하면 입력만",
+        "音声入力 (⇧⌘M) — 待機中。話して ⏎ で送信、クリックで入力のみ",
+        "语音输入 (⇧⌘M) — 待机中。说完按 ⏎ 直接发送，点击则只输入"
+    ],
+    "voice.setup_hint" => ["Voice input — set up a speech model first", "음성 입력 — 먼저 음성 모델을 설치하세요", "音声入力 — 先に音声モデルをインストールしてください", "语音输入 — 请先安装语音模型"],
+    "voice.asking" => ["Allow the microphone…", "마이크 권한을 허용해 주세요…", "マイクを許可してください…", "请允许使用麦克风…"],
+    "voice.recording" => ["Recording {time}", "녹음 중 {time}", "録音中 {time}", "录音中 {time}"],
+    "voice.keys" => ["⏎ send · esc cancel", "⏎ 전송 · esc 취소", "⏎ 送信 · esc キャンセル", "⏎ 发送 · esc 取消"],
+    "voice.stop" => [
+        "⏎ sends it to the terminal · click or ⇧⌘M types it in to review · esc cancels",
+        "⏎ 터미널로 바로 전송 · 클릭/⇧⌘M 입력만(확인 후 전송) · esc 취소",
+        "⏎ ターミナルへ送信 · クリック/⇧⌘M で入力のみ · esc でキャンセル",
+        "⏎ 直接发送到终端 · 点击/⇧⌘M 仅输入 · esc 取消"
+    ],
+    "voice.transcribing" => ["Transcribing…", "변환 중…", "文字起こし中…", "转写中…"],
+    "voice.nothing_heard" => ["Nothing heard", "인식된 말이 없어요", "音声が聞き取れませんでした", "没有识别到语音"],
+    "voice.no_terminal" => ["Select a terminal first", "먼저 터미널을 선택하세요", "先にターミナルを選んでください", "请先选择一个终端"],
+    "voice.terminal_closed" => ["The terminal was closed", "터미널이 닫혔어요", "ターミナルが閉じられました", "终端已关闭"],
+    "voice.busy" => ["Another window is recording", "다른 창에서 녹음 중이에요", "別のウィンドウで録音中です", "另一个窗口正在录音"],
+    "voice.shell_typed" => [
+        "Typed in, not run — this is a shell. Check it and press ⏎",
+        "셸이라 실행하지 않고 입력만 했어요 — 확인 후 ⏎",
+        "シェルなので実行せず入力だけしました — 確認して ⏎",
+        "这是 shell，只输入未执行 — 确认后按 ⏎"
+    ],
+    "voice.no_model" => ["No speech model installed", "설치된 음성 모델이 없어요", "音声モデルがインストールされていません", "未安装语音模型"],
+    "voice.denied" => [
+        "Microphone access is off — turn it on in System Settings",
+        "마이크 권한이 꺼져 있어요 — 시스템 설정에서 켜 주세요",
+        "マイクへのアクセスがオフです — システム設定でオンにしてください",
+        "麦克风权限已关闭 — 请在系统设置中开启"
+    ],
+    "voice.failed" => ["Voice input failed: {reason}", "음성 입력 실패: {reason}", "音声入力に失敗しました: {reason}", "语音输入失败：{reason}"],
     "remote.voice.tiny" => ["Tiny — fastest, less accurate", "Tiny — 가장 빠름, 정확도 낮음", "Tiny — 最速・精度は低め", "Tiny — 最快，准确度较低"],
     "remote.voice.base" => ["Base — recommended", "Base — 권장", "Base — おすすめ", "Base — 推荐"],
     "remote.voice.size" => ["{mb} MB download", "{mb} MB 다운로드", "{mb} MB ダウンロード", "{mb} MB 下载"],

@@ -60,8 +60,17 @@ const MAX_SECONDS: usize = 120;
 #[cfg(feature = "voice")]
 const SAMPLE_RATE: u32 = 16_000;
 
+/// Whether this build can transcribe at all (the `voice` feature compiles whisper.cpp in).
+pub const AVAILABLE: bool = cfg!(feature = "voice");
+
 pub fn model(id: &str) -> Option<&'static Model> {
     MODELS.iter().find(|m| m.id == id)
+}
+
+/// The model voice input transcribes with: the default one when it is installed, else any installed
+/// one (someone may have set up only `tiny`). `None` while nothing is installed.
+pub fn installed_model() -> Option<&'static Model> {
+    model(DEFAULT_MODEL).filter(|m| model_present(m)).or_else(|| MODELS.iter().find(|m| model_present(m)))
 }
 
 /// `~/.agentty/voice` (or the `AGENTTY_DATA_DIR` equivalent), created on demand.
@@ -112,26 +121,45 @@ fn hex(bytes: &[u8]) -> String {
 /// Download a model to a temp file next to its final path, verifying the pinned SHA-256 before
 /// moving it into place. `progress` is called with (downloaded, total) bytes as it streams, so the
 /// setup screen can show a bar. A download that fails verification is deleted, never loaded.
-pub fn download_model(m: &Model, mut progress: impl FnMut(u64, u64)) -> Result<()> {
+pub fn download_model(m: &Model, progress: impl FnMut(u64, u64)) -> Result<()> {
+    // One download at a time across the app (several windows can each offer the setup): a second
+    // request waits, then finds the model installed and returns at once.
+    static DOWNLOADING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = DOWNLOADING.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = voice_dir().join(format!("{}.part", m.file));
+    let result = fetch_model(m, &tmp, progress);
+    if result.is_err() {
+        // A failed or cut-off download never stays behind.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn fetch_model(m: &Model, tmp: &Path, mut progress: impl FnMut(u64, u64)) -> Result<()> {
     let dir = voice_dir();
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let final_path = model_path(m);
     if model_ready(m) {
         return Ok(());
     }
-    let tmp = dir.join(format!("{}.part", m.file));
-    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::remove_file(tmp);
 
-    let agent = crate::http::agent_builder().timeout(Duration::from_secs(600)).build();
+    // No limit on the whole download (a slow line takes long for 148 MB), only on silence.
+    let agent = crate::http::agent_builder().timeout_connect(Duration::from_secs(30)).timeout_read(Duration::from_secs(60)).build();
     let response = agent.get(m.url).set("User-Agent", "Agentty").call().with_context(|| format!("download {}", m.url))?;
     let total: u64 = response.header("content-length").and_then(|v| v.parse().ok()).unwrap_or(m.bytes);
 
     let mut reader = response.into_reader();
-    let mut file = std::fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
+    let mut file = std::fs::File::create(tmp).with_context(|| format!("create {}", tmp.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 128 * 1024];
     let mut done: u64 = 0;
+    // A line that trickles a byte a minute never trips the read timeout; give up after this.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30 * 60);
     loop {
+        if std::time::Instant::now() > deadline {
+            bail!("downloading {} took too long", m.file);
+        }
         let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
@@ -140,6 +168,9 @@ pub fn download_model(m: &Model, mut progress: impl FnMut(u64, u64)) -> Result<(
         file.write_all(&buf[..n])?;
         hasher.update(&buf[..n]);
         done += n as u64;
+        if done > m.bytes {
+            bail!("{} is larger than expected", m.file);
+        }
         progress(done, total);
     }
     file.sync_all().ok();
@@ -147,10 +178,9 @@ pub fn download_model(m: &Model, mut progress: impl FnMut(u64, u64)) -> Result<(
 
     let got = hex(&hasher.finalize());
     if got != m.sha256 {
-        let _ = std::fs::remove_file(&tmp);
         bail!("downloaded {} failed checksum (got {got})", m.file);
     }
-    std::fs::rename(&tmp, &final_path).with_context(|| format!("install {}", final_path.display()))?;
+    std::fs::rename(tmp, &final_path).with_context(|| format!("install {}", final_path.display()))?;
     Ok(())
 }
 
@@ -195,9 +225,9 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
 
     let mut state = ctx.create_state().map_err(|e| anyhow::anyhow!("voice state: {e}"))?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    if let Some(l) = lang {
-        params.set_language(Some(l));
-    }
+    // whisper.cpp's own default is English, which would turn Korean speech into an English
+    // translation: no hint means detect the language from the audio.
+    params.set_language(Some(lang.unwrap_or("auto")));
     params.set_translate(false);
     params.set_print_special(false);
     params.set_print_progress(false);
@@ -214,7 +244,46 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
             }
         }
     }
-    Ok(out.trim().to_string())
+    Ok(without_annotations(&out))
+}
+
+/// The transcript without whisper's notes about the audio — `[BLANK_AUDIO]`, `[inaudible]`,
+/// `(music)`, `*laughs*` — which are not words anyone said and must not be typed as a prompt.
+pub fn without_annotations(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(['[', '(', '*']) {
+        let close = match rest.as_bytes()[start] {
+            b'[' => ']',
+            b'(' => ')',
+            _ => '*',
+        };
+        let inner = &rest[start + 1..];
+        // A note stands on its own; `f(x)` or `items[0]` is part of what was said.
+        let alone = out.is_empty() && start == 0
+            || rest[..start].ends_with(char::is_whitespace)
+            || (start == 0 && out.ends_with(char::is_whitespace));
+        let is_note = |note: &str| {
+            !note.is_empty()
+                && note.len() <= 40
+                && note.chars().all(|c| c.is_alphanumeric() || c == '_' || c == ' ' || c == '-' || c == '♪')
+                // `*laughs*` is a note; `a * b * c` is arithmetic someone said.
+                && (close != '*' || !note.contains(' ') && !note.starts_with(' '))
+        };
+        match inner.find(close) {
+            // Only a short note made of letters: real speech keeps its brackets.
+            Some(end) if alone && is_note(&inner[..end]) => {
+                out.push_str(&rest[..start]);
+                rest = &inner[end + close.len_utf8()..];
+            }
+            _ => {
+                out.push_str(&rest[..start + 1]);
+                rest = inner;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.split_whitespace().filter(|word| !word.chars().all(|c| c == '♪')).collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(not(feature = "voice"))]
@@ -231,6 +300,14 @@ pub fn wav_to_samples(bytes: &[u8]) -> Result<Vec<f32>> {
 
     let mut reader = WavReader::new(std::io::Cursor::new(bytes)).context("read wav")?;
     let spec = reader.spec();
+    // A rate of zero would make the resampler's output length infinite, and the integer scale
+    // below shifts by the bit depth: refuse anything outside what a microphone records.
+    if !(1_000..=384_000).contains(&spec.sample_rate) {
+        bail!("unsupported sample rate {}", spec.sample_rate);
+    }
+    if !(1..=32).contains(&spec.bits_per_sample) {
+        bail!("unsupported bit depth {}", spec.bits_per_sample);
+    }
     let channels = spec.channels.max(1) as usize;
     let max_in = MAX_SECONDS * spec.sample_rate.max(1) as usize * channels;
 
@@ -330,5 +407,38 @@ mod tests {
         let samples = wav_to_samples(buf.get_ref()).unwrap();
         // 1 s at 44.1 kHz resampled to 16 kHz.
         assert!((samples.len() as i64 - 16_000).abs() <= 2, "got {}", samples.len());
+    }
+
+    #[test]
+    fn annotations_are_not_typed() {
+        assert_eq!(without_annotations(" [BLANK_AUDIO]"), "");
+        assert_eq!(without_annotations("[inaudible] [inaudible] [BLANK_AUDIO]"), "");
+        assert_eq!(without_annotations("(music) list the files *laughs* please"), "list the files please");
+        assert_eq!(without_annotations("call f(x) on items[0]"), "call f(x) on items[0]");
+        assert_eq!(without_annotations("a [ b"), "a [ b");
+        assert_eq!(without_annotations("파일 목록 보여줘"), "파일 목록 보여줘");
+        assert_eq!(without_annotations("multiply a * b * c"), "multiply a * b * c");
+        assert_eq!(without_annotations("[SPEAKER_00] hello ♪"), "hello");
+    }
+
+    #[cfg(feature = "voice")]
+    #[test]
+    fn zero_sample_rate_is_refused() {
+        // A hand-built header: hound itself does not refuse a rate of 0.
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&40u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&0u32.to_le_bytes()); // sample rate
+        wav.extend_from_slice(&0u32.to_le_bytes()); // byte rate
+        wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&4u32.to_le_bytes());
+        wav.extend_from_slice(&[0, 1, 0, 1]);
+        assert!(wav_to_samples(&wav).is_err());
     }
 }
