@@ -83,10 +83,13 @@ impl Workbench {
             ws.settle_active_tab();
             return self.after_park(window, cx);
         }
-        let tab = ws.tabs.remove(t);
-        let Some(root) = tab.root.remove(pane) else { return };
-        let active = if tab.active == *pane { root.leaves()[0].clone() } else { tab.active };
-        ws.tabs.insert(t, Tab { root, active, instance: tab.instance, todo: tab.todo });
+        // Split off before the tab leaves the list, so a failure can never drop it and its terminals.
+        let Some(root) = ws.tabs[t].root.clone().remove(pane) else { return };
+        let tab = &mut ws.tabs[t];
+        if tab.active == *pane {
+            tab.active = root.leaves()[0].clone();
+        }
+        tab.root = root;
         ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None, todo: true });
         if self.zoomed.as_ref() == Some(pane) {
             self.zoomed = None;

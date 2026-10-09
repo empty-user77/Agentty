@@ -38,6 +38,9 @@ hound = { version = "3.5", optional = true }
 default = ["voice"]
 voice = ["dep:whisper-rs", "dep:hound"]
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 

@@ -68,6 +68,7 @@ dependencies = [
  "clap",
  "dirs 7.0.0",
  "hound",
+ "libc",
  "memchr",
  "ring",
  "rustls",
