@@ -833,10 +833,30 @@ impl Settings {
         agentty_bridge::fsutil::data_dir().join("settings.json")
     }
 
-    fn load() -> Self {
-        match std::fs::read(Self::path()) {
-            Ok(bytes) => serde_json::from_slice::<Settings>(&bytes).map(Settings::migrate).unwrap_or_default(),
-            Err(_) => Settings::default(),
+    /// The saved settings, and whether saving over the file is safe. A file that doesn't parse is
+    /// copied aside first (see [`set_aside_unreadable`]) and the defaults used; if even the copy
+    /// fails, the file is left as it is and not saved over.
+    fn load() -> (Self, bool) {
+        let path = Self::path();
+        match std::fs::read(&path) {
+            Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
+                Ok(settings) => (settings.migrate(), true),
+                Err(err) => {
+                    eprintln!("agentty: {} could not be read ({err}); using the default settings", path.display());
+                    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                    match set_aside_unreadable(&path, &bytes, &stamp) {
+                        Ok(backup) => {
+                            eprintln!("agentty: the unreadable settings were kept as {}", backup.display());
+                            (Settings::default(), true)
+                        }
+                        Err(err) => {
+                            eprintln!("agentty: could not keep a copy of {} ({err}); not saving over it", path.display());
+                            (Settings::default(), false)
+                        }
+                    }
+                }
+            },
+            Err(_) => (Settings::default(), true),
         }
     }
 
@@ -888,6 +908,17 @@ impl Settings {
     }
 }
 
+/// Keeps a copy of a settings file that doesn't parse as `settings.json.bak-<stamp>` (`0600`) next
+/// to it, before the defaults are saved over it: a hand edit with a typo shouldn't cost the user
+/// every setting.
+fn set_aside_unreadable(path: &std::path::Path, bytes: &[u8], stamp: &str) -> std::io::Result<PathBuf> {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".bak-{stamp}"));
+    let backup = path.with_file_name(name);
+    agentty_bridge::fsutil::write_private(&backup, bytes)?;
+    Ok(backup)
+}
+
 pub struct SettingsStore {
     pub settings: Settings,
     /// Bumped on every change, so views can react to "settings were updated".
@@ -902,11 +933,13 @@ impl Global for SettingsStore {}
 
 impl SettingsStore {
     pub fn init(cx: &mut App) {
-        let settings = Settings::load();
+        let (settings, may_save) = Settings::load();
         let themes = load_themes();
         let composed = SettingsStore::compose(&settings, &themes);
         let store = SettingsStore { settings, revision: 0, themes, composed };
-        let _ = store.save();
+        if may_save {
+            let _ = store.save();
+        }
         if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass) {
             eprintln!("agentty: shell integration unavailable: {err:#}");
         }
@@ -1060,6 +1093,24 @@ pub fn reload_themes(cx: &mut App) {
 #[cfg(test)]
 mod browser_settings_tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_settings_file_is_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("agentty-settings-aside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"{ \"theme\": ").unwrap();
+        let backup = set_aside_unreadable(&path, b"{ \"theme\": ", "20261010-120000").unwrap();
+        assert_eq!(backup, dir.join("settings.json.bak-20261010-120000"));
+        assert_eq!(std::fs::read(&backup).unwrap(), b"{ \"theme\": ");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn the_font_is_only_chosen_for_someone_who_did_not_pick_one() {
