@@ -189,6 +189,13 @@ impl Workbench {
                 .bg(if active { hex(Chrome::SELECTED) } else { hex(Chrome::TAB_INACTIVE) })
                 .t_small()
                 .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::MUTED) })
+                .on_mouse_down(gpui::MouseButton::Right, {
+                    let target = pane.clone();
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.open_pane_menu(target.clone(), event.position, cx);
+                    })
+                })
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.mark_active(&pane_for_focus, cx);
                     this.focus_pane(&pane_for_focus, window, cx);

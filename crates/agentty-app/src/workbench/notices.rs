@@ -127,6 +127,7 @@ impl Workbench {
         self.activate_workspace(w, window, cx);
         let ws = &mut self.workspaces[w];
         ws.active_tab = tab;
+        ws.tabs[tab].todo = false;
         ws.tabs[tab].active = pane.clone();
         self.focus_pane(&pane, window, cx);
         pane.update(cx, |view, cx| view.acknowledge(cx));

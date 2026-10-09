@@ -205,7 +205,7 @@ impl Workbench {
         let pane = self.spawn_pane(crate::launch::LaunchSpec::new(kind, cwd), cx);
         let shown = index == self.active_workspace;
         let ws = &mut self.workspaces[index];
-        ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+        ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
         if !shown {
             ws.active_tab = ws.tabs.len() - 1;
         }

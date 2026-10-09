@@ -184,7 +184,12 @@ impl Workbench {
         let (w, _) = self.locate(anchor)?;
         self.wake_for_new_tab(w, cx);
         let pane = self.spawn_pane(spec, cx);
-        self.workspaces[w].tabs.push(super::Tab { root: super::panes::PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
+        self.workspaces[w].tabs.push(super::Tab {
+            root: super::panes::PaneNode::Leaf(pane.clone()),
+            active: pane.clone(),
+            instance: None,
+            todo: false,
+        });
         self.persist(cx);
         cx.notify();
         Some(pane)
@@ -205,6 +210,7 @@ impl Workbench {
         let tab = &mut ws.tabs[t];
         tab.root.split(anchor, pane.clone(), axis);
         tab.active = pane.clone();
+        tab.todo = false;
         ws.active_tab = t;
         self.active_workspace = w;
         self.page = None;

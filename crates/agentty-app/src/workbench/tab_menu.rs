@@ -1,4 +1,5 @@
-//! Right-click menu on a tab: close this / other / all tabs, move the tab to another workspace.
+//! Right-click menu on a tab: close this / other / all tabs, set it aside in TODO, move the tab to
+//! another workspace, and the recently closed tabs to reopen.
 
 use super::{Tab, Workbench, Workspace};
 use crate::i18n::t;
@@ -20,7 +21,8 @@ impl Workbench {
     fn close_tabs_where(&mut self, keep: impl Fn(usize) -> bool, window: &mut Window, cx: &mut Context<Self>) {
         self.tab_menu = None;
         let Some(ws) = self.workspaces.get(self.active_workspace) else { return };
-        let indices: Vec<usize> = (0..ws.tabs.len()).filter(|i| !keep(*i)).collect();
+        // TODO tabs are kept for later: "close others / all" means the tabs in the strip.
+        let indices: Vec<usize> = ws.visible_tabs().into_iter().filter(|i| !keep(*i)).collect();
         self.request_close_tabs(&indices, window, cx);
         cx.notify();
     }
@@ -40,6 +42,7 @@ impl Workbench {
             } else if index < ws.active_tab {
                 ws.active_tab -= 1;
             }
+            ws.settle_active_tab();
             tab
         };
         let source_id = self.workspaces[source].id;
@@ -90,14 +93,14 @@ impl Workbench {
         let menu = self.tab_menu.as_ref()?;
         let (index, position) = (menu.index, menu.position);
         let active = self.workspaces.get(self.active_workspace)?;
-        let count = active.tabs.len();
+        let count = active.visible_tabs().len();
+        // The fixed actions first, then where the tab can go, then the history.
         let mut list = popover()
             .w(px(240.))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.tab_menu = None;
                 cx.notify();
             }))
-            .children(self.render_reopen_tabs(cx))
             .child(menu_item(
                 "tab-menu-close",
                 t(cx, "tab.close"),
@@ -116,7 +119,18 @@ impl Workbench {
                 cx.listener(|this, _: &ClickEvent, window, cx| this.close_tabs_where(|_| false, window, cx)),
             ))
             .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
-            .child(div().px_3().pt_1().pb_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "tab.move_to")));
+            .child(menu_item(
+                "tab-menu-todo",
+                t(cx, "todo.park"),
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.park_tab(index, window, cx)),
+            ))
+            .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            .child(div().px_3().pt_1().pb_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "tab.move_to")))
+            .child(menu_item(
+                "tab-menu-move-new",
+                format!("+ {}", t(cx, "new.workspace")),
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.move_tab(index, None, window, cx)),
+            ));
         for ws in self.workspaces.iter().filter(|w| w.id != active.id) {
             let id = ws.id;
             // The workspace's own colour, when it has one, so the list reads like the sidebar.
@@ -127,11 +141,7 @@ impl Workbench {
                 cx.listener(move |this, _: &ClickEvent, window, cx| this.move_tab(index, Some(id), window, cx)),
             ));
         }
-        list = list.child(menu_item(
-            "tab-menu-move-new",
-            format!("+ {}", t(cx, "new.workspace")),
-            cx.listener(move |this, _: &ClickEvent, window, cx| this.move_tab(index, None, window, cx)),
-        ));
+        list = list.children(self.render_reopen_tabs(cx));
         Some(gpui::deferred(gpui::anchored().position(position).snap_to_window_with_margin(px(8.)).child(list)).with_priority(3))
     }
 }

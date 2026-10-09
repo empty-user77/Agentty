@@ -1888,6 +1888,8 @@ impl Workbench {
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
                 .child(icon("house", IconSize::INLINE, hex(if home_active { Chrome::BRIGHT } else { Chrome::MUTED }))),
         );
+        // Tabs set aside for later in this workspace, right after the start page.
+        tabs = tabs.children(self.render_todo_button(cx));
         if let Some(page) = self.page {
             // Monitoring: AI usage, AI processes, the capture proxy and what the agents can use
             // (skills, subagents, MCP servers) are tabs of one page. The extension tabs carry the
@@ -1971,7 +1973,7 @@ impl Workbench {
         } else if let Some(ws) = self.workspaces.get(self.active_workspace) {
             // While a file is shown in the editor, its tab is the active one.
             let editing = self.editor_visible(cx);
-            for (index, tab) in ws.tabs.iter().enumerate() {
+            for (index, tab) in ws.tabs.iter().enumerate().filter(|(_, tab)| !tab.todo) {
                 let view = tab.active.read(cx);
                 let active = index == ws.active_tab && !editing;
                 let leaves = tab.root.leaves();
