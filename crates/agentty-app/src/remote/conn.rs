@@ -153,6 +153,15 @@ impl Conn {
         }
     }
 
+    /// Ends this side's writing (FIN) while the other side may still send.
+    pub fn shutdown_write(&self) -> std::io::Result<()> {
+        match self {
+            Conn::Tcp(s) => s.shutdown(std::net::Shutdown::Write),
+            #[cfg(unix)]
+            Conn::Unix(s) => s.shutdown(std::net::Shutdown::Write),
+        }
+    }
+
     /// Whether the other end closed. A write to a closed connection still succeeds once (the
     /// reset comes back after it), so this looks for the end of the stream instead, without
     /// waiting and without touching the socket's blocking mode.

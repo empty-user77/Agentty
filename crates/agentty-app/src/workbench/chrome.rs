@@ -3038,6 +3038,7 @@ impl Workbench {
             .children(self.render_docker_chip(cx))
             .children(self.render_db_chip(cx))
             .children(self.render_status_icons(cx))
+            .children(self.render_mic_button(cx))
     }
 }
 

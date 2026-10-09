@@ -521,10 +521,7 @@ pub fn sign_out_everywhere(cx: &mut App) {
 /// model, else any installed one; language is auto-detected. The setup flow installs the model, so
 /// voice turns itself on once that is done. Returns `None` (voice off) when nothing is installed.
 fn voice_config() -> Option<server::VoiceConfig> {
-    use agentty_bridge::voice;
-    let model = voice::model(voice::DEFAULT_MODEL)
-        .filter(|m| voice::model_present(m))
-        .or_else(|| voice::MODELS.iter().find(|m| voice::model_present(m)))?;
+    let model = agentty_bridge::voice::installed_model()?;
     Some(server::VoiceConfig { model, language: None })
 }
 
