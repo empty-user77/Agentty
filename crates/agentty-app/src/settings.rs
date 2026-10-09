@@ -918,13 +918,9 @@ impl SettingsStore {
     }
 
     fn save(&self) -> anyhow::Result<()> {
-        let path = Settings::path();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.settings)?)?;
-        std::fs::rename(tmp, path)?;
+        // Private (0600) from creation and replaced atomically: it names projects, folders and
+        // connected services.
+        agentty_bridge::fsutil::write_private(&Settings::path(), &serde_json::to_vec_pretty(&self.settings)?)?;
         Ok(())
     }
 

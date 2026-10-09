@@ -602,6 +602,8 @@ fn main() {
     }
 
     sanitize_environment();
+    // `~/.agentty` holds conversation text and app state: 0700 before anything is written to it.
+    agentty_bridge::fsutil::secure_data_dir();
     // Windows / Linux hand links (`agentty://…`, registered by the installer / .desktop file) and
     // folders ("Open with Agentty") over as arguments; macOS sends them as open events below.
     if !cfg!(target_os = "macos") {

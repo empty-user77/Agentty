@@ -319,35 +319,11 @@ impl LayoutState {
     }
 
     pub fn save(&self, slot: usize) -> anyhow::Result<()> {
-        let path = Self::path(slot);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        // A name of this process's own, so a second Agentty on the same folder can't interleave
-        // its writes with ours; flushed to disk before it replaces the file, so a power cut leaves
-        // the old layout or the new one, never an empty file.
-        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-        {
-            use std::io::Write as _;
-            let mut file = std::fs::File::create(&tmp)?;
-            file.write_all(&serde_json::to_vec_pretty(self)?)?;
-            file.sync_all()?;
-        }
-        // Windows: a virus scanner or the search indexer can hold the file for a moment.
-        let mut attempt = 0;
-        loop {
-            match std::fs::rename(&tmp, &path) {
-                Ok(()) => return Ok(()),
-                Err(_) if attempt < 3 => {
-                    attempt += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(50 * attempt));
-                }
-                Err(err) => {
-                    let _ = std::fs::remove_file(&tmp);
-                    return Err(err.into());
-                }
-            }
-        }
+        // Folders, titles and working directories: private (0600) from creation, written under a
+        // name of its own and flushed before it replaces the file, so a second Agentty on the same
+        // folder can't interleave its writes and a power cut leaves the old layout or the new one.
+        agentty_bridge::fsutil::write_private_durable(&Self::path(slot), &serde_json::to_vec_pretty(self)?)?;
+        Ok(())
     }
 }
 
@@ -378,12 +354,8 @@ impl ClosedWindows {
     }
 
     fn save(&self) {
-        let path = Self::path();
-        let tmp = path.with_extension("json.tmp");
         if let Ok(bytes) = serde_json::to_vec_pretty(self) {
-            if std::fs::write(&tmp, bytes).is_ok() {
-                let _ = std::fs::rename(tmp, path);
-            }
+            let _ = agentty_bridge::fsutil::write_private(&Self::path(), &bytes);
         }
     }
 

@@ -115,8 +115,8 @@ fn remember_auto_mode(supported: bool) {
     DETECTED.store(true, Ordering::Relaxed);
     let marker = auto_mode_marker();
     if supported {
-        let _ = std::fs::create_dir_all(agentty_bridge::fsutil::data_dir());
-        let _ = std::fs::write(marker, "");
+        // Private (0600) like everything else in the data folder; `write_private` makes the folder.
+        let _ = agentty_bridge::fsutil::write_private(&marker, b"");
     } else {
         let _ = std::fs::remove_file(marker);
     }

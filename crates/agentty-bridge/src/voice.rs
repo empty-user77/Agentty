@@ -137,7 +137,8 @@ pub fn download_model(m: &Model, progress: impl FnMut(u64, u64)) -> Result<()> {
 
 fn fetch_model(m: &Model, tmp: &Path, mut progress: impl FnMut(u64, u64)) -> Result<()> {
     let dir = voice_dir();
-    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    // The same folder holds voice recordings while they are transcribed: private (0700).
+    crate::fsutil::create_private_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
     let final_path = model_path(m);
     if model_ready(m) {
         return Ok(());
