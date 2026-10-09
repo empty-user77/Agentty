@@ -246,6 +246,9 @@ pub struct Settings {
     pub system_notifications: bool,
     /// Local sessions pinned to the top (`claude:<id>`, `codex:<id>`).
     pub favorite_sessions: Vec<String>,
+    /// Sidebar plugins kept as icons of their own in the activity bar, by plugin id, however many
+    /// are installed (the rest fold into one group once there are enough of them).
+    pub pinned_plugins: Vec<String>,
     /// Notify even while Agentty is the focused app.
     pub notify_when_focused: bool,
     /// An agent asking for an answer (permission, question) always notifies, unless its pane is the
@@ -770,6 +773,7 @@ impl Default for Settings {
             external_editor: ExternalEditor::Auto,
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
+            pinned_plugins: Vec::new(),
             resume_bar: true,
             agent_bar: true,
             agent_bar_position: crate::hud::HudPosition::default(),
