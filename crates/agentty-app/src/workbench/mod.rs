@@ -68,6 +68,7 @@ mod system_page;
 mod tab_menu;
 mod tasks;
 mod terminal_browser;
+mod todo;
 mod tree_manager;
 pub mod update;
 mod voice_input;
@@ -200,6 +201,9 @@ pub struct Tab {
     /// In a plugin's workspace, the automation this tab is: its panel, its browser pages and
     /// these terminals go together, and each tab runs on its own.
     pub instance: Option<persist::TabInstance>,
+    /// Set aside for later (TODO): left out of the tab strip, its terminals still running, until it
+    /// is brought back from the workspace's TODO button.
+    pub todo: bool,
 }
 
 pub struct Workspace {
@@ -487,6 +491,10 @@ pub struct Workbench {
     mini_generation: u64,
     pub updates: update::Updates,
     tab_menu: Option<tab_menu::TabMenu>,
+    /// The TODO list of the active workspace, open below its button.
+    todo_menu: Option<gpui::Point<Pixels>>,
+    /// Right-click menu on a split pane's header.
+    pane_menu: Option<(Pane, gpui::Point<Pixels>)>,
     about_open: bool,
     close_confirm: Option<confirm::CloseConfirm>,
     /// Menu closed by a click outside it, and when: the same click on its toggle must not reopen it.
@@ -857,6 +865,8 @@ impl Workbench {
             mini_generation: 0,
             updates: update::Updates::default(),
             tab_menu: None,
+            todo_menu: None,
+            pane_menu: None,
             about_open: false,
             close_confirm: None,
             dismissed_menu: None,
@@ -1227,13 +1237,15 @@ impl Workbench {
 
     pub fn active_pane(&self) -> Option<Pane> {
         let ws = self.workspaces.get(self.active_workspace)?;
-        ws.tabs.get(ws.active_tab).map(|tab| tab.active.clone())
+        ws.tabs.get(ws.active_tab).filter(|tab| !tab.todo).map(|tab| tab.active.clone())
     }
 
     fn mark_active(&mut self, pane: &Pane, cx: &mut Context<Self>) {
         if let Some((w, t)) = self.locate(pane) {
             let ws = &mut self.workspaces[w];
-            if ws.tabs[t].active != *pane || ws.active_tab != t {
+            if ws.tabs[t].active != *pane || ws.active_tab != t || ws.tabs[t].todo {
+                // A pane made active is one the user went to: its tab comes out of TODO.
+                ws.tabs[t].todo = false;
                 ws.tabs[t].active = pane.clone();
                 ws.active_tab = t;
                 self.persist_soon(cx);
@@ -1285,7 +1297,7 @@ impl Workbench {
         match tab.root.remove(pane) {
             Some(root) => {
                 let active = if tab.active == *pane { root.leaves()[0].clone() } else { tab.active };
-                ws.tabs.insert(t, Tab { root, active, instance: tab.instance });
+                ws.tabs.insert(t, Tab { root, active, instance: tab.instance, todo: tab.todo });
             }
             None => {
                 if ws.active_tab >= ws.tabs.len() {
@@ -1293,6 +1305,7 @@ impl Workbench {
                 } else if t < ws.active_tab {
                     ws.active_tab -= 1;
                 }
+                ws.settle_active_tab();
             }
         }
         // Closing the last tab is not deleting the workspace: it goes dormant on the tab that just
@@ -1413,7 +1426,7 @@ impl Workbench {
             name,
             group,
             cwd,
-            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
+            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false }],
             active_tab: 0,
             dormant: None,
             asleep_on_close: false,
@@ -1451,7 +1464,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
         ws.active_tab = ws.tabs.len() - 1;
         self.page = None;
         self.session_viewer = None;
@@ -1475,7 +1488,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None, todo: false });
         ws.active_tab = ws.tabs.len() - 1;
         self.persist(cx);
         cx.notify();
@@ -1592,6 +1605,7 @@ impl Workbench {
         let Some(ws) = self.workspaces.get_mut(self.active_workspace) else { return };
         if index < ws.tabs.len() {
             ws.active_tab = index;
+            ws.tabs[index].todo = false;
             self.page = None;
             self.session_viewer = None;
             self.hide_editor();
@@ -2376,7 +2390,7 @@ impl Workbench {
             self.register_chat(&leaves[0], snapshot.chat_roles.unwrap_or_default(), cx);
         }
         let ws = &mut self.workspaces[w];
-        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
+        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone(), todo: false });
         ws.active_tab = ws.tabs.len() - 1;
         self.split_shared_instances(w);
         self.active_workspace = w;
@@ -2815,6 +2829,7 @@ impl Workbench {
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
             chat: lead.is_some(),
             chat_roles: lead.as_ref().and_then(|lead| self.chat_roles(lead)),
+            todo: tab.todo,
         }
     }
 
@@ -3013,7 +3028,7 @@ impl Workbench {
             if tab.chat {
                 self.register_chat(&leaves[0], tab.chat_roles.unwrap_or_default(), cx);
             }
-            tabs.push(Tab { root, active, instance: tab.instance.clone() });
+            tabs.push(Tab { root, active, instance: tab.instance.clone(), todo: tab.todo });
         }
         let ws = &mut self.workspaces[index];
         ws.active_tab = snapshot.active_tab.min(tabs.len().saturating_sub(1));
@@ -3024,7 +3039,7 @@ impl Workbench {
         if ws.tabs.is_empty() {
             let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, snapshot.cwd.clone()), cx);
             let ws = &mut self.workspaces[index];
-            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
         }
         self.split_shared_instances(index);
     }
@@ -3227,6 +3242,7 @@ impl Render for Workbench {
                 match (self.render_session_viewer(cx), self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)))
                 {
                     (Some(viewer), _) => viewer,
+                    (None, Some(tab)) if self.new_workspace.is_none() && !self.welcome && tab.todo => self.render_all_parked(cx),
                     (None, Some(tab)) if self.new_workspace.is_none() && !self.welcome => self.render_tab(tab, cx),
                     (None, _) => self.render_welcome(cx).into_any_element(),
                 }
@@ -3305,18 +3321,8 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| this.split(Axis::Vertical, window, cx)))
             .on_action(cx.listener(|this, _: &NextPane, window, cx| this.cycle_pane(true, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousPane, window, cx| this.cycle_pane(false, window, cx)))
-            .on_action(cx.listener(|this, _: &NextTab, window, cx| {
-                if let Some(ws) = this.workspaces.get(this.active_workspace) {
-                    let n = ws.tabs.len().max(1);
-                    this.activate_tab((ws.active_tab + 1) % n, window, cx);
-                }
-            }))
-            .on_action(cx.listener(|this, _: &PreviousTab, window, cx| {
-                if let Some(ws) = this.workspaces.get(this.active_workspace) {
-                    let n = ws.tabs.len().max(1);
-                    this.activate_tab((ws.active_tab + n - 1) % n, window, cx);
-                }
-            }))
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle_tab(true, window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousTab, window, cx| this.cycle_tab(false, window, cx)))
             .on_action(cx.listener(|this, _: &NextWorkspace, window, cx| {
                 let n = this.workspaces.len().max(1);
                 this.activate_workspace((this.active_workspace + 1) % n, window, cx);
@@ -3381,17 +3387,17 @@ impl Render for Workbench {
             .on_action(|_: &OpenPrivacyPolicy, _, cx| cx.open_url(update::PRIVACY_URL))
             .on_action(|_: &OpenTerms, _, cx| cx.open_url(update::TERMS_URL))
             .on_action(|_: &OpenEula, _, cx| cx.open_url(update::EULA_URL))
-            .on_action(cx.listener(|this, _: &GoToTab1, window, cx| this.activate_tab(0, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab2, window, cx| this.activate_tab(1, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab3, window, cx| this.activate_tab(2, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab4, window, cx| this.activate_tab(3, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab5, window, cx| this.activate_tab(4, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab6, window, cx| this.activate_tab(5, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab7, window, cx| this.activate_tab(6, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab8, window, cx| this.activate_tab(7, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab1, window, cx| this.activate_visible_tab(0, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab2, window, cx| this.activate_visible_tab(1, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab3, window, cx| this.activate_visible_tab(2, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab4, window, cx| this.activate_visible_tab(3, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab5, window, cx| this.activate_visible_tab(4, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab6, window, cx| this.activate_visible_tab(5, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab7, window, cx| this.activate_visible_tab(6, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab8, window, cx| this.activate_visible_tab(7, window, cx)))
             .on_action(cx.listener(|this, _: &GoToTab9, window, cx| {
-                let last = this.workspaces.get(this.active_workspace).map_or(0, |w| w.tabs.len().saturating_sub(1));
-                this.activate_tab(last, window, cx)
+                let last = this.workspaces.get(this.active_workspace).map_or(0, |w| w.visible_tabs().len().saturating_sub(1));
+                this.activate_visible_tab(last, window, cx)
             }))
             .on_action(cx.listener(|this, _: &GoToWorkspace1, window, cx| this.activate_workspace(0, window, cx)))
             .on_action(cx.listener(|this, _: &GoToWorkspace2, window, cx| this.activate_workspace(1, window, cx)))
@@ -3542,6 +3548,8 @@ impl Render for Workbench {
             .when_some(self.picker.as_ref().map(|_| ()), |d, _| d.child(self.render_picker(cx)))
             .when_some(self.palette.as_ref().map(|_| ()), |d, _| d.child(self.render_palette(cx)))
             .children(self.render_tab_menu(cx))
+            .children(self.render_todo_menu(cx))
+            .children(self.render_pane_menu(cx))
             .children(self.render_tree_menu(cx))
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
@@ -4729,10 +4737,34 @@ impl Workbench {
                     self.toggle_zoom(&pane, window, cx);
                 }
             }
+            // `todo park <tab>` / `todo pane` (the active pane) / `todo unpark <tab>` / `todo menu` /
+            // `todo pane-menu`.
+            "todo" => {
+                let (action, index) = argument.split_once(' ').unwrap_or((argument, "0"));
+                let index = index.parse().unwrap_or(0);
+                match action {
+                    "park" => self.park_tab(index, window, cx),
+                    "unpark" => self.unpark_tab(index, window, cx),
+                    "pane" => {
+                        if let Some(pane) = self.active_pane() {
+                            self.park_pane(&pane, window, cx);
+                        }
+                    }
+                    "menu" => self.todo_menu = Some(gpui::point(gpui::px(60.), gpui::px(80.))),
+                    "pane-menu" => {
+                        if let Some(pane) = self.active_pane() {
+                            self.open_pane_menu(pane, gpui::point(gpui::px(420.), gpui::px(90.)), cx);
+                        }
+                    }
+                    _ => {}
+                }
+                cx.notify();
+            }
             "layout" => {
                 for ws in &self.workspaces {
                     let panes: Vec<usize> = ws.tabs.iter().map(|t| t.root.leaves().len()).collect();
-                    eprintln!("layout: ws={} tabs={panes:?} active_tab={}", ws.id, ws.active_tab);
+                    let todo: Vec<bool> = ws.tabs.iter().map(|t| t.todo).collect();
+                    eprintln!("layout: ws={} tabs={panes:?} todo={todo:?} active_tab={}", ws.id, ws.active_tab);
                 }
                 eprintln!("layout: confirm={}", self.close_confirm.is_some());
             }

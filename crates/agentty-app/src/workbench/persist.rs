@@ -46,6 +46,9 @@ pub struct TabSnapshot {
     /// A chat's choice of agents for its workers and reviewers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_roles: Option<super::chat_team::ChatRoles>,
+    /// Set aside for later (TODO): hidden from the tab strip until brought back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub todo: bool,
 }
 
 /// A tab of a plugin's workspace as one automation: an id the plugin knows it by, and the name it
@@ -671,6 +674,7 @@ mod tests {
                 zoomed_pane: None,
                 chat: true,
                 chat_roles: None,
+                todo: true,
             }],
             ..loaded
         };

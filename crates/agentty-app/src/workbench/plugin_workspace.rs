@@ -359,7 +359,7 @@ impl Workbench {
         let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, cwd), cx);
         let instance = self.new_instance();
         let ws = &mut self.workspaces[index];
-        ws.tabs.push(super::Tab { root: super::panes::PaneNode::Leaf(pane.clone()), active: pane, instance: Some(instance) });
+        ws.tabs.push(super::Tab { root: super::panes::PaneNode::Leaf(pane.clone()), active: pane, instance: Some(instance), todo: false });
         ws.active_tab = ws.tabs.len() - 1;
         self.page = None;
         self.persist(cx);
