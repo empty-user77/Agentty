@@ -48,16 +48,8 @@ pub fn create_share(from: Agent, id: &str, title: &str, to: Agent, cwd: Option<S
 /// Live link update: only the turns added since the last share (`turns` is already that slice).
 pub fn create_update(from: Agent, id: &str, title: &str, to: Agent, cwd: Option<String>, turns: &[Turn]) -> Result<Handoff> {
     anyhow::ensure!(!turns.is_empty(), "no new turns to share");
-    let dir = fsutil::data_dir().join("handoffs");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}-{id}-to-{}-update.md", agent_slug(from), agent_slug(to)));
-    std::fs::write(&path, render(from, id, to, cwd.as_deref(), turns))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    let path = handoffs_dir()?.join(format!("{}-{id}-to-{}-update.md", agent_slug(from), agent_slug(to)));
+    fsutil::write_private(&path, render(from, id, to, cwd.as_deref(), turns).as_bytes())?;
     let prompt = update_prompt(from, title, turns.len(), &path);
     Ok(Handoff { args: Vec::new(), path, cwd, prompt, turn_count: turns.len() })
 }
@@ -72,18 +64,17 @@ fn update_prompt(from: Agent, title: &str, count: usize, path: &std::path::Path)
 }
 
 fn write_document(from: Agent, id: &str, to: Agent, cwd: Option<&str>, turns: &[Turn]) -> Result<PathBuf> {
-    let dir = fsutil::data_dir().join("handoffs");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}-{id}-to-{}.md", agent_slug(from), agent_slug(to)));
-    std::fs::write(&path, render(from, id, to, cwd, turns))?;
-    // Handoffs contain conversation text; keep them private to the user.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    let path = handoffs_dir()?.join(format!("{}-{id}-to-{}.md", agent_slug(from), agent_slug(to)));
+    fsutil::write_private(&path, render(from, id, to, cwd, turns).as_bytes())?;
     Ok(path)
+}
+
+/// Handoffs contain conversation text: the folder is `0700` and each file `0600` from the moment
+/// they are created (never written readable and tightened afterwards).
+fn handoffs_dir() -> Result<PathBuf> {
+    let dir = fsutil::data_dir().join("handoffs");
+    fsutil::create_private_dir(&dir)?;
+    Ok(dir)
 }
 
 fn agent_slug(agent: Agent) -> &'static str {

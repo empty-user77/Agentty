@@ -79,14 +79,6 @@ fn recordings_dir() -> PathBuf {
     agentty_bridge::fsutil::data_dir().join("voice")
 }
 
-fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder.create(dir)
-}
-
 /// Removes recordings a crash left behind (a recording in use is never this old).
 fn sweep_stale_recordings(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
@@ -204,7 +196,15 @@ impl Workbench {
         }
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let dir = recordings_dir();
-        let _ = create_private_dir(&dir);
+        // AVAudioRecorder creates the WAV itself with the process umask (usually 0644), and may
+        // replace a file made for it beforehand, so a pre-created 0600 file can't be relied on.
+        // What keeps the audio private from its first byte is the folder: 0700 (an older `voice/`
+        // left 0755 is tightened here), so no other user can reach the file inside it, whatever
+        // its own mode. No recording when the folder can't be made private.
+        if let Err(err) = agentty_bridge::fsutil::create_private_dir(&dir) {
+            RECORDING.store(false, Ordering::SeqCst);
+            return self.mic_note(tf(cx, "voice.failed", &[("reason", &err.to_string())]), true, cx);
+        }
         sweep_stale_recordings(&dir);
         let file = dir.join(format!("recording-{}-{id}.wav", std::process::id()));
         let recorder = match Recorder::start(&file) {
@@ -215,7 +215,8 @@ impl Workbench {
                 return self.mic_note(tf(cx, "voice.failed", &[("reason", &err.to_string())]), true, cx);
             }
         };
-        // The audio is the user's own words: readable by them alone.
+        // The audio is the user's own words: the file itself is made 0600 as well, in case it is
+        // ever moved out of the private folder.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -481,7 +482,7 @@ mod tests {
     #[test]
     fn only_old_recordings_are_swept() {
         let dir = std::env::temp_dir().join(format!("agentty-voice-sweep-{}", std::process::id()));
-        create_private_dir(&dir).unwrap();
+        agentty_bridge::fsutil::create_private_dir(&dir).unwrap();
         let old = dir.join("recording-1-1.wav");
         let fresh = dir.join("recording-1-2.wav");
         let model = dir.join("ggml-base.bin");
