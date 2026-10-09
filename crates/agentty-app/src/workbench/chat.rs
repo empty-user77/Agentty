@@ -146,8 +146,15 @@ pub struct ChatState {
 
 /// The lead's first message: its instructions (with where it works, see [`folder_brief`]), then what
 /// the user wrote.
+/// It goes in as a message of its own, never with the user's words in the same paste.
+fn brief_message(language: &str, folder: &str) -> String {
+    format!("{BRIEF_START}\n{}\n{BRIEF_END}", BRIEF.replace("{language}", language).replace("{folder}", folder))
+}
+
+/// The briefing and what the user wrote as one message (how a transcript shows an older chat).
+#[cfg(test)]
 fn briefed_prompt(text: &str, language: &str, folder: &str) -> String {
-    format!("{BRIEF_START}\n{}\n{BRIEF_END}\n\n{text}", BRIEF.replace("{language}", language).replace("{folder}", folder))
+    format!("{}\n\n{text}", brief_message(language, folder))
 }
 
 /// Waits (a few seconds at most) until `path` stops growing: the turn's last lines reach the
@@ -280,6 +287,21 @@ enum Pending {
     User { prompt: String, echo: String },
     /// A worker's report.
     Report(String),
+    /// The lead's instructions: always first, and alone in their message.
+    Brief(String),
+}
+
+/// What goes into the lead next out of `pending`: the briefing alone when it is there (the rest
+/// stays until the lead has had it), else everything as one message (see [`pending_message`]).
+fn next_batch(pending: &mut Vec<Pending>, echo: &mut Vec<String>) -> Option<String> {
+    match pending.iter().position(|entry| matches!(entry, Pending::Brief(_))) {
+        Some(at) => match pending.remove(at) {
+            Pending::Brief(text) => Some(text),
+            _ => None,
+        },
+        None if pending.is_empty() => None,
+        None => Some(pending_message(std::mem::take(pending), echo)),
+    }
 }
 
 /// The one message what waited goes in as: the user's words first, so no report swallows them,
@@ -297,6 +319,7 @@ fn pending_message(pending: Vec<Pending>, echo: &mut Vec<String>) -> String {
                 parts.push(prompt);
             }
             Pending::Report(report) => reports.push(report),
+            Pending::Brief(text) => parts.insert(0, text),
         }
     }
     parts.extend(reports);
@@ -780,22 +803,28 @@ impl Workbench {
         let language = agentty_bridge::idea::language_name(crate::settings::settings(cx).language.resolved().code());
         let Some(state) = self.chats.get_mut(&id) else { return };
         // A slash command is for Claude Code itself, not a message to brief the lead with.
-        let prompt = if state.briefed || text.starts_with('/') {
-            text.clone()
-        } else {
-            briefed_prompt(&text, language, &Self::lead_folder_brief(&state.lead, cx))
-        };
+        let brief = (!state.briefed && !text.starts_with('/')).then(|| brief_message(language, &Self::lead_folder_brief(&state.lead, cx)));
+        let prompt = text.clone();
         state.briefed |= !text.starts_with('/');
         state.echo.push(text.clone());
         // What the user just wrote is what they look at: back to the newest entry.
         state.follow.set(true);
         Self::show_chat_items(state);
+        if let Some(brief) = brief {
+            let ready = Self::lead_ready(state, cx);
+            if must_wait(waits_on_user(state.lead.read(cx)), !state.pending.is_empty(), state.brief_sent, state.brief_seen, ready) {
+                state.pending.insert(0, Pending::Brief(brief));
+            } else {
+                Self::note_brief_sent(state, true);
+                state.lead.update(cx, |view, cx| view.submit_prompt(brief, cx));
+            }
+        }
         let ready = Self::lead_ready(state, cx);
-        // Never into a selection on the lead's screen: it goes in once that is answered.
+        // Never into a selection on the lead's screen: it goes in once that is answered. Nor before
+        // the lead has had its instructions.
         if must_wait(waits_on_user(state.lead.read(cx)), !state.pending.is_empty(), state.brief_sent, state.brief_seen, ready) {
             state.pending.push(Pending::User { prompt, echo: text });
         } else {
-            Self::note_brief_sent(state, prompt.contains(BRIEF_START));
             state.lead.update(cx, |view, cx| view.submit_prompt(prompt, cx));
         }
         cx.notify();
@@ -886,8 +915,8 @@ impl Workbench {
         {
             return;
         }
-        let text = pending_message(std::mem::take(&mut state.pending), &mut state.echo);
-        Self::note_brief_sent(state, text.contains(BRIEF_START));
+        let Some(text) = next_batch(&mut state.pending, &mut state.echo) else { return };
+        Self::note_brief_sent(state, text.starts_with(BRIEF_START));
         Self::show_chat_items(state);
         state.lead.update(cx, |view, cx| view.submit_prompt(text, cx));
         cx.notify();
@@ -1928,5 +1957,31 @@ mod tests {
         assert_eq!(brief_step(Duration::from_secs(7), true), BriefStep::Wait);
         assert_eq!(brief_step(Duration::from_secs(15), true), BriefStep::GiveUp);
         assert_eq!(brief_step(Duration::from_secs(15), false), BriefStep::GiveUp);
+    }
+
+    #[test]
+    fn the_briefing_goes_in_alone_before_the_users_words() {
+        let brief = brief_message("Korean", "Your folder is the project folder itself.");
+        let mut echo = vec!["Reply with ONE".to_string(), "Reply with TWO".into()];
+        let mut pending = vec![
+            Pending::Brief(brief.clone()),
+            Pending::User { prompt: "Reply with ONE".into(), echo: "Reply with ONE".into() },
+            Pending::User { prompt: "Reply with TWO".into(), echo: "Reply with TWO".into() },
+        ];
+        // First the briefing, alone: no user text pasted with it, and the echoes stay.
+        assert_eq!(next_batch(&mut pending, &mut echo), Some(brief.clone()));
+        assert_eq!(pending.len(), 2);
+        assert_eq!(echo.len(), 2);
+        // The briefing alone shows no user entry in the transcript.
+        let (items, briefed) = chat_items(&[turn(Role::User, &brief)]);
+        assert!(briefed && items.is_empty());
+        // Then the users' messages, together, without any briefing in them.
+        let next = next_batch(&mut pending, &mut echo).unwrap();
+        assert_eq!(next, "Reply with ONE\n\nReply with TWO");
+        assert!(!next.contains(BRIEF_START));
+        assert_eq!(next_batch(&mut pending, &mut echo), None);
+        // A briefing queued after the users still goes first.
+        let mut late = vec![Pending::Report("[Agentty] A".into()), Pending::Brief(brief.clone())];
+        assert_eq!(next_batch(&mut late, &mut Vec::new()), Some(brief));
     }
 }
