@@ -40,6 +40,26 @@ impl Workbench {
         request.cwd = self.tasks_project(&request, cx);
         // A chat's lead starts its workers without asking: opening the chat was the user's yes.
         let Some(request) = self.start_chat_tasks(request, cx) else { return };
+        // A board ticket's agent splits its work without asking: moving the ticket to "instructed"
+        // was the user's yes. The tasks start from the ticket's branch.
+        let board_base = self.pane_by_id(request.pane, cx).and_then(|pane| self.board_task_base(&pane));
+        let split = crate::settings::settings(cx).board.split;
+        if board_base.is_some() && split == crate::settings::BoardSplit::Off {
+            let _ = request
+                .reply
+                .send(browser_reply(Err("splitting board tickets is turned off in Agentty's settings: do the work yourself".into())));
+            return;
+        }
+        if let Some(base) = board_base.filter(|_| split == crate::settings::BoardSplit::Auto) {
+            let handle = self.window_handle;
+            cx.spawn(async move |this, cx| {
+                let _ = cx.update_window(handle, |_, window, cx| {
+                    let _ = this.update(cx, |this, cx| this.start_tasks(request, base, window, cx));
+                });
+            })
+            .detach();
+            return;
+        }
         self.task_requests.push_back(request);
         cx.notify();
     }
@@ -73,8 +93,7 @@ impl Workbench {
     /// The user said yes: working trees first (in the background), then one pane per task — the first
     /// to the right of the asking agent, the next ones below it (a tab each from three tasks on) — and
     /// the answer to the agent.
-    fn start_tasks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(request) = self.task_requests.pop_front() else { return };
+    fn start_tasks(&mut self, request: TasksRequest, base: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(caller) = self.pane_by_id(request.pane, cx) else {
             let _ = request.reply.send(browser_reply(Err("the asking pane is gone".into())));
             return cx.notify();
@@ -89,9 +108,15 @@ impl Workbench {
             for task in tasks {
                 // A folder outside git has no working trees: the task starts there, next to the asking agent.
                 let in_git = agentty_bridge::worktree::tree_root(&cwd).is_some();
-                let (source, label) = (cwd.clone(), task.title.clone());
+                let (source, label, base) = (cwd.clone(), task.title.clone(), base.clone());
                 let tree = if in_git {
-                    match cx.background_spawn(async move { agentty_bridge::worktree::create(&source, &label) }).await {
+                    let made = cx.background_spawn(async move {
+                        match base {
+                            Some(base) => agentty_bridge::worktree::create_from(&source, &label, &base),
+                            None => agentty_bridge::worktree::create(&source, &label),
+                        }
+                    });
+                    match made.await {
                         Ok(tree) => Some(tree),
                         Err(err) => {
                             problems.push(format!("{}: {err:#}", task.title));
@@ -123,6 +148,7 @@ impl Workbench {
                     .flatten();
                 match opened {
                     Some(pane) => {
+                        let _ = this.update(cx, |this, cx| this.board_adopt(&pane, cx));
                         previous = Some(pane);
                         started.push(serde_json::json!({ "title": task.title, "branch": branch, "folder": folder }));
                         if tree.is_none() {
@@ -305,10 +331,16 @@ impl Workbench {
                                     button("tasks-decline", t(cx, "tasks.decline").to_string(), false)
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.decline_tasks(cx))),
                                 )
-                                .child(
-                                    button("tasks-start", t(cx, "tasks.start").to_string(), true)
-                                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.start_tasks(window, cx))),
-                                ),
+                                .child(button("tasks-start", t(cx, "tasks.start").to_string(), true).on_click(cx.listener(
+                                    |this, _: &ClickEvent, window, cx| {
+                                        if let Some(request) = this.task_requests.pop_front() {
+                                            // A board ticket's tasks start from its branch, asked or not.
+                                            let base =
+                                                this.pane_by_id(request.pane, cx).and_then(|pane| this.board_task_base(&pane)).flatten();
+                                            this.start_tasks(request, base, window, cx);
+                                        }
+                                    },
+                                ))),
                         ),
                 )
                 .into_any_element(),

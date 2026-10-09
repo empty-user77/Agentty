@@ -306,6 +306,8 @@ pub struct Settings {
     pub harness_submit: bool,
     /// Agent that starts harness work.
     pub harness_agent: HarnessAgent,
+    /// The development board (Settings → Development board): off until the user turns it on.
+    pub board: BoardSettings,
     /// Consent to anonymous usage statistics (Google Analytics: which features were used, app and
     /// OS version, a random installation id — never personal data, paths, commands, prompts or
     /// output). `DO_NOT_TRACK=1` turns it off regardless, and builds without analytics credentials
@@ -343,6 +345,100 @@ pub struct Settings {
     pub update_later_version: String,
     #[serde(default)]
     pub update_later_until: u64,
+}
+
+/// How the development board works.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BoardSettings {
+    /// The board page, its icon and its commands are only there when this is on.
+    pub enabled: bool,
+    /// The agent a new ticket goes to.
+    pub agent: BoardAgent,
+    pub run_mode: BoardRunMode,
+    pub split: BoardSplit,
+    /// What happens to a ticket's workspace and worktrees when the user signs it off.
+    pub cleanup: BoardCleanup,
+    pub jira: JiraSettings,
+}
+
+impl Default for BoardSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            agent: BoardAgent::Claude,
+            run_mode: BoardRunMode::Worktree,
+            split: BoardSplit::Auto,
+            cleanup: BoardCleanup::Ask,
+            jira: JiraSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoardAgent {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl BoardAgent {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+/// Where a ticket's agent works.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardRunMode {
+    /// A new git worktree on a branch of its own (outside git: the project folder).
+    #[default]
+    Worktree,
+    /// Right in the project folder, on whatever is checked out there.
+    ProjectFolder,
+}
+
+/// What happens when a ticket's agent wants to split its work (`agentty tasks`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardSplit {
+    /// The tasks start without asking.
+    #[default]
+    Auto,
+    /// The usual dialog asks first.
+    Ask,
+    /// One agent per ticket: it is told not to split, and requests are refused.
+    Off,
+}
+
+/// Cleaning up a ticket's workspace and worktrees at the final sign-off. Branches with commits
+/// the default branch does not have always stay; a tree with uncommitted changes is never removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardCleanup {
+    /// A dialog shows what goes and what stays.
+    #[default]
+    Ask,
+    /// Without asking, when nothing would be lost (otherwise the dialog after all).
+    Always,
+    Never,
+}
+
+/// Jira Cloud, for importing issues as tickets. The API token is in the Keychain, not here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct JiraSettings {
+    pub enabled: bool,
+    /// `https://team.atlassian.net`.
+    pub site: String,
+    pub email: String,
+    /// The issues an import brings in.
+    pub jql: String,
 }
 
 /// Which agent starts work through a harness.
@@ -695,6 +791,7 @@ impl Default for Settings {
             harness_patterns: Vec::new(),
             harness_submit: true,
             harness_agent: HarnessAgent::Auto,
+            board: BoardSettings::default(),
             analytics: true,
             compact_workspaces: false,
             sort_finished_to_top: false,
