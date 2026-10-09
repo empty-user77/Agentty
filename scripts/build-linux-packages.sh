@@ -58,12 +58,18 @@ fi
 
 # ─── On the host ───
 docker info >/dev/null 2>&1 || { echo "Docker is not running (start Docker Desktop)" >&2; exit 1; }
+# git in the container (root) refuses the host-owned checkout ("dubious ownership"), so the commit
+# Settings → About shows is read here and handed in; SOURCE_DATE_EPOCH, when set, fixes the date.
+build_env=(-e CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-auto}" -e AGENTTY_SOURCE_COMMIT="$(git rev-parse --short=9 HEAD 2>/dev/null || true)")
+if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
+  build_env+=(-e SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH")
+fi
 docker run --rm --platform "$PLATFORM" \
   -v "$PWD:/src" -w /src \
   -v agentty-linux-amd64-cargo:/root/.cargo \
   -v agentty-linux-amd64-rustup:/root/.rustup \
   -v agentty-linux-amd64-target:/src/target \
-  -e CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-auto}" \
+  "${build_env[@]}" \
   "$IMAGE" bash scripts/build-linux-packages.sh --in-container
 
 if [[ "${1:-}" == "--check" ]]; then

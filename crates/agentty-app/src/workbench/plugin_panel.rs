@@ -1080,6 +1080,24 @@ impl Workbench {
     }
 }
 
+/// After the upgrade that brought the plugin group: pins the sidebar plugins installed then, so
+/// each keeps its own activity-bar item. Once, right after the plugins are loaded.
+pub fn pin_installed_sidebar_plugins(cx: &mut gpui::App) {
+    if !settings(cx).pin_sidebar_plugins {
+        return;
+    }
+    let sidebar: Vec<String> = plugins::active(cx)
+        .filter(|(_, manifest)| manifest.contributes.panel.is_some() && manifest.surface() == Surface::Sidebar)
+        .map(|(plugin, _)| plugin.id.clone())
+        .collect();
+    crate::settings::update_settings(cx, move |s| {
+        s.pin_sidebar_plugins = false;
+        if s.pinned_plugins.is_empty() {
+            s.pinned_plugins = sidebar;
+        }
+    });
+}
+
 /// Pins a sidebar plugin to the activity bar, or unpins it.
 fn toggle_plugin_pin(id: &str, cx: &mut gpui::App) {
     let id = id.to_string();

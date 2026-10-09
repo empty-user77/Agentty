@@ -153,6 +153,33 @@ pub fn model_present(m: &Model) -> bool {
     std::fs::metadata(model_path(m)).map(|meta| meta.len() == m.bytes).unwrap_or(false)
 }
 
+/// Whether the file at `path` hashes to `sha256`, worked out once per process for each file as it
+/// is (its size and modification time): a model damaged on disk at the same size would otherwise
+/// reach whisper.cpp, whose asserts abort the whole app. Hashing reads the file, so call it off
+/// the UI thread; later calls for the unchanged file answer from memory.
+fn verified(path: &Path, sha256: &str) -> bool {
+    type Stamp = (PathBuf, u64, Option<std::time::SystemTime>);
+    static VERDICTS: std::sync::Mutex<Vec<(Stamp, bool)>> = std::sync::Mutex::new(Vec::new());
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let stamp: Stamp = (path.to_path_buf(), meta.len(), meta.modified().ok());
+    if let Some((_, ok)) = VERDICTS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(known, _)| *known == stamp) {
+        return *ok;
+    }
+    let ok = matches!(sha256_file(path), Ok(h) if h == sha256);
+    let mut verdicts = VERDICTS.lock().unwrap_or_else(|e| e.into_inner());
+    verdicts.retain(|((known, _, _), _)| known != path);
+    verdicts.push((stamp, ok));
+    ok
+}
+
+/// Checks a model's file in the background ahead of its first use (a recording started), so the
+/// transcription after it doesn't wait on the hash.
+pub fn verify_in_background(m: &'static Model) {
+    let _ = std::thread::Builder::new().name("voice-verify".into()).spawn(move || {
+        verified(&model_path(m), m.sha256);
+    });
+}
+
 fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -270,6 +297,12 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     let path = model_path(model);
     if !model_present(model) {
         bail!("voice model {} is not installed", model.id);
+    }
+    // Only a file that matches its pinned hash is ever handed to whisper.cpp. A damaged one goes,
+    // so the setup offers the download again.
+    if !verified(&path, model.sha256) {
+        let _ = std::fs::remove_file(&path);
+        bail!("voice model {} was damaged and has been removed: download it again", model.id);
     }
 
     // Load (or reload, if the model changed) under the lock, then clone the `Arc` and release it,
@@ -416,6 +449,25 @@ fn resample_to_16k(input: &[f32], rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_damaged_model_of_the_same_size_fails_verification() {
+        let dir = std::env::temp_dir().join(format!("agentty-voice-verify-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ggml-example.bin");
+        std::fs::write(&path, b"not a real model").unwrap();
+        let good = hex(&Sha256::digest(b"not a real model"));
+        assert!(verified(&path, &good));
+        // Asked again for the unchanged file: answered from memory.
+        assert!(verified(&path, &good));
+        // Same size, other bytes, a later write: checked again and refused.
+        std::fs::write(&path, b"not a real m0del").unwrap();
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+        assert!(!verified(&path, &good));
+        assert!(!verified(&dir.join("missing.bin"), &good));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn models_are_well_formed() {

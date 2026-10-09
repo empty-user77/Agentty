@@ -114,6 +114,8 @@ pub type ImageChecks = RefCell<PictureCache>;
 
 /// A file's change time and size: when either moves, the picture is read again.
 type Stamp = (SystemTime, u64);
+/// Where a picture's `src` led, and the file's stamp there.
+type Found = (PathBuf, Stamp);
 
 #[derive(Default)]
 pub struct PictureCache {
@@ -122,14 +124,20 @@ pub struct PictureCache {
     loading: HashSet<(PathBuf, Stamp)>,
     /// Bytes of the pictures in `entries`.
     bytes: u64,
+    /// Where a plugin's `src` led and the file's stamp there, and when that was looked up: finding
+    /// the file takes a lock and a look at every folder on the way, too much for every frame.
+    found: HashMap<(String, String), (Instant, Option<Found>)>,
 }
 
 struct Picture {
     stamp: Stamp,
-    /// `None`: the file is not a picture.
+    /// `None`: the file is not a picture (or was let go, see `dropped`).
     image: Option<Arc<gpui::Image>>,
     bytes: u64,
     used: Instant,
+    /// Let go while on screen, when the cache was over its hard cap, and when: drawn as the
+    /// placeholder instead of being read again at once, until [`RETRY_DROPPED`] has passed.
+    dropped: Option<Instant>,
 }
 
 /// What the cache has for a file as it is now.
@@ -144,13 +152,41 @@ enum Cached {
 /// one go would read it again at once, push out the next, and go round for as long as a panel
 /// shows more than fits.
 const ON_SCREEN: Duration = Duration::from_secs(2);
+/// How long where a picture's `src` leads is trusted before it is looked up again.
+const LOOKUP_EVERY: Duration = Duration::from_secs(1);
+/// A picture let go while on screen is tried again after this long.
+const RETRY_DROPPED: Duration = Duration::from_secs(30);
 
 impl PictureCache {
+    /// Where `src` of `plugin` leads, and the file's stamp: looked up with `look` at most once
+    /// every [`LOOKUP_EVERY`].
+    fn lookup(
+        &mut self,
+        plugin: &str,
+        src: &str,
+        now: Instant,
+        look: impl FnOnce() -> Option<(PathBuf, Stamp)>,
+    ) -> Option<(PathBuf, Stamp)> {
+        if let Some((at, found)) = self.found.get(&(plugin.to_string(), src.to_string())) {
+            if now.saturating_duration_since(*at) < LOOKUP_EVERY {
+                return found.clone();
+            }
+        }
+        // Pictures a panel no longer shows are forgotten, so the list stays as long as a screenful.
+        if self.found.len() >= 1024 {
+            self.found.retain(|_, (at, _)| now.saturating_duration_since(*at) < LOOKUP_EVERY);
+        }
+        let found = look();
+        self.found.insert((plugin.to_string(), src.to_string()), (now, found.clone()));
+        found
+    }
+
     fn get(&mut self, path: &Path, stamp: Stamp, now: Instant) -> Cached {
         match self.entries.get_mut(path) {
             Some(picture) => {
                 picture.used = now;
-                if picture.stamp == stamp {
+                let retry = picture.dropped.is_some_and(|at| now.saturating_duration_since(at) >= RETRY_DROPPED);
+                if picture.stamp == stamp && !retry {
                     Cached::Fresh(picture.image.clone())
                 } else {
                     Cached::Stale(picture.image.clone())
@@ -166,11 +202,13 @@ impl PictureCache {
     }
 
     /// Keeps what a read found, then lets go of the pictures used longest ago until the rest fit
-    /// in `limit` — never one that is on screen ([`ON_SCREEN`]), which the one just read is.
+    /// in `limit` — never one that is on screen ([`ON_SCREEN`]), which the one just read is. Past
+    /// twice `limit` (a panel showing more than that) the oldest on screen go as well: they are
+    /// drawn as placeholders, and tried again only after [`RETRY_DROPPED`].
     fn finish_loading(&mut self, path: PathBuf, stamp: Stamp, image: Option<Arc<gpui::Image>>, limit: u64, now: Instant) {
         self.loading.remove(&(path.clone(), stamp));
         let bytes = image.as_ref().map_or(0, |image| image.bytes().len() as u64);
-        if let Some(old) = self.entries.insert(path, Picture { stamp, image, bytes, used: now }) {
+        if let Some(old) = self.entries.insert(path, Picture { stamp, image, bytes, used: now, dropped: None }) {
             self.bytes -= old.bytes;
         }
         self.bytes += bytes;
@@ -187,6 +225,16 @@ impl PictureCache {
             if let Some(gone) = self.entries.remove(&oldest) {
                 self.bytes -= gone.bytes;
             }
+        }
+        let hard_limit = limit.saturating_mul(2);
+        while self.bytes > hard_limit {
+            let Some(oldest) = self.entries.values_mut().filter(|picture| picture.bytes > 0).min_by_key(|picture| picture.used) else {
+                break;
+            };
+            self.bytes -= oldest.bytes;
+            oldest.bytes = 0;
+            oldest.image = None;
+            oldest.dropped = Some(now);
         }
     }
 }
@@ -300,10 +348,12 @@ impl Workbench {
     /// A plugin's picture, when it is one: inside the plugin's folder (no way out of it, no link),
     /// there, and a picture by its bytes — read once per change of the file, in the background.
     fn plugin_picture(&self, plugin: &str, src: &str, cx: &mut Context<Self>) -> Option<Arc<gpui::Image>> {
-        let path = agentty_bridge::plugins::files::resolve(plugin, src).ok()?;
-        let meta = std::fs::metadata(&path).ok().filter(|m| m.is_file() && m.len() <= MAX_PICTURE_BYTES)?;
-        let stamp = (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len());
         let mut cache = self.plugin_image_checks.borrow_mut();
+        let (path, stamp) = cache.lookup(plugin, src, Instant::now(), || {
+            let path = agentty_bridge::plugins::files::resolve(plugin, src).ok()?;
+            let meta = std::fs::metadata(&path).ok().filter(|m| m.is_file() && m.len() <= MAX_PICTURE_BYTES)?;
+            Some((path, (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len())))
+        })?;
         let shown = match cache.get(&path, stamp, Instant::now()) {
             Cached::Fresh(image) => return image,
             Cached::Stale(image) => image,
@@ -928,14 +978,15 @@ mod tests {
     #[test]
     fn what_is_on_screen_stays_however_much_it_is() {
         // A panel showing more than fits: letting one go would read it again on the next frame
-        // and push out another, for as long as the panel is open. So they all stay...
+        // and push out another, for as long as the panel is open. So they all stay (up to twice
+        // the limit)...
         let now = Instant::now();
         let mut cache = PictureCache::default();
-        for name in ["a", "b", "c", "huge"] {
-            cache.finish_loading(name.into(), stamp(1), picture(if name == "huge" { 500 } else { 40 }), 100, now);
+        for name in ["a", "b", "c", "large"] {
+            cache.finish_loading(name.into(), stamp(1), picture(if name == "large" { 80 } else { 40 }), 100, now);
         }
         assert_eq!(cache.entries.len(), 4);
-        assert_eq!(cache.bytes, 620);
+        assert_eq!(cache.bytes, 200);
         // ...until the panel shows something else: then the ones no longer drawn go.
         let later = now + ON_SCREEN * 2;
         assert!(is_fresh(cache.get(Path::new("b"), stamp(1), later)));
@@ -944,6 +995,43 @@ mod tests {
         kept.sort();
         assert_eq!(kept, ["b", "e"]);
         assert_eq!(cache.bytes, 80);
+    }
+
+    #[test]
+    fn past_the_hard_cap_the_oldest_on_screen_go_and_wait_before_a_new_read() {
+        let start = Instant::now();
+        let mut cache = PictureCache::default();
+        for (name, ms) in [("a", 0), ("b", 10), ("c", 20), ("huge", 30)] {
+            let size = if name == "huge" { 150 } else { 40 };
+            cache.finish_loading(name.into(), stamp(1), picture(size), 100, start + Duration::from_millis(ms));
+        }
+        // 270 bytes, all on screen, over the hard cap of 200: `a` and `b`, drawn longest ago, go.
+        assert_eq!(cache.bytes, 190);
+        let now = start + Duration::from_millis(40);
+        // A dropped picture is not read again on the next frame (that would go round)...
+        assert!(matches!(cache.get(Path::new("a"), stamp(1), now), Cached::Fresh(None)));
+        assert!(is_fresh(cache.get(Path::new("c"), stamp(1), now)));
+        // ...only once a while has passed.
+        assert!(matches!(cache.get(Path::new("a"), stamp(1), now + RETRY_DROPPED), Cached::Stale(None)));
+    }
+
+    #[test]
+    fn where_a_picture_is_is_looked_up_once_a_second() {
+        let start = Instant::now();
+        let mut cache = PictureCache::default();
+        let looks = Cell::new(0);
+        let look = || {
+            looks.set(looks.get() + 1);
+            Some((PathBuf::from("files/a.png"), stamp(1)))
+        };
+        for ms in [0, 100, 900] {
+            assert!(cache.lookup("demo", "a.png", start + Duration::from_millis(ms), look).is_some());
+        }
+        assert_eq!(looks.get(), 1);
+        cache.lookup("demo", "b.png", start, look);
+        assert_eq!(looks.get(), 2, "another picture is its own lookup");
+        cache.lookup("demo", "a.png", start + LOOKUP_EVERY, look);
+        assert_eq!(looks.get(), 3);
     }
 
     #[test]

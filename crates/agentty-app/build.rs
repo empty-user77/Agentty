@@ -62,21 +62,40 @@ END
 /// Commit, date, profile, target and compiler of this build. Nothing here fails the build: what
 /// cannot be found (no git in a source tarball, say) is "unknown". Only names and numbers leave
 /// this script, never a path, so no folder of the machine that built it ends up in the binary.
+///
+/// Commit and date go only into release builds; a dev build says "dev". Embedding them reruns this
+/// script whenever HEAD moves, and every rerun recompiles all of agentty-app — on each commit and
+/// branch switch, in every worktree. `AGENTTY_SOURCE_COMMIT` names the commit when git cannot (a
+/// container that does not own the checkout), `SOURCE_DATE_EPOCH` the date.
 mod build_info {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
     pub fn emit() {
-        let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
-        let commit = git(&manifest_dir, &["rev-parse", "--short=9", "HEAD"]).unwrap_or_else(|| "unknown".into());
-        watch_head(&manifest_dir);
-        println!("cargo:rustc-env=AGENTTY_BUILD_COMMIT={commit}");
+        println!("cargo:rerun-if-env-changed=AGENTTY_SOURCE_COMMIT");
         println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
-        println!("cargo:rustc-env=AGENTTY_BUILD_DATE={}", build_date());
         let env = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "unknown".into());
+        let (commit, date) = if env("PROFILE") == "release" {
+            let given = std::env::var("AGENTTY_SOURCE_COMMIT").ok().filter(|c| is_commit(c));
+            let commit = given.or_else(|| {
+                let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+                watch_head(&manifest_dir);
+                git(&manifest_dir, &["rev-parse", "--short=9", "HEAD"])
+            });
+            (commit.unwrap_or_else(|| "unknown".into()), build_date())
+        } else {
+            ("dev".into(), "dev".into())
+        };
+        println!("cargo:rustc-env=AGENTTY_BUILD_COMMIT={commit}");
+        println!("cargo:rustc-env=AGENTTY_BUILD_DATE={date}");
         println!("cargo:rustc-env=AGENTTY_BUILD_PROFILE={}", env("PROFILE"));
         println!("cargo:rustc-env=AGENTTY_BUILD_TARGET={}", env("TARGET"));
         println!("cargo:rustc-env=AGENTTY_BUILD_RUSTC={}", rustc_version().unwrap_or_else(|| "unknown".into()));
+    }
+
+    /// A commit id as git prints one: hex, abbreviated or whole.
+    fn is_commit(text: &str) -> bool {
+        (4..=40).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_hexdigit())
     }
 
     fn git(dir: &Path, args: &[&str]) -> Option<String> {

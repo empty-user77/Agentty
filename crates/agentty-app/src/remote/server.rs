@@ -50,6 +50,11 @@ const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 const MAX_TRANSCRIPTIONS: usize = 2;
 /// How long a refused request's unread body is drained so its answer arrives (`linger`).
 const LINGER: Duration = Duration::from_secs(3);
+/// Refused voice uploads drained at once; past this the connection just closes, so refusals
+/// can't hold every connection the server has.
+const MAX_LINGERS: usize = 4;
+/// Refused voice uploads being drained now (see [`MAX_LINGERS`]).
+static LINGERING: AtomicUsize = AtomicUsize::new(0);
 /// Longest text one input may carry (a prompt pasted from a phone).
 pub const MAX_INPUT_CHARS: usize = 16_000;
 const LOG_LEN: usize = 50;
@@ -492,7 +497,9 @@ impl Hub {
         let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
         let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
         let deadline = Instant::now() + REQUEST_DEADLINE;
+        let voice = std::cell::Cell::new(false);
         let request = match http::read_request(&mut stream, deadline, |head| {
+            voice.set(http::is_voice(&head.path));
             if config.secret.as_deref().is_some_and(|secret| strip_secret(&head.path, secret).is_none()) {
                 return Err(404);
             }
@@ -513,8 +520,12 @@ impl Hub {
                     _ => 400,
                 };
                 send(&mut stream, &Response::new(status, "text/plain", http::reason(status)), false);
-                if matches!(error, HttpError::Refused(_) | HttpError::BodyTooLarge) {
-                    linger(&mut stream);
+                // Only a voice upload sends a body big enough to be still arriving (the page acts
+                // on its 401 / 429); a few at a time, so refusals can't take every connection.
+                if voice.get() && matches!(error, HttpError::Refused(_) | HttpError::BodyTooLarge) {
+                    if let Some(_slot) = Slot::take(&LINGERING, MAX_LINGERS) {
+                        linger(&mut stream);
+                    }
                 }
                 return;
             }
@@ -1053,6 +1064,21 @@ fn strip_secret(path: &str, secret: &str) -> Option<String> {
     }
 }
 
+/// One of a bounded number of places, given back when dropped.
+struct Slot(&'static AtomicUsize);
+
+impl Slot {
+    fn take(taken: &'static AtomicUsize, max: usize) -> Option<Self> {
+        taken.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < max).then_some(n + 1)).ok().map(|_| Self(taken))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// After answering a request whose body was not read: closing with that body still arriving
 /// would reset the connection, and the browser would lose the answer (a 401 or 429 the page acts
 /// on) along with it. So the writing side is closed and what still comes is read and dropped, for
@@ -1210,6 +1236,15 @@ mod tests {
 
     const HOST: &str = "mac.example.ts.net:8743";
     const OWNER: &str = "me@example.com";
+
+    #[test]
+    fn only_so_many_refusals_linger_at_once() {
+        static TAKEN: AtomicUsize = AtomicUsize::new(0);
+        let held: Vec<_> = (0..3).map(|_| Slot::take(&TAKEN, 3).expect("a free slot")).collect();
+        assert!(Slot::take(&TAKEN, 3).is_none(), "every slot is taken");
+        drop(held);
+        assert!(Slot::take(&TAKEN, 3).is_some(), "given back when done");
+    }
 
     fn hub(password: &str) -> Arc<Hub> {
         let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None };

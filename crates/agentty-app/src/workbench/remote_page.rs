@@ -593,7 +593,10 @@ impl Workbench {
                     Some(result) => {
                         wb.remote_page.voice_dl = None;
                         match result {
-                            Ok(()) => remote::refresh_voice(cx),
+                            Ok(()) => {
+                                super::voice_input::refresh_installed();
+                                remote::refresh_voice(cx);
+                            }
                             Err(err) => wb.remote_page.voice_error = Some(err),
                         }
                         cx.notify();

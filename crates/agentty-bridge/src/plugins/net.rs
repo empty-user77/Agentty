@@ -229,9 +229,11 @@ fn system_lookup() -> Lookup {
     Arc::new(|netloc: &str| netloc.to_socket_addrs().map(Iterator::collect))
 }
 
-/// The resolver the HTTP client connects through: it looks the name up, refuses the whole answer
-/// when any address in it is one a plugin may not reach, and hands the client exactly the
-/// addresses it checked.
+/// The resolver the HTTP client connects through: it looks the name up, leaves out every address
+/// in the answer a plugin may not reach, and hands the client exactly the addresses it checked —
+/// refusing only when none is left. A name with a link-local address next to a routable one
+/// (an mDNS `.local` host, `localhost` with `fe80::1%lo0` in `/etc/hosts`) is reached through the
+/// routable one; the forbidden one is never connected to.
 ///
 /// Checking here rather than before the request is what closes the gap a name leaves: a name that
 /// resolves to `169.254.169.254` passes every check on the URL's text, and a name looked up once
@@ -243,8 +245,8 @@ fn system_lookup() -> Lookup {
 /// address the request is for is then looked up by the proxy, which the plugin chose.
 fn guarded(lookup: Lookup) -> impl ureq::Resolver {
     move |netloc: &str| -> std::io::Result<Vec<SocketAddr>> {
-        let addresses = lookup(netloc)?;
-        if addresses.iter().any(|address| is_forbidden_ip(address.ip())) {
+        let addresses = reachable(lookup(netloc)?);
+        if addresses.is_empty() {
             return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, NOT_REACHABLE));
         }
         Ok(addresses)
@@ -252,6 +254,12 @@ fn guarded(lookup: Lookup) -> impl ureq::Resolver {
 }
 
 const NOT_REACHABLE: &str = "that address is not reachable from a plugin";
+
+/// The addresses of an answer a plugin may connect to, in the order given.
+fn reachable(mut addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    addresses.retain(|address| !is_forbidden_ip(address.ip()));
+    addresses
+}
 
 /// The client for one request: Agentty's TLS, a deadline, no redirects of its own (see [`send`]),
 /// the plugin's proxy if it named one, and names resolved through [`guarded`].
@@ -706,8 +714,8 @@ mod tests {
             &["64:ff9b::a9fe:a9fe"],
             &["fe80::1"],
             &["fd00:ec2::254"],
-            // One bad address among good ones spoils the answer: the client tries them in turn.
-            &["93.184.215.14", "169.254.169.254"],
+            // Nothing left once the forbidden ones are out.
+            &["169.254.169.254", "fe80::1", "fd00:ec2::254"],
         ] {
             let (lookup, calls) = fake_dns(&[("sneaky.example", answer)]);
             let err = fetch_with(&request(serde_json::json!({ "url": "http://sneaky.example/latest/meta-data/" })), lookup).unwrap_err();
@@ -727,6 +735,23 @@ mod tests {
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "looked up once, for the connection");
         let arrived = server.requests()[0].to_ascii_lowercase();
         assert!(arrived.contains(&format!("host: api.example:{}", server.port)), "{arrived}");
+    }
+
+    #[test]
+    fn a_link_local_address_next_to_a_routable_one_is_left_out() {
+        // mDNS hosts answer with their fe80:: address too, and many Macs list `fe80::1%lo0` for
+        // localhost: the request goes to the routable address, never to the link-local one.
+        let server = Server::answering(vec![ok("reached"), ok("reached")]);
+        for answer in [&["fe80::1", "127.0.0.1"][..], &["169.254.169.254", "127.0.0.1", "fd00:ec2::254"]] {
+            let (lookup, _) = fake_dns(&[("printer.local", answer)]);
+            let response =
+                fetch_with(&request(serde_json::json!({ "url": format!("http://printer.local:{}/", server.port) })), lookup).unwrap();
+            assert_eq!(response.body, "reached", "{answer:?}");
+        }
+        let checked = reachable(
+            ["[fe80::1]:80", "10.0.0.2:80", "169.254.1.1:80", "[::1]:80"].iter().map(|address| address.parse().unwrap()).collect(),
+        );
+        assert_eq!(checked, vec!["10.0.0.2:80".parse::<SocketAddr>().unwrap(), "[::1]:80".parse().unwrap()]);
     }
 
     #[test]
