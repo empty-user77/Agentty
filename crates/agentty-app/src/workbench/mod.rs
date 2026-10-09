@@ -636,6 +636,10 @@ pub struct Workbench {
     plugin_panel: Option<String>,
     /// The panel's layout menu is open.
     plugin_mode_menu: bool,
+    /// The activity bar's group of sidebar plugins has its list open.
+    plugin_group_menu: bool,
+    /// The right-click menu of a plugin's activity-bar item: the plugin, and where it was clicked.
+    plugin_pin_menu: Option<(String, gpui::Point<gpui::Pixels>)>,
     /// The panel's plugin shows a popover beside the panel: the page moves right to leave it room
     /// while it is open.
     plugin_popover_open: bool,
@@ -939,6 +943,8 @@ impl Workbench {
             harness_pattern_form: None,
             plugin_panel: None,
             plugin_mode_menu: false,
+            plugin_group_menu: false,
+            plugin_pin_menu: None,
             plugin_popover_open: false,
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
@@ -4378,6 +4384,16 @@ impl Workbench {
             "agentty-link" => self.open_agentty_link(argument, window, cx),
             // `plugin-panel <id>` / `plugin-command <id> <command>`.
             "plugin-panel" => self.toggle_plugin(argument, window, cx),
+            // `plugin-group`: opens or closes the activity bar's list of grouped plugins.
+            "plugin-group" => {
+                self.plugin_group_menu = !self.plugin_group_menu;
+                cx.notify();
+            }
+            // `plugin-pin-menu <id>`: the right-click menu of a plugin's activity-bar item.
+            "plugin-pin-menu" => {
+                self.plugin_pin_menu = Some((argument.to_string(), gpui::point(px(60.), px(560.))));
+                cx.notify();
+            }
             "plugin-command" => {
                 if let Some((plugin, command)) = argument.split_once(' ') {
                     self.run_plugin_command(plugin, command, None, cx);
