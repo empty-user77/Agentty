@@ -75,3 +75,5 @@ What Agentty uses and whether it is installed — Git, Node.js, the agent CLIs. 
 ## About
 
 Version, update check, and links — including the [Privacy Policy](https://www.agentty.run/privacy-policy), [Terms of Service](https://www.agentty.run/terms-of-service) and [License Agreement](https://www.agentty.run/eula).
+
+**Build** lists what this copy of Agentty is: version, commit, build date, profile (release or debug), target platform, Rust version and whether on-device voice recognition is included, followed by the API versions of the interfaces Agentty offers (plugin API, marketplace index, MCP, shell integration, settings backup file, session sync format). **Copy build info** copies all of it as plain English text to paste into a bug report; it holds no paths, user names or keys.

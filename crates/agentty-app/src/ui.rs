@@ -140,6 +140,7 @@ pub const ICONS: &[&str] = &[
     "file-plus",
     "list",
     "message-square",
+    "message-square-code",
     "notebook",
     "sticky-note",
     "bookmark",

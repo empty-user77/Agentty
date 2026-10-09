@@ -339,6 +339,43 @@ fn terminal_preview(preview: Option<super::Pane>, cx: &mut Context<Workbench>) -
         .child(div().rounded_md().overflow_hidden().border_1().border_color(hex(Chrome::BORDER)).bg(hex(theme.background)).child(body))
 }
 
+/// Settings → About: the build and the interface versions, as a key/value list, with a button that
+/// copies it all as plain text for a bug report.
+fn build_info_section(cx: &mut Context<Workbench>) -> Div {
+    use crate::build_info::{api_rows, build_rows, plain_text, value_text, Row};
+    let language = settings(cx).language;
+    let rows = |rows: Vec<Row>, cx: &Context<Workbench>| {
+        div().flex().flex_col().gap_1().children(rows.into_iter().map(|row| {
+            div()
+                .flex()
+                .gap_4()
+                .t_small()
+                .child(div().w(px(220.)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(t(cx, row.label)))
+                .child(div().font_family(BUNDLED_FONT).text_color(hex(Chrome::BRIGHT)).child(value_text(&row.value, language)))
+        }))
+    };
+    section(t(cx, "about.build"))
+        .child(rows(build_rows(), cx))
+        .child(
+            div()
+                .pt_2()
+                .t_small()
+                .font_weight(crate::theme::EMPHASIS)
+                .text_color(hex(Chrome::FOREGROUND))
+                .child(t(cx, "about.api_versions")),
+        )
+        .child(rows(api_rows(), cx))
+        .child(div().pt_1().flex().child(crate::ui::action_button_with_icon(
+            "about-copy-build",
+            "copy",
+            t(cx, "about.build_copy"),
+            cx.listener(|this, _: &ClickEvent, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(plain_text()));
+                this.show_toast(t(cx, "about.build_copied").to_string(), cx);
+            }),
+        )))
+}
+
 pub(super) fn section(title: &str) -> Div {
     div().flex().flex_col().gap_3().pb_6().child(
         div()
@@ -811,6 +848,7 @@ impl Workbench {
                     })
                     .child(div().t_small().text_color(hex(Chrome::MUTED)).child(status)),
             )
+            .child(build_info_section(cx))
             .child(
                 section(t(cx, "settings.about_links"))
                     .child(

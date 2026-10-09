@@ -49,6 +49,9 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
+/// Whether this build has on-device transcription (the `voice` feature, whisper.cpp) compiled in.
+pub const AVAILABLE: bool = cfg!(feature = "voice");
+
 /// The default model id when none is chosen.
 pub const DEFAULT_MODEL: &str = "base";
 
