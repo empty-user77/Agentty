@@ -1084,6 +1084,8 @@ impl Workbench {
         });
         cx.on_app_quit(|this, cx| {
             this.persist(cx);
+            // A board change still waiting for its delayed save.
+            board::save_board_now();
             // Whichever way the app is going down: the sleep lock is a child process and would
             // outlive it. Letting go of it twice is a no-op.
             crate::platform::wakelock::set(false);
@@ -1334,7 +1336,8 @@ impl Workbench {
                     });
                 }
                 None => {
-                    self.workspaces.remove(w);
+                    let removed = self.workspaces.remove(w);
+                    self.board_workspace_closed(removed.id);
                     if self.active_workspace >= self.workspaces.len() {
                         self.active_workspace = self.workspaces.len().saturating_sub(1);
                     } else if w < self.active_workspace {
@@ -1631,6 +1634,7 @@ impl Workbench {
             self.workspaces.remove(index);
             self.active_workspace = self.active_workspace.min(self.workspaces.len().saturating_sub(1));
         }
+        self.board_workspace_closed(id);
         self.persist(cx);
         self.workspace_menu = None;
         self.focus_active(window, cx);
@@ -3007,6 +3011,7 @@ impl Workbench {
             // Only the active workspace starts processes; the rest wake up when opened.
             self.activate_workspace(state.active_workspace.min(self.workspaces.len() - 1), window, cx);
         }
+        self.board_forget_missing_workspaces();
         self.restore_panels(state.panels, cx);
     }
 

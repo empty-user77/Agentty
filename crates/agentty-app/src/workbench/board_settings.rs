@@ -22,8 +22,10 @@ pub struct JiraFields {
 #[derive(Default)]
 pub struct JiraUi {
     fields: Option<JiraFields>,
-    /// Whether a token is saved; read once when the page first shows.
+    /// Whether a token is saved; read once (off the UI thread) when the Jira settings first show.
     token_saved: Option<bool>,
+    /// That read is under way.
+    token_checking: bool,
     busy: bool,
     /// The last check or save: (went well, what to say).
     message: Option<(bool, String)>,
@@ -118,11 +120,47 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Deletes the token in the background: the Keychain may ask the user or be slow, and the
+    /// window must not freeze meanwhile.
     fn delete_jira_token(&mut self, cx: &mut Context<Self>) {
-        let _ = agentty_bridge::jira::delete_token();
-        self.board_jira.token_saved = Some(false);
-        self.board_jira.message = None;
+        if self.board_jira.busy {
+            return;
+        }
+        self.board_jira.busy = true;
+        cx.spawn(async move |this, cx| {
+            let deleted = cx.background_spawn(async move { agentty_bridge::jira::delete_token() }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.board_jira.busy = false;
+                match deleted {
+                    Ok(()) => {
+                        this.board_jira.token_saved = Some(false);
+                        this.board_jira.message = None;
+                    }
+                    Err(err) => this.board_jira.message = Some((false, format!("{err:#}"))),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
+    }
+
+    /// Looks up once, in the background, whether a token is saved.
+    fn check_jira_token_saved(&mut self, cx: &mut Context<Self>) {
+        if self.board_jira.token_saved.is_some() || self.board_jira.token_checking {
+            return;
+        }
+        self.board_jira.token_checking = true;
+        cx.spawn(async move |this, cx| {
+            let saved = cx.background_spawn(async move { agentty_bridge::jira::has_token() }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.board_jira.token_checking = false;
+                // A save or delete that finished meanwhile knows better.
+                this.board_jira.token_saved.get_or_insert(saved);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Runs the search once and says how many issues it found.
@@ -146,9 +184,6 @@ impl Workbench {
 
     pub(super) fn render_board_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let prefs = crate::settings::settings(cx).board.clone();
-        if self.board_jira.token_saved.is_none() {
-            self.board_jira.token_saved = Some(agentty_bridge::jira::has_token());
-        }
         let set = |change: fn(&mut crate::settings::BoardSettings)| {
             move |_: &ClickEvent, _: &mut Window, cx: &mut gpui::App| update_settings(cx, move |s| change(&mut s.board))
         };
@@ -253,6 +288,7 @@ impl Workbench {
             toggle("board-jira", prefs.jira.enabled, |s| s.board.jira.enabled = !s.board.jira.enabled, cx),
         ));
         if prefs.jira.enabled {
+            self.check_jira_token_saved(cx);
             let (site, email, jql, token) = {
                 let fields = self.jira_fields(window, cx);
                 (fields.site.clone(), fields.email.clone(), fields.jql.clone(), fields.token.clone())
