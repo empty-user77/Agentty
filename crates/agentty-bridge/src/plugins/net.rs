@@ -9,6 +9,8 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Body a plugin may send.
@@ -171,17 +173,12 @@ fn is_token_byte(b: u8) -> bool {
 /// The link-local address cloud providers answer instance credentials on. Agentty runs on
 /// desktops, where nothing listens there — but a plugin has no business asking either.
 ///
-/// An IPv6 address that carries an IPv4 one inside it (`::ffff:169.254.169.254`) is that IPv4
-/// address as far as the operating system is concerned, so it is that one here too: checking only
-/// the IPv6 prefix would have let a plugin write the same address a different way and go straight
-/// past this.
+/// This is the check on the address as written, so an obvious refusal comes back before anything
+/// is sent. What a name resolves to is checked where the connection is made ([`guarded`]).
 fn is_metadata_host(url: &url::Url) -> bool {
     match url.host() {
-        Some(url::Host::Ipv4(ip)) => is_metadata_v4(ip),
-        Some(url::Host::Ipv6(ip)) => match ip.to_ipv4_mapped().or_else(|| ip.to_ipv4()) {
-            Some(ip) => is_metadata_v4(ip),
-            None => ip.segments()[0] & 0xffc0 == 0xfe80,
-        },
+        Some(url::Host::Ipv4(ip)) => is_forbidden_ip(IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => is_forbidden_ip(IpAddr::V6(ip)),
         Some(url::Host::Domain(name)) => {
             let name = name.trim_end_matches('.');
             name.eq_ignore_ascii_case("metadata.google.internal") || name.eq_ignore_ascii_case("metadata")
@@ -190,8 +187,80 @@ fn is_metadata_host(url: &url::Url) -> bool {
     }
 }
 
-fn is_metadata_v4(ip: std::net::Ipv4Addr) -> bool {
-    ip.octets()[..2] == [169, 254]
+/// An address a plugin may not connect to: link-local (`169.254.0.0/16`, `fe80::/10`), where
+/// cloud providers answer instance credentials, and AWS's IPv6 metadata address.
+///
+/// An IPv6 address that carries an IPv4 one inside it (`::ffff:169.254.169.254`, the old
+/// `::a9fe:a9fe`, NAT64's `64:ff9b::a9fe:a9fe`) is that IPv4 address as far as the network is
+/// concerned, so it is that one here too: checking only the IPv6 prefix would let a plugin write
+/// the same address a different way and go straight past this.
+///
+/// Loopback and private ranges stay reachable: plugins talk to local dev servers and to machines
+/// on the user's network, and every request already needs the `net.request` permission the user
+/// granted. (Asking the manifest to name them as well would break every plugin that does so
+/// today, so it is not done.)
+fn is_forbidden_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.octets()[..2] == [169, 254],
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            let nat64 = segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
+            if let Some(v4) = ip.to_ipv4_mapped().or_else(|| ip.to_ipv4()) {
+                return is_forbidden_ip(IpAddr::V4(v4));
+            }
+            if nat64 {
+                let [a, b] = segments[6].to_be_bytes();
+                let [c, d] = segments[7].to_be_bytes();
+                return is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
+            }
+            segments[0] & 0xffc0 == 0xfe80 || ip == AWS_METADATA_V6
+        }
+    }
+}
+
+/// AWS's instance metadata service on IPv6.
+const AWS_METADATA_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
+
+/// How names are looked up: `host:port` in, addresses out. The real one asks the operating system;
+/// the tests hand in their own.
+type Lookup = Arc<dyn Fn(&str) -> std::io::Result<Vec<SocketAddr>> + Send + Sync>;
+
+fn system_lookup() -> Lookup {
+    Arc::new(|netloc: &str| netloc.to_socket_addrs().map(Iterator::collect))
+}
+
+/// The resolver the HTTP client connects through: it looks the name up, refuses the whole answer
+/// when any address in it is one a plugin may not reach, and hands the client exactly the
+/// addresses it checked.
+///
+/// Checking here rather than before the request is what closes the gap a name leaves: a name that
+/// resolves to `169.254.169.254` passes every check on the URL's text, and a name looked up once
+/// for the check and again for the connection can answer differently the second time (DNS
+/// rebinding). The client connects only to what this returns, so what was checked is what is
+/// connected to — on the first request and on every redirect hop.
+///
+/// Through a proxy the client resolves the proxy's address, which is checked the same way; the
+/// address the request is for is then looked up by the proxy, which the plugin chose.
+fn guarded(lookup: Lookup) -> impl ureq::Resolver {
+    move |netloc: &str| -> std::io::Result<Vec<SocketAddr>> {
+        let addresses = lookup(netloc)?;
+        if addresses.iter().any(|address| is_forbidden_ip(address.ip())) {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, NOT_REACHABLE));
+        }
+        Ok(addresses)
+    }
+}
+
+const NOT_REACHABLE: &str = "that address is not reachable from a plugin";
+
+/// The client for one request: Agentty's TLS, a deadline, no redirects of its own (see [`send`]),
+/// the plugin's proxy if it named one, and names resolved through [`guarded`].
+fn agent(checked: &Checked, lookup: Lookup) -> Result<ureq::Agent> {
+    let mut builder = crate::http::agent_builder().timeout(checked.timeout).redirects(0).resolver(guarded(lookup));
+    if let Some(proxy) = &checked.proxy {
+        builder = builder.proxy(ureq::Proxy::new(proxy).map_err(|_| anyhow::anyhow!("that proxy address cannot be used"))?);
+    }
+    Ok(builder.build())
 }
 
 /// Whether a status is one that names another address to go to.
@@ -225,6 +294,8 @@ fn send(agent: &ureq::Agent, checked: &Checked) -> Result<ureq::Response> {
             Ok(response) => response,
             // A 4xx / 5xx is an answer, not a failure: a REST client shows it like any other.
             Err(ureq::Error::Status(_, response)) => response,
+            // The resolver's refusal, said plainly rather than as a DNS failure.
+            Err(err) if refused_by_resolver(&err) => bail!("{NOT_REACHABLE}"),
             Err(err) => bail!("{err}"),
         };
         let status = response.status();
@@ -243,7 +314,7 @@ fn send(agent: &ureq::Agent, checked: &Checked) -> Result<ureq::Response> {
             bail!("the redirect has no host");
         }
         if is_metadata_host(&next) {
-            bail!("that address is not reachable from a plugin");
+            bail!("{NOT_REACHABLE}");
         }
         if next.host_str() != url.host_str() || next.port_or_known_default() != url.port_or_known_default() {
             headers.retain(|(name, _)| !matches!(name.to_ascii_lowercase().as_str(), "authorization" | "cookie" | "proxy-authorization"));
@@ -258,15 +329,29 @@ fn send(agent: &ureq::Agent, checked: &Checked) -> Result<ureq::Response> {
     }
 }
 
+fn refused_by_resolver(err: &ureq::Error) -> bool {
+    use std::error::Error as _;
+    let mut source = err.source();
+    while let Some(cause) = source {
+        if cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied && io.to_string() == NOT_REACHABLE)
+        {
+            return true;
+        }
+        source = cause.source();
+    }
+    false
+}
+
 /// Sends the request. Blocking: callers run it off the main thread.
 pub fn fetch(request: &FetchRequest) -> Result<FetchResponse> {
+    fetch_with(request, system_lookup())
+}
+
+fn fetch_with(request: &FetchRequest, lookup: Lookup) -> Result<FetchResponse> {
     let checked = check(request)?;
-    // Redirects are `send`'s to follow, not the client's — see there.
-    let mut builder = crate::http::agent_builder().timeout(checked.timeout).redirects(0);
-    if let Some(proxy) = &checked.proxy {
-        builder = builder.proxy(ureq::Proxy::new(proxy).map_err(|_| anyhow::anyhow!("that proxy address cannot be used"))?);
-    }
-    let agent = builder.build();
+    let agent = agent(&checked, lookup)?;
     let started = Instant::now();
     let response = send(&agent, &checked)?;
     let status = response.status();
@@ -317,16 +402,16 @@ pub struct Downloaded {
 /// `max_bytes`. The file appears only once it is whole: a download that fails or is cut off
 /// leaves nothing behind, not half a picture.
 pub fn download(request: &FetchRequest, to: &std::path::Path, max_bytes: u64) -> Result<Downloaded> {
+    download_with(request, to, max_bytes, system_lookup())
+}
+
+fn download_with(request: &FetchRequest, to: &std::path::Path, max_bytes: u64, lookup: Lookup) -> Result<Downloaded> {
     let mut checked = check(request)?;
     if checked.method != "GET" {
         bail!("a download is a GET");
     }
     checked.timeout = request.timeout_ms.map(Duration::from_millis).unwrap_or(MAX_DOWNLOAD_TIME).min(MAX_DOWNLOAD_TIME);
-    let mut builder = crate::http::agent_builder().timeout(checked.timeout).redirects(0);
-    if let Some(proxy) = &checked.proxy {
-        builder = builder.proxy(ureq::Proxy::new(proxy).map_err(|_| anyhow::anyhow!("that proxy address cannot be used"))?);
-    }
-    let agent = builder.build();
+    let agent = agent(&checked, lookup)?;
     let started = Instant::now();
     let response = send(&agent, &checked)?;
     let status = response.status();
@@ -587,5 +672,103 @@ mod tests {
         let server = Server::answering(script);
         let err = fetch(&request(serde_json::json!({ "url": server.url("/round") }))).unwrap_err();
         assert!(format!("{err:#}").contains("redirected more than"), "{err:#}");
+    }
+
+    /// A resolver that knows the names it is given and nothing else; an address written as one
+    /// (`127.0.0.1:8080`) resolves to itself. Counts the lookups it answered.
+    fn fake_dns(names: &[(&str, &[&str])]) -> (Lookup, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let names: Vec<(String, Vec<IpAddr>)> =
+            names.iter().map(|(name, ips)| (name.to_string(), ips.iter().map(|ip| ip.parse().unwrap()).collect())).collect();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let lookup: Lookup = Arc::new(move |netloc: &str| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Ok(address) = netloc.parse::<SocketAddr>() {
+                return Ok(vec![address]);
+            }
+            let (host, port) = netloc.rsplit_once(':').unwrap();
+            let port: u16 = port.parse().unwrap();
+            match names.iter().find(|(name, _)| name == host) {
+                Some((_, ips)) => Ok(ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect()),
+                None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such name")),
+            }
+        });
+        (lookup, calls)
+    }
+
+    #[test]
+    fn a_name_that_resolves_to_the_metadata_address_is_refused() {
+        // Every one of these passes the checks on the URL's text: it is the answer that is wrong.
+        for answer in [
+            &["169.254.169.254"][..],
+            &["::ffff:169.254.169.254"],
+            &["::ffff:a9fe:a9fe"],
+            &["64:ff9b::a9fe:a9fe"],
+            &["fe80::1"],
+            &["fd00:ec2::254"],
+            // One bad address among good ones spoils the answer: the client tries them in turn.
+            &["93.184.215.14", "169.254.169.254"],
+        ] {
+            let (lookup, calls) = fake_dns(&[("sneaky.example", answer)]);
+            let err = fetch_with(&request(serde_json::json!({ "url": "http://sneaky.example/latest/meta-data/" })), lookup).unwrap_err();
+            assert_eq!(format!("{err:#}"), NOT_REACHABLE, "{answer:?}");
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn the_connection_goes_to_the_address_that_was_checked() {
+        // `api.example` exists only in the fake resolver, so the request can only have arrived
+        // through the address it handed out — and a name for a loopback dev server is allowed.
+        let server = Server::answering(vec![ok("pinned")]);
+        let (lookup, calls) = fake_dns(&[("api.example", &["127.0.0.1"])]);
+        let response = fetch_with(&request(serde_json::json!({ "url": format!("http://api.example:{}/x", server.port) })), lookup).unwrap();
+        assert_eq!(response.body, "pinned");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "looked up once, for the connection");
+        let arrived = server.requests()[0].to_ascii_lowercase();
+        assert!(arrived.contains(&format!("host: api.example:{}", server.port)), "{arrived}");
+    }
+
+    #[test]
+    fn a_redirect_to_a_name_that_resolves_to_the_metadata_address_is_not_followed() {
+        let server = Server::answering(vec![redirect_to("http://sneaky.example/latest/meta-data/")]);
+        let (lookup, _) = fake_dns(&[("sneaky.example", &["169.254.169.254"])]);
+        let err = fetch_with(&request(serde_json::json!({ "url": server.url("/go") })), lookup).unwrap_err();
+        assert_eq!(format!("{err:#}"), NOT_REACHABLE);
+        assert_eq!(server.requests().len(), 1, "nothing beyond the first request was sent");
+    }
+
+    #[test]
+    fn a_name_that_answers_differently_the_second_time_is_checked_again() {
+        // DNS rebinding: the first lookup is harmless, the next one is not. Each connection is
+        // checked against the answer it is made to, so the second one never happens.
+        let server = Server::answering(vec![redirect_to("/again"), ok("should not arrive")]);
+        let port = server.port;
+        let answers = std::sync::Mutex::new(vec!["169.254.169.254", "127.0.0.1"]);
+        let lookup: Lookup = Arc::new(move |_: &str| {
+            let ip: IpAddr = answers.lock().unwrap().pop().unwrap_or("169.254.169.254").parse().unwrap();
+            Ok(vec![SocketAddr::new(ip, port)])
+        });
+        let err = fetch_with(&request(serde_json::json!({ "url": format!("http://rebind.example:{port}/") })), lookup).unwrap_err();
+        assert_eq!(format!("{err:#}"), NOT_REACHABLE);
+        assert_eq!(server.requests().len(), 1);
+    }
+
+    #[test]
+    fn a_download_from_a_name_that_resolves_to_the_metadata_address_is_refused() {
+        let to = std::env::temp_dir().join(format!("agentty-net-test-{}.bin", std::process::id()));
+        let (lookup, _) = fake_dns(&[("sneaky.example", &["169.254.169.254"])]);
+        let err = download_with(&request(serde_json::json!({ "url": "http://sneaky.example/a.png" })), &to, 1024, lookup).unwrap_err();
+        assert_eq!(format!("{err:#}"), NOT_REACHABLE);
+        assert!(!to.exists());
+    }
+
+    #[test]
+    fn local_and_private_addresses_stay_reachable() {
+        for fine in
+            ["127.0.0.1", "10.0.0.5", "192.168.1.20", "172.16.0.1", "::1", "fd00::1", "fd00:ec2::253", "2606:4700::1111", "169.253.1.1"]
+        {
+            assert!(!is_forbidden_ip(fine.parse().unwrap()), "{fine}");
+        }
     }
 }

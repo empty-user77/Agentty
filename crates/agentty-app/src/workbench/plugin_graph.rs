@@ -17,11 +17,11 @@ use gpui::{
     Window,
 };
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 /// A node's heading.
 const NODE_HEADER: f32 = 32.;
@@ -105,11 +105,105 @@ pub type PluginDropZones = Rc<RefCell<Vec<PluginDropZone>>>;
 /// drawn only when its bytes say PNG, JPEG, WebP or GIF — never an SVG, a document the renderer
 /// would open the addresses of — and it is drawn from the very bytes that were checked: handed to
 /// GPUI by path, the file would be read again later and decoded by its contents, so a plugin could
-/// swap in an SVG between the check and the read. `None` is a file that is not a picture.
-pub type ImageChecks = RefCell<HashMap<PathBuf, (SystemTime, u64, Option<Arc<gpui::Image>>)>>;
+/// swap in an SVG between the check and the read.
+///
+/// Files are read off the UI thread (a picture can be 64 MB): a picture not read yet draws as the
+/// placeholder, or as the version before it while a changed file is read, and the panel is drawn
+/// again when it arrives.
+pub type ImageChecks = RefCell<PictureCache>;
 
-/// The bytes of pictures kept read at once; past this the cache starts over (a panel shows a
-/// handful).
+/// A file's change time and size: when either moves, the picture is read again.
+type Stamp = (SystemTime, u64);
+
+#[derive(Default)]
+pub struct PictureCache {
+    entries: HashMap<PathBuf, Picture>,
+    /// Reads under way, so a file is read once however many frames ask for it meanwhile.
+    loading: HashSet<(PathBuf, Stamp)>,
+    /// Bytes of the pictures in `entries`.
+    bytes: u64,
+}
+
+struct Picture {
+    stamp: Stamp,
+    /// `None`: the file is not a picture.
+    image: Option<Arc<gpui::Image>>,
+    bytes: u64,
+    used: Instant,
+}
+
+/// What the cache has for a file as it is now.
+enum Cached {
+    /// Read from the file as it is.
+    Fresh(Option<Arc<gpui::Image>>),
+    /// Read from an earlier version of the file, or not read at all: a read is due.
+    Stale(Option<Arc<gpui::Image>>),
+}
+
+/// A picture drawn this recently is on screen and is not let go, however full the cache: letting
+/// one go would read it again at once, push out the next, and go round for as long as a panel
+/// shows more than fits.
+const ON_SCREEN: Duration = Duration::from_secs(2);
+
+impl PictureCache {
+    fn get(&mut self, path: &Path, stamp: Stamp, now: Instant) -> Cached {
+        match self.entries.get_mut(path) {
+            Some(picture) => {
+                picture.used = now;
+                if picture.stamp == stamp {
+                    Cached::Fresh(picture.image.clone())
+                } else {
+                    Cached::Stale(picture.image.clone())
+                }
+            }
+            None => Cached::Stale(None),
+        }
+    }
+
+    /// Whether a read of `path` as of `stamp` should start: not when one already is under way.
+    fn start_loading(&mut self, path: &Path, stamp: Stamp) -> bool {
+        self.loading.insert((path.to_path_buf(), stamp))
+    }
+
+    /// Keeps what a read found, then lets go of the pictures used longest ago until the rest fit
+    /// in `limit` — never one that is on screen ([`ON_SCREEN`]), which the one just read is.
+    fn finish_loading(&mut self, path: PathBuf, stamp: Stamp, image: Option<Arc<gpui::Image>>, limit: u64, now: Instant) {
+        self.loading.remove(&(path.clone(), stamp));
+        let bytes = image.as_ref().map_or(0, |image| image.bytes().len() as u64);
+        if let Some(old) = self.entries.insert(path, Picture { stamp, image, bytes, used: now }) {
+            self.bytes -= old.bytes;
+        }
+        self.bytes += bytes;
+        while self.bytes > limit {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .filter(|(_, picture)| now.saturating_duration_since(picture.used) >= ON_SCREEN)
+                .min_by_key(|(_, picture)| picture.used)
+                .map(|(kept, _)| kept.clone())
+            else {
+                break;
+            };
+            if let Some(gone) = self.entries.remove(&oldest) {
+                self.bytes -= gone.bytes;
+            }
+        }
+    }
+}
+
+/// Reads the picture at `path`: at most [`MAX_PICTURE_BYTES`], and a picture by its bytes.
+fn read_picture(path: &Path) -> Option<Arc<gpui::Image>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(MAX_PICTURE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > MAX_PICTURE_BYTES {
+        return None;
+    }
+    raster_format(&bytes).map(|format| Arc::new(gpui::Image::from_bytes(format, bytes)))
+}
+
+/// The bytes of pictures kept read at once; past this the ones used longest ago are let go (a
+/// panel shows a handful, and what is on screen stays whatever it adds up to).
 const PICTURE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 /// The largest picture read for drawing.
 const MAX_PICTURE_BYTES: u64 = 64 * 1024 * 1024;
@@ -204,26 +298,29 @@ fn wire(from: Point<Pixels>, to: Point<Pixels>, zoom: f32) -> Option<gpui::Path<
 
 impl Workbench {
     /// A plugin's picture, when it is one: inside the plugin's folder (no way out of it, no link),
-    /// there, and a picture by its bytes — read once per change of the file.
-    fn plugin_picture(&self, plugin: &str, src: &str) -> Option<Arc<gpui::Image>> {
+    /// there, and a picture by its bytes — read once per change of the file, in the background.
+    fn plugin_picture(&self, plugin: &str, src: &str, cx: &mut Context<Self>) -> Option<Arc<gpui::Image>> {
         let path = agentty_bridge::plugins::files::resolve(plugin, src).ok()?;
         let meta = std::fs::metadata(&path).ok().filter(|m| m.is_file() && m.len() <= MAX_PICTURE_BYTES)?;
         let stamp = (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len());
         let mut cache = self.plugin_image_checks.borrow_mut();
-        if let Some((modified, len, picture)) = cache.get(&path) {
-            if (*modified, *len) == stamp {
-                return picture.clone();
-            }
+        let shown = match cache.get(&path, stamp, Instant::now()) {
+            Cached::Fresh(image) => return image,
+            Cached::Stale(image) => image,
+        };
+        if cache.start_loading(&path, stamp) {
+            let read = path.clone();
+            let task = cx.background_executor().spawn(async move { read_picture(&read) });
+            cx.spawn(async move |this, cx| {
+                let image = task.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.plugin_image_checks.borrow_mut().finish_loading(path, stamp, image, PICTURE_CACHE_BYTES, Instant::now());
+                    cx.notify();
+                });
+            })
+            .detach();
         }
-        let picture = std::fs::read(&path)
-            .ok()
-            .and_then(|bytes| raster_format(&bytes).map(|format| Arc::new(gpui::Image::from_bytes(format, bytes))));
-        let kept: u64 = cache.values().map(|(_, len, _)| *len).sum();
-        if kept + stamp.1 > PICTURE_CACHE_BYTES {
-            cache.clear();
-        }
-        cache.insert(path, (stamp.0, stamp.1, picture.clone()));
-        picture
+        shown
     }
 
     /// Whether the plugin may take files dropped on it: the same permission `files/pick` needs.
@@ -235,7 +332,7 @@ impl Workbench {
         let Node::Image { src, alt, width, height, fit, caption, placeholder, id, drop, into } = node else {
             return div().into_any_element();
         };
-        let file = src.as_deref().and_then(|src| self.plugin_picture(plugin, src));
+        let file = src.as_deref().and_then(|src| self.plugin_picture(plugin, src, cx));
         let takes_drop = *drop && id.is_some() && self.plugin_takes_files(plugin, cx);
         let picture = match &file {
             Some(picture) => gpui::img(picture.clone())
@@ -793,6 +890,90 @@ mod tests {
         assert!(!is_raster(b"RIFF\x24\x00\x00\x00WAVEfmt "));
         assert!(!is_raster(b""));
         assert_eq!(raster_format(&[0xff, 0xd8, 0xff, 0xdb]), Some(gpui::ImageFormat::Jpeg));
+    }
+
+    fn picture(bytes: usize) -> Option<Arc<gpui::Image>> {
+        Some(Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![0; bytes])))
+    }
+
+    fn stamp(n: u64) -> Stamp {
+        (SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(n), n)
+    }
+
+    fn is_fresh(cached: Cached) -> bool {
+        matches!(cached, Cached::Fresh(Some(_)))
+    }
+
+    #[test]
+    fn a_full_cache_lets_go_of_the_picture_used_longest_ago_only() {
+        let start = Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let mut cache = PictureCache::default();
+        for (name, seconds) in [("a", 0), ("b", 10), ("c", 20)] {
+            assert!(cache.start_loading(Path::new(name), stamp(1)));
+            cache.finish_loading(name.into(), stamp(1), picture(40), 100, at(seconds));
+        }
+        // Three of 40 bytes do not fit in 100: `a`, read first and not drawn since, went.
+        assert!(matches!(cache.get(Path::new("a"), stamp(1), at(21)), Cached::Stale(None)));
+        assert_eq!(cache.bytes, 80);
+        // `b` is drawn, then `d` arrives: `c` is the one used longest ago now, not `b`.
+        assert!(is_fresh(cache.get(Path::new("b"), stamp(1), at(30))));
+        cache.finish_loading("d".into(), stamp(1), picture(40), 100, at(40));
+        assert!(is_fresh(cache.get(Path::new("b"), stamp(1), at(41))));
+        assert!(is_fresh(cache.get(Path::new("d"), stamp(1), at(41))));
+        assert!(matches!(cache.get(Path::new("c"), stamp(1), at(41)), Cached::Stale(None)));
+        assert_eq!(cache.bytes, 80);
+    }
+
+    #[test]
+    fn what_is_on_screen_stays_however_much_it_is() {
+        // A panel showing more than fits: letting one go would read it again on the next frame
+        // and push out another, for as long as the panel is open. So they all stay...
+        let now = Instant::now();
+        let mut cache = PictureCache::default();
+        for name in ["a", "b", "c", "huge"] {
+            cache.finish_loading(name.into(), stamp(1), picture(if name == "huge" { 500 } else { 40 }), 100, now);
+        }
+        assert_eq!(cache.entries.len(), 4);
+        assert_eq!(cache.bytes, 620);
+        // ...until the panel shows something else: then the ones no longer drawn go.
+        let later = now + ON_SCREEN * 2;
+        assert!(is_fresh(cache.get(Path::new("b"), stamp(1), later)));
+        cache.finish_loading("e".into(), stamp(1), picture(40), 100, later);
+        let mut kept: Vec<&str> = cache.entries.keys().map(|path| path.to_str().unwrap()).collect();
+        kept.sort();
+        assert_eq!(kept, ["b", "e"]);
+        assert_eq!(cache.bytes, 80);
+    }
+
+    #[test]
+    fn a_changed_file_is_read_once_and_drawn_as_before_meanwhile() {
+        let now = Instant::now();
+        let mut cache = PictureCache::default();
+        assert!(cache.start_loading(Path::new("a"), stamp(1)));
+        assert!(!cache.start_loading(Path::new("a"), stamp(1)), "one read per version, however many frames ask");
+        cache.finish_loading("a".into(), stamp(1), picture(10), 100, now);
+        // The file changed: the old picture still shows until the new one is read.
+        assert!(matches!(cache.get(Path::new("a"), stamp(2), now), Cached::Stale(Some(_))));
+        assert!(cache.start_loading(Path::new("a"), stamp(2)));
+        cache.finish_loading("a".into(), stamp(2), None, 100, now);
+        // It is not a picture any more: nothing is drawn, and nothing is counted.
+        assert!(matches!(cache.get(Path::new("a"), stamp(2), now), Cached::Fresh(None)));
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
+    fn only_a_picture_is_read_for_drawing() {
+        let dir = std::env::temp_dir().join(format!("agentty-picture-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("a.png");
+        std::fs::write(&png, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]).unwrap();
+        assert_eq!(read_picture(&png).unwrap().bytes().len(), 11);
+        let svg = dir.join("a.svg");
+        std::fs::write(&svg, b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
+        assert!(read_picture(&svg).is_none());
+        assert!(read_picture(&dir.join("missing.png")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
