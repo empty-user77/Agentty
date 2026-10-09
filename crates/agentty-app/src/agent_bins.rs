@@ -97,7 +97,9 @@ pub fn refresh() {
     let chosen: HashMap<String, PathBuf> =
         AGENTS.iter().filter_map(|name| newest(&installs(name, &path)).map(|install| (name.to_string(), install.path.clone()))).collect();
     if let Ok(text) = serde_json::to_string(&chosen) {
-        let _ = std::fs::write(saved_file(), text);
+        // Private (0600) from creation and replaced whole: it names the program each tab starts, so
+        // a half-written or foreign-writable file must never be read back.
+        let _ = agentty_bridge::fsutil::write_private(&saved_file(), text.as_bytes());
     }
     if let Ok(mut slot) = CHOSEN.lock() {
         *slot = Some(chosen);

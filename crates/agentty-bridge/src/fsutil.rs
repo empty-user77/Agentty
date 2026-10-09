@@ -163,11 +163,21 @@ pub fn create_private(path: &Path) -> std::io::Result<fs::File> {
 }
 
 /// Writes a file only the user can read: created `0600` on Unix under a temporary name in the same
-/// folder before any content is written, flushed to disk, then renamed over `path` — so a reader
-/// never sees half of it, a power cut leaves the old file or the new one, and a file an older
-/// version left world-readable is replaced by a private one. Missing parent folders are created
-/// private (`0700`).
+/// folder before any content is written, then renamed over `path` — so a reader never sees half of
+/// it, and a file an older version left world-readable is replaced by a private one. Missing parent
+/// folders are created private (`0700`). Not flushed to disk: cheap enough for the UI thread.
 pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_private_with(path, bytes, false)
+}
+
+/// [`write_private`], flushed to disk before it replaces `path`, so a power cut leaves the old file
+/// or the new one, never an empty one. The flush is slow on macOS (`F_FULLFSYNC`): for files whose
+/// loss costs the user (the window layout), not for every small save.
+pub fn write_private_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_private_with(path, bytes, true)
+}
+
+fn write_private_with(path: &Path, bytes: &[u8], durable: bool) -> std::io::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     // Unique per write, so two threads (or two Agentty processes on one folder) saving the same
     // file never share a temporary file.
@@ -185,7 +195,10 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let written = (|| {
         let mut file = private_options().open(&tmp)?;
         std::io::Write::write_all(&mut file, bytes)?;
-        file.sync_all()
+        if durable {
+            file.sync_all()?;
+        }
+        Ok(())
     })();
     if let Err(err) = written {
         let _ = fs::remove_file(&tmp);
@@ -253,7 +266,7 @@ mod tests {
         // A reader holding the old file keeps seeing the old content: the new one is a different
         // file renamed into place, not the old one truncated and rewritten.
         let held = fs::File::open(&path).unwrap();
-        write_private(&path, b"new").unwrap();
+        write_private_durable(&path, b"new").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
         let mut old = String::new();
         std::io::Read::read_to_string(&mut &held, &mut old).unwrap();

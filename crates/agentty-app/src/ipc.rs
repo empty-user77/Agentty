@@ -227,7 +227,7 @@ impl Listener {
 
 /// The socket's file name inside its private folder.
 #[cfg(unix)]
-const SOCKET_NAME: &str = "agentty.sock";
+const SOCKET_NAME: &str = "s.sock";
 
 /// Removes socket folders left in `base` by an Agentty that ended without cleaning up (killed or
 /// crashed): only this user's own real folders, named as [`private_socket_dir`] names them, whose
@@ -257,11 +257,11 @@ fn sweep_stale_socket_dirs(base: &std::path::Path) {
     }
 }
 
-/// The pid in a socket folder name `agentty-<pid>-<16 hex digits>`.
+/// The pid in a socket folder name `agentty-<pid>-<8 hex digits>`.
 #[cfg(unix)]
 fn socket_dir_pid(name: &str) -> Option<u32> {
     let (pid, random) = name.strip_prefix("agentty-")?.split_once('-')?;
-    (random.len() == 16 && random.bytes().all(|b| b.is_ascii_hexdigit())).then_some(())?;
+    (random.len() == 8 && random.bytes().all(|b| b.is_ascii_hexdigit())).then_some(())?;
     pid.parse().ok()
 }
 
@@ -270,14 +270,15 @@ fn socket_dir_pid(name: &str) -> Option<u32> {
 /// narrowed for one call while other threads create files); inside this folder no other user can
 /// reach the socket, not even for that moment. The folder is created, never reused: on Linux the
 /// temp dir is the shared `/tmp`, where a folder another user made in advance must not be taken
-/// for ours. Short enough for SUN_LEN under macOS's per-user temp dir.
+/// for ours. Short enough for SUN_LEN (104 bytes on macOS): `agentty-<pid>-<8 hex>/s.sock` is only 11 bytes longer than
+/// the `agentty-<pid>.sock` it replaces.
 #[cfg(unix)]
 fn private_socket_dir(base: &std::path::Path) -> io::Result<std::path::PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     let mut attempts = 0;
     loop {
         let random = uuid::Uuid::new_v4().simple().to_string();
-        let dir = base.join(format!("agentty-{}-{}", std::process::id(), &random[..16]));
+        let dir = base.join(format!("agentty-{}-{}", std::process::id(), &random[..8]));
         match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
             Ok(()) => return Ok(dir),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists && attempts < 3 => attempts += 1,
@@ -329,7 +330,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("agentty-ipc-sweep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        let random = "0123456789abcdef";
+        let random = "01234567";
         // No process has this pid (above the largest pid any system hands out).
         let ended = base.join(format!("agentty-999999999-{random}"));
         let running = base.join(format!("agentty-{}-{random}", std::process::id()));
@@ -351,10 +352,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn socket_folder_names_are_parsed_strictly() {
-        assert_eq!(socket_dir_pid("agentty-42-0123456789abcdef"), Some(42));
-        assert_eq!(socket_dir_pid("agentty-42-0123456789abcde"), None);
+        assert_eq!(socket_dir_pid("agentty-42-0123abcd"), Some(42));
+        assert_eq!(socket_dir_pid("agentty-42-0123abc"), None);
+        assert_eq!(socket_dir_pid("agentty-42-0123abcg"), None);
         assert_eq!(socket_dir_pid("agentty-42.sock"), None);
-        assert_eq!(socket_dir_pid("agentty-x-0123456789abcdef"), None);
+        assert_eq!(socket_dir_pid("agentty-x-0123abcd"), None);
     }
 
     #[cfg(unix)]

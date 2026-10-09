@@ -319,7 +319,7 @@ impl LayoutState {
         // Folders, titles and working directories: private (0600) from creation, written under a
         // name of its own and flushed before it replaces the file, so a second Agentty on the same
         // folder can't interleave its writes and a power cut leaves the old layout or the new one.
-        agentty_bridge::fsutil::write_private(&Self::path(slot), &serde_json::to_vec_pretty(self)?)?;
+        agentty_bridge::fsutil::write_private_durable(&Self::path(slot), &serde_json::to_vec_pretty(self)?)?;
         Ok(())
     }
 }
