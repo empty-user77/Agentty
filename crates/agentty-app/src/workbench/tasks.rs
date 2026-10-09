@@ -41,16 +41,18 @@ impl Workbench {
         // A chat's lead starts its workers without asking: opening the chat was the user's yes.
         let Some(request) = self.start_chat_tasks(request, cx) else { return };
         // A board ticket's agent splits its work without asking: moving the ticket to "instructed"
-        // was the user's yes. The tasks start from the ticket's branch.
-        let board_base = self.pane_by_id(request.pane, cx).and_then(|pane| self.board_task_base(&pane));
-        let split = crate::settings::settings(cx).board.split;
-        if board_base.is_some() && split == crate::settings::BoardSplit::Off {
+        // was the user's yes — for the agent the board started for it, and not for an imported
+        // ticket (see `board::ticket_split`). The tasks start from the ticket's branch.
+        let pane = self.pane_by_id(request.pane, cx);
+        let board_base = pane.as_ref().and_then(|pane| self.board_task_base(pane, cx));
+        let split = pane.as_ref().and_then(|pane| self.board_split_for(pane, cx));
+        if board_base.is_some() && split == Some(crate::settings::BoardSplit::Off) {
             let _ = request
                 .reply
                 .send(browser_reply(Err("splitting board tickets is turned off in Agentty's settings: do the work yourself".into())));
             return;
         }
-        if let Some(base) = board_base.filter(|_| split == crate::settings::BoardSplit::Auto) {
+        if let Some(base) = board_base.filter(|_| split == Some(crate::settings::BoardSplit::Auto)) {
             let handle = self.window_handle;
             cx.spawn(async move |this, cx| {
                 let _ = cx.update_window(handle, |_, window, cx| {
@@ -341,8 +343,10 @@ impl Workbench {
                                     |this, _: &ClickEvent, window, cx| {
                                         if let Some(request) = this.task_requests.pop_front() {
                                             // A board ticket's tasks start from its branch, asked or not.
-                                            let base =
-                                                this.pane_by_id(request.pane, cx).and_then(|pane| this.board_task_base(&pane)).flatten();
+                                            let base = this
+                                                .pane_by_id(request.pane, cx)
+                                                .and_then(|pane| this.board_task_base(&pane, cx))
+                                                .flatten();
                                             this.start_tasks(request, base, window, cx);
                                         }
                                     },

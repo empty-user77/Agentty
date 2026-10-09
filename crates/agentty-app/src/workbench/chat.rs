@@ -709,7 +709,7 @@ impl Workbench {
     }
 
     /// Sends what was written in the chat to the lead (with its instructions, the first time).
-    fn send_chat_message(&mut self, id: EntityId, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn send_chat_message(&mut self, id: EntityId, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((input, _)) = self.chats.get(&id).and_then(|state| state.input.as_ref()) else { return };
         let input = input.clone();
         let text = input.read(cx).text().trim().to_string();

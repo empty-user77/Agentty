@@ -176,9 +176,21 @@ pub struct Listener {
 impl Listener {
     #[cfg(unix)]
     pub fn bind() -> io::Result<Listener> {
-        let base = std::env::temp_dir();
+        let base = socket_base(std::env::temp_dir());
         sweep_stale_socket_dirs(&base);
-        Self::bind_path(private_socket_dir(&base)?.join(SOCKET_NAME))
+        Self::bind_in(&base)
+    }
+
+    /// Binds in a new private folder in `base`; the folder goes again if binding fails.
+    #[cfg(unix)]
+    fn bind_in(base: &std::path::Path) -> io::Result<Listener> {
+        let dir = private_socket_dir(base)?;
+        let path = dir.join(SOCKET_NAME);
+        Self::bind_path(path.clone()).inspect_err(|_| {
+            // The folder was made for this socket only: don't leave it behind.
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&dir);
+        })
     }
 
     /// Binds at `path`, whose folder must already keep other users out: `bind` creates the socket
@@ -265,6 +277,24 @@ fn socket_dir_pid(name: &str) -> Option<u32> {
     pid.parse().ok()
 }
 
+/// Longest socket path `bind` takes, without the closing NUL: `sun_path` is 104 bytes on macOS and
+/// the BSDs, 108 on Linux.
+#[cfg(unix)]
+const SOCKET_PATH_MAX: usize = if cfg!(target_os = "linux") { 107 } else { 103 };
+
+/// The folder to make the socket's folder in: the temp dir, or `/tmp` when a long custom `TMPDIR`
+/// would make the socket path too long to bind.
+#[cfg(unix)]
+fn socket_base(temp: std::path::PathBuf) -> std::path::PathBuf {
+    // `<base>/agentty-<pid>-<8 hex>/s.sock`
+    let len = temp.as_os_str().len() + "/agentty-".len() + std::process::id().to_string().len() + "-12345678/".len() + SOCKET_NAME.len();
+    if len <= SOCKET_PATH_MAX {
+        temp
+    } else {
+        std::path::PathBuf::from("/tmp")
+    }
+}
+
 /// A new folder `agentty-<pid>-<random>` in `base`, `0700` from the moment it exists. `bind`
 /// creates the socket file with the process umask (and the umask is process-wide, so it can't be
 /// narrowed for one call while other threads create files); inside this folder no other user can
@@ -298,6 +328,29 @@ pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
+
+    #[cfg(unix)]
+    #[test]
+    fn a_long_temp_dir_falls_back_to_tmp() {
+        let short = std::path::PathBuf::from("/var/folders/ab/cd/T");
+        assert_eq!(socket_base(short.clone()), short);
+        let long = std::path::PathBuf::from(format!("/Users/someone/{}", "x".repeat(100)));
+        assert_eq!(socket_base(long), std::path::PathBuf::from("/tmp"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_bind_removes_its_folder() {
+        let base = std::env::temp_dir().join(format!("agentty-ipc-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // A folder far past `sun_path`: the folder is made, the bind fails.
+        let long = base.join("d".repeat(120));
+        std::fs::create_dir_all(&long).unwrap();
+        assert!(Listener::bind_in(&long).is_err());
+        assert_eq!(std::fs::read_dir(&long).unwrap().count(), 0);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn compares_tokens() {

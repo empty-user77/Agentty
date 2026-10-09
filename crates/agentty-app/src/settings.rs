@@ -117,7 +117,7 @@ pub struct CommandAlias {
     pub command: String,
 }
 
-pub const SETTINGS_VERSION: u32 = 6;
+pub const SETTINGS_VERSION: u32 = 7;
 
 pub const BUNDLED_FONT: &str = "JetBrains Mono";
 /// The coding font Korean developers reach for: its Hangul is exactly two cells wide. Not bundled
@@ -249,6 +249,10 @@ pub struct Settings {
     /// Sidebar plugins kept as icons of their own in the activity bar, by plugin id, however many
     /// are installed (the rest fold into one group once there are enough of them).
     pub pinned_plugins: Vec<String>,
+    /// Set by the v7 migration, for this run only: the sidebar plugins installed before grouping
+    /// came in are pinned once the plugins are known, so an upgrade keeps their icons.
+    #[serde(skip)]
+    pub pin_sidebar_plugins: bool,
     /// Notify even while Agentty is the focused app.
     pub notify_when_focused: bool,
     /// An agent asking for an answer (permission, question) always notifies, unless its pane is the
@@ -774,6 +778,7 @@ impl Default for Settings {
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
             pinned_plugins: Vec::new(),
+            pin_sidebar_plugins: false,
             resume_bar: true,
             agent_bar: true,
             agent_bar_position: crate::hud::HudPosition::default(),
@@ -833,10 +838,30 @@ impl Settings {
         agentty_bridge::fsutil::data_dir().join("settings.json")
     }
 
-    fn load() -> Self {
-        match std::fs::read(Self::path()) {
-            Ok(bytes) => serde_json::from_slice::<Settings>(&bytes).map(Settings::migrate).unwrap_or_default(),
-            Err(_) => Settings::default(),
+    /// The saved settings, and whether saving over the file is safe. A file that doesn't parse is
+    /// copied aside first (see [`set_aside_unreadable`]) and the defaults used; if even the copy
+    /// fails, the file is left as it is and not saved over.
+    fn load() -> (Self, bool) {
+        let path = Self::path();
+        match std::fs::read(&path) {
+            Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
+                Ok(settings) => (settings.migrate(), true),
+                Err(err) => {
+                    eprintln!("agentty: {} could not be read ({err}); using the default settings", path.display());
+                    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                    match set_aside_unreadable(&path, &bytes, &stamp) {
+                        Ok(backup) => {
+                            eprintln!("agentty: the unreadable settings were kept as {}", backup.display());
+                            (Settings::default(), true)
+                        }
+                        Err(err) => {
+                            eprintln!("agentty: could not keep a copy of {} ({err}); not saving over it", path.display());
+                            (Settings::default(), false)
+                        }
+                    }
+                }
+            },
+            Err(_) => (Settings::default(), true),
         }
     }
 
@@ -877,6 +902,12 @@ impl Settings {
             // unless turned on, so "off" was the old default rather than a choice.
             self.option_as_meta = true;
         }
+        if self.settings_version < 7 && self.pinned_plugins.is_empty() {
+            // v7: from three sidebar plugins on, the unpinned ones share one activity-bar item.
+            // Whoever had them before kept an icon for each: those are pinned (see
+            // `workbench::pin_installed_sidebar_plugins`).
+            self.pin_sidebar_plugins = true;
+        }
         self.settings_version = SETTINGS_VERSION;
         self
     }
@@ -886,6 +917,17 @@ impl Settings {
         self.recent_dirs.insert(0, dir);
         self.recent_dirs.truncate(10);
     }
+}
+
+/// Keeps a copy of a settings file that doesn't parse as `settings.json.bak-<stamp>` (`0600`) next
+/// to it, before the defaults are saved over it: a hand edit with a typo shouldn't cost the user
+/// every setting.
+fn set_aside_unreadable(path: &std::path::Path, bytes: &[u8], stamp: &str) -> std::io::Result<PathBuf> {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".bak-{stamp}"));
+    let backup = path.with_file_name(name);
+    agentty_bridge::fsutil::write_private(&backup, bytes)?;
+    Ok(backup)
 }
 
 pub struct SettingsStore {
@@ -902,11 +944,13 @@ impl Global for SettingsStore {}
 
 impl SettingsStore {
     pub fn init(cx: &mut App) {
-        let settings = Settings::load();
+        let (settings, may_save) = Settings::load();
         let themes = load_themes();
         let composed = SettingsStore::compose(&settings, &themes);
         let store = SettingsStore { settings, revision: 0, themes, composed };
-        let _ = store.save();
+        if may_save {
+            let _ = store.save();
+        }
         if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass) {
             eprintln!("agentty: shell integration unavailable: {err:#}");
         }
@@ -1062,6 +1106,24 @@ mod browser_settings_tests {
     use super::*;
 
     #[test]
+    fn an_unreadable_settings_file_is_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("agentty-settings-aside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"{ \"theme\": ").unwrap();
+        let backup = set_aside_unreadable(&path, b"{ \"theme\": ", "20261010-120000").unwrap();
+        assert_eq!(backup, dir.join("settings.json.bak-20261010-120000"));
+        assert_eq!(std::fs::read(&backup).unwrap(), b"{ \"theme\": ");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn the_font_is_only_chosen_for_someone_who_did_not_pick_one() {
         // macOS in Korean with D2Coding installed gets it; anyone else, or without it, the bundled font.
         assert_eq!(default_font_for(true, Language::Ko, true), KOREAN_FONT);
@@ -1106,6 +1168,15 @@ mod browser_settings_tests {
         // Turned off once this version is in use: a choice, kept.
         let current = Settings { option_as_meta: false, ..Settings::default().migrate() };
         assert!(!current.migrate().option_as_meta);
+    }
+
+    #[test]
+    fn an_upgrade_pins_the_sidebar_plugins_it_had() {
+        assert!(!Settings::default().migrate().pin_sidebar_plugins, "a new installation groups from the start");
+        assert!(Settings { settings_version: 6, ..Settings::default() }.migrate().pin_sidebar_plugins);
+        // A pinned list already saved is a choice, kept.
+        let chosen = Settings { settings_version: 6, pinned_plugins: vec!["example".into()], ..Settings::default() };
+        assert!(!chosen.migrate().pin_sidebar_plugins);
     }
 
     #[test]
