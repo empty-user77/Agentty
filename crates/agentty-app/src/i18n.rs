@@ -1725,6 +1725,18 @@ strings! {
     "remote.voice.size" => ["{mb} MB download", "{mb} MB 다운로드", "{mb} MB ダウンロード", "{mb} MB 下载"],
     "remote.voice.installed" => ["Installed", "설치됨", "インストール済み", "已安装"],
     "remote.voice.download" => ["Download", "다운로드", "ダウンロード", "下载"],
+    "remote.voice.not_built" => [
+        "This build of Agentty does not include on-device voice.",
+        "이 Agentty 빌드에는 기기 내 음성 인식이 포함되어 있지 않습니다.",
+        "この Agentty のビルドにはデバイス上の音声認識が含まれていません。",
+        "此 Agentty 版本未包含设备端语音识别。"
+    ],
+    "remote.voice.cpu_unsupported" => [
+        "On-device voice needs a processor with AVX2 (most from 2013 on). This one does not have it.",
+        "기기 내 음성 인식에는 AVX2를 지원하는 프로세서(대부분 2013년 이후)가 필요합니다. 이 프로세서는 지원하지 않습니다.",
+        "デバイス上の音声認識には AVX2 対応のプロセッサ（主に 2013 年以降）が必要です。このプロセッサは対応していません。",
+        "设备端语音识别需要支持 AVX2 的处理器（大多为 2013 年以后）。此处理器不支持。"
+    ],
     "remote.voice.downloading" => ["Downloading… {pct}%", "다운로드 중… {pct}%", "ダウンロード中… {pct}%", "正在下载… {pct}%"],
     "page.remote" => ["Remote access", "원격 접속", "リモートアクセス", "远程访问"],
     "settings.remote_feature" => ["Remote access feature", "원격 접속 기능 사용", "リモートアクセス機能を使う", "使用远程访问功能"],

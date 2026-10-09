@@ -90,6 +90,39 @@ if [[ "$PUBLISH" == "true" && "${AGENTTY_MAC_ONLY:-}" != "1" ]]; then
 fi
 
 # ─── 3. Compile ───
+# whisper.cpp (voice) is tuned for the CPU that compiles it unless told otherwise. Apple Silicon is not
+# uniform enough to ship that: built on an M2 or later, ggml adds i8mm (and more), which an M1 lacks, so
+# transcribing would die with an illegal instruction there. GGML_NATIVE=OFF builds for clang's arm64 macOS
+# baseline (apple-m1), which every Mac this DMG supports has. whisper-rs-sys forwards GGML_* to cmake but
+# does not rebuild when they change: prod and publish start from a cold target/ so they always get it; a dev
+# build reuses whatever whisper.cpp build target/ already holds.
+export GGML_NATIVE=OFF
+# Build every object for the oldest macOS the app claims (LSMinimumSystemVersion). Left unset, cmake compiles
+# whisper.cpp for the build Mac's own macOS, so the app would reference APIs older Macs do not have.
+MIN_MACOS="$(sed -n '/LSMinimumSystemVersion/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' "$ROOT/packaging/macos/Info.plist.in")"
+[[ "$MIN_MACOS" =~ ^[0-9]+\.[0-9]+$ ]] || die "LSMinimumSystemVersion not found in packaging/macos/Info.plist.in"
+export MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS"
+
+# The whisper.cpp static libraries (and the binary) must not target a macOS newer than $MIN_MACOS. A cached
+# whisper.cpp build from before this setting keeps the build Mac's version: prod and publish (cold target/)
+# fail on that, a dev build warns (`cargo clean --release -p whisper-rs-sys` fixes it).
+check_min_macos() {
+  local target="$1" bin="$2" newer=() lib minos
+  for lib in "$target"/release/build/whisper-rs-sys-*/out/lib/*.a; do
+    [[ -f "$lib" ]] || continue
+    while read -r minos; do
+      [[ "$(printf '%s\n%s\n' "$minos" "$MIN_MACOS" | sort -V | tail -n 1)" == "$MIN_MACOS" ]] || newer+=("$(basename "$lib") ($minos)")
+    done < <(otool -l "$lib" | awk '/ minos /{print $2}' | sort -u)
+  done
+  minos="$(otool -l "$bin" | awk '/ minos /{print $2; exit}')"
+  [[ "$minos" == "$MIN_MACOS" ]] || newer+=("agentty ($minos)")
+  if (( ${#newer[@]} )); then
+    local message="built for a macOS newer than $MIN_MACOS: ${newer[*]}"
+    [[ "$MODE" == "dev" ]] && warn "$message (cargo clean --release -p whisper-rs-sys)" || die "$message"
+  else
+    ok "every object targets macOS $MIN_MACOS"
+  fi
+}
 # dev builds what you have in front of you. prod and publish build a private git worktree of HEAD
 # instead: this checkout is shared — an agent session editing a file while cargo runs would otherwise
 # land inside a signed, notarized build, and nothing downstream would notice. The worktree has its own
@@ -117,6 +150,7 @@ else
   BIN="$SRC/target/release/agentty"
 fi
 [[ -x "$BIN" ]] || die "release binary not found at $BIN"
+check_min_macos "$(dirname "$(dirname "$BIN")")" "$BIN"
 
 # ─── 4. Assemble .app ───
 APP="$DIST/$APP_NAME.app"

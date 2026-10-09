@@ -32,9 +32,10 @@ static RECORDING: AtomicBool = AtomicBool::new(false);
 /// Numbers each recording: its file name, and which result or ticker still belongs to it.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Whether this Mac build can record and transcribe at all.
+/// Whether this Mac build can record and transcribe at all (voice compiled in, a processor that
+/// runs it, and a microphone recorder for the platform).
 pub fn available() -> bool {
-    mic::HAS_MIC && agentty_bridge::voice::AVAILABLE
+    mic::HAS_MIC && agentty_bridge::voice::supported()
 }
 
 #[derive(Default)]

@@ -56,6 +56,17 @@ if ($Installer) {
     }
 }
 
+# whisper.cpp (voice) is tuned for the CPU that compiles it unless told otherwise; a package built on a
+# runner with AVX-512 would die with an illegal instruction on most desktops. GGML_NATIVE=OFF keeps
+# ggml's portable x86-64 baseline (AVX2/FMA/F16C/BMI2, 2013 on; the app turns voice off on older CPUs,
+# see agentty_bridge::voice::X86_REQUIRED). whisper-rs-sys forwards GGML_* to cmake but does not
+# rebuild when they change, so for the installer (what a release ships) a cached build of it is dropped
+# first; CI's plain zip keeps its cache rather than recompiling whisper.cpp on every pull request.
+$env:GGML_NATIVE = 'OFF'
+if ($Installer) {
+    cargo clean --release -p whisper-rs-sys
+    if ($LASTEXITCODE -ne 0) { throw 'cargo clean failed' }
+}
 cargo build --release -p agentty-app
 if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue

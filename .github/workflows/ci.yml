@@ -46,6 +46,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # The app without on-device voice (no whisper.cpp, no cmake needed): reuses the dependencies the
+      # clippy run above already checked, so it only re-checks the three workspace crates.
+      - name: Clippy without voice
+        run: cargo clippy -p agentty-app -p agentty-bridge -p agentty-db --no-default-features --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
       # The release build, as a DMG (dev mode: ad-hoc signature, not notarized, so macOS asks

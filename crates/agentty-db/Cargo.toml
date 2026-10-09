@@ -10,7 +10,9 @@ homepage.workspace = true
 description = "Database connections for Agentty: project detection, read-only guard, MySQL / MariaDB / PostgreSQL / Oracle / MongoDB"
 
 [dependencies]
-agentty-bridge = { path = "../agentty-bridge" }
+# No default features: the database code needs none of them (voice in particular), and leaving them on
+# would turn whisper.cpp back on for an app built with `--no-default-features`.
+agentty-bridge = { path = "../agentty-bridge", default-features = false }
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

@@ -30,6 +30,13 @@ if [[ "${1:-}" == "--in-container" ]]; then
     wayland-devel libxcb-devel libX11-devel vulkan-loader-devel fontconfig-devel freetype-devel libzstd-devel >/dev/null
   command -v rustup >/dev/null || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --no-modify-path
   rustup toolchain install
+  # whisper.cpp (voice) is tuned for the CPU that compiles it unless told otherwise; a package built on a
+  # runner with AVX-512 would die with an illegal instruction on most desktops. GGML_NATIVE=OFF keeps
+  # ggml's portable x86-64 baseline (AVX2/FMA/F16C/BMI2, 2013 on; the app turns voice off on older CPUs,
+  # see agentty_bridge::voice::X86_REQUIRED). whisper-rs-sys forwards GGML_* to cmake but does not
+  # rebuild when they change, so its cached build in the target volume is dropped first.
+  export GGML_NATIVE=OFF
+  cargo clean --release -p whisper-rs-sys
   cargo build --release -p agentty-app
 
   tools=/root/.cargo/nfpm-$NFPM_VERSION

@@ -31,7 +31,10 @@ hound = { version = "3.5", optional = true }
 
 [features]
 # On-device voice-to-text. Compiles whisper.cpp (needs cmake + a C/C++ toolchain); on by default
-# so release builds have it, but `--no-default-features` lets a contributor without cmake skip it.
+# so release builds have it. agentty-app and agentty-db take this crate with default features off
+# (the app forwards its own `voice` feature here), so `cargo build -p agentty-app
+# --no-default-features` skips it. Any new default feature added here must also be listed for
+# agentty-app in its Cargo.toml.
 default = ["voice"]
 voice = ["dep:whisper-rs", "dep:hound"]
 

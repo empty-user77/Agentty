@@ -52,6 +52,63 @@ pub const MODELS: &[Model] = &[
 /// Whether this build has on-device transcription (the `voice` feature, whisper.cpp) compiled in.
 pub const AVAILABLE: bool = cfg!(feature = "voice");
 
+/// Why on-device transcription cannot run on this machine, when it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unavailable {
+    /// The build has no `voice` feature.
+    NotBuilt,
+    /// The processor lacks instructions whisper.cpp was compiled with (see [`X86_REQUIRED`]).
+    Cpu,
+}
+
+/// x86-64 instructions whisper.cpp uses in release packages. The packaging scripts build it with
+/// `GGML_NATIVE=OFF`, which keeps ggml's portable x86 baseline: SSE4.2, AVX, AVX2, FMA, F16C and
+/// BMI2 (Intel Haswell / AMD Excavator, 2013 on). Running it on a CPU without one of them dies with
+/// an illegal instruction, so voice is turned off there instead. A contributor's own build tuned
+/// for their machine (`GGML_NATIVE` on) only uses what that machine has.
+pub const X86_REQUIRED: &[&str] = &["sse4.2", "avx", "avx2", "fma", "f16c", "bmi2"];
+
+/// `None` when voice can run here, else why not. The CPU is checked once.
+pub fn unavailable() -> Option<Unavailable> {
+    if !AVAILABLE {
+        return Some(Unavailable::NotBuilt);
+    }
+    static CPU_OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*CPU_OK.get_or_init(|| cpu_supported(cpu_has)) {
+        return Some(Unavailable::Cpu);
+    }
+    None
+}
+
+/// Whether on-device transcription is compiled in and can run on this processor.
+pub fn supported() -> bool {
+    unavailable().is_none()
+}
+
+/// Whether a processor with the given features can run the release build of whisper.cpp. Only
+/// x86-64 has a check: Arm builds use the target's baseline (Apple M1 on macOS).
+fn cpu_supported(has: impl Fn(&str) -> bool) -> bool {
+    !cfg!(target_arch = "x86_64") || X86_REQUIRED.iter().all(|feature| has(feature))
+}
+
+#[cfg(target_arch = "x86_64")]
+fn cpu_has(feature: &str) -> bool {
+    match feature {
+        "sse4.2" => std::arch::is_x86_feature_detected!("sse4.2"),
+        "avx" => std::arch::is_x86_feature_detected!("avx"),
+        "avx2" => std::arch::is_x86_feature_detected!("avx2"),
+        "fma" => std::arch::is_x86_feature_detected!("fma"),
+        "f16c" => std::arch::is_x86_feature_detected!("f16c"),
+        "bmi2" => std::arch::is_x86_feature_detected!("bmi2"),
+        _ => false,
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn cpu_has(_feature: &str) -> bool {
+    true
+}
+
 /// The default model id when none is chosen.
 pub const DEFAULT_MODEL: &str = "base";
 
@@ -204,6 +261,9 @@ static LOADED: std::sync::Mutex<Option<Loaded>> = std::sync::Mutex::new(None);
 pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<String> {
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+    if unavailable() == Some(Unavailable::Cpu) {
+        bail!("this processor lacks the instructions on-device voice needs ({})", X86_REQUIRED.join(", "));
+    }
     if samples.is_empty() {
         return Ok(String::new());
     }
@@ -370,6 +430,39 @@ mod tests {
             for b in &MODELS[i + 1..] {
                 assert_ne!(a.id, b.id, "duplicate model id {}", a.id);
             }
+        }
+    }
+
+    #[test]
+    fn cpu_check_needs_every_required_feature() {
+        assert!(cpu_supported(|_| true));
+        if cfg!(target_arch = "x86_64") {
+            assert!(!cpu_supported(|_| false));
+            for missing in X86_REQUIRED {
+                assert!(!cpu_supported(|f| f != *missing), "a CPU without {missing} must not run voice");
+            }
+        } else {
+            assert!(cpu_supported(|_| false), "only x86-64 has a CPU check");
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn every_required_feature_is_detected() {
+        // `cpu_has` answers false for a name it does not know; every listed name must be one it checks.
+        // CI runners have all of them, so this also proves the names are spelled as the detector wants.
+        for feature in X86_REQUIRED {
+            assert!(cpu_has(feature), "{feature} not detected on this machine");
+        }
+    }
+
+    #[test]
+    fn unavailable_follows_the_feature() {
+        if AVAILABLE {
+            assert_ne!(unavailable(), Some(Unavailable::NotBuilt));
+        } else {
+            assert_eq!(unavailable(), Some(Unavailable::NotBuilt));
+            assert!(!supported());
         }
     }
 
