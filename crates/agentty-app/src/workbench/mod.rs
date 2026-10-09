@@ -70,6 +70,7 @@ mod tasks;
 mod terminal_browser;
 mod tree_manager;
 pub mod update;
+mod voice_input;
 mod windows_page;
 pub mod worktrees;
 
@@ -157,6 +158,7 @@ actions!(
         JumpToUnread,
         OpenPalette,
         ToggleZoom,
+        ToggleVoiceInput,
     ]
 );
 
@@ -185,6 +187,7 @@ pub fn next_free_window_slot() -> usize {
 pub use account_usage::AccountUsage;
 pub(crate) use layout::format_elapsed;
 pub use persist::ClosedWindows;
+pub use voice_input::available as voice_input_available;
 
 /// The place and size window `slot` had at the last save.
 pub fn saved_window(slot: usize) -> Option<persist::WindowState> {
@@ -439,6 +442,8 @@ pub struct Workbench {
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
     chat_notify: notify_settings::ChatNotifyState,
     remote_page: remote_page::RemotePageState,
+    /// The status bar's mic: recording, transcribing, its setup popover.
+    voice_input: voice_input::VoiceInput,
     sync: sync::SyncUi,
     backup: backup::BackupUi,
     split_drag: Option<layout::SplitDrag>,
@@ -822,6 +827,7 @@ impl Workbench {
             browser_home_input: None,
             chat_notify: Default::default(),
             remote_page: Default::default(),
+            voice_input: Default::default(),
             sync: Default::default(),
             backup: Default::default(),
             split_drag: None,
@@ -3239,12 +3245,18 @@ impl Render for Workbench {
             .track_focus(&self.focus_handle)
             // Esc leaves "pick a terminal to connect" before the focused terminal sees the key: the
             // agent there would take it as "interrupt".
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && this.connect_pick.is_some() {
                     this.cancel_connect_pick(cx);
                     cx.stop_propagation();
                 }
+                // While the mic records, Enter sends what was said and Esc drops it — before the
+                // terminal sees either key.
+                if this.voice_key(event, window, cx) {
+                    cx.stop_propagation();
+                }
             }))
+            .on_action(cx.listener(|this, _: &ToggleVoiceInput, window, cx| this.toggle_mic(window, cx)))
             .on_action(cx.listener(|this, _: &NewTerminalTab, window, cx| {
                 // In a plugin's workspace a new tab is a new automation.
                 match this.front_plugin_workspace(cx).filter(|_| this.page.is_none()) {

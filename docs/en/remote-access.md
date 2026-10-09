@@ -71,6 +71,16 @@ A sleeping Mac or a closed laptop cannot be reached.
 
 Remote access stays on across restarts until you turn it off. It uses Tailscale port 8743 and does not interfere with anything else you serve with Tailscale. If something else is already using port 8743, Agentty shows an error instead.
 
+## Voice input on the Mac
+
+You can also talk to your agents right in the app. Click the **microphone** at the right end of the status bar (or press **⇧⌘M**) and speak; the status bar shows **Recording 0:05** with a level meter while it listens.
+
+- **⏎ Enter** — stop and send what you said to the terminal straight away, as a prompt.
+- **Click the microphone or ⇧⌘M again** — stop and only type the words in, to check or fix them before you send.
+- **Esc** — throw the recording away.
+
+The words go to the terminal that was active when you started. The language is detected from your speech, so Korean, English and mixed prompts all work. The first time, macOS asks for microphone access; if you turned it off, Agentty opens the Microphone page of System Settings for you. Without a model yet, the microphone opens the model setup right there (the same one as below).
+
 ## Voice prompts
 
 From the remote page you can speak a prompt instead of typing it. Tap the microphone in the prompt bar, say your prompt, then tap again to stop; the words are transcribed and dropped into the prompt box for you to check and send.

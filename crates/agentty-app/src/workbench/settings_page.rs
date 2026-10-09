@@ -156,6 +156,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         "shortcuts.group.views",
         &[
             ("shortcuts.palette", "⇧⌘P"),
+            ("shortcuts.voice", "⇧⌘M"),
             ("shortcuts.search_sessions", "⇧⌘O"),
             ("panel.workspaces", "⇧⌘E"),
             ("panel.sessions", "⇧⌘S"),

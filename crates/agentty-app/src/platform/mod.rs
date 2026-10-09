@@ -8,6 +8,7 @@
 pub mod app_nap;
 pub mod drops;
 pub mod frame;
+pub mod mic;
 pub mod system_proxy;
 pub mod tray;
 pub mod url;
