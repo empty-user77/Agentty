@@ -75,3 +75,5 @@ Agentty가 사용하는 도구와 설치 여부입니다. Git, Node.js, 에이�
 ## Agentty 정보
 
 버전, 업데이트 확인, 그리고 [개인정보처리방침](https://www.agentty.run/privacy-policy), [이용약관](https://www.agentty.run/terms-of-service), [라이선스 계약](https://www.agentty.run/eula) 링크입니다.
+
+**빌드**에는 지금 쓰는 Agentty가 무엇인지 나옵니다: 버전, 커밋, 빌드 날짜, 프로필(release / debug), 대상 플랫폼, Rust 버전, 기기 내 음성 인식 포함 여부, 그리고 Agentty가 제공하는 인터페이스의 API 버전(플러그인 API, 마켓플레이스 목록, MCP, 셸 연동, 설정 백업 파일, 세션 동기화 형식)입니다. **빌드 정보 복사**는 이 내용을 영어 일반 텍스트로 복사해 버그 신고에 붙여 넣을 수 있게 합니다. 경로, 사용자 이름, 키는 들어 있지 않습니다.
