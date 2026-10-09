@@ -41,8 +41,9 @@ const FREE_TRIES: u32 = 5;
 const LOCK_BASE: Duration = Duration::from_secs(60);
 const LOCK_MAX: Duration = Duration::from_secs(60 * 60);
 
-/// Why a new password is refused, as an i18n key: at least eight characters, with a digit and a
-/// special character among them.
+/// Why a new password is refused, as an i18n key: it needs at least `MIN_PASSWORD_CHARS`
+/// characters and at most `MAX_PASSWORD_BYTES` bytes. No character classes are required, so a
+/// long passphrase is fine.
 pub fn password_problem(password: &str) -> Option<&'static str> {
     if password.chars().count() < MIN_PASSWORD_CHARS {
         Some("remote.password_short")

@@ -8,9 +8,15 @@ use std::time::{Duration, Instant};
 
 pub const MAX_HEAD: usize = 16 * 1024;
 pub const MAX_BODY: usize = 64 * 1024;
-/// Larger cap for `POST /api/voice` only: an uploaded voice clip. 8 MiB is ~4 minutes of 16 kHz
-/// mono 16-bit audio, well above the two-minute decode cap, and still bounds memory per request.
+/// Larger cap for `POST /api/voice` only: an uploaded voice clip. The page sends 16 kHz mono
+/// 16-bit audio (32 KB a second), so 8 MiB is ~4 minutes of it, well above the two-minute decode
+/// cap; a clip sent at a browser's own 48 kHz still fits ~87 s. It bounds memory per request.
 pub const VOICE_MAX_BODY: usize = 8 * 1024 * 1024;
+/// How long a voice clip's body may take to arrive, counted from the end of its head: a few MB
+/// from a phone on a slow uplink takes longer than a JSON body. The head itself still has the
+/// caller's (shorter) deadline, and the body is read only after `admit` checked the sender's
+/// session, so only a signed-in page gets this much time.
+pub const VOICE_BODY_TIME: Duration = Duration::from_secs(60);
 const MAX_HEADERS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,8 +113,17 @@ fn read_some(stream: &mut impl Deadline, chunk: &mut [u8], deadline: Instant) ->
     }
 }
 
-/// Reads one request by `deadline`. `admit` sees the head before any body is read: a request it
-/// refuses ends there, so a stranger can't make the server wait for a body.
+/// Whether `path` is the voice upload, which gets `VOICE_MAX_BODY` and `VOICE_BODY_TIME`. The secret
+/// path prefix (TCP listener) is still on `path` while the request is read — it is stripped only
+/// after `read_request` returns — so the suffix is matched to cover both forms. `admit` must check
+/// the sender's session for every path this matches before the larger body is read.
+pub fn is_voice(path: &str) -> bool {
+    path.ends_with("/api/voice")
+}
+
+/// Reads one request by `deadline` (a voice upload's body by `VOICE_BODY_TIME` after its head
+/// instead). `admit` sees the head before any body is read: a request it refuses ends there, so a
+/// stranger can't make the server wait for a body.
 pub fn read_request(
     stream: &mut impl Deadline,
     deadline: Instant,
@@ -144,10 +159,10 @@ pub fn read_request(
         None => 0,
     };
     // A voice upload is a short audio clip (16 kHz mono WAV, capped to two minutes on decode), so
-    // it needs more room than the small JSON bodies every other route sends. The secret path
-    // prefix (TCP listener) is still on `path` here — it is stripped only after this returns — so
-    // match the suffix to cover both the plain and secret-prefixed forms.
-    let max_body = if request.path.ends_with("/api/voice") { VOICE_MAX_BODY } else { MAX_BODY };
+    // it needs more room and time than the small JSON bodies every other route sends.
+    let voice = is_voice(&request.path);
+    let max_body = if voice { VOICE_MAX_BODY } else { MAX_BODY };
+    let deadline = if voice { deadline.max(Instant::now() + VOICE_BODY_TIME) } else { deadline };
     if length > max_body {
         return Err(HttpError::BodyTooLarge);
     }
@@ -373,6 +388,25 @@ mod tests {
         let result = read_request(&mut server, Instant::now() + Duration::from_millis(800), |_| Ok(()));
         assert_eq!(result, Err(HttpError::Gone));
         assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_voice_body_gets_more_time_than_other_bodies() {
+        // The head arrives in time; checking it takes past the request deadline. Only the voice
+        // upload may still read its body after that.
+        let slow_admit = |_: &Request| {
+            std::thread::sleep(Duration::from_millis(80));
+            Ok(())
+        };
+        // Longer than one read, so some of it is read after the head.
+        let body = "a".repeat(6000);
+        let voice = format!("POST /api/voice?pane=1 HTTP/1.1\r\nHost: x\r\nContent-Length: 6000\r\n\r\n{body}");
+        let r = read_request(&mut voice.as_bytes(), Instant::now() + Duration::from_millis(40), slow_admit).unwrap();
+        assert_eq!(r.body, body.as_bytes());
+        let input = format!("POST /api/input HTTP/1.1\r\nHost: x\r\nContent-Length: 6000\r\n\r\n{body}");
+        let result = read_request(&mut input.as_bytes(), Instant::now() + Duration::from_millis(40), slow_admit);
+        assert_eq!(result, Err(HttpError::Gone));
+        assert!(is_voice("/api/voice") && is_voice("/s3cr3t/api/voice") && !is_voice("/api/voice/x"));
     }
 
     #[test]

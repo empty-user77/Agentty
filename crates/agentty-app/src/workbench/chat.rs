@@ -119,8 +119,8 @@ pub struct ChatState {
     show_terminal: bool,
     /// The lead's screen shows something the chat can't answer (folder trust, sign-in).
     setup_screen: bool,
-    /// Reports waiting while the lead waits on the user (an approval, a question).
-    pending: Vec<String>,
+    /// Messages and reports waiting while the lead waits on the user (an approval, a question).
+    pending: Vec<Pending>,
     transcript: Option<(String, PathBuf)>,
     seen_len: u64,
     loading: bool,
@@ -200,15 +200,69 @@ pub fn chat_items(turns: &[Turn]) -> (Vec<ChatItem>, bool) {
                 if text.is_empty() {
                     continue;
                 }
-                items.push(match text.strip_prefix(REPORT_MARK) {
-                    Some(report) => ChatItem::Report(report.trim().to_string()),
-                    None => ChatItem::User(text.to_string()),
-                });
+                items.extend(user_entries(text));
             }
             Role::Assistant => items.push(ChatItem::Lead(turn.text.clone())),
         }
     }
     (items, briefed)
+}
+
+/// One user turn as entries: what the user wrote, then the reports in it. Reports that waited for
+/// the lead go in after the user's words, each from a new paragraph (see [`pending_message`]).
+fn user_entries(text: &str) -> Vec<ChatItem> {
+    let boundary = format!("\n\n{REPORT_MARK}");
+    let mut parts = text.split(boundary.as_str());
+    let first = parts.next().unwrap_or_default().trim();
+    let mut items = Vec::new();
+    match first.strip_prefix(REPORT_MARK) {
+        Some(report) => items.push(ChatItem::Report(report.trim().to_string())),
+        None if !first.is_empty() => items.push(ChatItem::User(first.to_string())),
+        None => {}
+    }
+    items.extend(parts.map(str::trim).filter(|report| !report.is_empty()).map(|report| ChatItem::Report(report.to_string())));
+    items
+}
+
+/// Something waiting for the lead while it waits on the user.
+#[derive(Debug, Clone, PartialEq)]
+enum Pending {
+    /// What the user wrote: as it goes to the lead, and as the chat echoes it.
+    User { prompt: String, echo: String },
+    /// A worker's report.
+    Report(String),
+}
+
+/// The one message what waited goes in as: the user's words first, so no report swallows them,
+/// then the reports. Their echoes give way to what the transcript will show of that message, so
+/// they clear once it is there.
+fn pending_message(pending: Vec<Pending>, echo: &mut Vec<String>) -> String {
+    let mut parts = Vec::with_capacity(pending.len());
+    let mut reports = Vec::new();
+    for entry in pending {
+        match entry {
+            Pending::User { prompt, echo: sent } => {
+                if let Some(at) = echo.iter().rposition(|shown| *shown == sent) {
+                    echo.remove(at);
+                }
+                parts.push(prompt);
+            }
+            Pending::Report(report) => reports.push(report),
+        }
+    }
+    parts.extend(reports);
+    let message = parts.join("\n\n");
+    let (items, _) = chat_items(&[Turn { role: Role::User, text: message.clone() }]);
+    echo.extend(items.into_iter().filter_map(|item| match item {
+        ChatItem::User(text) => Some(text),
+        _ => None,
+    }));
+    message
+}
+
+/// Drops the echoes the transcript's newest entries show.
+fn clear_echo(echo: &mut Vec<String>, items: &[ChatItem]) {
+    echo.retain(|sent| !items.iter().rev().take(8).any(|item| matches!(item, ChatItem::User(text) if text == sent)));
 }
 
 /// The tab's layout: the lead on top, its workers below in rows of two.
@@ -580,7 +634,7 @@ impl Workbench {
         let (items, briefed) = chat_items(&turns);
         state.briefed |= briefed;
         // What the transcript shows now no longer needs its echo.
-        state.echo.retain(|sent| !items.iter().rev().take(8).any(|item| matches!(item, ChatItem::User(text) if text == sent)));
+        clear_echo(&mut state.echo, &items);
         state.items = items;
         Self::show_chat_items(state);
         cx.notify();
@@ -624,13 +678,13 @@ impl Workbench {
             briefed_prompt(&text, language, &Self::lead_folder_brief(&state.lead, cx))
         };
         state.briefed |= !text.starts_with('/');
-        state.echo.push(text);
+        state.echo.push(text.clone());
         // What the user just wrote is what they look at: back to the newest entry.
         state.follow.set(true);
         Self::show_chat_items(state);
         // Never into a selection on the lead's screen: it goes in once that is answered.
         if waits_on_user(state.lead.read(cx)) || !state.pending.is_empty() {
-            state.pending.push(prompt);
+            state.pending.push(Pending::User { prompt, echo: text });
         } else {
             state.lead.update(cx, |view, cx| view.submit_prompt(prompt, cx));
         }
@@ -659,7 +713,7 @@ impl Workbench {
     fn deliver_to_lead(&mut self, id: EntityId, text: String, cx: &mut Context<Self>) {
         let Some(state) = self.chats.get_mut(&id) else { return };
         if waits_on_user(state.lead.read(cx)) || !state.pending.is_empty() {
-            state.pending.push(text);
+            state.pending.push(Pending::Report(text));
             return;
         }
         state.lead.update(cx, |view, cx| view.submit_prompt(text, cx));
@@ -671,8 +725,10 @@ impl Workbench {
         if state.pending.is_empty() || waits_on_user(state.lead.read(cx)) {
             return;
         }
-        let text = std::mem::take(&mut state.pending).join("\n\n");
+        let text = pending_message(std::mem::take(&mut state.pending), &mut state.echo);
+        Self::show_chat_items(state);
         state.lead.update(cx, |view, cx| view.submit_prompt(text, cx));
+        cx.notify();
     }
 
     /// A pane ended a turn: a lead takes what waited for it; a worker reports to its lead.
@@ -1586,6 +1642,49 @@ mod tests {
         let (items, briefed) = chat_items(&[turn(Role::User, &pasted), turn(Role::User, report)]);
         assert!(briefed);
         assert_eq!(items, vec![ChatItem::User("Build a todo app".into()), ChatItem::Report("Worker \"A\" finished its turn.".into())]);
+    }
+
+    #[test]
+    fn what_waited_clears_from_the_chat_once_delivered() {
+        let report = "[Agentty] Worker \"API\" finished its turn.\nIts last reply:\nDone\n\nAsk for a review.";
+        let first = briefed_prompt("Build a todo app", "Korean", "Your folder is the project folder itself.");
+        // Sent before the lead waited on the user, then three things queued while it did.
+        let mut echo = vec!["earlier".to_string(), "Build a todo app".into(), "use sqlite".into()];
+        let pending = vec![
+            Pending::Report(report.into()),
+            Pending::User { prompt: first, echo: "Build a todo app".into() },
+            Pending::User { prompt: "use sqlite".into(), echo: "use sqlite".into() },
+        ];
+        let message = pending_message(pending, &mut echo);
+        assert!(message.ends_with(report), "reports go in after the user's words");
+        assert_eq!(echo, vec!["earlier".to_string(), "Build a todo app\n\nuse sqlite".into()]);
+        // The transcript shows the message: the user's words stand apart from the report.
+        let turns = vec![turn(Role::User, "earlier"), turn(Role::Assistant, "Asking a question."), turn(Role::User, &message)];
+        let (items, briefed) = chat_items(&turns);
+        assert!(briefed);
+        assert_eq!(
+            &items[2..],
+            &[
+                ChatItem::User("Build a todo app\n\nuse sqlite".into()),
+                ChatItem::Report("Worker \"API\" finished its turn.\nIts last reply:\nDone\n\nAsk for a review.".into()),
+            ]
+        );
+        clear_echo(&mut echo, &items);
+        assert!(echo.is_empty(), "stale echoes: {echo:?}");
+    }
+
+    #[test]
+    fn reports_alone_leave_no_echo() {
+        let mut echo = vec!["still on its way".to_string()];
+        let message = pending_message(vec![Pending::Report("[Agentty] A".into()), Pending::Report("[Agentty] B".into())], &mut echo);
+        assert_eq!(message, "[Agentty] A\n\n[Agentty] B");
+        assert_eq!(echo, vec!["still on its way".to_string()]);
+        let (items, _) = chat_items(&[turn(Role::User, &message)]);
+        assert_eq!(items, vec![ChatItem::Report("A".into()), ChatItem::Report("B".into())]);
+        // One message on its own goes in as it was written.
+        let mut echo = vec!["yes".to_string()];
+        assert_eq!(pending_message(vec![Pending::User { prompt: "yes".into(), echo: "yes".into() }], &mut echo), "yes");
+        assert_eq!(echo, vec!["yes".to_string()]);
     }
 
     #[test]

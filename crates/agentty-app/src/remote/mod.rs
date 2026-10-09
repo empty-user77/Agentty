@@ -526,9 +526,7 @@ fn voice_config() -> Option<server::VoiceConfig> {
     if !voice::supported() {
         return None;
     }
-    let model = voice::model(voice::DEFAULT_MODEL)
-        .filter(|m| voice::model_present(m))
-        .or_else(|| voice::MODELS.iter().find(|m| voice::model_present(m)))?;
+    let model = voice::installed_model()?;
     Some(server::VoiceConfig { model, language: None })
 }
 

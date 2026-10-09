@@ -26,6 +26,7 @@ use crate::launch::PaneKind;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -44,6 +45,11 @@ const KEEPALIVE: Duration = Duration::from_secs(15);
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// The whole request, head and body, arrives within this or the connection closes.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
+/// Voice clips transcribed at once: each keeps a CPU busy for seconds, so more wait their turn
+/// (answered 429) rather than slowing every one down.
+const MAX_TRANSCRIPTIONS: usize = 2;
+/// How long a refused request's unread body is drained so its answer arrives (`linger`).
+const LINGER: Duration = Duration::from_secs(3);
 /// Longest text one input may carry (a prompt pasted from a phone).
 pub const MAX_INPUT_CHARS: usize = 16_000;
 const LOG_LEN: usize = 50;
@@ -190,6 +196,8 @@ pub struct Hub {
     /// Voice-to-text settings, or `None` when voice is off (no model set up). Read on every
     /// `/api/voice`.
     voice: RwLock<Option<VoiceConfig>>,
+    /// Voice clips being transcribed now, at most `MAX_TRANSCRIPTIONS`.
+    transcribing: AtomicUsize,
 }
 
 /// What `POST /api/voice` transcribes with: a model (already installed) and an optional language
@@ -303,6 +311,7 @@ impl Hub {
             streams: Mutex::new(HashMap::new()),
             new_tabs: Mutex::new(VecDeque::new()),
             voice: RwLock::new(None),
+            transcribing: AtomicUsize::new(0),
         });
         let accept = hub.clone();
         std::thread::Builder::new().name("agentty-remote".into()).spawn(move || accept.accept_loop(listener))?;
@@ -487,7 +496,11 @@ impl Hub {
             if config.secret.as_deref().is_some_and(|secret| strip_secret(&head.path, secret).is_none()) {
                 return Err(404);
             }
-            self.admitted(head, &config, true).map(|_| ()).map_err(|refused| refused.status)
+            let (host, login) = self.admitted(head, &config, true).map_err(|refused| refused.status)?;
+            if http::is_voice(&head.path) {
+                self.voice_admitted(head, &config, &host, &login)?;
+            }
+            Ok(())
         }) {
             Ok(request) => request,
             Err(HttpError::Gone) => return,
@@ -500,6 +513,9 @@ impl Hub {
                     _ => 400,
                 };
                 send(&mut stream, &Response::new(status, "text/plain", http::reason(status)), false);
+                if matches!(error, HttpError::Refused(_) | HttpError::BodyTooLarge) {
+                    linger(&mut stream);
+                }
                 return;
             }
         };
@@ -554,6 +570,35 @@ impl Hub {
         Ok((host.to_string(), login))
     }
 
+    /// The voice upload's head, checked in full before its body (up to `VOICE_MAX_BODY`) is read:
+    /// a POST from this page (check 4), a session of this login (check 3), and a transcription
+    /// slot free. `route` checks it all again once the body is in.
+    fn voice_admitted(&self, request: &Request, config: &Config, host: &str, login: &str) -> Result<(), u16> {
+        if request.method != "POST" {
+            return Err(405);
+        }
+        same_origin_post(request, &config.origin_for(host))?;
+        if cross_site(request) {
+            return Err(403);
+        }
+        let token = request.cookie(config.cookie_name()).unwrap_or("");
+        if !self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(token, login, SystemTime::now()) {
+            return Err(401);
+        }
+        if self.transcribing.load(Ordering::SeqCst) >= MAX_TRANSCRIPTIONS {
+            return Err(429);
+        }
+        Ok(())
+    }
+
+    /// Reserves one of `MAX_TRANSCRIPTIONS`, given back when the guard drops.
+    fn transcribe_slot(&self) -> Option<TranscribeSlot<'_>> {
+        self.transcribing
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < MAX_TRANSCRIPTIONS).then_some(n + 1))
+            .ok()
+            .map(|_| TranscribeSlot(self))
+    }
+
     fn route(&self, request: &Request) -> Routed {
         let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
         // 1 and 2 already passed on the head; checked again against the current settings.
@@ -597,7 +642,7 @@ impl Hub {
         } else if !get {
             return Routed::Response(Response::new(405, "text/plain", "Method Not Allowed"));
         }
-        if request.header("sec-fetch-site").is_some_and(|site| site != "same-origin" && site != "none") {
+        if cross_site(request) {
             return Routed::Response(Response::json(403, &json!({ "error": "refused" })));
         }
         let token = request.cookie(config.cookie_name()).unwrap_or("").to_string();
@@ -806,11 +851,12 @@ impl Hub {
         if !agentty_bridge::voice::model_present(config.model) {
             return Response::json(503, &json!({ "error": "no model" }));
         }
-        // A language hint from the page (`ko`, `en`), else the configured one, else auto-detect.
-        let lang = request
-            .query_param("lang")
-            .filter(|l| (1..=8).contains(&l.len()) && l.bytes().all(|b| b.is_ascii_alphabetic()))
-            .or_else(|| config.language.clone());
+        let Some(_slot) = self.transcribe_slot() else {
+            return Response::json(429, &json!({ "error": "busy" }));
+        };
+        // The configured language, else whisper detects it. The page's UI language is no hint: a
+        // Korean speaker may well use an English browser.
+        let lang = config.language.clone();
         let samples = match agentty_bridge::voice::wav_to_samples(&request.body) {
             Ok(samples) if !samples.is_empty() => samples,
             Ok(_) => return Response::json(422, &json!({ "error": "no audio" })),
@@ -1007,6 +1053,29 @@ fn strip_secret(path: &str, secret: &str) -> Option<String> {
     }
 }
 
+/// After answering a request whose body was not read: closing with that body still arriving
+/// would reset the connection, and the browser would lose the answer (a 401 or 429 the page acts
+/// on) along with it. So the writing side is closed and what still comes is read and dropped, for
+/// a short, bounded while.
+fn linger(stream: &mut Conn) {
+    if stream.shutdown_write().is_err() {
+        return;
+    }
+    let deadline = Instant::now() + LINGER;
+    let mut chunk = [0u8; 16 * 1024];
+    let mut dropped = 0;
+    while dropped <= http::VOICE_MAX_BODY {
+        let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) else { return };
+        if stream.set_read_timeout(Some(left)).is_err() {
+            return;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => dropped += n,
+        }
+    }
+}
+
 /// Writes a whole response within RESPONSE_DEADLINE.
 fn send(stream: &mut Conn, response: &Response, head_only: bool) {
     let deadline = Instant::now() + RESPONSE_DEADLINE;
@@ -1039,6 +1108,15 @@ impl Drop for OpenSlot {
     }
 }
 
+/// One transcription running, counted in `Hub::transcribing` until dropped.
+struct TranscribeSlot<'a>(&'a Hub);
+
+impl Drop for TranscribeSlot<'_> {
+    fn drop(&mut self) {
+        self.0.transcribing.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// One live stream of a session, counted in `Hub::streams` until dropped.
 struct StreamSlot<'a> {
     hub: &'a Hub,
@@ -1060,6 +1138,12 @@ impl Drop for StreamSlot<'_> {
 enum Routed {
     Response(Response),
     Events { token: String, login: String, pane: Option<u64> },
+}
+
+/// Sent from another site, by the browser's word (`Sec-Fetch-Site`); a request without the
+/// header is judged by the other checks.
+fn cross_site(request: &Request) -> bool {
+    request.header("sec-fetch-site").is_some_and(|site| site != "same-origin" && site != "none")
 }
 
 /// A POST that only this page can make: sent from its own origin, as JSON, with its header.
@@ -1333,6 +1417,60 @@ mod tests {
         assert!(hub.stream_slot("another-session").is_some(), "others still get theirs");
         drop(slots);
         assert!(hub.stream_slot(&token).is_some(), "given back when they end");
+        hub.shutdown();
+    }
+
+    #[test]
+    fn a_voice_upload_is_checked_before_its_body_is_read() {
+        let hub = hub("secret-password");
+        hub.publish(Vec::new(), vec![session(7)], Vec::new());
+        let cookie = sign_in(&hub, "secret-password");
+        // A head announcing a large clip whose body never comes: each refusal is answered at once
+        // instead of waiting for (or reading) the body.
+        let head_only = |req: Req| req.raw().replace("Content-Length: 2\r\n\r\n{}", "Content-Length: 4000000\r\n\r\n");
+        let voice = || Req::post("/api/voice?pane=7", json!({}));
+        let started = Instant::now();
+        assert_eq!(send(&hub, &head_only(voice())).0, 401, "no session");
+        let forged = format!("__Host-agentty={}", auth::new_token());
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(forged), ..voice() })).0, 401, "a made-up token");
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), marker: false, ..voice() })).0, 403, "not from the page");
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), origin: None, ..voice() })).0, 403);
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), method: "GET", ..voice() })).0, 405);
+        // Every transcription slot taken: the page is told to wait, before it sends its clip.
+        let slots: Vec<_> = (0..MAX_TRANSCRIPTIONS).map(|_| hub.transcribe_slot().unwrap()).collect();
+        assert!(hub.transcribe_slot().is_none());
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), ..voice() })).0, 429);
+        drop(slots);
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        // Signed in with a slot free, the body is read and the request reaches the route (voice is
+        // off in tests).
+        let (status, _, body) = send(&hub, &Req { cookie: Some(cookie), ..voice() }.raw());
+        assert_eq!(status, 503, "{body}");
+        assert!(hub.transcribe_slot().is_some(), "slots are given back");
+        hub.shutdown();
+    }
+
+    #[test]
+    fn a_refused_upload_still_gets_its_answer() {
+        // The page sends its whole clip at once; refused before the body is read, the answer must
+        // reach it rather than be lost to a reset connection.
+        let hub = hub("secret-password");
+        let body = vec![b'a'; 2 * 1024 * 1024];
+        let head = Req::post("/api/voice?pane=7", json!({}))
+            .raw()
+            .replace("Content-Length: 2\r\n\r\n{}", &format!("Content-Length: {}\r\n\r\n", body.len()));
+        let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port(&hub))).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let sender = std::thread::spawn(move || {
+            let _ = writer.write_all(head.as_bytes());
+            let _ = writer.write_all(&body);
+        });
+        // Like a browser, the answer is read once the upload is done.
+        sender.join().unwrap();
+        let mut status = String::new();
+        let _ = BufReader::new(&stream).read_line(&mut status);
+        assert!(status.starts_with("HTTP/1.1 401"), "{status:?}");
         hub.shutdown();
     }
 

@@ -14,7 +14,7 @@ const STRINGS = {
     failed: "Couldn't reach Agentty.", signOut: "Sign out", notify: "Notify me", notifyOn: "Notifying",
     noWorkspaces: "No workspaces are open in Agentty.", sleeping: "This workspace is asleep. Wake it up to start its terminals again.",
     send: "Send", promptHint: "Prompt for this terminal…", live: "Connected", offline: "Reconnecting…",
-    micStart: "Dictate a prompt", micRecording: "Recording — tap to stop", micBusy: "Transcribing…", micDenied: "Microphone access was blocked.", micFailed: "Couldn't transcribe. Try again.",
+    micStart: "Dictate a prompt", micRecording: "Recording — tap to stop", micBusy: "Transcribing…", micDenied: "Microphone access was blocked.", micFailed: "Couldn't transcribe. Try again.", micTooBusy: "The Mac is busy transcribing. Try again in a moment.",
     privacy: "Privacy Policy", terms: "Terms of Service", eula: "License Agreement", device: "Device", ip: "Tailnet IP", account: "Account", target: "Connecting to", secure: "Security", secureValue: "Tailscale (WireGuard) · HTTPS", browser: "Browser", shownOnly: "Shown here only; nothing is stored.",
     tooLong: "Too long.", busy: "Agentty is busy; try again.", finished: "Finished", asks: "Asks you", panes: "Split panes",
     home: "Home", needsYou: "Needs you", workingNow: "Working", workspacesTitle: "Workspaces", plugins: "Plugins",
@@ -32,7 +32,7 @@ const STRINGS = {
     failed: "Agentty에 연결하지 못했습니다.", signOut: "로그아웃", notify: "알림 받기", notifyOn: "알림 켜짐",
     noWorkspaces: "Agentty에 열린 작업공간이 없습니다.", sleeping: "쉬고 있는 작업공간입니다. 깨우면 터미널이 다시 시작됩니다.",
     send: "보내기", promptHint: "이 터미널에 보낼 프롬프트…", live: "연결됨", offline: "다시 연결하는 중…",
-    micStart: "음성으로 입력", micRecording: "녹음 중 — 눌러서 멈추기", micBusy: "변환 중…", micDenied: "마이크 사용이 차단되었습니다.", micFailed: "변환하지 못했습니다. 다시 시도하세요.",
+    micStart: "음성으로 입력", micRecording: "녹음 중 — 눌러서 멈추기", micBusy: "변환 중…", micDenied: "마이크 사용이 차단되었습니다.", micFailed: "변환하지 못했습니다. 다시 시도하세요.", micTooBusy: "Mac이 다른 음성을 변환하는 중입니다. 잠시 후 다시 시도하세요.",
     privacy: "개인정보처리방침", terms: "이용약관", eula: "라이선스 계약", device: "접속 기기", ip: "Tailnet IP", account: "계정", target: "접속 대상", secure: "보안", secureValue: "Tailscale(WireGuard) 암호화 · HTTPS", browser: "브라우저", shownOnly: "이 화면에 보여 주기만 하며 저장하지 않습니다.",
     tooLong: "너무 깁니다.", busy: "Agentty가 바쁩니다. 다시 시도하세요.", finished: "작업 완료", asks: "요청", panes: "분할창",
     home: "홈", needsYou: "응답 대기", workingNow: "작업 중", workspacesTitle: "작업공간", plugins: "플러그인",
@@ -50,7 +50,7 @@ const STRINGS = {
     failed: "Agentty に接続できませんでした。", signOut: "サインアウト", notify: "通知を受け取る", notifyOn: "通知オン",
     noWorkspaces: "Agentty で開いているワークスペースはありません。", sleeping: "休止中のワークスペースです。起こすとターミナルがまた始まります。",
     send: "送信", promptHint: "このターミナルへのプロンプト…", live: "接続中", offline: "再接続しています…",
-    micStart: "音声で入力", micRecording: "録音中 — タップで停止", micBusy: "文字起こし中…", micDenied: "マイクの使用がブロックされました。", micFailed: "文字起こしできませんでした。もう一度お試しください。",
+    micStart: "音声で入力", micRecording: "録音中 — タップで停止", micBusy: "文字起こし中…", micDenied: "マイクの使用がブロックされました。", micFailed: "文字起こしできませんでした。もう一度お試しください。", micTooBusy: "Mac が別の音声を文字起こし中です。少し待ってからもう一度お試しください。",
     privacy: "プライバシーポリシー", terms: "利用規約", eula: "ライセンス契約", device: "接続端末", ip: "Tailnet IP", account: "アカウント", target: "接続先", secure: "セキュリティ", secureValue: "Tailscale（WireGuard）暗号化 · HTTPS", browser: "ブラウザ", shownOnly: "表示するだけで、保存はしません。",
     tooLong: "長すぎます。", busy: "Agentty が混み合っています。もう一度お試しください。", finished: "完了", asks: "質問", panes: "分割ペイン",
     home: "ホーム", needsYou: "応答待ち", workingNow: "作業中", workspacesTitle: "ワークスペース", plugins: "プラグイン",
@@ -68,7 +68,7 @@ const STRINGS = {
     failed: "无法连接 Agentty。", signOut: "退出登录", notify: "接收通知", notifyOn: "通知已开启",
     noWorkspaces: "Agentty 中没有打开的工作区。", sleeping: "这个工作区处于休眠状态。唤醒后终端会重新启动。",
     send: "发送", promptHint: "发送给此终端的提示…", live: "已连接", offline: "正在重新连接…",
-    micStart: "语音输入", micRecording: "录音中 — 点按停止", micBusy: "转写中…", micDenied: "麦克风访问被阻止。", micFailed: "转写失败，请重试。",
+    micStart: "语音输入", micRecording: "录音中 — 点按停止", micBusy: "转写中…", micDenied: "麦克风访问被阻止。", micFailed: "转写失败，请重试。", micTooBusy: "Mac 正在转写其他语音，请稍后再试。",
     privacy: "隐私政策", terms: "服务条款", eula: "许可协议", device: "接入设备", ip: "Tailnet IP", account: "账号", target: "连接目标", secure: "安全", secureValue: "Tailscale（WireGuard）加密 · HTTPS", browser: "浏览器", shownOnly: "仅在此显示，不会保存。",
     tooLong: "太长了。", busy: "Agentty 正忙，请重试。", finished: "已完成", asks: "询问", panes: "分屏",
     home: "主页", needsYou: "等待回应", workingNow: "工作中", workspacesTitle: "工作区", plugins: "插件",
@@ -409,7 +409,7 @@ function render() {
   redraw("header", [ws, shown(session(state.pane)), state.tab], renderHeader);
   redraw("tabs", [ws && ws.tabs, state.tab, marks], renderTabs);
   redraw("panes", [tab, tab && tab.panes.map((p) => [shown(session(p)), session(p)?.elapsed]), state.pane], renderPanes);
-  redraw("body", [state.workspace, state.workspaces.length, ws && ws.sleeping, state.waking, shown(session(state.pane)), state.ctrl, state.size, inChat(), !!currentChat()], renderBody);
+  redraw("body", [state.workspace, state.workspaces.length, ws && ws.sleeping, state.waking, shown(session(state.pane)), state.ctrl, state.size, inChat(), !!currentChat(), state.voice], renderBody);
   redraw("chat", [inChat() && currentChat()], renderChat);
   if (state.workspace == null) {
     const busy = state.sessions.map((s) => [shown(s), s.working ? s.elapsed : null]);
@@ -1204,8 +1204,15 @@ function setupPrompt() {
 // prompt box for the person to check and send. The audio is 16-bit PCM WAV captured through
 // WebAudio (not MediaRecorder's Opus), so the Mac needs no audio decoder. Nothing is uploaded until
 // the person stops recording, and the transcript only fills the box — it is never auto-sent.
+//
+// The clip is sent at 16 kHz, what whisper uses, not the browser's own rate (often 48 kHz): a
+// third of the bytes to push over a phone's uplink. Recording stops by itself just short of the
+// Mac's two-minute cap, so nothing the person said is cut off unseen.
 
-let recorder = null; // { stream, ctx, node, source, chunks, rate } while recording
+const VOICE_RATE = 16000;
+const MAX_RECORD_SECONDS = 110;
+
+let recorder = null; // { stream, ctx, node, source, chunks, rate, samples } while recording
 let voiceStarting = false; // guards the getUserMedia await against a second tap
 
 function setupVoice() {
@@ -1273,11 +1280,17 @@ async function beginVoice(btn) {
     }
     const source = ctx.createMediaStreamSource(stream);
     const node = ctx.createScriptProcessor(4096, 1, 1);
-    const chunks = [];
-    node.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    const rec = { stream, ctx, node, source, chunks: [], rate: ctx.sampleRate, samples: 0 };
+    node.onaudioprocess = (e) => {
+      const chunk = new Float32Array(e.inputBuffer.getChannelData(0));
+      rec.chunks.push(chunk);
+      rec.samples += chunk.length;
+      // Out of the event, so the node is not torn down from inside its own callback.
+      if (rec.samples >= MAX_RECORD_SECONDS * rec.rate) setTimeout(() => recorder === rec && finishVoice(btn));
+    };
     source.connect(node);
     node.connect(ctx.destination);
-    recorder = { stream, ctx, node, source, chunks, rate: ctx.sampleRate };
+    recorder = rec;
     btn.classList.add("recording");
     btn.setAttribute("aria-pressed", "true");
     btn.setAttribute("aria-label", T.micRecording);
@@ -1299,7 +1312,7 @@ async function finishVoice(btn) {
   rec.node.disconnect();
   rec.source.disconnect();
   rec.stream.getTracks().forEach((t) => t.stop());
-  const blob = pcmToWav(flatten(rec.chunks), rec.rate);
+  const blob = pcmToWav(resample(flatten(rec.chunks), rec.rate, VOICE_RATE), VOICE_RATE);
   rec.ctx.close().catch(() => {});
   const pane = state.pane;
   if (pane == null) return;
@@ -1309,10 +1322,12 @@ async function finishVoice(btn) {
   btn.setAttribute("aria-label", T.micBusy);
   btn.title = T.micBusy;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  // Room for a slow uplink (the Mac waits up to a minute for the clip) and the transcription.
+  const timer = setTimeout(() => controller.abort(), 120000);
   try {
-    const lang = (navigator.language || "").slice(0, 2);
-    const q = `?pane=${pane}` + (/^[a-z]{2}$/.test(lang) ? `&lang=${lang}` : "");
+    // No language hint: the page's UI language says nothing about the language spoken, so the
+    // Mac detects it.
+    const q = `?pane=${pane}`;
     // The body is a WAV blob; the JSON content type is only here to satisfy the same-origin
     // (CSRF) check — the server reads /api/voice as raw bytes, not as JSON.
     const res = await fetch("/api/voice" + q, {
@@ -1323,6 +1338,11 @@ async function finishVoice(btn) {
       signal: controller.signal,
     });
     if (res.status === 401) return showLogin(); // session expired: bounce to sign-in, like other calls
+    if (res.status === 429) {
+      // Another clip is being transcribed (this page's or another device's).
+      flashMic(btn, T.micTooBusy);
+      return;
+    }
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
     const text = (data.text || "").trim();
@@ -1356,7 +1376,31 @@ function flatten(chunks) {
   return out;
 }
 
-// 16-bit PCM mono WAV. The Mac resamples to 16 kHz, so the capture rate is written as-is.
+// `samples` from `from` Hz to `to` Hz. Going down, each output sample is the average of the input
+// samples it covers (a crude low-pass, enough for speech); going up, it is linearly interpolated.
+function resample(samples, from, to) {
+  if (!from || from === to) return samples;
+  const ratio = from / to;
+  const out = new Float32Array(Math.floor(samples.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const start = i * ratio;
+    if (ratio < 1) {
+      const j = Math.floor(start);
+      const a = samples[j];
+      const b = j + 1 < samples.length ? samples[j + 1] : a;
+      out[i] = a + (b - a) * (start - j);
+    } else {
+      const end = Math.min(Math.ceil(start + ratio), samples.length);
+      let sum = 0;
+      let n = 0;
+      for (let j = Math.floor(start); j < end; j++, n++) sum += samples[j];
+      out[i] = n ? sum / n : 0;
+    }
+  }
+  return out;
+}
+
+// 16-bit PCM mono WAV at `rate` (the page sends 16 kHz; the Mac resamples anything else).
 function pcmToWav(samples, rate) {
   const n = samples.length;
   const buf = new ArrayBuffer(44 + n * 2);

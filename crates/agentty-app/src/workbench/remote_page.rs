@@ -600,9 +600,9 @@ impl Workbench {
                         true
                     }
                     None => {
-                        // Only the Remote page shows the bar; don't redraw the whole workbench
+                        // Only the Remote page and the status bar's mic setup show the bar; don't redraw the whole workbench
                         // several times a second while the user is on a terminal.
-                        if wb.page == Some(super::Page::Remote) {
+                        if wb.page == Some(super::Page::Remote) || wb.voice_setup_open() {
                             cx.notify();
                         }
                         false
@@ -618,7 +618,7 @@ impl Workbench {
 
     /// The voice-to-text card: pick a model, download it (with a progress bar), and voice input
     /// becomes available on the remote page. Models are small, pinned, and verified on download.
-    fn render_voice_card(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_voice_card(&self, cx: &mut Context<Self>) -> Div {
         let muted = |text: String| div().t_small().text_color(hex(Chrome::MUTED)).child(text);
         let mut body = card("VOX.STT", t(cx, "remote.voice.title")).child(muted(t(cx, "remote.voice.intro").to_string()));
         // Nothing to download when this build or this processor cannot transcribe: say why instead.

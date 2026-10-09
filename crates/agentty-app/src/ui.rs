@@ -39,6 +39,7 @@ pub const ICON_BUTTON: f32 = 26.0;
 
 /// Every icon referenced by name (checked by a test against the embedded assets).
 pub const ICONS: &[&str] = &[
+    "mic",
     "git-fork",
     "file",
     "lock",
@@ -139,6 +140,7 @@ pub const ICONS: &[&str] = &[
     "code",
     "file-plus",
     "list",
+    "square-kanban",
     "message-square",
     "message-square-code",
     "notebook",

@@ -22,6 +22,7 @@ pub mod harness;
 pub mod http;
 pub mod idea;
 pub mod inventory;
+pub mod jira;
 pub mod kimi;
 pub mod limits;
 pub mod metrics;

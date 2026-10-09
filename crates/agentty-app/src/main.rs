@@ -308,7 +308,10 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::action(t(cx, "shortcuts.clear"), terminal::Clear),
                 MenuItem::separator(),
                 MenuItem::action(t(cx, "shortcuts.palette"), workbench::OpenPalette),
-            ],
+            ]
+            .into_iter()
+            .chain(workbench::voice_input_available().then(|| MenuItem::action(t(cx, "shortcuts.voice"), workbench::ToggleVoiceInput)))
+            .collect(),
         },
         Menu {
             name: t(cx, "menu.view").into(),
@@ -489,6 +492,10 @@ fn bind_keys(cx: &mut App) {
         key("cmd-k", terminal::Clear, Some("Terminal")),
         key("cmd-a", terminal::SelectAll, Some("Terminal")),
     ]);
+    // Voice input records on macOS only; elsewhere ⇧⌘M would translate onto mini mode's chord.
+    if workbench::voice_input_available() {
+        cx.bind_keys([key("cmd-shift-m", ToggleVoiceInput, None)]);
+    }
     text_input::bind_keys(cx);
     editor::bind_keys(cx);
 }
