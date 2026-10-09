@@ -111,7 +111,7 @@ impl Workbench {
                         this.board_jira.token_saved = Some(true);
                         (true, t(cx, "board.jira_token_saved").to_string())
                     }
-                    Err(err) => (false, format!("{err:#}")),
+                    Err(err) => (false, super::board::jira_error_text(&err, cx)),
                 });
                 cx.notify();
             });
@@ -173,7 +173,7 @@ impl Workbench {
                 this.board_jira.busy = false;
                 this.board_jira.message = Some(match found {
                     Ok(issues) => (true, tf(cx, "board.jira_found", &[("n", &issues.len().to_string())])),
-                    Err(err) => (false, format!("{err:#}")),
+                    Err(err) => (false, super::board::jira_error_text(&err, cx)),
                 });
                 cx.notify();
             });

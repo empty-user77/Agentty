@@ -436,6 +436,33 @@ fn cleans_up_unasked(mode: crate::settings::BoardCleanup, trees: &[TreeToClean])
     mode == crate::settings::BoardCleanup::Always && trees.iter().all(TreeToClean::nothing_lost)
 }
 
+/// A Jira failure in the user's language (the bridge's own text is English).
+pub(super) fn jira_error_text(err: &anyhow::Error, cx: &gpui::App) -> String {
+    use agentty_bridge::jira::JiraError as E;
+    let Some(kind) = err.downcast_ref::<E>() else { return format!("{err:#}") };
+    match kind {
+        E::NotWebAddress => t(cx, "board.jira_err_address").to_string(),
+        E::NotHttps => t(cx, "board.jira_err_https").to_string(),
+        E::CredentialsInUrl => t(cx, "board.jira_err_userinfo").to_string(),
+        E::NoHost => t(cx, "board.jira_err_host").to_string(),
+        E::NoEmail => t(cx, "board.jira_err_email").to_string(),
+        E::NoSearch => t(cx, "board.jira_err_jql").to_string(),
+        E::NoToken => t(cx, "board.jira_err_token").to_string(),
+        E::Unexpected => t(cx, "board.jira_err_unexpected").to_string(),
+        E::Refused => t(cx, "board.jira_err_refused").to_string(),
+        // Jira's own explanation of a bad search is in its language: shown after ours.
+        E::SearchFailed(detail) => {
+            let base = t(cx, "board.jira_err_search");
+            match detail {
+                Some(detail) => format!("{base} {detail}"),
+                None => base.to_string(),
+            }
+        }
+        E::Status(status) => tf(cx, "board.jira_err_status", &[("status", &status.to_string())]),
+        E::Unreachable(site) => tf(cx, "board.jira_err_unreachable", &[("site", site)]),
+    }
+}
+
 /// Tickets for the issues not on the board yet (matched by key), in the backlog.
 fn tickets_from_issues(
     file: &BoardFile,
@@ -519,6 +546,18 @@ impl Workbench {
 
     fn board_enabled(cx: &gpui::App) -> bool {
         crate::settings::settings(cx).board.enabled
+    }
+
+    /// The board's sidebar group goes with its last workspace (it is made again on first use).
+    /// Other groups stay: an empty one the user made is theirs.
+    pub(super) fn drop_empty_board_group(&mut self, group: Option<u64>) {
+        let Some(group) = group else { return };
+        use crate::settings::Language;
+        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh].map(|l| crate::i18n::tr(l, "group.board"));
+        let is_board = self.groups.iter().any(|g| g.id == group && names.contains(&g.name.as_str()));
+        if is_board && !self.workspaces.iter().any(|w| w.group == Some(group)) {
+            self.groups.retain(|g| g.id != group);
+        }
     }
 
     /// A workspace of this window is gone (closed, emptied, moved away): no ticket keeps it, so a
@@ -983,7 +1022,7 @@ impl Workbench {
                             cx,
                         );
                     }
-                    Err(err) => this.show_toast(format!("Jira: {err:#}"), cx),
+                    Err(err) => this.show_toast(format!("Jira: {}", jira_error_text(&err, cx)), cx),
                 }
                 cx.notify();
             });

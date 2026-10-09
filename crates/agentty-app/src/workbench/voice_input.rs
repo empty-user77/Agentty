@@ -483,6 +483,12 @@ impl Workbench {
                 (Chrome::MUTED, Some((t(cx, "voice.transcribing").to_string(), Chrome::MUTED)), t(cx, "voice.transcribing").to_string())
             }
         };
+        let (phase_tag, show_tooltip) = match &self.voice_input.phase {
+            Phase::Idle => (0u64, true),
+            Phase::Asking(_) => (1, true),
+            Phase::Recording { .. } => (2, false),
+            Phase::Transcribing(_) => (3, false),
+        };
         let level = match &self.voice_input.phase {
             Phase::Recording { recorder, .. } => Some(recorder.level()),
             _ => None,
@@ -493,8 +499,11 @@ impl Workbench {
             icon("mic", 13., hex(glyph_color)).into_any_element()
         };
         let button = div()
-            .id(MENU_KEY)
-            .tooltip(crate::ui::Tooltip::text(tooltip, None))
+            // A tooltip built while idle would stay up over the recording label while the pointer
+            // rests on the mic: the element id changes with the phase (a new element, no tooltip
+            // carried over) and nothing is shown while recording or transcribing — the label says it.
+            .id(gpui::ElementId::NamedInteger(MENU_KEY.into(), phase_tag))
+            .when(show_tooltip, |d| d.tooltip(crate::ui::Tooltip::text(tooltip, None)))
             .h_full()
             .px_1p5()
             .flex()

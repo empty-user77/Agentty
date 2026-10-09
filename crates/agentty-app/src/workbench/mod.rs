@@ -1622,6 +1622,7 @@ impl Workbench {
     /// Removes a workspace for good, with its tabs and its tab history.
     fn close_workspace(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.workspaces.iter().position(|w| w.id == id) else { return };
+        let group = self.workspaces[index].group;
         let panes: Vec<Pane> = self.workspaces[index].tabs.iter().flat_map(|t| t.root.leaves()).collect();
         // Its final state goes to the sync repository before the workspace is gone.
         self.sync_workspace_removed(id, false, cx);
@@ -1636,6 +1637,7 @@ impl Workbench {
             self.active_workspace = self.active_workspace.min(self.workspaces.len().saturating_sub(1));
         }
         self.board_workspace_closed(id);
+        self.drop_empty_board_group(group);
         self.persist(cx);
         self.workspace_menu = None;
         self.focus_active(window, cx);
@@ -3271,6 +3273,10 @@ impl Render for Workbench {
                 if event.keystroke.key == "escape" && this.connect_pick.is_some() {
                     this.cancel_connect_pick(cx);
                     // One Esc does one thing: a recording goes on until the next.
+                    return cx.stop_propagation();
+                }
+                // A close confirmation owns the keyboard.
+                if this.close_confirm_key(event, window, cx) {
                     return cx.stop_propagation();
                 }
                 // While the mic records, Enter sends what was said and Esc drops it — before the

@@ -1282,6 +1282,7 @@ impl TerminalView {
         // Agent CLIs put their own mark in front of the window title ("✳ Claude Code"). Next to
         // the logo it reads as two icons, so the mark goes.
         let title = strip_agent_mark(title);
+        let title = program_of_command_line(title).unwrap_or(title);
         if title.is_empty() {
             self.spec.title.clone()
         } else if title == "~" {
@@ -2869,7 +2870,7 @@ mod session_claims {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_symbol_glyph, is_web_link};
+    use super::{is_symbol_glyph, is_web_link, program_of_command_line};
 
     #[test]
     fn opens_only_web_hyperlinks() {
@@ -2893,6 +2894,16 @@ mod tests {
         assert_eq!(shorten("ray@mac:~/code"), "~/code");
         assert_eq!(shorten("✳ Claude Code"), "✳ Claude Code");
         assert_eq!(shorten("vim: file.rs"), "vim: file.rs");
+    }
+
+    #[test]
+    fn command_chains_are_titled_by_their_program() {
+        assert_eq!(program_of_command_line("cd  && claude"), Some("claude"));
+        assert_eq!(program_of_command_line("cd /tmp/x && claude --resume"), Some("claude"));
+        assert_eq!(program_of_command_line("FOO=1 sudo /usr/bin/codex; true; ls"), Some("ls"));
+        assert_eq!(program_of_command_line("vim main.rs"), None);
+        assert_eq!(program_of_command_line("~/code"), None);
+        assert_eq!(program_of_command_line("cd  &&"), Some("cd"));
     }
 
     #[test]
@@ -2969,6 +2980,21 @@ mod screen_tests {
 /// bracketed paste early, so everything after it would arrive as real keystrokes and run — the same
 /// reason a clipboard paste strips them. Without bracketed paste the text is kept on one line, so it
 /// is never submitted by a newline of its own.
+/// A shell that titles its window with the command line just typed gives `cd <dir> && claude`
+/// (and, with the path stripped, `cd  && claude`): what names the tab is the program that runs, so
+/// the last command of a chain is reduced to its program name (`claude`). Titles that are not a
+/// chain (`vim main.rs`, `~/code`) are left alone.
+pub fn program_of_command_line(title: &str) -> Option<&str> {
+    let last = title.rsplit(['&', ';', '|']).map(str::trim).find(|part| !part.is_empty())?;
+    if last.len() == title.len() {
+        return None;
+    }
+    // Leading `VAR=value` assignments and `sudo` / `env` are not the program.
+    let program = last.split_whitespace().find(|word| !word.contains('=') && !matches!(*word, "sudo" | "env" | "exec" | "command"))?;
+    let name = program.rsplit('/').next().unwrap_or(program);
+    (!name.is_empty()).then_some(name)
+}
+
 /// Drops a decorative glyph an agent CLI puts in front of its window title (`✳`, `✶`, `●` …).
 /// Letters, digits, `~`, `/` and quotes are titles, not marks, so they stay.
 pub fn strip_agent_mark(title: &str) -> &str {

@@ -662,6 +662,14 @@ fn main() {
                     instance::register(&socket);
                     cx.on_app_quit(|_| async { instance::unregister() }).detach();
                 }
+                // `cx.quit()` never drops the global: the socket and its folder go here, or they wait
+                // for the next launch's sweep.
+                let address = socket.address.clone();
+                cx.on_app_quit(move |_| {
+                    let address = address.clone();
+                    async move { ipc::Listener::cleanup(&address) }
+                })
+                .detach();
                 cx.set_global(socket);
                 Some(rx)
             }

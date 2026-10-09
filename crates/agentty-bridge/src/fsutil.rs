@@ -167,7 +167,7 @@ pub fn secure_data_dir() {
         return;
     }
     tighten_dir(&dir);
-    for sub in ["handoffs", "voice"] {
+    for sub in ["handoffs", "voice", "limits"] {
         tighten_dir(&dir.join(sub));
     }
     std::thread::spawn(move || sweep_stale_temp_files(&dir, 2, STALE_TEMP_AGE));

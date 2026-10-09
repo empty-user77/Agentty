@@ -377,7 +377,21 @@ pub fn without_annotations(text: &str) -> String {
         }
     }
     out.push_str(rest);
-    out.split_whitespace().filter(|word| !word.chars().all(|c| c == '♪')).collect::<Vec<_>>().join(" ")
+    // `>>` is the speaker-turn marker the tiny model puts in front of a turn (alone or glued to the
+    // first word), and `♪` marks music: neither was said.
+    let mut words = out.split_whitespace().filter(|word| !word.chars().all(|c| c == '♪') && !word.chars().all(|c| c == '>')).peekable();
+    let mut text = String::new();
+    while let Some(word) = words.next() {
+        let word = if text.is_empty() { word.trim_start_matches(">>") } else { word };
+        if word.is_empty() {
+            continue;
+        }
+        text.push_str(word);
+        if words.peek().is_some() {
+            text.push(' ');
+        }
+    }
+    text.trim_end().to_string()
 }
 
 #[cfg(not(feature = "voice"))]
@@ -564,6 +578,11 @@ mod tests {
         assert_eq!(without_annotations("a [ b"), "a [ b");
         assert_eq!(without_annotations("파일 목록 보여줘"), "파일 목록 보여줘");
         assert_eq!(without_annotations("multiply a * b * c"), "multiply a * b * c");
+        assert_eq!(without_annotations(">> list the files"), "list the files");
+        assert_eq!(without_annotations(">>list the files"), "list the files");
+        assert_eq!(without_annotations(" >> >> hello >> there"), "hello there");
+        assert_eq!(without_annotations(">>"), "");
+        assert_eq!(without_annotations("a->b"), "a->b");
         assert_eq!(without_annotations("[SPEAKER_00] hello ♪"), "hello");
     }
 
