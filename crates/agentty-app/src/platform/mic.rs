@@ -13,6 +13,7 @@ pub const HAS_MIC: bool = cfg!(target_os = "macos");
 
 /// Whether the app may use the microphone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // elsewhere it is always `Denied`
 pub enum Permission {
     /// Not asked yet: recording asks first.
     Undetermined,
@@ -49,7 +50,7 @@ impl Recorder {
 
     /// Stops and closes the file, which is then complete on disk.
     pub fn stop(self) {
-        drop(self)
+        self.inner.stop()
     }
 
     /// Recent input level, 0.0 (silence) to 1.0, for the button to show it hears something.
@@ -171,6 +172,9 @@ mod imp {
             Ok(Self { recorder })
         }
 
+        /// Dropping stops it: `stop` closes the file before it returns.
+        pub fn stop(self) {}
+
         pub fn level(&self) -> f32 {
             unsafe {
                 let _: () = msg_send![self.recorder, updateMeters];
@@ -226,6 +230,8 @@ mod imp {
         pub fn start(_to: &Path) -> anyhow::Result<Self> {
             anyhow::bail!("voice input is not available on this platform yet")
         }
+
+        pub fn stop(self) {}
 
         pub fn level(&self) -> f32 {
             0.0
