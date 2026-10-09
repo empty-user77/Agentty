@@ -90,6 +90,13 @@ if [[ "$PUBLISH" == "true" && "${AGENTTY_MAC_ONLY:-}" != "1" ]]; then
 fi
 
 # ─── 3. Compile ───
+# whisper.cpp (voice) is tuned for the CPU that compiles it unless told otherwise. Apple Silicon is not
+# uniform enough to ship that: built on an M2 or later, ggml adds i8mm (and more), which an M1 lacks, so
+# transcribing would die with an illegal instruction there. GGML_NATIVE=OFF builds for clang's arm64 macOS
+# baseline (apple-m1), which every Mac this DMG supports has. whisper-rs-sys forwards GGML_* to cmake but
+# does not rebuild when they change: prod and publish start from a cold target/ so they always get it; a dev
+# build reuses whatever whisper.cpp build target/ already holds.
+export GGML_NATIVE=OFF
 # dev builds what you have in front of you. prod and publish build a private git worktree of HEAD
 # instead: this checkout is shared — an agent session editing a file while cargo runs would otherwise
 # land inside a signed, notarized build, and nothing downstream would notice. The worktree has its own

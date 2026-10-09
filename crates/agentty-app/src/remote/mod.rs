@@ -522,6 +522,10 @@ pub fn sign_out_everywhere(cx: &mut App) {
 /// voice turns itself on once that is done. Returns `None` (voice off) when nothing is installed.
 fn voice_config() -> Option<server::VoiceConfig> {
     use agentty_bridge::voice;
+    // A model left over from another build does not help a build (or processor) that cannot run it.
+    if !voice::supported() {
+        return None;
+    }
     let model = voice::model(voice::DEFAULT_MODEL)
         .filter(|m| voice::model_present(m))
         .or_else(|| voice::MODELS.iter().find(|m| voice::model_present(m)))?;

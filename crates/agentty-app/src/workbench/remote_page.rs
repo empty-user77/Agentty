@@ -621,6 +621,14 @@ impl Workbench {
     fn render_voice_card(&self, cx: &mut Context<Self>) -> Div {
         let muted = |text: String| div().t_small().text_color(hex(Chrome::MUTED)).child(text);
         let mut body = card("VOX.STT", t(cx, "remote.voice.title")).child(muted(t(cx, "remote.voice.intro").to_string()));
+        // Nothing to download when this build or this processor cannot transcribe: say why instead.
+        if let Some(reason) = voice::unavailable() {
+            let key = match reason {
+                voice::Unavailable::NotBuilt => "remote.voice.not_built",
+                voice::Unavailable::Cpu => "remote.voice.cpu_unsupported",
+            };
+            return body.child(div().t_small().text_color(hex(Chrome::WARNING)).child(t(cx, key)));
+        }
         for model in voice::MODELS {
             let installed = voice::model_present(model);
             let mb = tf(cx, "remote.voice.size", &[("mb", &((model.bytes + 500_000) / 1_000_000).to_string())]);

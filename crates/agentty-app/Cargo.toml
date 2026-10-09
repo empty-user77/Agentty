@@ -9,6 +9,14 @@ repository.workspace = true
 homepage.workspace = true
 description = "Agentty — your multi-orchestration AI terminal"
 
+[features]
+# On-device voice-to-text for the remote page (whisper.cpp through agentty-bridge; needs cmake and a
+# C/C++ toolchain). On by default so release builds have it; `cargo build -p agentty-app
+# --no-default-features` builds the app without it, and the remote page then reports voice as
+# unavailable.
+default = ["voice"]
+voice = ["agentty-bridge/voice"]
+
 [[bin]]
 name = "agentty"
 path = "src/main.rs"
@@ -20,7 +28,9 @@ alacritty_terminal = "0.26"
 anyhow.workspace = true
 base64 = "0.23"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-agentty-bridge = { path = "../agentty-bridge" }
+# Default features off so the app's own `voice` feature decides whether whisper.cpp is built.
+# `voice` is the bridge's only default feature; a new one must be listed here (or forwarded) too.
+agentty-bridge = { path = "../agentty-bridge", default-features = false }
 agentty-db = { path = "../agentty-db" }
 dirs.workspace = true
 futures = "0.3.34"
