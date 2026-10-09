@@ -262,6 +262,9 @@ pub struct TerminalView {
     spawned: bool,
     /// Input sent before the process started; flushed right after spawning.
     pending_input: Vec<Vec<u8>>,
+    /// Prompts for `submit_prompt` that wait for the previous one's Enter, and whether one is mid-send.
+    submit_queue: std::collections::VecDeque<String>,
+    submit_busy: bool,
     pub error: Option<String>,
     focus_handle: FocusHandle,
     marked_text: Option<String>,
@@ -433,6 +436,8 @@ impl TerminalView {
             backend: None,
             spawned: false,
             pending_input: Vec::new(),
+            submit_queue: Default::default(),
+            submit_busy: false,
             error: None,
             focus_handle: cx.focus_handle(),
             marked_text: None,
@@ -1618,8 +1623,15 @@ impl TerminalView {
         self.write_user_input(bytes);
     }
 
-    /// Submits text to the program as if pasted and entered by the user.
+    /// Submits text to the program as if pasted and entered by the user. One at a time: a prompt
+    /// submitted while the previous one still waits for its Enter queues behind it, since a second
+    /// paste inside that window would merge into the same input.
     pub fn submit_prompt(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.submit_busy {
+            self.submit_queue.push_back(text);
+            return;
+        }
+        self.submit_busy = true;
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
         self.write_user_input(paste_payload(&text, bracketed));
         if self.agent_kind() == Some(PaneKind::Codex) {
@@ -1631,7 +1643,13 @@ impl TerminalView {
         // Give the TUI a moment to process the paste before pressing Enter.
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(200)).await;
-            let _ = this.update(cx, |view, _| view.write(b"\r".to_vec()));
+            let _ = this.update(cx, |view, cx| {
+                view.write(b"\r".to_vec());
+                view.submit_busy = false;
+                if let Some(next) = view.submit_queue.pop_front() {
+                    view.submit_prompt(next, cx);
+                }
+            });
         })
         .detach();
     }

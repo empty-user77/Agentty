@@ -115,6 +115,10 @@ pub struct ChatState {
     follow: Rc<std::cell::Cell<bool>>,
     /// The lead has had its instructions (they are in its transcript, or were just sent).
     briefed: bool,
+    /// The lead's transcript shows its instructions: it has received them and is ready for input.
+    brief_seen: bool,
+    /// The instructions were typed into the lead (not just queued).
+    brief_sent: bool,
     /// The user asked to see the lead's terminal.
     show_terminal: bool,
     /// The lead's screen shows something the chat can't answer (folder trust, sign-in).
@@ -197,6 +201,8 @@ pub fn chat_items(turns: &[Turn]) -> (Vec<ChatItem>, bool) {
                     briefed = true;
                     continue;
                 }
+                let cleaned = strip_harness_blocks(text);
+                let text = cleaned.trim();
                 if text.is_empty() {
                     continue;
                 }
@@ -206,6 +212,36 @@ pub fn chat_items(turns: &[Turn]) -> (Vec<ChatItem>, bool) {
         }
     }
     (items, briefed)
+}
+
+/// Blocks Claude Code itself puts into the user's turns (a background task's notification, system
+/// reminders, local command output). They are not what the user wrote, so the chat leaves them out.
+const HARNESS_TAGS: [&str; 7] = [
+    "task-notification",
+    "system-reminder",
+    "command-name",
+    "command-message",
+    "command-args",
+    "local-command-stdout",
+    "local-command-stderr",
+];
+
+/// `text` without the blocks in [`HARNESS_TAGS`]; an unclosed one runs to the end of the text.
+fn strip_harness_blocks(text: &str) -> String {
+    let mut out = text.to_string();
+    for tag in HARNESS_TAGS {
+        let (open, close) = (format!("<{tag}"), format!("</{tag}>"));
+        while let Some(start) = out.find(&open) {
+            // `<task-notification-x>` is some other tag.
+            let after = out[start + open.len()..].chars().next();
+            if !matches!(after, Some('>') | Some(' ') | Some('\n') | None) {
+                break;
+            }
+            let end = out[start..].find(&close).map_or(out.len(), |at| start + at + close.len());
+            out.replace_range(start..end, "");
+        }
+    }
+    out
 }
 
 /// One user turn as entries: what the user wrote, then the reports in it. Reports that waited for
@@ -260,9 +296,19 @@ fn pending_message(pending: Vec<Pending>, echo: &mut Vec<String>) -> String {
     message
 }
 
-/// Drops the echoes the transcript's newest entries show.
+/// Drops the echoes the transcript's newest entries show. An entry that holds several sent texts
+/// (Claude Code merged messages typed close together) clears every echo it contains.
 fn clear_echo(echo: &mut Vec<String>, items: &[ChatItem]) {
-    echo.retain(|sent| !items.iter().rev().take(8).any(|item| matches!(item, ChatItem::User(text) if text == sent)));
+    echo.retain(|sent| {
+        !items.iter().rev().take(8).any(|item| matches!(item, ChatItem::User(text) if text == sent || text.contains(sent.as_str())))
+    });
+}
+
+/// Whether a message for the lead has to wait: the lead sits in a selection, something already
+/// waits ahead of it, or the lead has been sent its instructions but its transcript does not show
+/// them yet (still starting up: a message pasted now would land inside the briefing).
+fn must_wait(waits_on_user: bool, queued: bool, brief_sent: bool, brief_seen: bool) -> bool {
+    waits_on_user || queued || (brief_sent && !brief_seen)
 }
 
 /// The tab's layout: the lead on top, its workers below in rows of two.
@@ -418,6 +464,8 @@ impl Workbench {
                 list,
                 follow,
                 briefed: false,
+                brief_seen: false,
+                brief_sent: false,
                 show_terminal: false,
                 setup_screen: false,
                 pending: Vec::new(),
@@ -633,10 +681,16 @@ impl Workbench {
         let Some(turns) = turns else { return };
         let (items, briefed) = chat_items(&turns);
         state.briefed |= briefed;
+        let ready = briefed && !state.brief_seen;
+        state.brief_seen |= briefed;
         // What the transcript shows now no longer needs its echo.
         clear_echo(&mut state.echo, &items);
         state.items = items;
         Self::show_chat_items(state);
+        // The lead has its instructions now: what the user wrote while it started goes in.
+        if ready {
+            self.flush_pending_by_id(id, cx);
+        }
         cx.notify();
     }
 
@@ -683,9 +737,10 @@ impl Workbench {
         state.follow.set(true);
         Self::show_chat_items(state);
         // Never into a selection on the lead's screen: it goes in once that is answered.
-        if waits_on_user(state.lead.read(cx)) || !state.pending.is_empty() {
+        if must_wait(waits_on_user(state.lead.read(cx)), !state.pending.is_empty(), state.brief_sent, state.brief_seen) {
             state.pending.push(Pending::User { prompt, echo: text });
         } else {
+            state.brief_sent |= prompt.contains(BRIEF_START);
             state.lead.update(cx, |view, cx| view.submit_prompt(prompt, cx));
         }
         cx.notify();
@@ -712,7 +767,7 @@ impl Workbench {
     /// question): typed into that selection it would answer it. Then it waits until that is over.
     fn deliver_to_lead(&mut self, id: EntityId, text: String, cx: &mut Context<Self>) {
         let Some(state) = self.chats.get_mut(&id) else { return };
-        if waits_on_user(state.lead.read(cx)) || !state.pending.is_empty() {
+        if must_wait(waits_on_user(state.lead.read(cx)), !state.pending.is_empty(), state.brief_sent, state.brief_seen) {
             state.pending.push(Pending::Report(text));
             return;
         }
@@ -721,11 +776,16 @@ impl Workbench {
 
     /// The lead no longer waits on the user: what waited for it goes in, as one message.
     pub(super) fn flush_chat_pending(&mut self, pane: &Pane, cx: &mut Context<Self>) {
-        let Some(state) = self.chats.get_mut(&pane.entity_id()) else { return };
-        if state.pending.is_empty() || waits_on_user(state.lead.read(cx)) {
+        self.flush_pending_by_id(pane.entity_id(), cx);
+    }
+
+    fn flush_pending_by_id(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        let Some(state) = self.chats.get_mut(&id) else { return };
+        if state.pending.is_empty() || waits_on_user(state.lead.read(cx)) || (state.brief_sent && !state.brief_seen) {
             return;
         }
         let text = pending_message(std::mem::take(&mut state.pending), &mut state.echo);
+        state.brief_sent |= text.contains(BRIEF_START);
         Self::show_chat_items(state);
         state.lead.update(cx, |view, cx| view.submit_prompt(text, cx));
         cx.notify();
@@ -1718,5 +1778,34 @@ mod tests {
         assert!(is_setup_screen(&["Do you trust the files in this folder?".into()]));
         assert!(is_setup_screen(&["Trust this folder? Codex can read, edit, and run files here".into()]));
         assert!(!is_setup_screen(&["> what should we build".into()]));
+    }
+
+    #[test]
+    fn harness_blocks_are_not_user_entries() {
+        let note = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>";
+        let (items, _) = chat_items(&[turn(Role::User, note), turn(Role::User, "<system-reminder>be brief</system-reminder>")]);
+        assert!(items.is_empty(), "{items:?}");
+        let mixed = format!("hello\n\n{note}");
+        let (items, _) = chat_items(&[turn(Role::User, &mixed)]);
+        assert_eq!(items, vec![ChatItem::User("hello".into())]);
+        // An unclosed block runs to the end; a similar tag stays.
+        assert_eq!(strip_harness_blocks("a <system-reminder> b"), "a ");
+        assert_eq!(strip_harness_blocks("a <task-notificationx> b"), "a <task-notificationx> b");
+    }
+
+    #[test]
+    fn merged_entry_clears_every_echo_it_holds() {
+        let mut echo = vec!["one".to_string(), "two".into(), "three".into()];
+        clear_echo(&mut echo, &[ChatItem::Lead("x".into()), ChatItem::User("one\ntwo".into())]);
+        assert_eq!(echo, vec!["three".to_string()]);
+    }
+
+    #[test]
+    fn messages_wait_while_the_lead_starts() {
+        assert!(must_wait(false, false, true, false), "briefing typed, not in the transcript yet");
+        assert!(!must_wait(false, false, true, true));
+        assert!(!must_wait(false, false, false, false), "the briefing itself goes in at once");
+        assert!(must_wait(true, false, false, false));
+        assert!(must_wait(false, true, true, true), "behind what already waits");
     }
 }
