@@ -49,6 +49,9 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
+/// Whether this build has on-device transcription (the `voice` feature, whisper.cpp) compiled in.
+pub const AVAILABLE: bool = cfg!(feature = "voice");
+
 /// The default model id when none is chosen.
 pub const DEFAULT_MODEL: &str = "base";
 
@@ -59,9 +62,6 @@ const MAX_SECONDS: usize = 120;
 /// Sample rate whisper expects.
 #[cfg(feature = "voice")]
 const SAMPLE_RATE: u32 = 16_000;
-
-/// Whether this build can transcribe at all (the `voice` feature compiles whisper.cpp in).
-pub const AVAILABLE: bool = cfg!(feature = "voice");
 
 pub fn model(id: &str) -> Option<&'static Model> {
     MODELS.iter().find(|m| m.id == id)

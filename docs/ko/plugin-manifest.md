@@ -176,7 +176,7 @@ code columns-2 command container copy database download ellipsis external-link e
 file-plus file-text folder folder-git-2 folder-open folder-plus git-branch git-commit-horizontal
 git-pull-request globe grip-vertical hammer hash history house image info key-round
 layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question
-message-square minimize-2 minus network notebook notebook-pen package panel-left-close
+message-square message-square-code minimize-2 minus network notebook notebook-pen package panel-left-close
 panel-left-open pencil picture-in-picture-2 play plug plus power puzzle refresh-cw rocket rotate-cw
 rows-2 save scroll-text search send settings shield-alert sparkles square square-plus
 square-terminal star sticky-note tag terminal trash-2 undo-2 unlink upload users wand-sparkles

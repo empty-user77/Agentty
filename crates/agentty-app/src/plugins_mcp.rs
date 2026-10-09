@@ -5,7 +5,8 @@
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 
-const PROTOCOL_VERSION: &str = "2025-06-18";
+use crate::browser_mcp::PROTOCOL_VERSION;
+
 /// Most text of one answer handed to the agent.
 const MAX_TEXT: usize = 100_000;
 

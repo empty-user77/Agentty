@@ -16,6 +16,7 @@ mod browser_cli;
 mod browser_keeper;
 mod browser_mcp;
 mod browser_profiles;
+mod build_info;
 mod capture;
 mod db_cli;
 mod debug;

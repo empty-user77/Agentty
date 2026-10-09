@@ -2546,7 +2546,7 @@ impl Workbench {
     /// what to start, what ran recently, and what else Agentty does.
     pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let starting = self.new_workspace.as_ref().map(|(input, _)| input.clone());
-        let tile = |id: SharedString, logo: &'static str, label: String, body: String| {
+        let tile = |id: SharedString, art: gpui::Div, label: String, body: String| {
             div()
                 .id(id)
                 .flex_1()
@@ -2561,7 +2561,7 @@ impl Workbench {
                 .border_color(hex(Chrome::BORDER))
                 .bg(hex(Chrome::OVERLAY))
                 .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(Chrome::ACCENT, 0.7)))
-                .child(crate::brand::tile(logo, 36.))
+                .child(art)
                 .child(
                     div()
                         .flex()
@@ -2571,8 +2571,10 @@ impl Workbench {
                         .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(body)),
                 )
         };
-        let card = |id: SharedString, logo: &'static str, label: String, body: String, choice: LaunchChoice, cx: &mut Context<Self>| {
-            tile(id, logo, label, body).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+        // A card that shows an icon instead of a brand logo.
+        let glyph_tile = |glyph: &'static str, color: u32| crate::brand::tinted_tile(color, 36.).child(icon(glyph, 20., hex(color)));
+        let card = |id: SharedString, art: gpui::Div, label: String, body: String, choice: LaunchChoice, cx: &mut Context<Self>| {
+            tile(id, art, label, body).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.request_launch(choice.clone(), LaunchTarget::NewWorkspace, window, cx)
             }))
         };
@@ -2582,31 +2584,40 @@ impl Workbench {
         // are there.
         let missing = |id: &'static str, name: &'static str, url: &'static str, cx: &mut Context<Self>| {
             let not_installed = t(cx, "welcome.not_installed").to_string();
-            tile(SharedString::from(format!("welcome-{id}")), id, name.to_string(), not_installed).on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
+            tile(SharedString::from(format!("welcome-{id}")), crate::brand::tile(id, 36.), name.to_string(), not_installed).on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.install_hint = Some((id, name, url));
                     cx.notify();
-                },
-            ))
+                }),
+            )
         };
         let mut cards = div().w_full().flex().flex_wrap().gap_3();
+        if starting.is_none() && settings(cx).idea_mode {
+            let (label, body) = (t(cx, "idea.menu").to_string(), t(cx, "welcome.idea_body").to_string());
+            cards = cards.child(
+                tile("welcome-idea".into(), glyph_tile("lightbulb", Chrome::ORANGE), label, body)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx))),
+            );
+        }
         let terminal_body = t(cx, "welcome.terminal_body").to_string();
+        let shell = crate::brand::tile("shell", 36.);
         cards =
-            cards.child(card("welcome-shell".into(), "shell", t(cx, "welcome.terminal").into(), terminal_body, PaneKind::Shell.into(), cx));
+            cards.child(card("welcome-shell".into(), shell, t(cx, "welcome.terminal").into(), terminal_body, PaneKind::Shell.into(), cx));
         cards = cards.child(if self.is_installed("claude") {
             let body = tf(cx, "welcome.maker_body", &[("maker", "Anthropic")]);
-            card("welcome-claude".into(), "claude", "Claude Code".into(), body, PaneKind::Claude.into(), cx)
+            card("welcome-claude".into(), crate::brand::tile("claude", 36.), "Claude Code".into(), body, PaneKind::Claude.into(), cx)
         } else {
             missing("claude", "Claude Code", CLAUDE_INSTALL_URL, cx)
         });
-        // A chat runs Claude Code as its lead.
+        // A chat runs Claude Code as its lead, but gets its own icon and color so the two cards don't look alike.
         if self.is_installed("claude") {
             let body = t(cx, "welcome.chat_body").to_string();
-            cards = cards.child(card("welcome-chat".into(), "claude", t(cx, "welcome.chat").into(), body, LaunchChoice::Chat, cx));
+            let art = glyph_tile("message-square-code", Chrome::PURPLE);
+            cards = cards.child(card("welcome-chat".into(), art, t(cx, "welcome.chat").into(), body, LaunchChoice::Chat, cx));
         }
         cards = cards.child(if self.is_installed("codex") {
             let body = tf(cx, "welcome.maker_body", &[("maker", "OpenAI")]);
-            card("welcome-codex".into(), "codex", "Codex".into(), body, PaneKind::Codex.into(), cx)
+            card("welcome-codex".into(), crate::brand::tile("codex", 36.), "Codex".into(), body, PaneKind::Codex.into(), cx)
         } else {
             missing("codex", "Codex", CODEX_INSTALL_URL, cx)
         });
@@ -2617,8 +2628,8 @@ impl Workbench {
             } else {
                 tf(cx, "welcome.maker_body", &[("maker", agent.maker)])
             };
-            cards =
-                cards.child(card(SharedString::from(format!("welcome-{}", agent.id)), agent.id, agent.name.to_string(), body, choice, cx));
+            let art = crate::brand::tile(agent.id, 36.);
+            cards = cards.child(card(SharedString::from(format!("welcome-{}", agent.id)), art, agent.name.to_string(), body, choice, cx));
         }
         // Invisible cards keep the last row on the same columns as the rows above it. They carry a
         // card's padding and border width too: free space is shared on top of those.
@@ -2716,7 +2727,6 @@ impl Workbench {
                         .children(self.render_group_choice(cx)),
                 )
             })
-            .when(starting.is_none() && settings(cx).idea_mode, |d| d.child(self.render_idea_card(cx)))
             .child(div().w_full().flex().flex_col().gap_3().child(heading(t(cx, "welcome.start").to_string())).child(cards).when(
                 more,
                 |d| {
@@ -2874,49 +2884,6 @@ impl Workbench {
                     cx,
                 )),
         )
-    }
-
-    /// Start page card for "Build my idea": the one thing on the page that is not a terminal, so it
-    /// gets the full width — and room for its one-line description.
-    fn render_idea_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("welcome-idea")
-            .group("welcome-idea")
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_4()
-            .p_4()
-            .rounded_lg()
-            .cursor_pointer()
-            .border_1()
-            .border_color(hex_alpha(Chrome::ORANGE, 0.5))
-            .bg(hex_alpha(Chrome::ORANGE, 0.08))
-            .hover(|s| s.bg(hex_alpha(Chrome::ORANGE, 0.16)).border_color(hex(Chrome::ORANGE)))
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx)))
-            .child(crate::brand::tinted_tile(Chrome::ORANGE, 40.).child(icon("lightbulb", 20., hex(Chrome::ORANGE))))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .truncate()
-                            .t_title()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(hex(Chrome::BRIGHT))
-                            .child(t(cx, "idea.menu")),
-                    )
-                    .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "welcome.idea_body"))),
-            )
-            .child(div().flex_shrink_0().opacity(0.6).group_hover("welcome-idea", |s| s.opacity(1.)).child(icon(
-                "chevron-right",
-                IconSize::BUTTON,
-                hex(Chrome::ORANGE),
-            )))
     }
 
     /// Links and copyright at the bottom of the start page, like the website's footer.
