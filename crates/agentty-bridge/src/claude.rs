@@ -224,6 +224,8 @@ fn read_turns(path: &Path, sidechain: bool) -> Result<(Option<String>, Vec<Turn>
         }
         let turn = match v["type"].as_str() {
             Some("user") => user_text(&v).map(|text| Turn { role: Role::User, text }),
+            // A message typed while a turn ran is recorded as an attachment, not as a user entry.
+            Some("attachment") => queued_text(&v).map(|text| Turn { role: Role::User, text }),
             Some("assistant") => assistant_text(&v).map(|text| Turn { role: Role::Assistant, text }),
             _ => None,
         };
@@ -257,8 +259,22 @@ fn user_text(v: &Value) -> Option<String> {
             .join("\n"),
         _ => return None,
     };
+    human_text(&text)
+}
+
+/// What the user typed mid-turn: a `queued_command` attachment's prompt (the harness queues its own
+/// background-task notifications the same way; those are dropped like other injected text).
+fn queued_text(v: &Value) -> Option<String> {
+    let attachment = &v["attachment"];
+    if attachment["type"].as_str() != Some("queued_command") {
+        return None;
+    }
+    human_text(attachment["prompt"].as_str()?)
+}
+
+fn human_text(text: &str) -> Option<String> {
     let text = text.trim();
-    let injected = ["<command-", "<local-command", "<system-reminder>", "Caveat:", "[Request interrupted"];
+    let injected = ["<command-", "<local-command", "<system-reminder>", "<task-notification", "Caveat:", "[Request interrupted"];
     if text.is_empty() || injected.iter().any(|p| text.starts_with(p)) {
         return None;
     }
@@ -476,6 +492,29 @@ fn owned_by_other(peers: &[PeerSession], session_id: &str, pid: Option<u32>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn messages_typed_mid_turn_are_user_turns() {
+        let dir = std::env::temp_dir().join(format!("agentty-queued-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        let queued = |prompt: &str| {
+            serde_json::json!({ "type": "attachment", "attachment": { "type": "queued_command", "prompt": prompt, "commandMode": "prompt", "origin": { "kind": "human" } } })
+                .to_string()
+        };
+        let lines = [
+            queued("reply B"),
+            queued("<task-notification>\n<task-id>b1</task-id>\n</task-notification>"),
+            r#"{"type":"attachment","attachment":{"type":"hook_success","prompt":"not a message"}}"#.to_string(),
+            queued("reply C"),
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let (_, turns) = super::transcript(&path).unwrap();
+        let texts: Vec<&str> = turns.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, ["reply B", "reply C"]);
+        assert!(turns.iter().all(|t| t.role == super::Role::User));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn a_session_is_on_the_model_of_its_latest_answer() {
         let text = [

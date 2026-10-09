@@ -32,7 +32,7 @@ use gpui::{
 };
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Workers on screen at once, in a grid of two columns.
 pub const MAX_WORKERS: usize = 4;
@@ -43,6 +43,13 @@ const BRIEF_END: &str = "<!-- /agentty:chat-lead -->";
 const REPORT_MARK: &str = "[Agentty]";
 /// How often the lead's transcript is checked for news.
 const WATCH_INTERVAL: Duration = Duration::from_millis(700);
+/// A lead whose screen never shows its input box (an unknown layout) is taken as ready after this.
+const READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// The briefing is not in the transcript this long after it was typed: its Enter may have gone
+/// astray while the TUI started, so Enter is pressed once more.
+const BRIEF_RETRY: Duration = Duration::from_secs(6);
+/// Still not there: stop holding messages back (they go in behind it) so the chat cannot stall.
+const BRIEF_GIVE_UP: Duration = Duration::from_secs(14);
 /// How much of a worker's last reply goes into its report.
 const REPORT_REPLY_LIMIT: usize = 4_000;
 /// The chat's share of the height once workers are below it.
@@ -119,6 +126,12 @@ pub struct ChatState {
     brief_seen: bool,
     /// The instructions were typed into the lead (not just queued).
     brief_sent: bool,
+    /// When the instructions were typed, and whether Enter was pressed again since.
+    brief_sent_at: Option<Instant>,
+    brief_retried: bool,
+    /// When the lead last showed a question or first-run screen (or the chat started): the wait for
+    /// its input box to appear counts from here.
+    quiet_since: Instant,
     /// The user asked to see the lead's terminal.
     show_terminal: bool,
     /// The lead's screen shows something the chat can't answer (folder trust, sign-in).
@@ -307,8 +320,45 @@ fn clear_echo(echo: &mut Vec<String>, items: &[ChatItem]) {
 /// Whether a message for the lead has to wait: the lead sits in a selection, something already
 /// waits ahead of it, or the lead has been sent its instructions but its transcript does not show
 /// them yet (still starting up: a message pasted now would land inside the briefing).
-fn must_wait(waits_on_user: bool, queued: bool, brief_sent: bool, brief_seen: bool) -> bool {
-    waits_on_user || queued || (brief_sent && !brief_seen)
+/// Nothing goes in before the lead's input box is up: Enter typed into a starting TUI is lost.
+fn must_wait(waits_on_user: bool, queued: bool, brief_sent: bool, brief_seen: bool, ready: bool) -> bool {
+    waits_on_user || queued || !ready || (brief_sent && !brief_seen)
+}
+
+/// Whether `lines` (the bottom of the lead's screen) show Claude Code's input box, not a starting
+/// banner or a first-run question.
+fn input_ready(lines: &[String]) -> bool {
+    if is_setup_screen(lines) {
+        return false;
+    }
+    lines.iter().any(|line| {
+        let line = line.trim();
+        line.contains("for shortcuts")
+            || line.contains("bypass permissions")
+            || line.contains("auto-accept edits")
+            || line.contains("plan mode on")
+            || line.starts_with("❯")
+            || line.starts_with("│ >")
+            || line.starts_with("> ")
+    })
+}
+
+/// What a lead that was typed its briefing needs next: Enter again, or no more waiting for it.
+#[derive(Debug, PartialEq)]
+enum BriefStep {
+    Wait,
+    PressEnter,
+    GiveUp,
+}
+
+fn brief_step(elapsed: Duration, retried: bool) -> BriefStep {
+    if elapsed >= BRIEF_GIVE_UP {
+        BriefStep::GiveUp
+    } else if elapsed >= BRIEF_RETRY && !retried {
+        BriefStep::PressEnter
+    } else {
+        BriefStep::Wait
+    }
 }
 
 /// The tab's layout: the lead on top, its workers below in rows of two.
@@ -466,6 +516,9 @@ impl Workbench {
                 briefed: false,
                 brief_seen: false,
                 brief_sent: false,
+                brief_sent_at: None,
+                brief_retried: false,
+                quiet_since: Instant::now(),
                 show_terminal: false,
                 setup_screen: false,
                 pending: Vec::new(),
@@ -635,6 +688,7 @@ impl Workbench {
     /// Reads the lead's transcript again when it grew. False once the chat is gone (the watch ends).
     fn poll_chat(&mut self, id: EntityId, cx: &mut Context<Self>) -> bool {
         self.refresh_chat_usage(id, cx);
+        self.chat_delivery_tick(id, cx);
         let Some(state) = self.chats.get_mut(&id) else { return false };
         let view = state.lead.read(cx);
         // Until the lead has its instructions, its first-run screens may be in the way.
@@ -736,11 +790,12 @@ impl Workbench {
         // What the user just wrote is what they look at: back to the newest entry.
         state.follow.set(true);
         Self::show_chat_items(state);
+        let ready = Self::lead_ready(state, cx);
         // Never into a selection on the lead's screen: it goes in once that is answered.
-        if must_wait(waits_on_user(state.lead.read(cx)), !state.pending.is_empty(), state.brief_sent, state.brief_seen) {
+        if must_wait(waits_on_user(state.lead.read(cx)), !state.pending.is_empty(), state.brief_sent, state.brief_seen, ready) {
             state.pending.push(Pending::User { prompt, echo: text });
         } else {
-            state.brief_sent |= prompt.contains(BRIEF_START);
+            Self::note_brief_sent(state, prompt.contains(BRIEF_START));
             state.lead.update(cx, |view, cx| view.submit_prompt(prompt, cx));
         }
         cx.notify();
@@ -767,11 +822,54 @@ impl Workbench {
     /// question): typed into that selection it would answer it. Then it waits until that is over.
     fn deliver_to_lead(&mut self, id: EntityId, text: String, cx: &mut Context<Self>) {
         let Some(state) = self.chats.get_mut(&id) else { return };
-        if must_wait(waits_on_user(state.lead.read(cx)), !state.pending.is_empty(), state.brief_sent, state.brief_seen) {
+        if must_wait(
+            waits_on_user(state.lead.read(cx)),
+            !state.pending.is_empty(),
+            state.brief_sent,
+            state.brief_seen,
+            Self::lead_ready(state, cx),
+        ) {
             state.pending.push(Pending::Report(text));
             return;
         }
         state.lead.update(cx, |view, cx| view.submit_prompt(text, cx));
+    }
+
+    fn note_brief_sent(state: &mut ChatState, sent: bool) {
+        if sent && !state.brief_sent {
+            state.brief_sent = true;
+            state.brief_sent_at = Some(Instant::now());
+        }
+    }
+
+    /// Whether the lead's input box is up: on its screen, or [`READY_TIMEOUT`] after it last showed
+    /// a question or first-run screen (the TUI takes a moment to come back from one: text typed
+    /// then is lost).
+    fn lead_ready(state: &mut ChatState, cx: &App) -> bool {
+        let view = state.lead.read(cx);
+        if waits_on_user(view) {
+            state.quiet_since = Instant::now();
+            return false;
+        }
+        state.brief_seen || input_ready(&view.screen_lines(40)) || state.quiet_since.elapsed() >= READY_TIMEOUT
+    }
+
+    /// Keeps messages moving: what waited for the lead to start goes in once it is ready, and a
+    /// briefing that never shows up in the transcript is nudged once, then no longer waited for.
+    fn chat_delivery_tick(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        let Some(state) = self.chats.get_mut(&id) else { return };
+        if state.brief_sent && !state.brief_seen {
+            let elapsed = state.brief_sent_at.map_or(Duration::ZERO, |at| at.elapsed());
+            match brief_step(elapsed, state.brief_retried) {
+                BriefStep::Wait => {}
+                BriefStep::PressEnter => {
+                    state.brief_retried = true;
+                    state.lead.update(cx, |view, _| view.write(b"\r".to_vec()));
+                }
+                BriefStep::GiveUp => state.brief_seen = true,
+            }
+        }
+        self.flush_pending_by_id(id, cx);
     }
 
     /// The lead no longer waits on the user: what waited for it goes in, as one message.
@@ -781,11 +879,15 @@ impl Workbench {
 
     fn flush_pending_by_id(&mut self, id: EntityId, cx: &mut Context<Self>) {
         let Some(state) = self.chats.get_mut(&id) else { return };
-        if state.pending.is_empty() || waits_on_user(state.lead.read(cx)) || (state.brief_sent && !state.brief_seen) {
+        if state.pending.is_empty()
+            || waits_on_user(state.lead.read(cx))
+            || !Self::lead_ready(state, cx)
+            || (state.brief_sent && !state.brief_seen)
+        {
             return;
         }
         let text = pending_message(std::mem::take(&mut state.pending), &mut state.echo);
-        state.brief_sent |= text.contains(BRIEF_START);
+        Self::note_brief_sent(state, text.contains(BRIEF_START));
         Self::show_chat_items(state);
         state.lead.update(cx, |view, cx| view.submit_prompt(text, cx));
         cx.notify();
@@ -1802,10 +1904,29 @@ mod tests {
 
     #[test]
     fn messages_wait_while_the_lead_starts() {
-        assert!(must_wait(false, false, true, false), "briefing typed, not in the transcript yet");
-        assert!(!must_wait(false, false, true, true));
-        assert!(!must_wait(false, false, false, false), "the briefing itself goes in at once");
-        assert!(must_wait(true, false, false, false));
-        assert!(must_wait(false, true, true, true), "behind what already waits");
+        assert!(must_wait(false, false, true, false, true), "briefing typed, not in the transcript yet");
+        assert!(!must_wait(false, false, true, true, true));
+        assert!(!must_wait(false, false, false, false, true), "the briefing itself goes in once the lead is ready");
+        assert!(must_wait(false, false, false, false, false), "nothing goes into a starting TUI");
+        assert!(must_wait(true, false, false, false, true));
+        assert!(must_wait(false, true, true, true, true), "behind what already waits");
+    }
+
+    #[test]
+    fn the_input_box_means_ready() {
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(input_ready(&lines(&["╭─────╮", "│ > Try \"fix\"", "  ? for shortcuts"])));
+        assert!(input_ready(&lines(&["❯ "])));
+        assert!(!input_ready(&lines(&["Welcome to Claude Code", "starting..."])));
+        assert!(!input_ready(&lines(&["Do you trust the files in this folder?", "❯ 1. Yes"])));
+    }
+
+    #[test]
+    fn a_lost_enter_is_pressed_again_once_then_given_up_on() {
+        assert_eq!(brief_step(Duration::from_secs(2), false), BriefStep::Wait);
+        assert_eq!(brief_step(Duration::from_secs(7), false), BriefStep::PressEnter);
+        assert_eq!(brief_step(Duration::from_secs(7), true), BriefStep::Wait);
+        assert_eq!(brief_step(Duration::from_secs(15), true), BriefStep::GiveUp);
+        assert_eq!(brief_step(Duration::from_secs(15), false), BriefStep::GiveUp);
     }
 }
