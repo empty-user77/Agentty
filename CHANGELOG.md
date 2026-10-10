@@ -5,6 +5,47 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-10-10
+
+### Added
+- Voice input in the Mac app: a microphone in the status bar of agent tabs (Claude Code, Codex, …)
+  and chats shows whether it is recording. Click it or press ⇧⌘M, speak, and the words go into the
+  prompt; Enter sends them straight away, Esc cancels. Speech is transcribed on your Mac by a local
+  model and no audio leaves the computer.
+- Settings → Voice input: install the Small or Large-v3 Turbo model (Turbo is recommended and the
+  default), pick the one in use, delete a model, and set the language (automatic, Korean or
+  English). Transcription uses the GPU and a vocabulary of developer terms, and ignores silence
+  instead of inventing sentences. The same controls stay on the remote access page.
+- Development board (Settings → Development board, off by default): a kanban board of tickets that
+  agents work on. Moving a ticket to "instructed" creates a worktree and starts its agent with the
+  ticket, and the ticket follows the agent through development, review and QA.
+- Work on later (TODO): right-click a tab or a split pane to set it aside while its terminals keep
+  running; a TODO button beside the start page lists them per workspace and brings them back.
+- From three sidebar plugins on, the unpinned ones fold into one activity-bar item; pin the plugins
+  you use most to keep their own icon.
+- Settings → About shows build information (version, commit, build date, target) and the plugin
+  and marketplace API versions.
+- The synced sessions list scrolls, shows up to 50 sessions and links to the sync repository.
+
+### Changed
+- Build my idea is a card in the start page's "Get started" grid, and Chat · team has its own icon.
+- The text caret blinks in text fields.
+- A plugin panel with no open tab shows a clearer, plugin-neutral message.
+
+### Fixed
+- Messages written in a chat while the lead agent starts, works or waits on you are delivered once,
+  in order, and their bubbles clear.
+- The close pane / tab dialog takes the keyboard: Enter confirms, Esc cancels.
+- A tab started with a command chain (`cd <folder> && claude`) is titled after the program.
+- A floating plugin panel stays inside the window and docks again when dragged narrower.
+- Voice uploads from the remote page are smaller and limited in size and number.
+
+### Security
+- Plugin network requests check every address a name resolves to, and conversation and app-state
+  files are created private from the start.
+- Development board tickets are passed to agents as data, and a damaged board file is kept aside
+  instead of overwritten.
+
 ## [0.2.14] - 2026-10-08
 
 ### Added
