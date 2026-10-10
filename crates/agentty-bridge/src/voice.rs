@@ -18,7 +18,7 @@ use crate::fsutil::data_dir;
 /// against `sha256` before it is trusted, so a tampered or truncated file is never loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Model {
-    /// Stable id used in settings and the API (`tiny`, `base`).
+    /// Stable id used in settings and the API (`small`, `large-v3-turbo`).
     pub id: &'static str,
     /// File name as stored in the data folder and served by Hugging Face.
     pub file: &'static str,
@@ -30,24 +30,36 @@ pub struct Model {
     pub bytes: u64,
 }
 
-/// The models the setup flow offers, smallest first. `base` is the default: noticeably better than
-/// `tiny` for non-English (e.g. Korean) while still a single modest file.
+/// The models the setup flow offers, smallest first. `tiny` and `base` were dropped: they get
+/// Korean (and English technical words inside Korean sentences) wrong too often to type prompts
+/// with. Large-v3 Turbo (5-bit) is the recommended default: close to Large-v3 for about a third of
+/// its size, and fast with the GPU (Metal on macOS).
 pub const MODELS: &[Model] = &[
     Model {
-        id: "tiny",
-        file: "ggml-tiny.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
-        sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-        bytes: 77_691_713,
+        id: "small",
+        file: "ggml-small.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        bytes: 487_601_967,
     },
     Model {
-        id: "base",
-        file: "ggml-base.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
-        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-        bytes: 147_951_465,
+        id: "large-v3-turbo",
+        file: "ggml-large-v3-turbo-q5_0.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        bytes: 574_041_195,
     },
 ];
+
+/// Files of models earlier versions offered; removed once a supported model is installed.
+const RETIRED_FILES: &[&str] = &["ggml-tiny.bin", "ggml-base.bin"];
+
+/// Words a developer says to an agent, given to whisper as its starting context so it spells them
+/// the way they are typed (in Korean sentences too) instead of guessing at the sounds.
+#[cfg(feature = "voice")]
+const VOCABULARY: &str = "Claude, Claude Code, Codex, Agentty, git, commit, push, pull request, PR, merge, \
+branch, rebase, worktree, diff, cargo, Rust, npm, TypeScript, React, Python, API, CLI, README, \
+refactor, debug, test, build, deploy, CI. git commit하고 PR 올려줘. cargo test 돌리고 refactor해줘.";
 
 /// Whether this build has on-device transcription (the `voice` feature, whisper.cpp) compiled in.
 pub const AVAILABLE: bool = cfg!(feature = "voice");
@@ -109,8 +121,8 @@ fn cpu_has(_feature: &str) -> bool {
     true
 }
 
-/// The default model id when none is chosen.
-pub const DEFAULT_MODEL: &str = "base";
+/// The default model id when none is chosen: the recommended one.
+pub const DEFAULT_MODEL: &str = "large-v3-turbo";
 
 /// Longest clip accepted, in seconds — a voice prompt, not a recording session. At 16 kHz mono
 /// f32 this also bounds memory and transcription time.
@@ -124,10 +136,44 @@ pub fn model(id: &str) -> Option<&'static Model> {
     MODELS.iter().find(|m| m.id == id)
 }
 
-/// The model voice input transcribes with: the default one when it is installed, else any installed
-/// one (someone may have set up only `tiny`). `None` while nothing is installed.
+/// The model the user chose as default (Settings → Voice input), if any. The app sets it at start
+/// and whenever the choice changes, so every caller of [`installed_model`] follows it.
+static PREFERRED: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+/// Use `id` (a [`MODELS`] id) whenever it is installed; `None` or an unknown id goes back to the
+/// recommended order.
+pub fn set_preferred_model(id: Option<&str>) {
+    *PREFERRED.lock().unwrap_or_else(|e| e.into_inner()) = id.and_then(model).map(|m| m.id);
+}
+
+/// The model voice input transcribes with: the one the user chose when it is installed, else the
+/// recommended one, else any installed one (someone may have set up only `small`). `None` while
+/// nothing is installed.
 pub fn installed_model() -> Option<&'static Model> {
-    model(DEFAULT_MODEL).filter(|m| model_present(m)).or_else(|| MODELS.iter().find(|m| model_present(m)))
+    let preferred = *PREFERRED.lock().unwrap_or_else(|e| e.into_inner());
+    preferred
+        .and_then(model)
+        .filter(|m| model_present(m))
+        .or_else(|| model(DEFAULT_MODEL).filter(|m| model_present(m)))
+        .or_else(|| MODELS.iter().find(|m| model_present(m)))
+}
+
+/// Deletes an installed model (and a partial download of it). If it is the one loaded in memory it
+/// is let go too; a transcription already running keeps its own reference until it ends.
+pub fn remove_model(m: &Model) -> Result<()> {
+    let path = model_path(m);
+    #[cfg(feature = "voice")]
+    {
+        let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+        if loaded.as_ref().is_some_and(|l| l.path == path) {
+            *loaded = None;
+        }
+    }
+    let _ = std::fs::remove_file(voice_dir().join(format!("{}.part", m.file)));
+    match std::fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e).with_context(|| format!("remove {}", path.display())),
+        _ => Ok(()),
+    }
 }
 
 /// `~/.agentty/voice` (or the `AGENTTY_DATA_DIR` equivalent), created on demand.
@@ -266,6 +312,10 @@ fn fetch_model(m: &Model, tmp: &Path, mut progress: impl FnMut(u64, u64)) -> Res
         bail!("downloaded {} failed checksum (got {got})", m.file);
     }
     std::fs::rename(tmp, &final_path).with_context(|| format!("install {}", final_path.display()))?;
+    // Models earlier versions offered are no longer used: give their space back.
+    for retired in RETIRED_FILES {
+        let _ = std::fs::remove_file(voice_dir().join(retired));
+    }
     Ok(())
 }
 
@@ -291,7 +341,9 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     if unavailable() == Some(Unavailable::Cpu) {
         bail!("this processor lacks the instructions on-device voice needs ({})", X86_REQUIRED.join(", "));
     }
-    if samples.is_empty() {
+    // A clip with (almost) no speech in it is not handed to whisper at all: large models invent a
+    // sentence for silence ("Thank you.", "감사합니다.") that would otherwise be sent as a prompt.
+    if voiced_seconds(samples) < MIN_VOICED_SECONDS {
         return Ok(String::new());
     }
     let path = model_path(model);
@@ -309,7 +361,13 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     // so the slow transcription below runs without blocking other requests.
     let ctx = {
         let mut guard = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+        // Deleted while this request was on its way (`remove_model` holds this lock): don't load it.
+        if !model_present(model) {
+            bail!("voice model {} is not installed", model.id);
+        }
         if guard.as_ref().map(|l| l.path != path).unwrap_or(true) {
+            // The GPU (Metal on macOS) when the build has it: large models need it to answer a
+            // prompt in about a second.
             let ctx = WhisperContext::new_with_params(&path.to_string_lossy() as &str, WhisperContextParameters::default())
                 .map_err(|e| anyhow::anyhow!("load voice model: {e}"))?;
             *guard = Some(Loaded { path: path.clone(), ctx: std::sync::Arc::new(ctx) });
@@ -318,7 +376,14 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     };
 
     let mut state = ctx.create_state().map_err(|e| anyhow::anyhow!("voice state: {e}"))?;
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    // Beam search finds noticeably better wording than taking the likeliest token each step; with
+    // the GPU it costs little for a prompt-length clip.
+    let mut params = FullParams::new(SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 });
+    params.set_n_threads(std::thread::available_parallelism().map(|n| n.get().min(8) as i32).unwrap_or(4));
+    params.set_initial_prompt(VOCABULARY);
+    params.set_suppress_blank(true);
+    params.set_suppress_nst(true);
+    params.set_no_speech_thold(NO_SPEECH);
     // whisper.cpp's own default is English, which would turn Korean speech into an English
     // translation: no hint means detect the language from the audio.
     params.set_language(Some(lang.unwrap_or("auto")));
@@ -333,12 +398,64 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     let mut out = String::new();
     for i in 0..n {
         if let Some(seg) = state.get_segment(i) {
+            // A segment whisper itself rates as probably not speech is left out.
+            if seg.no_speech_probability() > NO_SPEECH {
+                continue;
+            }
             if let Ok(text) = seg.to_str_lossy() {
                 out.push_str(&text);
             }
         }
     }
-    Ok(without_annotations(&out))
+    let text = without_annotations(&out);
+    Ok(if is_hallucination(&text) { String::new() } else { text })
+}
+
+/// Below this much speech in a clip (seconds of 30 ms frames above [`SPEECH_RMS`]), there is
+/// nothing to transcribe.
+#[cfg(feature = "voice")]
+const MIN_VOICED_SECONDS: f32 = 0.25;
+/// RMS of a 30 ms frame (samples in -1..1) above which it counts as speech rather than room noise.
+#[cfg(feature = "voice")]
+const SPEECH_RMS: f32 = 0.015;
+/// whisper's own "no speech" probability above which a segment is dropped.
+#[cfg(feature = "voice")]
+const NO_SPEECH: f32 = 0.6;
+
+/// How many seconds of a 16 kHz clip are loud enough to be speech.
+#[cfg(feature = "voice")]
+fn voiced_seconds(samples: &[f32]) -> f32 {
+    const FRAME: usize = 480; // 30 ms at 16 kHz
+    let voiced =
+        samples.chunks(FRAME).filter(|frame| (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt() > SPEECH_RMS).count();
+    voiced as f32 * FRAME as f32 / SAMPLE_RATE as f32
+}
+
+/// Whether a whole transcript is one of the sentences whisper makes up for noise or silence (it
+/// learned them from video subtitles) rather than something said to an agent.
+pub fn is_hallucination(text: &str) -> bool {
+    const MADE_UP: &[&str] = &[
+        "thank you",
+        "thank you very much",
+        "thanks for watching",
+        "thank you for watching",
+        "please subscribe",
+        "you",
+        "so",
+        "bye",
+        "감사합니다",
+        "시청해주셔서 감사합니다",
+        "시청해 주셔서 감사합니다",
+        "구독과 좋아요 부탁드립니다",
+        "고맙습니다",
+        "ご視聴ありがとうございました",
+        "ありがとうございました",
+        "谢谢观看",
+        "谢谢",
+    ];
+    let core: String =
+        text.trim().trim_matches(|c: char| c.is_ascii_punctuation() || c == '。' || c == '!' || c.is_whitespace()).to_lowercase();
+    core.is_empty() || MADE_UP.contains(&core.as_str())
 }
 
 /// The transcript without whisper's notes about the audio — `[BLANK_AUDIO]`, `[inaudible]`,
@@ -481,6 +598,36 @@ mod tests {
         assert!(!verified(&path, &good));
         assert!(!verified(&dir.join("missing.bin"), &good));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn made_up_sentences_are_not_prompts() {
+        assert!(is_hallucination("Thank you."));
+        assert!(is_hallucination(" 감사합니다. "));
+        assert!(is_hallucination("."));
+        assert!(is_hallucination(""));
+        assert!(!is_hallucination("Thank you, now run the tests."));
+        assert!(!is_hallucination("git commit하고 PR 올려줘."));
+    }
+
+    #[cfg(feature = "voice")]
+    #[test]
+    fn silence_and_room_noise_have_no_speech() {
+        let silence = vec![0.0f32; 16_000 * 3];
+        assert_eq!(voiced_seconds(&silence), 0.0);
+        // Steady low noise, well under speech level.
+        let hiss: Vec<f32> = (0..16_000 * 3).map(|i| if i % 2 == 0 { 0.005 } else { -0.005 }).collect();
+        assert!(voiced_seconds(&hiss) < MIN_VOICED_SECONDS);
+        // One second of a speech-loud tone counts as about a second of speech.
+        let tone: Vec<f32> = (0..16_000).map(|i| (i as f32 * 0.05).sin() * 0.2).collect();
+        assert!((voiced_seconds(&tone) - 1.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn the_recommended_model_is_turbo_and_offered() {
+        assert_eq!(DEFAULT_MODEL, "large-v3-turbo");
+        assert_eq!(MODELS.iter().map(|m| m.id).collect::<Vec<_>>(), ["small", "large-v3-turbo"]);
+        assert!(MODELS.iter().all(|m| !RETIRED_FILES.contains(&m.file)));
     }
 
     #[test]

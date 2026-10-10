@@ -43,6 +43,10 @@ libc = "0.2.189"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+# Transcription on the GPU: Large-v3 Turbo answers a prompt in about a second with Metal, several
+# times slower on the CPU alone. Still only built with the `voice` feature (the dependency stays
+# optional); the Metal shaders are embedded in the binary.
+whisper-rs = { version = "0.16", optional = true, features = ["metal"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Registry"] }

@@ -249,6 +249,7 @@ pub fn start(cx: &mut App) {
     if !(settings(cx).remote.feature && settings(cx).remote.enabled) {
         return stop(cx);
     }
+    *VOICE_LANGUAGE.lock().unwrap_or_else(|e| e.into_inner()) = settings(cx).voice.language.code();
     stop_serving(cx);
     let remote = cx.global_mut::<Remote>();
     remote.generation += 1;
@@ -517,9 +518,14 @@ pub fn sign_out_everywhere(cx: &mut App) {
 }
 
 /// The server, while it runs (for the settings page's devices and log).
+/// The voice language from the settings (`None`: detect it), kept for the server threads that build
+/// the voice config without the app at hand. Updated by [`refresh_voice`].
+static VOICE_LANGUAGE: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
 /// Voice-to-text for the remote page: on when a whisper model is installed. Prefers the default
-/// model, else any installed one; language is auto-detected. The setup flow installs the model, so
-/// voice turns itself on once that is done. Returns `None` (voice off) when nothing is installed.
+/// model, else any installed one; the language is the one chosen in the settings (or detected).
+/// The setup flow installs the model, so voice turns itself on once that is done. Returns `None`
+/// (voice off) when nothing is installed.
 fn voice_config() -> Option<server::VoiceConfig> {
     use agentty_bridge::voice;
     // A model left over from another build does not help a build (or processor) that cannot run it.
@@ -527,12 +533,14 @@ fn voice_config() -> Option<server::VoiceConfig> {
         return None;
     }
     let model = voice::installed_model()?;
-    Some(server::VoiceConfig { model, language: None })
+    let language = VOICE_LANGUAGE.lock().unwrap_or_else(|e| e.into_inner()).map(str::to_string);
+    Some(server::VoiceConfig { model, language })
 }
 
 /// Re-read which voice model is installed and tell the running server, so voice turns on (or off)
 /// without a restart — called after the setup flow finishes a download.
 pub fn refresh_voice(cx: &App) {
+    *VOICE_LANGUAGE.lock().unwrap_or_else(|e| e.into_inner()) = settings(cx).voice.language.code();
     if let Some(hub) = hub(cx) {
         hub.set_voice(voice_config());
     }

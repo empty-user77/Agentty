@@ -684,6 +684,7 @@ fn main() {
         let mut plugin_events = plugins::init(cx);
         workbench::pin_installed_sidebar_plugins(cx);
         browser_keeper::start(cx);
+        agentty_bridge::voice::set_preferred_model(settings::settings(cx).voice.model.as_deref());
         remote::init(cx);
         cx.spawn(async move |cx| {
             while let Some(envelope) = plugin_events.next().await {

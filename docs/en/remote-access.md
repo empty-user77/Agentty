@@ -85,7 +85,7 @@ The words go to the terminal that was active when you started. The language is d
 
 From the remote page you can speak a prompt instead of typing it. Tap the microphone in the prompt bar, say your prompt, then tap again to stop; the words are transcribed and dropped into the prompt box for you to check and send.
 
-The audio is transcribed **on your Mac** by a local model — nothing is sent to any outside service. Install the model once from **Settings → Remote access → Voice to text**: choose **Base** (recommended) or the smaller, faster **Tiny**, and it downloads to your Mac, verified and kept there. Once a model is installed, the microphone button appears on the remote page by itself.
+The audio is transcribed **on your Mac** by a local model — nothing is sent to any outside service. Install a model once from **Settings → Voice input** (the same card is also on the Remote access page): **Large-v3 Turbo** (recommended, about 574 MB) or the lighter **Small** (about 488 MB). It downloads to your Mac, is verified and kept there, and runs on the Mac's GPU. In the same place you can choose the spoken language (Automatic, Korean, English — a short prompt is sometimes mistaken for another language when detected automatically), pick which installed model is used, and delete a model. Once a model is installed, the microphone button appears on the remote page by itself.
 
 Your browser asks for microphone permission the first time, and the page must be served over HTTPS — it is, through Tailscale.
 

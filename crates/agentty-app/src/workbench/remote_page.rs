@@ -635,7 +635,8 @@ impl Workbench {
         for model in voice::MODELS {
             let installed = voice::model_present(model);
             let mb = tf(cx, "remote.voice.size", &[("mb", &((model.bytes + 500_000) / 1_000_000).to_string())]);
-            let name = if model.id == "tiny" { t(cx, "remote.voice.tiny") } else { t(cx, "remote.voice.base") };
+            let name = if model.id == "small" { t(cx, "remote.voice.small") } else { t(cx, "remote.voice.turbo") };
+            let recommended = model.id == voice::DEFAULT_MODEL;
             let dl = self.remote_page.voice_dl.as_ref().filter(|d| d.model_id == model.id);
             let right = if let Some(d) = dl {
                 let done = d.done.load(Ordering::Relaxed);
@@ -660,7 +661,40 @@ impl Workbench {
                             .child(div().h(gpui::px(6.)).rounded_full().bg(hex(NEON_CYAN)).w(gpui::px(170.0 * pct as f32 / 100.0))),
                     )
             } else if installed {
-                div().t_body().text_color(hex(NEON_GREEN)).child(format!("✓ {}", t(cx, "remote.voice.installed")))
+                // Installed: which one is used, make another the default, or delete it.
+                let in_use = voice::installed_model().is_some_and(|m| m.id == model.id);
+                let m = model;
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(if in_use {
+                        div().t_small().text_color(hex(NEON_GREEN)).child(format!("✓ {}", t(cx, "remote.voice.in_use"))).into_any_element()
+                    } else {
+                        action_button(
+                            gpui::SharedString::from(format!("voice-default-{}", model.id)),
+                            t(cx, "remote.voice.make_default"),
+                            cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                crate::settings::update_settings(cx, move |s| s.voice.model = Some(m.id.to_string()));
+                                voice::set_preferred_model(Some(m.id));
+                                remote::refresh_voice(cx);
+                                cx.notify();
+                            }),
+                        )
+                        .into_any_element()
+                    })
+                    .child(action_button(
+                        gpui::SharedString::from(format!("voice-remove-{}", model.id)),
+                        t(cx, "remote.voice.delete"),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if let Err(err) = voice::remove_model(m) {
+                                this.remote_page.voice_error = Some(err.to_string());
+                            }
+                            super::voice_input::refresh_installed();
+                            remote::refresh_voice(cx);
+                            cx.notify();
+                        }),
+                    ))
             } else if self.remote_page.voice_dl.is_some() {
                 // Another model is downloading; don't offer a second one that would just no-op.
                 div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "remote.voice.download"))
@@ -679,10 +713,61 @@ impl Workbench {
                     .justify_between()
                     .gap_3()
                     .py_2()
-                    .child(div().flex().flex_col().child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(name)).child(muted(mb)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div().flex().items_center().gap_2().child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(name)).when(
+                                    recommended,
+                                    |d| {
+                                        d.child(
+                                            div()
+                                                .px_1p5()
+                                                .rounded_md()
+                                                .t_caption()
+                                                .bg(hex(NEON_GREEN).opacity(0.15))
+                                                .text_color(hex(NEON_GREEN))
+                                                .child(t(cx, "remote.voice.recommended")),
+                                        )
+                                    },
+                                ),
+                            )
+                            .child(muted(mb)),
+                    )
                     .child(right),
             );
         }
+        // The language prompts are spoken in: detection is often wrong for a short prompt.
+        let current = settings(cx).voice.language;
+        let mut languages = div().flex().gap_1();
+        for language in crate::settings::VoiceLanguage::ALL {
+            languages = languages.child(crate::ui::chip(
+                gpui::SharedString::from(format!("voice-lang-{language:?}")),
+                t(cx, language.label_key()),
+                current == language,
+                move |_, _, cx| {
+                    crate::settings::update_settings(cx, move |s| s.voice.language = language);
+                    remote::refresh_voice(cx);
+                },
+            ));
+        }
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .py_2()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "voice.language")))
+                        .child(muted(t(cx, "voice.language_hint").to_string())),
+                )
+                .child(languages),
+        );
         if let Some(err) = &self.remote_page.voice_error {
             body = body.child(div().t_small().text_color(hex(Chrome::ERROR)).child(err.clone()));
         }

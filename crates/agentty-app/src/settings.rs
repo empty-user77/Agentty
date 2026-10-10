@@ -264,6 +264,9 @@ pub struct Settings {
     /// lives in the credential store, never here.
     #[serde(default)]
     pub remote: RemoteSettings,
+    /// Speech recognition for voice prompts (the status bar mic and the remote page).
+    #[serde(default)]
+    pub voice: VoiceSettings,
     /// Menu bar icon; closing the window keeps Agentty running there.
     pub menu_bar: bool,
     pub link_opener: LinkOpener,
@@ -349,6 +352,48 @@ pub struct Settings {
     pub update_later_version: String,
     #[serde(default)]
     pub update_later_until: u64,
+}
+
+/// Speech recognition for voice prompts.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VoiceSettings {
+    pub language: VoiceLanguage,
+    /// The model to transcribe with (an id of `agentty_bridge::voice::MODELS`); `None` or a model
+    /// that is not installed means the recommended one.
+    pub model: Option<String>,
+}
+
+/// The language voice prompts are spoken in. Detecting it works for longer sentences, but a short
+/// prompt is often taken for the wrong language; naming it avoids that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceLanguage {
+    #[default]
+    Auto,
+    Korean,
+    English,
+}
+
+impl VoiceLanguage {
+    pub const ALL: [VoiceLanguage; 3] = [VoiceLanguage::Auto, VoiceLanguage::Korean, VoiceLanguage::English];
+
+    /// The language code whisper takes, or `None` to detect it from the speech.
+    pub fn code(self) -> Option<&'static str> {
+        match self {
+            VoiceLanguage::Auto => None,
+            VoiceLanguage::Korean => Some("ko"),
+            VoiceLanguage::English => Some("en"),
+        }
+    }
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            VoiceLanguage::Auto => "voice.lang_auto",
+            VoiceLanguage::Korean => "voice.lang_ko",
+            VoiceLanguage::English => "voice.lang_en",
+        }
+    }
 }
 
 /// How the development board works.
@@ -772,6 +817,7 @@ impl Default for Settings {
             notify_answer_requests: true,
             chat_notify: ChatNotify::default(),
             remote: RemoteSettings::default(),
+            voice: VoiceSettings::default(),
             menu_bar: true,
             link_opener: LinkOpener::InApp,
             external_editor: ExternalEditor::Auto,
@@ -1088,7 +1134,9 @@ pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Resul
             let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
         crate::platform::wakelock::set(store.settings.prevent_sleep);
+        agentty_bridge::voice::set_preferred_model(store.settings.voice.model.as_deref());
     });
+    crate::remote::refresh_voice(cx);
     cx.refresh_windows();
     Ok(())
 }

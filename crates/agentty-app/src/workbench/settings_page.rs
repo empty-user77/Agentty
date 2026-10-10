@@ -39,6 +39,8 @@ pub enum SettingsSection {
     Project,
     /// The development board: on or off, how tickets run, Jira.
     Board,
+    /// Speech recognition: the model, the language (the same card as on the Remote access page).
+    Voice,
     Accounts,
     Appearance,
     Browser,
@@ -59,10 +61,11 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 14] = [
+    pub const ALL: [SettingsSection; 15] = [
         Self::General,
         Self::Project,
         Self::Board,
+        Self::Voice,
         Self::Windows,
         Self::Accounts,
         Self::Notifications,
@@ -89,6 +92,7 @@ impl SettingsSection {
             Self::General => "settings.general",
             Self::Project => "settings.project",
             Self::Board => "settings.board",
+            Self::Voice => "settings.voice",
             Self::Accounts => "settings.accounts",
             Self::Appearance => "settings.appearance",
             Self::Browser => "settings.browser",
@@ -108,6 +112,7 @@ impl SettingsSection {
             Self::General => "settings",
             Self::Project => "folder-open",
             Self::Board => "square-kanban",
+            Self::Voice => "mic",
             Self::Accounts => "key-round",
             Self::Appearance => "terminal",
             Self::Browser => "globe",
@@ -1507,6 +1512,7 @@ impl Workbench {
                 .into_any_element(),
             SettingsSection::Project => self.render_project_settings(window, cx).into_any_element(),
             SettingsSection::Board => self.render_board_settings(window, cx).into_any_element(),
+            SettingsSection::Voice => div().flex().flex_col().child(self.render_voice_card(cx)).into_any_element(),
             SettingsSection::Accounts => self.render_accounts(window, cx).into_any_element(),
             SettingsSection::Appearance => div()
                 .flex()
