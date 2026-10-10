@@ -268,8 +268,9 @@ impl Element for EditorElement {
         let font_size = px(points);
         let line_height = (points * 1.5).round();
         let editor = self.editor.clone();
-        editor.update(cx, |editor, _| {
+        editor.update(cx, |editor, cx| {
             let active = editor.active;
+            let focused = editor.focus_handle.is_focused(window);
             let Some(doc) = editor.docs.get_mut(active) else {
                 return Prepainted {
                     text_bounds: bounds,
@@ -302,6 +303,7 @@ impl Element for EditorElement {
             let text_width = (f32::from(bounds.size.width) - gutter_width - TEXT_PADDING - SCROLLBAR_WIDTH).max(char_width);
             let max_scroll_y = ((line_count as f32 - 1.) * line_height).max(0.);
             let cursor = doc.buffer.cursor();
+            let caret_key = (active, cursor.line, cursor.col, doc.buffer.revision());
 
             // Keep the cursor in view (after typing, moving, dragging past the edge).
             let margin = (line_height * 2.).min(height / 3.);
@@ -380,7 +382,8 @@ impl Element for EditorElement {
                     ));
                 }
             }
-            let cursor_quad = cursor_x.map(|x| {
+            let caret = editor.blink.update(focused, caret_key, cx, |e: &mut CodeEditor| &mut e.blink);
+            let cursor_quad = cursor_x.filter(|_| caret).map(|x| {
                 fill(
                     Bounds::new(point(px(text_left - scroll.x + x), px(row_top(cursor.line) + 2.)), size(px(2.), px(line_height - 4.))),
                     hex(0xaeafad),

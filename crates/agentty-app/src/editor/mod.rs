@@ -337,6 +337,8 @@ pub struct CodeEditor {
     preview_next: Option<PathBuf>,
     /// Where the preview's page answers arrive.
     preview_replies: futures::channel::mpsc::UnboundedSender<PageReply>,
+    /// Blinking of the caret while the editor has focus.
+    blink: crate::caret_blink::CaretBlink,
 }
 
 impl EventEmitter<EditorEvent> for CodeEditor {}
@@ -396,6 +398,7 @@ impl CodeEditor {
             scrollbar_drag: None,
             shown_tabs: Vec::new(),
             preview: Preview::new(),
+            blink: Default::default(),
             preview_next: None,
             preview_replies,
         }

@@ -106,6 +106,8 @@ pub struct TextInput {
     menu_at: Option<Point<Pixels>>,
     /// Syntax colors of a text area (byte range, color), for the text it holds now.
     colors: std::rc::Rc<Vec<(Range<usize>, u32)>>,
+    /// Blinking of the caret while the field has focus.
+    blink: crate::caret_blink::CaretBlink,
     _blur: Option<gpui::Subscription>,
 }
 
@@ -125,7 +127,10 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        let blur = cx.on_blur(&focus_handle, window, |_, _, cx| cx.emit(TextInputEvent::Blurred));
+        let blur = cx.on_blur(&focus_handle, window, |this, _, cx| {
+            this.blink.stop();
+            cx.emit(TextInputEvent::Blurred)
+        });
         let content: SharedString = content.into();
         let len = content.len();
         Self {
@@ -147,6 +152,7 @@ impl TextInput {
             last_lines: Vec::new(),
             menu_at: None,
             colors: std::rc::Rc::default(),
+            blink: Default::default(),
             _blur: Some(blur),
         }
     }
@@ -401,6 +407,16 @@ impl TextInput {
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
         cx.notify()
+    }
+
+    /// Whether the caret is drawn in this frame: blinking while focused, solid right after the
+    /// caret moved or the text changed.
+    fn caret_visible(&mut self, focused: bool, cx: &mut Context<Self>) -> bool {
+        let key = (self.selected_range.clone(), self.content.len(), self.marked_range.clone());
+        let mut blink = std::mem::take(&mut self.blink);
+        let visible = blink.update(focused, key, cx, |input: &mut TextInput| &mut input.blink);
+        self.blink = blink;
+        visible
     }
 
     fn cursor_offset(&self) -> usize {
@@ -769,7 +785,8 @@ impl Element for TextElement {
                 let origin = point(bounds.origin.x, bounds.origin.y + line_height * index as f32);
                 let _ = line.paint(origin, line_height, window, cx);
             }
-            if focused {
+            let caret = self.input.update(cx, |input, cx| input.caret_visible(focused, cx));
+            if caret {
                 if let Some(cursor) = prepaint.cursor.take() {
                     window.paint_quad(cursor);
                 }
@@ -782,7 +799,8 @@ impl Element for TextElement {
         }
         let Some(line) = prepaint.line.take() else { return };
         let _ = line.paint(bounds.origin, line_height, window, cx);
-        if focused {
+        let caret = self.input.update(cx, |input, cx| input.caret_visible(focused, cx));
+        if caret {
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);
             }
