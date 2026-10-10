@@ -1134,7 +1134,9 @@ pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Resul
             let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
         crate::platform::wakelock::set(store.settings.prevent_sleep);
+        agentty_bridge::voice::set_preferred_model(store.settings.voice.model.as_deref());
     });
+    crate::remote::refresh_voice(cx);
     cx.refresh_windows();
     Ok(())
 }
