@@ -1720,6 +1720,18 @@ strings! {
     "voice.nothing_heard" => ["Nothing heard", "인식된 말이 없어요", "音声が聞き取れませんでした", "没有识别到语音"],
     "voice.no_terminal" => ["Select a terminal first", "먼저 터미널을 선택하세요", "先にターミナルを選んでください", "请先选择一个终端"],
     "voice.terminal_closed" => ["The terminal was closed", "터미널이 닫혔어요", "ターミナルが閉じられました", "终端已关闭"],
+    "voice.claude_hint" => [
+        "Claude Code also dictates on its own: /voice, then hold Space (audio goes to Anthropic)",
+        "Claude Code 자체 받아쓰기도 있어요: /voice 후 Space 길게 (음성은 Anthropic 서버로 전송)",
+        "Claude Code にも独自の音声入力があります: /voice のあと Space を長押し（音声は Anthropic のサーバーへ送信）",
+        "Claude Code 也有自带的语音输入：输入 /voice 后长按空格（音频发送到 Anthropic 服务器）"
+    ],
+    "voice.codex_hint" => [
+        "Codex's /voice is a spoken conversation (it answers aloud), not dictation",
+        "Codex의 /voice는 받아쓰기가 아니라 음성 대화예요 (말로 답함)",
+        "Codex の /voice は音声入力ではなく音声での会話です（声で答えます）",
+        "Codex 的 /voice 是语音对话（用语音回答），不是听写"
+    ],
     "voice.agents_only" => [
         "Voice input is for Claude, Codex and other agent tabs",
         "음성 입력은 Claude·Codex 같은 에이전트 탭에서 쓸 수 있어요",
