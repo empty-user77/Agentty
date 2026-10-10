@@ -270,8 +270,11 @@ impl Element for EditorElement {
         let editor = self.editor.clone();
         editor.update(cx, |editor, cx| {
             let active = editor.active;
-            let focused = editor.focus_handle.is_focused(window);
+            // An inactive window has no blinking caret (like native fields); activation repaints.
+            let focused = editor.focus_handle.is_focused(window) && window.is_window_active();
             let Some(doc) = editor.docs.get_mut(active) else {
+                // No document: no caret, and no timer redrawing nothing.
+                editor.blink.stop();
                 return Prepainted {
                     text_bounds: bounds,
                     lines: Vec::new(),

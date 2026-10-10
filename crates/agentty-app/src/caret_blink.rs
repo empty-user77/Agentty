@@ -2,7 +2,9 @@
 //!
 //! Like a native macOS field: shown for [`HALF_PERIOD`], hidden for [`HALF_PERIOD`], solid again as
 //! soon as the caret moves or the text changes (so the blink restarts after a pause), and no caret
-//! or timer at all while the field has no focus.
+//! or timer at all while the field has no focus (callers count an inactive window as no focus). The
+//! timer also stops by itself when the field was not painted since its last tick — hidden, or its
+//! element gone while the entity lives — and starts again with the next paint.
 
 use gpui::{Context, Task, WeakEntity};
 use std::hash::{Hash, Hasher};
@@ -27,13 +29,17 @@ pub struct CaretBlink {
     epoch: Instant,
     /// What the caret last looked like (position and text), to notice a move.
     key: Option<u64>,
-    /// Redraws the owner at every change; running only while the field is focused.
+    /// Redraws the owner at every change; running only while the field is focused and painted.
     timer: Option<Task<()>>,
+    /// Painted since the timer's last tick: a tick finding it unset stops the timer.
+    painted: bool,
+    /// The timer task ended on its own (nothing painted): the next paint starts a new one.
+    ended: bool,
 }
 
 impl Default for CaretBlink {
     fn default() -> Self {
-        Self { epoch: Instant::now(), key: None, timer: None }
+        Self { epoch: Instant::now(), key: None, timer: None, painted: false, ended: false }
     }
 }
 
@@ -58,12 +64,24 @@ impl CaretBlink {
             self.key = Some(key);
             self.epoch = Instant::now();
         }
-        if self.timer.is_none() {
+        self.painted = true;
+        if self.timer.is_none() || self.ended {
+            self.ended = false;
             self.timer = Some(cx.spawn(async move |this: WeakEntity<T>, cx| loop {
                 let Ok(wait) = this.update(cx, |owner, _| until_next_change(own(owner).epoch.elapsed())) else { break };
                 // A little past the change, so the redraw never lands just before it.
                 cx.background_executor().timer(wait + Duration::from_millis(2)).await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                let more = this.update(cx, |owner, cx| {
+                    let blink = own(owner);
+                    if !std::mem::take(&mut blink.painted) {
+                        // Not painted since the last tick: nobody sees this caret now.
+                        blink.ended = true;
+                        return false;
+                    }
+                    cx.notify();
+                    true
+                });
+                if !matches!(more, Ok(true)) {
                     break;
                 }
             }));
@@ -75,6 +93,8 @@ impl CaretBlink {
     pub fn stop(&mut self) {
         self.timer = None;
         self.key = None;
+        self.painted = false;
+        self.ended = false;
     }
 }
 
