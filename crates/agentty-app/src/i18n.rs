@@ -2559,6 +2559,7 @@ strings! {
     "sync.in_terminal" => ["In a terminal here", "여기 터미널에서 사용 중", "ここのターミナルで使用中", "在此处终端中"],
     "sync.open_there" => ["Open there", "그쪽에서 열림", "向こうで開いています", "在那边打开"],
     "sync.no_sessions" => ["No sessions synced for this workspace yet", "이 작업공간에서 동기화된 세션이 아직 없습니다", "このワークスペースで同期したセッションはまだありません", "此工作区还没有同步的会话"],
+    "sync.view_all" => ["View all", "모두 보기", "すべて表示", "查看全部"],
     "sync.devices" => ["Computers", "컴퓨터", "コンピュータ", "电脑"],
     "sync.connected_new" => ["Connected. The repository is set up for sync.", "연결되었습니다. 동기화용 저장소를 준비했습니다.", "接続しました。同期用にリポジトリを準備しました。", "已连接。仓库已设置为同步用。"],
     "sync.connected_joined" => ["Connected to a sync repository used by {n} computer(s).", "컴퓨터 {n}대가 쓰는 동기화 저장소에 연결되었습니다.", "{n} 台のコンピュータが使う同期リポジトリに接続しました。", "已连接到 {n} 台电脑使用的同步仓库。"],
