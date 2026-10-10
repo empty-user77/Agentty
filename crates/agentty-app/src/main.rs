@@ -18,6 +18,7 @@ mod browser_mcp;
 mod browser_profiles;
 mod build_info;
 mod capture;
+mod caret_blink;
 mod db_cli;
 mod debug;
 mod diagnostics;
