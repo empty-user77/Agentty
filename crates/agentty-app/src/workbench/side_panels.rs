@@ -40,6 +40,13 @@ impl Workbench {
         self.plugin_panel_shown_width(cx).min(self.dockable_width(cx).max(MIN_WIDTH))
     }
 
+    /// Width the floating plugin panel is drawn at: its stored width, but never wider than the
+    /// window bar the activity bar, so a width saved in a larger window cannot push the panel's
+    /// right part off screen. The stored width is kept for when the window grows again.
+    pub(super) fn plugin_overlay_width(&self, cx: &gpui::App) -> f32 {
+        overlay_width(self.plugin_panel_shown_width(cx), self.viewport_width)
+    }
+
     /// The most the plugin panel may take while docked.
     pub(super) fn dockable_width(&self, cx: &gpui::App) -> f32 {
         let prefs = crate::settings::settings(cx);
@@ -94,6 +101,9 @@ impl Workbench {
     pub(super) fn set_plugin_panel_mode(&mut self, plugin: &str, mode: PanelMode, _window: &mut gpui::Window, cx: &mut Context<Self>) {
         let id = mode.id().to_string();
         let chosen = plugin.to_string();
+        // Any mode set here is a choice (the layout menu, or the drag below, which records its own
+        // float again right after): a panel the user chose to float is not docked by a drag.
+        self.plugin_floated_by_drag = None;
         crate::settings::update_settings(cx, |settings| {
             settings.plugin_panel_modes.insert(chosen, id);
         });
@@ -164,6 +174,15 @@ impl Workbench {
                 let wanted = edge - pointer_x - 2.5;
                 if mode == PanelMode::Push && wanted > dockable {
                     self.set_plugin_panel_mode(&plugin, PanelMode::Overlay, window, cx);
+                    self.plugin_floated_by_drag = Some(plugin.clone());
+                } else if mode == PanelMode::Overlay
+                    && wanted <= dockable
+                    && self.plugin_floated_by_drag.as_deref() == Some(plugin.as_str())
+                {
+                    // Dragged back to a width the window can dock: it docks again, the way it
+                    // floated. A panel set to float from the layout menu stays floating.
+                    self.set_plugin_panel_mode(&plugin, PanelMode::Push, window, cx);
+                    self.plugin_floated_by_drag = None;
                 }
                 !self.plugin_panel_mode(&plugin, cx).is_docked()
             }
@@ -179,6 +198,13 @@ impl Workbench {
         });
         cx.notify();
     }
+}
+
+/// A floating panel's width in a window `viewport` wide: what was stored, within the window bar
+/// the activity bar and a margin to grab its edge, and never below [`MIN_WIDTH`].
+fn overlay_width(stored: f32, viewport: f32) -> f32 {
+    const GRAB_MARGIN: f32 = 24.;
+    stored.min(viewport - super::chrome::ACTIVITY_BAR_WIDTH - GRAB_MARGIN).max(MIN_WIDTH)
 }
 
 /// A side panel whose right edge is at `edge`, dragged to `pointer_x`: at least [`MIN_WIDTH`], and
@@ -201,5 +227,15 @@ mod tests {
         assert_eq!(side_width(1400., 10.), 1400. - MIN_TERMINALS);
         // A tiny window: never below the minimum.
         assert_eq!(side_width(500., 10.), MIN_WIDTH);
+    }
+
+    #[test]
+    fn a_floating_panel_never_runs_off_the_window() {
+        // Stored 877 wide, window 760: drawn within the window, edge still reachable.
+        assert_eq!(overlay_width(877., 760.), 760. - super::super::chrome::ACTIVITY_BAR_WIDTH - 24.);
+        // Room enough: the stored width.
+        assert_eq!(overlay_width(500., 1600.), 500.);
+        // A tiny window: never below the minimum.
+        assert_eq!(overlay_width(877., 200.), MIN_WIDTH);
     }
 }

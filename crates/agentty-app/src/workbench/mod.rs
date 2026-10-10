@@ -444,6 +444,9 @@ pub struct Workbench {
     board_jira: board_settings::JiraUi,
     /// Window width at the last render, for sizing the panels docked at the right.
     viewport_width: f32,
+    /// The plugin panel that a drag made float (wider than the window can dock); dragging it back
+    /// narrow enough docks it again. Not kept across restarts.
+    plugin_floated_by_drag: Option<String>,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
     chat_notify: notify_settings::ChatNotifyState,
     remote_page: remote_page::RemotePageState,
@@ -833,6 +836,7 @@ impl Workbench {
             board: Default::default(),
             board_jira: Default::default(),
             viewport_width: 1400.,
+            plugin_floated_by_drag: None,
             browser_home_input: None,
             chat_notify: Default::default(),
             remote_page: Default::default(),
