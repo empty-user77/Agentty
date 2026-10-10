@@ -636,7 +636,7 @@ impl Workbench {
                 .top_0()
                 .bottom_0()
                 .right_0()
-                .w(px(self.plugin_panel_shown_width(cx)))
+                .w(px(self.plugin_overlay_width(cx)))
                 .flex()
                 .shadow_lg()
                 // Floating over the page: a click on the panel is the panel's, never the page's.
