@@ -1206,7 +1206,8 @@ impl Workbench {
             // The sessions of the workspace in front, from every device.
             if let Some((ws, sync_id)) = self.front_sync_workspace() {
                 let title = tf(cx, "sync.this_workspace", &[("name", &self.workspace_title(ws, cx))]);
-                let mut list = div().flex().flex_col().gap_1();
+                // Scrolls on its own so a long history never pushes the popover off the window.
+                let mut list = div().id("sync-session-list").flex().flex_col().gap_1().max_h(px(420.)).overflow_y_scroll();
                 let open_here: Vec<String> = self.sync_sessions(ws, true, cx).into_iter().filter(|s| s.open).map(|s| s.id).collect();
                 let target = ws.id;
                 let flat = sync_id.as_deref().map(|id| self.synced_sessions(Some(id))).unwrap_or_default();
@@ -1277,7 +1278,8 @@ impl Workbench {
                             )),
                     );
                 }
-                for (index, (entry, depth)) in entries.into_iter().take(16).enumerate() {
+                let any_entries = !entries.is_empty();
+                for (index, (entry, depth)) in entries.into_iter().take(50).enumerate() {
                     let here = entry.device == self.sync.config.device_id;
                     // Only this computer's copy runs here; the same session from another one is a different copy.
                     let in_view = here && open_here.contains(&entry.id);
@@ -1345,6 +1347,22 @@ impl Workbench {
                                     .tooltip(crate::ui::Tooltip::text(t(cx, "sync.continue_hint"), None)),
                                 )
                             }),
+                    );
+                }
+                // Every session lives in the sync repository: "View all" opens it on GitHub.
+                if let Some(url) = self.sync.config.remote.as_ref().and_then(|r| r.web_url()).filter(|_| any_entries) {
+                    list = list.child(
+                        div()
+                            .id("sync-view-all")
+                            .px_2()
+                            .py_1()
+                            .t_caption()
+                            .text_color(hex(Chrome::ACCENT))
+                            .cursor_pointer()
+                            .hover(|s| s.underline())
+                            .tooltip(crate::ui::Tooltip::text(url.clone(), None))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_link(url.clone(), cx)))
+                            .child(t(cx, "sync.view_all")),
                     );
                 }
                 body = body.child(div().pt_1().t_caption().text_color(hex(Chrome::MUTED)).child(title)).child(list);
