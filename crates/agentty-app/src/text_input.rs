@@ -778,7 +778,8 @@ impl Element for TextElement {
             window.paint_quad(selection);
         }
         let line_height = window.line_height();
-        let focused = focus_handle.is_focused(window);
+        // An inactive window has no blinking caret (like native fields); activation repaints.
+        let focused = focus_handle.is_focused(window) && window.is_window_active();
         if !prepaint.lines.is_empty() {
             let lines = std::mem::take(&mut prepaint.lines);
             for (index, (_, line)) in lines.iter().enumerate() {
