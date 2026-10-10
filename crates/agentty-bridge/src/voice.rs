@@ -336,7 +336,7 @@ static LOADED: std::sync::Mutex<Option<Loaded>> = std::sync::Mutex::new(None);
 /// `None` to let whisper detect it. The model must already be installed.
 #[cfg(feature = "voice")]
 pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<String> {
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+    use whisper_rs::{FullParams, SamplingStrategy};
 
     if unavailable() == Some(Unavailable::Cpu) {
         bail!("this processor lacks the instructions on-device voice needs ({})", X86_REQUIRED.join(", "));
@@ -346,34 +346,7 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     if voiced_seconds(samples) < MIN_VOICED_SECONDS {
         return Ok(String::new());
     }
-    let path = model_path(model);
-    if !model_present(model) {
-        bail!("voice model {} is not installed", model.id);
-    }
-    // Only a file that matches its pinned hash is ever handed to whisper.cpp. A damaged one goes,
-    // so the setup offers the download again.
-    if !verified(&path, model.sha256) {
-        let _ = std::fs::remove_file(&path);
-        bail!("voice model {} was damaged and has been removed: download it again", model.id);
-    }
-
-    // Load (or reload, if the model changed) under the lock, then clone the `Arc` and release it,
-    // so the slow transcription below runs without blocking other requests.
-    let ctx = {
-        let mut guard = LOADED.lock().unwrap_or_else(|e| e.into_inner());
-        // Deleted while this request was on its way (`remove_model` holds this lock): don't load it.
-        if !model_present(model) {
-            bail!("voice model {} is not installed", model.id);
-        }
-        if guard.as_ref().map(|l| l.path != path).unwrap_or(true) {
-            // The GPU (Metal on macOS) when the build has it: large models need it to answer a
-            // prompt in about a second.
-            let ctx = WhisperContext::new_with_params(&path.to_string_lossy() as &str, WhisperContextParameters::default())
-                .map_err(|e| anyhow::anyhow!("load voice model: {e}"))?;
-            *guard = Some(Loaded { path: path.clone(), ctx: std::sync::Arc::new(ctx) });
-        }
-        guard.as_ref().expect("just set").ctx.clone()
-    };
+    let ctx = loaded_context(model)?;
 
     let mut state = ctx.create_state().map_err(|e| anyhow::anyhow!("voice state: {e}"))?;
     // Beam search finds noticeably better wording than taking the likeliest token each step; with
@@ -411,23 +384,88 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     Ok(if is_hallucination(&text) { String::new() } else { text })
 }
 
-/// Below this much speech in a clip (seconds of 30 ms frames above [`SPEECH_RMS`]), there is
-/// nothing to transcribe.
+/// The model, loaded and ready: loaded (or reloaded, if another model was in use) under the lock,
+/// whose `Arc` is then cloned so the slow transcription runs without blocking other requests.
+#[cfg(feature = "voice")]
+fn loaded_context(model: &Model) -> Result<std::sync::Arc<whisper_rs::WhisperContext>> {
+    use whisper_rs::{WhisperContext, WhisperContextParameters};
+
+    let path = model_path(model);
+    if !model_present(model) {
+        bail!("voice model {} is not installed", model.id);
+    }
+    // Only a file that matches its pinned hash is ever handed to whisper.cpp. A damaged one goes,
+    // so the setup offers the download again.
+    if !verified(&path, model.sha256) {
+        let _ = std::fs::remove_file(&path);
+        bail!("voice model {} was damaged and has been removed: download it again", model.id);
+    }
+    let mut guard = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+    // Deleted while this request was on its way (`remove_model` holds this lock): don't load it.
+    if !model_present(model) {
+        bail!("voice model {} is not installed", model.id);
+    }
+    if guard.as_ref().map(|l| l.path != path).unwrap_or(true) {
+        // The GPU (Metal on macOS) when the build has it: large models need it to answer a prompt
+        // in about a second.
+        let ctx = WhisperContext::new_with_params(&path.to_string_lossy() as &str, WhisperContextParameters::default())
+            .map_err(|e| anyhow::anyhow!("load voice model: {e}"))?;
+        // One short pass over silence prepares the GPU pipelines, which the first real prompt
+        // would otherwise wait for.
+        if let Ok(mut state) = ctx.create_state() {
+            let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
+            params.set_language(Some("en"));
+            params.set_print_special(false);
+            params.set_print_progress(false);
+            params.set_print_realtime(false);
+            params.set_print_timestamps(false);
+            let _ = state.full(params, &vec![0.0f32; SAMPLE_RATE as usize]);
+        }
+        *guard = Some(Loaded { path: path.clone(), ctx: std::sync::Arc::new(ctx) });
+    }
+    Ok(guard.as_ref().expect("just set").ctx.clone())
+}
+
+/// Loads the model ahead of a prompt — called when recording starts, so it is ready (and the GPU
+/// warmed up) by the time the person stops talking. Slow the first time, nothing afterwards.
+#[cfg(feature = "voice")]
+pub fn preload(model: &Model) {
+    let _ = loaded_context(model);
+}
+
+#[cfg(not(feature = "voice"))]
+pub fn preload(_model: &Model) {}
+
+/// Below this much speech in a clip, there is nothing to transcribe.
 #[cfg(feature = "voice")]
 const MIN_VOICED_SECONDS: f32 = 0.25;
-/// RMS of a 30 ms frame (samples in -1..1) above which it counts as speech rather than room noise.
+/// A 30 ms frame counts as speech when it is this many times louder (RMS) than the clip's own
+/// noise floor — relative, so quiet speech in a quiet room counts and steady noise does not.
 #[cfg(feature = "voice")]
-const SPEECH_RMS: f32 = 0.015;
+const OVER_NOISE: f32 = 3.0;
+/// …and at least this loud in absolute terms (samples in -1..1), so a silent clip's tiny
+/// fluctuations never count.
+#[cfg(feature = "voice")]
+const MIN_SPEECH_RMS: f32 = 0.003;
 /// whisper's own "no speech" probability above which a segment is dropped.
 #[cfg(feature = "voice")]
 const NO_SPEECH: f32 = 0.6;
 
-/// How many seconds of a 16 kHz clip are loud enough to be speech.
+/// How many seconds of a 16 kHz clip stand out from its noise floor as speech.
 #[cfg(feature = "voice")]
 fn voiced_seconds(samples: &[f32]) -> f32 {
     const FRAME: usize = 480; // 30 ms at 16 kHz
-    let voiced =
-        samples.chunks(FRAME).filter(|frame| (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt() > SPEECH_RMS).count();
+    let rms: Vec<f32> = samples.chunks(FRAME).map(|frame| (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt()).collect();
+    if rms.is_empty() {
+        return 0.0;
+    }
+    // The noise floor: the level the quietest fifth of the clip stays under (people pause, so
+    // part of every prompt is background).
+    let mut sorted = rms.clone();
+    sorted.sort_by(f32::total_cmp);
+    let floor = sorted[sorted.len() / 5];
+    let threshold = (floor * OVER_NOISE).max(MIN_SPEECH_RMS);
+    let voiced = rms.iter().filter(|level| **level > threshold).count();
     voiced as f32 * FRAME as f32 / SAMPLE_RATE as f32
 }
 
@@ -610,17 +648,50 @@ mod tests {
         assert!(!is_hallucination("git commit하고 PR 올려줘."));
     }
 
+    /// `secs` seconds of a tone at `amp` (peak), standing in for speech.
+    #[cfg(feature = "voice")]
+    fn tone(secs: f32, amp: f32) -> Vec<f32> {
+        (0..(16_000.0 * secs) as usize).map(|i| (i as f32 * 0.05).sin() * amp).collect()
+    }
+
+    /// Steady noise at about `amp` RMS (a cheap deterministic generator).
+    #[cfg(feature = "voice")]
+    fn noise(secs: f32, amp: f32) -> Vec<f32> {
+        let mut x: u32 = 12345;
+        (0..(16_000.0 * secs) as usize)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((x >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0) * amp * 1.7
+            })
+            .collect()
+    }
+
     #[cfg(feature = "voice")]
     #[test]
-    fn silence_and_room_noise_have_no_speech() {
-        let silence = vec![0.0f32; 16_000 * 3];
-        assert_eq!(voiced_seconds(&silence), 0.0);
-        // Steady low noise, well under speech level.
-        let hiss: Vec<f32> = (0..16_000 * 3).map(|i| if i % 2 == 0 { 0.005 } else { -0.005 }).collect();
-        assert!(voiced_seconds(&hiss) < MIN_VOICED_SECONDS);
-        // One second of a speech-loud tone counts as about a second of speech.
-        let tone: Vec<f32> = (0..16_000).map(|i| (i as f32 * 0.05).sin() * 0.2).collect();
-        assert!((voiced_seconds(&tone) - 1.0).abs() < 0.05);
+    fn silence_and_steady_noise_have_no_speech() {
+        assert_eq!(voiced_seconds(&vec![0.0f32; 16_000 * 3]), 0.0);
+        assert!(voiced_seconds(&noise(3.0, 0.002)) < MIN_VOICED_SECONDS);
+        assert!(voiced_seconds(&noise(3.0, 0.012)) < MIN_VOICED_SECONDS);
+        assert!(voiced_seconds(&noise(3.0, 0.05)) < MIN_VOICED_SECONDS);
+    }
+
+    #[cfg(feature = "voice")]
+    #[test]
+    fn quiet_speech_counts_against_its_own_background() {
+        // A pause, then a second of quiet "speech" (peak 0.01, RMS ~0.007), then a pause.
+        let mut quiet = vec![0.0f32; 16_000];
+        quiet.extend(tone(1.0, 0.01));
+        quiet.extend(vec![0.0f32; 16_000]);
+        assert!((voiced_seconds(&quiet) - 1.0).abs() < 0.1, "{}", voiced_seconds(&quiet));
+        // Speech over steady room noise.
+        let mut noisy = noise(1.0, 0.012);
+        let mut speech = noise(1.0, 0.012);
+        for (s, t) in speech.iter_mut().zip(tone(1.0, 0.15)) {
+            *s += t;
+        }
+        noisy.extend(speech);
+        noisy.extend(noise(1.0, 0.012));
+        assert!((voiced_seconds(&noisy) - 1.0).abs() < 0.1, "{}", voiced_seconds(&noisy));
     }
 
     #[test]
