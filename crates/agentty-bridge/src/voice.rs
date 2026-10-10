@@ -18,7 +18,7 @@ use crate::fsutil::data_dir;
 /// against `sha256` before it is trusted, so a tampered or truncated file is never loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Model {
-    /// Stable id used in settings and the API (`tiny`, `base`).
+    /// Stable id used in settings and the API (`small`, `large-v3-turbo`).
     pub id: &'static str,
     /// File name as stored in the data folder and served by Hugging Face.
     pub file: &'static str,
@@ -30,24 +30,36 @@ pub struct Model {
     pub bytes: u64,
 }
 
-/// The models the setup flow offers, smallest first. `base` is the default: noticeably better than
-/// `tiny` for non-English (e.g. Korean) while still a single modest file.
+/// The models the setup flow offers, smallest first. `tiny` and `base` were dropped: they get
+/// Korean (and English technical words inside Korean sentences) wrong too often to type prompts
+/// with. Large-v3 Turbo (5-bit) is the recommended default: close to Large-v3 for about a third of
+/// its size, and fast with the GPU (Metal on macOS).
 pub const MODELS: &[Model] = &[
     Model {
-        id: "tiny",
-        file: "ggml-tiny.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
-        sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-        bytes: 77_691_713,
+        id: "small",
+        file: "ggml-small.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        bytes: 487_601_967,
     },
     Model {
-        id: "base",
-        file: "ggml-base.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
-        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-        bytes: 147_951_465,
+        id: "large-v3-turbo",
+        file: "ggml-large-v3-turbo-q5_0.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        bytes: 574_041_195,
     },
 ];
+
+/// Files of models earlier versions offered; removed once a supported model is installed.
+const RETIRED_FILES: &[&str] = &["ggml-tiny.bin", "ggml-base.bin"];
+
+/// Words a developer says to an agent, given to whisper as its starting context so it spells them
+/// the way they are typed (in Korean sentences too) instead of guessing at the sounds.
+#[cfg(feature = "voice")]
+const VOCABULARY: &str = "Claude, Claude Code, Codex, Agentty, git, commit, push, pull request, PR, merge, \
+branch, rebase, worktree, diff, cargo, Rust, npm, TypeScript, React, Python, API, CLI, README, \
+refactor, debug, test, build, deploy, CI. git commit하고 PR 올려줘. cargo test 돌리고 refactor해줘.";
 
 /// Whether this build has on-device transcription (the `voice` feature, whisper.cpp) compiled in.
 pub const AVAILABLE: bool = cfg!(feature = "voice");
@@ -109,8 +121,8 @@ fn cpu_has(_feature: &str) -> bool {
     true
 }
 
-/// The default model id when none is chosen.
-pub const DEFAULT_MODEL: &str = "base";
+/// The default model id when none is chosen: the recommended one.
+pub const DEFAULT_MODEL: &str = "large-v3-turbo";
 
 /// Longest clip accepted, in seconds — a voice prompt, not a recording session. At 16 kHz mono
 /// f32 this also bounds memory and transcription time.
@@ -124,10 +136,44 @@ pub fn model(id: &str) -> Option<&'static Model> {
     MODELS.iter().find(|m| m.id == id)
 }
 
-/// The model voice input transcribes with: the default one when it is installed, else any installed
-/// one (someone may have set up only `tiny`). `None` while nothing is installed.
+/// The model the user chose as default (Settings → Voice input), if any. The app sets it at start
+/// and whenever the choice changes, so every caller of [`installed_model`] follows it.
+static PREFERRED: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+/// Use `id` (a [`MODELS`] id) whenever it is installed; `None` or an unknown id goes back to the
+/// recommended order.
+pub fn set_preferred_model(id: Option<&str>) {
+    *PREFERRED.lock().unwrap_or_else(|e| e.into_inner()) = id.and_then(model).map(|m| m.id);
+}
+
+/// The model voice input transcribes with: the one the user chose when it is installed, else the
+/// recommended one, else any installed one (someone may have set up only `small`). `None` while
+/// nothing is installed.
 pub fn installed_model() -> Option<&'static Model> {
-    model(DEFAULT_MODEL).filter(|m| model_present(m)).or_else(|| MODELS.iter().find(|m| model_present(m)))
+    let preferred = *PREFERRED.lock().unwrap_or_else(|e| e.into_inner());
+    preferred
+        .and_then(model)
+        .filter(|m| model_present(m))
+        .or_else(|| model(DEFAULT_MODEL).filter(|m| model_present(m)))
+        .or_else(|| MODELS.iter().find(|m| model_present(m)))
+}
+
+/// Deletes an installed model (and a partial download of it). If it is the one loaded in memory it
+/// is let go too; a transcription already running keeps its own reference until it ends.
+pub fn remove_model(m: &Model) -> Result<()> {
+    let path = model_path(m);
+    #[cfg(feature = "voice")]
+    {
+        let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+        if loaded.as_ref().is_some_and(|l| l.path == path) {
+            *loaded = None;
+        }
+    }
+    let _ = std::fs::remove_file(voice_dir().join(format!("{}.part", m.file)));
+    match std::fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e).with_context(|| format!("remove {}", path.display())),
+        _ => Ok(()),
+    }
 }
 
 /// `~/.agentty/voice` (or the `AGENTTY_DATA_DIR` equivalent), created on demand.
@@ -266,6 +312,10 @@ fn fetch_model(m: &Model, tmp: &Path, mut progress: impl FnMut(u64, u64)) -> Res
         bail!("downloaded {} failed checksum (got {got})", m.file);
     }
     std::fs::rename(tmp, &final_path).with_context(|| format!("install {}", final_path.display()))?;
+    // Models earlier versions offered are no longer used: give their space back.
+    for retired in RETIRED_FILES {
+        let _ = std::fs::remove_file(voice_dir().join(retired));
+    }
     Ok(())
 }
 
@@ -310,6 +360,8 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     let ctx = {
         let mut guard = LOADED.lock().unwrap_or_else(|e| e.into_inner());
         if guard.as_ref().map(|l| l.path != path).unwrap_or(true) {
+            // The GPU (Metal on macOS) when the build has it: large models need it to answer a
+            // prompt in about a second.
             let ctx = WhisperContext::new_with_params(&path.to_string_lossy() as &str, WhisperContextParameters::default())
                 .map_err(|e| anyhow::anyhow!("load voice model: {e}"))?;
             *guard = Some(Loaded { path: path.clone(), ctx: std::sync::Arc::new(ctx) });
@@ -318,7 +370,11 @@ pub fn transcribe(model: &Model, samples: &[f32], lang: Option<&str>) -> Result<
     };
 
     let mut state = ctx.create_state().map_err(|e| anyhow::anyhow!("voice state: {e}"))?;
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    // Beam search finds noticeably better wording than taking the likeliest token each step; with
+    // the GPU it costs little for a prompt-length clip.
+    let mut params = FullParams::new(SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 });
+    params.set_n_threads(std::thread::available_parallelism().map(|n| n.get().min(8) as i32).unwrap_or(4));
+    params.set_initial_prompt(VOCABULARY);
     // whisper.cpp's own default is English, which would turn Korean speech into an English
     // translation: no hint means detect the language from the audio.
     params.set_language(Some(lang.unwrap_or("auto")));
@@ -481,6 +537,13 @@ mod tests {
         assert!(!verified(&path, &good));
         assert!(!verified(&dir.join("missing.bin"), &good));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_recommended_model_is_turbo_and_offered() {
+        assert_eq!(DEFAULT_MODEL, "large-v3-turbo");
+        assert_eq!(MODELS.iter().map(|m| m.id).collect::<Vec<_>>(), ["small", "large-v3-turbo"]);
+        assert!(MODELS.iter().all(|m| !RETIRED_FILES.contains(&m.file)));
     }
 
     #[test]

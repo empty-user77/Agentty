@@ -375,12 +375,14 @@ impl Workbench {
         };
         self.voice_input.phase = Phase::Transcribing(id);
         cx.notify();
+        let lang = crate::settings::settings(cx).voice.language.code();
         let task = cx.background_spawn(async move {
             let bytes = std::fs::read(&file);
             let _ = std::fs::remove_file(&file);
             let samples = agentty_bridge::voice::wav_to_samples(&bytes?)?;
-            // Language detected from the speech: people often speak another language than the UI's.
-            agentty_bridge::voice::transcribe(model, &samples, None)
+            // The language chosen in the settings, else detected from the speech (people often speak
+            // another language than the UI's).
+            agentty_bridge::voice::transcribe(model, &samples, lang)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
