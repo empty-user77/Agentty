@@ -436,6 +436,17 @@ pub fn preload(model: &Model) {
 #[cfg(not(feature = "voice"))]
 pub fn preload(_model: &Model) {}
 
+/// Lets go of the loaded model. Call it before the process exits: with the Metal backend,
+/// whisper.cpp's GPU device is a static that is torn down at exit and asserts (aborting the app)
+/// if a context still holds GPU memory then, so a model left loaded turns every quit into a crash.
+#[cfg(feature = "voice")]
+pub fn unload() {
+    LOADED.lock().unwrap_or_else(|e| e.into_inner()).take();
+}
+
+#[cfg(not(feature = "voice"))]
+pub fn unload() {}
+
 /// Below this much speech in a clip, there is nothing to transcribe.
 #[cfg(feature = "voice")]
 const MIN_VOICED_SECONDS: f32 = 0.25;

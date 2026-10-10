@@ -685,6 +685,9 @@ fn main() {
         workbench::pin_installed_sidebar_plugins(cx);
         browser_keeper::start(cx);
         agentty_bridge::voice::set_preferred_model(settings::settings(cx).voice.model.as_deref());
+        // A voice model still loaded when the process exits makes whisper.cpp's Metal teardown
+        // abort: every quit after using voice would end in a crash report.
+        cx.on_app_quit(|_| async { agentty_bridge::voice::unload() }).detach();
         remote::init(cx);
         cx.spawn(async move |cx| {
             while let Some(envelope) = plugin_events.next().await {
