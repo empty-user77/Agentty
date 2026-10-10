@@ -73,7 +73,7 @@ Remote access stays on across restarts until you turn it off. It uses Tailscale 
 
 ## Voice input on the Mac
 
-You can also talk to your agents right in the app. The microphone shows in agent tabs (Claude Code, Codex, …) and chats — a plain shell has no use for a spoken prompt. Click the **microphone** at the right end of the status bar (or press **⇧⌘M**) and speak; the status bar shows **Recording 0:05** with a level meter while it listens.
+You can also talk to your agents right in the app. The microphone shows in agent tabs (Claude Code, Codex, …) and chats — a plain shell has no use for a spoken prompt. The agent CLIs have voice of their own too: Claude Code's `/voice` dictates into its prompt (hold Space; the audio is transcribed on Anthropic's servers and needs a claude.ai sign-in), and Codex's `/voice` is a spoken conversation in which Codex answers aloud, not dictation. Agentty's microphone works the same in every agent, in chats and on the remote page, and keeps the audio on your Mac. Click the **microphone** at the right end of the status bar (or press **⇧⌘M**) and speak; the status bar shows **Recording 0:05** with a level meter while it listens.
 
 - **⏎ Enter** — stop and send what you said to the terminal straight away, as a prompt.
 - **Click the microphone or ⇧⌘M again** — stop and only type the words in, to check or fix them before you send.

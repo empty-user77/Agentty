@@ -480,10 +480,23 @@ impl Workbench {
             Phase::Idle => {
                 let note = self.voice_input.note.as_ref().filter(|(text, _, _)| !text.is_empty());
                 let tip = if installed { t(cx, "voice.idle") } else { t(cx, "voice.setup_hint") };
+                // The agent CLI may have voice of its own; say what it is, so people pick the one
+                // they want (Claude Code's `/voice` dictates through Anthropic's servers; Codex's
+                // `/voice` is a spoken conversation, not dictation).
+                let cli = self.active_pane().and_then(|pane| pane.read(cx).agent_kind().and_then(PaneKind::agent));
+                let cli_hint = match cli {
+                    Some(agentty_bridge::model::Agent::Claude) => Some(t(cx, "voice.claude_hint")),
+                    Some(agentty_bridge::model::Agent::Codex) => Some(t(cx, "voice.codex_hint")),
+                    _ => None,
+                };
+                let tip = match cli_hint {
+                    Some(hint) => format!("{tip}\n{hint}"),
+                    None => tip.to_string(),
+                };
                 (
                     if self.voice_input.setup_open { Chrome::BRIGHT } else { Chrome::MUTED },
                     note.map(|(text, error, _)| (text.clone(), if *error { Chrome::ERROR } else { Chrome::MUTED })),
-                    tip.to_string(),
+                    tip,
                 )
             }
             Phase::Asking(_) => {
