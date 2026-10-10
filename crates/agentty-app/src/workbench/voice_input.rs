@@ -10,7 +10,7 @@ use crate::platform::mic::{self, Permission, Recorder};
 use crate::terminal::TerminalView;
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, TypeScale};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Focusable, WeakEntity, Window};
+use gpui::{div, prelude::*, px, AnyElement, App, ClickEvent, Context, Focusable, WeakEntity, Window};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -149,6 +149,11 @@ fn sends_to(view: &TerminalView) -> bool {
 }
 
 impl Workbench {
+    /// Whether a spoken prompt has a use in `pane`: an agent CLI runs in it, or it is a chat's lead.
+    fn takes_voice(&self, pane: &Pane, cx: &App) -> bool {
+        sends_to(pane.read(cx)) || self.chat_input_for(pane, cx).is_some()
+    }
+
     /// Whether the status bar's model setup is showing (its download bar needs redraws).
     pub(super) fn voice_setup_open(&self) -> bool {
         self.voice_input.setup_open
@@ -184,6 +189,10 @@ impl Workbench {
         let Some(pane) = self.active_pane() else {
             return self.mic_note(t(cx, "voice.no_terminal").to_string(), true, cx);
         };
+        // Words are for an agent: a plain shell has no use for a spoken prompt.
+        if !self.takes_voice(&pane, cx) {
+            return self.mic_note(t(cx, "voice.agents_only").to_string(), false, cx);
+        }
         if RECORDING.load(Ordering::SeqCst) {
             return self.mic_note(t(cx, "voice.busy").to_string(), true, cx);
         }
@@ -260,6 +269,10 @@ impl Workbench {
         // The model's file is checked against its hash while the person speaks, not after.
         if let Some(model) = agentty_bridge::voice::installed_model() {
             agentty_bridge::voice::verify_in_background(model);
+        }
+        // Load the model while the person talks, so the transcript is there right after they stop.
+        if let Some(model) = agentty_bridge::voice::installed_model() {
+            cx.background_spawn(async move { agentty_bridge::voice::preload(model) }).detach();
         }
         self.voice_input.phase = Phase::Recording { id, recorder, file, pane: pane.downgrade(), started: Instant::now() };
         cx.notify();
@@ -456,7 +469,10 @@ impl Workbench {
             return None;
         }
         let busy = !matches!(self.voice_input.phase, Phase::Idle);
-        if !busy && self.active_pane().is_none() {
+        // Shown where a spoken prompt has somewhere to go: an agent CLI, or a chat. A recording
+        // already running keeps showing wherever the person goes.
+        let for_agent = self.active_pane().is_some_and(|pane| self.takes_voice(&pane, cx));
+        if !busy && !for_agent && self.voice_input.note.is_none() {
             return None;
         }
         let installed = installed();

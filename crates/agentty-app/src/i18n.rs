@@ -1720,6 +1720,12 @@ strings! {
     "voice.nothing_heard" => ["Nothing heard", "인식된 말이 없어요", "音声が聞き取れませんでした", "没有识别到语音"],
     "voice.no_terminal" => ["Select a terminal first", "먼저 터미널을 선택하세요", "先にターミナルを選んでください", "请先选择一个终端"],
     "voice.terminal_closed" => ["The terminal was closed", "터미널이 닫혔어요", "ターミナルが閉じられました", "终端已关闭"],
+    "voice.agents_only" => [
+        "Voice input is for Claude, Codex and other agent tabs",
+        "음성 입력은 Claude·Codex 같은 에이전트 탭에서 쓸 수 있어요",
+        "音声入力は Claude・Codex などのエージェントタブで使えます",
+        "语音输入可在 Claude、Codex 等智能体标签页中使用"
+    ],
     "voice.busy" => ["Another window is recording", "다른 창에서 녹음 중이에요", "別のウィンドウで録音中です", "另一个窗口正在录音"],
     "voice.shell_typed" => [
         "Typed in, not run — this is a shell. Check it and press ⏎",
