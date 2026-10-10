@@ -16,7 +16,7 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 | `~/.agentty/handoffs/` | Session Flow와 에이전트 이전이 만든 컨텍스트 문서 |
 | `~/.agentty/connectors.json` | API 커넥터 정의(비밀 값 없음) |
 | `~/.agentty/agent-auth.json` | 새 에이전트 탭의 로그인 방식(비밀 값 없음) |
-| `~/.agentty/codex-home/` | API 키 로그인을 위한 전용 Codex 홈 |
+| `~/.agentty/codex-home/` | API 키 로그인용 전용 Codex 홈 |
 | `~/.agentty/worktrees/` | 세션별로 만들어진 워크트리 |
 | `~/.agentty/plugins/` | 설치된 플러그인 |
 | `~/.agentty/plugin-data/<id>/` | 각 플러그인의 데이터 |
@@ -55,7 +55,7 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 | `boldText` | 일반 텍스트를 굵게 그림. 원래 굵던 글씨는 한 단계 더 굵어짐 |
 | `colorBackground`, `colorForeground`, `colorCursor`, `colorSelection` | 직접 바꾼 테마 색. `0xRRGGBB` 값을 숫자로 적음 — JSON에는 16진 리터럴이 없어 `0x121212`는 `1184274` |
 | `scrollback` | 터미널마다 유지할 줄 수 |
-| `askDirectory` | 새 워크스페이스의 폴더를 묻기. `askDirectoryForTabs`는 탭에 대해 동일 |
+| `askDirectory` | 새 워크스페이스의 폴더를 묻기. `askDirectoryForTabs`는 탭에도 동일 |
 | `resumeBar` | 예전 세션이 있는 폴더에 들어가면 이어가기를 제안 |
 | `autoWorktree` | 작업 중인 프로젝트의 두 번째 세션에 전용 워크트리 제공 |
 | `agentTasks` | 에이전트가 병렬 작업 시작을 요청할 수 있게 하되 매번 확인 |

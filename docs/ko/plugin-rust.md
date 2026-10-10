@@ -19,14 +19,14 @@ Agentty가 모듈에 넘기는 함수는 셋뿐입니다.
 
 파일도, 소켓도, 환경 변수도, 프로세스도 없고, 저 카운터 말고는 시계도 없습니다. WebAssembly 플러그인은 **어떻게 작성했든** `~/.agentty`도, 여러분의 프로젝트도, 자격 증명도 읽을 수 없습니다. 읽지 않겠다고 약속해서가 아니라, 그럴 함수를 애초에 받지 못했기 때문입니다. 이외의 것을 import하는 모듈은 아예 로드되지 않습니다.
 
-나머지는 프로세스 플러그인이 stdout에 쓰는 것과 똑같은 JSON-RPC 메시지로 Agentty에 요청하고, `agentty-plugin.json`의 [권한](/docs/plugin-permissions)도 똑같이 검사됩니다.
+나머지는 프로세스 플러그인이 stdout에 쓰는 것과 똑같은 JSON-RPC 메시지로 Agentty에 요청하고 `agentty-plugin.json`의 [권한](/docs/plugin-permissions)도 똑같이 검사됩니다.
 
 > [!NOTE]
 > `runtime`이 `node`·`python`·`executable`인 플러그인은 정반대입니다. 이용자 권한으로 실행되며, 이용자가 직접 실행하는 다른 프로그램과 같은 접근 권한을 가집니다. 플러그인 페이지의 **정보 → 실행 방식**에 둘 중 무엇인지 표시됩니다.
 
 ## SDK
 
-Rust SDK는 [마켓플레이스 저장소](https://github.com/empty-user77/Agentty-Marketplace/tree/main/sdk/rust)의 `sdk/rust`에 있고, 그것으로 작성한 플러그인들이 옆에 함께 있습니다.
+Rust SDK는 [마켓플레이스 저장소](https://github.com/empty-user77/Agentty-Marketplace/tree/main/sdk/rust)의 `sdk/rust`에 있습니다. 이 SDK로 작성한 플러그인들도 옆에 함께 있습니다.
 
 ```toml
 # Cargo.toml
@@ -111,7 +111,7 @@ cp target/wasm32-unknown-unknown/release/hello.wasm hello.wasm
 
 ## 로고
 
-모듈에는 그림을 담을 파일 폴더가 없으므로, 모듈이 직접 그림을 들고 다닙니다. WebAssembly 커스텀 섹션 `agentty.logo`입니다. 엔진은 이 섹션을 무시하고, 마켓플레이스 엔트리의 체크섬이 이미 이 영역을 덮습니다 — 로고도 모듈의 나머지와 똑같이 리뷰된 바이트입니다. Rust에서는 static 하나입니다:
+모듈에는 그림을 담을 파일 폴더가 없으므로, 모듈이 직접 그림을 들고 다닙니다. WebAssembly 커스텀 섹션 `agentty.logo`입니다. 엔진은 이 섹션을 무시합니다. 마켓플레이스 엔트리의 체크섬이 이미 이 영역을 덮으므로 로고도 모듈의 나머지와 똑같이 리뷰된 바이트입니다. Rust에서는 static 하나입니다:
 
 ```rust
 #[used]

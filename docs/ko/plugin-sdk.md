@@ -6,7 +6,7 @@ description: 핸들러, 호출, 패널 UI 빌더, 컨텍스트 객체 — agentt
 `agentty-plugin.mjs`는 의존성이 없는 파일 하나입니다. 타입 정의는 같은 위치의 `agentty-plugin.d.ts`에 있습니다. 플러그인 페이지에서 **개발자 가이드**를 누르면 둘 다 `~/.agentty/plugins/.sdk/`에 풀립니다.
 
 > [!NOTE]
-> 이렇게 만든 플러그인은 이용자 컴퓨터에서 프로그램으로 실행되며 `PATH`에 Node.js 18 이상이 필요하고, 폴더나 Git 저장소에서 설치됩니다. [마켓플레이스](/docs/plugin-publishing)는 WebAssembly 모듈만 받습니다. 그쪽은 [Rust와 WebAssembly](/docs/plugin-rust)를 보세요.
+> 이렇게 만든 플러그인은 이용자 컴퓨터에서 프로그램으로 실행되며 `PATH`에 Node.js 18 이상이 필요합니다. 설치는 폴더나 Git 저장소에서 합니다. [마켓플레이스](/docs/plugin-publishing)는 WebAssembly 모듈만 받습니다. 그쪽은 [Rust와 WebAssembly](/docs/plugin-rust)를 보세요.
 
 ```js
 import { createPlugin, ui } from './agentty-plugin.mjs';
@@ -160,7 +160,7 @@ plugin.onEvent('notes', (event, context) => {
 | `shell` | 일반 셸 |
 | `exited` | 프로그램 종료 |
 
-방해하지 않을 판단을 할 때 `working`과 `thinking`은 같게 취급하세요.
+방해해도 되는지 판단할 때 `working`과 `thinking`은 같게 취급하세요.
 
 ## 프롬프트 보내기
 
