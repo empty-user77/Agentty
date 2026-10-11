@@ -15,10 +15,11 @@ pub const MANIFEST_FILE: &str = "agentty-plugin.json";
 /// | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
 /// | 4 | panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code` |
 /// | 5 | `tools/call` — tools a plugin offers AI agents through Agentty's MCP server (`mcp.tools`) |
+/// | 6 | `terminal/setProxy` — terminals opened from then on go through the plugin's proxy (`terminal.proxy`) |
 ///
 /// A plugin that uses something a version added says so, and an Agentty that speaks less than
 /// that tells the user to update instead of installing a module it cannot run.
-pub const API_VERSION: u32 = 5;
+pub const API_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -307,6 +308,7 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("browser.control", "Use the in-app browser on the sites it names, signed in as you"),
     ("files", "Keep files in a folder of its own (pictures, videos, drafts)"),
     ("mcp.tools", "Answer AI agents in Agentty through the tools it offers (MCP)"),
+    ("terminal.proxy", "Send the network traffic of terminals opened from now on through its proxy on this computer"),
 ];
 
 impl Manifest {
@@ -386,6 +388,14 @@ impl Manifest {
         }
         if self.has_permission("mcp.tools") && self.api_version < 5 {
             bail!("plugin \"{}\": mcp.tools needs apiVersion 5", self.id);
+        }
+        // A proxy is a listening socket, which a module cannot open: in a wasm plugin the
+        // permission could only ever point terminals at something else's port.
+        if self.has_permission("terminal.proxy") && self.runtime == Runtime::Wasm {
+            bail!("plugin \"{}\": terminal.proxy is for plugins that run as a program", self.id);
+        }
+        if self.has_permission("terminal.proxy") && self.api_version < 6 {
+            bail!("plugin \"{}\": terminal.proxy needs apiVersion 6", self.id);
         }
         if self.contributes.tools.len() > MAX_TOOLS {
             bail!("plugin \"{}\": at most {MAX_TOOLS} tools", self.id);

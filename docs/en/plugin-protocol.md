@@ -5,7 +5,7 @@ description: The JSON-RPC wire format behind the SDKs, the WebAssembly module AB
 
 The wire format, for writing a plugin without an SDK. The [Node.js SDK](/docs/plugin-sdk) and the [Rust SDK](/docs/plugin-rust) wrap all of it; read the [quick start](/docs/plugin-quickstart) first either way.
 
-API version **1** is everything on this page except `host/timer` and `pane/status`, which are version **2**, and the panel elements marked API 4 under [UI tree](#ui-tree), which are version **4**, and `tools/call`, which is version **5**.
+API version **1** is everything on this page except `host/timer` and `pane/status`, which are version **2**, and the panel elements marked API 4 under [UI tree](#ui-tree), which are version **4**, `tools/call`, which is version **5**, and `terminal/setProxy`, which is version **6**.
 
 ## Transport
 
@@ -56,6 +56,7 @@ Send these as requests (with an `id`) to get a result or an error, or as notific
 | `host/revealPath` | `workspace.read` | `{ path }` — absolute, existing | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` — focused pane without `paneId` | `{ paneId }` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }` (`token`: 16–128 letters, digits, `-`, `_`), or `{ port: null }` to stop — terminals opened from then on go through the plugin's proxy on 127.0.0.1 | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` — default 200, max 2000 | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |

@@ -56,6 +56,7 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 | `host/revealPath` | `workspace.read` | `{ path }` — 존재하는 절대 경로 | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` 또는 `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` — `paneId` 없으면 포커스된 페인 | `{ paneId }` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }` (`token`: 16~128자의 문자, 숫자, `-`, `_`) 또는 `{ port: null }` — 이후 여는 터미널은 플러그인의 127.0.0.1 프록시를 거침 | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` — 기본 200, 최대 2000 | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |

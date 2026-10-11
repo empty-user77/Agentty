@@ -49,7 +49,7 @@ description: agentty-plugin.json のすべてのフィールド — 識別情報
 |---|---|---|
 | `main` | 必須 | プラグインフォルダからの相対パスのエントリポイント |
 | `runtime` | `node` | `node`（ログインシェル `PATH` の Node.js 18+）、`python`（`python3 <main>`）、`executable`（`<main>` を直接実行）、または `wasm` — `<main>` が Agentty 自身の実行する WebAssembly モジュール。[Rust と WebAssembly](/docs/plugin-rust) を参照 |
-| `apiVersion` | `1` | 作成時に基準としたプラグイン API のバージョン。`2` は [AgentOS プラグイン](/docs/plugin-agentos)に必要な `host/timer` と `pane/status` を、`3` はアプリ内ブラウザ（`browser.control`）を、`4` はパネル要素 `card`、`grid`、`tabs`、`table`、`keyValue`、`stat`、`progress`、`callout`、`select`、`checkbox`、`code` を加えます（[パネルのデザイン](/docs/plugin-ui-guide)）。古いバージョンしか話せない Agentty は、実行できないものを入れる代わりにその旨を伝えます |
+| `apiVersion` | `1` | 作成時に基準としたプラグイン API のバージョン。`2` は [AgentOS プラグイン](/docs/plugin-agentos)に必要な `host/timer` と `pane/status` を、`3` はアプリ内ブラウザ（`browser.control`）を、`4` はパネル要素 `card`、`grid`、`tabs`、`table`、`keyValue`、`stat`、`progress`、`callout`、`select`、`checkbox`、`code` を加えます（[パネルのデザイン](/docs/plugin-ui-guide)）。`6` は新しいターミナルをプラグインのプロキシ経由にする `terminal/setProxy`（`terminal.proxy`）を加えます。古いバージョンしか話せない Agentty は、実行できないものを入れる代わりにその旨を伝えます |
 | `activationEvents` | `[]` | `["onStartup"]` なら Agentty と同時に起動、なければ最初の使用時 |
 
 Agentty はプラグインフォルダを作業ディレクトリとしてプログラムを起動します。`wasm` プラグインはプログラムを起動しません。モジュールは Agentty の中で動き、作業ディレクトリも環境変数もファイルもありません。
@@ -75,6 +75,7 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 | `session.read` | AI 会話の読み取り |
 | `workspace.read` | ワークスペース一覧の取得、コンテキストのフォルダ・タイトル項目の参照 |
 | `mcp.tools` | AI エージェントにツールを提供。`apiVersion: 5` と `contributes.tools` が必須 |
+| `terminal.proxy` | 新しいターミナルと AI セッションを、プラグインが動かすプロキシ経由にする。`apiVersion: 6` が必須、`wasm` は不可 |
 
 使うものだけを求めてください。一覧はインストール前に利用者へ表示され、権限のない呼び出しは失敗します。[プラグインの権限](/docs/plugin-permissions)を参照してください。
 
@@ -154,6 +155,8 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 ```
 
 プラグインは Agentty で動いている AI エージェント (Claude Code、Codex) へツールを提供できます。`mcp.tools` 権限と `apiVersion: 5` が必須で、一緒に宣言する必要があります。
+
+プラグインは、自分で動かすプロキシを経由させて新しいターミナルを通せます。`terminal.proxy` 権限と `apiVersion: 6` が必須で、`wasm` プラグインでは使えません。
 
 | フィールド | 必須 | 説明 |
 |---|---|---|

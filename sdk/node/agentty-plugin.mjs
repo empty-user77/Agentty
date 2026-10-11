@@ -12,8 +12,8 @@
 
 import { createInterface } from 'node:readline';
 
-export const SDK_VERSION = '1.2.0';
-export const API_VERSION = 5;
+export const SDK_VERSION = '1.3.0';
+export const API_VERSION = 6;
 
 /** Builders for the panel UI tree. Every interactive element needs an `id` unique in the panel. */
 export const ui = {
@@ -236,6 +236,14 @@ export function createPlugin(streams = {}) {
     /** Types text into a pane (Enter when `submit`). Needs `terminal.write`. */
     sendToTerminal({ paneId, text, submit = false }) {
       return call('terminal/send', { paneId, text, submit });
+    },
+    /**
+     * Terminals opened from now on go through the plugin's proxy at `127.0.0.1:<port>`, with
+     * `pane-<id>:<token>` as its user and password; `port: null` stops it. Needs `terminal.proxy`
+     * (API 6), and ends when the plugin stops.
+     */
+    setTerminalProxy({ port, token } = {}) {
+      return call('terminal/setProxy', { port: port ?? null, token });
     },
     /** Conversation of an agent pane: { agent, sessionId, title, cwd, status, turns: [{ role, text }] }. Needs `session.read`. */
     getSession({ paneId, maxTurns } = {}) {

@@ -272,8 +272,9 @@ impl Workbench {
     }
 
     pub(super) fn send_plugin_event(&mut self, plugin: &str, event: UiEvent, cx: &mut Context<Self>) {
-        // The user did something in the plugin's panel (typing in a field is not asking for anything).
-        if event.event != "change" {
+        // The user did something in the plugin's panel. Typing in a field is not asking for anything;
+        // ticking a checkbox or flipping a toggle (a change to `true` / `false`) is a click.
+        if event.event != "change" || matches!(event.value, Some(serde_json::Value::Bool(_))) {
             self.plugin_gesture.insert(plugin.to_string(), std::time::Instant::now());
         }
         let mut params = serde_json::to_value(event).unwrap_or_default();

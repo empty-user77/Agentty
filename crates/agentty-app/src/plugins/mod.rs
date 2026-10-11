@@ -3,6 +3,7 @@
 
 pub mod mcp;
 pub mod process;
+pub mod terminal_proxy;
 pub mod wasm;
 
 use agentty_bridge::plugins::manifest::Manifest;
@@ -635,6 +636,7 @@ pub fn send_if_running(id: &str, method: &str, params: Value, cx: &App) {
 
 pub fn stop(id: &str, cx: &mut App) {
     mcp::abandon(id, cx);
+    terminal_proxy::release(id);
     if let Some(runtime) = host_mut(cx).runtimes.get_mut(id) {
         if let Some(process) = runtime.process.take() {
             runtime.stopping = true;
@@ -757,6 +759,7 @@ pub fn handle(envelope: Envelope, cx: &mut App) {
         }
         ProcessEvent::Failed(error) => {
             mcp::abandon(&id, cx);
+            terminal_proxy::release(&id);
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
                 runtime.log(format!("error: {error}"));
                 runtime.state = RunState::Failed(error);
@@ -778,6 +781,8 @@ pub fn handle(envelope: Envelope, cx: &mut App) {
         }
         ProcessEvent::Exited(code) => {
             mcp::abandon(&id, cx);
+            // Its proxy went with it: terminals opened from now on must not point at a dead port.
+            terminal_proxy::release(&id);
             if let Some(runtime) = host_mut(cx).runtimes.get_mut(&id) {
                 runtime.process = None;
                 let status = code.map_or_else(|| "was terminated".to_string(), |c| format!("exited with code {c}"));
@@ -875,6 +880,22 @@ fn call(plugin_id: &str, request_id: Option<Value>, method: &str, mut params: Va
             })),
             cx,
         ),
+        // A link's author must not get to route the user's terminals anywhere.
+        "terminal/setProxy" if guarded => {
+            reply(Err((codes::PERMISSION_DENIED, "a plugin that a link reached may not set a proxy; restart it first".into())), cx)
+        }
+        "terminal/setProxy" => {
+            let port = params.get("port").and_then(Value::as_u64);
+            let token = params.get("token").and_then(Value::as_str);
+            let result = terminal_proxy::set(plugin_id, port, token);
+            if let (Ok(()), Some(runtime)) = (&result, host_mut(cx).runtimes.get_mut(plugin_id)) {
+                runtime.log(match port {
+                    Some(port) => format!("new terminals go through 127.0.0.1:{port}"),
+                    None => "new terminals no longer go through a proxy".into(),
+                });
+            }
+            reply(result.map(|()| Value::Null).map_err(|e| (codes::INVALID_PARAMS, e)), cx)
+        }
         "net/fetch" => fetch(plugin_id, request_id, params, cx),
         "files/download" => download(plugin_id, request_id, params, cx),
         "files/pick" => pick_files(plugin_id, request_id, params, cx),

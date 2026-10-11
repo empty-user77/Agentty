@@ -1878,6 +1878,7 @@ fn permission_strings(permission: &str) -> (&'static str, &'static str) {
         "browser.control" => ("plugins.perm.browser", "plugins.perm.browser.body"),
         "files" => ("plugins.perm.files", "plugins.perm.files.body"),
         "mcp.tools" => ("plugins.perm.mcp", "plugins.perm.mcp.body"),
+        "terminal.proxy" => ("plugins.perm.proxy", "plugins.perm.proxy.body"),
         _ => ("plugins.perm.unknown", "plugins.perm.unknown"),
     }
 }

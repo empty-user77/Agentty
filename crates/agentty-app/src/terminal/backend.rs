@@ -137,8 +137,8 @@ impl Backend {
         }
         env.extend(crate::shell_integration::environment(&program));
         env.extend(auth.pane_variables());
-        // Monitoring → Proxy: tabs opened while capture is on are routed through the capture proxy.
-        env.extend(crate::capture::pane_environment(options.pane_id));
+        // A plugin's capture proxy (`terminal/setProxy`): tabs opened while it is on go through it.
+        env.extend(crate::plugins::terminal_proxy::pane_environment(options.pane_id));
         let mut socket_token = None;
         if let Some(address) = options.signal_socket {
             env.insert("AGENTTY_SOCKET".into(), address.to_string());

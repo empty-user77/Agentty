@@ -56,6 +56,7 @@ stdin が閉じるか `shutdown` が来たら終了してください。`shutdow
 | `host/revealPath` | `workspace.read` | `{ path }` — 存在する絶対パス | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` または `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` — `paneId` がなければフォーカス中のペイン | `{ paneId }` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }`（`token`：16〜128 文字の英字・数字・`-`・`_`）または `{ port: null }` — 以後に開くターミナルは、プラグインの 127.0.0.1 のプロキシを経由する | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` — 既定 200、最大 2000 | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |

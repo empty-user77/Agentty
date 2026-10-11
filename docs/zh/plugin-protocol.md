@@ -56,6 +56,7 @@ Agentty 以插件文件夹作为工作目录启动程序：
 | `host/revealPath` | `workspace.read` | `{ path }` —— 存在的绝对路径 | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` 或 `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` —— 不带 `paneId` 时为聚焦窗格 | `{ paneId }` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }`（`token`：16–128 个字母、数字、`-`、`_`）或 `{ port: null }` —— 之后打开的终端经过插件在 127.0.0.1 上的代理 | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` —— 默认 200，最大 2000 | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
