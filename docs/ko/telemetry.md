@@ -12,6 +12,7 @@ description: Agentty가 자신에 관해 무엇을 보내는지, 그리고 끄�
 | 이벤트 | 속성 |
 |---|---|
 | `app_launched` | 실행 시 열린 창의 개수 |
+| `app_running` | — (Agentty가 켜져 있는 동안 5분마다, 직전 이벤트 이후 켜져 있던 시간과 함께) |
 | `window_opened` | — |
 | `pane_opened` | 어떤 종류의 페인인지: `shell`, `claude`, `codex`, `gemini` 등 |
 | `agent_turn_finished` | 어떤 종류의 에이전트가 턴을 마쳤는지 |

@@ -1,8 +1,10 @@
-//! Queues usage events and sends them to GA4 through `agentty_bridge::metrics` once a minute.
+//! Queues usage events and sends them to GA4 through `agentty_bridge::metrics` once a minute,
+//! with an `app_running` event every five minutes while the app is open.
 
 use gpui::App;
 use serde_json::Value;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 static QUEUE: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 
@@ -57,20 +59,37 @@ pub fn track(cx: &App, event: &'static str, props: Value) {
     }
 }
 
-/// Sends queued events every minute.
+/// How often `app_running` says the app is open. Each one carries the time since the previous,
+/// so GA's engagement time stays exact whatever this is; it only sets how many requests it takes.
+const RUNNING_EVERY: Duration = Duration::from_secs(5 * 60);
+
+/// Sends queued events every minute, plus `app_running` every five minutes while the app is open.
+/// Both ride one timer: no extra wake-ups, and at most one request a minute.
 pub fn start_uploads(cx: &mut App) {
     if !agentty_bridge::metrics::enabled() {
         return;
     }
-    cx.spawn(async move |cx| loop {
-        cx.background_executor().timer(std::time::Duration::from_secs(60)).await;
-        let events = QUEUE.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        // Consent can be withdrawn between two uploads: whatever was queued before is dropped.
-        let Some(device) = cx.update(|cx| allowed(cx).then(|| device(cx))).ok().flatten() else {
-            continue;
-        };
-        if !events.is_empty() {
-            cx.background_executor().spawn(async move { agentty_bridge::metrics::send(events, &device) }).await;
+    cx.spawn(async move |cx| {
+        let mut last_running = Instant::now();
+        loop {
+            cx.background_executor().timer(Duration::from_secs(60)).await;
+            let mut events = QUEUE.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+            // Consent can be withdrawn between two uploads: whatever was queued before is dropped.
+            let Some(device) = cx.update(|cx| allowed(cx).then(|| device(cx))).ok().flatten() else {
+                // Time without consent is never reported later.
+                last_running = Instant::now();
+                continue;
+            };
+            let open = last_running.elapsed();
+            if open >= RUNNING_EVERY {
+                // A computer that slept past a tick wasn't in use: count one interval at most.
+                let open = open.min(RUNNING_EVERY + Duration::from_secs(60));
+                events.push(agentty_bridge::metrics::app_running(open, env!("CARGO_PKG_VERSION"), os_version()));
+                last_running = Instant::now();
+            }
+            if !events.is_empty() {
+                cx.background_executor().spawn(async move { agentty_bridge::metrics::send(events, &device) }).await;
+            }
         }
     })
     .detach();
