@@ -12,6 +12,7 @@ description: Agentty が自分自身について何を送るか、そして止�
 | イベント | プロパティ |
 |---|---|
 | `app_launched` | 起動時に開いたウィンドウの数 |
+| `app_running` | —(Agentty が開いている間 5 分ごと、前回からの起動時間とともに) |
 | `window_opened` | — |
 | `pane_opened` | どの種類のペインか: `shell`、`claude`、`codex`、`gemini` など |
 | `agent_turn_finished` | どの種類のエージェントがターンを終えたか |

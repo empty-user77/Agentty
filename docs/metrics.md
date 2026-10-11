@@ -24,13 +24,14 @@ use GA's **Realtime** report or **DebugView**.
 | Event | Parameters |
 |---|---|
 | `app_launched` | `windows` |
+| `app_running` | — (every 5 minutes while the app is open; `engagement_time_msec` is the time since the previous one, at most 6 minutes) |
 | `window_opened` | — |
 | `pane_opened` | `tool`: `shell`, `claude`, `codex`, `gemini`, `agy`, … or `command` |
 | `agent_turn_finished` | `tool` |
 | `feature_used` | `feature`: `agentgit`, `flow`, `usage`, `settings`, `extensions`, `mini`, `browser_api` |
 
-Every event also carries `app_version`, `os_version` and a random install ID (`client_id`, stored
-in `~/.agentty/install_id`). Each request also describes the device, since Measurement Protocol
+Every event also carries `app_version`, `os_version`, a `session_id` (the launch time, one per run
+of the app) and a random install ID (`client_id`, stored in `~/.agentty/install_id`). Each request also describes the device, since Measurement Protocol
 requests have no device or location of their own:
 
 | Field | Value |
@@ -45,7 +46,9 @@ No IP address or location is looked up or sent: the country is the region the us
 system, not where the computer is. To see `app_version` and `os_version` in GA reports, register
 them as event-scoped custom dimensions (Admin → Custom definitions). Parameters are checked against an allow-list and must be short
 identifiers — paths, commands, prompts, output, repository and branch names are never sent.
-Events are queued and sent once a minute.
+Events are queued and sent once a minute. `app_running` rides the same timer, so someone who leaves
+an agent working without touching the window still counts as an active user, with no extra
+wake-ups and no more than one request a minute.
 
 ## Turning it off
 

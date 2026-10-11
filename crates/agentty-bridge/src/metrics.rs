@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 /// Every event Agentty may send; anything else is dropped.
-pub const EVENTS: &[&str] = &["app_launched", "pane_opened", "agent_turn_finished", "feature_used", "window_opened"];
+pub const EVENTS: &[&str] = &["app_launched", "app_running", "pane_opened", "agent_turn_finished", "feature_used", "window_opened"];
 
 /// Property keys allowed per event.
 fn allowed(event: &str, key: &str) -> bool {
@@ -58,6 +58,13 @@ pub fn install_id() -> String {
     id
 }
 
+/// GA `session_id`: one session per run of the app, its launch time in seconds. Without it GA
+/// groups Measurement Protocol events into no session and reports no engagement time.
+fn session_id() -> u64 {
+    static ID: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))
+}
+
 /// A GA4 event, or `None` if the event isn't allowed. Properties are filtered to the allow-list
 /// and to short identifiers.
 pub fn event(name: &str, props: &Value, app_version: &str, os_version: &str) -> Option<Value> {
@@ -78,9 +85,18 @@ pub fn event(name: &str, props: &Value, app_version: &str, os_version: &str) -> 
     }
     params.insert("app_version".into(), json!(app_version));
     params.insert("os_version".into(), json!(os_version));
+    params.insert("session_id".into(), json!(session_id()));
     // GA shows events without engagement time as inactive users.
     params.insert("engagement_time_msec".into(), json!(1));
     Some(json!({ "name": name, "params": params }))
+}
+
+/// `app_running`: the app has been open for `open` since the previous one, so GA counts someone
+/// who leaves an agent working for an hour without touching the window as active for that hour.
+pub fn app_running(open: std::time::Duration, app_version: &str, os_version: &str) -> Value {
+    let mut event = event("app_running", &json!({}), app_version, os_version).expect("app_running is in EVENTS");
+    event["params"]["engagement_time_msec"] = json!(open.as_millis().max(1) as u64);
+    event
 }
 
 /// What GA shows as the device and the country. Measurement Protocol requests carry none of it on
@@ -162,6 +178,16 @@ mod tests {
         assert!(event("keystroke", &json!({}), "0.2.0", "15.1").is_none());
         let event_value = event("feature_used", &json!({ "feature": "rm -rf /" }), "0.2.0", "15.1").unwrap();
         assert!(event_value["params"].get("feature").is_none());
+    }
+
+    #[test]
+    fn app_running_reports_the_time_open_in_the_run_session() {
+        let running = app_running(std::time::Duration::from_secs(300), "0.2.0", "15.1");
+        assert_eq!(running["name"], "app_running");
+        assert_eq!(running["params"]["engagement_time_msec"], 300_000);
+        let other = event("pane_opened", &json!({}), "0.2.0", "15.1").unwrap();
+        assert_eq!(other["params"]["engagement_time_msec"], 1);
+        assert_eq!(running["params"]["session_id"], other["params"]["session_id"]);
     }
 
     #[test]
