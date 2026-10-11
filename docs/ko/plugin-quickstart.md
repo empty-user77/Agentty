@@ -3,7 +3,7 @@ title: 플러그인 빠른 시작
 description: AI로, Rust로, 또는 JavaScript로 동작하는 Agentty 플러그인을 만들고 설치하기.
 ---
 
-플러그인은 매니페스트와 프로그램이 든 폴더입니다. 터미널 옆에 **패널**을 두고, 에이전트 페인 위에 **버튼**을 추가하고, **명령 팔레트**에 항목을 넣고, 텍스트를 **프롬프트**로 에이전트에 넘길 수 있습니다.
+플러그인은 매니페스트와 프로그램이 든 폴더입니다. 터미널 옆에 **패널**을 두거나, 에이전트 페인 위에 **버튼**을 추가하거나, **명령 팔레트**에 항목을 넣거나, 텍스트를 **프롬프트**로 에이전트에 넘길 수 있습니다.
 
 종류가 둘이고, 먼저 고르는 편이 좋습니다.
 
@@ -32,7 +32,7 @@ Agentty가 템플릿으로 플러그인을 만들고 — SDK, 타입 정의, 개
 권한은 prompt.inject와 workspace.read만 요청하고, 그 외에는 요청하지 마.
 ```
 
-그다음 코드를 검사하게 하고(`node --check main.mjs`, 또는 `cargo build --release --target wasm32-unknown-unknown`), Agentty의 플러그인 카드에서 **재시작**을 눌러 반영합니다. 오류는 같은 카드의 **로그**에 있습니다.
+그다음 코드를 검사하게 하고(`node --check main.mjs`, 또는 `cargo build --release --target wasm32-unknown-unknown`) Agentty의 플러그인 카드에서 **재시작**을 눌러 반영합니다. 오류는 같은 카드의 **로그**에 있습니다.
 
 > [!TIP]
 > 템플릿 폴더 밖에서 작업하는 에이전트에게 프롬프트를 쓴다면 [매니페스트 레퍼런스](/docs/plugin-manifest), [UI 트리](/docs/plugin-protocol#ui-트리), [프로토콜](/docs/plugin-protocol)을 가리켜 주세요. 이 세 페이지가 전부입니다.

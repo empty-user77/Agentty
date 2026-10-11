@@ -18,7 +18,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 | `executable` | `<main>` |
 | `wasm` | 없음 — `<main>`이 Agentty가 직접 실행하는 WebAssembly 모듈. [WebAssembly 플러그인](#webassembly-플러그인) 참고 |
 
-메시지는 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 객체이며 **한 줄에 하나**, UTF-8로, stdin(Agentty → 플러그인)과 stdout(플러그인 → Agentty)을 통해 오갑니다. 16MB가 넘는 줄은 거부됩니다. stdout의 JSON이 아닌 내용은 로그에 남고 무시되며, stderr는 플러그인 로그로 갑니다.
+메시지는 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 객체이며 **한 줄에 하나**, UTF-8로, stdin(Agentty → 플러그인)과 stdout(플러그인 → Agentty)으로 오갑니다. 16MB가 넘는 줄은 거부됩니다. stdout의 JSON이 아닌 내용은 로그에 남고 무시되며, stderr는 플러그인 로그로 갑니다.
 
 stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5초가 지나도 살아 있으면 `SIGTERM`을, 다시 1.5초 뒤에 `SIGKILL`을 받습니다. Agentty가 종료될 때는 둘 다 즉시 이어집니다.
 
@@ -83,11 +83,11 @@ AI 에이전트가 `tools/call`을 `{ name, arguments, context }`로 호출하�
 
 이용자가 직접 보낸 프롬프트도 추적됩니다. `target: "ask"`는 아직 페인이 없으므로 페인 id 없이 `{ status: "asked" }`로 응답하지만, 이용자가 고른 세션도 똑같이 지켜봅니다. 그 세션의 첫 `pane/status`가 플러그인이 어느 페인이 되었는지 알게 되는 지점입니다. 질문이 여럿 열려 있는 플러그인은 프롬프트에 붙인 `title`로 구분합니다.
 
-화면이 그려지고 있든 아니든 상태는 전달됩니다. 다른 창에 가려진 창이나 잠긴 화면의 창은 그려지지 않는데, 에이전트를 기다리는 플러그인이 이용자가 돌아오기를 기다리고 있어서는 안 되기 때문입니다. [AgentOS 플러그인](/docs/plugin-agentos)이 이 둘 위에 만들어져 있습니다.
+화면이 그려지고 있든 아니든 상태는 전달됩니다. 다른 창에 가려진 창이나 잠긴 화면의 창은 그려지지 않는데, 에이전트를 기다리는 플러그인이 이용자가 돌아오기를 기다리고 있어서는 안 되기 때문입니다. [AgentOS 플러그인](/docs/plugin-agentos)이 이 둘을 바탕으로 만들어졌습니다.
 
 ### 기억하기
 
-`storage/*`는 플러그인이 실행 사이에 기억하는 수단입니다. 자기 폴더의 JSON 문서 하나(`<데이터 폴더>/plugin-data/<plugin>/storage.json`, `0600`으로 생성)를 키로 읽고 씁니다. 키는 소문자·숫자·`.`·`-`·`_`이며 최대 64개, 총 1MB입니다. 프로세스로 실행되는 플러그인은 자기 파일을 쓸 수 있지만, WebAssembly 플러그인에는 파일이 없으므로 무언가를 남기는 수단은 이것뿐입니다.
+`storage/*`는 플러그인이 실행 사이에 기억하는 수단입니다. 자기 폴더의 JSON 문서 하나(`<데이터 폴더>/plugin-data/<plugin>/storage.json`, `0600`으로 생성)를 키로 읽고 씁니다. 키는 소문자·숫자·`.`·`-`·`_`이며 최대 64개, 총 1MB입니다. 프로세스로 실행되는 플러그인은 자기 파일을 쓸 수 있지만 WebAssembly 플러그인에는 파일이 없으므로 무언가를 남기는 수단은 이것뿐입니다.
 
 ### 오류 코드
 
@@ -208,6 +208,6 @@ API 4 요소를 쓰는 플러그인은 매니페스트에 `"apiVersion": 4`를 �
 
 ## Agentty 없이 테스트하기
 
-`node`·`python`·`executable` 플러그인은 stdin을 읽고 stdout에 쓰는 평범한 프로그램이므로 테스트에서 직접 구동할 수 있습니다. `initialize` 요청을 쓰고, 확인하고 싶은 알림을 이어서 보낸 뒤, 플러그인이 돌려주는 JSON을 검증하면 됩니다.
+`node`·`python`·`executable` 플러그인은 stdin을 읽고 stdout에 쓰는 평범한 프로그램이므로 테스트에서 직접 구동할 수 있습니다. `initialize` 요청을 쓰고 확인하고 싶은 알림을 이어서 보낸 뒤 플러그인이 돌려주는 JSON을 검증하면 됩니다.
 
 `wasm` 모듈도 방식은 같습니다. 위의 import 세 개를 제공할 수 있는 WebAssembly 런타임이면 무엇으로든 구동할 수 있습니다.
