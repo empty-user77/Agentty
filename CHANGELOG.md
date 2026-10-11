@@ -5,11 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-10-11
+
 ### Added
 - Plugin permission `terminal.proxy` and plugin API version 6 with `terminal/setProxy`: a plugin can route the terminals and AI sessions opened from then on through a proxy it runs on 127.0.0.1. The Node SDK adds `setTerminalProxy`.
 
 ### Changed
 - Proxy monitoring moved out of Agentty into the [Proxy Capture](https://github.com/empty-user77/agentty-proxy-capture) plugin, installed from Plugins → Install from Git. The Monitoring → Proxy tab is removed.
+- In a plugin's panel, ticking a checkbox or flipping a toggle counts as using the plugin, like a click, so the plugin
+  can act on it in your terminals right away. Typing in a field still does not.
+- The Korean user guide reads more naturally.
 
 ## [0.2.15] - 2026-10-10
 
