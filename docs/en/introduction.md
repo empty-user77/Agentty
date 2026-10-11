@@ -66,7 +66,7 @@ Today, plugins already add panels and automation workspaces, drive the in-app br
 | **Working trees** | A worktree per session, a panel that shows every tree, who works in it and what changed |
 | **Files & editor** | Project tree, a file editor with syntax colors and formatters, "Open in editor" for VS Code or Cursor |
 | **Extensions** | Skills, subagents, commands, plugins and MCP servers for Claude Code and Codex in one place |
-| **Monitoring** | Cost, tokens, cache hit rate and models from local transcripts; running AI processes; a capture proxy that lists what your tabs talk to |
+| **Monitoring** | Cost, tokens, cache hit rate and models from local transcripts; running AI processes |
 | **Plugins** | Panels, buttons, palette commands and `agentty://` links from other apps — see [Plugins](/docs/plugins-overview) |
 
 ## Platforms

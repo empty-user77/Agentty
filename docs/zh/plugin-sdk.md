@@ -52,6 +52,7 @@ plugin.start();
 | `revealPath(path)` —— 在文件管理器中显示 | `workspace.read` |
 | `injectPrompt(request)` | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
+| `setTerminalProxy({ port, token })` · `setTerminalProxy({ port: null })` | `terminal.proxy` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
 | `fetch(request)` —— HTTP 请求 | `net.request` |
@@ -196,6 +197,8 @@ plugin.tool('list_containers', async ({ args }) => {
 为了提供工具，插件必须声明 `mcp.tools` 权限和 `apiVersion: 5`。每个插件最多 32 个工具。查看[清单参考](/docs/plugin-manifest)了解架构和限制。
 
 ## 会话与终端
+
+要让新开的终端经过代理，请声明 `terminal.proxy` 权限和 `apiVersion: 6`，然后调用 `plugin.setTerminalProxy({ port, token })`。`plugin.setTerminalProxy({ port: null })` 用于停止代理。地址由 Agentty 根据端口在 127.0.0.1 上生成，插件无法把终端指向别处。详见[权限](/docs/plugin-permissions)。
 
 ```js
 const session = await plugin.getSession({ paneId: context.pane.id, maxTurns: 200 });

@@ -259,6 +259,8 @@ export interface Plugin {
   /** `submitted: false` when the text was typed but Enter left to the user (always, once a link reached the plugin). */
   injectPrompt(request: PromptRequest): Promise<{ status: 'sent' | 'asked'; paneId?: number; submitted?: boolean }>;
   sendToTerminal(request: { paneId?: number; text: string; submit?: boolean }): Promise<{ paneId: number; submitted?: boolean }>;
+  /** Terminals opened from now on go through `http://pane-<id>:<token>@127.0.0.1:<port>`; `port: null` stops it. Needs `terminal.proxy` (API 6). */
+  setTerminalProxy(request: { port: number | null; token?: string }): Promise<void>;
   getSession(request?: { paneId?: number; maxTurns?: number }): Promise<Session>;
   listWorkspaces(): Promise<WorkspaceInfo[]>;
   openUrl(url: string): Promise<void>;

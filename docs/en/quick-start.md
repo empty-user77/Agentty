@@ -73,7 +73,7 @@ Click a file in the files panel to open it in the editor next to your terminals 
 
 ## 7. See what it cost
 
-**⌥⌘U** opens Monitoring: cost, calls, cache hit rate, tokens, models, projects and tools — all computed from the transcript files already on your disk. The same page lists the AI processes that are running, and a capture proxy that shows what your tabs talk to.
+**⌥⌘U** opens Monitoring: cost, calls, cache hit rate, tokens, models, projects and tools — all computed from the transcript files already on your disk. The same page lists the AI processes that are running. What each tab talks to is shown by the Proxy Capture plugin.
 
 ## Worth knowing early
 

@@ -15,6 +15,7 @@ What a plugin may do is declared in advance, in `agentty-plugin.json`, and shown
 | `session.read` | Read the conversation of AI sessions open in Agentty | `session/get` |
 | `workspace.read` | See open workspaces, tabs, folders and agent status | `workspace/list`, `host/revealPath`, `pane/status` |
 | `mcp.tools` | Answer AI agents in Agentty through the tools it offers (MCP) | `tools/call` |
+| `terminal.proxy` | Route new terminals through its proxy; requires API version 6 | `terminal/setProxy` |
 
 A plugin's own storage and its panel need no permission. `storage/get`, `storage/set` and `storage/keys` are its own folder (`<data dir>/plugin-data/<id>/storage.json`, created `0600`), up to 64 keys and a megabyte. A WebAssembly plugin has no files of its own, so that is how it remembers anything.
 
@@ -115,6 +116,10 @@ A plugin that declares it has an **"Allow MCP connection"** switch on its Permis
 At most 32 tools per plugin; tool `name` is 1–48 lower-case letters, digits or `_`, starting with a letter. Each call times out after 120 seconds. Arguments and text handed to the agent have size limits — see the protocol for details.
 
 The plugin's answers go into the agent's context — treat them like any other tool output. Each call is logged (Logs tab) with the pane that called it.
+
+## Terminal proxy
+
+A plugin can ask Agentty to route the terminals and AI sessions you open through a proxy it runs on this computer (127.0.0.1), so it sees which hosts they reach and how much they send. You see the permission as **Route new terminals through its proxy**. Terminals already open are not changed; stopping the plugin ends it. Agentty builds the address from the port, so the plugin cannot point terminals anywhere else, and only one plugin holds the proxy at a time.
 
 ## Writing a plugin that deserves it
 

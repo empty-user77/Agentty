@@ -205,7 +205,6 @@ impl Workbench {
             (Page::Browsers, "page.monitoring", "⌥⌘U"),
             (Page::Usage, "page.usage", ""),
             (Page::Processes, "page.processes", ""),
-            (Page::Proxy, "page.proxy", ""),
             (Page::Worktrees, "page.worktrees", ""),
             (Page::Disk, "page.disk", ""),
             (Page::Browsers, "page.browsers", ""),

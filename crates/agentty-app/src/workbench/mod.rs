@@ -53,7 +53,6 @@ mod plugin_workspace;
 mod plugins_page;
 mod processes;
 mod prompt_dialog;
-mod proxy_page;
 mod remote_page;
 mod responsive;
 pub mod resume_hint;
@@ -304,8 +303,6 @@ pub enum Page {
     Flow,
     Usage,
     Processes,
-    /// Monitoring → the capture proxy: what tabs talk to.
-    Proxy,
     /// Monitoring → every git working tree on this computer.
     Worktrees,
     /// Monitoring → what fills the disk, and clearing build output and caches.
@@ -741,8 +738,6 @@ pub struct Workbench {
     onboarding: Option<onboarding::Onboarding>,
     /// The first-run tour opens once the system check finds the environment ready.
     onboarding_waits_for_setup: bool,
-    /// Monitoring → Proxy: the capture table and its filter.
-    proxy: proxy_page::ProxyPage,
     next_id: u64,
 }
 
@@ -783,12 +778,6 @@ impl Workbench {
                 }
                 _ => {}
             });
-        let proxy_filter = cx.new(|cx| TextInput::localized("", "proxy.filter", window, cx));
-        let proxy_subscription = cx.subscribe(&proxy_filter, |_, _, event: &crate::text_input::TextInputEvent, cx| {
-            if matches!(event, crate::text_input::TextInputEvent::Changed) {
-                cx.notify();
-            }
-        });
         let mut this = Self {
             slot,
             window_id: window.window_handle().window_id(),
@@ -1006,7 +995,6 @@ impl Workbench {
             plugins_page: Default::default(),
             onboarding: None,
             onboarding_waits_for_setup: false,
-            proxy: proxy_page::ProxyPage::new(proxy_filter, proxy_subscription),
             next_id: 1,
         };
         this.restore(window, cx);
@@ -3230,7 +3218,6 @@ impl Render for Workbench {
                 gpui::AnyView::from(usage).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
             Some(Page::Processes) => self.render_processes(cx).into_any_element(),
-            Some(Page::Proxy) => self.render_proxy_page(cx).into_any_element(),
             Some(Page::Worktrees) => self.render_tree_manager(cx).into_any_element(),
             Some(Page::Disk) => self.render_disk_page(cx).into_any_element(),
             Some(Page::Browsers) => self.render_browsers_page(cx).into_any_element(),
@@ -3751,7 +3738,6 @@ impl Workbench {
             Page::Flow => "flow",
             Page::Usage => "usage",
             Page::Processes => "processes",
-            Page::Proxy => "proxy",
             Page::Worktrees => "worktrees",
             Page::Disk => "disk",
             Page::Browsers => "browsers",
@@ -4031,10 +4017,6 @@ impl Workbench {
                     .collect();
                 let listeners: Vec<(u64, Vec<u16>)> =
                     self.servers.listeners.iter().map(|(pane, l)| (*pane, l.iter().map(|l| l.port).collect())).collect();
-                let records: Vec<serde_json::Value> = crate::capture::records()
-                    .iter()
-                    .map(|r| serde_json::json!({ "pane": r.pane, "method": r.method, "endpoint": r.endpoint(), "path": r.path, "status": r.status, "sent": r.sent, "received": r.received, "open": r.duration_ms.is_none(), "error": r.error }))
-                    .collect();
                 eprintln!(
                     "probe: {}",
                     serde_json::json!({
@@ -4048,7 +4030,6 @@ impl Workbench {
                         "db": self.db.debug_state(),
                         "chatNotify": self.chat_notify.debug_state(),
                         "sync": self.sync.debug_state(),
-                        "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
                         "plugins": {
                             "panel": self.plugin_panel,
@@ -4066,12 +4047,6 @@ impl Workbench {
                     })
                 );
             }
-            "capture" => match argument {
-                "stop" => crate::capture::stop(),
-                _ => {
-                    let _ = crate::capture::start();
-                }
-            },
             "edit" => self.debug_editor("edit", argument, window, cx),
             "editor" => {
                 let (command, argument) = argument.split_once(' ').unwrap_or((argument, ""));
@@ -4095,7 +4070,6 @@ impl Workbench {
                     "flow" => Some(Page::Flow),
                     "usage" => Some(Page::Usage),
                     "processes" => Some(Page::Processes),
-                    "proxy" => Some(Page::Proxy),
                     "worktrees" => Some(Page::Worktrees),
                     "disk" => Some(Page::Disk),
                     "browsers" => Some(Page::Browsers),

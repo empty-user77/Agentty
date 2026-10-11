@@ -323,15 +323,17 @@ and rotates it; `agentty browser viewport` / `browser_viewport` and the debug dr
 open in-app, opened in the in-app browser. When a pane closes, the shell's process tree is read *before* the pane is
 dropped, and whatever in it still listens gets `SIGTERM`, then `SIGKILL` three seconds later.
 
-## Monitoring → Proxy
+## Terminal proxy for plugins
 
-`capture.rs` is a forward proxy on `127.0.0.1` (std threads, no TLS code). Panes started while capture is on get
-`HTTPS_PROXY` / `HTTP_PROXY` of the form `http://pane-<id>:<token>@127.0.0.1:<port>`: the user name attributes a
-connection to its pane, the per-run random token keeps every other local process out (407). `CONNECT` is tunnelled
-untouched — no certificate, no decryption: host, bytes and timing only. Plain HTTP is forwarded one request per
-connection and records method, path (query values masked) and status, never headers or bodies. Records are a bounded
-in-memory ring. Once started the listener lives as long as the app, because panes keep pointing at it; stopping capture
-only stops recording. An upstream proxy from the app's own environment is chained.
+The capture proxy is a plugin now ([Proxy Capture](https://github.com/empty-user77/agentty-proxy-capture)); what stays
+in the app is `plugins/terminal_proxy.rs`, behind `terminal/setProxy` (`terminal.proxy`, plugin API 6). A plugin gives a
+port and a token; panes started from then on get `HTTPS_PROXY` / `HTTP_PROXY` of the form
+`http://pane-<id>:<token>@127.0.0.1:<port>`, built by the app — the address is always loopback, so a plugin cannot send a
+terminal's traffic off the machine this way. The user name attributes a connection to its pane, the token keeps every
+other local process out of the plugin's proxy. One plugin holds it at a time, and it is released when that plugin
+stops, exits or restarts. The variables are read in `terminal/backend.rs` off the main thread, hence a lock rather than
+app state. `platform/system_proxy.rs` only puts back the macOS proxy settings an older Agentty left pointed at its
+built-in capture proxy when it was killed.
 
 ## Monitoring → Worktrees and Disk
 

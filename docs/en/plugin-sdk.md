@@ -52,6 +52,7 @@ Every call returns a promise.
 | `revealPath(path)` — show a file in the file manager | `workspace.read` |
 | `injectPrompt(request)` | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
+| `setTerminalProxy({ port, token })` · `setTerminalProxy({ port: null })` | `terminal.proxy` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
 | `fetch(request)` — an HTTP request | `net.request` |
@@ -196,6 +197,8 @@ Register tools before calling `plugin.start()`. An agent calling the tool receiv
 A plugin must declare the `mcp.tools` permission and `apiVersion: 5` to offer tools. At most 32 tools per plugin. See [Manifest reference](/docs/plugin-manifest) for schema and limits.
 
 ## Sessions and terminals
+
+To route new terminals through a proxy, declare the `terminal.proxy` permission and `apiVersion: 6`, then call `plugin.setTerminalProxy({ port, token })`. `plugin.setTerminalProxy({ port: null })` stops it. Agentty builds the address on 127.0.0.1 from the port, so the plugin cannot point terminals anywhere else. See [Permissions](/docs/plugin-permissions).
 
 ```js
 const session = await plugin.getSession({ paneId: context.pane.id, maxTurns: 200 });

@@ -66,6 +66,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     // Which agents `prompt/inject` can start here, so a plugin offers only those.
     ("agent/list", Some("prompt.inject")),
     ("terminal/send", Some("terminal.write")),
+    // Terminals opened from now on go through the plugin's proxy on the loopback interface.
+    ("terminal/setProxy", Some("terminal.proxy")),
     ("session/get", Some("session.read")),
     ("workspace/list", Some("workspace.read")),
     // The in-app browser, signed in as the user: only on the sites the manifest names, and never

@@ -91,7 +91,7 @@ appears in the tab strip and the command in the palette (⇧⌘P).
 | `name`, `version` | required | shown in the store; `version` is `major.minor.patch` |
 | `main` | required | entry point, relative to the plugin folder |
 | `runtime` | `node` | `node` (Node.js 18+ from the login shell PATH), `python` (`python3 main`), `executable`, or `wasm` (see [Rust and WebAssembly](#rust-and-webassembly)) |
-| `apiVersion` | `1` | the plugin protocol this was written for — `2` for anything using `host/timer` or `pane/status`, `4` for tools offered to AI agents. Left out it is `1`, and an Agentty that speaks less than it says to update rather than running what it cannot |
+| `apiVersion` | `1` | the plugin protocol this was written for — `2` for anything using `host/timer` or `pane/status`, `5` for tools offered to AI agents, `6` for `terminal/setProxy`. Left out it is `1`, and an Agentty that speaks less than it says to update rather than running what it cannot |
 | `description`, `publisher`, `homepage`, `keywords` | | store listing; `homepage` must be `https://` |
 | `links` | `[]` | up to 6 `{ "label", "url" }` (https) shown as buttons on the store card — project site, docs, source |
 | `requires` | | `{ "name", "url", "note" }`: the app or service the plugin is for. The card says whether it was found (see `detect`) and offers the link when it wasn't |
@@ -145,6 +145,7 @@ plugin.start(); // after registering handlers
 | `revealPath(path)` — show a file in Finder | `workspace.read` |
 | `injectPrompt(request)` — see [Sending prompts](#sending-prompts) | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
+| `setTerminalProxy({ port, token })` · `setTerminalProxy({ port: null })` — API 6 | `terminal.proxy` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
 | `browser.sites()` · `open(url)` · `eval(tabId, fn, args)` · `wait` · `signIn(host)` … — the in-app browser on the manifest's sites ([protocol](protocol.md#the-browser-browsercontrol-api-version-3); example: [X Feed](https://github.com/empty-user77/agentty-social-manager/tree/main/x)) | `browser.control` |
@@ -416,6 +417,7 @@ be served from a release of a repository, or from the same host as the list itse
 | `workspace.read` | `listWorkspaces` |
 | `net.request` | `net/fetch` — HTTP requests to addresses the plugin chooses |
 | `mcp.tools` | tools the plugin offers to AI agents (Claude Code, Codex); requires `apiVersion: 5` and `contributes.tools` |
+| `terminal.proxy` | `setTerminalProxy` — route new terminals and AI sessions through a proxy the plugin runs on 127.0.0.1; requires `apiVersion: 6`; not for `wasm` plugins |
 | `browser.control` | `browser/*` — pages of the sites in `browser.sites`, in the browser the user is signed in to: reading them and acting there in the user's name. The user allows it in a dialog the first time; signing in is always the user's, and cookies never reach the plugin |
 
 `storage/get`, `storage/set` and `storage/keys` need no permission: they are the plugin's own

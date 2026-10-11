@@ -52,6 +52,7 @@ plugin.start();
 | `revealPath(path)` — 파일 관리자에서 보기 | `workspace.read` |
 | `injectPrompt(request)` | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
+| `setTerminalProxy({ port, token })` · `setTerminalProxy({ port: null })` | `terminal.proxy` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
 | `fetch(request)` — HTTP 요청 | `net.request` |
@@ -196,6 +197,8 @@ plugin.tool('list_containers', async ({ args }) => {
 플러그인은 `mcp.tools` 권한과 `apiVersion: 5`를 선언해야 도구를 제공할 수 있습니다. 플러그인당 최대 32개 도구입니다. 스키마와 제한은 [매니페스트 레퍼런스](/docs/plugin-manifest)를 보세요.
 
 ## 세션과 터미널
+
+새 터미널을 프록시로 보내려면 `terminal.proxy` 권한과 `apiVersion: 6`을 선언하고 `plugin.setTerminalProxy({ port, token })`를 호출합니다. `plugin.setTerminalProxy({ port: null })`는 프록시를 멈춥니다. 주소는 Agentty가 포트로 127.0.0.1에 만들므로 플러그인은 터미널을 다른 곳으로 보낼 수 없습니다. [권한](/docs/plugin-permissions)을 보세요.
 
 ```js
 const session = await plugin.getSession({ paneId: context.pane.id, maxTurns: 200 });

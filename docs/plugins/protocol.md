@@ -1,4 +1,4 @@
-# Agentty plugin protocol (API version 4)
+# Agentty plugin protocol (API version 6)
 
 For writing plugins without the Node.js SDK. Read the [plugin guide](README.md) first; this page
 only describes the wire format.
@@ -10,6 +10,7 @@ only describes the wire format.
 | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
 | 4 | panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code` |
 | 5 | `tools/call` — tools a plugin offers to AI agents (`mcp.tools`) |
+| 6 | `terminal/setProxy` — terminals opened from then on go through the plugin's proxy (`terminal.proxy`) |
 
 A plugin that uses something a version added says so, with `apiVersion` in its manifest and in its
 marketplace entry. An Agentty that speaks less than that says to update rather than installing a
@@ -81,6 +82,7 @@ when you don't care.
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId, submitted }` |
 | `agent/list` | `prompt.inject` | `{}` | `[{ id, name, version?, models: [{ id, label }] }]` — the agents `prompt/inject` can start here (installed): `claude`, `codex`, with the models each was seen using (its default first) |
 | `terminal/close` | `prompt.inject` | `{ paneId }` — a terminal `prompt/inject` opened for this plugin (`newTab`, `newWorkspace`, `split`, `own`); any other is refused with `-32001` | `null` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }` (`token`: 16–128 letters, digits, `-`, `_`), or `{ port: null }` to stop — terminals opened from then on go through the plugin's proxy on 127.0.0.1 | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
@@ -110,8 +112,8 @@ pages, posts, mail — only this way, and check what it writes before acting on 
 **Whose terminals.** A plugin types freely only into terminals of its own: ones `prompt/inject`
 started for it (`newTab`, `newWorkspace`, `split`, `own`) and any in its own workspace. Another
 terminal — the user's own agents and shells, `active`, `pane`, `workspace` — takes a prompt or
-`terminal/send` only within 10 seconds of the user using the plugin (a click in its panel, one of
-its commands), and never while that terminal waits for the user to approve or answer something. A
+`terminal/send` only within 10 seconds of the user using the plugin (a click in its panel — ticking
+a checkbox or flipping a toggle included, typing in a field not — or one of its commands), and never while that terminal waits for the user to approve or answer something. A
 `prompt/inject` outside that goes to the `ask` dialog instead (`{ status: "asked" }`, not sent until
 the user sends it); `terminal/send` fails with `-32001`.
 
@@ -180,6 +182,8 @@ A pane is `idle` from the moment it opens, before the agent has picked the promp
 alone does not mean finished — wait until that pane has been `working` at least once. And an agent
 between two tool calls is idle for a moment, so a stop is worth giving a second or two before its
 session is read as the answer.
+
+`terminal/setProxy` (API version 6, `terminal.proxy`) sets the proxy that terminals opened from then on use. Agentty builds the address itself from the port — `http://pane-<paneId>:<token>@127.0.0.1:<port>` — so a plugin cannot point terminals anywhere else. Those terminals get `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and `https_proxy` with that address; `NO_PROXY` and `no_proxy` set to `localhost,127.0.0.1,::1` plus the user's own `NO_PROXY` entries; `NODE_USE_ENV_PROXY=1`; and `AGENTTY_CAPTURE=1`. Terminals already started keep the variables they got. Only one plugin holds the proxy at a time: while one does, another's call fails with `-32602`. The proxy is released when the plugin stops, exits or restarts. A plugin that an `agentty://` link reached gets `-32001` until it is restarted. The manifest needs `apiVersion: 6`, and a `wasm` plugin is refused, since a module cannot listen on a socket.
 
 `storage/*` is what a plugin remembers between runs: one JSON document in its own folder
 (`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. It goes

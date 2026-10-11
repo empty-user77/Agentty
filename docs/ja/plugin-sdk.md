@@ -52,6 +52,7 @@ plugin.start();
 | `revealPath(path)` — ファイルマネージャーで表示 | `workspace.read` |
 | `injectPrompt(request)` | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
+| `setTerminalProxy({ port, token })` · `setTerminalProxy({ port: null })` | `terminal.proxy` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
 | `fetch(request)` — HTTP リクエスト | `net.request` |
@@ -196,6 +197,8 @@ plugin.tool('list_containers', async ({ args }) => {
 プラグインはツールを提供するために `mcp.tools` 権限と `apiVersion: 5` を宣言する必要があります。プラグインあたり最大 32 個のツール。スキーマと制限は[マニフェストリファレンス](/docs/plugin-manifest)を参照してください。
 
 ## セッションとターミナル
+
+新しいターミナルをプロキシ経由にするには、`terminal.proxy` 権限と `apiVersion: 6` を宣言し、`plugin.setTerminalProxy({ port, token })` を呼びます。`plugin.setTerminalProxy({ port: null })` でプロキシを止めます。アドレスは Agentty がポートから 127.0.0.1 に組み立てるため、プラグインはターミナルを別の場所へ向けられません。詳しくは[権限](/docs/plugin-permissions)を参照してください。
 
 ```js
 const session = await plugin.getSession({ paneId: context.pane.id, maxTurns: 200 });
