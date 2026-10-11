@@ -102,6 +102,7 @@ impl Chrome {
     pub const BLUE: u32 = 0x4daafc;
     pub const ORANGE: u32 = 0xe8a33d;
     pub const GREEN: u32 = 0x4ec9b0;
+    pub const PINK: u32 = 0xe36fa6;
     pub const FAVORITE: u32 = 0xf5c518;
 }
 

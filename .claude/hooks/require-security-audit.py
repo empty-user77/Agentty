@@ -18,6 +18,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 AUDIT = os.path.join(ROOT, "scripts", "security-audit.py")
+MARK_FILE = "agentty-security-audit.json"  # in the git dir, as `security-audit.py --mark` writes it
 
 GIT = r"\bgit\b(?:\s+-[^\s]+(?:\s+[^\s-][^\s]*)?)*\s+"
 COMMIT = re.compile(GIT + r"commit\b([^|;&\n]*)")
@@ -38,8 +39,40 @@ def block(reason):
     sys.exit(2)
 
 
-def reviewed(what):
-    return subprocess.run([sys.executable, AUDIT, "--reviewed", what], capture_output=True, text=True).returncode == 0
+def reviewed(what, checkout):
+    if os.path.realpath(checkout) == os.path.realpath(ROOT):
+        return subprocess.run([sys.executable, AUDIT, "--reviewed", what], capture_output=True, text=True).returncode == 0
+    # A worktree has its own index and marker. Read here rather than by the worktree's copy of
+    # `security-audit.py`, which its branch could have changed; same marker as `--mark` writes.
+    tree = ask_git(checkout, "write-tree") if what == "commit" else ask_git(checkout, "rev-parse", "HEAD^{tree}")
+    marker = os.path.join(ask_git(checkout, "rev-parse", "--path-format=absolute", "--git-dir"), MARK_FILE)
+    try:
+        with open(marker, encoding="utf-8") as handle:
+            return bool(tree) and any(t.get("tree") == tree for t in json.load(handle).get("trees", []))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def ask_git(folder, *args):
+    return subprocess.run(["git", "-C", folder, *args], capture_output=True, text=True, check=False).stdout.strip()
+
+
+def gated_checkout(unquoted, invocation, before, cwd):
+    """The checkout whose review gates a git command: this one, or one of its worktrees — wherever it
+    lives, `.claude/worktrees/` included — or None for another repository.
+
+    A worktree has its own index and its own review marker, so it is gated by its own; asking this
+    checkout instead would block every reviewed commit made in a worktree.
+    """
+    folder = target(unquoted, invocation, before, cwd)
+    if folder is None:
+        return ROOT
+    root = os.path.realpath(ROOT)
+    shared = ask_git(ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if shared and ask_git(folder, "rev-parse", "--path-format=absolute", "--git-common-dir") == shared:
+        return ask_git(folder, "rev-parse", "--show-toplevel") or ROOT
+    inside = folder == root or folder.startswith(root + os.sep)
+    return ROOT if inside else None
 
 
 CD = re.compile(r"(?:^|[;&|(]\s*|\s)cd\s+([^\s;&|)]+)")
@@ -47,8 +80,9 @@ DASH_C = re.compile(r"\s-C\s+([^\s;&|)]+)")
 REDIRECTED = re.compile(r"--git-dir|--work-tree|\bGIT_DIR\b|\bGIT_WORK_TREE\b|\bpushd\b|\bpopd\b|\bchdir\b")
 
 
-def elsewhere(unquoted, invocation, before, cwd):
-    """Whether a git command runs in another repository (a scratch repository of a test, say).
+def target(unquoted, invocation, before, cwd):
+    """The folder a git command runs in (a scratch repository of a test, say), or None when it cannot
+    be told.
 
     Read off the command only: `git -C <dir>`, else the `cd <dir>` steps before it, starting from the
     tool's working directory. Whatever cannot be read — a variable, a substitution, a quoted path,
@@ -57,11 +91,10 @@ def elsewhere(unquoted, invocation, before, cwd):
     `cd` fails and the command goes on here). The gate fails closed.
     """
     if REDIRECTED.search(unquoted):
-        return False
+        return None
     steps = list(CD.finditer(before))
     if steps and ")" in before[steps[-1].end() :]:
-        return False
-    root = os.path.realpath(ROOT)
+        return None
 
     def plain(path):
         return path and not re.search(r"""[$`"'*?\\]""", path) and path != "-"
@@ -70,7 +103,7 @@ def elsewhere(unquoted, invocation, before, cwd):
     if explicit:
         path = explicit.group(1)
         if not plain(path):
-            return False
+            return None
         current = os.path.join(cwd, os.path.expanduser(path))
     else:
         current, known = cwd, True
@@ -83,11 +116,10 @@ def elsewhere(unquoted, invocation, before, cwd):
             elif known:
                 current = os.path.join(current, path)
         if not known:
-            return False
+            return None
     if not os.path.isdir(current):
-        return False
-    current = os.path.realpath(current)
-    return not (current == root or current.startswith(root + os.sep))
+        return None
+    return os.path.realpath(current)
 
 
 def main():
@@ -106,15 +138,17 @@ def main():
 
     cwd = event.get("cwd") or ROOT
     commit = COMMIT.search(unquoted)
-    if commit and not elsewhere(unquoted, commit.group(0), unquoted[: commit.start()], cwd):
+    checkout = commit and gated_checkout(unquoted, commit.group(0), unquoted[: commit.start()], cwd)
+    if checkout:
         if STAGING.search(unquoted[: commit.start()]):
             block("this command stages and commits in one go, so the committed tree cannot be the reviewed one.")
         if COMMIT_ALL.search(commit.group(1)):
             block("`git commit -a` (or --include/--only) commits files that were not staged when the change was reviewed.")
-        if not reviewed("commit"):
+        if not reviewed("commit", checkout):
             block("the staged tree has not been through the security audit.")
     push = PUSH.search(unquoted)
-    if push and not elsewhere(unquoted, push.group(0), unquoted[: push.start()], cwd) and not reviewed("push"):
+    checkout = push and gated_checkout(unquoted, push.group(0), unquoted[: push.start()], cwd)
+    if checkout and not reviewed("push", checkout):
         block("the commit being pushed (HEAD) has not been through the security audit.")
     return 0
 
