@@ -171,7 +171,33 @@ fn footprint(pid: i32) -> u64 {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Memory a process uses as Task Manager counts it ("Memory (private working set)" is close; this
+/// is the private commit, what the process holds whether or not it is in RAM right now).
+#[cfg(windows)]
+fn footprint(pid: i32) -> u64 {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: the handle is checked before use and closed after; `counters` matches the size passed.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+        if process.is_null() {
+            return 0;
+        }
+        let mut counters: PROCESS_MEMORY_COUNTERS_EX = std::mem::zeroed();
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+        let ok =
+            K32GetProcessMemoryInfo(process, (&mut counters as *mut PROCESS_MEMORY_COUNTERS_EX).cast::<PROCESS_MEMORY_COUNTERS>(), size);
+        CloseHandle(process);
+        if ok != 0 {
+            counters.PrivateUsage as u64
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn footprint(_pid: i32) -> u64 {
     0
 }
@@ -190,7 +216,22 @@ pub(super) fn system_memory() -> u64 {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+pub(super) fn system_memory() -> u64 {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: `status` is a MEMORYSTATUSEX with its length set, as the call requires.
+    unsafe {
+        let mut status: MEMORYSTATUSEX = std::mem::zeroed();
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut status) != 0 {
+            status.ullTotalPhys
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 pub(super) fn system_memory() -> u64 {
     0
 }

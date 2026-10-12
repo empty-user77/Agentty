@@ -12,7 +12,7 @@ Agentty는 macOS에서 개발되며 macOS가 기준 플랫폼입니다. 세 플�
 | 페인 셸 | `$SHELL` | PowerShell(설치돼 있으면 `pwsh`) | `$SHELL` |
 | 자격 증명 저장소 | 키체인 | 자격 증명 관리자 | Secret Service, 없으면 전용 파일 |
 | 알림 | 시스템 알림, 클릭하면 페인이 열림 | 토스트 | `notify-send` |
-| 인앱 브라우저 | Agentty 안에서 | 기본 브라우저 | 기본 브라우저 |
+| 인앱 브라우저 | Agentty 안에서 (WebKit) | Agentty 안에서 (WebView2) | 기본 브라우저 |
 | 메뉴 바 아이콘, 미니 모드 | ✓ | — | — |
 | 제목 표시줄 | Agentty 자체 | 시스템 | 시스템, 컴포지터에 장식이 없으면 Agentty 자체 |
 | 설치 | DMG | 설치 프로그램(사용자 단위) | `.deb` / `.rpm` |

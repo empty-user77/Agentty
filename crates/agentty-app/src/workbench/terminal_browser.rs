@@ -222,7 +222,7 @@ impl Workbench {
         // Private mode already gives every view a store of its own that is never kept.
         let apart = prefs.separate_sessions && !prefs.private_mode && crate::webview::profiles_supported();
         let profile = apart.then(|| *uuid::Uuid::new_v4().as_bytes());
-        let mut view = WebView::new_background_in(window, &prefs, profile).ok_or("the in-app browser is not available here")?;
+        let mut view = WebView::new_background_in(window, &prefs, profile).ok_or(super::BROWSER_MISSING)?;
         // Only now: WebKit crashes removing a store before it made its first view (its main run
         // loop is not set up yet).
         remove_left_profiles_once();
@@ -384,7 +384,8 @@ impl Workbench {
     pub(super) fn open_link_for_terminal(&mut self, pane: u64, url: String, opener: Opener, cx: &mut Context<Self>) {
         let in_app = settings(cx).link_opener == crate::settings::LinkOpener::InApp
             && super::browser::is_local_url(&url)
-            && crate::platform::HAS_WEBVIEW;
+            && crate::platform::HAS_WEBVIEW
+            && crate::webview::available();
         if !in_app {
             return self.open_link(url, cx);
         }

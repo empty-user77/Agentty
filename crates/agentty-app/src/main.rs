@@ -18,6 +18,7 @@ mod browser_mcp;
 mod browser_profiles;
 mod build_info;
 mod caret_blink;
+mod crash_log;
 mod db_cli;
 mod debug;
 mod diagnostics;
@@ -61,7 +62,8 @@ mod theme;
 mod tray_popover;
 mod ui;
 mod usage_view;
-#[cfg_attr(not(target_os = "macos"), path = "platform/fallback/webview.rs")]
+#[cfg_attr(windows, path = "platform/windows/webview.rs")]
+#[cfg_attr(not(any(target_os = "macos", windows)), path = "platform/fallback/webview.rs")]
 mod webview;
 mod workbench;
 
@@ -540,6 +542,10 @@ fn main() {
         std::process::exit(worktree_guard::run());
     }
 
+    if args.get(1).map(String::as_str) == Some("hang-dump") {
+        std::process::exit(crash_log::hang_dump(&args));
+    }
+
     if args.get(1).map(String::as_str) == Some("statusline") {
         std::process::exit(statusline::run());
     }
@@ -629,6 +635,10 @@ fn main() {
         single_instance::Lock::Unavailable => {}
     }
 
+    // A crash leaves its reason in `<data dir>/crash.log`.
+    crash_log::install();
+    // Windows: the keys the IME needs that gpui does not pass on (한/영, 한자, …).
+    platform::ime::install();
     // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
     platform::raise_file_limit();
     // An older Agentty killed while it had the machine captured: put its proxy settings back before
@@ -649,6 +659,8 @@ fn main() {
     });
     app.on_reopen(|cx| with_workbench(cx, |wb, window, cx| wb.handle_tray(status_item::TrayAction::Show, window, cx)));
     app.run(|cx: &mut App| {
+        // Windows: a UI thread that stops answering is noted, with a dump (see `crash_log`).
+        crash_log::watch_ui(cx);
         if let Err(err) = cx.text_system().add_fonts(FONTS.iter().map(|f| Cow::Borrowed(*f)).collect()) {
             eprintln!("agentty: failed to load bundled fonts: {err:#}");
         }

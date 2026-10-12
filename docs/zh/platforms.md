@@ -12,7 +12,7 @@ Agentty 在 macOS 上开发，macOS 是基准平台。三个平台都已提供�
 | 窗格 shell | `$SHELL` | PowerShell（装了就用 `pwsh`） | `$SHELL` |
 | 凭据存储 | 钥匙串 | 凭据管理器 | Secret Service，没有则用私有文件 |
 | 通知 | 系统通知，点击打开窗格 | Toast | `notify-send` |
-| 内置浏览器 | 在 Agentty 内 | 默认浏览器 | 默认浏览器 |
+| 内置浏览器 | 在 Agentty 内（WebKit） | 在 Agentty 内（WebView2） | 默认浏览器 |
 | 菜单栏图标、迷你模式 | ✓ | — | — |
 | 标题栏 | Agentty 自绘 | 系统 | 系统；合成器无装饰时由 Agentty 自绘 |
 | 安装 | DMG | 安装程序（按用户） | `.deb` / `.rpm` |

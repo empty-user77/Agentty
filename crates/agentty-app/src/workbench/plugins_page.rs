@@ -557,7 +557,7 @@ impl Workbench {
                 cx.listener(|this, _: &ClickEvent, _, cx| match super::guide::unpack() {
                     Ok(page) => {
                         this.page = None;
-                        this.open_browser(Some(super::guide::file_url(&page)), cx);
+                        this.show_file_in_browser(&page, cx);
                     }
                     Err(err) => this.plugins_message(err.to_string(), true, cx),
                 }),

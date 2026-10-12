@@ -543,12 +543,18 @@ impl EntityInputHandler for TextInput {
         self.marked_range = None;
     }
 
-    fn replace_text_in_range(&mut self, range_utf16: Option<Range<usize>>, new_text: &str, _: &mut Window, cx: &mut Context<Self>) {
+    fn replace_text_in_range(&mut self, range_utf16: Option<Range<usize>>, new_text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let range =
             range_utf16.as_ref().map(|r| self.range_from_utf16(r)).or(self.marked_range.clone()).unwrap_or(self.selected_range.clone());
         self.content = (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
+        // A finished syllable can come with the next one already begun (한 + ㄴ): that one goes
+        // back in as marked text after it (see `platform::ime`).
+        if let Some(pending) = crate::platform::ime::pending_composition(window) {
+            self.replace_and_mark_text_in_range(None, &pending, None, window, cx);
+            return;
+        }
         cx.emit(TextInputEvent::Changed);
         cx.notify();
     }

@@ -88,7 +88,10 @@ impl Workbench {
         self.servers.seen.retain(|key| live.contains(key));
         self.servers.pending.retain(|(pane, port, _)| live.contains(&(*pane, *port)));
         let prefs = settings(cx);
-        let wanted = prefs.link_opener == LinkOpener::InApp && prefs.browser.auto_open_servers && crate::platform::HAS_WEBVIEW;
+        let wanted = prefs.link_opener == LinkOpener::InApp
+            && prefs.browser.auto_open_servers
+            && crate::platform::HAS_WEBVIEW
+            && crate::webview::available();
         self.servers.settling.retain(|key, _| live.contains(key));
         // Agentty's own processes (a dev build, test binaries) serve pages for Agentty, not for the user.
         let own: HashSet<(u64, u16)> = self
