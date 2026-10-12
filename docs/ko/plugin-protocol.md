@@ -3,9 +3,9 @@ title: 플러그인 프로토콜
 description: SDK 뒤에서 오가는 JSON-RPC 와이어 포맷, WebAssembly 모듈 ABI, 그리고 모든 메시지와 제한, 오류 코드.
 ---
 
-SDK 없이 플러그인을 작성하기 위한 와이어 포맷입니다. [Node.js SDK](/docs/plugin-sdk)와 [Rust SDK](/docs/plugin-rust)가 전부 감싸 주며, 어느 쪽이든 [빠른 시작](/docs/plugin-quickstart)을 먼저 읽는 편이 좋습니다.
+SDK 없이 플러그인을 작성할 때 쓰는 와이어 포맷입니다. [Node.js SDK](/docs/plugin-sdk)와 [Rust SDK](/docs/plugin-rust)가 이 내용을 모두 감싸 줍니다. 어느 쪽이든 [빠른 시작](/docs/plugin-quickstart)을 먼저 읽으세요.
 
-API **버전 1**은 이 페이지에서 `host/timer`와 `pane/status`를 뺀 전부입니다. 그 둘은 **버전 2**이고, [UI 트리](#ui-트리)에서 API 4로 표시된 패널 요소는 **버전 4**, `tools/call`은 **버전 5**입니다.
+API **버전 1**은 이 페이지에서 아래 것들을 뺀 전부입니다. `host/timer`와 `pane/status`는 **버전 2**, [UI 트리](#ui-트리)에서 API 4로 표시된 패널 요소는 **버전 4**, `tools/call`은 **버전 5**, `terminal/setProxy`는 **버전 6**입니다.
 
 ## 전송 방식
 
@@ -18,7 +18,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 | `executable` | `<main>` |
 | `wasm` | 없음 — `<main>`이 Agentty가 직접 실행하는 WebAssembly 모듈. [WebAssembly 플러그인](#webassembly-플러그인) 참고 |
 
-메시지는 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 객체이며 **한 줄에 하나**, UTF-8로, stdin(Agentty → 플러그인)과 stdout(플러그인 → Agentty)으로 오갑니다. 16MB가 넘는 줄은 거부됩니다. stdout의 JSON이 아닌 내용은 로그에 남고 무시되며, stderr는 플러그인 로그로 갑니다.
+메시지는 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 객체이며 **한 줄에 하나**, UTF-8로, stdin(Agentty → 플러그인)과 stdout(플러그인 → Agentty)으로 오갑니다. 16MB가 넘는 줄은 거부됩니다. stdout에 나온 JSON이 아닌 내용은 로그에 남기고 무시합니다. stderr는 플러그인 로그로 갑니다.
 
 stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5초가 지나도 살아 있으면 `SIGTERM`을, 다시 1.5초 뒤에 `SIGKILL`을 받습니다. Agentty가 종료될 때는 둘 다 즉시 이어집니다.
 
@@ -36,7 +36,7 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 | `tools/call` | 요청 — 응답 필요 | `{ name, arguments, context }` — AI 에이전트가 도구를 호출함 (`mcp.tools`, API 5) |
 | `shutdown` | 알림 | `{}` |
 
-`initialize`가 먼저 오고, 곧바로 플러그인을 시작시킨 것(명령, 패널 열기, 링크)이 뒤따릅니다. `initialize`에는 아무 결과나 응답하면 됩니다(예: `{}`).
+`initialize`가 먼저 오고, 바로 뒤에 플러그인을 시작하게 한 메시지(명령, 패널 열기, 링크)가 옵니다. `initialize`에는 아무 결과나 응답하면 됩니다(예: `{}`).
 
 ## 플러그인 → Agentty
 
@@ -68,27 +68,27 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 
 ### 네트워크에 닿기
 
-`net/fetch`는 플러그인이 네트워크에 닿는 유일한 방법입니다. Agentty가 거는 제한 — 메서드, 헤더, 크기, 타임아웃, 리다이렉트 — 은 [권한](/docs/plugin-permissions#net-request로-할-수-있는-일)에 있습니다. 요약하면, 요청에는 여러분의 것이 아무것도 실리지 않습니다. 쿠키도 저장된 자격 증명도 없고, 플러그인이 직접 넣은 것만 갑니다.
+`net/fetch`는 플러그인이 네트워크에 닿는 유일한 방법입니다. Agentty가 거는 제한(메서드, 헤더, 크기, 타임아웃, 리다이렉트)은 [권한](/docs/plugin-permissions#net-request로-할-수-있는-일)에 정리해 두었습니다. 요약하면 요청에는 여러분의 것이 아무것도 실리지 않습니다. 쿠키도 저장된 자격 증명도 없고, 플러그인이 직접 넣은 것만 갑니다.
 
 ### 에이전트의 도구 호출에 응답하기 (API 4)
 
-AI 에이전트가 `tools/call`을 `{ name, arguments, context }`로 호출하면, 문자열, 어떤 JSON 값, 또는 MCP 형식 컨텐츠 `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }`로 응답하세요. 다른 컨텐츠 타입은 폐기됩니다. 또는 JSON-RPC 오류로 응답하세요. 그 메시지는 에이전트로 전달됩니다.
+AI 에이전트가 도구를 호출하면 Agentty가 `tools/call`을 `{ name, arguments, context }`로 보냅니다. 문자열, 어떤 JSON 값, 또는 MCP 형식 컨텐츠 `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }`로 응답하세요. 다른 컨텐츠 타입은 폐기됩니다. JSON-RPC 오류로 응답해도 됩니다. 그 메시지는 오류로 에이전트에 전달됩니다.
 
 플러그인은 120초 이내에 응답해야 합니다. 한 플러그인에서는 최대 8개 호출이 기다릴 수 있습니다. 인수는 최대 256KB입니다. 에이전트에 전달되는 텍스트는 100,000자에서 잘립니다.
 
 ### 기다리기, 그리고 에이전트가 끝난 것을 듣기
 
-`host/timer`는 플러그인이 기다리는 방법입니다. 시간이 지나면 응답되는 요청이고, 최소 100ms, 최대 1시간, 동시에 8개까지입니다. 모듈은 메시지를 처리하는 동안에만 실행되므로, 나중의 어떤 시점으로 돌아오는 수단은 이것이 전부입니다. 플러그인이 얻는 것은 그 응답뿐이라서 백그라운드 실행 수단이 되지 않습니다.
+`host/timer`로 플러그인은 기다릴 수 있습니다. 시간이 지나면 응답이 오는 요청이고 최소 100ms, 최대 1시간, 동시에 8개까지입니다. 모듈은 메시지를 처리하는 동안에만 실행되므로 나중에 다시 일을 이어 가려면 이것밖에 없습니다. 플러그인이 받는 것은 그 응답뿐이어서 백그라운드 실행 수단은 되지 못합니다.
 
-`pane/status`는 플러그인이 시작한 에이전트가 끝난 것을 듣는 방법입니다. 플러그인은 `prompt/inject`의 응답(`{ status: "sent", paneId }`)에서 페인 id를 알게 되고, Agentty는 어느 플러그인이 어느 페인을 시작했는지 기억했다가 그 플러그인에게만 상태 변화를 알립니다. `working`, `idle`, `finished`, `permission`, `question`, `interrupted`, `exited`, 그리고 마지막에 한 번 `closed`입니다. 동시에 최대 32개 페인까지 추적합니다.
+`pane/status`로 플러그인은 자기가 시작한 에이전트가 끝났는지 알 수 있습니다. 플러그인은 `prompt/inject`의 응답(`{ status: "sent", paneId }`)에서 페인 id를 얻습니다. Agentty는 어느 플러그인이 어느 페인을 시작했는지 기억했다가 그 플러그인에게만 상태 변화를 알립니다. `working`, `idle`, `finished`, `permission`, `question`, `interrupted`, `exited`, 그리고 마지막에 한 번 `closed`입니다. 동시에 최대 32개 페인까지 추적합니다.
 
-이용자가 직접 보낸 프롬프트도 추적됩니다. `target: "ask"`는 아직 페인이 없으므로 페인 id 없이 `{ status: "asked" }`로 응답하지만, 이용자가 고른 세션도 똑같이 지켜봅니다. 그 세션의 첫 `pane/status`가 플러그인이 어느 페인이 되었는지 알게 되는 지점입니다. 질문이 여럿 열려 있는 플러그인은 프롬프트에 붙인 `title`로 구분합니다.
+이용자가 직접 보낸 프롬프트도 추적됩니다. `target: "ask"`는 아직 페인이 없어서 페인 id 없이 `{ status: "asked" }`로 응답합니다. 그래도 이용자가 고른 세션을 똑같이 지켜봅니다. 플러그인은 그 세션의 첫 `pane/status`를 받고서야 어느 페인인지 알게 됩니다. 질문이 여럿 열려 있는 플러그인은 프롬프트에 붙인 `title`로 구분합니다.
 
-화면이 그려지고 있든 아니든 상태는 전달됩니다. 다른 창에 가려진 창이나 잠긴 화면의 창은 그려지지 않는데, 에이전트를 기다리는 플러그인이 이용자가 돌아오기를 기다리고 있어서는 안 되기 때문입니다. [AgentOS 플러그인](/docs/plugin-agentos)이 이 둘을 바탕으로 만들어졌습니다.
+화면이 그려지고 있든 아니든 상태는 전달됩니다. 다른 창에 가려진 창이나 잠긴 화면의 창은 그려지지 않습니다. 에이전트를 기다리는 플러그인이 이용자가 돌아올 때까지 기다려서는 안 됩니다. [AgentOS 플러그인](/docs/plugin-agentos)이 이 둘을 바탕으로 만들어졌습니다.
 
 ### 기억하기
 
-`storage/*`는 플러그인이 실행 사이에 기억하는 수단입니다. 자기 폴더의 JSON 문서 하나(`<데이터 폴더>/plugin-data/<plugin>/storage.json`, `0600`으로 생성)를 키로 읽고 씁니다. 키는 소문자·숫자·`.`·`-`·`_`이며 최대 64개, 총 1MB입니다. 프로세스로 실행되는 플러그인은 자기 파일을 쓸 수 있지만 WebAssembly 플러그인에는 파일이 없으므로 무언가를 남기는 수단은 이것뿐입니다.
+`storage/*`는 플러그인이 실행 사이에 기억하는 수단입니다. 자기 폴더의 JSON 문서 하나(`<데이터 폴더>/plugin-data/<plugin>/storage.json`, `0600`으로 생성)를 키로 읽고 씁니다. 키는 소문자·숫자·`.`·`-`·`_`로 쓰며 최대 64개, 총 1MB입니다. 프로세스로 실행되는 플러그인은 자기 파일을 쓸 수 있습니다. WebAssembly 플러그인은 파일이 없으니 무언가를 남기려면 이것을 써야 합니다.
 
 ### 오류 코드
 
@@ -118,7 +118,7 @@ AI 에이전트가 `tools/call`을 `{ name, arguments, context }`로 호출하�
 
 `"runtime": "wasm"`으로 지정하면 `main`은 Agentty가 자기 안에서 인터프리터로 실행하는 `.wasm` 모듈이 됩니다. 파일 하나가 macOS·Windows·Linux에서 그대로 동작합니다.
 
-모듈은 Agentty가 건네준 함수만 호출할 수 있습니다. 파일도, 소켓도, 환경 변수도, 프로세스도 없고, 카운터 말고는 시계도 없습니다. WebAssembly 플러그인은 어떻게 작성했든 `~/.agentty`도, 이용자의 프로젝트도, 자격 증명도 읽을 수 없습니다. Agentty에 원하는 것은 프로세스 플러그인이 stdout에 쓰는 것과 똑같은 메시지로 요청하고, 매니페스트의 권한도 똑같이 검사됩니다.
+모듈은 Agentty가 건네준 함수만 호출할 수 있습니다. 파일도, 소켓도, 환경 변수도, 프로세스도 없고, 카운터 말고는 시계도 없습니다. WebAssembly 플러그인은 어떻게 작성했든 `~/.agentty`도, 이용자의 프로젝트도, 자격 증명도 읽을 수 없습니다. Agentty에 무언가를 요청할 때는 프로세스 플러그인이 stdout에 쓰는 것과 똑같은 메시지를 보내며, 매니페스트의 권한도 똑같이 검사합니다.
 
 모듈이 export하는 것:
 
@@ -136,7 +136,7 @@ AI 에이전트가 `tools/call`을 `{ name, arguments, context }`로 호출하�
 | `log(ptr: i32, len: i32)` | 플러그인 로그에 남길 한 줄 |
 | `now_ms() -> i64` | Unix epoch 기준 밀리초 |
 
-메시지는 stdio로 오가는 것과 같은 JSON-RPC 객체이며, 호출마다 하나씩 줄바꿈 없이 전달됩니다. **이외의 것을 import하는 모듈은 로드되지 않습니다.** 64MB가 넘는 모듈도 거부되고, 메모리는 64MB로 제한되며, 메시지마다 작업량 예산이 있습니다. 돌아오지 않는 플러그인은 "제시간에 끝내지 못함"으로 중단되고, 메시지 하나를 처리하는 동안 256개가 넘는 메시지를 보내는 플러그인도 중단됩니다. `send`와 `log`를 합쳐서 세므로, 로그만 찍는 루프도 공짜가 아닙니다.
+메시지는 stdio로 오가는 것과 같은 JSON-RPC 객체이며, 호출마다 하나씩 줄바꿈 없이 전달됩니다. **이외의 것을 import하는 모듈은 로드되지 않습니다.** 64MB가 넘는 모듈도 거부하고 메모리는 64MB로 제한하며 메시지마다 작업량 예산을 둡니다. 돌아오지 않는 플러그인은 "제시간에 끝내지 못함"으로 중단됩니다. 메시지 하나를 처리하는 동안 256개가 넘는 메시지를 보내는 플러그인도 중단됩니다. `send`와 `log`를 합쳐서 세므로 로그만 찍는 루프도 공짜가 아닙니다.
 
 [Rust SDK](/docs/plugin-rust)가 이 모든 것을 감춰 줍니다.
 
@@ -203,12 +203,12 @@ graph    { id, nodes, edges?, height?, movable?, fill? }
 
 리스트 항목의 `tone`은 아이콘 색을 정하며 `badge`와 같은 값을 씁니다.
 
-`flow`는 단계 id를 `item`으로 담아 `select`를, `popover`는 닫기 버튼에서 `close`를 보냅니다. API 4부터: `tabs`는 탭 id와 함께 `change`, `table`은 행 id를 `item`으로 담아 `select`, `select`는 옵션 값과 함께 `change`, `checkbox`는 새 불리언과 함께 `change`를 보냅니다. API 5부터: `image`는 `click`을, 그리고 `[{ path, name, size }]`와 함께 `drop`을 보냅니다(`files/pick`처럼 플러그인 폴더에 복사된 경로). `graph`는 노드 헤더를 누르면 노드 id를 `item`으로 담아 `select`를, `movable`이면 헤더를 끌어 놓았을 때 노드를 `item`, `{ x, y }`를 `value`로 담아 `move`를 보냅니다 — 그 위치를 기억해 다시 보내 주세요.
+`flow`는 단계 id를 `item`으로 담아 `select`를, `popover`는 닫기 버튼에서 `close`를 보냅니다. API 4부터: `tabs`는 탭 id와 함께 `change`, `table`은 행 id를 `item`으로 담아 `select`, `select`는 옵션 값과 함께 `change`, `checkbox`는 새 불리언과 함께 `change`를 보냅니다. API 5부터: `image`는 `click`을, 그리고 `[{ path, name, size }]`와 함께 `drop`을 보냅니다(`files/pick`처럼 플러그인 폴더에 복사된 경로). `graph`는 노드 헤더를 누르면 노드 id를 `item`으로 담아 `select`를, `movable`이면 헤더를 끌어 놓았을 때 노드를 `item`, `{ x, y }`를 `value`로 담아 `move`를 보냅니다. 플러그인은 그 위치를 기억해 다시 보내 주세요.
 
 API 4 요소를 쓰는 플러그인은 매니페스트에 `"apiVersion": 4`를 적습니다. 실행 중인 Agentty가 그릴 수 있는 요소는 `host/info`의 `uiFeatures`에 있습니다. 무엇에 어떤 요소를 쓸지는 [패널 디자인](/docs/plugin-ui-guide)을 보세요.
 
 ## Agentty 없이 테스트하기
 
-`node`·`python`·`executable` 플러그인은 stdin을 읽고 stdout에 쓰는 평범한 프로그램이므로 테스트에서 직접 구동할 수 있습니다. `initialize` 요청을 쓰고 확인하고 싶은 알림을 이어서 보낸 뒤 플러그인이 돌려주는 JSON을 검증하면 됩니다.
+`node`·`python`·`executable` 플러그인은 stdin을 읽고 stdout에 쓰는 평범한 프로그램이므로 테스트에서 직접 구동할 수 있습니다. `initialize` 요청을 쓰고 확인할 알림을 이어서 보낸 뒤 플러그인이 돌려주는 JSON을 검증하면 됩니다.
 
 `wasm` 모듈도 방식은 같습니다. 위의 import 세 개를 제공할 수 있는 WebAssembly 런타임이면 무엇으로든 구동할 수 있습니다.

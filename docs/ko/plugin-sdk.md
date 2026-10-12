@@ -6,7 +6,7 @@ description: 핸들러, 호출, 패널 UI 빌더, 컨텍스트 객체 — agentt
 `agentty-plugin.mjs`는 의존성이 없는 파일 하나입니다. 타입 정의는 같은 위치의 `agentty-plugin.d.ts`에 있습니다. 플러그인 페이지에서 **개발자 가이드**를 누르면 둘 다 `~/.agentty/plugins/.sdk/`에 풀립니다.
 
 > [!NOTE]
-> 이렇게 만든 플러그인은 이용자 컴퓨터에서 프로그램으로 실행되며 `PATH`에 Node.js 18 이상이 필요합니다. 설치는 폴더나 Git 저장소에서 합니다. [마켓플레이스](/docs/plugin-publishing)는 WebAssembly 모듈만 받습니다. 그쪽은 [Rust와 WebAssembly](/docs/plugin-rust)를 보세요.
+> 이렇게 만든 플러그인은 이용자 컴퓨터에서 프로그램으로 실행되므로 `PATH`에 Node.js 18 이상이 있어야 합니다. 설치는 폴더나 Git 저장소에서 합니다. [마켓플레이스](/docs/plugin-publishing)는 WebAssembly 모듈만 받습니다. 그쪽은 [Rust와 WebAssembly](/docs/plugin-rust)를 보세요.
 
 ```js
 import { createPlugin, ui } from './agentty-plugin.mjs';
@@ -58,13 +58,13 @@ plugin.start();
 | `fetch(request)` — HTTP 요청 | `net.request` |
 | `log(...)` — 플러그인 로그(stderr)에 기록 | |
 
-프로토콜에는 `storage/get`·`storage/set`·`storage/keys`(플러그인 자기 폴더의 JSON 문서. 권한 불필요. 설정 동기화를 켜면 사용자의 다른 컴퓨터로도 함께 동기화됨)와, API 버전 2부터 `host/timer`·`pane/status`도 있습니다. Node 플러그인은 자기 파일을 써도 되지만 storage는 두 종류 모두에서 똑같이 동작합니다. [프로토콜](/docs/plugin-protocol)을 참고하세요.
+프로토콜에는 `storage/get`·`storage/set`·`storage/keys`도 있습니다. 플러그인 자기 폴더에 JSON 문서 하나로 저장되고, 권한이 필요 없습니다. 설정 동기화를 켜 두면 설정과 함께 이용자의 다른 컴퓨터로 동기화됩니다. API 버전 2부터는 `host/timer`·`pane/status`도 쓸 수 있습니다. Node 플러그인은 파일을 직접 써도 되지만 storage는 두 종류 모두에서 똑같이 동작합니다. [프로토콜](/docs/plugin-protocol)을 참고하세요.
 
 `plugin.info`에는 `initialize` 데이터가, `plugin.context`에는 최신 컨텍스트가 들어 있습니다.
 
 ## 패널
 
-패널은 폭 360px이고 세로로 스크롤됩니다. 플러그인이 트리로 설명하면 Agentty가 네이티브로 그리므로 앱과 이질감이 없고 웹뷰가 필요 없습니다. 무언가 바뀔 때마다 새 트리를 보내면 됩니다. 텍스트 필드는 다른 `value`를 보내지 않는 한 이용자가 입력한 값을 유지합니다.
+패널은 폭 360px이고 세로로 스크롤됩니다. 플러그인이 패널을 트리로 기술하면 Agentty가 네이티브로 그립니다. 그래서 앱과 잘 어울리고 웹뷰도 필요 없습니다. 무언가 바뀔 때마다 새 트리를 보내면 됩니다. 텍스트 필드는 다른 `value`를 보내지 않는 한 이용자가 입력한 값을 유지합니다.
 
 | 빌더 | 요소 | 이벤트 |
 |---|---|---|
@@ -145,7 +145,7 @@ plugin.onEvent('notes', (event, context) => {
 }
 ```
 
-플러그인이 보는 범위는 선언한 권한에 따라 달라집니다. 폴더와 이름 필드(`workspace.cwd`, `workspace.name`, `pane.cwd`, `pane.title`)에는 `workspace.read`가, `pane.sessionId`에는 `session.read`가 필요합니다. 권한이 없으면 id, `kind`, `tool`, `status`, `running`, 언어만 남습니다. 어느 페인이 포커스됐는지는 알 수 있어도 이용자가 어디서 작업하는지는 알 수 없습니다.
+플러그인이 보는 범위는 선언한 권한에 따라 달라집니다. 폴더와 이름 필드(`workspace.cwd`, `workspace.name`, `pane.cwd`, `pane.title`)에는 `workspace.read`가, `pane.sessionId`에는 `session.read`가 필요합니다. 권한이 없으면 id, `kind`, `tool`, `status`, `running`, 언어만 남습니다. 이것으로 어느 페인이 포커스됐는지는 알 수 있지만 이용자가 어디서 작업하는지는 알 수 없습니다.
 
 `kind`는 `claude`, `codex`, `shell`입니다. 다른 에이전트 CLI는 `shell` 페인에서 실행되며 `tool`이 이름을 알려줍니다.
 
@@ -179,7 +179,7 @@ await plugin.injectPrompt({
 - `ask`(기본값)는 **보낼 곳…**을 띄워 이용자가 목적지를 고르게 합니다.
 - `active`는 포커스된 페인에, `pane`은 `paneId`에, `workspace`는 `workspaceId`에 입력하고, `newWorkspace`·`newTab`은 그 프롬프트로 새 세션을 시작합니다.
 - 터미널에는 언제나 입력만 됩니다. `injectPrompt`는 Enter를 누르지 않습니다.
-- 60,000바이트가 넘는 프롬프트는 `~/.agentty/prompts/`에 저장되고 에이전트에게 그 파일을 읽으라고 전달됩니다.
+- 60,000바이트가 넘는 프롬프트는 `~/.agentty/prompts/`에 파일로 저장되고, 에이전트에게는 그 파일을 읽으라고 요청합니다.
 
 다른 앱이나 링크에서 시작된 것이라면 `ask`를 쓰세요.
 
@@ -192,13 +192,13 @@ plugin.tool('list_containers', async ({ args }) => {
 });
 ```
 
-`plugin.start()` 호출 전에 도구를 등록하세요. 에이전트가 도구를 호출하면 여러분의 응답(문자열, 어떤 JSON 값, MCP 형식 컨텐츠)을 받습니다. 핸들러에서 던진 오류는 도구 오류로 에이전트에 전송됩니다.
+`plugin.start()` 호출 전에 도구를 등록하세요. 에이전트가 도구를 호출하면 핸들러가 반환한 응답(문자열, 임의의 JSON 값, MCP 형식 콘텐츠)을 받습니다. 핸들러에서 던진 오류는 도구 오류로 에이전트에 전송됩니다.
 
 플러그인은 `mcp.tools` 권한과 `apiVersion: 5`를 선언해야 도구를 제공할 수 있습니다. 플러그인당 최대 32개 도구입니다. 스키마와 제한은 [매니페스트 레퍼런스](/docs/plugin-manifest)를 보세요.
 
 ## 세션과 터미널
 
-새 터미널을 프록시로 보내려면 `terminal.proxy` 권한과 `apiVersion: 6`을 선언하고 `plugin.setTerminalProxy({ port, token })`를 호출합니다. `plugin.setTerminalProxy({ port: null })`는 프록시를 멈춥니다. 주소는 Agentty가 포트로 127.0.0.1에 만들므로 플러그인은 터미널을 다른 곳으로 보낼 수 없습니다. [권한](/docs/plugin-permissions)을 보세요.
+새 터미널을 프록시로 보내려면 `terminal.proxy` 권한과 `apiVersion: 6`을 선언하고 `plugin.setTerminalProxy({ port, token })`를 호출합니다. `plugin.setTerminalProxy({ port: null })`는 프록시를 멈춥니다. 주소는 Agentty가 이 포트로 127.0.0.1에 만들기 때문에 플러그인이 터미널을 다른 곳으로 보낼 수는 없습니다. [권한](/docs/plugin-permissions)을 보세요.
 
 ```js
 const session = await plugin.getSession({ paneId: context.pane.id, maxTurns: 200 });
