@@ -11,11 +11,18 @@
 use agentty_db::engine::Session;
 use agentty_db::guard::{classify_sql, MongoOp, Verdict};
 use agentty_db::model::{ConnectionConfig, Engine, Secret};
+use agentty_db::schema::relations;
 
 const PASSWORD: &str = "example-not-a-real-pass";
 
 fn live() -> bool {
     std::env::var("AGENTTY_DB_LIVE").as_deref() == Ok("1")
+}
+
+/// The port of a test database: the one above, or `AGENTTY_DB_LIVE_<ENGINE>_PORT` when that one is
+/// taken on this machine.
+fn port(engine: &str, default: u16) -> u16 {
+    std::env::var(format!("AGENTTY_DB_LIVE_{engine}_PORT")).ok().and_then(|p| p.parse().ok()).unwrap_or(default)
 }
 
 fn config(engine: Engine, port: u16, user: &str, database: &str) -> ConnectionConfig {
@@ -101,21 +108,21 @@ fn sql_engine(engine: Engine, port: u16, user: &str) {
 #[test]
 fn mysql() {
     if live() {
-        sql_engine(Engine::MySql, 13306, "root");
+        sql_engine(Engine::MySql, port("MYSQL", 13306), "root");
     }
 }
 
 #[test]
 fn mariadb() {
     if live() {
-        sql_engine(Engine::MariaDb, 13307, "root");
+        sql_engine(Engine::MariaDb, port("MARIADB", 13307), "root");
     }
 }
 
 #[test]
 fn postgres() {
     if live() {
-        sql_engine(Engine::Postgres, 15432, "postgres");
+        sql_engine(Engine::Postgres, port("POSTGRES", 15432), "postgres");
     }
 }
 
@@ -124,7 +131,7 @@ fn mongodb() {
     if !live() {
         return;
     }
-    let mut session = connect(&config(Engine::MongoDb, 17017, "root", "shop"));
+    let mut session = connect(&config(Engine::MongoDb, port("MONGO", 17017), "root", "shop"));
     let _ = session.mongo_write(MongoOp::DropCollection, "items", &serde_json::Value::Null);
     let docs = serde_json::json!([{ "_id": 1, "name": "apple" }, { "_id": 2, "name": "pear" }, { "_id": 3, "name": "plum" }]);
     assert_eq!(session.mongo_write(MongoOp::InsertMany, "items", &docs).unwrap().affected, Some(3));
@@ -147,10 +154,97 @@ fn wrong_password_says_so() {
     if !live() {
         return;
     }
-    let mut bad = config(Engine::MySql, 13306, "root", "shop");
+    let mut bad = config(Engine::MySql, port("MYSQL", 13306), "root", "shop");
     bad.password = Some(Secret::new("example-wrong"));
     let error = Session::connect(&bad).err().expect("refused");
     let text = format!("{error:#}");
     assert!(text.contains("could not connect"), "{text}");
     assert!(!text.contains("example-wrong"), "the password never shows in errors");
+}
+
+/// The relationship diagram's reading of a database: comments, primary keys, declared foreign keys,
+/// and a reference the database does not declare.
+fn sql_schema(engine: Engine, port: u16, user: &str) {
+    let mut session = connect(&config(engine, port, user, "shop"));
+    let (users, settings, orders) = if engine == Engine::Postgres {
+        ("public.erd_users", "public.erd_user_settings", "public.erd_orders")
+    } else {
+        ("erd_users", "erd_user_settings", "erd_orders")
+    };
+    for statement in ["DROP TABLE IF EXISTS erd_orders", "DROP TABLE IF EXISTS erd_user_settings", "DROP TABLE IF EXISTS erd_users"] {
+        session.write(statement).unwrap();
+    }
+    let setup: &[&str] = match engine {
+        Engine::Postgres => &[
+            "CREATE TABLE erd_users (id BIGINT PRIMARY KEY, name VARCHAR(40))",
+            "COMMENT ON TABLE erd_users IS 'members'",
+            "COMMENT ON COLUMN erd_users.name IS 'display name'",
+            "CREATE TABLE erd_user_settings (id BIGINT PRIMARY KEY, erd_user_id BIGINT, theme TEXT)",
+            "CREATE TABLE erd_orders (id BIGINT PRIMARY KEY, erd_user_id BIGINT REFERENCES erd_users(id))",
+        ],
+        _ => &[
+            "CREATE TABLE erd_users (id BIGINT PRIMARY KEY, name VARCHAR(40) COMMENT 'display name') COMMENT 'members'",
+            "CREATE TABLE erd_user_settings (id BIGINT PRIMARY KEY, erd_user_id BIGINT, theme TEXT)",
+            "CREATE TABLE erd_orders (id BIGINT PRIMARY KEY, erd_user_id BIGINT, FOREIGN KEY (erd_user_id) REFERENCES erd_users(id))",
+        ],
+    };
+    for statement in setup {
+        session.write(statement).unwrap_or_else(|e| panic!("{statement}: {e:#}"));
+    }
+    let schema = session.schema().unwrap();
+    let user_table = schema.tables.iter().find(|t| t.name == users).unwrap_or_else(|| panic!("{schema:?}"));
+    assert_eq!(user_table.comment, "members");
+    assert!(user_table.columns[0].primary && user_table.columns[0].name == "id");
+    assert_eq!(user_table.columns[1].comment, "display name");
+    let found: Vec<(String, String, bool)> =
+        relations(&schema).into_iter().filter(|r| r.to_table == users).map(|r| (r.from_table, r.from_column, r.declared)).collect();
+    assert!(found.contains(&(orders.to_string(), "erd_user_id".to_string(), true)), "{found:?}");
+    assert!(found.contains(&(settings.to_string(), "erd_user_id".to_string(), false)), "{found:?}");
+    for statement in ["DROP TABLE erd_orders", "DROP TABLE erd_user_settings", "DROP TABLE erd_users"] {
+        session.write(statement).unwrap();
+    }
+}
+
+#[test]
+fn mysql_schema() {
+    if live() {
+        sql_schema(Engine::MySql, port("MYSQL", 13306), "root");
+    }
+}
+
+#[test]
+fn mariadb_schema() {
+    if live() {
+        sql_schema(Engine::MariaDb, port("MARIADB", 13307), "root");
+    }
+}
+
+#[test]
+fn postgres_schema() {
+    if live() {
+        sql_schema(Engine::Postgres, port("POSTGRES", 15432), "postgres");
+    }
+}
+
+#[test]
+fn mongodb_schema() {
+    if !live() {
+        return;
+    }
+    let mut session = connect(&config(Engine::MongoDb, port("MONGO", 17017), "root", "shop"));
+    for name in ["erd_people", "erd_visits"] {
+        let _ = session.mongo_write(MongoOp::DropCollection, name, &serde_json::Value::Null);
+    }
+    let person = serde_json::json!({ "_id": { "$oid": "65f000000000000000000001" }, "name": "a" });
+    session.mongo_write(MongoOp::InsertOne, "erd_people", &person).unwrap();
+    let visit = serde_json::json!({ "erdPersonId": { "$oid": "65f000000000000000000001" }, "at": 1 });
+    session.mongo_write(MongoOp::InsertOne, "erd_visits", &visit).unwrap();
+    let schema = session.schema().unwrap();
+    let visits = schema.tables.iter().find(|t| t.name == "erd_visits").unwrap();
+    assert_eq!(visits.columns.iter().find(|c| c.name == "erdPersonId").unwrap().data_type, "objectId");
+    let found = relations(&schema);
+    assert!(found.iter().any(|r| r.from_table == "erd_visits" && r.to_table == "erd_people" && r.to_column == "_id"), "{found:?}");
+    for name in ["erd_people", "erd_visits"] {
+        session.mongo_write(MongoOp::DropCollection, name, &serde_json::Value::Null).unwrap();
+    }
 }

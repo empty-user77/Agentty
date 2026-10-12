@@ -5,7 +5,7 @@ description: Rust로 플러그인을 만들어 어디서나 돌아가는 .wasm �
 
 `"runtime": "wasm"`으로 지정하면 `main`은 Agentty가 **자기 안에서** 인터프리터로 실행하는 WebAssembly 모듈이 됩니다. 파일 하나가 macOS·Windows·Linux에서 그대로 동작하고, 이용자 컴퓨터에 설치할 것이 없습니다. Node.js도 Python도 필요 없습니다.
 
-[마켓플레이스](/docs/plugin-publishing)가 등록을 받는 유일한 형태이기도 합니다. 그럴 수 있는 이유는 모듈이 프로토콜이 건네준 것만 건드릴 수 있기 때문입니다.
+[마켓플레이스](/docs/plugin-publishing)에 등록할 수 있는 것도 이 형태뿐입니다. 모듈이 프로토콜이 건네준 것만 건드릴 수 있기 때문에 가능한 일입니다.
 
 ## 모듈이 닿을 수 있는 것
 
@@ -17,12 +17,12 @@ Agentty가 모듈에 넘기는 함수는 셋뿐입니다.
 | `log(ptr, len)` | 플러그인 로그에 남길 한 줄 |
 | `now_ms() -> i64` | Unix epoch 기준 밀리초 |
 
-파일도, 소켓도, 환경 변수도, 프로세스도 없고, 저 카운터 말고는 시계도 없습니다. WebAssembly 플러그인은 **어떻게 작성했든** `~/.agentty`도, 여러분의 프로젝트도, 자격 증명도 읽을 수 없습니다. 읽지 않겠다고 약속해서가 아니라, 그럴 함수를 애초에 받지 못했기 때문입니다. 이외의 것을 import하는 모듈은 아예 로드되지 않습니다.
+파일도, 소켓도, 환경 변수도, 프로세스도 없고, 저 카운터 말고는 시계도 없습니다. WebAssembly 플러그인은 **어떻게 작성했든** `~/.agentty`도, 여러분의 프로젝트도, 자격 증명도 읽을 수 없습니다. 읽지 않겠다고 약속해서가 아니라 그런 함수를 애초에 받지 못했기 때문입니다. 이 밖의 것을 import하는 모듈은 아예 로드되지 않습니다.
 
-나머지는 프로세스 플러그인이 stdout에 쓰는 것과 똑같은 JSON-RPC 메시지로 Agentty에 요청하고 `agentty-plugin.json`의 [권한](/docs/plugin-permissions)도 똑같이 검사됩니다.
+그 밖에 필요한 것은 Agentty에 요청합니다. 프로세스 플러그인이 stdout에 쓰는 것과 똑같은 JSON-RPC 메시지를 쓰고, `agentty-plugin.json`의 [권한](/docs/plugin-permissions)도 똑같이 검사합니다.
 
 > [!NOTE]
-> `runtime`이 `node`·`python`·`executable`인 플러그인은 정반대입니다. 이용자 권한으로 실행되며, 이용자가 직접 실행하는 다른 프로그램과 같은 접근 권한을 가집니다. 플러그인 페이지의 **정보 → 실행 방식**에 둘 중 무엇인지 표시됩니다.
+> `runtime`이 `node`·`python`·`executable`인 플러그인은 정반대입니다. 이용자 권한으로 실행되므로 이용자가 직접 실행하는 다른 프로그램과 접근 범위가 같습니다. 플러그인 페이지의 **정보 → 실행 방식**에 둘 중 무엇인지 표시됩니다.
 
 ## SDK
 
@@ -97,7 +97,7 @@ export_plugin!(Hello);
 
 `call`과 `fetch`는 요청 id를 돌려주고, 응답은 `Plugin::answer`로 도착합니다.
 
-모듈에는 자기 파일이 없으므로, 실행 사이에 무언가를 기억하는 수단은 `storage/get`·`storage/set`·`storage/keys`입니다. 자기 폴더의 JSON 문서 하나이고 키 64개, 총 1MB까지이며 권한이 필요 없습니다.
+모듈에는 자기 파일이 없으므로 실행과 실행 사이에 무언가를 기억하려면 `storage/get`·`storage/set`·`storage/keys`를 씁니다. 저장소는 자기 폴더의 JSON 문서 하나로, 키 64개와 총 1MB까지 담을 수 있습니다. 권한은 필요 없습니다.
 
 ## 빌드와 설치
 
@@ -111,7 +111,7 @@ cp target/wasm32-unknown-unknown/release/hello.wasm hello.wasm
 
 ## 로고
 
-모듈에는 그림을 담을 파일 폴더가 없으므로, 모듈이 직접 그림을 들고 다닙니다. WebAssembly 커스텀 섹션 `agentty.logo`입니다. 엔진은 이 섹션을 무시합니다. 마켓플레이스 엔트리의 체크섬이 이미 이 영역을 덮으므로 로고도 모듈의 나머지와 똑같이 리뷰된 바이트입니다. Rust에서는 static 하나입니다:
+모듈에는 그림을 넣어 둘 폴더가 없으므로 그림을 모듈 안에 직접 담습니다. 자리는 WebAssembly 커스텀 섹션 `agentty.logo`이고, 엔진은 이 섹션을 무시합니다. 마켓플레이스 엔트리의 체크섬이 이 섹션까지 포함하므로 로고도 모듈의 다른 부분처럼 검토를 거친 바이트입니다. Rust에서는 static 하나면 됩니다.
 
 ```rust
 #[used]
@@ -121,7 +121,7 @@ static LOGO: [u8; 1234] = *include_bytes!("logo.png");
 
 `#[used]`는 선택이 아닙니다. 아무것도 참조하지 않는 static은 릴리스 빌드에서 제거되고, 섹션도 함께 사라집니다. 배열 길이는 파일 크기와 같아야 합니다.
 
-바이트는 512KB 이하의 PNG, JPEG, GIF, WebP여야 하며 설치할 때 확인합니다. SVG는 어떤 이름을 달고 있든 거부됩니다 — [로고](/docs/plugin-manifest#로고) 참고. Agentty는 설치 시점에 그림을 파일로 써 두므로, 목록을 그릴 때마다 모듈을 파싱하지 않습니다.
+바이트는 512KB 이하의 PNG, JPEG, GIF, WebP여야 하며 설치할 때 확인합니다. SVG는 어떤 이름을 달고 있든 거부됩니다 — [로고](/docs/plugin-manifest#로고) 참고. Agentty는 설치할 때 그림을 파일로 꺼내 두므로 목록을 그릴 때마다 모듈을 파싱하지 않습니다.
 
 ## 제한
 
@@ -133,7 +133,7 @@ static LOGO: [u8; 1234] = *include_bytes!("logo.png");
 | 메시지당 작업량 | 예산이 정해져 있어, 돌아오지 않는 플러그인은 "제시간에 끝내지 못함"으로 중단 |
 | 메시지 하나를 처리하는 동안 보낸 메시지 | `send`와 `log`를 합쳐 256개를 넘으면 중단 |
 
-한 번에 메시지 하나만 처리합니다. 모듈은 메시지를 처리하는 **동안에만** 실행되므로 백그라운드 루프가 없습니다. `host/timer`는 시간이 지나면 응답되는 요청이고, 플러그인이 얻는 것은 그 응답이 전부입니다.
+한 번에 메시지 하나만 처리합니다. 모듈은 메시지를 처리하는 **동안에만** 실행되므로 백그라운드 루프가 없습니다. `host/timer`는 정한 시간이 지나면 응답이 오는 요청일 뿐이고, 플러그인이 받는 것은 그 응답 하나입니다.
 
 ## 예제
 
@@ -144,6 +144,6 @@ static LOGO: [u8; 1234] = *include_bytes!("logo.png");
 
 ## 다음으로
 
-- [AgentOS 플러그인](/docs/plugin-agentos) — 에이전트를 통해 일을 진행하는 플러그인
+- [AgentOS 플러그인](/docs/plugin-agentos) — Agentty의 에이전트에게 일을 맡기는 플러그인
 - [매니페스트 레퍼런스](/docs/plugin-manifest) · [플러그인 프로토콜](/docs/plugin-protocol) — 모듈 ABI 포함
 - [권한](/docs/plugin-permissions) · [배포하기](/docs/plugin-publishing)

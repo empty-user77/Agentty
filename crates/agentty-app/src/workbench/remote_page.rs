@@ -43,6 +43,13 @@ pub(super) struct RemotePageState {
     voice_error: Option<String>,
 }
 
+impl RemotePageState {
+    /// Whether the password popup is open (drawn over the rest of the window).
+    pub(super) fn dialog_open(&self) -> bool {
+        self.dialog_open
+    }
+}
+
 /// A voice model download in flight: shared counters the background task writes and the page reads
 /// each tick for its progress bar, and where the task leaves its result.
 struct VoiceDl {
