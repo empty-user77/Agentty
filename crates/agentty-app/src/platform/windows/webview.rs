@@ -49,10 +49,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::platform::page_scripts::{navigation_allowed, CONSOLE_CAPTURE, NETWORK_CAPTURE};
 pub use crate::platform::page_scripts::{NET_DETAIL, NET_ENTRIES, NET_TOTALS};
+use crate::platform::url::file_under;
 pub use crate::platform::url::normalize_url_with;
 use crate::platform::webview2_logic::{
-    browser_key_for, devtools_error, evaluate_answer, major_version, profile_name, screenshot_png, script_of, signed_by_microsoft,
-    world_is_gone,
+    browser_key_for, devtools_error, evaluate_answer, file_folder, file_host, file_url_of, major_version, profile_name, screenshot_png,
+    script_of, served_url, signed_by_microsoft, world_is_gone,
 };
 
 /// Result of an asynchronous web view call, delivered on the main thread.
@@ -152,6 +153,8 @@ struct Inner {
     downloading: bool,
     /// WebView2 said a navigation started (`NavigationStarting`) since the last load was asked for.
     navigating: bool,
+    /// The local folder the page may show (see [`FileRoot`]); gone once it leaves for the web.
+    file_root: Option<FileRoot>,
 }
 
 enum Environment {
@@ -160,7 +163,27 @@ enum Environment {
     Ready(ICoreWebView2Environment),
 }
 
+/// The folder of a local file a page was opened on, served by WebView2 under a host name of its own
+/// (`SetVirtualHostNameToFolderMapping`): the page reads its own styles, scripts and images there,
+/// and nothing outside it. WebView2 keeps it inside the folder; other sites cannot load from it.
+#[derive(Clone)]
+struct FileRoot {
+    host: String,
+    /// `file:///C:/dir/`, what the address bar and agents see.
+    folder: String,
+    /// `C:\dir\`.
+    path: String,
+}
+
+/// How long a grant waits for its load: the page opens on the next frame, and a grant the browser
+/// had no tab for must not be left for another view to use later.
+const FILE_GRANT_FOR: std::time::Duration = std::time::Duration::from_secs(10);
+
 thread_local! {
+    /// `file://` addresses the user asked to see (an HTML file's browser button), each good for one
+    /// [`WebView::load`] within [`FILE_GRANT_FOR`]. Nothing else opens a local file: not a page, a
+    /// plugin or an agent.
+    static FILE_GRANTS: RefCell<Vec<(String, std::time::Instant)>> = const { RefCell::new(Vec::new()) };
     /// The one WebView2 environment (browser process) all pages share.
     static ENVIRONMENT: RefCell<Environment> = const { RefCell::new(Environment::Idle) };
     /// Every web view that exists right now, by host window.
@@ -249,9 +272,23 @@ fn runtime_version() -> Option<String> {
     (found.is_ok() && !text.is_empty()).then_some(text)
 }
 
-/// Local HTML files are not opened on Windows yet: the navigation filter refuses every `file:`
-/// address, and nothing here grants one (macOS limits a granted file to its own folder).
-pub fn grant_file(_url: &str) {}
+/// Lets the next [`WebView::load`] of `url` (a `file://` address) open that file.
+pub fn grant_file(url: &str) {
+    FILE_GRANTS.with(|grants| {
+        let mut grants = grants.borrow_mut();
+        grants.retain(|(g, _)| g != url);
+        grants.push((url.to_string(), std::time::Instant::now()));
+    });
+}
+
+fn take_file_grant(url: &str) -> bool {
+    FILE_GRANTS.with(|grants| {
+        let mut grants = grants.borrow_mut();
+        let granted = grants.iter().any(|(g, at)| g == url && at.elapsed() < FILE_GRANT_FOR);
+        grants.retain(|(g, at)| g != url && at.elapsed() < FILE_GRANT_FOR);
+        granted
+    })
+}
 
 /// Whether the WebView2 Runtime is installed, so the in-app browser can open pages.
 pub fn available() -> bool {
@@ -803,6 +840,7 @@ impl WebView {
             mobile: prefs.mobile,
             downloading: false,
             navigating: false,
+            file_root: None,
         }));
         VIEWS.with(|views| views.borrow_mut().push((host.0 as usize, Rc::downgrade(&inner))));
         start_page(host, Rc::downgrade(&inner), prefs.clone());
@@ -892,9 +930,57 @@ impl WebView {
     }
 
     pub fn load(&self, url: &str) {
+        if url.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:")) {
+            self.load_file(url);
+            return;
+        }
         let url = HSTRING::from(url);
         // SAFETY: a valid string for the duration of the call.
         self.navigate(move |page| unsafe { page.webview.Navigate(&url) }.is_ok());
+    }
+
+    /// A local file: one the user just asked to see (its folder is served from now on), or one in
+    /// the folder this page was already given. Anything else is refused, as the filter refuses
+    /// `file:` addresses a page goes to by itself.
+    fn load_file(&self, url: &str) {
+        let current = self.inner.borrow().file_root.clone();
+        let root = if take_file_grant(url) {
+            let Some((folder, path)) = file_folder(url) else { return };
+            FileRoot { host: file_host(&uuid::Uuid::new_v4().simple().to_string()), folder, path }
+        } else {
+            match current.clone() {
+                Some(root) if file_under(&root.folder, url) => root,
+                _ => return,
+            }
+        };
+        let Some(target) = served_url(&root.host, &root.folder, url) else { return };
+        // A new grant serves its folder under a new host, and the last one's goes.
+        let fresh = current.as_ref().is_none_or(|old| old.host != root.host);
+        let replaced = current.filter(|old| old.host != root.host);
+        self.inner.borrow_mut().file_root = Some(root.clone());
+        let target = HSTRING::from(target);
+        self.navigate(move |page| {
+            let Ok(webview) = page.webview.cast::<ICoreWebView2_3>() else { return false };
+            // SAFETY: valid strings for the duration of each call, on a live page.
+            unsafe {
+                if let Some(old) = replaced {
+                    let _ = webview.ClearVirtualHostNameToFolderMapping(&HSTRING::from(old.host));
+                }
+                // DENY: only the folder's own pages load from it; no other site can.
+                if fresh
+                    && webview
+                        .SetVirtualHostNameToFolderMapping(
+                            &HSTRING::from(&root.host),
+                            &HSTRING::from(&root.path),
+                            COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY,
+                        )
+                        .is_err()
+                {
+                    return false;
+                }
+                page.webview.Navigate(&target).is_ok()
+            }
+        });
     }
 
     /// Shows `html` as a page of its own, with no address: what it may load is up to its
@@ -963,10 +1049,15 @@ impl WebView {
         });
     }
 
+    /// The page's address; a local page's is its `file:` address, not the host it is served under.
     pub fn current_url(&self) -> Option<String> {
-        let page = self.inner.borrow().page.clone()?;
+        let (page, root) = {
+            let inner = self.inner.borrow();
+            (inner.page.clone()?, inner.file_root.clone())
+        };
         // SAFETY: a plain query on a live page.
-        read(|value| unsafe { page.webview.Source(value) }).filter(|url| !url.is_empty())
+        let url = read(|value| unsafe { page.webview.Source(value) }).filter(|url| !url.is_empty())?;
+        Some(root.and_then(|root| file_url_of(&root.host, &root.folder, &url)).unwrap_or(url))
     }
 
     /// Why the last page could not be opened, until the next navigation starts.
@@ -1443,7 +1534,7 @@ fn setup_page(
 
         let weak = inner.clone();
         webview.add_NavigationStarting(
-            &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+            &NavigationStartingEventHandler::create(Box::new(move |sender, args| {
                 let Some(args) = args else { return Ok(()) };
                 let url = read(|value| args.Uri(value)).unwrap_or_default();
                 if !navigation_allowed(&url) {
@@ -1451,6 +1542,13 @@ fn setup_page(
                 }
                 if let Some(state) = weak.upgrade() {
                     let Ok(mut state) = state.try_borrow_mut() else { return Ok(()) };
+                    // Leaving the local page takes its folder with it: no site gets to go back there.
+                    if state.file_root.as_ref().is_some_and(|root| file_url_of(&root.host, &root.folder, &url).is_none()) {
+                        if let (Some(root), Some(webview)) = (state.file_root.take(), sender.and_then(|s| s.cast::<ICoreWebView2_3>().ok()))
+                        {
+                            let _ = webview.ClearVirtualHostNameToFolderMapping(&HSTRING::from(root.host));
+                        }
+                    }
                     state.load_error = None;
                     state.loading = true;
                     state.navigating = true;

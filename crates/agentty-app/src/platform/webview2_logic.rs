@@ -109,10 +109,107 @@ pub fn major_version(version: &str) -> u32 {
     version.split('.').next().and_then(|major| major.trim().parse().ok()).unwrap_or(0)
 }
 
+/// The folder of a local file the user asked to see (`file:///C:/dir/page.html`): its address
+/// (`file:///C:/dir/`) and its place on disk (`C:\dir\`), which WebView2 serves under a host name
+/// of its own. Only a folder on a drive (not the whole drive), never a network share, and never one
+/// reached through `..`.
+pub fn file_folder(url: &str) -> Option<(String, String)> {
+    let path = url.split(['?', '#']).next()?;
+    let folder = &path[..path.rfind('/')? + 1];
+    let decoded = percent_decode(folder.strip_prefix("file:///")?)?;
+    let drive = decoded.as_bytes();
+    if drive.len() < 4 || !drive[0].is_ascii_alphabetic() || drive[1] != b':' || drive[2] != b'/' {
+        return None;
+    }
+    if decoded.split(['/', '\\']).any(|segment| segment == ".." || segment == ".") {
+        return None;
+    }
+    Some((folder.to_string(), decoded.replace('/', "\\")))
+}
+
+/// The host name a granted folder is served under: unique per grant, so no page can guess it, and
+/// under `.example`, which never resolves on the web.
+pub fn file_host(unique: &str) -> String {
+    format!("{unique}.agentty.example")
+}
+
+/// Where WebView2 serves `url`, a file inside `folder` (see [`file_folder`]): `https://{host}/…`.
+pub fn served_url(host: &str, folder: &str, url: &str) -> Option<String> {
+    crate::platform::url::file_under(folder, url).then(|| format!("https://{host}/{}", &url[folder.len()..]))
+}
+
+/// The `file:` address a page served under `host` stands for: what the address bar and agents see.
+pub fn file_url_of(host: &str, folder: &str, url: &str) -> Option<String> {
+    let prefix = format!("https://{host}/");
+    let rest = url.get(..prefix.len()).filter(|start| start.eq_ignore_ascii_case(&prefix)).map(|_| &url[prefix.len()..])?;
+    Some(format!("{folder}{rest}"))
+}
+
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_local_file_is_served_from_its_own_folder() {
+        let url = "file:///C:/Users/me/out%20dir/index.html?x=1#top";
+        let (folder, path) = file_folder(url).unwrap();
+        assert_eq!(folder, "file:///C:/Users/me/out%20dir/");
+        assert_eq!(path, r"C:\Users\me\out dir\");
+        let host = file_host("0123abcd");
+        let served = served_url(&host, &folder, url).unwrap();
+        assert_eq!(served, "https://0123abcd.agentty.example/index.html?x=1#top");
+        assert_eq!(file_url_of(&host, &folder, &served).as_deref(), Some(url));
+        assert_eq!(
+            file_url_of(&host, &folder, "https://0123ABCD.agentty.example/b.html").as_deref(),
+            Some("file:///C:/Users/me/out%20dir/b.html")
+        );
+        // Pages next to it and below it, nothing above it or elsewhere.
+        assert!(served_url(&host, &folder, "file:///C:/Users/me/out%20dir/sub/b.html").is_some());
+        for outside in [
+            "file:///C:/Users/me/secret.txt",
+            "file:///C:/Users/me/out%20dir/../secret.txt",
+            "file:///C:/Users/me/out%20dir/%2e%2e/secret.txt",
+            "https://example.com/C:/Users/me/out%20dir/",
+        ] {
+            assert!(served_url(&host, &folder, outside).is_none(), "{outside} must stay out");
+        }
+        assert!(file_url_of(&host, &folder, "https://example.com/index.html").is_none());
+    }
+
+    #[test]
+    fn only_folders_on_a_drive_are_served() {
+        assert!(file_folder("file:///D:/x/a.html").is_some());
+        for url in [
+            "file:///D:/a.html",
+            "file://server/share/a.html",
+            "file:////server/share/a.html",
+            "file:///C:/a/%2e%2e/b/a.html",
+            "file:///C:/a/../b/a.html",
+            "file:///tmp/a.html",
+            "file:///C:/a/%ZZ/a.html",
+            "https://example.com/a.html",
+        ] {
+            assert!(file_folder(url).is_none(), "{url}");
+        }
+    }
 
     #[test]
     fn scripts_take_their_arguments_as_parameters() {

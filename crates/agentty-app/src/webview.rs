@@ -36,6 +36,7 @@ pub use crate::platform::url::normalize_url_with;
 
 use crate::platform::page_scripts::{navigation_allowed, CONSOLE_CAPTURE, NETWORK_CAPTURE};
 pub use crate::platform::page_scripts::{NET_DETAIL, NET_ENTRIES, NET_TOTALS};
+use crate::platform::url::file_under;
 
 /// Whether the in-app browser can open pages (WebKit is part of macOS).
 pub fn available() -> bool {
@@ -111,18 +112,6 @@ fn set_file_root(view: Id, root: Option<String>) {
 fn file_in_root(view: Id, url: &str) -> bool {
     let roots = FILE_ROOTS.lock().unwrap_or_else(|e| e.into_inner());
     roots.as_ref().and_then(|roots| roots.get(&(view as usize))).is_some_and(|root| file_under(root, url))
-}
-
-/// `url` is `root` or below it, with no way back up (`..`, spelled out or encoded).
-fn file_under(root: &str, url: &str) -> bool {
-    let path = url.split(['?', '#']).next().unwrap_or_default();
-    let lower = path.to_ascii_lowercase();
-    path.starts_with(root)
-        && !path.contains("/../")
-        && !path.ends_with("/..")
-        && !lower.contains("%2e%2e")
-        && !lower.contains(".%2e")
-        && !lower.contains("%2e.")
 }
 
 /// A standard editing command, as the Edit menu names it.
@@ -1236,7 +1225,8 @@ pub fn focus_gpui_view(window: &gpui::Window) {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_under, grant_file, take_file_grant};
+    use super::{grant_file, take_file_grant};
+    use crate::platform::url::file_under;
 
     #[test]
     fn a_file_page_stays_in_its_folder() {

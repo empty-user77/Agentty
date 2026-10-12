@@ -35,11 +35,27 @@ pub fn unpack() -> std::io::Result<PathBuf> {
 }
 
 pub fn file_url(path: &Path) -> String {
+    file_url_of(&path.to_string_lossy(), cfg!(windows))
+}
+
+/// `file_url` for a path written the way `windows` (or not) writes them: `C:\dir\a.html` becomes
+/// `file:///C:/dir/a.html`.
+fn file_url_of(path: &str, windows: bool) -> String {
+    let path = if windows {
+        let path = path.strip_prefix(r"\\?\").unwrap_or(path).replace('\\', "/");
+        if path.starts_with('/') {
+            path
+        } else {
+            format!("/{path}")
+        }
+    } else {
+        path.to_string()
+    };
     let encoded: String = path
-        .to_string_lossy()
         .bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (b as char).to_string(),
+            b':' if windows => ":".to_string(),
             other => format!("%{other:02X}"),
         })
         .collect();
@@ -295,5 +311,12 @@ mod tests {
             assert!(!html.contains("<script"));
         }
         assert!(file_url(Path::new("/tmp/a b/x.html")).ends_with("/tmp/a%20b/x.html"));
+    }
+
+    #[test]
+    fn file_urls_of_both_kinds_of_path() {
+        assert_eq!(file_url_of("/tmp/a b/x:y.html", false), "file:///tmp/a%20b/x%3Ay.html");
+        assert_eq!(file_url_of(r"C:\Users\me\a b\x.html", true), "file:///C:/Users/me/a%20b/x.html");
+        assert_eq!(file_url_of(r"\\?\C:\out\x.html", true), "file:///C:/out/x.html");
     }
 }

@@ -26,6 +26,20 @@ pub fn normalize_url_with(input: &str, search_prefix: &str) -> String {
     format!("{search_prefix}{query}")
 }
 
+/// `url` is `root` or below it, with no way back up (`..`, spelled out or encoded): what a local
+/// page the user opened may move around in.
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+pub fn file_under(root: &str, url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let lower = path.to_ascii_lowercase();
+    path.starts_with(root)
+        && !path.contains("/../")
+        && !path.ends_with("/..")
+        && !lower.contains("%2e%2e")
+        && !lower.contains(".%2e")
+        && !lower.contains("%2e.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalize_url_with;
