@@ -209,7 +209,11 @@ fn refresh_renderers() {
                 if process.Kind(&mut kind).is_err() || kind != COREWEBVIEW2_PROCESS_KIND_RENDERER || process.ProcessId(&mut pid).is_err() {
                     continue;
                 }
-                let Ok(frames) = info.AssociatedFrameInfos().and_then(|f| f.GetIterator()) else { continue };
+                // The iterator does not hold a reference to its collection: the collection must
+                // outlive it, or `GetCurrent` reads freed memory and the app crashes (seen in
+                // crash dumps: FrameInfoCollectionIterator::GetCurrent, access violation).
+                let Ok(collection) = info.AssociatedFrameInfos() else { continue };
+                let Ok(frames) = collection.GetIterator() else { continue };
                 loop {
                     let mut has = BOOL::default();
                     if frames.HasCurrent(&mut has).is_err() || !has.as_bool() {
