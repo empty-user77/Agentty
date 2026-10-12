@@ -909,6 +909,17 @@ impl Workbench {
             || self.agent_panel.is_some()
             || self.prompt_dialog.is_some()
             || self.harness_dialog.is_some()
+            || self.ask.is_some()
+            || self.rename.is_some()
+            || self.diagnostics.is_some()
+            || self.clone_dialog.is_some()
+            || self.install_hint.is_some()
+            || !self.task_requests.is_empty()
+            || !self.db.approvals.is_empty()
+            || self.remote_page.dialog_open()
+            || self.todo_menu.is_some()
+            || self.pane_menu.is_some()
+            || self.files_panel.as_ref().is_some_and(|f| f.popup_open())
             || self.onboarding.as_ref().is_some_and(|o| o.is_modal())
             // Native views swallow mouse events; hide it so the resize drags keep reaching GPUI.
             || self.browser_resizing
