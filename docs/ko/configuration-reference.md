@@ -91,7 +91,7 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 
 ## pricing.json
 
-가격이 내장되지 않은 모델을 위한 100만 토큰당 USD 값입니다.
+가격이 내장되지 않은 모델의 100만 토큰당 가격(USD)입니다.
 
 ```json
 {
@@ -99,4 +99,4 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 }
 ```
 
-`cacheRead`, `cacheWrite`, `cacheWrite1h`는 선택이며 각각 `input`의 10%, 125%, 200%가 기본값입니다.
+`cacheRead`, `cacheWrite`, `cacheWrite1h`는 생략할 수 있으며 기본값은 각각 `input`의 10%, 125%, 200%입니다.

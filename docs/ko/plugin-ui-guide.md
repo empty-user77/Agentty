@@ -3,10 +3,10 @@ title: 패널 디자인
 description: 무엇에 어떤 요소를 쓰는지, 패널이 Agentty의 일부처럼 보이게 하는 몇 가지 규칙, 그리고 그대로 시작할 수 있는 완성 화면.
 ---
 
-플러그인은 직접 그리지 않습니다. 요소의 트리를 보내면 Agentty가 앱과 같은 색·글꼴·간격으로 그립니다. 그래서 어떤 플러그인이든 Agentty만큼 보기 좋을 수 있습니다. 방법은 요소를 꾸미는 것이 아니라 알맞은 요소를 고르는 것입니다.
+플러그인은 직접 그리지 않습니다. 요소의 트리를 보내면 Agentty가 앱과 같은 색·글꼴·간격으로 그립니다. 그래서 어떤 플러그인이든 Agentty만큼 보기 좋을 수 있습니다. 비결은 요소를 꾸미기보다 알맞은 요소를 고르는 데 있습니다.
 
 > [!TIP]
-> **플러그인** 페이지에서 **UI Gallery**를 설치하세요(Agentty에 포함되어 있습니다). 모든 요소를 실제로 보여 주고 각 요소 아래에 그 요소를 그린 코드도 보여 줍니다. 이 페이지의 레시피도 직접 눌러 볼 수 있는 화면으로 들어 있습니다.
+> **플러그인** 페이지에서 **UI Gallery**를 설치하세요(Agentty에 포함되어 있습니다). 모든 요소를 실제로 그려 보여 주고, 요소마다 그 아래에 해당 코드를 함께 보여 줍니다. 이 페이지의 레시피도 직접 눌러 볼 수 있는 화면으로 들어 있습니다.
 
 ## 용도에 맞는 요소 고르기
 
@@ -125,7 +125,7 @@ ui.column([
 | `checkbox`, `toggle` | 새 boolean과 함께 `change` |
 | `popover` | `close` |
 
-`card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`는 API 버전 4입니다. 쓸 때는 매니페스트에 `"apiVersion": 4`를 적으세요. 그러면 이전 버전 Agentty는 그릴 수 없는 패널을 보여 주는 대신 업데이트하라고 안내합니다. 두 버전 모두에서 동작하려는 플러그인은 `host/info`의 `uiFeatures`로 실행 중인 Agentty가 그릴 수 있는 요소를 확인할 수 있습니다.
+`card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`는 API 버전 4입니다. 쓸 때는 매니페스트에 `"apiVersion": 4`를 적으세요. 그러면 이전 버전 Agentty는 그리지 못하는 패널을 내보이는 대신 업데이트하라고 안내합니다. 두 버전에서 모두 동작해야 한다면 `host/info`의 `uiFeatures`로 지금 실행 중인 Agentty가 그릴 수 있는 요소를 확인하세요.
 
 ## 다음
 
