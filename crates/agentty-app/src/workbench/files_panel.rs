@@ -163,6 +163,11 @@ pub(super) struct FilesPanel {
 }
 
 impl FilesPanel {
+    /// Whether the panel has a menu or a dialog open (drawn over the rest of the window).
+    pub(super) fn popup_open(&self) -> bool {
+        self.tree_menu.is_some() || self.remove_confirm.is_some()
+    }
+
     /// Marks `path` as the selected file (the one the editor shows).
     pub(super) fn select(&mut self, path: &Path) {
         self.selected = Some(path.to_path_buf());
