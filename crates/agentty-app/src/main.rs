@@ -542,6 +542,10 @@ fn main() {
         std::process::exit(worktree_guard::run());
     }
 
+    if args.get(1).map(String::as_str) == Some("hang-dump") {
+        std::process::exit(crash_log::hang_dump(&args));
+    }
+
     if args.get(1).map(String::as_str) == Some("statusline") {
         std::process::exit(statusline::run());
     }
@@ -655,6 +659,8 @@ fn main() {
     });
     app.on_reopen(|cx| with_workbench(cx, |wb, window, cx| wb.handle_tray(status_item::TrayAction::Show, window, cx)));
     app.run(|cx: &mut App| {
+        // Windows: a UI thread that stops answering is noted, with a dump (see `crash_log`).
+        crash_log::watch_ui(cx);
         if let Err(err) = cx.text_system().add_fonts(FONTS.iter().map(|f| Cow::Borrowed(*f)).collect()) {
             eprintln!("agentty: failed to load bundled fonts: {err:#}");
         }
