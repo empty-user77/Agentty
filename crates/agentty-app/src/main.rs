@@ -633,6 +633,8 @@ fn main() {
 
     // A crash leaves its reason in `<data dir>/crash.log`.
     crash_log::install();
+    // Windows: the keys the IME needs that gpui does not pass on (한/영, 한자, …).
+    platform::ime::install();
     // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
     platform::raise_file_limit();
     // An older Agentty killed while it had the machine captured: put its proxy settings back before

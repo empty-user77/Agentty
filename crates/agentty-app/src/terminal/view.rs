@@ -2201,8 +2201,10 @@ impl EntityInputHandler for TerminalView {
         cx.notify();
     }
 
-    fn replace_text_in_range(&mut self, _: Option<Range<usize>>, text: &str, _: &mut Window, cx: &mut Context<Self>) {
-        self.marked_text = None;
+    fn replace_text_in_range(&mut self, _: Option<Range<usize>>, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // A finished syllable can come with the next one already begun (한 + ㄴ): that one stays
+        // marked, so it is shown and keys wait for it (see `platform::ime`).
+        self.marked_text = crate::platform::ime::pending_composition(window);
         self.write_user_input(text.as_bytes().to_vec());
         cx.notify();
     }

@@ -8,6 +8,7 @@
 pub mod app_nap;
 pub mod drops;
 pub mod frame;
+pub mod ime;
 pub mod mic;
 #[cfg(any(target_os = "macos", windows))]
 pub mod page_scripts;
