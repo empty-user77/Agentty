@@ -5,6 +5,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-10-12
+
+### Added
+- In-app browser on Windows, built on Microsoft Edge WebView2: the browser panel, one browser per terminal,
+  agents' `agentty browser` / MCP tools and plugins' browser calls work as on macOS. Where the WebView2 Runtime is
+  missing, Agentty offers to download and install Microsoft's signed installer. Local HTML files open in it too.
+- Relationship diagram in the Databases panel (MySQL, MariaDB, PostgreSQL, Oracle, MongoDB): tables as cards with
+  their column comments, declared foreign keys drawn as solid lines, and references inferred from column names
+  (`user_settings.user_id` → `users`) as dashed lines that can be hidden. Drag cards, pan and zoom; the board opens
+  centered and fitted.
+- The agents panel shows subagents in detail: a timeline across subagents colored by tool kind, each one's current
+  step, plan progress, files changed and errors, and a step list whose output or diff opens on click. The view can
+  be moved, resized or opened in its own window.
+
+### Changed
+- The Korean interface and user guide read more naturally and more briefly.
+
+### Fixed
+- Dialogs (such as "an AI is already working here") no longer open behind the in-app browser.
+- Korean input on Windows with IMEs that need it: the 한/영 and 한자 keys work, and a syllable typed right after
+  another is no longer dropped.
+- On Windows, turning on "always Bypass" (or changing reserved words) reaches agents started in PowerShell panes
+  that were already open.
+- Windows browser stability fixes.
+- On Windows, a crash or a UI thread that stops responding leaves its cause in Agentty's local crash log, to help
+  diagnose it. Nothing is sent anywhere.
+
 ## [0.2.16] - 2026-10-11
 
 ### Added
