@@ -5,10 +5,14 @@ use super::flow::{EdgeStatus, LinkMode};
 use super::{Pane, Workbench};
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::{icon, now_ms, relative_time, IconSize, TypeScale};
-use agentty_bridge::claude::Subagent;
-use agentty_bridge::model::{Role, Turn};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, EntityId, SharedString};
+use crate::ui::{icon, IconSize, TypeScale};
+use agentty_bridge::claude::SubagentFile;
+use agentty_bridge::subagent_trace::TraceReader;
+use gpui::{div, prelude::*, px, AnyElement, Bounds, ClickEvent, Context, EntityId, MouseButton, Pixels, Point, SharedString, Size};
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 /// The link chip picks a terminal; the panel behind it is one modifier away.
 /// What ⌘-click does on the link chip, which is the other of the two things it can do.
@@ -27,10 +31,84 @@ pub struct AgentPanel {
     pub tab: PanelTab,
     /// Sessions ticked in the "connect" list, to link them all at once.
     pub selected_peers: Vec<u64>,
-    pub subagents: Option<Vec<Subagent>>,
+    pub subagents: Option<Vec<SubagentFile>>,
+    /// Each subagent's transcript, followed while the panel is open (by subagent id).
+    pub traces: Arc<Mutex<HashMap<String, TraceReader>>>,
     pub selected: Option<String>,
-    pub log: Option<Vec<Turn>>,
+    /// Steps of the selected subagent opened to show their output.
+    pub expanded: HashSet<usize>,
     pub scroll: gpui::ScrollHandle,
+}
+
+impl AgentPanel {
+    fn new(pane: EntityId, tab: PanelTab) -> Self {
+        Self {
+            pane,
+            tab,
+            selected_peers: Vec::new(),
+            subagents: None,
+            traces: Arc::default(),
+            selected: None,
+            expanded: HashSet::new(),
+            scroll: gpui::ScrollHandle::new(),
+        }
+    }
+}
+
+/// The subagents view in a window of its own, to keep anywhere on the screen. What it shows lives
+/// in the workbench (`popped_out`), which draws it.
+pub struct SubagentWindow {
+    workbench: gpui::WeakEntity<Workbench>,
+}
+
+impl Render for SubagentWindow {
+    fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let body = self.workbench.upgrade().and_then(|workbench| workbench.update(cx, |this, cx| this.render_popped_out(cx)));
+        if body.is_none() {
+            // Its workbench window is gone.
+            cx.defer_in(window, |_, window, _| window.remove_window());
+        }
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(hex(Chrome::OVERLAY))
+            .text_color(hex(Chrome::FOREGROUND))
+            .font_family(".SystemUIFont")
+            .children(body)
+    }
+}
+
+/// Where the subagents window sits and how big it is: moved by its title bar, resized by its
+/// corner, and kept the same while the app runs.
+pub struct AgentWindow {
+    /// None until it is first moved: it opens under its chip.
+    pub origin: Option<Point<Pixels>>,
+    pub size: Size<Pixels>,
+    /// Where it was drawn last, for a move or resize to start from.
+    placed: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The pointer and the window when a move or resize started.
+    drag: Option<(WindowDrag, Point<Pixels>, Bounds<Pixels>)>,
+}
+
+impl Default for AgentWindow {
+    fn default() -> Self {
+        Self { origin: None, size: gpui::size(px(980.), px(640.)), placed: Rc::default(), drag: None }
+    }
+}
+
+const MIN_WINDOW: (f32, f32) = (560., 320.);
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum WindowDrag {
+    Move,
+    Resize,
+}
+
+impl Render for WindowDrag {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
 }
 
 impl Workbench {
@@ -43,57 +121,99 @@ impl Workbench {
             self.agent_panel = None;
             return cx.notify();
         }
-        self.agent_panel = Some(AgentPanel {
-            pane: id,
-            tab,
-            selected_peers: Vec::new(),
-            subagents: None,
-            selected: None,
-            log: None,
-            scroll: gpui::ScrollHandle::new(),
-        });
+        // With the subagents in a window of their own, that window shows this pane's.
+        if tab == PanelTab::Agents && self.popout_window.is_some() {
+            if !self.popped_out.as_ref().is_some_and(|p| p.pane == id) {
+                self.popped_out = Some(AgentPanel::new(id, tab));
+                self.follow_subagents(id, cx);
+            }
+            if let Some(handle) = self.popout_window {
+                handle.update(cx, |_, window, _| window.activate_window()).ok();
+            }
+            return cx.notify();
+        }
+        self.agent_panel = Some(AgentPanel::new(id, tab));
         if tab == PanelTab::Agents {
-            // Refresh while open: subagents come and go during a turn.
-            cx.spawn(async move |this, cx| loop {
-                let Ok(Some(session)) = this.read_with(cx, |this, cx| {
-                    let panel = this.agent_panel.as_ref().filter(|p| p.pane == id && p.tab == PanelTab::Agents)?;
-                    let pane = this.all_panes().into_iter().find(|p| p.entity_id() == panel.pane)?;
-                    Some((pane.read(cx).session_id_live.clone(), panel.selected.clone()))
-                }) else {
-                    break;
-                };
-                let (session_id, selected) = session;
-                let loaded = cx
-                    .background_spawn(async move {
-                        let agents = session_id.as_deref().map(agentty_bridge::claude::subagents).unwrap_or_default();
-                        let log = selected
-                            .and_then(|sel| agents.iter().find(|a| a.id == sel).map(|a| a.path.clone()))
-                            .and_then(|path| agentty_bridge::claude::subagent_transcript(&path).ok());
-                        (agents, log)
-                    })
-                    .await;
-                let alive = this.update(cx, |this, cx| {
-                    let Some(panel) = this.agent_panel.as_mut().filter(|p| p.pane == id) else { return false };
-                    let (agents, log) = loaded;
-                    if panel.selected.is_none() {
-                        // Start with the running one (or the latest).
-                        panel.selected = agents.iter().rev().find(|a| !a.finished).or(agents.last()).map(|a| a.id.clone());
-                    }
-                    panel.subagents = Some(agents);
-                    if log.is_some() {
-                        panel.log = log;
-                    }
-                    cx.notify();
-                    true
-                });
-                if !alive.unwrap_or(false) {
-                    break;
-                }
-                cx.background_executor().timer(Duration::from_secs(2)).await;
-            })
-            .detach();
+            self.follow_subagents(id, cx);
         }
         cx.notify();
+    }
+
+    /// The subagents view on screen: in its own window, or in the panel.
+    pub(super) fn subagents_shown(&mut self) -> Option<&mut AgentPanel> {
+        match self.popped_out.as_mut() {
+            Some(panel) => Some(panel),
+            None => self.agent_panel.as_mut().filter(|p| p.tab == PanelTab::Agents),
+        }
+    }
+
+    /// Refreshes a pane's subagents while their view is open: they come and go during a turn,
+    /// and each transcript grows. Stops once that view is closed (or replaced).
+    fn follow_subagents(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        let Some(mine) = self.subagents_shown().map(|p| p.traces.clone()) else { return };
+        let ours = move |panel: &&mut AgentPanel| panel.pane == id && Arc::ptr_eq(&panel.traces, &mine);
+        cx.spawn(async move |this, cx| loop {
+            let Ok(Some((session_id, traces))) = this.update(cx, |this, cx| {
+                let panel = this.subagents_shown().filter(&ours)?;
+                let traces = panel.traces.clone();
+                let pane = this.all_panes().into_iter().find(|p| p.entity_id() == id)?;
+                Some((pane.read(cx).session_id_live.clone(), traces))
+            }) else {
+                break;
+            };
+            let (agents, changed) = cx
+                .background_spawn(async move {
+                    let agents = session_id.as_deref().map(agentty_bridge::claude::subagent_files).unwrap_or_default();
+                    let mut changed = Vec::new();
+                    for agent in &agents {
+                        let known = traces.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&agent.id);
+                        if known {
+                            // Only what was appended since the last round.
+                            let mut map = traces.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(reader) = map.get_mut(&agent.id) {
+                                if reader.poll().unwrap_or(false) {
+                                    changed.push(agent.id.clone());
+                                }
+                            }
+                        } else {
+                            // A whole transcript is read outside the lock, so the panel keeps drawing.
+                            let mut reader = TraceReader::new(&agent.path);
+                            reader.poll().ok();
+                            traces.lock().unwrap_or_else(|e| e.into_inner()).insert(agent.id.clone(), reader);
+                            changed.push(agent.id.clone());
+                        }
+                    }
+                    (agents, changed)
+                })
+                .await;
+            let alive = this.update(cx, |this, cx| {
+                let Some(panel) = this.subagents_shown().filter(&ours) else { return false };
+                if panel.selected.is_none() {
+                    // Start with the running one (or the latest).
+                    let traces = panel.traces.lock().unwrap_or_else(|e| e.into_inner());
+                    let running = agents.iter().rev().find(|a| traces.get(&a.id).is_some_and(|r| !r.trace.finished));
+                    let selected = running.or(agents.last()).map(|a| a.id.clone());
+                    drop(traces);
+                    panel.selected = selected;
+                    panel.scroll.scroll_to_bottom();
+                } else if panel.selected.as_ref().is_some_and(|s| changed.contains(s)) {
+                    // Follow the newest step, unless the reader scrolled up to look at an earlier one.
+                    let (offset, max) = (panel.scroll.offset().y, panel.scroll.max_offset().height);
+                    if -offset >= max - px(48.) {
+                        panel.scroll.scroll_to_bottom();
+                    }
+                }
+                panel.subagents = Some(agents);
+                // Also when nothing changed: running times count up.
+                cx.notify();
+                true
+            });
+            if !alive.unwrap_or(false) {
+                break;
+            }
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+        })
+        .detach();
     }
 
     /// `[⛓ 2] [👥 1/3]` chips for a pane header: session links and subagents, when there are any.
@@ -189,11 +309,13 @@ impl Workbench {
             PanelTab::Agents => self.render_subagents(pane, panel, cx),
             PanelTab::Links => self.render_links(pane, cx),
         };
+        if panel.tab == PanelTab::Agents && panel.subagents.as_ref().is_some_and(|a| !a.is_empty()) {
+            return self.render_agent_window(body, cx);
+        }
         let popover = crate::ui::popover()
             .id("agent-panel")
             .w(px(match panel.tab {
-                // List + log side by side only when there are transcripts; the hook-reported runs are a short list.
-                PanelTab::Agents if panel.subagents.as_ref().is_some_and(|a| !a.is_empty()) => 760.,
+                // The hook-reported runs are a short list.
                 PanelTab::Agents => 380.,
                 PanelTab::Links => 520.,
             }))
@@ -208,8 +330,176 @@ impl Workbench {
         super::layout::bar_popover(crate::ui::fade_in("agent-panel-fade", popover), 3, cx).into_any_element()
     }
 
+    /// The subagents' timeline and logs, as a window over the terminals: it stays open while you
+    /// work beside it, moves by its title bar and resizes by its corner.
+    fn render_agent_window(&self, body: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        let window = &self.agent_window;
+        let placed = window.placed.clone();
+        let corner = div()
+            .id("agent-window-resize")
+            .absolute()
+            .right_0()
+            .bottom_0()
+            .size(px(14.))
+            .cursor(gpui::CursorStyle::ResizeUpLeftDownRight)
+            .child(div().absolute().right(px(3.)).bottom(px(3.)).size(px(6.)).border_r_2().border_b_2().border_color(hex(Chrome::MUTED)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, _, _| this.start_window_drag(WindowDrag::Resize, event.position)),
+            )
+            .on_drag(WindowDrag::Resize, |drag, _, _, cx| cx.new(|_| *drag));
+        let popover = crate::ui::popover()
+            .id("agent-panel")
+            .relative()
+            .w(window.size.width)
+            .h(window.size.height)
+            .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<WindowDrag>, _, cx| this.drag_window(event.event.position, cx)))
+            .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| placed.set(Some(bounds))).absolute().size_full())
+            .child(div().flex_1().min_h_0().child(body))
+            .child(corner);
+        match window.origin {
+            Some(origin) => div()
+                .child(gpui::deferred(gpui::anchored().position(origin).snap_to_window_with_margin(px(8.)).child(popover)).with_priority(3))
+                .into_any_element(),
+            None => super::layout::bar_popover(crate::ui::fade_in("agent-panel-fade", popover), 3, cx).into_any_element(),
+        }
+    }
+
+    /// The subagents window's title bar: drag it to move the window; × closes it.
+    pub(super) fn agent_window_bar(&self, bar: gpui::Div, cx: &mut Context<Self>) -> AnyElement {
+        if self.popped_out.is_some() {
+            // A window of its own: the system title bar moves it and closes it.
+            return bar.into_any_element();
+        }
+        bar.id("agent-window-bar")
+            .cursor_grab()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, _, _| this.start_window_drag(WindowDrag::Move, event.position)),
+            )
+            .on_drag(WindowDrag::Move, |drag, _, _, cx| cx.new(|_| *drag))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .id("agent-window-pop-out")
+                    .p_0p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex_alpha(0xffffff, 0.08)))
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "collab.pop_out"), None))
+                    .child(icon("external-link", IconSize::INLINE, hex(Chrome::MUTED)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.pop_out_subagents(cx))),
+            )
+            .child(
+                div()
+                    .id("agent-window-close")
+                    .p_0p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hex_alpha(0xffffff, 0.08)))
+                    .child(icon("x", IconSize::INLINE, hex(Chrome::MUTED)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.agent_panel = None;
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
+    /// Moves the subagents view out of the Agentty window into a window of its own.
+    pub(super) fn pop_out_subagents(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.agent_panel.take_if(|p| p.tab == PanelTab::Agents) else { return };
+        self.popped_out = Some(panel);
+        cx.notify();
+        if let Some(handle) = self.popout_window {
+            handle.update(cx, |_, window, _| window.activate_window()).ok();
+            return;
+        }
+        let workbench = cx.entity();
+        let weak = workbench.downgrade();
+        let bounds = gpui::Bounds::centered(None, self.agent_window.size, cx);
+        let options = gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            titlebar: Some(gpui::TitlebarOptions { title: Some(t(cx, "collab.agents").into()), ..Default::default() }),
+            window_min_size: Some(gpui::size(px(MIN_WINDOW.0), px(MIN_WINDOW.1))),
+            ..Default::default()
+        };
+        // Opened after this update: the window draws its first frame from the workbench at once.
+        cx.defer(move |cx| {
+            let opened = cx.open_window(options, |_, cx| {
+                cx.new(|cx| {
+                    // Redrawn whenever the workbench is: the steps arrive there.
+                    cx.observe(&workbench, |_, _, cx| cx.notify()).detach();
+                    // Closed by its own button: the workbench forgets it (later, it may be mid-update).
+                    let workbench = weak.clone();
+                    cx.on_release(move |_, cx| {
+                        cx.defer(move |cx| {
+                            workbench
+                                .update(cx, |this, cx| {
+                                    this.popped_out = None;
+                                    this.popout_window = None;
+                                    cx.notify();
+                                })
+                                .ok();
+                        })
+                    })
+                    .detach();
+                    SubagentWindow { workbench: weak }
+                })
+            });
+            let back = workbench.downgrade();
+            back.update(cx, |this, cx| {
+                match opened {
+                    Ok(handle) => this.popout_window = Some(handle),
+                    Err(_) => this.agent_panel = this.popped_out.take(),
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+    }
+
+    pub(super) fn close_popped_out(&mut self, cx: &mut Context<Self>) {
+        self.popped_out = None;
+        if let Some(handle) = self.popout_window.take() {
+            handle.update(cx, |_, window, _| window.remove_window()).ok();
+        }
+    }
+
+    fn render_popped_out(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let panel = self.popped_out.as_ref()?;
+        Some(match &panel.subagents {
+            None => crate::ui::loading_row(t(cx, "collab.loading")).into_any_element(),
+            Some(agents) if agents.is_empty() => crate::ui::hint(t(cx, "collab.no_agents")).into_any_element(),
+            Some(agents) => self.render_subagent_traces(panel, agents, cx),
+        })
+    }
+
+    fn start_window_drag(&mut self, mode: WindowDrag, pointer: Point<Pixels>) {
+        let window = &mut self.agent_window;
+        if let Some(bounds) = window.placed.get() {
+            window.drag = Some((mode, pointer, bounds));
+        }
+    }
+
+    fn drag_window(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+        let window = &mut self.agent_window;
+        let Some((mode, from, start)) = window.drag else { return };
+        let moved = pointer - from;
+        match mode {
+            WindowDrag::Move => window.origin = Some(start.origin + moved),
+            WindowDrag::Resize => {
+                window.origin = Some(start.origin);
+                window.size =
+                    gpui::size((start.size.width + moved.x).max(px(MIN_WINDOW.0)), (start.size.height + moved.y).max(px(MIN_WINDOW.1)));
+            }
+        }
+        cx.notify();
+    }
+
     fn render_subagents(&self, pane: &Pane, panel: &AgentPanel, cx: &mut Context<Self>) -> AnyElement {
-        let now = now_ms();
         let Some(agents) = &panel.subagents else {
             return crate::ui::loading_row(t(cx, "collab.loading")).into_any_element();
         };
@@ -279,118 +569,7 @@ impl Workbench {
                 .child(list)
                 .into_any_element();
         }
-        let running = agents.iter().filter(|a| !a.finished).count();
-        let mut list =
-            div().id("subagent-list").w(px(300.)).flex_shrink_0().h(px(420.)).overflow_y_scroll().flex().flex_col().gap_0p5().p_1();
-        for (index, agent) in agents.iter().enumerate() {
-            let selected = panel.selected.as_ref() == Some(&agent.id);
-            let id = agent.id.clone();
-            let status_color = if agent.finished { Chrome::SUCCESS } else { Chrome::ORANGE };
-            list = list.child(
-                div()
-                    .id(("subagent", index))
-                    .p_2()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .when(selected, |d| d.bg(hex(Chrome::SELECTED)))
-                    .when(!selected, |d| d.hover(|s| s.bg(hex(Chrome::HOVER))))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if let Some(panel) = this.agent_panel.as_mut() {
-                            panel.selected = Some(id.clone());
-                            panel.log = None;
-                            panel.scroll = gpui::ScrollHandle::new();
-                        }
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            .t_small()
-                            .child(if agent.finished {
-                                icon("circle-check", IconSize::INLINE, hex(status_color)).into_any_element()
-                            } else {
-                                crate::ui::spinner(IconSize::INLINE, hex(status_color)).into_any_element()
-                            })
-                            .child(
-                                div().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(agent.agent_type.clone()),
-                            )
-                            .children(agent.model.clone().map(|m| div().text_color(hex(Chrome::MUTED)).child(m)))
-                            .child(div().flex_1())
-                            .child(div().text_color(hex(Chrome::MUTED)).child(relative_time(now, agent.updated_ms))),
-                    )
-                    .child(div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(agent.description.clone()))
-                    .children(agent.last_tool.clone().map(|tool| {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .t_caption()
-                            .text_color(hex(Chrome::MUTED))
-                            .child(icon("square-terminal", 11., hex(Chrome::MUTED)))
-                            .child(div().truncate().child(tool))
-                    })),
-            );
-        }
-        let log: AnyElement = match &panel.log {
-            None if panel.selected.is_some() => crate::ui::loading_row(t(cx, "viewer.loading")).into_any_element(),
-            None => crate::ui::hint(t(cx, "collab.pick_agent")).into_any_element(),
-            Some(turns) => {
-                let mut column = div().flex().flex_col().gap_2().p_3();
-                for turn in turns.iter().rev().take(60).collect::<Vec<_>>().into_iter().rev() {
-                    let user = turn.role == Role::User;
-                    column = column.child(
-                        div()
-                            .p_2()
-                            .rounded_md()
-                            .when(user, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.12)))
-                            .t_small()
-                            .text_color(hex(if user { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
-                            .child(div().t_caption().text_color(hex(Chrome::MUTED)).pb_0p5().child(if user {
-                                t(cx, "collab.task")
-                            } else {
-                                t(cx, "collab.reply")
-                            }))
-                            .children(
-                                turn.text.lines().take(40).map(|l| div().child(if l.is_empty() { " ".to_string() } else { l.to_string() })),
-                            ),
-                    );
-                }
-                div().id("subagent-log").size_full().overflow_y_scroll().track_scroll(&panel.scroll).child(column).into_any_element()
-            }
-        };
-        div()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(hex(Chrome::OVERLAY_BORDER))
-                    .child(icon("bot", IconSize::INLINE, hex(Chrome::FOREGROUND)))
-                    .child(div().t_body().font_weight(crate::theme::EMPHASIS).child(t(cx, "collab.agents")))
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(tf(
-                        cx,
-                        "collab.agents_count",
-                        &[("running", &running.to_string()), ("total", &agents.len().to_string())],
-                    ))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .child(list)
-                    .child(div().w(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
-                    .child(div().flex_1().min_w_0().h(px(420.)).child(log)),
-            )
-            .into_any_element()
+        self.render_subagent_traces(panel, agents, cx)
     }
 
     fn render_links(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {

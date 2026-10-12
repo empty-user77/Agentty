@@ -200,23 +200,15 @@ pub fn find(id: &str) -> Result<PathBuf> {
         .with_context(|| format!("Claude session {id} not found"))
 }
 
+/// Turns of a session transcript; subagents' lines (sidechain) are left out.
 pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
-    read_turns(path, false)
-}
-
-/// Turns of a subagent transcript (all of its lines are sidechain lines).
-pub fn subagent_transcript(path: &Path) -> Result<Vec<Turn>> {
-    read_turns(path, true).map(|(_, turns)| turns)
-}
-
-fn read_turns(path: &Path, sidechain: bool) -> Result<(Option<String>, Vec<Turn>)> {
     let reader = BufReader::new(File::open(path)?);
     let mut cwd = None;
     let mut turns = Vec::new();
 
     for line in reader.lines() {
         let Ok(v) = serde_json::from_str::<Value>(&line?) else { continue };
-        if (!sidechain && v["isSidechain"].as_bool() == Some(true)) || v["isMeta"].as_bool() == Some(true) {
+        if v["isSidechain"].as_bool() == Some(true) || v["isMeta"].as_bool() == Some(true) {
             continue;
         }
         if cwd.is_none() {
@@ -331,12 +323,22 @@ pub fn subagent_activity(session_id: &str) -> (usize, usize) {
     (files.len(), files.iter().filter(|m| now.saturating_sub(**m) < 20_000).count())
 }
 
-/// Subagents of a session, oldest first.
-pub fn subagents(session_id: &str) -> Vec<Subagent> {
+/// A subagent's transcript and what it was started for, from its `.meta.json` alone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubagentFile {
+    pub id: String,
+    pub agent_type: String,
+    pub description: String,
+    pub model: Option<String>,
+    pub path: PathBuf,
+}
+
+/// Subagent transcripts of a session, oldest first, without reading them.
+pub fn subagent_files(session_id: &str) -> Vec<SubagentFile> {
     let Ok(transcript) = find(session_id) else { return Vec::new() };
     let dir = transcript.with_extension("").join("subagents");
     let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
-    let mut found: Vec<Subagent> = entries
+    let mut found: Vec<SubagentFile> = entries
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
@@ -344,6 +346,25 @@ pub fn subagents(session_id: &str) -> Vec<Subagent> {
             let id = path.file_stem()?.to_string_lossy().trim_start_matches("agent-").to_string();
             let meta: Value =
                 std::fs::read(path.with_extension("meta.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+            Some(SubagentFile {
+                id,
+                agent_type: meta["agentType"].as_str().unwrap_or("agent").to_string(),
+                description: meta["description"].as_str().unwrap_or_default().to_string(),
+                model: meta["model"].as_str().map(str::to_string),
+                path,
+            })
+        })
+        .collect();
+    found.sort_by_key(|s| s.path.metadata().and_then(|m| m.created()).ok());
+    found
+}
+
+/// Subagents of a session, oldest first.
+pub fn subagents(session_id: &str) -> Vec<Subagent> {
+    subagent_files(session_id)
+        .into_iter()
+        .map(|file| {
+            let path = file.path;
             let tail = fsutil::tail_lines_rev(&path, 256 * 1024);
             let finished =
                 tail.iter().find(|l| l.contains("\"type\":\"assistant\"")).is_some_and(|l| l.contains("\"stop_reason\":\"end_turn\""));
@@ -361,21 +382,19 @@ pub fn subagents(session_id: &str) -> Vec<Subagent> {
                 })
             });
             let turns = tail.iter().filter(|l| l.contains("\"type\":\"assistant\"")).count();
-            Some(Subagent {
-                id,
-                agent_type: meta["agentType"].as_str().unwrap_or("agent").to_string(),
-                description: meta["description"].as_str().unwrap_or_default().to_string(),
-                model: meta["model"].as_str().map(str::to_string),
+            Subagent {
+                id: file.id,
+                agent_type: file.agent_type,
+                description: file.description,
+                model: file.model,
                 updated_ms: fsutil::mtime_ms(&path),
                 path,
                 finished,
                 turns,
                 last_tool,
-            })
+            }
         })
-        .collect();
-    found.sort_by_key(|s| s.path.metadata().and_then(|m| m.created()).ok());
-    found
+        .collect()
 }
 
 pub fn exists(id: &str) -> bool {

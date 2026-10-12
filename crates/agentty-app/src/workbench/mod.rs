@@ -62,6 +62,7 @@ mod session_viewer;
 mod settings_page;
 pub mod side_panels;
 mod status_menus;
+mod subagent_view;
 mod sync;
 mod system_page;
 mod tab_menu;
@@ -521,6 +522,10 @@ pub struct Workbench {
     usage_scanner: std::sync::Arc<std::sync::Mutex<agentty_bridge::usage::UsageScanner>>,
     /// Subagents / session links popover of a pane.
     agent_panel: Option<agent_panel::AgentPanel>,
+    agent_window: agent_panel::AgentWindow,
+    /// The subagents view while it is in a window of its own, and that window.
+    popped_out: Option<agent_panel::AgentPanel>,
+    popout_window: Option<gpui::WindowHandle<agent_panel::SubagentWindow>>,
     session_viewer: Option<session_viewer::SessionViewer>,
     /// File editor (files opened from the files panel), and whether it is what the main area shows.
     editor: Option<Entity<crate::editor::CodeEditor>>,
@@ -875,6 +880,9 @@ impl Workbench {
             account_usage: Vec::new(),
             usage_scanner: Default::default(),
             agent_panel: None,
+            agent_window: Default::default(),
+            popped_out: None,
+            popout_window: None,
             session_viewer: None,
             editor: None,
             editor_shown: false,
@@ -1278,6 +1286,9 @@ impl Workbench {
         }
         if self.agent_panel.as_ref().is_some_and(|p| p.pane == pane.entity_id()) {
             self.agent_panel = None;
+        }
+        if self.popped_out.as_ref().is_some_and(|p| p.pane == pane.entity_id()) {
+            self.close_popped_out(cx);
         }
         let removed_id = pane.read(cx).pane_id;
         // Read off the pane before it goes: a workspace that falls dormant on this close keeps
@@ -4248,6 +4259,32 @@ impl Workbench {
                 }
             }
             "tab-menu" => self.open_tab_menu(argument.parse().unwrap_or(0), gpui::point(gpui::px(420.), gpui::px(60.)), cx),
+            // `subagents <session id>`: the active pane follows that Claude session and opens its
+            // subagents panel, without starting an agent (to look at a finished session's runs).
+            "subagents" => {
+                if let Some(pane) = self.active_pane() {
+                    let id = argument.trim().to_string();
+                    pane.update(cx, |view, _| {
+                        view.subagent_files = agentty_bridge::claude::subagent_activity(&id);
+                        view.session_id_live = Some(id);
+                    });
+                    self.toggle_agent_panel(&pane, agent_panel::PanelTab::Agents, cx);
+                }
+            }
+            "subagent-select" => self.select_subagent(argument.trim(), cx),
+            "subagent-popout" => self.pop_out_subagents(cx),
+            "subagent-top" => {
+                if let Some(panel) = self.subagents_shown() {
+                    eprintln!("subagent-top: offset={:?} max={:?}", panel.scroll.offset(), panel.scroll.max_offset());
+                    let y = argument.parse::<f32>().unwrap_or(0.);
+                    panel.scroll.set_offset(gpui::point(gpui::px(0.), gpui::px(-y)));
+                    // `subagent-top open`: every step opened, to look at outputs and changes.
+                    if argument == "open" {
+                        panel.expanded.extend(0..2_000);
+                    }
+                }
+                cx.notify();
+            }
             "resume-here" => {
                 if let Some(pane) = self.active_pane() {
                     let dir = pane.read(cx).display_cwd();
