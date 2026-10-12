@@ -181,7 +181,7 @@ impl Session {
         self.read_rows(sql, limit)
     }
 
-    fn read_rows(&mut self, sql: &str, limit: usize) -> Result<QueryResult> {
+    pub(crate) fn read_rows(&mut self, sql: &str, limit: usize) -> Result<QueryResult> {
         let sql = sql.trim().trim_end_matches(';');
         match self {
             Session::MySql(conn) => {

@@ -53,3 +53,12 @@ Passwords never appear in a reply, on the page, or in a log. Connection errors n
 ## Using it
 
 The database chip and page follow the working tree of the active pane, like the Docker panel. Run a query in the box on the page, or let an agent use `agentty db` — both go through the same classification and approval path.
+
+## Relationship diagram
+
+**Diagram** above the rows draws every table of the connection as a card: its comment, and each column with its type and comment (a key icon marks the primary key). Lines join a column to the column it points at.
+
+- **Foreign keys** the database declares are solid blue lines.
+- **Inferred** relations are dashed orange lines: references the database does not declare but the names show — `user_settings.user_id` → `users.id`, `userId` → `users`, `parent_id` → the table itself, `emp_no` → the table whose key is `emp_no`. A line is drawn only when the referenced table and column exist and the two types could hold the same values. Click **Inferred** to hide them.
+
+Referenced tables sit left of the tables that point at them. Drag a card by its name to move it, click it to bring out its lines, double-click it to open its rows. Zoom with the buttons at the bottom right or ⌘ + scroll; **Fit** shows every table. Clicking a table in the list finds it in the diagram. MongoDB collections are read from a few sample documents, so their links are always inferred.

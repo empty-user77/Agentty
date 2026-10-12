@@ -6,4 +6,5 @@ pub mod detect;
 pub mod engine;
 pub mod guard;
 pub mod model;
+pub mod schema;
 pub mod store;
