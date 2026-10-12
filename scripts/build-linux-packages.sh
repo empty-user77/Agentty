@@ -26,10 +26,17 @@ if [[ "${1:-}" == "--in-container" ]]; then
   export PATH="/root/.cargo/bin:$PATH"
   dnf -y -q install dnf-plugins-core >/dev/null
   dnf config-manager --set-enabled crb
-  dnf -y -q install gcc gcc-c++ make git pkgconf-pkg-config libxkbcommon-devel libxkbcommon-x11-devel \
+  dnf -y -q install gcc gcc-c++ make cmake clang clang-devel git pkgconf-pkg-config libxkbcommon-devel libxkbcommon-x11-devel \
     wayland-devel libxcb-devel libX11-devel vulkan-loader-devel fontconfig-devel freetype-devel libzstd-devel >/dev/null
   command -v rustup >/dev/null || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --no-modify-path
   rustup toolchain install
+  # whisper.cpp (voice) is tuned for the CPU that compiles it unless told otherwise; a package built on a
+  # runner with AVX-512 would die with an illegal instruction on most desktops. GGML_NATIVE=OFF keeps
+  # ggml's portable x86-64 baseline (AVX2/FMA/F16C/BMI2, 2013 on; the app turns voice off on older CPUs,
+  # see agentty_bridge::voice::X86_REQUIRED). whisper-rs-sys forwards GGML_* to cmake but does not
+  # rebuild when they change, so its cached build in the target volume is dropped first.
+  export GGML_NATIVE=OFF
+  cargo clean --release -p whisper-rs-sys
   cargo build --release -p agentty-app
 
   tools=/root/.cargo/nfpm-$NFPM_VERSION
@@ -51,12 +58,18 @@ fi
 
 # ─── On the host ───
 docker info >/dev/null 2>&1 || { echo "Docker is not running (start Docker Desktop)" >&2; exit 1; }
+# git in the container (root) refuses the host-owned checkout ("dubious ownership"), so the commit
+# Settings → About shows is read here and handed in; SOURCE_DATE_EPOCH, when set, fixes the date.
+build_env=(-e CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-auto}" -e AGENTTY_SOURCE_COMMIT="$(git rev-parse --short=9 HEAD 2>/dev/null || true)")
+if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
+  build_env+=(-e SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH")
+fi
 docker run --rm --platform "$PLATFORM" \
   -v "$PWD:/src" -w /src \
   -v agentty-linux-amd64-cargo:/root/.cargo \
   -v agentty-linux-amd64-rustup:/root/.rustup \
   -v agentty-linux-amd64-target:/src/target \
-  -e CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-auto}" \
+  "${build_env[@]}" \
   "$IMAGE" bash scripts/build-linux-packages.sh --in-container
 
 if [[ "${1:-}" == "--check" ]]; then

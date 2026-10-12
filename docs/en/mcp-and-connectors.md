@@ -7,6 +7,14 @@ description: Skills, subagents, commands, MCP servers and your own HTTP APIs —
 
 From there you can add an official MCP server in one click, or insert and run any of them in the active agent. The status bar of an agent pane shows the skills, subagents and MCP servers that agent actually has.
 
+## Plugins as MCP tools
+
+Plugins installed in Agentty can offer tools to AI agents (Claude Code and Codex) running in Agentty, through an MCP server Agentty ships (`agentty-plugins`). Agents automatically get the server when at least one enabled plugin declares the `mcp.tools` permission and lists tools under `contributes.tools`.
+
+Each plugin offering tools appears on its Permissions tab with an **"Allow MCP connection"** switch, ON by default. When the user turns it OFF, agents can no longer call that plugin's tools.
+
+To write a plugin with tools, see [Manifest reference](/docs/plugin-manifest) for the `contributes.tools` structure, and [Node.js SDK](/docs/plugin-sdk) for the `plugin.tool()` handler.
+
 ## MCP servers
 
 Agentty registers servers with the agent CLIs rather than proxying them: the server is added to the project's or the agent's own configuration, and the agent talks to it directly.

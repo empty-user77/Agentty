@@ -4,7 +4,8 @@
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
-const PROTOCOL_VERSION: &str = "2025-06-18";
+/// MCP revision Agentty's own MCP servers (`mcp-browser`, `mcp-plugins`) speak.
+pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": required } })

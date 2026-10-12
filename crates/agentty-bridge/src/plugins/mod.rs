@@ -66,6 +66,8 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     // Which agents `prompt/inject` can start here, so a plugin offers only those.
     ("agent/list", Some("prompt.inject")),
     ("terminal/send", Some("terminal.write")),
+    // Terminals opened from now on go through the plugin's proxy on the loopback interface.
+    ("terminal/setProxy", Some("terminal.proxy")),
     ("session/get", Some("session.read")),
     ("workspace/list", Some("workspace.read")),
     // The in-app browser, signed in as the user: only on the sites the manifest names, and never
@@ -75,6 +77,9 @@ pub const HOST_METHODS: &[(&str, Option<&str>)] = &[
     ("workspace/setInstanceTitle", None),
     ("workspace/setInstanceStatus", None),
     ("workspace/closeInstance", None),
+    // Another Agentty window with the plugin's workspace in front: the plugin on its own, beside
+    // the window the user works in. Only right after the user used the plugin.
+    ("workspace/openWindow", None),
     ("browser/sites", Some("browser.control")),
     ("browser/open", Some("browser.control")),
     ("browser/navigate", Some("browser.control")),

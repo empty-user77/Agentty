@@ -12,6 +12,9 @@ pub struct LoadError {
     pub message: String,
 }
 
+/// No web view opens files here: the default browser shows them.
+pub fn grant_file(_url: &str) {}
+
 /// A browser shortcut pressed inside the web view. The panel matches on these, but without a web
 /// view nothing ever makes one, so this build only reads the type.
 #[allow(dead_code)]

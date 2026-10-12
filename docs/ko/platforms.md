@@ -3,7 +3,7 @@ title: 플랫폼
 description: macOS, Windows, Linux에서 다른 점.
 ---
 
-Agentty는 macOS에서 개발되며 macOS가 기준 플랫폼입니다. 세 플랫폼 모두 다운로드가 공개되어 있고, Windows와 Linux는 AppKit이나 WebKit에 의존하지 않는 모든 기능을 동일하게 제공합니다.
+Agentty는 macOS에서 개발되며 macOS가 기준 플랫폼입니다. 세 플랫폼 모두 다운로드가 공개되어 있고 Windows와 Linux는 AppKit이나 WebKit에 의존하지 않는 모든 기능을 동일하게 제공합니다.
 
 ## 다른 점
 

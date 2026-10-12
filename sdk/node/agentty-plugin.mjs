@@ -12,8 +12,8 @@
 
 import { createInterface } from 'node:readline';
 
-export const SDK_VERSION = '1.0.0';
-export const API_VERSION = 3;
+export const SDK_VERSION = '1.3.0';
+export const API_VERSION = 6;
 
 /** Builders for the panel UI tree. Every interactive element needs an `id` unique in the panel. */
 export const ui = {
@@ -25,7 +25,7 @@ export const ui = {
   /** variant: primary | secondary | ghost | danger */
   button: (id, label, { icon, variant = 'secondary', disabled = false } = {}) => ({ type: 'button', id, label, icon, variant, disabled }),
   /** rows > 1: a text area that many lines tall (max 24), where Enter adds a line. */
-  input: (id, { placeholder = '', value = '', rows } = {}) => ({ type: 'input', id, placeholder, value, ...(rows ? { rows } : {}) }),
+  input: (id, { placeholder = '', value = '', rows, mono } = {}) => ({ type: 'input', id, placeholder, value, ...(rows ? { rows } : {}), ...(mono ? { mono } : {}) }),
   /** items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }] — tone colors the icon */
   list: (id, items, { empty } = {}) => ({ type: 'list', id, items, empty }),
   /** options: [{ value, label }] */
@@ -35,6 +35,54 @@ export const ui = {
   badge: (text, tone = 'neutral') => ({ type: 'badge', text, tone }),
   spinner: (text = '') => ({ type: 'spinner', text }),
   divider: () => ({ type: 'divider' }),
+  /** steps: [{ id, title, subtitle?, icon?, state?: off | on | active | done | error, selected?, side? }] */
+  flow: (id, steps) => ({ type: 'flow', id, steps }),
+  /** A card beside the panel; its close button sends `close`. */
+  popover: (id, title, children) => ({ type: 'popover', id, title, children: compact(children) }),
+
+  // API 4 — check `uiFeatures` from `plugin.hostInfo()` before using these on an older Agentty.
+
+  /** A raised box around what belongs together. tone colors the icon and the edge. */
+  card: (children, { title, subtitle, icon, tone = 'neutral' } = {}) => ({ type: 'card', title, subtitle, icon, tone, children: compact(children) }),
+  /** Children in equal columns (1–6), wrapping onto new rows. */
+  grid: (children, { columns = 2, gap = 'medium', widths } = {}) => ({ type: 'grid', columns, gap, ...(widths?.length ? { widths } : {}), children: compact(children) }),
+  /** tabs: [{ id, label, icon?, badge? }]. Send only the picked tab's content as children; picking one sends `change`. */
+  tabs: (id, tabs, value, children) => ({ type: 'tabs', id, tabs, value, children: compact(children) }),
+  /** columns: [{ label, align?: start | center | end, grow? }]; rows: [{ id, cells: [string], tone? }]. A row click sends `select`. */
+  table: (id, columns, rows, { empty, selected } = {}) => ({ type: 'table', id, columns, rows, empty, selected }),
+  /** items: [{ label, value, tone?, mono? }] */
+  keyValue: (items) => ({ type: 'keyValue', items }),
+  /** One number that matters: stat('Passed', '128', { detail: '+4 today', tone: 'success' }) */
+  stat: (label, value, { detail, icon, tone = 'neutral' } = {}) => ({ type: 'stat', label, value: String(value ?? ''), detail, icon, tone }),
+  /** value from 0 to 1. detail replaces the percentage on the right. */
+  progress: (value, { label, detail, tone = 'neutral' } = {}) => ({ type: 'progress', value: Number(value) || 0, label, detail, tone }),
+  /** A tinted note. tone: info (default) | success | warning | error | neutral */
+  callout: (text, { title, icon, tone = 'info' } = {}) => ({ type: 'callout', text: String(text ?? ''), title, icon, tone }),
+  /** A drop-down; picking sends `change` with the option's value. options: [{ value, label }] */
+  select: (id, options, value = '', { placeholder, disabled = false } = {}) => ({ type: 'select', id, options, value, placeholder, disabled }),
+  /** A box to tick; sends `change` with the new boolean. */
+  checkbox: (id, label, value = false, { description, disabled = false } = {}) => ({ type: 'checkbox', id, label, value, description, disabled }),
+  /** Monospaced, colored by language (rust, json, ts, sh, …), with a copy button. */
+  code: (text, { language, title } = {}) => ({ type: 'code', text: String(text ?? ''), language, title }),
+
+  // API 5 — `uiFeatures` has `image` and `graph`.
+
+  /**
+   * A picture from the plugin's own folder (`files/*`): PNG, JPEG, WebP or GIF. With `id`, clicking
+   * sends `click`; with `drop` as well, pictures dragged on from the Finder are copied into `into`
+   * (default `dropped`) and sent as `drop` with `[{ path, name, size }]` (needs `files`).
+   */
+  image: (src, { id, alt, width, height, fit, caption, placeholder, drop = false, into } = {}) =>
+    ({ type: 'image', src: src || undefined, id, alt, width, height, fit, caption, placeholder, drop, into }),
+  /**
+   * Node cards on a canvas joined by wires. nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?,
+   * inputs?: [{ id, label?, tone? }], outputs?: [...], children?, state?, selected? }]; edges:
+   * [{ from: { node, port }, to: { node, port }, tone?, idle? }]. A heading click sends `select` with
+   * the node as `item`; with `movable`, a dragged heading sends `move` with `{ x, y }` as `value`.
+   * `fill` takes the panel's height instead of `height`; the user scrolls and zooms inside it.
+   */
+  graph: (id, nodes, edges = [], { height, movable = false, fill = false } = {}) =>
+    ({ type: 'graph', id, nodes: nodes.map((n) => ({ ...n, children: compact(n.children) })), edges, height, movable, fill }),
 };
 
 function compact(children) {
@@ -56,6 +104,7 @@ export function createPlugin(streams = {}) {
   const input = streams.input ?? process.stdin;
   const output = streams.output ?? process.stdout;
   const commands = new Map();
+  const tools = new Map();
   const events = new Map();
   const urls = new Map();
   const listeners = { activate: [], panelOpen: [], panelClose: [], context: [], event: [], url: [], shutdown: [], browserHidden: [], instanceOpen: [], instanceClose: [] };
@@ -74,6 +123,15 @@ export function createPlugin(streams = {}) {
 
     command(id, handler) {
       commands.set(id, handler);
+      return plugin;
+    },
+    /**
+     * Answers an AI agent's call of a tool listed in `contributes.tools` (needs the `mcp.tools`
+     * permission): handler({ args, context }) → a string, any JSON value, or MCP content
+     * `{ content: [{ type: 'text', text }], isError? }`. A thrown error goes back to the agent.
+     */
+    tool(name, handler) {
+      tools.set(name, handler);
       return plugin;
     },
     /** Handler for events of one element id: (event, context) => … */
@@ -135,6 +193,10 @@ export function createPlugin(streams = {}) {
     closeInstance(instance) {
       return call('workspace/closeInstance', { instance });
     },
+    /** Another Agentty window with the plugin's workspace in front (right after the user used the plugin). */
+    openWindow() {
+      return call('workspace/openWindow', {});
+    },
     /** A new automation (tab) in the plugin's workspace, or one that exists when the plugin starts: handler({ instance, title }). */
     onInstanceOpen(handler) {
       listeners.instanceOpen.push(handler);
@@ -160,6 +222,10 @@ export function createPlugin(streams = {}) {
     getContext() {
       return call('context/get', {});
     },
+    /** { version, apiVersion, language, utcOffsetMinutes, uiFeatures } — uiFeatures lists the panel elements this Agentty draws. */
+    hostInfo() {
+      return call('host/info', {});
+    },
     /**
      * Sends a prompt to an agent. target: ask (dialog, default) | active | newWorkspace | newTab |
      * pane (paneId) | workspace (workspaceId). agent: claude | codex | shell. Needs `prompt.inject`.
@@ -170,6 +236,14 @@ export function createPlugin(streams = {}) {
     /** Types text into a pane (Enter when `submit`). Needs `terminal.write`. */
     sendToTerminal({ paneId, text, submit = false }) {
       return call('terminal/send', { paneId, text, submit });
+    },
+    /**
+     * Terminals opened from now on go through the plugin's proxy at `127.0.0.1:<port>`, with
+     * `pane-<id>:<token>` as its user and password; `port: null` stops it. Needs `terminal.proxy`
+     * (API 6), and ends when the plugin stops.
+     */
+    setTerminalProxy({ port, token } = {}) {
+      return call('terminal/setProxy', { port: port ?? null, token });
     },
     /** Conversation of an agent pane: { agent, sessionId, title, cwd, status, turns: [{ role, text }] }. Needs `session.read`. */
     getSession({ paneId, maxTurns } = {}) {
@@ -340,6 +414,22 @@ export function createPlugin(streams = {}) {
           return;
         }
         await guarded(() => handler({ context: params.context, args: params.args ?? {} }));
+        return;
+      }
+      case 'tools/call': {
+        const handler = tools.get(params.name);
+        if (message.id === undefined) return;
+        if (!handler) {
+          send({ id: message.id, error: { code: -32601, message: `no handler for tool ${params.name}` } });
+          return;
+        }
+        try {
+          const result = await handler({ args: params.arguments ?? {}, context: params.context });
+          send({ id: message.id, result: result === undefined ? null : result });
+        } catch (err) {
+          plugin.log(err?.stack ?? String(err));
+          send({ id: message.id, error: { code: -32603, message: err?.message ?? String(err) } });
+        }
         return;
       }
       case 'ui/event': {

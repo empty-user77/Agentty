@@ -295,6 +295,16 @@ impl Workbench {
                         Box::new(|this, cx| this.open_page(Page::Flow, cx)),
                         cx,
                     ))
+                    .when(settings(cx).board.enabled, |d| {
+                        d.child(item(
+                            "activity-board",
+                            "square-kanban",
+                            self.page == Some(Page::Board),
+                            "page.board",
+                            Box::new(|this, cx| this.open_board(cx)),
+                            cx,
+                        ))
+                    })
                     .child(item(
                         "activity-git",
                         "git-branch",
@@ -306,16 +316,45 @@ impl Workbench {
                     .child(item(
                         "activity-usage",
                         "chart-column",
-                        matches!(
-                            self.page,
-                            Some(Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Browsers)
-                        ),
+                        matches!(self.page, Some(Page::Usage | Page::Processes | Page::Worktrees | Page::Disk | Page::Browsers)),
                         "page.monitoring",
                         Box::new(|this, cx| this.open_page(Page::Browsers, cx)),
                         cx,
                     ))
                     // Extensions has no icon here any more: it is reached from the command palette
                     // (⇧⌘X) and from where an extension is actually needed.
+                    .when(settings(cx).remote.feature, |d| {
+                        // On and reachable: a green dot at the icon's lower right corner, ringed
+                        // in the bar's colour so it stands off the glyph.
+                        let online =
+                            cx.try_global::<crate::remote::Remote>().is_some_and(|r| matches!(r.phase, crate::remote::Phase::On { .. }));
+                        const DOT: f32 = 9.;
+                        let corner = |extent: f32| extent / 2. + IconSize::ACTIVITY / 2. - DOT + 1.;
+                        d.child(
+                            item(
+                                "activity-remote",
+                                "remote-desktop",
+                                self.page == Some(Page::Remote),
+                                "page.remote",
+                                Box::new(|this, cx| this.open_page(Page::Remote, cx)),
+                                cx,
+                            )
+                            .relative()
+                            .when(online, |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(corner(ACTIVITY_BAR_WIDTH)))
+                                        .top(px(corner(48.)))
+                                        .size(px(DOT))
+                                        .rounded_full()
+                                        .border_2()
+                                        .border_color(hex(Chrome::ACTIVITY_BAR))
+                                        .bg(hex(super::remote_page::NEON_GREEN)),
+                                )
+                            }),
+                        )
+                    })
                     .child(item(
                         "activity-plugins",
                         "puzzle",
@@ -677,7 +716,7 @@ impl Workbench {
             let ws = &self.workspaces[index];
             let id = ws.id;
             // Named as its card names it; the whole path goes on the line below.
-            let title = super::card_title(self.workspace_title(ws, cx));
+            let title = self.workspace_label(ws, cx);
             let folder = tilde(&self.workspace_folder(ws, cx));
             let by_name = title.to_lowercase().contains(query);
             let by_folder = folder.to_lowercase().contains(query);
@@ -932,7 +971,7 @@ impl Workbench {
         let ws = &self.workspaces[index];
         let id = ws.id;
         let active = index == self.active_workspace && self.page.is_none_or(Workbench::page_keeps_sidebar) && self.session_viewer.is_none();
-        let title = super::card_title(self.workspace_title(ws, cx));
+        let title = self.workspace_label(ws, cx);
         let summary = self.summarize(ws, cx);
         let renaming = matches!(&self.rename, Some(r) if r.target == RenameTarget::Workspace(id));
         let ws_colored = ws.color.is_some();
@@ -989,9 +1028,12 @@ impl Workbench {
         // A plugin's workspace works in the plugin's own folder: say whose it is instead, or what
         // one of its automations is doing right now while it works.
         let plugin_working_text = ws.plugin.as_deref().and_then(|id| crate::plugins::plugin_working_text(cx, id));
+        // A chat says so, and names its project: its lead works in a worktree of the chat's own.
+        let chat = ws.plugin.is_none() && self.is_chat_workspace(ws);
         let path = match (&ws.plugin, &plugin_working_text) {
             (Some(_), Some(text)) => text.clone(),
             (Some(_), None) => t(cx, "workspace.plugin_card").to_string(),
+            (None, _) if chat => tf(cx, "workspace.chat_card", &[("folder", &tilde(&ws.cwd))]),
             (None, _) => tilde(&cwd),
         };
         // The path is shortened on its own; the counts are short and go after it whole, so a cut
@@ -1036,7 +1078,11 @@ impl Workbench {
             );
             crate::ui::plugin_mark(agentty_bridge::plugins::store::logo_file(plugin), glyph, 16., hex(ink))
         });
-        let indent = px(if show_logo { 24. } else { 2. });
+        // A chat carries a chat mark, like a plugin its own: told apart at a glance in the list.
+        if chat {
+            plugin_mark = Some(crate::ui::icon("message-square", 16., hex(ink)).into_any_element());
+        }
+        let indent = px(if show_logo || chat { 24. } else { 2. });
         let compact = settings(cx).compact_workspaces;
 
         // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
@@ -1125,7 +1171,7 @@ impl Workbench {
                     // One logo: which agent it is, without a pile of icons down the sidebar. It
                     // breathes while a turn is running.
                     .map(|d| {
-                        if let Some(mark) = plugin_mark.take().filter(|_| show_logo) {
+                        if let Some(mark) = plugin_mark.take().filter(|_| show_logo || chat) {
                             // A turn running in there still shows, beside the mark.
                             d.child(mark)
                                 .when(working, |d| d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(ink, 0.9))))
@@ -1274,7 +1320,7 @@ impl Workbench {
         let menu_open = self.workspace_menu == Some(id);
         // A card near the bottom of the sidebar would have its menu cut off by the window edge, so
         // there the menu grows upwards from the card instead of downwards.
-        let upwards = menu_open && self.workspace_menu_at + self.workspace_menu_height() > f32::from(window.viewport_size().height) - 8.;
+        let upwards = menu_open && self.workspace_menu_at + self.workspace_menu_height(cx) > f32::from(window.viewport_size().height) - 8.;
         // Deferred so the menu paints above the rows below it (e.g. the selected workspace).
         div()
             .relative()
@@ -1458,15 +1504,17 @@ impl Workbench {
 
     /// Roughly how tall the workspace menu comes out, to decide which way it opens. Measured from
     /// what it is built of below: rows, the colour block, and the palette when it is unfolded.
-    fn workspace_menu_height(&self) -> f32 {
+    fn workspace_menu_height(&self, cx: &gpui::App) -> f32 {
         const ROW: f32 = 28.;
         const COLOUR_BLOCK: f32 = 52.;
         const PALETTE: f32 = 116.;
         let groups = self.groups.len() as f32;
         let palette = if matches!(self.color_palette_open, Some(ColorTarget::Workspace(_))) { PALETTE } else { 0. };
         let group_section = if groups > 0. { 24. + groups * ROW } else { 0. };
-        // rename + colour + groups + "new group" + ungroup + rule + close, inside the popover's padding.
-        12. + ROW + COLOUR_BLOCK + palette + group_section + ROW * 2. + 9. + ROW
+        let remote = if crate::settings::settings(cx).remote.feature { ROW } else { 0. };
+        // rename + colour + remote + groups + "new group" + ungroup + rule + close, inside the
+        // popover's padding.
+        12. + ROW + COLOUR_BLOCK + palette + remote + group_section + ROW * 2. + 9. + ROW
     }
 
     fn render_workspace_menu(&self, id: u64, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1492,6 +1540,15 @@ impl Workbench {
                 self.workspaces.iter().find(|w| w.id == id).and_then(|w| w.color),
                 cx,
             ));
+        if crate::settings::settings(cx).remote.feature {
+            let hidden = self.workspaces.iter().find(|w| w.id == id).is_some_and(|w| w.remote_hidden);
+            let label = t(cx, "remote.hide_workspace");
+            menu = menu.child(menu_item(
+                "wm-remote-hidden",
+                if hidden { format!("✓ {label}") } else { label.to_string() },
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_remote_hidden(id, cx)),
+            ));
+        }
         if !self.groups.is_empty() {
             menu = menu.child(div().px_3().pt_2().pb_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "move.to.group")));
             for group in &self.groups {
@@ -1828,6 +1885,8 @@ impl Workbench {
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
                 .child(icon("house", IconSize::INLINE, hex(if home_active { Chrome::BRIGHT } else { Chrome::MUTED }))),
         );
+        // Tabs set aside for later in this workspace, right after the start page.
+        tabs = tabs.children(self.render_todo_button(cx));
         if let Some(page) = self.page {
             // Monitoring: AI usage, AI processes, the capture proxy and what the agents can use
             // (skills, subagents, MCP servers) are tabs of one page. The extension tabs carry the
@@ -1838,7 +1897,6 @@ impl Workbench {
                     (Page::Browsers, None, t(cx, "page.browsers")),
                     (Page::Usage, None, t(cx, "page.usage")),
                     (Page::Processes, None, t(cx, "page.processes")),
-                    (Page::Proxy, None, t(cx, "page.proxy")),
                     (Page::Worktrees, None, t(cx, "page.worktrees")),
                     (Page::Disk, None, t(cx, "page.disk")),
                     (Page::Extensions, Some("skills"), t(cx, "ext.skills")),
@@ -1853,15 +1911,15 @@ impl Workbench {
                 tabs
             };
             let pages: Vec<(Page, Option<&'static str>, &str)> = match page {
-                Page::Usage | Page::Processes | Page::Proxy | Page::Worktrees | Page::Disk | Page::Browsers | Page::Extensions => {
-                    monitoring()
-                }
+                Page::Usage | Page::Processes | Page::Worktrees | Page::Disk | Page::Browsers | Page::Extensions => monitoring(),
                 Page::Git => vec![(page, None, t(cx, "page.git"))],
                 Page::Flow => vec![(page, None, t(cx, "page.flow"))],
                 Page::Settings => vec![(page, None, t(cx, "page.settings"))],
                 Page::Plugins => vec![(page, None, t(cx, "page.plugins"))],
+                Page::Remote => vec![(page, None, t(cx, "page.remote"))],
                 Page::Idea => vec![(page, None, t(cx, "page.idea"))],
                 Page::Database => vec![(page, None, t(cx, "page.database"))],
+                Page::Board => vec![(page, None, t(cx, "page.board"))],
             };
             for (tab_page, tab_category, label) in pages {
                 let active = tab_page == page && tab_category.is_none_or(|c| c == category);
@@ -1909,7 +1967,7 @@ impl Workbench {
         } else if let Some(ws) = self.workspaces.get(self.active_workspace) {
             // While a file is shown in the editor, its tab is the active one.
             let editing = self.editor_visible(cx);
-            for (index, tab) in ws.tabs.iter().enumerate() {
+            for (index, tab) in ws.tabs.iter().enumerate().filter(|(_, tab)| !tab.todo) {
                 let view = tab.active.read(cx);
                 let active = index == ws.active_tab && !editing;
                 let leaves = tab.root.leaves();
@@ -2166,13 +2224,17 @@ impl Workbench {
                 d
                     // Plugins with a panel, then cmux-style quick actions: icons only.
                     .children(self.render_plugin_header_buttons(cx))
-                    .child(header_icon(
-                        "header-git-clone",
-                        "git-branch",
-                        self.clone_dialog.is_some(),
-                        (t(cx, "clone.tooltip"), None),
-                        cx.listener(|this, _: &ClickEvent, window, cx| this.open_clone_dialog(window, cx)),
-                    ))
+                    // Only where a clone makes sense: a plain terminal in an empty folder (or one of
+                    // repositories side by side), never in a repository, `/` or the home folder.
+                    .when(self.clone_dialog.is_some() || self.clone_offered(cx), |d| {
+                        d.child(header_icon(
+                            "header-git-clone",
+                            "folder-git-2",
+                            self.clone_dialog.is_some(),
+                            (t(cx, "clone.tooltip"), None),
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.open_clone_dialog(window, cx)),
+                        ))
+                    })
                     .child(ringed(
                         header_icon(
                             "header-browser",
@@ -2420,6 +2482,16 @@ impl Workbench {
                 Box::new(|this, w, cx| this.open_new_workspace_page(w, cx)),
                 cx,
             ))
+            .when(self.is_installed("claude"), |menu| {
+                menu.child(entry(
+                    "launch-chat-workspace".into(),
+                    Some("claude"),
+                    t(cx, "new.chat_workspace").into(),
+                    "",
+                    Box::new(|this, w, cx| this.request_launch(LaunchChoice::Chat, LaunchTarget::NewWorkspace, w, cx)),
+                    cx,
+                ))
+            })
             // Last: what opens something new comes first, putting something back comes after it.
             .children(self.render_reopen_tabs(cx));
         // Right-clicked on the tab strip: open where the click was; else under the + button.
@@ -2481,7 +2553,7 @@ impl Workbench {
     /// what to start, what ran recently, and what else Agentty does.
     pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let starting = self.new_workspace.as_ref().map(|(input, _)| input.clone());
-        let tile = |id: SharedString, logo: &'static str, label: String, body: String| {
+        let tile = |id: SharedString, art: gpui::Div, label: String, body: String| {
             div()
                 .id(id)
                 .flex_1()
@@ -2496,7 +2568,7 @@ impl Workbench {
                 .border_color(hex(Chrome::BORDER))
                 .bg(hex(Chrome::OVERLAY))
                 .hover(|s| s.bg(hex(Chrome::HOVER)).border_color(hex_alpha(Chrome::ACCENT, 0.7)))
-                .child(crate::brand::tile(logo, 36.))
+                .child(art)
                 .child(
                     div()
                         .flex()
@@ -2506,8 +2578,10 @@ impl Workbench {
                         .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(body)),
                 )
         };
-        let card = |id: SharedString, logo: &'static str, label: String, body: String, choice: LaunchChoice, cx: &mut Context<Self>| {
-            tile(id, logo, label, body).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+        // A card that shows an icon instead of a brand logo.
+        let glyph_tile = |glyph: &'static str, color: u32| crate::brand::tinted_tile(color, 36.).child(icon(glyph, 20., hex(color)));
+        let card = |id: SharedString, art: gpui::Div, label: String, body: String, choice: LaunchChoice, cx: &mut Context<Self>| {
+            tile(id, art, label, body).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.request_launch(choice.clone(), LaunchTarget::NewWorkspace, window, cx)
             }))
         };
@@ -2517,26 +2591,40 @@ impl Workbench {
         // are there.
         let missing = |id: &'static str, name: &'static str, url: &'static str, cx: &mut Context<Self>| {
             let not_installed = t(cx, "welcome.not_installed").to_string();
-            tile(SharedString::from(format!("welcome-{id}")), id, name.to_string(), not_installed).on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
+            tile(SharedString::from(format!("welcome-{id}")), crate::brand::tile(id, 36.), name.to_string(), not_installed).on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.install_hint = Some((id, name, url));
                     cx.notify();
-                },
-            ))
+                }),
+            )
         };
         let mut cards = div().w_full().flex().flex_wrap().gap_3();
+        if starting.is_none() && settings(cx).idea_mode {
+            let (label, body) = (t(cx, "idea.menu").to_string(), t(cx, "welcome.idea_body").to_string());
+            cards = cards.child(
+                tile("welcome-idea".into(), glyph_tile("lightbulb", Chrome::ORANGE), label, body)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx))),
+            );
+        }
         let terminal_body = t(cx, "welcome.terminal_body").to_string();
+        let shell = crate::brand::tile("shell", 36.);
         cards =
-            cards.child(card("welcome-shell".into(), "shell", t(cx, "welcome.terminal").into(), terminal_body, PaneKind::Shell.into(), cx));
+            cards.child(card("welcome-shell".into(), shell, t(cx, "welcome.terminal").into(), terminal_body, PaneKind::Shell.into(), cx));
         cards = cards.child(if self.is_installed("claude") {
             let body = tf(cx, "welcome.maker_body", &[("maker", "Anthropic")]);
-            card("welcome-claude".into(), "claude", "Claude Code".into(), body, PaneKind::Claude.into(), cx)
+            card("welcome-claude".into(), crate::brand::tile("claude", 36.), "Claude Code".into(), body, PaneKind::Claude.into(), cx)
         } else {
             missing("claude", "Claude Code", CLAUDE_INSTALL_URL, cx)
         });
+        // A chat runs Claude Code as its lead, but gets its own icon and color so the two cards don't look alike.
+        if self.is_installed("claude") {
+            let body = t(cx, "welcome.chat_body").to_string();
+            let art = glyph_tile("message-square-code", Chrome::PURPLE);
+            cards = cards.child(card("welcome-chat".into(), art, t(cx, "welcome.chat").into(), body, LaunchChoice::Chat, cx));
+        }
         cards = cards.child(if self.is_installed("codex") {
             let body = tf(cx, "welcome.maker_body", &[("maker", "OpenAI")]);
-            card("welcome-codex".into(), "codex", "Codex".into(), body, PaneKind::Codex.into(), cx)
+            card("welcome-codex".into(), crate::brand::tile("codex", 36.), "Codex".into(), body, PaneKind::Codex.into(), cx)
         } else {
             missing("codex", "Codex", CODEX_INSTALL_URL, cx)
         });
@@ -2547,8 +2635,8 @@ impl Workbench {
             } else {
                 tf(cx, "welcome.maker_body", &[("maker", agent.maker)])
             };
-            cards =
-                cards.child(card(SharedString::from(format!("welcome-{}", agent.id)), agent.id, agent.name.to_string(), body, choice, cx));
+            let art = crate::brand::tile(agent.id, 36.);
+            cards = cards.child(card(SharedString::from(format!("welcome-{}", agent.id)), art, agent.name.to_string(), body, choice, cx));
         }
         // Invisible cards keep the last row on the same columns as the rows above it. They carry a
         // card's padding and border width too: free space is shared on top of those.
@@ -2646,7 +2734,6 @@ impl Workbench {
                         .children(self.render_group_choice(cx)),
                 )
             })
-            .when(starting.is_none() && settings(cx).idea_mode, |d| d.child(self.render_idea_card(cx)))
             .child(div().w_full().flex().flex_col().gap_3().child(heading(t(cx, "welcome.start").to_string())).child(cards).when(
                 more,
                 |d| {
@@ -2806,49 +2893,6 @@ impl Workbench {
         )
     }
 
-    /// Start page card for "Build my idea": the one thing on the page that is not a terminal, so it
-    /// gets the full width — and room for its one-line description.
-    fn render_idea_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("welcome-idea")
-            .group("welcome-idea")
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_4()
-            .p_4()
-            .rounded_lg()
-            .cursor_pointer()
-            .border_1()
-            .border_color(hex_alpha(Chrome::ORANGE, 0.5))
-            .bg(hex_alpha(Chrome::ORANGE, 0.08))
-            .hover(|s| s.bg(hex_alpha(Chrome::ORANGE, 0.16)).border_color(hex(Chrome::ORANGE)))
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_idea_page(window, cx)))
-            .child(crate::brand::tinted_tile(Chrome::ORANGE, 40.).child(icon("lightbulb", 20., hex(Chrome::ORANGE))))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .truncate()
-                            .t_title()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(hex(Chrome::BRIGHT))
-                            .child(t(cx, "idea.menu")),
-                    )
-                    .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "welcome.idea_body"))),
-            )
-            .child(div().flex_shrink_0().opacity(0.6).group_hover("welcome-idea", |s| s.opacity(1.)).child(icon(
-                "chevron-right",
-                IconSize::BUTTON,
-                hex(Chrome::ORANGE),
-            )))
-    }
-
     /// Links and copyright at the bottom of the start page, like the website's footer.
     fn render_welcome_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let link = |id: &'static str, label: String, url: &'static str| {
@@ -2988,6 +3032,7 @@ impl Workbench {
             .children(self.render_docker_chip(cx))
             .children(self.render_db_chip(cx))
             .children(self.render_status_icons(cx))
+            .children(self.render_mic_button(cx))
     }
 }
 

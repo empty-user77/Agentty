@@ -17,6 +17,7 @@ use crate::webview::{normalize_url_with, BrowserKey, LoadError, WebView, NET_DET
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, FontWeight, SharedString, Subscription, Window};
 use serde::Deserialize;
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -374,6 +375,15 @@ impl Workbench {
         } else {
             cx.open_url(&url);
         }
+    }
+
+    /// Shows a local HTML file as a page, in the browser beside the terminals. The web view never
+    /// opens `file:` addresses on its own; this one is granted for its next load, with the file's
+    /// folder readable for its styles, scripts and images.
+    pub(super) fn show_file_in_browser(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let url = super::guide::file_url(path);
+        crate::webview::grant_file(&url);
+        self.open_browser(Some(url), cx);
     }
 
     /// Whether an AI drives the page in front: a plugin's page, or one an agent sent a command to

@@ -88,12 +88,18 @@ pub struct LaunchSpec {
     /// tools (so not the in-app browser, which is signed in as the user). A prompt hidden in that
     /// text then has nothing to reach with.
     pub restricted: bool,
+    /// A reviewer: it reads and runs what it needs to judge the work, but does not edit files
+    /// (Claude Code without its editing tools, Codex in a read-only sandbox).
+    pub read_only: bool,
 }
 
 /// Claude Code tools a restricted agent does not get: everything that runs a program, reaches the
 /// network or starts other agents. What is left reads and writes files.
 const RESTRICTED_DENIED_TOOLS: &[&str] =
     &["Bash", "BashOutput", "KillShell", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit", "Skill", "SlashCommand"];
+
+/// Claude Code tools a reviewer does not get: the ones that edit files.
+const READ_ONLY_DENIED_TOOLS: &[&str] = &["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
 /// What the user picked in the launcher.
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +112,8 @@ pub enum LaunchChoice {
         title: String,
         command: String,
     },
+    /// A chat workspace: Claude Code as the lead the user chats with, starting workers below it.
+    Chat,
 }
 
 impl From<PaneKind> for LaunchChoice {
@@ -119,6 +127,7 @@ impl LaunchChoice {
         match self {
             LaunchChoice::Kind(kind) | LaunchChoice::Model(kind, _) => *kind,
             LaunchChoice::Command { .. } => PaneKind::Shell,
+            LaunchChoice::Chat => PaneKind::Claude,
         }
     }
 
@@ -128,6 +137,7 @@ impl LaunchChoice {
             LaunchChoice::Kind(_) => None,
             LaunchChoice::Model(kind, model) => Some(format!("{} · {model}", LaunchSpec::new(*kind, PathBuf::new()).title)),
             LaunchChoice::Command { title, .. } => Some(title.clone()),
+            LaunchChoice::Chat => Some(CHAT_TITLE.to_string()),
         }
     }
 
@@ -140,9 +150,17 @@ impl LaunchChoice {
                 spec
             }
             LaunchChoice::Command { title, command } => LaunchSpec::shell_command(command.clone(), title.clone(), cwd),
+            LaunchChoice::Chat => {
+                let mut spec = LaunchSpec::new(PaneKind::Claude, cwd);
+                spec.title = CHAT_TITLE.to_string();
+                spec
+            }
         }
     }
 }
+
+/// Title of the lead agent's pane in a chat workspace.
+pub const CHAT_TITLE: &str = "Chat";
 
 static NEXT_PANE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -158,7 +176,18 @@ impl LaunchSpec {
             PaneKind::Codex => "Codex".to_string(),
         };
         let session_id = (kind == PaneKind::Claude).then(|| uuid::Uuid::new_v4().to_string());
-        Self { kind, title, cwd, start: Start::New, session_id, model: None, advisor: None, missing_cwd: None, restricted: false }
+        Self {
+            kind,
+            title,
+            cwd,
+            start: Start::New,
+            session_id,
+            model: None,
+            advisor: None,
+            missing_cwd: None,
+            restricted: false,
+            read_only: false,
+        }
     }
 
     pub fn shell_command(command: String, title: String, cwd: PathBuf) -> Self {
@@ -172,6 +201,7 @@ impl LaunchSpec {
             advisor: None,
             missing_cwd: None,
             restricted: false,
+            read_only: false,
         }
     }
 
@@ -190,6 +220,7 @@ impl LaunchSpec {
             advisor: None,
             missing_cwd: None,
             restricted: false,
+            read_only: false,
         }
     }
 
@@ -238,7 +269,7 @@ impl LaunchSpec {
                     // `--advisor` has no "off"; this also overrides an `advisorModel` setting.
                     args.extend(["env".into(), "CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1".into()]);
                 }
-                args.push("claude".into());
+                args.push(crate::agent_bins::program("claude"));
                 match &self.start {
                     Start::Resume(id) => args.extend(["--resume".into(), id.clone()]),
                     _ => {
@@ -260,6 +291,9 @@ impl LaunchSpec {
                     args.extend(["--permission-mode".into(), "acceptEdits".into()]);
                     args.extend(["--disallowedTools".into(), RESTRICTED_DENIED_TOOLS.join(",")]);
                     args.extend(["--strict-mcp-config".into()]);
+                } else if self.read_only {
+                    // A reviewer keeps the user's permission mode; only its editing tools go.
+                    args.extend(["--disallowedTools".into(), READ_ONLY_DENIED_TOOLS.join(",")]);
                 } else if crate::settings::always_bypass() {
                     // The user turned on "always Bypass" in Settings (off by default). The flag alone
                     // leaves the starting mode to the user's `defaultMode` (`auto` stayed `auto` in a
@@ -273,11 +307,15 @@ impl LaunchSpec {
                     // `"defaultMode": "auto"` in the project's own settings is ignored.
                     args.extend(["--permission-mode".into(), "auto".into()]);
                 }
-                if crate::settings::browser_tools_enabled() && !self.restricted {
-                    // The in-app browser as MCP tools (added to the user's own servers). `--mcp-config`
-                    // takes any number of values, so it must not be the last option: a prompt right
-                    // after it is read as another config file ("Invalid MCP configuration").
-                    args.extend(["--mcp-config".into(), inline_or_file("browser-mcp.json", browser_mcp_config())]);
+                let browser = crate::settings::browser_tools_enabled() && !self.restricted;
+                let plugins = !self.restricted && plugin_tools_offered();
+                if browser || plugins {
+                    // The in-app browser and the plugins' tools as MCP servers (added to the user's
+                    // own). `--mcp-config` takes any number of values, so it must not be the last
+                    // option: a prompt right after it is read as another config file ("Invalid MCP
+                    // configuration").
+                    let (name, config) = mcp_config(browser, plugins);
+                    args.extend(["--mcp-config".into(), inline_or_file(name, config)]);
                 }
                 // What Agentty offers the agent (guide + skills), passed along, never written into its settings.
                 args.extend(crate::agent_guide::claude_args());
@@ -288,7 +326,7 @@ impl LaunchSpec {
                 // ends, and never stops at the interactive screen's questions (whether to trust a
                 // new folder), which nobody is there to answer.
                 let job = self.restricted && matches!(self.start, Start::Prompt(_));
-                args.push("codex".into());
+                args.push(crate::agent_bins::program("codex"));
                 if job {
                     args.extend(["exec".into(), "--skip-git-repo-check".into()]);
                 }
@@ -296,7 +334,11 @@ impl LaunchSpec {
                 if let Some(guide) = crate::agent_guide::codex_override() {
                     args.extend(["-c".into(), guide]);
                 }
-                if self.restricted {
+                if self.read_only && !self.restricted {
+                    // A reviewer: it may read and run commands, never write, and never stops to ask
+                    // (a command the sandbox refuses fails, and the review goes on).
+                    args.extend(["--sandbox".into(), "read-only".into(), "--ask-for-approval".into(), "never".into()]);
+                } else if self.restricted {
                     // Its folder only, no network, never asking (it works unattended; `exec` does
                     // not ask anyway and takes no approval option).
                     args.extend(["--sandbox".into(), "workspace-write".into()]);
@@ -311,7 +353,10 @@ impl LaunchSpec {
                         args.push(full_access.into());
                     }
                     if crate::settings::browser_tools_enabled() {
-                        args.extend(["-c".into(), codex_browser_mcp_override()]);
+                        args.extend(["-c".into(), codex_mcp_override("agentty_browser", "mcp-browser")]);
+                    }
+                    if plugin_tools_offered() {
+                        args.extend(["-c".into(), codex_mcp_override("agentty_plugins", "mcp-plugins")]);
                     }
                 }
                 if let Some(model) = &self.model {
@@ -570,8 +615,30 @@ fn agentty_exe() -> String {
     std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "agentty".into())
 }
 
-fn browser_mcp_config() -> String {
-    serde_json::json!({ "mcpServers": { "agentty-browser": { "command": agentty_exe(), "args": ["mcp-browser"] } } }).to_string()
+/// Agentty's own MCP servers for Claude Code's `--mcp-config`, and the file name it gets on Windows.
+fn mcp_config(browser: bool, plugins: bool) -> (&'static str, String) {
+    let mut servers = serde_json::Map::new();
+    if browser {
+        servers.insert("agentty-browser".into(), serde_json::json!({ "command": agentty_exe(), "args": ["mcp-browser"] }));
+    }
+    if plugins {
+        servers.insert("agentty-plugins".into(), serde_json::json!({ "command": agentty_exe(), "args": ["mcp-plugins"] }));
+    }
+    let name = match (browser, plugins) {
+        (true, true) => "agentty-mcp.json",
+        (false, true) => "plugins-mcp.json",
+        _ => "browser-mcp.json",
+    };
+    (name, serde_json::json!({ "mcpServers": servers }).to_string())
+}
+
+/// Whether some plugin offers tools to agents now: enabled, with `mcp.tools`, and its MCP
+/// connection left on. Without one, agents are not given the plugins' MCP server at all.
+fn plugin_tools_offered() -> bool {
+    let off = crate::settings::plugin_mcp_off();
+    agentty_bridge::plugins::store::installed()
+        .iter()
+        .any(|p| p.active() && !off.contains(&p.id) && p.manifest.as_ref().is_some_and(|m| m.supports_mcp()))
 }
 
 /// A TOML string for `codex -c`. Windows uses literal ('…') strings: Windows PowerShell 5.1 would
@@ -584,7 +651,7 @@ fn toml_string(s: &str) -> String {
     }
 }
 
-fn codex_browser_mcp_override() -> String {
+fn codex_mcp_override(server: &str, subcommand: &str) -> String {
     // Codex passes only listed environment variables to MCP servers.
     let mut env = vec!["AGENTTY_SOCKET", "AGENTTY_PANE_ID"];
     if cfg!(windows) {
@@ -592,9 +659,9 @@ fn codex_browser_mcp_override() -> String {
     }
     let env: Vec<String> = env.into_iter().map(toml_string).collect();
     format!(
-        "mcp_servers.agentty_browser={{command={},args=[{}],env_vars=[{}]}}",
+        "mcp_servers.{server}={{command={},args=[{}],env_vars=[{}]}}",
         toml_string(&agentty_exe()),
-        toml_string("mcp-browser"),
+        toml_string(subcommand),
         env.join(",")
     )
 }
@@ -906,6 +973,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn agenttys_mcp_servers_go_in_one_config() {
+        let servers = |browser, plugins| {
+            let (_, config) = mcp_config(browser, plugins);
+            let config: serde_json::Value = serde_json::from_str(&config).unwrap();
+            config["mcpServers"].as_object().unwrap().keys().cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(servers(true, false), ["agentty-browser"]);
+        assert_eq!(servers(false, true), ["agentty-plugins"]);
+        assert_eq!(servers(true, true), ["agentty-browser", "agentty-plugins"]);
+        assert!(codex_mcp_override("agentty_plugins", "mcp-plugins").starts_with("mcp_servers.agentty_plugins="));
+    }
+
+    #[test]
     fn claude_prompt_is_not_swallowed_by_mcp_config() {
         let spec =
             LaunchSpec::with_prompt(agentty_bridge::model::Agent::Claude, "Build my idea".into(), "Idea".into(), PathBuf::from("/tmp"));
@@ -993,6 +1073,29 @@ pub(crate) mod tests {
 
         let open = LaunchSpec::with_prompt(Agent::Claude, "x".into(), String::new(), std::env::temp_dir());
         assert!(!open.command().unwrap().iter().any(|a| a == "--disallowedTools"), "other agents are left as they were");
+    }
+
+    /// A chat's reviewer reads and runs commands but has no way to edit files.
+    #[test]
+    fn a_reviewer_cannot_edit() {
+        let mut spec = LaunchSpec::with_prompt(Agent::Claude, "review".into(), String::new(), std::env::temp_dir());
+        spec.read_only = true;
+        let args = spec.command().unwrap();
+        let after = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
+        let denied = after("--disallowedTools").unwrap();
+        for tool in ["Edit", "MultiEdit", "Write", "NotebookEdit"] {
+            assert!(denied.split(',').any(|t| t == tool), "{tool} is not denied: {denied}");
+        }
+        assert!(!denied.split(',').any(|t| t == "Bash"), "it still runs tests and git");
+        assert!(!args.iter().any(|a| a.starts_with("--dangerously")), "a reviewer never skips its checks");
+
+        let mut codex = LaunchSpec::with_prompt(Agent::Codex, "review".into(), String::new(), std::env::temp_dir());
+        codex.read_only = true;
+        let args = codex.command().unwrap();
+        assert!(args.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "read-only"));
+        assert!(args.windows(2).any(|w| w[0] == "--ask-for-approval" && w[1] == "never"));
+        assert!(!args.iter().any(|a| a.starts_with("--dangerously")), "a reviewer never skips its checks");
+        assert_eq!(args[1], "-c", "an interactive session, not a one-off `exec` job");
     }
 
     /// Runs the generated hook commands through `sh` against a real socket.

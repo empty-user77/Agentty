@@ -5,7 +5,7 @@ description: SDK 背后的 JSON-RPC 线上格式、WebAssembly 模块 ABI，以�
 
 不借助 SDK 编写插件时用到的线上格式。[Node.js SDK](/docs/plugin-sdk) 和 [Rust SDK](/docs/plugin-rust) 都已经封装了全部内容；无论哪种方式，建议先读[快速开始](/docs/plugin-quickstart)。
 
-API **版本 1** 是本页中除 `host/timer` 和 `pane/status` 之外的全部内容，这两者属于**版本 2**。
+API **版本 1** 是本页中除 `host/timer` 和 `pane/status` 之外的全部内容，这两者属于**版本 2**；[UI 树](#ui)中标为 API 4 的面板元素属于**版本 4**；`tools/call` 属于**版本 5**。
 
 ## 传输方式
 
@@ -33,6 +33,7 @@ Agentty 以插件文件夹作为工作目录启动程序：
 | `context/changed` | 通知 | `{ context }` |
 | `url/open` | 通知 | `{ path, query, url, context }` |
 | `pane/status` | 通知 | `{ paneId, status, running, agent, title, cwd }` —— 这个插件启动的某个窗格状态变了（`workspace.read`，API 2） |
+| `tools/call` | 请求 —— 需要应答 | `{ name, arguments, context }` —— 某个 AI 智能体在调用工具（`mcp.tools`，API 5） |
 | `shutdown` | 通知 | `{}` |
 
 `initialize` 最先到达，紧接着是启动该插件的那件事（命令、打开面板或链接）。对 `initialize` 用任意结果应答即可，例如 `{}`。
@@ -48,13 +49,14 @@ Agentty 以插件文件夹作为工作目录启动程序：
 | `ui/notify` | | `{ message, kind }` —— `info`、`success`、`warning`、`error` | `null` |
 | `ui/setBadge` | | `{ text }`，最多 8 个字符 | `null` |
 | `context/get` | | `{}` | 上下文 |
-| `host/info` | | `{}` | `{ version, apiVersion, language }` |
+| `host/info` | | `{}` | `{ version, apiVersion, language, uiFeatures }` |
 | `host/openUrl` | | `{ url }` —— http/https | `null` |
 | `host/copy` | | `{ text }` —— 最多 100,000 个字符 | `null` |
 | `host/timer` | | `{ ms }` —— API 2 | 到点后返回 `{ elapsedMs }` |
 | `host/revealPath` | `workspace.read` | `{ path }` —— 存在的绝对路径 | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` 或 `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` —— 不带 `paneId` 时为聚焦窗格 | `{ paneId }` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }`（`token`：16–128 个字母、数字、`-`、`_`）或 `{ port: null }` —— 之后打开的终端经过插件在 127.0.0.1 上的代理 | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` —— 默认 200，最大 2000 | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
@@ -67,6 +69,12 @@ Agentty 以插件文件夹作为工作目录启动程序：
 ### 接触网络
 
 `net/fetch` 是插件接触网络的唯一途径。Agentty 给它划下的边界——方法、请求头、大小、超时、重定向——都在[权限](/docs/plugin-permissions#net-request)里。一句话说完：请求里不会带上任何属于你的东西，没有 cookie，没有已保存的凭据，只有插件自己放进去的内容。
+
+### 回应智能体的工具调用 (API 4)
+
+当某个 AI 智能体调用你的工具时，Agentty 用 `{ name, arguments, context }` 发送 `tools/call`。用字符串、任意 JSON 值或 MCP 格式的内容 `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }` 应答。其他内容类型会被丢弃。或者用 JSON-RPC 错误应答；其消息会作为错误传给智能体。
+
+插件必须在 120 秒内应答。同一个插件最多有 8 个调用在等待。参数最多 256 KB；传给智能体的文本在 100,000 字符处被截断。
 
 ### 等待，以及听到智能体干完了
 
@@ -142,20 +150,61 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: 等宽字体 (API 4)
+         completions (API 4): [{ label, insert?, detail? }] 正在输入的词的补全建议，
+         前面的 {{ 和后面的 }} 一并替换
          rows > 1：该行数的文本域（最多 24）；回车换行，粘贴保留换行
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: 树的缩进 0–8，tag: 标题前的短标签（≤ 8 个字符），颜色为 tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
 spinner  { text? }
 divider  {}
+flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }] }
+         state: off | on | active | done | error — 自动化的步骤，自上而下
+popover  { id, title, children }           面板旁边的卡片；树中第一个会被打开
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   浮起的方框；tone 决定图标和边框颜色
+grid     { children, columns?, gap?, widths? }      等宽的列（1–6，默认 2），放不下时换到下一行
+         widths: 每列 "240px"（固定）或 "2"（比例）— 代替 columns
+         id?, resizable? (API 4): 拖动第一个固定列调整宽度，结束后发送 resize（宽度）
+         fill: 占满剩余高度，每列单独滚动 (API 4)
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: 关闭按钮，点击发送 close
+         children：只放选中标签页的内容
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+         align: start | center | end；grow：所占宽度比例（1–12）；每列一个单元格
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value 取 0 到 1；detail 代替百分比显示
+callout  { text, title?, icon?, tone? }     tone 默认为 info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }       按 language（rust、json、ts、sh 等）着色，带复制按钮
+
+API 5:
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                           插件自己文件夹（files/*）中的图片：仅 PNG、JPEG、WebP、GIF，不绘制 SVG；
+                                           高度默认 240；fit: contain | cover；没有 src 时为空位；drop（与 id 一起，
+                                           需要 files 权限）接收从 Finder 拖放的图片
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                           把放在画布 x, y 处的节点卡片用连线连起来（像图像流水线那样）；fill 时占满面板剩余高度；
+                                           可在其中滚动与缩放（− % + 适应，⌘/Ctrl + 滚动）
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?, children?, state?, selected? }]
+         edges: [{ from: { node, port }, to: { node, port }, tone?, idle? }]
 ```
 
 事件：`button` 发送 `click`；`input` 发送带 `value` 的 `change` 与 `submit`；`list` 发送带 `item` 的 `select`，行内按钮发送带 `item` 和 `action` 的 `action`；`choice` 发送带选项值的 `change`；`toggle` 发送带新布尔值的 `change`。
 
 列表项的 `tone` 决定其图标颜色，取值与 `badge` 相同。
+
+`flow` 以步骤 id 作为 `item` 发送 `select`；`popover` 的关闭按钮发送 `close`。自 API 4 起：`tabs` 发送带标签页 id 的 `change`；`table` 以行 id 作为 `item` 发送 `select`；`select` 发送带选项值的 `change`；`checkbox` 发送带新布尔值的 `change`。自 API 5 起：`image` 发送 `click`，以及带 `[{ path, name, size }]` 的 `drop`（与 `files/pick` 一样，是复制到插件文件夹中的路径）；`graph` 在点击节点标题时以节点 id 作为 `item` 发送 `select`，设置 `movable` 时，拖动标题后以节点为 `item`、`{ x, y }` 为 `value` 发送 `move` — 请记住这个位置并发回。
+
+使用 API 4 元素的插件需在清单中写上 `"apiVersion": 4`。当前运行的 Agentty 能绘制哪些元素，见 `host/info` 的 `uiFeatures`。什么内容该用哪个元素，见 [设计面板](/docs/plugin-ui-guide)。
 
 ## 不用 Agentty 也能测试
 

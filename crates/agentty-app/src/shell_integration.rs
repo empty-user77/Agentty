@@ -112,12 +112,16 @@ __agentty_leave_gone() {
 }
 
 /// The line that runs `command` (`args` are its arguments, already shell syntax); for an agent, the
-/// shell leaves a folder the agent removed afterwards, keeping the agent's exit status.
+/// copy the pane's Agentty chose (the newest installed, `$AGENTTY_<NAME>_BIN`) when it is still
+/// there, and the shell leaves a folder the agent removed afterwards, keeping the agent's exit status.
 fn posix_call(command: &str, args: &str) -> String {
     if !AGENTS.contains(&command) {
         return format!("  command {command} {args}\n");
     }
-    format!("  command {command} {args}\n  local __agentty_status=$?\n  __agentty_leave_gone\n  return $__agentty_status\n")
+    let chosen = crate::agent_bins::env_name(command);
+    format!(
+        "  if [ -n \"${chosen}\" ] && [ -x \"${chosen}\" ]; then \"${chosen}\" {args}; else command {command} {args}; fi\n  local __agentty_status=$?\n  __agentty_leave_gone\n  return $__agentty_status\n"
+    )
 }
 
 /// `__agentty_guide_ok <args…>`: whether a typed `claude` gets Agentty's guide and skills (the pane
@@ -440,16 +444,36 @@ PROMPT_COMMAND="_agentty_load_aliases${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 /// Writes the integration files. Called at startup and whenever aliases or "always Bypass" change;
 /// shells read them again before each command, so a change applies to the next agent typed.
 pub fn write_files(aliases: &[CommandAlias], bypass: bool) -> Result<()> {
-    let dir = integration_dir();
-    std::fs::create_dir_all(dir.join("zsh"))?;
-    write_if_changed(&dir.join("zsh").join(".zshenv"), ZSHENV)?;
-    write_if_changed(&dir.join("rc.bash"), BASHRC)?;
-    write_if_changed(&dir.join("aliases.zsh"), &zsh_script(aliases, bypass))?;
-    write_if_changed(&dir.join("aliases.bash"), &bash_script(aliases, bypass))?;
-    if cfg!(windows) {
-        write_if_changed(&dir.join("aliases.ps1"), &powershell_script(aliases, bypass))?;
+    std::fs::create_dir_all(integration_dir().join("zsh"))?;
+    for (path, content) in expected_files(aliases, bypass) {
+        write_if_changed(&path, &content)?;
     }
     Ok(())
+}
+
+/// The files [`write_files`] writes, with what they hold.
+fn expected_files(aliases: &[CommandAlias], bypass: bool) -> Vec<(PathBuf, String)> {
+    let dir = integration_dir();
+    let mut files = vec![
+        (dir.join("zsh").join(".zshenv"), ZSHENV.to_string()),
+        (dir.join("rc.bash"), BASHRC.to_string()),
+        (dir.join("aliases.zsh"), zsh_script(aliases, bypass)),
+        (dir.join("aliases.bash"), bash_script(aliases, bypass)),
+    ];
+    if cfg!(windows) {
+        files.push((dir.join("aliases.ps1"), powershell_script(aliases, bypass)));
+    }
+    files
+}
+
+/// The integration files that are missing or differ from what the settings make them (edited or
+/// deleted by hand, or written by another version).
+pub fn stale_files(aliases: &[CommandAlias], bypass: bool) -> Vec<PathBuf> {
+    expected_files(aliases, bypass)
+        .into_iter()
+        .filter(|(path, content)| std::fs::read_to_string(path).ok().as_deref() != Some(content.as_str()))
+        .map(|(path, _)| path)
+        .collect()
 }
 
 fn write_if_changed(path: &Path, content: &str) -> Result<()> {
@@ -545,6 +569,8 @@ mod tests {
                 let out = Command::new(shell)
                     .args(["-c", &line])
                     .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                    .env_remove("AGENTTY_CLAUDE_BIN")
+                    .env_remove("AGENTTY_CODEX_BIN")
                     .env("HOME", home)
                     .current_dir(&dir)
                     .output()
@@ -649,6 +675,8 @@ mod tests {
         let output = Command::new("zsh")
             .args(["-f", "-c", &format!("source {}; agenttyprobe x zzzz two zzzzz", script.display())])
             .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env_remove("AGENTTY_CLAUDE_BIN")
+            .env_remove("AGENTTY_CODEX_BIN")
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout), "[x][--dangerously-skip-permissions][--a][b c][zzzzz]");
@@ -665,6 +693,8 @@ mod tests {
         let output = Command::new("bash")
             .args(["--noprofile", "--norc", "-c", &format!("source {}; agenttyprobe zzzz y", script.display())])
             .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env_remove("AGENTTY_CLAUDE_BIN")
+            .env_remove("AGENTTY_CODEX_BIN")
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout), "[--dangerously-skip-permissions][--verbose][y]");
@@ -697,6 +727,8 @@ mod tests {
                 command
                     .args([flag, "-c", &format!("source {}; cd /; claude {args}", dir.join("wrappers").display())])
                     .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                    .env_remove("AGENTTY_CLAUDE_BIN")
+                    .env_remove("AGENTTY_CODEX_BIN")
                     .env("AGENTTY_BIN", dir.join("agentty"))
                     .env("AGENTTY_SHELL_API", SHELL_API)
                     .env("AGENTTY_SOCKET", "placeholder");
@@ -735,6 +767,8 @@ mod tests {
                 let output = Command::new(shell)
                     .args([flag, "-c", &format!("source {}; claude {args}", dir.join("wrappers").display())])
                     .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                    .env_remove("AGENTTY_CLAUDE_BIN")
+                    .env_remove("AGENTTY_CODEX_BIN")
                     // Never the Agentty this test runs in: its binary would be started for real.
                     .env_remove("AGENTTY_BIN")
                     .env_remove("AGENTTY_SOCKET")
@@ -750,6 +784,47 @@ mod tests {
             assert_eq!(run("--version"), "[--version]", "{shell}");
             assert_eq!(run("mcp list"), "[mcp][list]", "{shell}");
             assert_eq!(run("--append-system-prompt mine"), "[--append-system-prompt][mine]", "{shell}");
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    /// A typed agent runs the copy Agentty chose (the newest installed), not the first on `PATH`;
+    /// the one on `PATH` when the chosen copy is gone.
+    #[test]
+    #[cfg(unix)]
+    fn typed_agents_run_the_chosen_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        for shell in ["zsh", "bash"] {
+            let dir = std::env::temp_dir().join(format!("agentty-chosen-wrapper-{shell}-{}", std::process::id()));
+            let (old, new) = (dir.join("old"), dir.join("new"));
+            for (folder, word) in [(&old, "old"), (&new, "new")] {
+                std::fs::create_dir_all(folder).unwrap();
+                for agent in ["claude", "codex"] {
+                    let path = folder.join(agent);
+                    std::fs::write(&path, format!("#!/bin/sh\nprintf '{word}'; for a in \"$@\"; do printf '[%s]' \"$a\"; done\n")).unwrap();
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+                }
+            }
+            let script = if shell == "zsh" { zsh_script(&[], false) } else { bash_script(&[], false) };
+            std::fs::write(dir.join("wrappers"), &script).unwrap();
+            let run = |line: &str, chosen: &Path| {
+                let flag = if shell == "zsh" { "-f" } else { "--norc" };
+                let output = Command::new(shell)
+                    .args([flag, "-c", &format!("source {}; {line}", dir.join("wrappers").display())])
+                    .env("PATH", format!("{}:/usr/bin:/bin", old.display()))
+                    .env("AGENTTY_CLAUDE_BIN", chosen.join("claude"))
+                    .env("AGENTTY_CODEX_BIN", chosen.join("codex"))
+                    .env_remove("AGENTTY_BIN")
+                    .env_remove("AGENTTY_SOCKET")
+                    .env_remove("AGENTTY_SHELL_API")
+                    .env_remove("AGENTTY_GUIDE_FILE")
+                    .output()
+                    .unwrap();
+                String::from_utf8_lossy(&output.stdout).to_string()
+            };
+            assert_eq!(run("claude hi", &new), "new[hi]", "{shell}");
+            assert_eq!(run("codex 'a b'", &new), "new[a b]", "{shell}");
+            assert_eq!(run("claude hi", &dir.join("gone")), "old[hi]", "{shell}");
             std::fs::remove_dir_all(dir).ok();
         }
     }
@@ -776,6 +851,8 @@ mod tests {
                 let output = Command::new(shell)
                     .args([flag, "-c", &format!("source {}; {line}", dir.join("wrappers").display())])
                     .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                    .env_remove("AGENTTY_CLAUDE_BIN")
+                    .env_remove("AGENTTY_CODEX_BIN")
                     .env_remove("AGENTTY_BIN")
                     .env_remove("AGENTTY_SOCKET")
                     .env_remove("AGENTTY_SHELL_API")
@@ -817,6 +894,8 @@ mod tests {
             command
                 .args(["-f", "-c", &format!("source {}; {line}", dir.join("wrappers").display())])
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env_remove("AGENTTY_CLAUDE_BIN")
+                .env_remove("AGENTTY_CODEX_BIN")
                 .env_remove("AGENTTY_BIN")
                 .env_remove("AGENTTY_SHELL_API")
                 .env_remove("AGENTTY_SOCKET");

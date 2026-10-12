@@ -9,6 +9,14 @@ repository.workspace = true
 homepage.workspace = true
 description = "Agentty — your multi-orchestration AI terminal"
 
+[features]
+# On-device voice-to-text for the remote page (whisper.cpp through agentty-bridge; needs cmake and a
+# C/C++ toolchain). On by default so release builds have it; `cargo build -p agentty-app
+# --no-default-features` builds the app without it, and the remote page then reports voice as
+# unavailable.
+default = ["voice"]
+voice = ["agentty-bridge/voice"]
+
 [[bin]]
 name = "agentty"
 path = "src/main.rs"
@@ -20,13 +28,21 @@ alacritty_terminal = "0.26"
 anyhow.workspace = true
 base64 = "0.23"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-agentty-bridge = { path = "../agentty-bridge" }
+# Default features off so the app's own `voice` feature decides whether whisper.cpp is built.
+# `voice` is the bridge's only default feature; a new one must be listed here (or forwarded) too.
+agentty-bridge = { path = "../agentty-bridge", default-features = false }
 agentty-db = { path = "../agentty-db" }
 dirs.workspace = true
 futures = "0.3.34"
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
 libc = "0.2.189"
 plist = "1.10.1"
+# Remote access: the web password's PBKDF2 hash, its constant-time check and the session tokens'
+# randomness. Already in the build through agentty-bridge (same version), so nothing new is fetched.
+ring = "0.17"
+# Remote access: the page's address as a QR code to open on a phone. Only the encoder (no image,
+# SVG or terminal output); the settings page draws the modules itself.
+qrcode = { version = "0.14.1", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 # The markdown preview's Content-Security-Policy lists its scripts by hash.

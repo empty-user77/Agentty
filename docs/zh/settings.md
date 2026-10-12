@@ -75,3 +75,5 @@ Agentty 所用的工具及其安装情况 —— Git、Node.js、智能体 CLI�
 ## 关于 Agentty
 
 版本、检查更新，以及相关链接 —— 包括[隐私政策](https://www.agentty.run/privacy-policy)、[服务条款](https://www.agentty.run/terms-of-service)和[许可协议](https://www.agentty.run/eula)。
+
+**构建**显示当前这份 Agentty 的信息：版本、提交、构建日期、配置（release / debug）、目标平台、Rust 版本、是否包含设备端语音识别，以及 Agentty 提供的接口的 API 版本（插件 API、插件市场索引、MCP、Shell 集成、设置备份文件、会话同步格式）。**复制构建信息**会把这些内容复制为英文纯文本，方便粘贴到问题报告中；其中不含路径、用户名或密钥。

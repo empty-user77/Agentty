@@ -5,7 +5,7 @@ description: The JSON-RPC wire format behind the SDKs, the WebAssembly module AB
 
 The wire format, for writing a plugin without an SDK. The [Node.js SDK](/docs/plugin-sdk) and the [Rust SDK](/docs/plugin-rust) wrap all of it; read the [quick start](/docs/plugin-quickstart) first either way.
 
-API version **1** is everything on this page except `host/timer` and `pane/status`, which are version **2**.
+API version **1** is everything on this page except `host/timer` and `pane/status`, which are version **2**, and the panel elements marked API 4 under [UI tree](#ui-tree), which are version **4**, `tools/call`, which is version **5**, and `terminal/setProxy`, which is version **6**.
 
 ## Transport
 
@@ -33,6 +33,7 @@ When stdin closes or `shutdown` arrives, exit. A plugin still running 1.5 second
 | `context/changed` | notification | `{ context }` |
 | `url/open` | notification | `{ path, query, url, context }` |
 | `pane/status` | notification | `{ paneId, status, running, agent, title, cwd }` — a pane this plugin started changed what it is doing (`workspace.read`, API 2) |
+| `tools/call` | request — answer it | `{ name, arguments, context }` — an AI agent is calling a tool (`mcp.tools`, API 5) |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin — a command, the panel opening, or a link. Answer `initialize` with any result, for example `{}`.
@@ -48,13 +49,14 @@ Send these as requests (with an `id`) to get a result or an error, or as notific
 | `ui/notify` | | `{ message, kind }` — `info`, `success`, `warning`, `error` | `null` |
 | `ui/setBadge` | | `{ text }`, max 8 characters | `null` |
 | `context/get` | | `{}` | The context |
-| `host/info` | | `{}` | `{ version, apiVersion, language }` |
+| `host/info` | | `{}` | `{ version, apiVersion, language, uiFeatures }` |
 | `host/openUrl` | | `{ url }` — http/https | `null` |
 | `host/copy` | | `{ text }` — up to 100,000 characters | `null` |
 | `host/timer` | | `{ ms }` — API 2 | `{ elapsedMs }`, once the time has passed |
 | `host/revealPath` | `workspace.read` | `{ path }` — absolute, existing | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` or `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` — focused pane without `paneId` | `{ paneId }` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }` (`token`: 16–128 letters, digits, `-`, `_`), or `{ port: null }` to stop — terminals opened from then on go through the plugin's proxy on 127.0.0.1 | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` — default 200, max 2000 | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
@@ -67,6 +69,12 @@ Agentty drops `ui/notify` calls arriving faster than one per 700 ms, answering t
 ### Reaching the network
 
 `net/fetch` is the only way a plugin reaches the network. [Permissions](/docs/plugin-permissions#what-net-request-is-allowed) has the bounds Agentty puts on it — methods, headers, sizes, timeouts, redirects — and the short version is that nothing of yours travels with the request: no cookie, no stored credential, only what the plugin put in it.
+
+### Answering tool calls from agents (API 4)
+
+When an AI agent calls one of your tools, Agentty sends `tools/call` with `{ name, arguments, context }`. Answer with a result — a string, any JSON value, or MCP-shaped content `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }`. Other content types are dropped. Or answer with a JSON-RPC error; its message goes to the agent as an error.
+
+The plugin must answer within 120 seconds. At most 8 calls may wait on one plugin. Arguments are at most 256 KB; text handed to the agent is cut at 100,000 characters.
 
 ### Waiting, and hearing that an agent finished
 
@@ -142,21 +150,62 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: monospace font (API 4)
+         completions (API 4): [{ label, insert?, detail? }] suggested for the word being typed;
+         a {{ before it and }} after it are replaced too
          rows > 1: a text area that many lines tall (max 24); Enter adds a
          line and a paste keeps its line breaks
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: tree indent 0–8, tag: label before the title (≤ 8 chars) in tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
 spinner  { text? }
 divider  {}
+flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }] }
+         state: off | on | active | done | error — steps of an automation, top to bottom
+popover  { id, title, children }            a card beside the panel; the first one in the tree is open
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   a raised box; tone colors the icon and edge
+grid     { children, columns?, gap?, widths? }      equal columns (1–6, default 2), wrapping onto new rows
+         widths: per column, "240px" fixed or "2" a share — replaces columns
+         id?, resizable? (API 4): the first fixed column can be dragged; resize with the width
+         fill: takes the height left, each column scrolling on its own (API 4)
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: a close button that sends close
+         children: the picked tab's content only
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+         align: start | center | end; grow: share of the width (1–12); one cell per column
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value from 0 to 1; detail replaces the percentage
+callout  { text, title?, icon?, tone? }     tone defaults to info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }       colored by language (rust, json, ts, sh, …), with a copy button
+
+API 5:
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                           a picture from the plugin's own folder (files/*): PNG, JPEG, WebP or GIF,
+                                           never an SVG; height 240 by default; fit: contain | cover; without src an
+                                           empty slot; drop (with id, needs files) takes pictures dropped from the Finder
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                           node cards at x, y on a canvas joined by wires, like an image pipeline; fill takes
+                                           the panel's height; the user scrolls and zooms inside it (− % + fit, ⌘/Ctrl + scroll)
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?, children?, state?, selected? }]
+         edges: [{ from: { node, port }, to: { node, port }, tone?, idle? }]
 ```
 
 Events: `button` sends `click`; `input` sends `change` and `submit` with `value`; `list` sends `select` with `item`, and row buttons send `action` with `item` and `action`; `choice` sends `change` with the option value; `toggle` sends `change` with the new boolean.
 
 A list item's `tone` colors its icon, using the same values as `badge`.
+
+`flow` sends `select` with the step's id as `item`; `popover` sends `close` from its close button. From API 4: `tabs` sends `change` with the tab's id; `table` sends `select` with the row's id as `item`; `select` sends `change` with the option's value; `checkbox` sends `change` with the new boolean. From API 5: `image` sends `click`, and `drop` with `[{ path, name, size }]` (copied into the plugin's folder, as `files/pick` answers); `graph` sends `select` with the node's id as `item` when its heading is clicked, and, when `movable`, `move` with the node as `item` and `{ x, y }` as `value` once a heading is dragged — keep the place and send it back.
+
+A plugin that uses the API 4 elements says `"apiVersion": 4` in its manifest. `host/info` lists the elements the running Agentty draws in `uiFeatures`. [Designing a panel](/docs/plugin-ui-guide) says which one to use for what.
 
 ## Testing without Agentty
 

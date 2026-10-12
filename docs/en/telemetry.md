@@ -12,6 +12,7 @@ Nothing about your work is included. No paths, file names, commands, prompts, AI
 | Event | Property |
 |---|---|
 | `app_launched` | How many windows opened at launch |
+| `app_running` | — (every 5 minutes while Agentty is open, with how long it has been open since the previous one) |
 | `window_opened` | — |
 | `pane_opened` | Which kind of pane: `shell`, `claude`, `codex`, `gemini`, … |
 | `agent_turn_finished` | Which kind of agent finished a turn |

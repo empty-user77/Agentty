@@ -4,6 +4,7 @@
 // Release builds on Windows are GUI apps (no console window of their own).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod agent_bins;
 mod agent_guide;
 mod agent_signal;
 mod agents;
@@ -15,10 +16,12 @@ mod browser_cli;
 mod browser_keeper;
 mod browser_mcp;
 mod browser_profiles;
-mod capture;
+mod build_info;
+mod caret_blink;
 mod crash_log;
 mod db_cli;
 mod debug;
+mod diagnostics;
 mod editor;
 mod extensions_view;
 mod tasks_cli;
@@ -42,7 +45,9 @@ mod native;
 mod notifications;
 mod platform;
 mod plugins;
+mod plugins_mcp;
 mod procinfo;
+mod remote;
 mod settings;
 mod setup_check;
 mod shell_integration;
@@ -104,7 +109,7 @@ pub fn guide_url(language: &str, page: &str) -> String {
 /// Where to report a problem or ask for help.
 const SUPPORT_URL: &str = "https://github.com/empty-user77/Agentty/issues";
 
-const FONTS: &[&[u8]] = &[
+pub(crate) const FONTS: &[&[u8]] = &[
     include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
     include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
     include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
@@ -305,7 +310,10 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::action(t(cx, "shortcuts.clear"), terminal::Clear),
                 MenuItem::separator(),
                 MenuItem::action(t(cx, "shortcuts.palette"), workbench::OpenPalette),
-            ],
+            ]
+            .into_iter()
+            .chain(workbench::voice_input_available().then(|| MenuItem::action(t(cx, "shortcuts.voice"), workbench::ToggleVoiceInput)))
+            .collect(),
         },
         Menu {
             name: t(cx, "menu.view").into(),
@@ -364,6 +372,7 @@ pub fn set_app_menus(cx: &mut App) {
                 MenuItem::action(t(cx, "help.shortcuts"), OpenGuide { page: "keyboard-shortcuts" }),
                 MenuItem::action(t(cx, "help.settings"), OpenGuide { page: "settings" }),
                 MenuItem::separator(),
+                MenuItem::action(t(cx, "diag.title"), workbench::RunDiagnostics),
                 MenuItem::action(t(cx, "help.troubleshooting"), OpenGuide { page: "troubleshooting" }),
                 MenuItem::action(t(cx, "help.faq"), OpenGuide { page: "faq" }),
                 MenuItem::action(t(cx, "help.support"), GetSupport),
@@ -485,6 +494,10 @@ fn bind_keys(cx: &mut App) {
         key("cmd-k", terminal::Clear, Some("Terminal")),
         key("cmd-a", terminal::SelectAll, Some("Terminal")),
     ]);
+    // Voice input records on macOS only; elsewhere ⇧⌘M would translate onto mini mode's chord.
+    if workbench::voice_input_available() {
+        cx.bind_keys([key("cmd-shift-m", ToggleVoiceInput, None)]);
+    }
     text_input::bind_keys(cx);
     editor::bind_keys(cx);
 }
@@ -537,6 +550,10 @@ fn main() {
         std::process::exit(browser_mcp::serve());
     }
 
+    if args.get(1).map(String::as_str) == Some("mcp-plugins") {
+        std::process::exit(plugins_mcp::serve());
+    }
+
     if args.get(1).map(String::as_str) == Some("browser") {
         std::process::exit(browser_cli::run(&args[2..]));
     }
@@ -587,6 +604,8 @@ fn main() {
     }
 
     sanitize_environment();
+    // `~/.agentty` holds conversation text and app state: 0700 before anything is written to it.
+    agentty_bridge::fsutil::secure_data_dir();
     // Windows / Linux hand links (`agentty://…`, registered by the installer / .desktop file) and
     // folders ("Open with Agentty") over as arguments; macOS sends them as open events below.
     if !cfg!(target_os = "macos") {
@@ -616,7 +635,8 @@ fn main() {
     crash_log::install();
     // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
     platform::raise_file_limit();
-    // Killed while the machine was captured: put its proxy settings back before anything else runs.
+    // An older Agentty killed while it had the machine captured: put its proxy settings back before
+    // anything else runs.
     platform::system_proxy::restore_after_crash();
     let app = Application::new().with_assets(assets::Assets);
     // Clicking the Dock icon brings the window back (after closing to the menu bar or mini mode).
@@ -637,12 +657,24 @@ fn main() {
             eprintln!("agentty: failed to load bundled fonts: {err:#}");
         }
         settings::SettingsStore::init(cx);
+        // The newest copy of each agent CLI: last run's choice for the tabs restored now, a fresh
+        // look in the background for the ones opened later.
+        agent_bins::load_saved();
+        let _ = std::thread::Builder::new().name("agent-bins".into()).spawn(agent_bins::refresh);
         let signals = match agent_signal::start() {
             Ok((socket, rx)) => {
                 if !cfg!(target_os = "macos") {
                     instance::register(&socket);
                     cx.on_app_quit(|_| async { instance::unregister() }).detach();
                 }
+                // `cx.quit()` never drops the global: the socket and its folder go here, or they wait
+                // for the next launch's sweep.
+                let address = socket.address.clone();
+                cx.on_app_quit(move |_| {
+                    let address = address.clone();
+                    async move { ipc::Listener::cleanup(&address) }
+                })
+                .detach();
                 cx.set_global(socket);
                 Some(rx)
             }
@@ -654,7 +686,13 @@ fn main() {
 
         notifications::prepare();
         let mut plugin_events = plugins::init(cx);
+        workbench::pin_installed_sidebar_plugins(cx);
         browser_keeper::start(cx);
+        agentty_bridge::voice::set_preferred_model(settings::settings(cx).voice.model.as_deref());
+        // A voice model still loaded when the process exits makes whisper.cpp's Metal teardown
+        // abort: every quit after using voice would end in a crash report.
+        cx.on_app_quit(|_| async { agentty_bridge::voice::unload() }).detach();
+        remote::init(cx);
         cx.spawn(async move |cx| {
             while let Some(envelope) = plugin_events.next().await {
                 if cx.update(|cx| plugins::handle(envelope, cx)).is_err() {
@@ -798,6 +836,16 @@ fn main() {
                                     }
                                 }
                             }
+                            agent_signal::SocketMessage::TasksCtl(request) => {
+                                match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
+                                    Some(window) => {
+                                        let _ = window.update(cx, |workbench, _, cx| workbench.answer_tasks_ctl(request, cx));
+                                    }
+                                    None => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
                             agent_signal::SocketMessage::Db(request) => {
                                 // The window holding the asking pane shows the approval dialog.
                                 match windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(request.pane, cx))).copied() {
@@ -806,6 +854,23 @@ fn main() {
                                     }
                                     None => {
                                         let _ = request.reply.send(agent_signal::browser_reply(Err("the asking pane is gone".into())));
+                                    }
+                                }
+                            }
+                            agent_signal::SocketMessage::Plugins(request) => {
+                                // Plugins are shared by every window: no window is involved.
+                                let args = &request.args;
+                                match args["action"].as_str() {
+                                    Some("call") => plugins::mcp::call(
+                                        request.pane,
+                                        args["plugin"].as_str().unwrap_or_default(),
+                                        args["tool"].as_str().unwrap_or_default(),
+                                        args["arguments"].clone(),
+                                        request.reply,
+                                        cx,
+                                    ),
+                                    _ => {
+                                        let _ = request.reply.send(agent_signal::browser_reply(Ok(plugins::mcp::list(cx).to_string())));
                                     }
                                 }
                             }
@@ -909,6 +974,23 @@ pub fn new_window(cx: &mut App) {
     }
 }
 
+/// Opens another Agentty window with `plugin`'s workspace in front, as if its icon was pressed
+/// there: the plugin on its own, in a window the user places where they like.
+pub fn open_plugin_window(plugin: String, cx: &mut App) {
+    cx.defer(move |cx| {
+        let slot = NEXT_WINDOW_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(handle) = open_window(slot, cx) else {
+            eprintln!("agentty: could not open window {slot}");
+            return;
+        };
+        metrics::track(cx, "window_opened", serde_json::json!({ "plugin": true }));
+        let _ = handle.update(cx, |workbench, window, cx| {
+            workbench.open_plugin_alone(&plugin, window, cx);
+            window.activate_window();
+        });
+    });
+}
+
 /// Opens a recently closed window again, or brings it forward if it is already open.
 pub(crate) fn reopen_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench>> {
     if let Some(open) = workbenches(cx).into_iter().find(|w| w.read(cx).is_ok_and(|wb| wb.slot == slot)) {
@@ -941,12 +1023,6 @@ pub fn request_quit(cx: &mut App) {
         if asking {
             cx.activate(true);
             return;
-        }
-    }
-    // Never leave the machine pointing at a proxy that is about to stop answering.
-    if let Some(previous) = platform::system_proxy::saved_previous() {
-        if let Err(err) = platform::system_proxy::restore(&previous) {
-            eprintln!("agentty: could not put the system proxy settings back: {err}");
         }
     }
     // The sleep lock is held by a child process, which outlives Agentty unless it is let go of

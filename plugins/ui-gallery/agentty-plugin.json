@@ -1,0 +1,17 @@
+{
+  "id": "ui-gallery",
+  "name": "UI Gallery",
+  "version": "1.0.0",
+  "publisher": "Agentty",
+  "description": "Every element a plugin panel can show, live, with the code that draws it — and ready-made screens to start a plugin from.",
+  "icon": "blocks",
+  "homepage": "https://www.agentty.run/docs/plugin-ui-guide",
+  "main": "main.mjs",
+  "runtime": "node",
+  "apiVersion": 4,
+  "permissions": [],
+  "keywords": ["ui", "design", "components", "examples", "plugin development"],
+  "contributes": {
+    "panel": { "title": "UI Gallery", "icon": "blocks" }
+  }
+}

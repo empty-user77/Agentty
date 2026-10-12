@@ -22,8 +22,17 @@ const MAX_DEPTH: usize = 16;
 const MAX_LIST: usize = 5000;
 
 /// The plugin's folder, made if it is not there yet.
+///
+/// Made and closed to others (`0700`) once per folder, not on every call: `resolve` runs for each
+/// picture a panel draws, every frame. A folder that has since gone (the plugin's data was
+/// removed) is made again.
 pub fn root(plugin: &str) -> Result<PathBuf> {
+    static PREPARED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
     let root = super::store::plugin_data_dir(plugin).join("files");
+    let mut prepared = PREPARED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if prepared.contains(&root) && root.is_dir() {
+        return Ok(root);
+    }
     if !root.is_dir() {
         std::fs::create_dir_all(&root).context("could not make the plugin's folder")?;
     }
@@ -31,6 +40,9 @@ pub fn root(plugin: &str) -> Result<PathBuf> {
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+    }
+    if !prepared.contains(&root) {
+        prepared.push(root.clone());
     }
     Ok(root)
 }
@@ -279,6 +291,25 @@ mod tests {
             assert_eq!(mode, 0o600);
             let folder = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
             assert_eq!(folder, 0o700);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_is_prepared_once_and_again_when_it_is_gone() {
+        use std::os::unix::fs::PermissionsExt;
+        with_plugin(|id| {
+            let root = root(id).unwrap();
+            // Opened up behind Agentty's back: a later call no longer closes it again — it was
+            // prepared already, and doing it per call is what made every frame touch the disk.
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+            resolve(id, "a.png").unwrap();
+            assert_eq!(std::fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o755);
+            // Gone: made again, and private again.
+            std::fs::remove_dir_all(&root).unwrap();
+            resolve(id, "a.png").unwrap();
+            assert!(root.is_dir());
+            assert_eq!(std::fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
         });
     }
 }

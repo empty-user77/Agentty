@@ -1,4 +1,5 @@
 // An Agentty plugin. Guide: PLUGIN_GUIDE.md · Types: agentty-plugin.d.ts
+// See every panel element and whole example screens in the UI Gallery plugin (Plugins page).
 import { createPlugin, ui } from './agentty-plugin.mjs';
 
 const plugin = createPlugin();
@@ -10,11 +11,18 @@ function render(context) {
   return plugin.setPanel(
     ui.column([
       ui.text(name(), 'title'),
-      ui.text(pane ? `Focused: ${pane.title} · ${pane.cwd}` : 'No terminal is focused.', 'muted'),
+      pane
+        ? ui.card([ui.keyValue([
+            { label: 'Terminal', value: pane.title },
+            { label: 'Folder', value: pane.cwd, mono: true },
+            { label: 'Status', value: pane.status },
+          ])], { title: 'Focused terminal', icon: 'square-terminal' })
+        : ui.callout('Click into a terminal to see it here.', { title: 'No terminal is focused' }),
+      ui.grid([ui.stat('Hellos', String(clicks), { icon: 'sparkles' })], { columns: 2 }),
       ui.row([
-        ui.button('hello', `Say hello (${clicks})`, { icon: 'sparkles', variant: 'primary' }),
-        ui.button('explain', 'Explain this folder', { icon: 'bot' }),
-      ]),
+        ui.button('explain', 'Explain this folder', { icon: 'bot', variant: 'primary' }),
+        ui.button('hello', 'Say hello', { icon: 'sparkles' }),
+      ], { gap: 'small', wrap: true }),
     ]),
   );
 }

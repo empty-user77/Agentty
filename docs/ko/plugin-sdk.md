@@ -6,7 +6,7 @@ description: 핸들러, 호출, 패널 UI 빌더, 컨텍스트 객체 — agentt
 `agentty-plugin.mjs`는 의존성이 없는 파일 하나입니다. 타입 정의는 같은 위치의 `agentty-plugin.d.ts`에 있습니다. 플러그인 페이지에서 **개발자 가이드**를 누르면 둘 다 `~/.agentty/plugins/.sdk/`에 풀립니다.
 
 > [!NOTE]
-> 이렇게 만든 플러그인은 이용자 컴퓨터에서 프로그램으로 실행되며 `PATH`에 Node.js 18 이상이 필요하고, 폴더나 Git 저장소에서 설치됩니다. [마켓플레이스](/docs/plugin-publishing)는 WebAssembly 모듈만 받습니다. 그쪽은 [Rust와 WebAssembly](/docs/plugin-rust)를 보세요.
+> 이렇게 만든 플러그인은 이용자 컴퓨터에서 프로그램으로 실행되며 `PATH`에 Node.js 18 이상이 필요합니다. 설치는 폴더나 Git 저장소에서 합니다. [마켓플레이스](/docs/plugin-publishing)는 WebAssembly 모듈만 받습니다. 그쪽은 [Rust와 WebAssembly](/docs/plugin-rust)를 보세요.
 
 ```js
 import { createPlugin, ui } from './agentty-plugin.mjs';
@@ -26,6 +26,7 @@ plugin.start();
 |---|---|
 | `onActivate(info => …)` | 플러그인이 시작됨. `info`에 `plugin.dataDir`, `language`, `context` |
 | `command(id, ({ context, args }) => …)` | 명령 팔레트에서 명령 실행 |
+| `tool(name, handler)` | AI 에이전트가 도구를 호출. 핸들러는 `{ args, context }`를 받고 응답을 반환. 오류는 도구 오류로 전송됨 |
 | `onPanelOpen(context => …)` | 패널이 보이게 됨 — 여기서 그립니다 |
 | `onPanelClose(context => …)` | 패널이 숨겨짐 |
 | `onEvent(elementId, (event, context) => …)` | 해당 id의 UI 요소가 사용됨 |
@@ -45,11 +46,13 @@ plugin.start();
 | `notify(message, kind)` — `info`, `success`, `warning`, `error` | |
 | `setBadge(text)` — 탭 영역 버튼에 최대 8자 | |
 | `getContext()` | |
+| `hostInfo()` — Agentty 버전, API 버전, 언어, 그릴 수 있는 패널 요소(`uiFeatures`) | |
 | `openUrl(url)` — http/https | |
 | `copy(text)` — 클립보드에 복사 | |
 | `revealPath(path)` — 파일 관리자에서 보기 | `workspace.read` |
 | `injectPrompt(request)` | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
+| `setTerminalProxy({ port, token })` · `setTerminalProxy({ port: null })` | `terminal.proxy` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
 | `fetch(request)` — HTTP 요청 | `net.request` |
@@ -76,8 +79,23 @@ plugin.start();
 | `ui.badge(text, tone)` | `neutral`, `info`, `success`, `warning`, `error` | |
 | `ui.spinner(text)` | | |
 | `ui.divider()` | | |
+| `ui.flow(id, steps)` | 단계 `{ id, title, subtitle, icon, state, selected, side }`, `state`: `off`, `on`, `active`, `done`, `error` | `event.item`과 함께 `select` |
+| `ui.popover(id, title, children)` | 패널 옆의 카드 | `close` |
+| `ui.card(children, { title, subtitle, icon, tone })` | 떠 있는 상자. `tone`은 아이콘과 테두리 색(API 4) | |
+| `ui.grid(children, { columns, gap })` | 같은 폭의 열 1–6개(API 4) | |
+| `ui.tabs(id, [{ id, label, icon, badge }], value, children)` | 탭. children은 선택된 탭의 내용(API 4) | 탭 id와 함께 `change` |
+| `ui.table(id, [{ label, align, grow }], [{ id, cells, tone }], { empty, selected })` | 머리글 아래의 행(API 4) | `event.item`과 함께 `select` |
+| `ui.keyValue([{ label, value, tone, mono }])` | 이름과 값 쌍(API 4) | |
+| `ui.stat(label, value, { detail, icon, tone })` | 크게 보여 주는 숫자 하나(API 4) | |
+| `ui.progress(value, { label, detail, tone })` | 진행 막대, `value`는 0부터 1(API 4) | |
+| `ui.callout(text, { title, icon, tone })` | 색이 있는 안내, 기본 `info`(API 4) | |
+| `ui.select(id, [{ value, label }], value, { placeholder, disabled })` | 드롭다운(API 4) | 값과 함께 `change` |
+| `ui.checkbox(id, label, value, { description, disabled })` | 체크박스(API 4) | 새 불리언과 함께 `change` |
+| `ui.code(text, { language, title })` | 색이 입혀진 코드와 복사 버튼(API 4) | |
 
 null과 false인 자식은 건너뛰므로 `조건 && ui.text('…')`가 그대로 동작합니다.
+
+무엇에 어떤 요소를 쓸지, 그리고 그대로 시작할 수 있는 완성 화면은 [패널 디자인](/docs/plugin-ui-guide)에 있습니다. API 4로 표시된 요소를 쓰려면 매니페스트에 `"apiVersion": 4`가 필요합니다.
 
 ```js
 plugin.onPanelOpen(async (context) => {
@@ -143,7 +161,7 @@ plugin.onEvent('notes', (event, context) => {
 | `shell` | 일반 셸 |
 | `exited` | 프로그램 종료 |
 
-방해하지 않을 판단을 할 때 `working`과 `thinking`은 같게 취급하세요.
+방해해도 되는지 판단할 때 `working`과 `thinking`은 같게 취급하세요.
 
 ## 프롬프트 보내기
 
@@ -165,7 +183,22 @@ await plugin.injectPrompt({
 
 다른 앱이나 링크에서 시작된 것이라면 `ask`를 쓰세요.
 
+## AI 에이전트의 도구
+
+```js
+plugin.tool('list_containers', async ({ args }) => {
+  const containers = await listContainers({ all: args.all === true });
+  return containers.map((c) => `${c.name}: ${c.state}`).join('\n');
+});
+```
+
+`plugin.start()` 호출 전에 도구를 등록하세요. 에이전트가 도구를 호출하면 여러분의 응답(문자열, 어떤 JSON 값, MCP 형식 컨텐츠)을 받습니다. 핸들러에서 던진 오류는 도구 오류로 에이전트에 전송됩니다.
+
+플러그인은 `mcp.tools` 권한과 `apiVersion: 5`를 선언해야 도구를 제공할 수 있습니다. 플러그인당 최대 32개 도구입니다. 스키마와 제한은 [매니페스트 레퍼런스](/docs/plugin-manifest)를 보세요.
+
 ## 세션과 터미널
+
+새 터미널을 프록시로 보내려면 `terminal.proxy` 권한과 `apiVersion: 6`을 선언하고 `plugin.setTerminalProxy({ port, token })`를 호출합니다. `plugin.setTerminalProxy({ port: null })`는 프록시를 멈춥니다. 주소는 Agentty가 포트로 127.0.0.1에 만들므로 플러그인은 터미널을 다른 곳으로 보낼 수 없습니다. [권한](/docs/plugin-permissions)을 보세요.
 
 ```js
 const session = await plugin.getSession({ paneId: context.pane.id, maxTurns: 200 });

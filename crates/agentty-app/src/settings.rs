@@ -117,7 +117,7 @@ pub struct CommandAlias {
     pub command: String,
 }
 
-pub const SETTINGS_VERSION: u32 = 6;
+pub const SETTINGS_VERSION: u32 = 7;
 
 pub const BUNDLED_FONT: &str = "JetBrains Mono";
 /// The coding font Korean developers reach for: its Hangul is exactly two cells wide. Not bundled
@@ -222,6 +222,10 @@ pub struct Settings {
     /// update asks for more).
     #[serde(default)]
     pub plugin_permission_grants: std::collections::BTreeMap<String, Vec<String>>,
+    /// Plugins whose MCP connection the user turned off: their tools are not offered to agents.
+    /// Only plugins that offer tools (`mcp.tools`) have the switch; it is on until turned off.
+    #[serde(default)]
+    pub plugin_mcp_off: std::collections::BTreeSet<String>,
     /// A plugin's own workspace: the width of its panel and the height of its terminals.
     pub plugin_workspace_panel_width: f32,
     pub plugin_workspace_terminal_height: f32,
@@ -242,6 +246,13 @@ pub struct Settings {
     pub system_notifications: bool,
     /// Local sessions pinned to the top (`claude:<id>`, `codex:<id>`).
     pub favorite_sessions: Vec<String>,
+    /// Sidebar plugins kept as icons of their own in the activity bar, by plugin id, however many
+    /// are installed (the rest fold into one group once there are enough of them).
+    pub pinned_plugins: Vec<String>,
+    /// Set by the v7 migration, for this run only: the sidebar plugins installed before grouping
+    /// came in are pinned once the plugins are known, so an upgrade keeps their icons.
+    #[serde(skip)]
+    pub pin_sidebar_plugins: bool,
     /// Notify even while Agentty is the focused app.
     pub notify_when_focused: bool,
     /// An agent asking for an answer (permission, question) always notifies, unless its pane is the
@@ -249,6 +260,13 @@ pub struct Settings {
     pub notify_answer_requests: bool,
     /// Messages to Slack / Discord / Telegram (their secrets live in the credential store).
     pub chat_notify: ChatNotify,
+    /// Remote access from a browser over the user's Tailscale network (`remote`). The password
+    /// lives in the credential store, never here.
+    #[serde(default)]
+    pub remote: RemoteSettings,
+    /// Speech recognition for voice prompts (the status bar mic and the remote page).
+    #[serde(default)]
+    pub voice: VoiceSettings,
     /// Menu bar icon; closing the window keeps Agentty running there.
     pub menu_bar: bool,
     pub link_opener: LinkOpener,
@@ -295,6 +313,8 @@ pub struct Settings {
     pub harness_submit: bool,
     /// Agent that starts harness work.
     pub harness_agent: HarnessAgent,
+    /// The development board (Settings → Development board): off until the user turns it on.
+    pub board: BoardSettings,
     /// Consent to anonymous usage statistics (Google Analytics: which features were used, app and
     /// OS version, a random installation id — never personal data, paths, commands, prompts or
     /// output). `DO_NOT_TRACK=1` turns it off regardless, and builds without analytics credentials
@@ -332,6 +352,142 @@ pub struct Settings {
     pub update_later_version: String,
     #[serde(default)]
     pub update_later_until: u64,
+}
+
+/// Speech recognition for voice prompts.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VoiceSettings {
+    pub language: VoiceLanguage,
+    /// The model to transcribe with (an id of `agentty_bridge::voice::MODELS`); `None` or a model
+    /// that is not installed means the recommended one.
+    pub model: Option<String>,
+}
+
+/// The language voice prompts are spoken in. Detecting it works for longer sentences, but a short
+/// prompt is often taken for the wrong language; naming it avoids that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceLanguage {
+    #[default]
+    Auto,
+    Korean,
+    English,
+}
+
+impl VoiceLanguage {
+    pub const ALL: [VoiceLanguage; 3] = [VoiceLanguage::Auto, VoiceLanguage::Korean, VoiceLanguage::English];
+
+    /// The language code whisper takes, or `None` to detect it from the speech.
+    pub fn code(self) -> Option<&'static str> {
+        match self {
+            VoiceLanguage::Auto => None,
+            VoiceLanguage::Korean => Some("ko"),
+            VoiceLanguage::English => Some("en"),
+        }
+    }
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            VoiceLanguage::Auto => "voice.lang_auto",
+            VoiceLanguage::Korean => "voice.lang_ko",
+            VoiceLanguage::English => "voice.lang_en",
+        }
+    }
+}
+
+/// How the development board works.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BoardSettings {
+    /// The board page, its icon and its commands are only there when this is on.
+    pub enabled: bool,
+    /// The agent a new ticket goes to.
+    pub agent: BoardAgent,
+    pub run_mode: BoardRunMode,
+    pub split: BoardSplit,
+    /// What happens to a ticket's workspace and worktrees when the user signs it off.
+    pub cleanup: BoardCleanup,
+    pub jira: JiraSettings,
+}
+
+impl Default for BoardSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            agent: BoardAgent::Claude,
+            run_mode: BoardRunMode::Worktree,
+            split: BoardSplit::Auto,
+            cleanup: BoardCleanup::Ask,
+            jira: JiraSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoardAgent {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl BoardAgent {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+/// Where a ticket's agent works.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardRunMode {
+    /// A new git worktree on a branch of its own (outside git: the project folder).
+    #[default]
+    Worktree,
+    /// Right in the project folder, on whatever is checked out there.
+    ProjectFolder,
+}
+
+/// What happens when a ticket's agent wants to split its work (`agentty tasks`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardSplit {
+    /// The tasks start without asking.
+    #[default]
+    Auto,
+    /// The usual dialog asks first.
+    Ask,
+    /// One agent per ticket: it is told not to split, and requests are refused.
+    Off,
+}
+
+/// Cleaning up a ticket's workspace and worktrees at the final sign-off. Branches with commits
+/// the default branch does not have always stay; a tree with uncommitted changes is never removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardCleanup {
+    /// A dialog shows what goes and what stays.
+    #[default]
+    Ask,
+    /// Without asking, when nothing would be lost (otherwise the dialog after all).
+    Always,
+    Never,
+}
+
+/// Jira Cloud, for importing issues as tickets. The API token is in the Keychain, not here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct JiraSettings {
+    pub enabled: bool,
+    /// `https://team.atlassian.net`.
+    pub site: String,
+    pub email: String,
+    /// The issues an import brings in.
+    pub jql: String,
 }
 
 /// Which agent starts work through a harness.
@@ -429,6 +585,28 @@ fn lenient_search_engine<'de, D: serde::Deserializer<'de>>(deserializer: D) -> R
     })
 }
 
+/// Remote access over Tailscale. Off until the user sets a password and turns it on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteSettings {
+    /// The feature itself: its item in the activity bar and its page. Off hides both and keeps
+    /// remote access off, whatever `enabled` says.
+    pub feature: bool,
+    /// On: Agentty serves its web page to the user's tailnet whenever it runs.
+    pub enabled: bool,
+    /// The tailnet HTTPS port (`https://<machine>.<tailnet>.ts.net:<port>`). Not 443, which people
+    /// often serve something else on.
+    pub https_port: u16,
+    /// Keeps the Mac from idle sleep while remote access is on, so the page stays reachable.
+    pub keep_awake: bool,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        RemoteSettings { feature: true, enabled: false, https_port: 8743, keep_awake: true }
+    }
+}
+
 /// Which chat services get a message, and what. The webhook URLs and the bot token are in the
 /// credential store (`agentty_bridge::notify`), never here.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -455,6 +633,9 @@ pub struct ChatNotify {
     pub on_finish: bool,
     /// Include what the agent asks (the command, the question). Off: only who and where.
     pub details: bool,
+    /// Also while that session is on screen in Agentty: the window can be up while the user works
+    /// on it from elsewhere (remote desktop, another room).
+    pub when_in_view: bool,
 }
 
 impl ChatNotify {
@@ -621,6 +802,7 @@ impl Default for Settings {
             plugin_browser_modes: std::collections::BTreeMap::new(),
             plugin_browser_grants: std::collections::BTreeMap::new(),
             plugin_permission_grants: std::collections::BTreeMap::new(),
+            plugin_mcp_off: std::collections::BTreeSet::new(),
             plugin_workspace_panel_width: 380.,
             plugin_workspace_terminal_height: 280.,
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
@@ -634,11 +816,15 @@ impl Default for Settings {
             notify_when_focused: false,
             notify_answer_requests: true,
             chat_notify: ChatNotify::default(),
+            remote: RemoteSettings::default(),
+            voice: VoiceSettings::default(),
             menu_bar: true,
             link_opener: LinkOpener::InApp,
             external_editor: ExternalEditor::Auto,
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
+            pinned_plugins: Vec::new(),
+            pin_sidebar_plugins: false,
             resume_bar: true,
             agent_bar: true,
             agent_bar_position: crate::hud::HudPosition::default(),
@@ -656,6 +842,7 @@ impl Default for Settings {
             harness_patterns: Vec::new(),
             harness_submit: true,
             harness_agent: HarnessAgent::Auto,
+            board: BoardSettings::default(),
             analytics: true,
             compact_workspaces: false,
             sort_finished_to_top: false,
@@ -697,10 +884,30 @@ impl Settings {
         agentty_bridge::fsutil::data_dir().join("settings.json")
     }
 
-    fn load() -> Self {
-        match std::fs::read(Self::path()) {
-            Ok(bytes) => serde_json::from_slice::<Settings>(&bytes).map(Settings::migrate).unwrap_or_default(),
-            Err(_) => Settings::default(),
+    /// The saved settings, and whether saving over the file is safe. A file that doesn't parse is
+    /// copied aside first (see [`set_aside_unreadable`]) and the defaults used; if even the copy
+    /// fails, the file is left as it is and not saved over.
+    fn load() -> (Self, bool) {
+        let path = Self::path();
+        match std::fs::read(&path) {
+            Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
+                Ok(settings) => (settings.migrate(), true),
+                Err(err) => {
+                    eprintln!("agentty: {} could not be read ({err}); using the default settings", path.display());
+                    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                    match set_aside_unreadable(&path, &bytes, &stamp) {
+                        Ok(backup) => {
+                            eprintln!("agentty: the unreadable settings were kept as {}", backup.display());
+                            (Settings::default(), true)
+                        }
+                        Err(err) => {
+                            eprintln!("agentty: could not keep a copy of {} ({err}); not saving over it", path.display());
+                            (Settings::default(), false)
+                        }
+                    }
+                }
+            },
+            Err(_) => (Settings::default(), true),
         }
     }
 
@@ -741,6 +948,12 @@ impl Settings {
             // unless turned on, so "off" was the old default rather than a choice.
             self.option_as_meta = true;
         }
+        if self.settings_version < 7 && self.pinned_plugins.is_empty() {
+            // v7: from three sidebar plugins on, the unpinned ones share one activity-bar item.
+            // Whoever had them before kept an icon for each: those are pinned (see
+            // `workbench::pin_installed_sidebar_plugins`).
+            self.pin_sidebar_plugins = true;
+        }
         self.settings_version = SETTINGS_VERSION;
         self
     }
@@ -750,6 +963,17 @@ impl Settings {
         self.recent_dirs.insert(0, dir);
         self.recent_dirs.truncate(10);
     }
+}
+
+/// Keeps a copy of a settings file that doesn't parse as `settings.json.bak-<stamp>` (`0600`) next
+/// to it, before the defaults are saved over it: a hand edit with a typo shouldn't cost the user
+/// every setting.
+fn set_aside_unreadable(path: &std::path::Path, bytes: &[u8], stamp: &str) -> std::io::Result<PathBuf> {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".bak-{stamp}"));
+    let backup = path.with_file_name(name);
+    agentty_bridge::fsutil::write_private(&backup, bytes)?;
+    Ok(backup)
 }
 
 pub struct SettingsStore {
@@ -766,11 +990,13 @@ impl Global for SettingsStore {}
 
 impl SettingsStore {
     pub fn init(cx: &mut App) {
-        let settings = Settings::load();
+        let (settings, may_save) = Settings::load();
         let themes = load_themes();
         let composed = SettingsStore::compose(&settings, &themes);
         let store = SettingsStore { settings, revision: 0, themes, composed };
-        let _ = store.save();
+        if may_save {
+            let _ = store.save();
+        }
         if let Err(err) = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass) {
             eprintln!("agentty: shell integration unavailable: {err:#}");
         }
@@ -782,13 +1008,9 @@ impl SettingsStore {
     }
 
     fn save(&self) -> anyhow::Result<()> {
-        let path = Settings::path();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.settings)?)?;
-        std::fs::rename(tmp, path)?;
+        // Private (0600) from creation and replaced atomically: it names projects, folders and
+        // connected services.
+        agentty_bridge::fsutil::write_private(&Settings::path(), &serde_json::to_vec_pretty(&self.settings)?)?;
         Ok(())
     }
 
@@ -816,6 +1038,16 @@ impl SettingsStore {
 /// Read from the settings file (launch specs are built without an `App`).
 pub fn browser_tools_enabled() -> bool {
     std::fs::read(Settings::path()).ok().and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).is_none_or(|s| s.browser.agent_tools)
+}
+
+/// Plugins whose MCP connection the user turned off, read from the settings file like
+/// [`browser_tools_enabled`] (for launching agents, where there is no `App`).
+pub fn plugin_mcp_off() -> std::collections::BTreeSet<String> {
+    std::fs::read(Settings::path())
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+        .map(|s| s.plugin_mcp_off)
+        .unwrap_or_default()
 }
 
 /// Whether agents get Agentty's guide, read from the settings file like [`browser_tools_enabled`].
@@ -902,7 +1134,9 @@ pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Resul
             let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
         crate::platform::wakelock::set(store.settings.prevent_sleep);
+        agentty_bridge::voice::set_preferred_model(store.settings.voice.model.as_deref());
     });
+    crate::remote::refresh_voice(cx);
     cx.refresh_windows();
     Ok(())
 }
@@ -918,6 +1152,24 @@ pub fn reload_themes(cx: &mut App) {
 #[cfg(test)]
 mod browser_settings_tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_settings_file_is_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("agentty-settings-aside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"{ \"theme\": ").unwrap();
+        let backup = set_aside_unreadable(&path, b"{ \"theme\": ", "20261010-120000").unwrap();
+        assert_eq!(backup, dir.join("settings.json.bak-20261010-120000"));
+        assert_eq!(std::fs::read(&backup).unwrap(), b"{ \"theme\": ");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn the_font_is_only_chosen_for_someone_who_did_not_pick_one() {
@@ -964,6 +1216,15 @@ mod browser_settings_tests {
         // Turned off once this version is in use: a choice, kept.
         let current = Settings { option_as_meta: false, ..Settings::default().migrate() };
         assert!(!current.migrate().option_as_meta);
+    }
+
+    #[test]
+    fn an_upgrade_pins_the_sidebar_plugins_it_had() {
+        assert!(!Settings::default().migrate().pin_sidebar_plugins, "a new installation groups from the start");
+        assert!(Settings { settings_version: 6, ..Settings::default() }.migrate().pin_sidebar_plugins);
+        // A pinned list already saved is a choice, kept.
+        let chosen = Settings { settings_version: 6, pinned_plugins: vec!["example".into()], ..Settings::default() };
+        assert!(!chosen.migrate().pin_sidebar_plugins);
     }
 
     #[test]

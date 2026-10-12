@@ -5,7 +5,7 @@ description: SDK 뒤에서 오가는 JSON-RPC 와이어 포맷, WebAssembly 모�
 
 SDK 없이 플러그인을 작성하기 위한 와이어 포맷입니다. [Node.js SDK](/docs/plugin-sdk)와 [Rust SDK](/docs/plugin-rust)가 전부 감싸 주며, 어느 쪽이든 [빠른 시작](/docs/plugin-quickstart)을 먼저 읽는 편이 좋습니다.
 
-API **버전 1**은 이 페이지에서 `host/timer`와 `pane/status`를 뺀 전부입니다. 그 둘은 **버전 2**입니다.
+API **버전 1**은 이 페이지에서 `host/timer`와 `pane/status`를 뺀 전부입니다. 그 둘은 **버전 2**이고, [UI 트리](#ui-트리)에서 API 4로 표시된 패널 요소는 **버전 4**, `tools/call`은 **버전 5**입니다.
 
 ## 전송 방식
 
@@ -18,7 +18,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 | `executable` | `<main>` |
 | `wasm` | 없음 — `<main>`이 Agentty가 직접 실행하는 WebAssembly 모듈. [WebAssembly 플러그인](#webassembly-플러그인) 참고 |
 
-메시지는 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 객체이며 **한 줄에 하나**, UTF-8로, stdin(Agentty → 플러그인)과 stdout(플러그인 → Agentty)을 통해 오갑니다. 16MB가 넘는 줄은 거부됩니다. stdout의 JSON이 아닌 내용은 로그에 남고 무시되며, stderr는 플러그인 로그로 갑니다.
+메시지는 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 객체이며 **한 줄에 하나**, UTF-8로, stdin(Agentty → 플러그인)과 stdout(플러그인 → Agentty)으로 오갑니다. 16MB가 넘는 줄은 거부됩니다. stdout의 JSON이 아닌 내용은 로그에 남고 무시되며, stderr는 플러그인 로그로 갑니다.
 
 stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5초가 지나도 살아 있으면 `SIGTERM`을, 다시 1.5초 뒤에 `SIGKILL`을 받습니다. Agentty가 종료될 때는 둘 다 즉시 이어집니다.
 
@@ -33,6 +33,7 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 | `context/changed` | 알림 | `{ context }` |
 | `url/open` | 알림 | `{ path, query, url, context }` |
 | `pane/status` | 알림 | `{ paneId, status, running, agent, title, cwd }` — 이 플러그인이 시작한 페인의 상태가 바뀜 (`workspace.read`, API 2) |
+| `tools/call` | 요청 — 응답 필요 | `{ name, arguments, context }` — AI 에이전트가 도구를 호출함 (`mcp.tools`, API 5) |
 | `shutdown` | 알림 | `{}` |
 
 `initialize`가 먼저 오고, 곧바로 플러그인을 시작시킨 것(명령, 패널 열기, 링크)이 뒤따릅니다. `initialize`에는 아무 결과나 응답하면 됩니다(예: `{}`).
@@ -48,13 +49,14 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 | `ui/notify` | | `{ message, kind }` — `info`, `success`, `warning`, `error` | `null` |
 | `ui/setBadge` | | `{ text }`, 최대 8자 | `null` |
 | `context/get` | | `{}` | 컨텍스트 |
-| `host/info` | | `{}` | `{ version, apiVersion, language }` |
+| `host/info` | | `{}` | `{ version, apiVersion, language, uiFeatures }` |
 | `host/openUrl` | | `{ url }` — http/https | `null` |
 | `host/copy` | | `{ text }` — 최대 100,000자 | `null` |
 | `host/timer` | | `{ ms }` — API 2 | 시간이 지나면 `{ elapsedMs }` |
 | `host/revealPath` | `workspace.read` | `{ path }` — 존재하는 절대 경로 | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` 또는 `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` — `paneId` 없으면 포커스된 페인 | `{ paneId }` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }` (`token`: 16~128자의 문자, 숫자, `-`, `_`) 또는 `{ port: null }` — 이후 여는 터미널은 플러그인의 127.0.0.1 프록시를 거침 | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` — 기본 200, 최대 2000 | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
@@ -68,6 +70,12 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 
 `net/fetch`는 플러그인이 네트워크에 닿는 유일한 방법입니다. Agentty가 거는 제한 — 메서드, 헤더, 크기, 타임아웃, 리다이렉트 — 은 [권한](/docs/plugin-permissions#net-request로-할-수-있는-일)에 있습니다. 요약하면, 요청에는 여러분의 것이 아무것도 실리지 않습니다. 쿠키도 저장된 자격 증명도 없고, 플러그인이 직접 넣은 것만 갑니다.
 
+### 에이전트의 도구 호출에 응답하기 (API 4)
+
+AI 에이전트가 `tools/call`을 `{ name, arguments, context }`로 호출하면, 문자열, 어떤 JSON 값, 또는 MCP 형식 컨텐츠 `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }`로 응답하세요. 다른 컨텐츠 타입은 폐기됩니다. 또는 JSON-RPC 오류로 응답하세요. 그 메시지는 에이전트로 전달됩니다.
+
+플러그인은 120초 이내에 응답해야 합니다. 한 플러그인에서는 최대 8개 호출이 기다릴 수 있습니다. 인수는 최대 256KB입니다. 에이전트에 전달되는 텍스트는 100,000자에서 잘립니다.
+
 ### 기다리기, 그리고 에이전트가 끝난 것을 듣기
 
 `host/timer`는 플러그인이 기다리는 방법입니다. 시간이 지나면 응답되는 요청이고, 최소 100ms, 최대 1시간, 동시에 8개까지입니다. 모듈은 메시지를 처리하는 동안에만 실행되므로, 나중의 어떤 시점으로 돌아오는 수단은 이것이 전부입니다. 플러그인이 얻는 것은 그 응답뿐이라서 백그라운드 실행 수단이 되지 않습니다.
@@ -76,11 +84,11 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 
 이용자가 직접 보낸 프롬프트도 추적됩니다. `target: "ask"`는 아직 페인이 없으므로 페인 id 없이 `{ status: "asked" }`로 응답하지만, 이용자가 고른 세션도 똑같이 지켜봅니다. 그 세션의 첫 `pane/status`가 플러그인이 어느 페인이 되었는지 알게 되는 지점입니다. 질문이 여럿 열려 있는 플러그인은 프롬프트에 붙인 `title`로 구분합니다.
 
-화면이 그려지고 있든 아니든 상태는 전달됩니다. 다른 창에 가려진 창이나 잠긴 화면의 창은 그려지지 않는데, 에이전트를 기다리는 플러그인이 이용자가 돌아오기를 기다리고 있어서는 안 되기 때문입니다. [AgentOS 플러그인](/docs/plugin-agentos)이 이 둘 위에 만들어져 있습니다.
+화면이 그려지고 있든 아니든 상태는 전달됩니다. 다른 창에 가려진 창이나 잠긴 화면의 창은 그려지지 않는데, 에이전트를 기다리는 플러그인이 이용자가 돌아오기를 기다리고 있어서는 안 되기 때문입니다. [AgentOS 플러그인](/docs/plugin-agentos)이 이 둘을 바탕으로 만들어졌습니다.
 
 ### 기억하기
 
-`storage/*`는 플러그인이 실행 사이에 기억하는 수단입니다. 자기 폴더의 JSON 문서 하나(`<데이터 폴더>/plugin-data/<plugin>/storage.json`, `0600`으로 생성)를 키로 읽고 씁니다. 키는 소문자·숫자·`.`·`-`·`_`이며 최대 64개, 총 1MB입니다. 프로세스로 실행되는 플러그인은 자기 파일을 쓸 수 있지만, WebAssembly 플러그인에는 파일이 없으므로 무언가를 남기는 수단은 이것뿐입니다.
+`storage/*`는 플러그인이 실행 사이에 기억하는 수단입니다. 자기 폴더의 JSON 문서 하나(`<데이터 폴더>/plugin-data/<plugin>/storage.json`, `0600`으로 생성)를 키로 읽고 씁니다. 키는 소문자·숫자·`.`·`-`·`_`이며 최대 64개, 총 1MB입니다. 프로세스로 실행되는 플러그인은 자기 파일을 쓸 수 있지만 WebAssembly 플러그인에는 파일이 없으므로 무언가를 남기는 수단은 이것뿐입니다.
 
 ### 오류 코드
 
@@ -142,24 +150,65 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: 고정폭 글꼴 (API 4)
+         completions (API 4): [{ label, insert?, detail? }] 입력 중인 단어의 자동완성.
+         앞의 {{ 와 뒤의 }} 도 함께 바뀝니다
          rows > 1: 그만큼의 줄을 가진 텍스트 영역(최대 24). Enter는 줄을
          바꾸고, 붙여넣기는 줄바꿈을 유지합니다
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: 트리 들여쓰기 0–8, tag: 제목 앞 짧은 라벨(8자 이하), 색은 tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
 spinner  { text? }
 divider  {}
+flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }] }
+         state: off | on | active | done | error — 자동화의 단계를 위에서 아래로
+popover  { id, title, children }           패널 옆의 카드. 트리의 첫 번째 것이 열립니다
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   떠 있는 상자. tone은 아이콘과 테두리 색
+grid     { children, columns?, gap?, widths? }      같은 폭의 열(1–6, 기본 2), 넘치면 다음 줄로
+         widths: 열마다 "240px"(고정) 또는 "2"(비율) — columns 대신
+         id?, resizable? (API 4): 첫 고정 열을 끌어서 폭 조절, 끝나면 resize(폭)
+         fill: 남은 높이를 채우고 열마다 따로 스크롤 (API 4)
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: 닫기 버튼, 누르면 close
+         children: 선택된 탭의 내용만
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+         align: start | center | end, grow: 폭의 비율(1–12), 열마다 셀 하나
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value는 0부터 1까지, detail은 퍼센트 대신 표시
+callout  { text, title?, icon?, tone? }     tone 기본값은 info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }       language(rust, json, ts, sh, …)로 색칠, 복사 버튼 포함
+
+API 5:
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                           플러그인 자기 폴더(files/*)의 그림: PNG·JPEG·WebP·GIF만, SVG는 그리지 않음;
+                                           높이 기본 240; fit: contain | cover; src가 없으면 빈 칸; drop(id와 함께,
+                                           files 권한 필요)은 Finder에서 끌어 놓은 그림을 받음
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                           캔버스의 x, y에 놓인 노드 카드를 와이어로 잇는 그래프(이미지 파이프라인처럼); fill이면 패널의
+                                           남은 높이를 차지; 그 안에서 스크롤·확대/축소(− % + 맞춤, ⌘/Ctrl + 스크롤)
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?, children?, state?, selected? }]
+         edges: [{ from: { node, port }, to: { node, port }, tone?, idle? }]
 ```
 
 이벤트: `button`은 `click`, `input`은 `value`와 함께 `change`·`submit`, `list`는 `item`과 함께 `select`(행 버튼은 `item`·`action`과 함께 `action`), `choice`는 선택한 값과 함께 `change`, `toggle`은 새 불리언과 함께 `change`를 보냅니다.
 
 리스트 항목의 `tone`은 아이콘 색을 정하며 `badge`와 같은 값을 씁니다.
 
+`flow`는 단계 id를 `item`으로 담아 `select`를, `popover`는 닫기 버튼에서 `close`를 보냅니다. API 4부터: `tabs`는 탭 id와 함께 `change`, `table`은 행 id를 `item`으로 담아 `select`, `select`는 옵션 값과 함께 `change`, `checkbox`는 새 불리언과 함께 `change`를 보냅니다. API 5부터: `image`는 `click`을, 그리고 `[{ path, name, size }]`와 함께 `drop`을 보냅니다(`files/pick`처럼 플러그인 폴더에 복사된 경로). `graph`는 노드 헤더를 누르면 노드 id를 `item`으로 담아 `select`를, `movable`이면 헤더를 끌어 놓았을 때 노드를 `item`, `{ x, y }`를 `value`로 담아 `move`를 보냅니다 — 그 위치를 기억해 다시 보내 주세요.
+
+API 4 요소를 쓰는 플러그인은 매니페스트에 `"apiVersion": 4`를 적습니다. 실행 중인 Agentty가 그릴 수 있는 요소는 `host/info`의 `uiFeatures`에 있습니다. 무엇에 어떤 요소를 쓸지는 [패널 디자인](/docs/plugin-ui-guide)을 보세요.
+
 ## Agentty 없이 테스트하기
 
-`node`·`python`·`executable` 플러그인은 stdin을 읽고 stdout에 쓰는 평범한 프로그램이므로 테스트에서 직접 구동할 수 있습니다. `initialize` 요청을 쓰고, 확인하고 싶은 알림을 이어서 보낸 뒤, 플러그인이 돌려주는 JSON을 검증하면 됩니다.
+`node`·`python`·`executable` 플러그인은 stdin을 읽고 stdout에 쓰는 평범한 프로그램이므로 테스트에서 직접 구동할 수 있습니다. `initialize` 요청을 쓰고 확인하고 싶은 알림을 이어서 보낸 뒤 플러그인이 돌려주는 JSON을 검증하면 됩니다.
 
 `wasm` 모듈도 방식은 같습니다. 위의 import 세 개를 제공할 수 있는 WebAssembly 런타임이면 무엇으로든 구동할 수 있습니다.

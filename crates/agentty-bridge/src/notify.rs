@@ -14,6 +14,7 @@
 //! - What is sent is decided by the caller; this module adds nothing (no paths, no prompts).
 //!   Discord and Slack mentions are switched off, so a message can't ping `@everyone`.
 
+pub use crate::notify_card::{Card, Tone};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -169,8 +170,9 @@ pub fn validate(channel: Channel, transport: Transport, secret: &str) -> Result<
 
 /// A Slack channel to post to: `#name`, `name`, or a channel/user id like `C01ABCDEF`.
 pub fn valid_slack_channel(channel: &str) -> bool {
+    // Slack names may be in any script (`#개발`, `#開発`), up to 80 characters, not bytes.
     let name = channel.trim().strip_prefix('#').unwrap_or(channel.trim());
-    (1..=80).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    (1..=80).contains(&name.chars().count()) && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
 /// A Discord channel id. The API posts to an id, not a name — a name cannot be resolved without
@@ -304,11 +306,24 @@ fn request(channel: Channel, transport: Transport, secret: &str, target: Option<
     })
 }
 
-/// Sends `text` to `channel` the way `transport` says. Errors name the service and the HTTP status
+/// Where `card` goes and how it looks there: the plain request, laid out in the service's own
+/// format (`notify_card`).
+fn card_request(channel: Channel, transport: Transport, secret: &str, target: Option<&str>, card: &Card) -> Result<Request> {
+    let card = Card { body: clip(&card.body), ..card.clone() };
+    let mut request = request(channel, transport, secret, target, &card.plain())?;
+    match channel {
+        Channel::Slack => card.slack(&mut request.body),
+        Channel::Discord => card.discord(&mut request.body),
+        Channel::Telegram => card.telegram(&mut request.body),
+    }
+    Ok(request)
+}
+
+/// Sends `card` to `channel` the way `transport` says. Errors name the service and the HTTP status
 /// only — never the URL or the header, which hold the secret.
-pub fn send(channel: Channel, transport: Transport, target: Option<&str>, text: &str) -> Result<()> {
+pub fn send(channel: Channel, transport: Transport, target: Option<&str>, card: &Card) -> Result<()> {
     let Some(secret) = secret(channel, transport) else { bail!("{} is not set up", channel.label()) };
-    let Request { url, body, auth, check_ok_field } = request(channel, transport, &secret, target, text)?;
+    let Request { url, body, auth, check_ok_field } = card_request(channel, transport, &secret, target, card)?;
     let agent = crate::http::agent_builder().redirects(0).timeout(Duration::from_secs(15)).build();
     let mut post = agent.post(&url).set("User-Agent", "Agentty");
     if let Some(auth) = &auth {
@@ -460,6 +475,12 @@ mod tests {
         assert!(valid_target(Channel::Slack, "#general") && valid_target(Channel::Slack, "general"));
         assert!(valid_target(Channel::Slack, "C01ABCDEF"));
         assert!(!valid_target(Channel::Slack, "") && !valid_target(Channel::Slack, "has space"));
+        assert!(valid_target(Channel::Slack, "#개발-알림") && valid_target(Channel::Slack, "開発_通知"), "names in any script");
+        assert!(
+            valid_target(Channel::Slack, &"가".repeat(80)) && !valid_target(Channel::Slack, &"가".repeat(81)),
+            "80 characters, not bytes"
+        );
+        assert!(!valid_target(Channel::Slack, "#알림!") && !valid_target(Channel::Slack, "#a/b"));
         // Discord posts to an id, not a name.
         assert!(valid_target(Channel::Discord, "123456789012345678")); // gitleaks:allow — a made-up id in a test
         assert!(!valid_target(Channel::Discord, "#general") && !valid_target(Channel::Discord, "1234"));

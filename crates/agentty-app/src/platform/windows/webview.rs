@@ -249,6 +249,10 @@ fn runtime_version() -> Option<String> {
     (found.is_ok() && !text.is_empty()).then_some(text)
 }
 
+/// Local HTML files are not opened on Windows yet: the navigation filter refuses every `file:`
+/// address, and nothing here grants one (macOS limits a granted file to its own folder).
+pub fn grant_file(_url: &str) {}
+
 /// Whether the WebView2 Runtime is installed, so the in-app browser can open pages.
 pub fn available() -> bool {
     if RUNTIME_FOUND.with(Cell::get) {

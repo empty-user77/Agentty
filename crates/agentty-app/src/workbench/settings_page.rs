@@ -37,6 +37,10 @@ pub enum SettingsSection {
     #[default]
     General,
     Project,
+    /// The development board: on or off, how tickets run, Jira.
+    Board,
+    /// Speech recognition: the model, the language (the same card as on the Remote access page).
+    Voice,
     Accounts,
     Appearance,
     Browser,
@@ -57,9 +61,11 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 13] = [
+    pub const ALL: [SettingsSection; 15] = [
         Self::General,
         Self::Project,
+        Self::Board,
+        Self::Voice,
         Self::Windows,
         Self::Accounts,
         Self::Notifications,
@@ -85,6 +91,8 @@ impl SettingsSection {
         match self {
             Self::General => "settings.general",
             Self::Project => "settings.project",
+            Self::Board => "settings.board",
+            Self::Voice => "settings.voice",
             Self::Accounts => "settings.accounts",
             Self::Appearance => "settings.appearance",
             Self::Browser => "settings.browser",
@@ -103,6 +111,8 @@ impl SettingsSection {
         match self {
             Self::General => "settings",
             Self::Project => "folder-open",
+            Self::Board => "square-kanban",
+            Self::Voice => "mic",
             Self::Accounts => "key-round",
             Self::Appearance => "terminal",
             Self::Browser => "globe",
@@ -151,6 +161,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         "shortcuts.group.views",
         &[
             ("shortcuts.palette", "⇧⌘P"),
+            ("shortcuts.voice", "⇧⌘M"),
             ("shortcuts.search_sessions", "⇧⌘O"),
             ("panel.workspaces", "⇧⌘E"),
             ("panel.sessions", "⇧⌘S"),
@@ -339,6 +350,43 @@ fn terminal_preview(preview: Option<super::Pane>, cx: &mut Context<Workbench>) -
         .child(div().rounded_md().overflow_hidden().border_1().border_color(hex(Chrome::BORDER)).bg(hex(theme.background)).child(body))
 }
 
+/// Settings → About: the build and the interface versions, as a key/value list, with a button that
+/// copies it all as plain text for a bug report.
+fn build_info_section(cx: &mut Context<Workbench>) -> Div {
+    use crate::build_info::{api_rows, build_rows, plain_text, value_text, Row};
+    let language = settings(cx).language;
+    let rows = |rows: Vec<Row>, cx: &Context<Workbench>| {
+        div().flex().flex_col().gap_1().children(rows.into_iter().map(|row| {
+            div()
+                .flex()
+                .gap_4()
+                .t_small()
+                .child(div().w(px(220.)).flex_shrink_0().text_color(hex(Chrome::MUTED)).child(t(cx, row.label)))
+                .child(div().font_family(BUNDLED_FONT).text_color(hex(Chrome::BRIGHT)).child(value_text(&row.value, language)))
+        }))
+    };
+    section(t(cx, "about.build"))
+        .child(rows(build_rows(), cx))
+        .child(
+            div()
+                .pt_2()
+                .t_small()
+                .font_weight(crate::theme::EMPHASIS)
+                .text_color(hex(Chrome::FOREGROUND))
+                .child(t(cx, "about.api_versions")),
+        )
+        .child(rows(api_rows(), cx))
+        .child(div().pt_1().flex().child(crate::ui::action_button_with_icon(
+            "about-copy-build",
+            "copy",
+            t(cx, "about.build_copy"),
+            cx.listener(|this, _: &ClickEvent, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(plain_text()));
+                this.show_toast(t(cx, "about.build_copied").to_string(), cx);
+            }),
+        )))
+}
+
 pub(super) fn section(title: &str) -> Div {
     div().flex().flex_col().gap_3().pb_6().child(
         div()
@@ -521,7 +569,7 @@ pub(super) fn toggle(
 
 /// The on/off switch of [`toggle`], for a choice kept somewhere other than the settings.
 pub(super) fn switch(
-    id: &'static str,
+    id: impl Into<gpui::ElementId>,
     on: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> gpui::Stateful<Div> {
@@ -811,6 +859,7 @@ impl Workbench {
                     })
                     .child(div().t_small().text_color(hex(Chrome::MUTED)).child(status)),
             )
+            .child(build_info_section(cx))
             .child(
                 section(t(cx, "settings.about_links"))
                     .child(
@@ -1355,7 +1404,15 @@ impl Workbench {
                         ))
                         .when(crate::platform::HAS_STATUS_ITEM, |d| {
                             d.child(row(t(cx, "settings.menu_bar"), toggle("menu-bar", prefs.menu_bar, |s| s.menu_bar = !s.menu_bar, cx)))
-                        }),
+                        })
+                        .child(row_with_hint(
+                            t(cx, "settings.remote_feature"),
+                            t(cx, "settings.remote_feature_hint"),
+                            switch("remote-feature", prefs.remote.feature, |_, _, cx| {
+                                let on = !crate::settings::settings(cx).remote.feature;
+                                crate::remote::set_feature(on, cx);
+                            }),
+                        )),
                 )
                 .child(
                     section(t(cx, "settings.group.agents"))
@@ -1454,6 +1511,8 @@ impl Workbench {
                 )
                 .into_any_element(),
             SettingsSection::Project => self.render_project_settings(window, cx).into_any_element(),
+            SettingsSection::Board => self.render_board_settings(window, cx).into_any_element(),
+            SettingsSection::Voice => div().flex().flex_col().child(self.render_voice_card(cx)).into_any_element(),
             SettingsSection::Accounts => self.render_accounts(window, cx).into_any_element(),
             SettingsSection::Appearance => div()
                 .flex()

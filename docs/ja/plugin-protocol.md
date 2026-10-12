@@ -5,7 +5,7 @@ description: SDK の背後の JSON-RPC ワイヤーフォーマット、WebAssem
 
 SDK なしでプラグインを書くためのワイヤーフォーマットです。[Node.js SDK](/docs/plugin-sdk) と [Rust SDK](/docs/plugin-rust) がすべて包んでくれます。どちらにせよ[クイックスタート](/docs/plugin-quickstart)を先に読むとよいでしょう。
 
-API **バージョン 1** は、このページから `host/timer` と `pane/status` を除いたすべてです。この 2 つは**バージョン 2** です。
+API **バージョン 1** は、このページから `host/timer` と `pane/status` を除いたすべてです。この 2 つは**バージョン 2**、[UI ツリー](#ui-ツリー)で API 4 と記した要素は**バージョン 4**、`tools/call` は**バージョン 5** です。
 
 ## 通信方式
 
@@ -33,6 +33,7 @@ stdin が閉じるか `shutdown` が来たら終了してください。`shutdow
 | `context/changed` | 通知 | `{ context }` |
 | `url/open` | 通知 | `{ path, query, url, context }` |
 | `pane/status` | 通知 | `{ paneId, status, running, agent, title, cwd }` — このプラグインが開始したペインの状態が変わった（`workspace.read`、API 2） |
+| `tools/call` | リクエスト — 応答が必要 | `{ name, arguments, context }` — AI エージェントがツールを呼び出している（`mcp.tools`、API 5） |
 | `shutdown` | 通知 | `{}` |
 
 `initialize` が最初に来て、その直後にプラグインを起動させたもの（コマンド、パネルを開く、リンク）が続きます。`initialize` には任意の結果で応答すれば十分です（例: `{}`）。
@@ -48,13 +49,14 @@ stdin が閉じるか `shutdown` が来たら終了してください。`shutdow
 | `ui/notify` | | `{ message, kind }` — `info`、`success`、`warning`、`error` | `null` |
 | `ui/setBadge` | | `{ text }`、最大 8 文字 | `null` |
 | `context/get` | | `{}` | コンテキスト |
-| `host/info` | | `{}` | `{ version, apiVersion, language }` |
+| `host/info` | | `{}` | `{ version, apiVersion, language, uiFeatures }` |
 | `host/openUrl` | | `{ url }` — http/https | `null` |
 | `host/copy` | | `{ text }` — 最大 100,000 文字 | `null` |
 | `host/timer` | | `{ ms }` — API 2 | 時間が経つと `{ elapsedMs }` |
 | `host/revealPath` | `workspace.read` | `{ path }` — 存在する絶対パス | `null` |
 | `prompt/inject` | `prompt.inject` | `{ text, title?, target?, paneId?, workspaceId?, agent?, cwd?, submit? }` | `{ status: "asked" }` または `{ status: "sent", paneId }` |
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` — `paneId` がなければフォーカス中のペイン | `{ paneId }` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }`（`token`：16〜128 文字の英字・数字・`-`・`_`）または `{ port: null }` — 以後に開くターミナルは、プラグインの 127.0.0.1 のプロキシを経由する | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` — 既定 200、最大 2000 | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
@@ -67,6 +69,12 @@ stdin が閉じるか `shutdown` が来たら終了してください。`shutdow
 ### ネットワークに届く
 
 `net/fetch` はプラグインがネットワークに届く唯一の方法です。Agentty が課す範囲 — メソッド、ヘッダ、サイズ、タイムアウト、リダイレクト — は[権限](/docs/plugin-permissions#net-request)にあります。要点は、リクエストにあなたのものは何も載らないということです。クッキーも保存された資格情報もなく、プラグインが自分で入れたものだけが行きます。
+
+### エージェントのツール呼び出しに応答する (API 4)
+
+AI エージェントがあなたのツールを呼び出すとき、Agentty は `tools/call` を `{ name, arguments, context }` で送ります。文字列、任意の JSON 値、または MCP 形式のコンテンツ `{ "content": [{ "type": "text", "text": "…" } | { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }` で応答してください。他のコンテンツタイプは削除されます。または JSON-RPC エラーで応答してください。そのメッセージはエージェントのエラーとして渡されます。
+
+プラグインは 120 秒以内に応答する必要があります。1 つのプラグインで最大 8 件の呼び出しが待つことができます。引数は最大 256 KB です。エージェントに渡されるテキストは 100,000 文字で切られます。
 
 ### 待つ、そしてエージェントが終わったのを聞く
 
@@ -142,21 +150,62 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                  style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
+         mono: 等幅フォント (API 4)
+         completions (API 4): [{ label, insert?, detail? }] 入力中の単語の候補。
+         前の {{ と後ろの }} も置き換えます
          rows > 1: その行数のテキストエリア（最大 24）。Enter は改行し、
          貼り付けは改行を保ちます
 list     { id, items, empty? }
          items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }]
+         depth: ツリーの字下げ 0–8、tag: タイトル前の短いラベル（8 文字まで）、色は tagTone (API 4)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                   tone: neutral | info | success | warning | error
 spinner  { text? }
 divider  {}
+flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }] }
+         state: off | on | active | done | error — 自動化の手順を上から下へ
+popover  { id, title, children }           パネルの横のカード。ツリーの最初のものが開きます
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   浮いた箱。tone はアイコンと縁の色
+grid     { children, columns?, gap?, widths? }      等幅の列（1–6、既定 2）、あふれたら次の行へ
+         widths: 列ごとに "240px"（固定）か "2"（比率）— columns の代わり
+         id?, resizable? (API 4): 最初の固定列をドラッグで幅変更、resize（幅）を送信
+         fill: 残りの高さを埋め、列ごとにスクロール (API 4)
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+         closable: 閉じるボタン、押すと close
+         children: 選ばれたタブの中身だけ
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+         align: start | center | end、grow: 幅の割合（1–12）、列ごとにセル 1 つ
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value は 0 から 1、detail はパーセントの代わりに表示
+callout  { text, title?, icon?, tone? }     tone の既定は info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }       language（rust、json、ts、sh など）で色分け、コピーボタン付き
+
+API 5:
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                           プラグイン自身のフォルダ（files/*）の画像：PNG・JPEG・WebP・GIF のみ、SVG は
+                                           描かない；高さは既定 240；fit: contain | cover；src がなければ空の枠；drop（id と
+                                           一緒に、files 権限が必要）は Finder からドロップした画像を受け取る
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                           キャンバスの x, y に置いたノードカードをワイヤーでつなぐ（画像パイプラインのように）；fill で
+                                           パネルの残りの高さを使う；中でスクロール・ズーム（− % + 全体表示、⌘/Ctrl + スクロール）
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?, children?, state?, selected? }]
+         edges: [{ from: { node, port }, to: { node, port }, tone?, idle? }]
 ```
 
 イベント: `button` は `click`、`input` は `value` を伴う `change`・`submit`、`list` は `item` を伴う `select`（行のボタンは `item`・`action` を伴う `action`）、`choice` は選んだ値を伴う `change`、`toggle` は新しい真偽値を伴う `change` を送ります。
 
 リスト項目の `tone` はアイコンの色を決め、`badge` と同じ値を使います。
+
+`flow` は手順の id を `item` にして `select` を、`popover` は閉じるボタンから `close` を送ります。API 4 から：`tabs` はタブの id 付きで `change`、`table` は行の id を `item` にして `select`、`select` は選択肢の値付きで `change`、`checkbox` は新しい真偽値付きで `change` を送ります。API 5 から：`image` は `click` と、`[{ path, name, size }]` 付きの `drop`（`files/pick` と同じく、プラグインのフォルダにコピーされたパス）を送ります。`graph` はノードの見出しをクリックするとノードの id を `item` にして `select` を、`movable` なら見出しをドラッグしたときノードを `item`、`{ x, y }` を `value` にして `move` を送ります — その位置を覚えて送り返してください。
+
+API 4 の要素を使うプラグインはマニフェストに `"apiVersion": 4` と書きます。実行中の Agentty が描ける要素は `host/info` の `uiFeatures` にあります。何にどの要素を使うかは [パネルのデザイン](/docs/plugin-ui-guide) を参照してください。
 
 ## Agentty なしでテストする
 

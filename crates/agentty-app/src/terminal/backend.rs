@@ -121,6 +121,15 @@ impl Backend {
                 env.insert("CLAUDE_CODE_GIT_BASH_PATH".into(), bash.display().to_string());
             }
         }
+        // Claude Code turns its fullscreen renderer off, for one launch or for good, when an earlier
+        // launch on this machine went away before it counted as started; with many agents running
+        // side by side that happens with nothing wrong in the renderer. Someone who chose
+        // fullscreen keeps it.
+        if agentty_bridge::claude::prefers_fullscreen() {
+            env.insert("CLAUDE_CODE_NO_FLICKER".into(), "1".into());
+        }
+        // The newest copy of each agent CLI, for the shell wrappers to start when one is typed.
+        env.extend(crate::agent_bins::pane_environment());
         // Where the shell wrapper finds Agentty's guide for a `claude` typed into the pane.
         if crate::agent_guide::enabled() && crate::agent_guide::guide_file().is_file() {
             env.insert("AGENTTY_GUIDE_FILE".into(), crate::agent_guide::guide_file().display().to_string());
@@ -128,8 +137,8 @@ impl Backend {
         }
         env.extend(crate::shell_integration::environment(&program));
         env.extend(auth.pane_variables());
-        // Monitoring → Proxy: tabs opened while capture is on are routed through the capture proxy.
-        env.extend(crate::capture::pane_environment(options.pane_id));
+        // A plugin's capture proxy (`terminal/setProxy`): tabs opened while it is on go through it.
+        env.extend(crate::plugins::terminal_proxy::pane_environment(options.pane_id));
         let mut socket_token = None;
         if let Some(address) = options.signal_socket {
             env.insert("AGENTTY_SOCKET".into(), address.to_string());

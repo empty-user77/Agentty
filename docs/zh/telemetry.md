@@ -12,6 +12,7 @@ description: Agentty 关于自身究竟发送了什么，以及如何关闭。
 | 事件 | 属性 |
 |---|---|
 | `app_launched` | 启动时打开了多少窗口 |
+| `app_running` | —（Agentty 打开期间每 5 分钟一次，附带自上一次以来打开的时长） |
 | `window_opened` | — |
 | `pane_opened` | 哪种窗格：`shell`、`claude`、`codex`、`gemini` 等 |
 | `agent_turn_finished` | 哪种智能体结束了一轮 |

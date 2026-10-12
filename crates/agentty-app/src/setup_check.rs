@@ -95,6 +95,14 @@ impl Probe {
         Some(if version.is_empty() { path.display().to_string() } else { version })
     }
 
+    /// Like [`Probe::version_of`] for an agent CLI with several copies: the newest one, which is the
+    /// one Agentty starts ([`crate::agent_bins`]).
+    fn newest_version(&self, name: &str) -> Option<String> {
+        let installs = crate::agent_bins::installs(name, &self.path);
+        let newest = crate::agent_bins::newest(&installs)?;
+        Some(newest.version.clone().unwrap_or_else(|| newest.path.display().to_string()))
+    }
+
     fn path_of(&self, name: &str) -> Option<String> {
         self.which(name).map(|p| p.display().to_string())
     }
@@ -142,7 +150,7 @@ fn windows_tools(probe: &Probe) -> Vec<Tool> {
             purpose: "system.purpose.claude",
             install: Some("irm https://claude.ai/install.ps1 | iex".into()),
             guide: "https://docs.claude.com/en/docs/claude-code/setup",
-            found: probe.version_of("claude"),
+            found: probe.newest_version("claude"),
         },
         Tool {
             id: "node",
@@ -160,7 +168,7 @@ fn windows_tools(probe: &Probe) -> Vec<Tool> {
             purpose: "system.purpose.codex",
             install: Some("npm install -g @openai/codex".into()),
             guide: "https://github.com/openai/codex",
-            found: probe.version_of("codex"),
+            found: probe.newest_version("codex"),
         },
         Tool {
             id: "pwsh",
@@ -247,7 +255,7 @@ fn macos_tools(probe: &Probe) -> Vec<Tool> {
             purpose: "system.purpose.claude",
             install: Some("curl -fsSL https://claude.ai/install.sh | bash".into()),
             guide: "https://docs.claude.com/en/docs/claude-code/setup",
-            found: probe.version_of("claude"),
+            found: probe.newest_version("claude"),
         },
         Tool {
             id: "node",
@@ -265,7 +273,7 @@ fn macos_tools(probe: &Probe) -> Vec<Tool> {
             purpose: "system.purpose.codex",
             install: Some("npm install -g @openai/codex".into()),
             guide: "https://github.com/openai/codex",
-            found: probe.version_of("codex"),
+            found: probe.newest_version("codex"),
         },
         Tool {
             id: "git",
@@ -294,7 +302,7 @@ fn linux_tools(probe: &Probe, pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.claude",
             install: Some("curl -fsSL https://claude.ai/install.sh | bash".into()),
             guide: "https://docs.claude.com/en/docs/claude-code/setup",
-            found: probe.version_of("claude"),
+            found: probe.newest_version("claude"),
         },
         Tool {
             id: "node",
@@ -312,7 +320,7 @@ fn linux_tools(probe: &Probe, pm: &PackageManager) -> Vec<Tool> {
             purpose: "system.purpose.codex",
             install: Some("npm install -g @openai/codex".into()),
             guide: "https://github.com/openai/codex",
-            found: probe.version_of("codex"),
+            found: probe.newest_version("codex"),
         },
         Tool {
             id: "git",

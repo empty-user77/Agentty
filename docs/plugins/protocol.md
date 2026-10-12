@@ -1,4 +1,4 @@
-# Agentty plugin protocol (API version 3)
+# Agentty plugin protocol (API version 6)
 
 For writing plugins without the Node.js SDK. Read the [plugin guide](README.md) first; this page
 only describes the wire format.
@@ -8,6 +8,9 @@ only describes the wire format.
 | 1 | the panel, commands, links, `storage/*`, `net/fetch`, `prompt/inject`, `session/get` |
 | 2 | `host/timer` and `pane/status` — what a plugin needs to walk work through agents |
 | 3 | `browser/*` — the in-app browser on the sites a plugin names (`browser.control`) |
+| 4 | panel elements `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code` |
+| 5 | `tools/call` — tools a plugin offers to AI agents (`mcp.tools`) |
+| 6 | `terminal/setProxy` — terminals opened from then on go through the plugin's proxy (`terminal.proxy`) |
 
 A plugin that uses something a version added says so, with `apiVersion` in its manifest and in its
 marketplace entry. An Agentty that speaks less than that says to update rather than installing a
@@ -47,6 +50,7 @@ with the same 16 MB line limit as stdout.
 | `browser/hidden` | notification | `{ tabId }` — the user took one of the plugin's pages out of the browser panel; it keeps running out of sight (`browser.control`) |
 | `instance/open` | notification | `{ instance, title }` — an automation (a tab of the plugin's workspace) exists: each one when the plugin starts, then every new one |
 | `instance/close` | notification | `{ instance }` — the user closed an automation's tab; its pages are closed already |
+| `tools/call` | request (answer it) | `{ name, arguments, context }` — an AI agent is calling a tool (`mcp.tools`, API 5) |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin (a command, the panel
@@ -64,11 +68,12 @@ when you don't care.
 | `workspace/setInstanceTitle` | | `{ instance, title }` | `null` — what the automation's tab is called |
 | `workspace/setInstanceStatus` | | `{ instance?, state: "working" \| "idle" \| "error", text? }` — `instance` omitted or empty is the plugin's panel outside a workspace; `text` is a short one-line status (max 120 characters), e.g. `"Collecting @sama (3/6)"` | `null` — what the automation (or the plugin, with no workspace) is doing, shown next to its workspace card and in the menu bar popover without opening it |
 | `workspace/closeInstance` | | `{ instance }` | `null` — closes that automation's tab (one of the plugin's own, open); it is not offered among the recently closed tabs |
+| `workspace/openWindow` | | `{}` | `null` — another Agentty window with the plugin's workspace in front and nothing else, for the plugin on its own beside the user's work; only right after the user used the plugin (a click in its panel), else a permission error |
 | `ui/showPanel` | | `{}` | `null` |
 | `ui/notify` | | `{ message, kind: "info" \| "success" \| "warning" \| "error" }` | `null` |
 | `ui/setBadge` | | `{ text }` (max 8 characters) | `null` |
 | `context/get` | | `{}` | context |
-| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`), missing on older Agentty |
+| `host/info` | | `{}` | `{ version, apiVersion, language, utcOffsetMinutes, uiFeatures }` — `utcOffsetMinutes`: the user's time zone, minutes east of UTC, for showing times and cutting days the way the user reads them; `uiFeatures`: panel elements added since the first API version (`flow`, `popover`, and from API 4 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`, and the fields `gridWidths`, `listTree` (list `depth` / `tag`), `tabClose`, `monoInput`, `completions`, `gridResize`, `openWindow`, `gridFill`, `tabsAdd` and `listSelected`), missing on older Agentty |
 | `host/openUrl` | | `{ url }` (http/https) | `null` |
 | `host/timer` | | `{ ms }` | `{ elapsedMs }`, once the time has passed |
 | `host/copy` | | `{ text }` (up to 100,000 characters) | `null` |
@@ -77,6 +82,7 @@ when you don't care.
 | `terminal/send` | `terminal.write` | `{ paneId?, text, submit? }` (focused pane without `paneId`) | `{ paneId, submitted }` |
 | `agent/list` | `prompt.inject` | `{}` | `[{ id, name, version?, models: [{ id, label }] }]` — the agents `prompt/inject` can start here (installed): `claude`, `codex`, with the models each was seen using (its default first) |
 | `terminal/close` | `prompt.inject` | `{ paneId }` — a terminal `prompt/inject` opened for this plugin (`newTab`, `newWorkspace`, `split`, `own`); any other is refused with `-32001` | `null` |
+| `terminal/setProxy` | `terminal.proxy` | `{ port, token }` (`token`: 16–128 letters, digits, `-`, `_`), or `{ port: null }` to stop — terminals opened from then on go through the plugin's proxy on 127.0.0.1 | `null` |
 | `session/get` | `session.read` | `{ paneId?, maxTurns? }` (default 200, max 2000) | `{ paneId, agent, sessionId, title, cwd, status, turnCount, turns: [{ role, text }] }` |
 | `workspace/list` | `workspace.read` | `{}` | `[{ id, name, cwd, active, panes: [pane] }]` |
 | `net/fetch` | `net.request` | `{ url, method?, headers?, body?, timeoutMs?, proxy? }` | `{ status, statusText, url, headers, body, truncated, binary, bytes, durationMs }` |
@@ -106,8 +112,8 @@ pages, posts, mail — only this way, and check what it writes before acting on 
 **Whose terminals.** A plugin types freely only into terminals of its own: ones `prompt/inject`
 started for it (`newTab`, `newWorkspace`, `split`, `own`) and any in its own workspace. Another
 terminal — the user's own agents and shells, `active`, `pane`, `workspace` — takes a prompt or
-`terminal/send` only within 10 seconds of the user using the plugin (a click in its panel, one of
-its commands), and never while that terminal waits for the user to approve or answer something. A
+`terminal/send` only within 10 seconds of the user using the plugin (a click in its panel — ticking
+a checkbox or flipping a toggle included, typing in a field not — or one of its commands), and never while that terminal waits for the user to approve or answer something. A
 `prompt/inject` outside that goes to the `ask` dialog instead (`{ status: "asked" }`, not sent until
 the user sends it); `terminal/send` fails with `-32001`.
 
@@ -117,6 +123,13 @@ opens with the text typed in and unsent (`{ status: "sent", paneId, submitted: f
 such tab every 5 seconds, the rest go to `ask` — every other prompt goes to `ask`, and
 `terminal/send` types without Enter, into Claude Code or Codex only (never a shell, where the text
 would run with the user's next command), under the rules above (`{ paneId, submitted: false }`).
+
+**Tools for AI agents.** When an agent calls a tool, Agentty sends `tools/call` with `{ name, arguments, context }`. Answer with a
+result — a string, any JSON value, or MCP-shaped content `{ "content": [{ "type": "text", "text": "…" }
+| { "type": "image", "data": "<base64>", "mimeType": "image/png" }], "isError": false }`. Other
+content types are dropped. Or answer with a JSON-RPC error; its message goes to the agent as an error.
+The plugin must answer within 120 seconds. At most 8 calls may wait on one plugin. Arguments are at
+most 256 KB; text handed to the agent is cut at 100,000 characters.
 
 Agentty drops `ui/notify` calls that arrive faster than one per 700 ms (answering them normally), and
 stops a plugin that sends more than 240 messages a second. `host/openUrl` is metered the same way —
@@ -169,6 +182,8 @@ A pane is `idle` from the moment it opens, before the agent has picked the promp
 alone does not mean finished — wait until that pane has been `working` at least once. And an agent
 between two tool calls is idle for a moment, so a stop is worth giving a second or two before its
 session is read as the answer.
+
+`terminal/setProxy` (API version 6, `terminal.proxy`) sets the proxy that terminals opened from then on use. Agentty builds the address itself from the port — `http://pane-<paneId>:<token>@127.0.0.1:<port>` — so a plugin cannot point terminals anywhere else. Those terminals get `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and `https_proxy` with that address; `NO_PROXY` and `no_proxy` set to `localhost,127.0.0.1,::1` plus the user's own `NO_PROXY` entries; `NODE_USE_ENV_PROXY=1`; and `AGENTTY_CAPTURE=1`. Terminals already started keep the variables they got. Only one plugin holds the proxy at a time: while one does, another's call fails with `-32602`. The proxy is released when the plugin stops, exits or restarts. A plugin that an `agentty://` link reached gets `-32001` until it is restarted. The manifest needs `apiVersion: 6`, and a `wasm` plugin is refused, since a module cannot listen on a socket.
 
 `storage/*` is what a plugin remembers between runs: one JSON document in its own folder
 (`<data dir>/plugin-data/<plugin>/storage.json`, created `0600`), read and written by key. It goes
@@ -380,6 +395,10 @@ and puts the window back as it was — the start page when the user has no works
 Out of sight the plugin and its automations keep running. With every tab closed, the panel offers a
 new automation.
 
+A plugin without `browser.control` has no pages to show, and its workspace is its panel: the panel
+takes the whole area, and a tab's terminals come up under it (their edge can be dragged) only once
+a job runs beside the tab's own shell — an AI session the plugin started with `target: "own"`, say.
+
 In that workspace **a tab is an automation**. Each has its own panel (`ui/setPanel` with its
 `instance`; UI events from it carry the same `instance`), its own browser pages (`browser/open`
 with `instance`: the browser shows the pages of the tab in front, the others keep running out of
@@ -407,11 +426,21 @@ row      { children, gap?, wrap? }
 section  { title, children }
 text     { text, style? }                   style: body | title | muted | small | code | error | success
 button   { id, label, icon?, variant?, disabled? }   variant: primary | secondary | ghost | danger
-input    { id, placeholder?, value?, rows? }
+input    { id, placeholder?, value?, rows?, mono? }
                                             rows > 1: a text area that many lines tall (max 24);
-                                            Enter adds a line and a paste keeps its line breaks
-list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }] }], empty? }
-                                            item tone colors its icon (same values as badge)
+                                            Enter adds a line and a paste keeps its line breaks;
+                                            mono (API 4): the monospace font, for code and JSON;
+                                            completions (API 4): [{ label, insert?, detail? }]
+                                            listed under a one-line field while a word that one
+                                            of them contains is typed (two letters, or any after
+                                            {{); ↑ ↓ pick, Enter / Tab insert `insert` (the label
+                                            if left out) in place of the word and of a {{ before
+                                            it and a }} after it — variables in a URL
+list     { id, items: [{ id, title, subtitle?, detail?, icon?, tone?, actions?: [{ id, label?, icon?, tooltip? }], depth?, tag?, tagTone? }], empty? }
+                                            item tone colors its icon (same values as badge);
+                                            API 4: depth indents the row (0–8) for a tree, tag is a
+                                            short label before the title (an HTTP method, ≤ 8
+                                            characters) in tagTone's color; selected: drawn highlighted (the row whose page is open)
 choice   { id, options: [{ value, label }], value? }
 toggle   { id, label, value? }
 badge    { text, tone? }                    tone: neutral | info | success | warning | error
@@ -425,8 +454,74 @@ flow     { id, steps: [{ id, title, subtitle?, icon?, state?, selected?, side? }
 popover  { id, title, children }            a card beside the panel, over the page next to it
                                             (hidden while it is open); the first one in the tree
                                             is shown, none: closed
+
+API 4:
+card     { children, title?, subtitle?, icon?, tone? }   a raised box; tone colors the icon and edge
+grid     { children, columns?, gap?, widths? }   equal columns (1–6, default 2), wrapping onto
+                                            new rows; widths sets each column instead: "240px"
+                                            fixed (40–1200), "2" twice the share of a "1";
+                                            id + resizable: the first fixed column gets a handle
+                                            the user drags (160–720), and resize comes back with
+                                            the width in pixels for the plugin to keep; fill: the
+                                            grid takes the height left in the panel and each
+                                            column scrolls on its own (in the top column, or a
+                                            column inside it, or a fill tab's content)
+tabs     { id, tabs: [{ id, label, icon?, badge?, closable? }], value, children }
+                                            children: the picked tab's content only; closable
+                                            draws a close button, which sends close; fill (in a
+                                            fill grid's column): the strip stays and the content
+                                            scrolls; the strip scrolls sideways (drag, wheel) and
+                                            keeps the picked tab in view; addMenu: [{ value,
+                                            label }] behind a + at the strip's end, sends add
+table    { id, columns: [{ label, align?, grow? }], rows: [{ id, cells, tone? }], empty?, selected? }
+                                            align: start | center | end; grow: share of the width
+                                            (1–12); one cell per column; tone marks the first cell
+keyValue { items: [{ label, value, tone?, mono? }] }
+stat     { label, value, detail?, icon?, tone? }
+progress { value, label?, detail?, tone? }  value from 0 to 1; detail replaces the percentage
+callout  { text, title?, icon?, tone? }     tone defaults to info
+select   { id, options: [{ value, label }], value?, placeholder?, disabled? }
+checkbox { id, label, value?, description?, disabled? }
+code     { text, language?, title? }        colored by language (rust, json, ts, sh, …), with a
+                                            copy button
+
+API 5 (`uiFeatures`: image, imageDrop, graph):
+image    { src?, id?, alt?, width?, height?, fit?, caption?, placeholder?, drop?, into? }
+                                            a picture from the plugin's own folder (a files/*
+                                            path): PNG, JPEG, WebP or GIF by its bytes, never an
+                                            SVG; height defaults to 240, width to the place's;
+                                            fit: contain (default) | cover; no src (or not a
+                                            picture) draws an empty slot with the placeholder;
+                                            id makes it clickable; drop (with id, needs files):
+                                            pictures dropped on it from the Finder are copied into
+                                            into (default dropped); a picture that changes on disk
+                                            is read again
+graph    { id, nodes, edges?, height?, movable?, fill? }
+                                            node cards on a canvas joined by wires (at most 64
+                                            nodes, 512 wires); the canvas is height pixels tall
+                                            (default 560), or with fill takes the height left in
+                                            the panel (what comes before it stays on screen); the
+                                            user scrolls inside it and zooms with its − % + fit
+                                            buttons or ⌘/Ctrl + scroll — far out, the cards show
+                                            their pictures only
+         nodes: [{ id, title, subtitle?, icon?, tone?, x, y, width?, inputs?, outputs?,
+                   children?, state?, selected? }]
+                                            a card at x, y (pixels, 0–20000), width 240 by
+                                            default (120–900); inputs on its left edge and outputs
+                                            on its right, one row each under the heading:
+                                            [{ id, label?, tone? }] (12 a side), tone colors the
+                                            port and its wires; children: elements inside the
+                                            card; state as a flow step's
+         edges:  [{ from: { node, port }, to: { node, port }, tone?, idle? }]
+                                            an output to an input; idle draws it faint
 ```
 
 Events: `button` → `click`; `input` → `change` / `submit` with `value`; `list` → `select` with
 `item`, row buttons → `action` with `item` and `action`; `choice` → `change` with the option value;
 `toggle` → `change` with the new boolean; `flow` → `select` with the step's id as `item`; `popover` → `close` from its close button.
+From API 4: `tabs` → `change` with the tab's id, and `close` with the tab's id as `value` from a `closable` tab's button; `table` → `select` with the row's id as `item`;
+`select` → `change` with the option's value; `checkbox` → `change` with the new boolean; a resizable `grid` → `resize` with the column's width in pixels as `value`.
+From API 5: `image` → `click`, and `drop` with `[{ path, name, size }]` as `value` (paths in the plugin's folder, as `files/pick` answers); `graph` → `select` with the node's id as `item` from a heading click, and with `movable` `move` with the node as `item` and `{ x, y }` as `value` once a heading is dragged — keep it and send the node there, or it goes back.
+
+Which element to use for what, and whole screens to start from: the **UI Gallery** plugin (it
+comes with Agentty) and https://www.agentty.run/docs/plugin-ui-guide.

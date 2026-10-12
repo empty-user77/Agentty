@@ -3,7 +3,7 @@ title: 매니페스트 레퍼런스
 description: agentty-plugin.json의 모든 필드 — 식별 정보, 실행 방식, 권한, 패널, 명령, 아이콘.
 ---
 
-`agentty-plugin.json`은 플러그인 폴더 최상위에 놓이며, 이 플러그인이 무엇이고 어떻게 시작하며 무엇을 할 수 있고 인터페이스에 무엇을 더하는지 Agentty에 알려줍니다.
+`agentty-plugin.json`은 플러그인 폴더 최상위에 놓입니다. 이 파일은 플러그인이 무엇이고 어떻게 시작하는지, 무엇을 할 수 있고 인터페이스에 무엇을 더하는지 Agentty에 알려줍니다.
 
 ```json
 {
@@ -49,7 +49,7 @@ description: agentty-plugin.json의 모든 필드 — 식별 정보, 실행 방�
 |---|---|---|
 | `main` | 필수 | 플러그인 폴더 기준 진입점 |
 | `runtime` | `node` | `node`(로그인 셸 `PATH`의 Node.js 18+), `python`(`python3 <main>`), `executable`(`<main>`을 직접 실행), 또는 `wasm` — `<main>`이 Agentty가 직접 실행하는 WebAssembly 모듈. [Rust와 WebAssembly](/docs/plugin-rust) 참고 |
-| `apiVersion` | `1` | 작성 기준이 된 플러그인 API 버전. `2`는 [AgentOS 플러그인](/docs/plugin-agentos)에 필요한 `host/timer`와 `pane/status`를 더합니다. 더 낮은 버전만 아는 Agentty는 실행할 수 없는 것을 설치하는 대신 그렇다고 알립니다 |
+| `apiVersion` | `1` | 작성 기준이 된 플러그인 API 버전. `2`는 [AgentOS 플러그인](/docs/plugin-agentos)에 필요한 `host/timer`와 `pane/status`를, `3`은 인앱 브라우저(`browser.control`)를, `4`는 패널 요소 `card`, `grid`, `tabs`, `table`, `keyValue`, `stat`, `progress`, `callout`, `select`, `checkbox`, `code`를, `5`는 AI 에이전트용 도구인 `tools/call`(`mcp.tools`)을, `6`은 새 터미널을 플러그인 프록시로 보내는 `terminal/setProxy`(`terminal.proxy`)를 더합니다([패널 디자인](/docs/plugin-ui-guide)). 더 낮은 버전만 아는 Agentty는 실행할 수 없는 것을 설치하는 대신 그렇다고 알립니다 |
 | `activationEvents` | `[]` | `["onStartup"]`이면 Agentty와 함께 시작하고, 아니면 처음 사용할 때 시작 |
 
 Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 실행합니다. `wasm` 플러그인은 프로그램을 시작하지 않습니다. 모듈이 Agentty 안에서 실행되며 작업 디렉터리도, 환경 변수도, 파일도 없습니다.
@@ -64,7 +64,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 ## 권한
 
 ```json
-"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read"]
+"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read", "mcp.tools"]
 ```
 
 | 권한 | 허용되는 일 |
@@ -74,6 +74,8 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 | `terminal.write` | 열린 페인에 입력 |
 | `session.read` | AI 대화 읽기 |
 | `workspace.read` | 워크스페이스 목록 조회, 컨텍스트의 폴더·제목 필드 확인 |
+| `mcp.tools` | AI 에이전트에 도구 제공. `apiVersion: 5`와 `contributes.tools` 필요 |
+| `terminal.proxy` | 플러그인이 실행하는 프록시로 새 터미널과 AI 세션 보내기. `apiVersion: 6` 필요, `wasm` 불가 |
 
 쓰는 것만 요청하세요. 목록은 설치 전에 이용자에게 표시되고, 권한 없는 호출은 실패합니다. [플러그인 권한](/docs/plugin-permissions)을 참고하세요.
 
@@ -85,7 +87,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 "contributes": { "panel": { "title": "Hello", "icon": "sparkles", "surface": "sidebar", "mode": "push" } }
 ```
 
-플러그인에 버튼과, UI 트리로 채우는 패널(너비 360px, 세로 스크롤)을 줍니다. [SDK](/docs/plugin-sdk)를 참고하세요.
+플러그인에 버튼과 UI 트리로 채우는 패널(너비 360px, 세로 스크롤)을 줍니다. [SDK](/docs/plugin-sdk)를 참고하세요.
 
 `surface`는 버튼이 놓이는 자리를 정합니다.
 
@@ -104,7 +106,7 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 | `window` | 독립된 창. 이동과 크기 조절이 가능합니다 |
 | `full` | 터미널과 페이지가 쓰는 영역 전체 |
 
-도킹된 패널이 나머지 창을 짓누를 만큼 커지지는 않습니다. 도킹 가능한 범위를 넘겨 끌면 떠 있는 패널이 됩니다.
+도킹된 패널은 나머지 창을 밀어낼 만큼 커지지는 않습니다. 도킹 가능한 범위를 넘겨 끌면 떠 있는 패널이 됩니다.
 
 ### 명령
 
@@ -132,6 +134,39 @@ Agentty는 플러그인 폴더를 작업 디렉터리로 삼아 프로그램을 
 
 명령은 명령 팔레트에서 실행합니다. `paneBar`와 `when`은 없어졌습니다. 두 필드가 남아 있는 매니페스트도 그대로 설치·실행되고 필드는 무시되지만, **그 버튼에 의존해 만든 플러그인은 버튼을 잃고** 명령은 팔레트에서 실행하게 됩니다.
 
+### AI 에이전트의 도구
+
+```json
+"contributes": {
+  "tools": [
+    {
+      "name": "list_containers",
+      "description": "Lists the Docker containers this plugin manages, with their state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "all": { "type": "boolean" }
+        }
+      },
+      "readOnly": true
+    }
+  ]
+}
+```
+
+플러그인은 Agentty에서 실행되는 AI 에이전트(Claude Code, Codex)에 도구를 제공할 수 있습니다. `mcp.tools` 권한과 `apiVersion: 5`가 필수이고 함께 선언돼야 합니다.
+
+플러그인은 자신이 실행하는 프록시를 거쳐 새 터미널을 보낼 수 있습니다. `terminal.proxy` 권한과 `apiVersion: 6`이 필수이며, `wasm` 플러그인은 쓸 수 없습니다.
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `name` | 예 | 1–48자. `a-z`, `0-9`, `_` 사용, 문자로 시작 |
+| `description` | 예 | 1–1000자. 에이전트가 도구에 대해 아는 전부 |
+| `inputSchema` | | JSON Schema, type은 `object`, 최대 16KB |
+| `readOnly` | | 불값(기본값 `false`). 에이전트에 대한 힌트 |
+
+플러그인당 최대 32개 도구. 플러그인은 `tools/call` 요청에 문자열, 어떤 JSON 값, 또는 MCP 형식 컨텐츠(`{ "content": [...], "isError": false }`)로 응답합니다. 상세는 [플러그인 프로토콜](/docs/plugin-protocol)을 참고하세요.
+
 ## 아이콘
 
 `icon` 필드에는 아래 이름을 씁니다. 그 외의 값은 퍼즐 조각으로 표시됩니다.
@@ -141,10 +176,10 @@ app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bel
 blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right
 chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud
 code columns-2 command container copy database download ellipsis external-link eye file-input
-file-plus file-text folder folder-open folder-plus git-branch git-commit-horizontal
+file-plus file-text folder folder-git-2 folder-open folder-plus git-branch git-commit-horizontal
 git-pull-request globe grip-vertical hammer hash history house image info key-round
 layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question
-message-square minimize-2 minus network notebook notebook-pen package panel-left-close
+message-square message-square-code minimize-2 minus network notebook notebook-pen package panel-left-close
 panel-left-open pencil picture-in-picture-2 play plug plus power puzzle refresh-cw rocket rotate-cw
 rows-2 save scroll-text search send settings shield-alert sparkles square square-plus
 square-terminal star sticky-note tag terminal trash-2 undo-2 unlink upload users wand-sparkles

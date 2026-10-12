@@ -71,6 +71,13 @@ impl Workbench {
         true
     }
 
+    /// Whether the open question is where the agent typed into shell `pane` starts.
+    pub(super) fn asks_for_shell(&self, pane: u64) -> bool {
+        self.ask.as_ref().is_some_and(|ask| {
+            ask.choices.iter().any(|choice| matches!(&choice.action, AskAction::SameTree(request) if request.shell_pane() == Some(pane)))
+        })
+    }
+
     /// A question closed without an answer: a shell waiting on it starts its agent where it was
     /// typed, instead of waiting on a dialog that is gone — and, having just been asked, is not
     /// warned about sharing the tree on top of it.

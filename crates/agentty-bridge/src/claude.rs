@@ -174,12 +174,21 @@ fn last_model(text: &str) -> Option<String> {
     })
 }
 
-/// The default model from Claude Code's user settings (`model` in settings.json), if set.
-pub fn configured_model() -> Option<String> {
+/// Claude Code's user settings (`settings.json` in its config folder), if readable.
+fn user_settings() -> Option<Value> {
     let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| fsutil::home().join(".claude"));
     let text = std::fs::read_to_string(dir.join("settings.json")).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    json["model"].as_str().map(str::to_string).filter(|m| !m.trim().is_empty())
+    serde_json::from_str(&text).ok()
+}
+
+/// The default model from Claude Code's user settings (`model` in settings.json), if set.
+pub fn configured_model() -> Option<String> {
+    user_settings()?["model"].as_str().map(str::to_string).filter(|m| !m.trim().is_empty())
+}
+
+/// Whether the user chose Claude Code's fullscreen renderer (`"tui": "fullscreen"` in settings.json).
+pub fn prefers_fullscreen() -> bool {
+    user_settings().is_some_and(|settings| settings["tui"] == "fullscreen")
 }
 
 pub fn find(id: &str) -> Result<PathBuf> {
@@ -191,23 +200,15 @@ pub fn find(id: &str) -> Result<PathBuf> {
         .with_context(|| format!("Claude session {id} not found"))
 }
 
+/// Turns of a session transcript; subagents' lines (sidechain) are left out.
 pub fn transcript(path: &Path) -> Result<(Option<String>, Vec<Turn>)> {
-    read_turns(path, false)
-}
-
-/// Turns of a subagent transcript (all of its lines are sidechain lines).
-pub fn subagent_transcript(path: &Path) -> Result<Vec<Turn>> {
-    read_turns(path, true).map(|(_, turns)| turns)
-}
-
-fn read_turns(path: &Path, sidechain: bool) -> Result<(Option<String>, Vec<Turn>)> {
     let reader = BufReader::new(File::open(path)?);
     let mut cwd = None;
     let mut turns = Vec::new();
 
     for line in reader.lines() {
         let Ok(v) = serde_json::from_str::<Value>(&line?) else { continue };
-        if (!sidechain && v["isSidechain"].as_bool() == Some(true)) || v["isMeta"].as_bool() == Some(true) {
+        if v["isSidechain"].as_bool() == Some(true) || v["isMeta"].as_bool() == Some(true) {
             continue;
         }
         if cwd.is_none() {
@@ -215,6 +216,8 @@ fn read_turns(path: &Path, sidechain: bool) -> Result<(Option<String>, Vec<Turn>
         }
         let turn = match v["type"].as_str() {
             Some("user") => user_text(&v).map(|text| Turn { role: Role::User, text }),
+            // A message typed while a turn ran is recorded as an attachment, not as a user entry.
+            Some("attachment") => queued_text(&v).map(|text| Turn { role: Role::User, text }),
             Some("assistant") => assistant_text(&v).map(|text| Turn { role: Role::Assistant, text }),
             _ => None,
         };
@@ -248,8 +251,22 @@ fn user_text(v: &Value) -> Option<String> {
             .join("\n"),
         _ => return None,
     };
+    human_text(&text)
+}
+
+/// What the user typed mid-turn: a `queued_command` attachment's prompt (the harness queues its own
+/// background-task notifications the same way; those are dropped like other injected text).
+fn queued_text(v: &Value) -> Option<String> {
+    let attachment = &v["attachment"];
+    if attachment["type"].as_str() != Some("queued_command") {
+        return None;
+    }
+    human_text(attachment["prompt"].as_str()?)
+}
+
+fn human_text(text: &str) -> Option<String> {
     let text = text.trim();
-    let injected = ["<command-", "<local-command", "<system-reminder>", "Caveat:", "[Request interrupted"];
+    let injected = ["<command-", "<local-command", "<system-reminder>", "<task-notification", "Caveat:", "[Request interrupted"];
     if text.is_empty() || injected.iter().any(|p| text.starts_with(p)) {
         return None;
     }
@@ -306,12 +323,22 @@ pub fn subagent_activity(session_id: &str) -> (usize, usize) {
     (files.len(), files.iter().filter(|m| now.saturating_sub(**m) < 20_000).count())
 }
 
-/// Subagents of a session, oldest first.
-pub fn subagents(session_id: &str) -> Vec<Subagent> {
+/// A subagent's transcript and what it was started for, from its `.meta.json` alone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubagentFile {
+    pub id: String,
+    pub agent_type: String,
+    pub description: String,
+    pub model: Option<String>,
+    pub path: PathBuf,
+}
+
+/// Subagent transcripts of a session, oldest first, without reading them.
+pub fn subagent_files(session_id: &str) -> Vec<SubagentFile> {
     let Ok(transcript) = find(session_id) else { return Vec::new() };
     let dir = transcript.with_extension("").join("subagents");
     let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
-    let mut found: Vec<Subagent> = entries
+    let mut found: Vec<SubagentFile> = entries
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
@@ -319,6 +346,25 @@ pub fn subagents(session_id: &str) -> Vec<Subagent> {
             let id = path.file_stem()?.to_string_lossy().trim_start_matches("agent-").to_string();
             let meta: Value =
                 std::fs::read(path.with_extension("meta.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+            Some(SubagentFile {
+                id,
+                agent_type: meta["agentType"].as_str().unwrap_or("agent").to_string(),
+                description: meta["description"].as_str().unwrap_or_default().to_string(),
+                model: meta["model"].as_str().map(str::to_string),
+                path,
+            })
+        })
+        .collect();
+    found.sort_by_key(|s| s.path.metadata().and_then(|m| m.created()).ok());
+    found
+}
+
+/// Subagents of a session, oldest first.
+pub fn subagents(session_id: &str) -> Vec<Subagent> {
+    subagent_files(session_id)
+        .into_iter()
+        .map(|file| {
+            let path = file.path;
             let tail = fsutil::tail_lines_rev(&path, 256 * 1024);
             let finished =
                 tail.iter().find(|l| l.contains("\"type\":\"assistant\"")).is_some_and(|l| l.contains("\"stop_reason\":\"end_turn\""));
@@ -336,21 +382,19 @@ pub fn subagents(session_id: &str) -> Vec<Subagent> {
                 })
             });
             let turns = tail.iter().filter(|l| l.contains("\"type\":\"assistant\"")).count();
-            Some(Subagent {
-                id,
-                agent_type: meta["agentType"].as_str().unwrap_or("agent").to_string(),
-                description: meta["description"].as_str().unwrap_or_default().to_string(),
-                model: meta["model"].as_str().map(str::to_string),
+            Subagent {
+                id: file.id,
+                agent_type: file.agent_type,
+                description: file.description,
+                model: file.model,
                 updated_ms: fsutil::mtime_ms(&path),
                 path,
                 finished,
                 turns,
                 last_tool,
-            })
+            }
         })
-        .collect();
-    found.sort_by_key(|s| s.path.metadata().and_then(|m| m.created()).ok());
-    found
+        .collect()
 }
 
 pub fn exists(id: &str) -> bool {
@@ -467,6 +511,29 @@ fn owned_by_other(peers: &[PeerSession], session_id: &str, pid: Option<u32>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn messages_typed_mid_turn_are_user_turns() {
+        let dir = std::env::temp_dir().join(format!("agentty-queued-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        let queued = |prompt: &str| {
+            serde_json::json!({ "type": "attachment", "attachment": { "type": "queued_command", "prompt": prompt, "commandMode": "prompt", "origin": { "kind": "human" } } })
+                .to_string()
+        };
+        let lines = [
+            queued("reply B"),
+            queued("<task-notification>\n<task-id>b1</task-id>\n</task-notification>"),
+            r#"{"type":"attachment","attachment":{"type":"hook_success","prompt":"not a message"}}"#.to_string(),
+            queued("reply C"),
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let (_, turns) = super::transcript(&path).unwrap();
+        let texts: Vec<&str> = turns.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, ["reply B", "reply C"]);
+        assert!(turns.iter().all(|t| t.role == super::Role::User));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn a_session_is_on_the_model_of_its_latest_answer() {
         let text = [

@@ -168,6 +168,8 @@ pub enum EditorEvent {
     OpenUrl(String),
     /// A file linked from the markdown preview: open it (the path, and the project it belongs to).
     OpenFile(PathBuf, PathBuf),
+    /// An HTML file to see as a page, in the in-app browser.
+    ShowInBrowser(PathBuf),
 }
 
 /// What waits for "discard unsaved changes?".
@@ -335,6 +337,8 @@ pub struct CodeEditor {
     preview_next: Option<PathBuf>,
     /// Where the preview's page answers arrive.
     preview_replies: futures::channel::mpsc::UnboundedSender<PageReply>,
+    /// Blinking of the caret while the editor has focus.
+    blink: crate::caret_blink::CaretBlink,
 }
 
 impl EventEmitter<EditorEvent> for CodeEditor {}
@@ -394,6 +398,7 @@ impl CodeEditor {
             scrollbar_drag: None,
             shown_tabs: Vec::new(),
             preview: Preview::new(),
+            blink: Default::default(),
             preview_next: None,
             preview_replies,
         }
@@ -1165,6 +1170,18 @@ impl CodeEditor {
                         }),
                 )
             })
+            // An HTML file is read as a page, not as its markup: the browser beside the terminals shows it.
+            .when(doc.language == Language::Html, |d| {
+                let path = doc.path.clone();
+                d.child(
+                    crate::ui::icon_only(
+                        "editor-browser",
+                        "globe",
+                        cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(EditorEvent::ShowInBrowser(path.clone()))),
+                    )
+                    .tooltip(Tooltip::text(t(cx, "editor.open_browser"), None)),
+                )
+            })
             .child(
                 crate::ui::icon_only("editor-external", "code", cx.listener(|this, _: &ClickEvent, _, cx| this.open_externally(cx)))
                     .tooltip(Tooltip::text(t(cx, "editor.open_external"), None)),
@@ -1544,6 +1561,12 @@ impl CodeEditor {
             }
             "format" => self.format(cx),
             "preview" => self.toggle_preview(window, cx),
+            // The HTML file's browser button.
+            "browser" => {
+                if let Some(doc) = self.docs.get(self.active).filter(|doc| doc.language == Language::Html) {
+                    cx.emit(EditorEvent::ShowInBrowser(doc.path.clone()));
+                }
+            }
             "undo" => self.edit(cx, |b| {
                 b.undo();
             }),

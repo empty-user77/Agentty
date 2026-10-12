@@ -26,6 +26,7 @@ All handlers may be async. Errors are logged and shown to the user as a notifica
 |---|---|
 | `onActivate(info => …)` | The plugin started. `info` has `plugin.dataDir`, `language` and `context` |
 | `command(id, ({ context, args }) => …)` | A command runs, from the command palette |
+| `tool(name, handler)` | An AI agent calls a tool; handler receives `{ args, context }` and returns the answer (string, JSON value, or MCP content); errors are caught and sent as tool errors |
 | `onPanelOpen(context => …)` | The panel became visible — render here |
 | `onPanelClose(context => …)` | The panel was hidden |
 | `onEvent(elementId, (event, context) => …)` | A UI element with that id was used |
@@ -45,11 +46,13 @@ Every call returns a promise.
 | `notify(message, kind)` — `info`, `success`, `warning`, `error` | |
 | `setBadge(text)` — up to 8 characters on the tab-strip button | |
 | `getContext()` | |
+| `hostInfo()` — Agentty's version, API version, language, and the panel elements it draws (`uiFeatures`) | |
 | `openUrl(url)` — http/https | |
 | `copy(text)` — put text on the clipboard | |
 | `revealPath(path)` — show a file in the file manager | `workspace.read` |
 | `injectPrompt(request)` | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
+| `setTerminalProxy({ port, token })` · `setTerminalProxy({ port: null })` | `terminal.proxy` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
 | `fetch(request)` — an HTTP request | `net.request` |
@@ -76,8 +79,23 @@ The panel is 360 px wide and scrolls vertically. The plugin describes it as a tr
 | `ui.badge(text, tone)` | `neutral`, `info`, `success`, `warning`, `error` | |
 | `ui.spinner(text)` | | |
 | `ui.divider()` | | |
+| `ui.flow(id, steps)` | Steps `{ id, title, subtitle, icon, state, selected, side }`; `state`: `off`, `on`, `active`, `done`, `error` | `select` with `event.item` |
+| `ui.popover(id, title, children)` | A card beside the panel | `close` |
+| `ui.card(children, { title, subtitle, icon, tone })` | Raised box; `tone` colors the icon and edge (API 4) | |
+| `ui.grid(children, { columns, gap })` | Equal columns, 1–6 (API 4) | |
+| `ui.tabs(id, [{ id, label, icon, badge }], value, children)` | Tab strip; children are the picked tab's content (API 4) | `change` with the tab's id |
+| `ui.table(id, [{ label, align, grow }], [{ id, cells, tone }], { empty, selected })` | Rows under headings (API 4) | `select` with `event.item` |
+| `ui.keyValue([{ label, value, tone, mono }])` | Label and value pairs (API 4) | |
+| `ui.stat(label, value, { detail, icon, tone })` | One number, large (API 4) | |
+| `ui.progress(value, { label, detail, tone })` | Bar, `value` from 0 to 1 (API 4) | |
+| `ui.callout(text, { title, icon, tone })` | Tinted note, `info` unless told otherwise (API 4) | |
+| `ui.select(id, [{ value, label }], value, { placeholder, disabled })` | Drop-down (API 4) | `change` with the value |
+| `ui.checkbox(id, label, value, { description, disabled })` | Box to tick (API 4) | `change` with the new boolean |
+| `ui.code(text, { language, title })` | Colored code with a copy button (API 4) | |
 
 Null and false children are skipped, so `condition && ui.text('…')` works.
+
+Which element to use for what, with whole screens to start from: [Designing a panel](/docs/plugin-ui-guide). The elements marked API 4 need `"apiVersion": 4` in the manifest.
 
 ```js
 plugin.onPanelOpen(async (context) => {
@@ -165,7 +183,22 @@ await plugin.injectPrompt({
 
 Prefer `ask` for anything the user starts from another app or from a link.
 
+## Tools for AI agents
+
+```js
+plugin.tool('list_containers', async ({ args }) => {
+  const containers = await listContainers({ all: args.all === true });
+  return containers.map((c) => `${c.name}: ${c.state}`).join('\n');
+});
+```
+
+Register tools before calling `plugin.start()`. An agent calling the tool receives your answer (string, JSON value, or MCP-shaped content). Errors thrown in the handler are sent to the agent as tool errors.
+
+A plugin must declare the `mcp.tools` permission and `apiVersion: 5` to offer tools. At most 32 tools per plugin. See [Manifest reference](/docs/plugin-manifest) for schema and limits.
+
 ## Sessions and terminals
+
+To route new terminals through a proxy, declare the `terminal.proxy` permission and `apiVersion: 6`, then call `plugin.setTerminalProxy({ port, token })`. `plugin.setTerminalProxy({ port: null })` stops it. Agentty builds the address on 127.0.0.1 from the port, so the plugin cannot point terminals anywhere else. See [Permissions](/docs/plugin-permissions).
 
 ```js
 const session = await plugin.getSession({ paneId: context.pane.id, maxTurns: 200 });

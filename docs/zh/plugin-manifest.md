@@ -49,7 +49,7 @@ description: agentty-plugin.json 的所有字段 —— 标识信息、运行方
 |---|---|---|
 | `main` | 必填 | 相对于插件文件夹的入口点 |
 | `runtime` | `node` | `node`（登录 shell `PATH` 中的 Node.js 18+）、`python`（`python3 <main>`）、`executable`（直接运行 `<main>`），或 `wasm` —— `<main>` 是 Agentty 自己运行的 WebAssembly 模块，见 [Rust 与 WebAssembly](/docs/plugin-rust) |
-| `apiVersion` | `1` | 编写时依据的插件 API 版本。`2` 增加了 [AgentOS 插件](/docs/plugin-agentos)所需的 `host/timer` 和 `pane/status`。只懂旧版本的 Agentty 会直说，而不是安装一个自己跑不了的东西 |
+| `apiVersion` | `1` | 编写时依据的插件 API 版本。`2` 增加了 [AgentOS 插件](/docs/plugin-agentos)所需的 `host/timer` 和 `pane/status`；`3` 增加了应用内浏览器（`browser.control`）；`4` 增加了面板元素 `card`、`grid`、`tabs`、`table`、`keyValue`、`stat`、`progress`、`callout`、`select`、`checkbox` 和 `code`（[设计面板](/docs/plugin-ui-guide)）；`6` 增加了让新终端经过插件代理的 `terminal/setProxy`（`terminal.proxy`）。只懂旧版本的 Agentty 会直说，而不是安装一个自己跑不了的东西 |
 | `activationEvents` | `[]` | `["onStartup"]` 表示随 Agentty 一起启动，否则在首次使用时启动 |
 
 Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启动任何程序：模块在 Agentty 内部运行，没有工作目录、没有环境变量、也没有文件。
@@ -64,7 +64,7 @@ Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启�
 ## 权限
 
 ```json
-"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read"]
+"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read", "mcp.tools"]
 ```
 
 | 权限 | 允许的事 |
@@ -74,6 +74,8 @@ Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启�
 | `terminal.write` | 向已打开的窗格输入 |
 | `session.read` | 读取 AI 对话 |
 | `workspace.read` | 列出工作区，查看上下文中的文件夹与标题字段 |
+| `mcp.tools` | 为 AI 智能体提供工具。需要 `apiVersion: 5` 和 `contributes.tools` |
+| `terminal.proxy` | 让新开的终端和 AI 会话经过插件运行的代理。需要 `apiVersion: 6`，不适用于 `wasm` |
 
 只申请你会用到的。清单会在安装前展示给用户，没有权限的调用会失败。参见[插件权限](/docs/plugin-permissions)。
 
@@ -132,6 +134,39 @@ Agentty 以插件文件夹作为工作目录启动程序。`wasm` 插件不启�
 
 命令从命令面板中调用。`paneBar` 和 `when` 已经取消：仍带着这两个字段的清单照常安装和运行，字段会被忽略；但**依赖这些按钮构建的插件会失去按钮**，其命令改为从命令面板中调用。
 
+### AI 智能体的工具
+
+```json
+"contributes": {
+  "tools": [
+    {
+      "name": "list_containers",
+      "description": "Lists the Docker containers this plugin manages, with their state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "all": { "type": "boolean" }
+        }
+      },
+      "readOnly": true
+    }
+  ]
+}
+```
+
+插件可以向 Agentty 中运行的 AI 智能体 (Claude Code、Codex) 提供工具。`mcp.tools` 权限和 `apiVersion: 5` 是必需的，且必须一起声明。
+
+插件可以让新开的终端经过它运行的代理。需要 `terminal.proxy` 权限和 `apiVersion: 6`，`wasm` 插件不能使用。
+
+| 字段 | 必需 | 说明 |
+|---|---|---|
+| `name` | 是 | 1～48 个字符。仅限 `a-z`、`0-9`、`_`，以字母开头 |
+| `description` | 是 | 1～1000 个字符。智能体知道的关于工具的全部内容 |
+| `inputSchema` | | JSON Schema，类型为 `object`，最大 16 KB |
+| `readOnly` | | 布尔值（默认 `false`）。给智能体的提示 |
+
+每个插件最多 32 个工具。插件用字符串、任意 JSON 值或 MCP 格式的内容（`{ "content": [...], "isError": false }`）回应 `tools/call` 请求。详见[插件协议](/docs/plugin-protocol)。
+
 ## 图标
 
 `icon` 字段请使用下列名称，其他值会显示为拼图块。
@@ -141,10 +176,10 @@ app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bel
 blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right
 chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud
 code columns-2 command container copy database download ellipsis external-link eye file-input
-file-plus file-text folder folder-open folder-plus git-branch git-commit-horizontal
+file-plus file-text folder folder-git-2 folder-open folder-plus git-branch git-commit-horizontal
 git-pull-request globe grip-vertical hammer hash history house image info key-round
 layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question
-message-square minimize-2 minus network notebook notebook-pen package panel-left-close
+message-square message-square-code minimize-2 minus network notebook notebook-pen package panel-left-close
 panel-left-open pencil picture-in-picture-2 play plug plus power puzzle refresh-cw rocket rotate-cw
 rows-2 save scroll-text search send settings shield-alert sparkles square square-plus
 square-terminal star sticky-note tag terminal trash-2 undo-2 unlink upload users wand-sparkles

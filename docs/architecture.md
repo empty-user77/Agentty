@@ -61,6 +61,35 @@ Dragging from a node's handle to another node creates an edge. The source transc
 `handoff::create_share` into a Markdown document under `~/.agentty/handoffs/`, and a prompt asking the target agent to
 read it is submitted to the target pane (bracketed paste + Enter).
 
+## Chat workspaces
+
+`workbench/chat.rs`. A chat tab is an ordinary tab whose first pane is the lead (Claude Code, `LaunchChoice::Chat`)
+and whose other panes are its workers; `TabSnapshot.chat` marks it, and `Workbench::chats` holds each lead's state
+(composer, transcript items, reports waiting). `layout.rs` draws the lead as the chat (or as its terminal when the
+user asks, or when it waits on an approval, a question or a first-run screen). The chat is read from the lead's
+transcript every 700 ms while the file grows; what is written in it is typed into the lead's terminal, the first
+message with the lead's instructions in front (between `<!-- agentty:chat-lead -->` markers the chat leaves out).
+
+In a repository with a commit, `create_chat_workspace` gives the lead a worktree on a new branch (`agentty/chat-…`):
+the chat's integration branch. Workers are made with `worktree::create_from` at its tip, so they build on what the lead
+merged; a lead in the project folder (no commit yet, or a chat from before) sends them to the default branch.
+
+`agentty tasks` from a lead skips the dialog (`start_chat_tasks`) and rebuilds the tab as `chat_tree`: the lead on
+top, workers in rows of two, at most 4; a finished worker closes for a new one. A worker's `Stop` sends the lead a
+`[Agentty] Worker "…" finished its turn` message with its branch, folder and last reply (plus a reminder to review it
+while reviews are on), held back only while the lead waits on the user. `agentty tasks status|send|result|stop|review`
+(`tasksctl` on the socket) answer the lead about its own workers only. A reviewer (`Review: <worker>`) starts in the
+worker's folder with `LaunchSpec.read_only` (Claude Code without its editing tools, Codex `--sandbox read-only`).
+`workbench/chat_team.rs` holds the chat's choices (`ChatRoles`: the worker and reviewer agents, saved in
+`TabSnapshot.chat_roles`), the reviewer's prompt and what the lead is told about its folder.
+Each chat reads the plan usage of the agents it runs on (`limits::latest`, every minute, in the background) and keeps
+the window closest to running out per agent; from `chat_team::WARN_AT` (85 %) the chat warns, and the reply to the
+lead's `agentty tasks` carries `limits` notes. The remote page gets a chat tab's `TabInfo.chat` (`ChatInfo`: the lead's
+pane, the newest 40 entries cut at 3 000 characters, branch, choices, usage, warning) and sends `{"kind":"chat"}`
+input, which reaches `say_to_lead` like the app's own composer.
+Debug driver: `chat <folder>|send:<text>|terminal|worker|reviewer|state`; `remote password <pw>|forget` (debug builds)
+sets a throwaway web password for testing the page locally (`AGENTTY_REMOTE_DEV=1`).
+
 ## Git page
 
 `git_view.rs` resolves repository roots from the working directories of open panes (the active pane's repository is
@@ -294,15 +323,17 @@ and rotates it; `agentty browser viewport` / `browser_viewport` and the debug dr
 open in-app, opened in the in-app browser. When a pane closes, the shell's process tree is read *before* the pane is
 dropped, and whatever in it still listens gets `SIGTERM`, then `SIGKILL` three seconds later.
 
-## Monitoring → Proxy
+## Terminal proxy for plugins
 
-`capture.rs` is a forward proxy on `127.0.0.1` (std threads, no TLS code). Panes started while capture is on get
-`HTTPS_PROXY` / `HTTP_PROXY` of the form `http://pane-<id>:<token>@127.0.0.1:<port>`: the user name attributes a
-connection to its pane, the per-run random token keeps every other local process out (407). `CONNECT` is tunnelled
-untouched — no certificate, no decryption: host, bytes and timing only. Plain HTTP is forwarded one request per
-connection and records method, path (query values masked) and status, never headers or bodies. Records are a bounded
-in-memory ring. Once started the listener lives as long as the app, because panes keep pointing at it; stopping capture
-only stops recording. An upstream proxy from the app's own environment is chained.
+The capture proxy is a plugin now ([Proxy Capture](https://github.com/empty-user77/agentty-proxy-capture)); what stays
+in the app is `plugins/terminal_proxy.rs`, behind `terminal/setProxy` (`terminal.proxy`, plugin API 6). A plugin gives a
+port and a token; panes started from then on get `HTTPS_PROXY` / `HTTP_PROXY` of the form
+`http://pane-<id>:<token>@127.0.0.1:<port>`, built by the app — the address is always loopback, so a plugin cannot send a
+terminal's traffic off the machine this way. The user name attributes a connection to its pane, the token keeps every
+other local process out of the plugin's proxy. One plugin holds it at a time, and it is released when that plugin
+stops, exits or restarts. The variables are read in `terminal/backend.rs` off the main thread, hence a lock rather than
+app state. `platform/system_proxy.rs` only puts back the macOS proxy settings an older Agentty left pointed at its
+built-in capture proxy when it was killed.
 
 ## Monitoring → Worktrees and Disk
 

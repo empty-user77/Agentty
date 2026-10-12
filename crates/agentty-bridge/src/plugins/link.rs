@@ -18,9 +18,21 @@ const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Link {
-    Plugin { id: String, path: String, query: BTreeMap<String, String> },
+    Plugin {
+        id: String,
+        path: String,
+        query: BTreeMap<String, String>,
+    },
     Prompt(PromptRequest),
-    Store { plugin: Option<String> },
+    Store {
+        plugin: Option<String>,
+    },
+    /// `agentty://open/<id>`: the plugin's workspace (or panel) brought up; `?window=new` in an
+    /// Agentty window of its own.
+    Open {
+        plugin: String,
+        new_window: bool,
+    },
 }
 
 pub fn parse(raw: &str) -> Result<Link, String> {
@@ -37,6 +49,13 @@ pub fn parse(raw: &str) -> Result<Link, String> {
                 return Err("link names no valid plugin".into());
             }
             Ok(Link::Plugin { id, path: segments[1..].join("/"), query })
+        }
+        "open" => {
+            let plugin = segments.first().cloned().unwrap_or_default();
+            if !valid_id(&plugin) {
+                return Err("link names no valid plugin".into());
+            }
+            Ok(Link::Open { plugin, new_window: query.get("window").is_some_and(|w| w == "new") })
         }
         "plugins" => Ok(Link::Store { plugin: segments.first().cloned().filter(|id| valid_id(id)) }),
         "prompt" => {
@@ -100,6 +119,16 @@ fn percent_decode(segment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_open_links() {
+        assert_eq!(
+            parse("agentty://open/agent-rest-client?window=new"),
+            Ok(Link::Open { plugin: "agent-rest-client".into(), new_window: true })
+        );
+        assert_eq!(parse("agentty://open/notes"), Ok(Link::Open { plugin: "notes".into(), new_window: false }));
+        assert!(parse("agentty://open/").is_err());
+    }
 
     #[test]
     fn parses_plugin_links() {

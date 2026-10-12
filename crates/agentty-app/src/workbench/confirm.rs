@@ -77,6 +77,8 @@ impl Workbench {
         let removes_workspace = !matches!(target, CloseTarget::Workspace(_)) && self.empties_workspace(&target);
         self.close_confirm =
             Some(CloseConfirm { target, dont_ask: false, removes_workspace, trees, remove_trees: false, synced, delete_sync: false });
+        // The dialog takes the keyboard from the terminal behind it.
+        window.focus(&self.focus_handle);
         cx.notify();
     }
 
@@ -151,6 +153,58 @@ impl Workbench {
                 cx.notify();
             }
         }
+    }
+
+    /// The dialog's "Close": remembers "don't ask again", then closes.
+    pub(super) fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(confirm) = self.close_confirm.take() else { return };
+        if confirm.dont_ask {
+            // Asked only because a working tree would be left
+            // behind? Then that is the question to silence — the
+            // user's "ask before closing" setting stays as it is.
+            let only_trees = !settings(cx).confirm_close;
+            update_settings(cx, |s| {
+                if only_trees {
+                    s.ask_remove_trees = false;
+                } else {
+                    s.confirm_close = false;
+                }
+            });
+        }
+        if let (CloseTarget::Workspace(id), true) = (&confirm.target, confirm.delete_sync) {
+            self.sync_workspace_removed(*id, true, cx);
+        }
+        self.perform_close(confirm.target, window, cx);
+        if confirm.remove_trees && !confirm.trees.is_empty() {
+            self.remove_trees_after_close(confirm.trees, cx);
+        }
+    }
+
+    pub(super) fn cancel_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_confirm = None;
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    /// The dialog owns the keyboard while it is open: Enter closes, Esc cancels, and every other
+    /// key goes nowhere (not to the terminal behind it). Returns whether the key was consumed.
+    pub(super) fn close_confirm_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.close_confirm.is_none() {
+            return false;
+        }
+        let m = &event.keystroke.modifiers;
+        // Shortcuts (cmd-Q, cmd-W, ...) are actions, not typing: they keep working.
+        if m.platform || m.control {
+            return false;
+        }
+        if !event.is_held {
+            match event.keystroke.key.as_str() {
+                "enter" => self.confirm_close(window, cx),
+                "escape" => self.cancel_close(window, cx),
+                _ => {}
+            }
+        }
+        true
     }
 
     pub(super) fn render_close_confirm(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -339,38 +393,14 @@ impl Workbench {
                                 .flex()
                                 .justify_end()
                                 .gap_2()
-                                .child(button("close-confirm-cancel", t(cx, "confirm.cancel"), false).on_click(cx.listener(
-                                    |this, _: &ClickEvent, window, cx| {
-                                        this.close_confirm = None;
-                                        this.focus_active(window, cx);
-                                        cx.notify();
-                                    },
-                                )))
-                                .child(button("close-confirm-ok", t(cx, "confirm.close"), true).on_click(cx.listener(
-                                    |this, _: &ClickEvent, window, cx| {
-                                        let Some(confirm) = this.close_confirm.take() else { return };
-                                        if confirm.dont_ask {
-                                            // Asked only because a working tree would be left
-                                            // behind? Then that is the question to silence — the
-                                            // user's "ask before closing" setting stays as it is.
-                                            let only_trees = !settings(cx).confirm_close;
-                                            update_settings(cx, |s| {
-                                                if only_trees {
-                                                    s.ask_remove_trees = false;
-                                                } else {
-                                                    s.confirm_close = false;
-                                                }
-                                            });
-                                        }
-                                        if let (CloseTarget::Workspace(id), true) = (&confirm.target, confirm.delete_sync) {
-                                            this.sync_workspace_removed(*id, true, cx);
-                                        }
-                                        this.perform_close(confirm.target, window, cx);
-                                        if confirm.remove_trees && !confirm.trees.is_empty() {
-                                            this.remove_trees_after_close(confirm.trees, cx);
-                                        }
-                                    },
-                                ))),
+                                .child(
+                                    button("close-confirm-cancel", t(cx, "confirm.cancel"), false)
+                                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.cancel_close(window, cx))),
+                                )
+                                .child(
+                                    button("close-confirm-ok", t(cx, "confirm.close"), true)
+                                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.confirm_close(window, cx))),
+                                ),
                         ),
                 ),
         )

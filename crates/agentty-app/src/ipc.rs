@@ -176,14 +176,30 @@ pub struct Listener {
 impl Listener {
     #[cfg(unix)]
     pub fn bind() -> io::Result<Listener> {
-        // The per-user temp dir is private (0700) and short enough for SUN_LEN, unlike deep data dirs.
-        Self::bind_path(std::env::temp_dir().join(format!("agentty-{}.sock", std::process::id())))
+        let base = socket_base(std::env::temp_dir());
+        sweep_stale_socket_dirs(&base);
+        Self::bind_in(&base)
     }
 
+    /// Binds in a new private folder in `base`; the folder goes again if binding fails.
+    #[cfg(unix)]
+    fn bind_in(base: &std::path::Path) -> io::Result<Listener> {
+        let dir = private_socket_dir(base)?;
+        let path = dir.join(SOCKET_NAME);
+        Self::bind_path(path.clone()).inspect_err(|_| {
+            // The folder was made for this socket only: don't leave it behind.
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&dir);
+        })
+    }
+
+    /// Binds at `path`, whose folder must already keep other users out: `bind` creates the socket
+    /// file with the process umask, and only the folder makes that harmless.
     #[cfg(unix)]
     pub(crate) fn bind_path(path: std::path::PathBuf) -> io::Result<Listener> {
         let _ = std::fs::remove_file(&path);
         let inner = std::os::unix::net::UnixListener::bind(&path)?;
+        // Defense in depth: the folder already keeps other users out.
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
@@ -204,12 +220,100 @@ impl Listener {
         self.inner.incoming().flatten().map(|inner| Stream { inner })
     }
 
-    /// Removes the socket file (Unix).
+    /// Removes the socket file and the private folder `bind` made for it (Unix).
     pub fn cleanup(address: &str) {
         #[cfg(unix)]
-        let _ = std::fs::remove_file(address);
+        {
+            let path = std::path::Path::new(address);
+            let _ = std::fs::remove_file(path);
+            let ours = |p: &std::path::Path, prefix: &str| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(prefix));
+            if let Some(dir) = path.parent().filter(|dir| ours(path, SOCKET_NAME) && ours(dir, "agentty-")) {
+                // Only an empty folder goes: never anything else someone put there.
+                let _ = std::fs::remove_dir(dir);
+            }
+        }
         #[cfg(not(unix))]
         let _ = address;
+    }
+}
+
+/// The socket's file name inside its private folder.
+#[cfg(unix)]
+const SOCKET_NAME: &str = "s.sock";
+
+/// Removes socket folders left in `base` by an Agentty that ended without cleaning up (killed or
+/// crashed): only this user's own real folders, named as [`private_socket_dir`] names them, whose
+/// process is gone, and only the socket inside (a folder with anything else in it stays).
+#[cfg(unix)]
+fn sweep_stale_socket_dirs(base: &std::path::Path) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = std::fs::read_dir(base) else { return };
+    let me = unsafe { libc::getuid() };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(socket_dir_pid) else { continue };
+        if pid == std::process::id() {
+            continue;
+        }
+        let dir = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&dir) else { continue };
+        if !meta.is_dir() || meta.uid() != me {
+            continue;
+        }
+        // Signal 0 only checks: 0 or EPERM means the process still runs.
+        let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if !alive {
+            let _ = std::fs::remove_file(dir.join(SOCKET_NAME));
+            let _ = std::fs::remove_dir(&dir);
+        }
+    }
+}
+
+/// The pid in a socket folder name `agentty-<pid>-<8 hex digits>`.
+#[cfg(unix)]
+fn socket_dir_pid(name: &str) -> Option<u32> {
+    let (pid, random) = name.strip_prefix("agentty-")?.split_once('-')?;
+    (random.len() == 8 && random.bytes().all(|b| b.is_ascii_hexdigit())).then_some(())?;
+    pid.parse().ok()
+}
+
+/// Longest socket path `bind` takes, without the closing NUL: `sun_path` is 104 bytes on macOS and
+/// the BSDs, 108 on Linux.
+#[cfg(unix)]
+const SOCKET_PATH_MAX: usize = if cfg!(target_os = "linux") { 107 } else { 103 };
+
+/// The folder to make the socket's folder in: the temp dir, or `/tmp` when a long custom `TMPDIR`
+/// would make the socket path too long to bind.
+#[cfg(unix)]
+fn socket_base(temp: std::path::PathBuf) -> std::path::PathBuf {
+    // `<base>/agentty-<pid>-<8 hex>/s.sock`
+    let len = temp.as_os_str().len() + "/agentty-".len() + std::process::id().to_string().len() + "-12345678/".len() + SOCKET_NAME.len();
+    if len <= SOCKET_PATH_MAX {
+        temp
+    } else {
+        std::path::PathBuf::from("/tmp")
+    }
+}
+
+/// A new folder `agentty-<pid>-<random>` in `base`, `0700` from the moment it exists. `bind`
+/// creates the socket file with the process umask (and the umask is process-wide, so it can't be
+/// narrowed for one call while other threads create files); inside this folder no other user can
+/// reach the socket, not even for that moment. The folder is created, never reused: on Linux the
+/// temp dir is the shared `/tmp`, where a folder another user made in advance must not be taken
+/// for ours. Short enough for SUN_LEN (104 bytes on macOS): `agentty-<pid>-<8 hex>/s.sock` is only 11 bytes longer than
+/// the `agentty-<pid>.sock` it replaces.
+#[cfg(unix)]
+fn private_socket_dir(base: &std::path::Path) -> io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    let mut attempts = 0;
+    loop {
+        let random = uuid::Uuid::new_v4().simple().to_string();
+        let dir = base.join(format!("agentty-{}-{}", std::process::id(), &random[..8]));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists && attempts < 3 => attempts += 1,
+            Err(err) => return Err(err),
+        }
     }
 }
 
@@ -225,6 +329,29 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
 
+    #[cfg(unix)]
+    #[test]
+    fn a_long_temp_dir_falls_back_to_tmp() {
+        let short = std::path::PathBuf::from("/var/folders/ab/cd/T");
+        assert_eq!(socket_base(short.clone()), short);
+        let long = std::path::PathBuf::from(format!("/Users/someone/{}", "x".repeat(100)));
+        assert_eq!(socket_base(long), std::path::PathBuf::from("/tmp"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_bind_removes_its_folder() {
+        let base = std::env::temp_dir().join(format!("agentty-ipc-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // A folder far past `sun_path`: the folder is made, the bind fails.
+        let long = base.join("d".repeat(120));
+        std::fs::create_dir_all(&long).unwrap();
+        assert!(Listener::bind_in(&long).is_err());
+        assert_eq!(std::fs::read_dir(&long).unwrap().count(), 0);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
     #[test]
     fn compares_tokens() {
         assert!(constant_time_eq(b"auth\tabc\n", b"auth\tabc\n"));
@@ -232,11 +359,74 @@ mod tests {
         assert!(!constant_time_eq(b"auth\tab", b"auth\tabc\n"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn the_socket_lives_in_a_new_private_folder_removed_with_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let listener = Listener::bind().unwrap();
+        let path = std::path::PathBuf::from(&listener.address);
+        let dir = path.parent().unwrap().to_path_buf();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        // Each listener gets a folder of its own.
+        let second = Listener::bind().unwrap();
+        assert_ne!(std::path::Path::new(&second.address).parent().unwrap(), dir);
+        Listener::cleanup(&listener.address);
+        Listener::cleanup(&second.address);
+        assert!(!path.exists());
+        assert!(!dir.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_socket_folders_of_ended_processes_are_swept() {
+        let base = std::env::temp_dir().join(format!("agentty-ipc-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let random = "01234567";
+        // No process has this pid (above the largest pid any system hands out).
+        let ended = base.join(format!("agentty-999999999-{random}"));
+        let running = base.join(format!("agentty-{}-{random}", std::process::id()));
+        let crowded = base.join(format!("agentty-999999998-{random}"));
+        let unrelated = base.join("agentty-999999999-notours");
+        for dir in [&ended, &running, &crowded, &unrelated] {
+            std::fs::create_dir(dir).unwrap();
+            std::fs::write(dir.join(SOCKET_NAME), b"").unwrap();
+        }
+        std::fs::write(crowded.join("keep.txt"), b"x").unwrap();
+        sweep_stale_socket_dirs(&base);
+        assert!(!ended.exists());
+        assert!(running.join(SOCKET_NAME).exists());
+        assert!(crowded.join("keep.txt").exists());
+        assert!(unrelated.join(SOCKET_NAME).exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_folder_names_are_parsed_strictly() {
+        assert_eq!(socket_dir_pid("agentty-42-0123abcd"), Some(42));
+        assert_eq!(socket_dir_pid("agentty-42-0123abc"), None);
+        assert_eq!(socket_dir_pid("agentty-42-0123abcg"), None);
+        assert_eq!(socket_dir_pid("agentty-42.sock"), None);
+        assert_eq!(socket_dir_pid("agentty-x-0123abcd"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_leaves_other_folders_alone() {
+        let dir = std::env::temp_dir().join(format!("agentty-ipc-keep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Not our socket name: the folder stays even when empty.
+        let other = dir.join("other.sock");
+        std::fs::write(&other, b"").unwrap();
+        Listener::cleanup(&other.display().to_string());
+        assert!(dir.is_dir());
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
     #[test]
     fn roundtrip() {
-        #[cfg(unix)]
-        let listener = Listener::bind_path(std::env::temp_dir().join(format!("agentty-ipc-test-{}.sock", std::process::id()))).unwrap();
-        #[cfg(not(unix))]
         let listener = Listener::bind().unwrap();
         if let Some(token) = &listener.token {
             std::env::set_var(TOKEN_VARIABLE, token);

@@ -6,15 +6,20 @@ mod agent_panel;
 pub mod ai_resolve;
 mod ask;
 mod backup;
+mod board;
+mod board_settings;
 mod browser;
 mod browser_budget;
 mod browser_control;
 mod browsers_page;
+mod chat;
+mod chat_team;
 mod chrome;
 mod confirm;
 mod content_search;
 mod context_menu;
 mod db_page;
+mod diagnostics;
 mod disk_page;
 mod docker_panel;
 mod drop_split;
@@ -39,14 +44,16 @@ pub mod panes;
 mod persist;
 mod picker;
 pub mod plugin_browser;
+mod plugin_graph;
 mod plugin_host;
 mod plugin_panel;
+mod plugin_ui;
 mod plugin_window;
 mod plugin_workspace;
 mod plugins_page;
 mod processes;
 mod prompt_dialog;
-mod proxy_page;
+mod remote_page;
 mod responsive;
 pub mod resume_hint;
 mod servers;
@@ -55,13 +62,16 @@ mod session_viewer;
 mod settings_page;
 pub mod side_panels;
 mod status_menus;
+mod subagent_view;
 mod sync;
 mod system_page;
 mod tab_menu;
 mod tasks;
 mod terminal_browser;
+mod todo;
 mod tree_manager;
 pub mod update;
+mod voice_input;
 #[cfg(windows)]
 mod webview_setup;
 mod windows_page;
@@ -113,6 +123,7 @@ actions!(
         OpenSettings,
         OpenExtensions,
         OpenGit,
+        RunDiagnostics,
         OpenPlugins,
         ToggleBrowser,
         HardReloadBrowser,
@@ -150,6 +161,7 @@ actions!(
         JumpToUnread,
         OpenPalette,
         ToggleZoom,
+        ToggleVoiceInput,
     ]
 );
 
@@ -178,6 +190,8 @@ pub fn next_free_window_slot() -> usize {
 pub use account_usage::AccountUsage;
 pub(crate) use layout::format_elapsed;
 pub use persist::ClosedWindows;
+pub use plugin_panel::pin_installed_sidebar_plugins;
+pub use voice_input::available as voice_input_available;
 
 /// The place and size window `slot` had at the last save.
 pub fn saved_window(slot: usize) -> Option<persist::WindowState> {
@@ -190,6 +204,9 @@ pub struct Tab {
     /// In a plugin's workspace, the automation this tab is: its panel, its browser pages and
     /// these terminals go together, and each tab runs on its own.
     pub instance: Option<persist::TabInstance>,
+    /// Set aside for later (TODO): left out of the tab strip, its terminals still running, until it
+    /// is brought back from the workspace's TODO button.
+    pub todo: bool,
 }
 
 pub struct Workspace {
@@ -212,6 +229,8 @@ pub struct Workspace {
     /// The plugin this workspace belongs to (`mode: "workspace"`): its panel and the browser come
     /// up while it is in front.
     pub plugin: Option<String>,
+    /// Left out of remote access (its menu): the web page neither lists it nor reaches it.
+    pub remote_hidden: bool,
 }
 
 /// How many closed tabs a workspace remembers.
@@ -294,8 +313,6 @@ pub enum Page {
     Flow,
     Usage,
     Processes,
-    /// Monitoring → the capture proxy: what tabs talk to.
-    Proxy,
     /// Monitoring → every git working tree on this computer.
     Worktrees,
     /// Monitoring → what fills the disk, and clearing build output and caches.
@@ -309,6 +326,10 @@ pub enum Page {
     Idea,
     /// The active project's databases (only offered when it has some).
     Database,
+    /// Remote access over Tailscale (when the feature is on in Settings → General).
+    Remote,
+    /// The board: tickets an agent works on, from the backlog to the user's sign-off.
+    Board,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -426,10 +447,18 @@ pub struct Workbench {
     /// Docker of the active pane's project: the status bar chip and the panel docked at the right.
     docker: docker_panel::DockerState,
     db: db_page::DbState,
+    board: board::BoardState,
+    board_jira: board_settings::JiraUi,
     /// Window width at the last render, for sizing the panels docked at the right.
     viewport_width: f32,
+    /// The plugin panel that a drag made float (wider than the window can dock); dragging it back
+    /// narrow enough docks it again. Not kept across restarts.
+    plugin_floated_by_drag: Option<String>,
     browser_home_input: Option<(Entity<TextInput>, Subscription)>,
     chat_notify: notify_settings::ChatNotifyState,
+    remote_page: remote_page::RemotePageState,
+    /// The status bar's mic: recording, transcribing, its setup popover.
+    voice_input: voice_input::VoiceInput,
     sync: sync::SyncUi,
     backup: backup::BackupUi,
     split_drag: Option<layout::SplitDrag>,
@@ -450,6 +479,8 @@ pub struct Workbench {
     /// Whether a pane's folder is a folder of projects, asked from renders: kept a few seconds so a
     /// frame asks the file system nothing.
     folder_kinds: std::cell::RefCell<std::collections::HashMap<PathBuf, (bool, std::time::Instant)>>,
+    /// Folders asked whether "Clone from Git" belongs there, with when (see `clone_offered`).
+    clone_spots: std::cell::RefCell<std::collections::HashMap<PathBuf, (bool, std::time::Instant)>>,
     /// Installed agent CLIs and local models (`None` until detected).
     pub installed: Option<crate::agents::Installed>,
     installed_at: Option<std::time::Instant>,
@@ -471,6 +502,10 @@ pub struct Workbench {
     mini_generation: u64,
     pub updates: update::Updates,
     tab_menu: Option<tab_menu::TabMenu>,
+    /// The TODO list of the active workspace, open below its button.
+    todo_menu: Option<gpui::Point<Pixels>>,
+    /// Right-click menu on a split pane's header.
+    pane_menu: Option<(Pane, gpui::Point<Pixels>)>,
     about_open: bool,
     close_confirm: Option<confirm::CloseConfirm>,
     /// Menu closed by a click outside it, and when: the same click on its toggle must not reopen it.
@@ -496,6 +531,10 @@ pub struct Workbench {
     usage_scanner: std::sync::Arc<std::sync::Mutex<agentty_bridge::usage::UsageScanner>>,
     /// Subagents / session links popover of a pane.
     agent_panel: Option<agent_panel::AgentPanel>,
+    agent_window: agent_panel::AgentWindow,
+    /// The subagents view while it is in a window of its own, and that window.
+    popped_out: Option<agent_panel::AgentPanel>,
+    popout_window: Option<gpui::WindowHandle<agent_panel::SubagentWindow>>,
     session_viewer: Option<session_viewer::SessionViewer>,
     /// File editor (files opened from the files panel), and whether it is what the main area shows.
     editor: Option<Entity<crate::editor::CodeEditor>>,
@@ -509,6 +548,8 @@ pub struct Workbench {
     pending_editor_open: Option<PathBuf>,
     /// A short question waiting for an answer (migrate, delete, compact before resuming).
     ask: Option<ask::Ask>,
+    /// Help → Diagnose problems, while open.
+    diagnostics: Option<diagnostics::Diagnostics>,
     launcher_more: bool,
     service_status: HashMap<&'static str, agentty_bridge::service_status::ServiceStatus>,
     status_dismissed: std::collections::HashSet<String>,
@@ -624,6 +665,10 @@ pub struct Workbench {
     plugin_panel: Option<String>,
     /// The panel's layout menu is open.
     plugin_mode_menu: bool,
+    /// The activity bar's group of sidebar plugins has its list open.
+    plugin_group_menu: bool,
+    /// The right-click menu of a plugin's activity-bar item: the plugin, and where it was clicked.
+    plugin_pin_menu: Option<(String, gpui::Point<gpui::Pixels>)>,
     /// The panel's plugin shows a popover beside the panel: the page moves right to leave it room
     /// while it is open.
     plugin_popover_open: bool,
@@ -649,6 +694,38 @@ pub struct Workbench {
     /// it as the user closing the panel.
     plugin_windows_closing: std::collections::HashSet<String>,
     plugin_inputs: HashMap<(String, String), plugin_panel::PluginInput>,
+    /// Widths the user dragged a plugin grid's resizable column to, by (plugin, grid id), and the
+    /// drag's count so only its last move is sent to the plugin.
+    plugin_grid_widths: HashMap<(String, String), (f32, u64)>,
+    /// The plugin tab strip whose `+` menu is open, as `plugin/element`.
+    plugin_tab_menu: Option<String>,
+    /// The menu a click outside just closed, and when: the same click landing on its own button
+    /// must not open it again.
+    plugin_menu_closed: Option<(String, std::time::Instant)>,
+    /// A popover's contents are being built: they are drawn deferred already, and a menu inside
+    /// must not ask for that again (GPUI panics on deferred drawing inside deferred drawing).
+    plugin_in_popover: std::cell::Cell<bool>,
+    /// The window's height at the last panel update: a popover is never taller than what is left.
+    plugin_window_height: std::cell::Cell<f32>,
+    /// Each plugin tab strip's scroll, and the tab it last showed (to bring a newly picked one
+    /// into view), as `plugin/element`.
+    plugin_tab_strips: RefCell<HashMap<String, (gpui::ScrollHandle, String)>>,
+    /// The `select` of a plugin panel whose options are showing: (input scope, element id).
+    plugin_select_open: Option<(String, String)>,
+    /// Colors of the `code` blocks plugin panels show, by their text and language.
+    plugin_code_colors: plugin_ui::CodeColors,
+    /// Where plugin picture slots that take dropped files were drawn in the last frame.
+    plugin_drop_zones: plugin_graph::PluginDropZones,
+    /// Which plugin pictures are pictures by their bytes.
+    plugin_image_checks: plugin_graph::ImageChecks,
+    /// Graph nodes the user dragged, until the plugin sends the tree back.
+    plugin_graph_moves: plugin_graph::GraphMoves,
+    /// How the user zoomed each graph, and the place it is shown in.
+    plugin_graph_views: plugin_graph::GraphViews,
+    /// The zoom of the graph node being drawn, for the pictures inside it (1 elsewhere).
+    plugin_graph_scale: std::cell::Cell<f32>,
+    /// The grammars `code` blocks are colored with are loading.
+    plugin_grammars_loading: bool,
     plugin_scroll: gpui::ScrollHandle,
     welcome_scroll: gpui::ScrollHandle,
     /// Context last sent to plugins (serialized), to send only changes.
@@ -659,6 +736,9 @@ pub struct Workbench {
     prompt_queue: std::collections::VecDeque<agentty_bridge::plugins::PromptRequest>,
     /// Parallel tasks agents asked for (`agentty tasks`), waiting for the user; the first is shown.
     task_requests: std::collections::VecDeque<crate::agent_signal::TasksRequest>,
+    /// Chat tabs, by their lead agent's pane: the tab's first pane is drawn as a chat, the others
+    /// are the workers it started.
+    chats: HashMap<gpui::EntityId, chat::ChatState>,
     /// The "Clone from Git" dialog, while open.
     clone_dialog: Option<git_clone::CloneDialog>,
     /// A CLI the user picked that isn't installed: what to tell them, and where to read more.
@@ -675,8 +755,6 @@ pub struct Workbench {
     onboarding: Option<onboarding::Onboarding>,
     /// The first-run tour opens once the system check finds the environment ready.
     onboarding_waits_for_setup: bool,
-    /// Monitoring → Proxy: the capture table and its filter.
-    proxy: proxy_page::ProxyPage,
     next_id: u64,
 }
 
@@ -717,12 +795,6 @@ impl Workbench {
                 }
                 _ => {}
             });
-        let proxy_filter = cx.new(|cx| TextInput::localized("", "proxy.filter", window, cx));
-        let proxy_subscription = cx.subscribe(&proxy_filter, |_, _, event: &crate::text_input::TextInputEvent, cx| {
-            if matches!(event, crate::text_input::TextInputEvent::Changed) {
-                cx.notify();
-            }
-        });
         let mut this = Self {
             slot,
             window_id: window.window_handle().window_id(),
@@ -767,9 +839,14 @@ impl Workbench {
             browser_net_drag: None,
             docker: Default::default(),
             db: Default::default(),
+            board: Default::default(),
+            board_jira: Default::default(),
             viewport_width: 1400.,
+            plugin_floated_by_drag: None,
             browser_home_input: None,
             chat_notify: Default::default(),
+            remote_page: Default::default(),
+            voice_input: Default::default(),
             sync: Default::default(),
             backup: Default::default(),
             split_drag: None,
@@ -785,6 +862,7 @@ impl Workbench {
             branch_menu_closed: None,
             folder_scans: Default::default(),
             folder_kinds: Default::default(),
+            clone_spots: Default::default(),
             installed: None,
             installed_at: None,
             mini: None,
@@ -798,6 +876,8 @@ impl Workbench {
             mini_generation: 0,
             updates: update::Updates::default(),
             tab_menu: None,
+            todo_menu: None,
+            pane_menu: None,
             about_open: false,
             close_confirm: None,
             dismissed_menu: None,
@@ -812,6 +892,9 @@ impl Workbench {
             account_usage: Vec::new(),
             usage_scanner: Default::default(),
             agent_panel: None,
+            agent_window: Default::default(),
+            popped_out: None,
+            popout_window: None,
             session_viewer: None,
             editor: None,
             editor_shown: false,
@@ -820,6 +903,7 @@ impl Workbench {
             discard_confirmed: false,
             pending_editor_open: None,
             ask: None,
+            diagnostics: None,
             launcher_more: false,
             service_status: HashMap::new(),
             status_dismissed: Default::default(),
@@ -891,6 +975,8 @@ impl Workbench {
             harness_pattern_form: None,
             plugin_panel: None,
             plugin_mode_menu: false,
+            plugin_group_menu: false,
+            plugin_pin_menu: None,
             plugin_popover_open: false,
             plugin_windows: HashMap::new(),
             plugin_panes: HashMap::new(),
@@ -901,12 +987,27 @@ impl Workbench {
             plugin_windows_opening: std::collections::HashSet::new(),
             plugin_windows_closing: std::collections::HashSet::new(),
             plugin_inputs: HashMap::new(),
+            plugin_grid_widths: HashMap::new(),
+            plugin_tab_menu: None,
+            plugin_menu_closed: None,
+            plugin_in_popover: std::cell::Cell::new(false),
+            plugin_window_height: std::cell::Cell::new(900.),
+            plugin_tab_strips: RefCell::new(HashMap::new()),
+            plugin_select_open: None,
+            plugin_code_colors: Default::default(),
+            plugin_drop_zones: Default::default(),
+            plugin_image_checks: Default::default(),
+            plugin_graph_moves: Default::default(),
+            plugin_graph_views: Default::default(),
+            plugin_graph_scale: std::cell::Cell::new(1.),
+            plugin_grammars_loading: false,
             plugin_scroll: gpui::ScrollHandle::new(),
             welcome_scroll: gpui::ScrollHandle::new(),
             plugin_context_key: serde_json::Value::Null,
             prompt_dialog: None,
             prompt_queue: std::collections::VecDeque::new(),
             task_requests: std::collections::VecDeque::new(),
+            chats: HashMap::new(),
             clone_dialog: None,
             welcome: false,
             install_hint: None,
@@ -916,7 +1017,6 @@ impl Workbench {
             plugins_page: Default::default(),
             onboarding: None,
             onboarding_waits_for_setup: false,
-            proxy: proxy_page::ProxyPage::new(proxy_filter, proxy_subscription),
             next_id: 1,
         };
         this.restore(window, cx);
@@ -999,6 +1099,8 @@ impl Workbench {
         });
         cx.on_app_quit(|this, cx| {
             this.persist(cx);
+            // A board change still waiting for its delayed save.
+            board::save_board_now();
             // Whichever way the app is going down: the sleep lock is a child process and would
             // outlive it. Letting go of it twice is a no-op.
             crate::platform::wakelock::set(false);
@@ -1063,7 +1165,11 @@ impl Workbench {
         crate::metrics::track(cx, "pane_opened", serde_json::json!({ "tool": tool }));
         let pane = cx.new(|cx| TerminalView::new(spec, cx));
         let subscription = cx.subscribe(&pane, |this, pane, event: &TerminalEvent, cx| match event {
-            TerminalEvent::Exited => this.pane_exited(pane.clone(), cx),
+            TerminalEvent::Exited => {
+                let pane_id = pane.read(cx).pane_id;
+                this.pane_exited(pane.clone(), cx);
+                this.board_pane_exited(pane_id, cx);
+            }
             TerminalEvent::Activated => {
                 let pane_id = pane.read(cx).pane_id;
                 if this.mark_pane_read(pane_id) {
@@ -1077,6 +1183,8 @@ impl Workbench {
                     let pane_id = pane.read(cx).pane_id;
                     this.flow_agent_finished(pane_id, cx);
                     this.sync_after_turn(pane_id, cx);
+                    this.chat_turn_finished(&pane, message.clone(), cx);
+                    this.board_turn_finished(&pane, cx);
                 }
             }
             // A `cd` moves where the pane works, and that is part of the saved layout. Saving it
@@ -1098,6 +1206,10 @@ impl Workbench {
                 // It may also have landed on another branch, whose pull request the card shows.
                 this.refresh_pull_requests(cx);
                 this.warn_about_shared_tree(&pane, cx);
+                // A chat's lead that is free again reads the reports that waited for it.
+                this.flush_chat_pending(&pane, cx);
+                // A ticket's agent at work moves its ticket on the board.
+                this.board_status_changed(&pane, cx);
                 cx.notify();
             }
             // A link in a terminal opens in that terminal's tab.
@@ -1142,13 +1254,15 @@ impl Workbench {
 
     pub fn active_pane(&self) -> Option<Pane> {
         let ws = self.workspaces.get(self.active_workspace)?;
-        ws.tabs.get(ws.active_tab).map(|tab| tab.active.clone())
+        ws.tabs.get(ws.active_tab).filter(|tab| !tab.todo).map(|tab| tab.active.clone())
     }
 
     fn mark_active(&mut self, pane: &Pane, cx: &mut Context<Self>) {
         if let Some((w, t)) = self.locate(pane) {
             let ws = &mut self.workspaces[w];
-            if ws.tabs[t].active != *pane || ws.active_tab != t {
+            if ws.tabs[t].active != *pane || ws.active_tab != t || ws.tabs[t].todo {
+                // A pane made active is one the user went to: its tab comes out of TODO.
+                ws.tabs[t].todo = false;
                 ws.tabs[t].active = pane.clone();
                 ws.active_tab = t;
                 self.persist_soon(cx);
@@ -1158,6 +1272,10 @@ impl Workbench {
     }
 
     fn focus_pane(&self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
+        // A chat's lead shown as the chat: the keyboard goes to its composer.
+        if let Some(input) = self.chat_input_for(pane, cx) {
+            return window.focus(&input.focus_handle(cx));
+        }
         let handle = pane.read(cx).focus_handle(cx);
         window.focus(&handle);
     }
@@ -1183,6 +1301,9 @@ impl Workbench {
         if self.agent_panel.as_ref().is_some_and(|p| p.pane == pane.entity_id()) {
             self.agent_panel = None;
         }
+        if self.popped_out.as_ref().is_some_and(|p| p.pane == pane.entity_id()) {
+            self.close_popped_out(cx);
+        }
         let removed_id = pane.read(cx).pane_id;
         // Read off the pane before it goes: a workspace that falls dormant on this close keeps
         // what its card was showing (branch, last activity) instead of emptying out.
@@ -1196,7 +1317,7 @@ impl Workbench {
         match tab.root.remove(pane) {
             Some(root) => {
                 let active = if tab.active == *pane { root.leaves()[0].clone() } else { tab.active };
-                ws.tabs.insert(t, Tab { root, active, instance: tab.instance });
+                ws.tabs.insert(t, Tab { root, active, instance: tab.instance, todo: tab.todo });
             }
             None => {
                 if ws.active_tab >= ws.tabs.len() {
@@ -1204,6 +1325,7 @@ impl Workbench {
                 } else if t < ws.active_tab {
                     ws.active_tab -= 1;
                 }
+                ws.settle_active_tab();
             }
         }
         // Closing the last tab is not deleting the workspace: it goes dormant on the tab that just
@@ -1228,10 +1350,12 @@ impl Workbench {
                         branch: last_branch,
                         last_activity_ms: Some(last_activity),
                         plugin: ws.plugin.clone(),
+                        remote_hidden: ws.remote_hidden,
                     });
                 }
                 None => {
-                    self.workspaces.remove(w);
+                    let removed = self.workspaces.remove(w);
+                    self.board_workspace_closed(removed.id);
                     if self.active_workspace >= self.workspaces.len() {
                         self.active_workspace = self.workspaces.len().saturating_sub(1);
                     } else if w < self.active_workspace {
@@ -1247,6 +1371,10 @@ impl Workbench {
     /// Files dropped at `position` (window coordinates): typed as paths into the pane under it.
     pub fn drop_files_at(&mut self, position: (f32, f32), paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         let point = gpui::point(px(position.0), px(position.1));
+        // A plugin's picture slot under the pointer takes the pictures.
+        if self.drop_on_plugin(point, paths, cx) {
+            return;
+        }
         let visible: Vec<Pane> =
             self.workspaces.get(self.active_workspace).and_then(|w| w.tabs.get(w.active_tab)).map(|t| t.root.leaves()).unwrap_or_default();
         let bounds = self.pane_bounds.borrow().clone();
@@ -1319,13 +1447,14 @@ impl Workbench {
             name,
             group,
             cwd,
-            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
+            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false }],
             active_tab: 0,
             dormant: None,
             asleep_on_close: false,
             closed_tabs: Vec::new(),
             color: None,
             plugin: None,
+            remote_hidden: false,
         });
         self.activate_workspace(self.workspaces.len() - 1, window, cx);
         self.persist(cx);
@@ -1356,7 +1485,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
         ws.active_tab = ws.tabs.len() - 1;
         self.page = None;
         self.session_viewer = None;
@@ -1380,7 +1509,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None, todo: false });
         ws.active_tab = ws.tabs.len() - 1;
         self.persist(cx);
         cx.notify();
@@ -1497,6 +1626,7 @@ impl Workbench {
         let Some(ws) = self.workspaces.get_mut(self.active_workspace) else { return };
         if index < ws.tabs.len() {
             ws.active_tab = index;
+            ws.tabs[index].todo = false;
             self.page = None;
             self.session_viewer = None;
             self.hide_editor();
@@ -1509,6 +1639,7 @@ impl Workbench {
     /// Removes a workspace for good, with its tabs and its tab history.
     fn close_workspace(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.workspaces.iter().position(|w| w.id == id) else { return };
+        let group = self.workspaces[index].group;
         let panes: Vec<Pane> = self.workspaces[index].tabs.iter().flat_map(|t| t.root.leaves()).collect();
         // Its final state goes to the sync repository before the workspace is gone.
         self.sync_workspace_removed(id, false, cx);
@@ -1522,6 +1653,8 @@ impl Workbench {
             self.workspaces.remove(index);
             self.active_workspace = self.active_workspace.min(self.workspaces.len().saturating_sub(1));
         }
+        self.board_workspace_closed(id);
+        self.drop_empty_board_group(group);
         self.persist(cx);
         self.workspace_menu = None;
         self.focus_active(window, cx);
@@ -1620,6 +1753,9 @@ impl Workbench {
     ) {
         let remembered = project.map(std::path::Path::to_path_buf).unwrap_or_else(|| cwd.clone());
         update_settings(cx, |s| s.remember_dir(remembered));
+        if choice == crate::launch::LaunchChoice::Chat {
+            return self.create_chat_workspace(cwd, window, cx);
+        }
         let spec = choice.spec(cwd);
         match target {
             LaunchTarget::NewTab => self.open_tab(spec, window, cx),
@@ -2270,11 +2406,15 @@ impl Workbench {
         let snapshot = self.workspaces[w].closed_tabs.remove(index);
         let Some(tree) = snapshot.layout.to_tree() else { return };
         let mut claimed = self.running_sessions(cx);
-        let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(restored_spec(pane, &mut claimed), cx));
+        let chat = snapshot.chat;
+        let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(chat_spec(restored_spec(pane, &mut claimed), chat), cx));
         let leaves = root.leaves();
         let active = leaves.get(snapshot.active_pane).unwrap_or(&leaves[0]).clone();
+        if snapshot.chat {
+            self.register_chat(&leaves[0], snapshot.chat_roles.unwrap_or_default(), cx);
+        }
         let ws = &mut self.workspaces[w];
-        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
+        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone(), todo: false });
         ws.active_tab = ws.tabs.len() - 1;
         self.split_shared_instances(w);
         self.active_workspace = w;
@@ -2526,6 +2666,13 @@ impl Workbench {
             .unwrap_or_else(|| crate::ui::tilde(&ws.cwd))
     }
 
+    /// The workspace's name exactly as its sidebar card shows it. Everything else that tells the
+    /// user where a session lives (mini mode, the menu bar, notifications, processes) uses this,
+    /// so a workspace reads the same everywhere.
+    pub fn workspace_label(&self, ws: &Workspace, cx: &gpui::App) -> String {
+        card_title(self.workspace_title(ws, cx))
+    }
+
     fn start_rename(&mut self, target: RenameTarget, window: &mut Window, cx: &mut Context<Self>) {
         let current = match target {
             RenameTarget::Workspace(id) => self.workspaces.iter().find(|w| w.id == id).map(|w| self.workspace_title(w, cx)),
@@ -2690,11 +2837,23 @@ impl Workbench {
     }
 
     fn snapshot_tab(&self, tab: &Tab, cx: &gpui::App) -> TabSnapshot {
+        let lead = self.chat_lead_of_tab(tab);
+        let layout = tab.root.map(&mut |pane| {
+            let mut snapshot = Self::snapshot_pane(pane, cx);
+            // A chat's worker keeps the title its lead gave it: the lead names it by that title.
+            if lead.as_ref().is_some_and(|lead| lead != pane) {
+                snapshot.title = pane.read(cx).spec.title.clone();
+            }
+            snapshot
+        });
         TabSnapshot {
             instance: tab.instance.clone(),
-            layout: NodeSnapshot::from_tree(&tab.root.map(&mut |pane| Self::snapshot_pane(pane, cx))),
+            layout: NodeSnapshot::from_tree(&layout),
             active_pane: tab.root.leaves().iter().position(|p| *p == tab.active).unwrap_or(0),
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
+            chat: lead.is_some(),
+            chat_roles: lead.as_ref().and_then(|lead| self.chat_roles(lead)),
+            todo: tab.todo,
         }
     }
 
@@ -2785,6 +2944,7 @@ impl Workbench {
                         closed_tabs: ws.closed_tabs.clone(),
                         color: None,
                         color_value: ws.color,
+                        remote_hidden: ws.remote_hidden,
                         tabs,
                         ..dormant.clone()
                     };
@@ -2800,6 +2960,7 @@ impl Workbench {
                     color: None,
                     color_value: ws.color,
                     plugin: ws.plugin.clone(),
+                    remote_hidden: ws.remote_hidden,
                     tabs: ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)).collect(),
                     // What the card says while the workspace is open, so it says the same once it
                     // is folded away: the branch it is on and when it last did something.
@@ -2855,6 +3016,7 @@ impl Workbench {
                 closed_tabs: snapshot.closed_tabs.clone(),
                 color: stored_color(snapshot.color_value, snapshot.color),
                 plugin: snapshot.plugin.clone(),
+                remote_hidden: snapshot.remote_hidden,
                 dormant: Some(snapshot),
                 asleep_on_close: false,
             });
@@ -2869,6 +3031,7 @@ impl Workbench {
             // Only the active workspace starts processes; the rest wake up when opened.
             self.activate_workspace(state.active_workspace.min(self.workspaces.len() - 1), window, cx);
         }
+        self.board_forget_missing_workspaces();
         self.restore_panels(state.panels, cx);
     }
 
@@ -2880,13 +3043,17 @@ impl Workbench {
             let Some(tree) = tab.layout.without(&|pane| persist::plugin_job(pane, &plugin_data)).and_then(|layout| layout.to_tree()) else {
                 continue;
             };
-            let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(restored_spec(pane, &mut claimed), cx));
+            let chat = tab.chat;
+            let root = tree.map(&mut |pane: &PaneSnapshot| self.spawn_pane(chat_spec(restored_spec(pane, &mut claimed), chat), cx));
             let leaves = root.leaves();
             let active = leaves.get(tab.active_pane).unwrap_or(&leaves[0]).clone();
             if self.zoomed.is_none() {
                 self.zoomed = tab.zoomed_pane.and_then(|index| leaves.get(index)).cloned();
             }
-            tabs.push(Tab { root, active, instance: tab.instance.clone() });
+            if tab.chat {
+                self.register_chat(&leaves[0], tab.chat_roles.unwrap_or_default(), cx);
+            }
+            tabs.push(Tab { root, active, instance: tab.instance.clone(), todo: tab.todo });
         }
         let ws = &mut self.workspaces[index];
         ws.active_tab = snapshot.active_tab.min(tabs.len().saturating_sub(1));
@@ -2897,7 +3064,7 @@ impl Workbench {
         if ws.tabs.is_empty() {
             let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, snapshot.cwd.clone()), cx);
             let ws = &mut self.workspaces[index];
-            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
+            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
         }
         self.split_shared_instances(index);
     }
@@ -3019,6 +3186,7 @@ impl Render for Workbench {
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);
+        self.prepare_chats(window, cx);
         if std::mem::take(&mut self.refocus) && self.page.is_none() && !self.welcome {
             self.focus_active(window, cx);
         }
@@ -3075,7 +3243,6 @@ impl Render for Workbench {
                 gpui::AnyView::from(usage).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
             Some(Page::Processes) => self.render_processes(cx).into_any_element(),
-            Some(Page::Proxy) => self.render_proxy_page(cx).into_any_element(),
             Some(Page::Worktrees) => self.render_tree_manager(cx).into_any_element(),
             Some(Page::Disk) => self.render_disk_page(cx).into_any_element(),
             Some(Page::Browsers) => self.render_browsers_page(cx).into_any_element(),
@@ -3088,7 +3255,9 @@ impl Render for Workbench {
             }
             Some(Page::Flow) => self.render_flow(window, cx).into_any_element(),
             Some(Page::Plugins) => self.render_plugins_page(cx).into_any_element(),
+            Some(Page::Remote) => self.render_remote_page(window, cx).into_any_element(),
             Some(Page::Database) => self.render_db_page(cx),
+            Some(Page::Board) => self.render_board_page(cx),
             Some(Page::Idea) => {
                 gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
@@ -3097,6 +3266,7 @@ impl Render for Workbench {
                 match (self.render_session_viewer(cx), self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)))
                 {
                     (Some(viewer), _) => viewer,
+                    (None, Some(tab)) if self.new_workspace.is_none() && !self.welcome && tab.todo => self.render_all_parked(cx),
                     (None, Some(tab)) if self.new_workspace.is_none() && !self.welcome => self.render_tab(tab, cx),
                     (None, _) => self.render_welcome(cx).into_any_element(),
                 }
@@ -3115,12 +3285,23 @@ impl Render for Workbench {
             .track_focus(&self.focus_handle)
             // Esc leaves "pick a terminal to connect" before the focused terminal sees the key: the
             // agent there would take it as "interrupt".
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && this.connect_pick.is_some() {
                     this.cancel_connect_pick(cx);
+                    // One Esc does one thing: a recording goes on until the next.
+                    return cx.stop_propagation();
+                }
+                // A close confirmation owns the keyboard.
+                if this.close_confirm_key(event, window, cx) {
+                    return cx.stop_propagation();
+                }
+                // While the mic records, Enter sends what was said and Esc drops it — before the
+                // terminal sees either key.
+                if this.voice_key(event, window, cx) {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(cx.listener(|this, _: &ToggleVoiceInput, window, cx| this.toggle_mic(window, cx)))
             .on_action(cx.listener(|this, _: &NewTerminalTab, window, cx| {
                 // In a plugin's workspace a new tab is a new automation.
                 match this.front_plugin_workspace(cx).filter(|_| this.page.is_none()) {
@@ -3169,18 +3350,8 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| this.split(Axis::Vertical, window, cx)))
             .on_action(cx.listener(|this, _: &NextPane, window, cx| this.cycle_pane(true, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousPane, window, cx| this.cycle_pane(false, window, cx)))
-            .on_action(cx.listener(|this, _: &NextTab, window, cx| {
-                if let Some(ws) = this.workspaces.get(this.active_workspace) {
-                    let n = ws.tabs.len().max(1);
-                    this.activate_tab((ws.active_tab + 1) % n, window, cx);
-                }
-            }))
-            .on_action(cx.listener(|this, _: &PreviousTab, window, cx| {
-                if let Some(ws) = this.workspaces.get(this.active_workspace) {
-                    let n = ws.tabs.len().max(1);
-                    this.activate_tab((ws.active_tab + n - 1) % n, window, cx);
-                }
-            }))
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle_tab(true, window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousTab, window, cx| this.cycle_tab(false, window, cx)))
             .on_action(cx.listener(|this, _: &NextWorkspace, window, cx| {
                 let n = this.workspaces.len().max(1);
                 this.activate_workspace((this.active_workspace + 1) % n, window, cx);
@@ -3200,6 +3371,7 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_page(Page::Settings, cx)))
             .on_action(cx.listener(|this, _: &OpenExtensions, _, cx| this.open_page(Page::Extensions, cx)))
             .on_action(cx.listener(|this, _: &OpenGit, _, cx| this.open_page(Page::Git, cx)))
+            .on_action(cx.listener(|this, _: &RunDiagnostics, _, cx| this.open_diagnostics(cx)))
             .on_action(cx.listener(|this, _: &OpenPlugins, _, cx| this.open_page(Page::Plugins, cx)))
             // The Edit menu's ⌘C / ⌘V / ⌘A land here when no terminal is focused; a page in the
             // in-app browser still needs them, since a menu key equivalent never reaches it.
@@ -3244,17 +3416,17 @@ impl Render for Workbench {
             .on_action(|_: &OpenPrivacyPolicy, _, cx| cx.open_url(update::PRIVACY_URL))
             .on_action(|_: &OpenTerms, _, cx| cx.open_url(update::TERMS_URL))
             .on_action(|_: &OpenEula, _, cx| cx.open_url(update::EULA_URL))
-            .on_action(cx.listener(|this, _: &GoToTab1, window, cx| this.activate_tab(0, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab2, window, cx| this.activate_tab(1, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab3, window, cx| this.activate_tab(2, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab4, window, cx| this.activate_tab(3, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab5, window, cx| this.activate_tab(4, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab6, window, cx| this.activate_tab(5, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab7, window, cx| this.activate_tab(6, window, cx)))
-            .on_action(cx.listener(|this, _: &GoToTab8, window, cx| this.activate_tab(7, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab1, window, cx| this.activate_visible_tab(0, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab2, window, cx| this.activate_visible_tab(1, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab3, window, cx| this.activate_visible_tab(2, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab4, window, cx| this.activate_visible_tab(3, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab5, window, cx| this.activate_visible_tab(4, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab6, window, cx| this.activate_visible_tab(5, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab7, window, cx| this.activate_visible_tab(6, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToTab8, window, cx| this.activate_visible_tab(7, window, cx)))
             .on_action(cx.listener(|this, _: &GoToTab9, window, cx| {
-                let last = this.workspaces.get(this.active_workspace).map_or(0, |w| w.tabs.len().saturating_sub(1));
-                this.activate_tab(last, window, cx)
+                let last = this.workspaces.get(this.active_workspace).map_or(0, |w| w.visible_tabs().len().saturating_sub(1));
+                this.activate_visible_tab(last, window, cx)
             }))
             .on_action(cx.listener(|this, _: &GoToWorkspace1, window, cx| this.activate_workspace(0, window, cx)))
             .on_action(cx.listener(|this, _: &GoToWorkspace2, window, cx| this.activate_workspace(1, window, cx)))
@@ -3405,6 +3577,8 @@ impl Render for Workbench {
             .when_some(self.picker.as_ref().map(|_| ()), |d, _| d.child(self.render_picker(cx)))
             .when_some(self.palette.as_ref().map(|_| ()), |d, _| d.child(self.render_palette(cx)))
             .children(self.render_tab_menu(cx))
+            .children(self.render_todo_menu(cx))
+            .children(self.render_pane_menu(cx))
             .children(self.render_tree_menu(cx))
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
@@ -3412,8 +3586,10 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_webview_setup_dialog(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_remote_password_dialog(window, cx))
             .children(self.render_tree_remove_confirm(cx))
             .children(self.render_ask(cx))
+            .children(self.render_diagnostics(cx))
             .children(self.render_rename_dialog(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_tasks_dialog(cx))
@@ -3506,8 +3682,17 @@ impl Workbench {
         Some(
             // Spans the window so a long message wraps at its left edge instead of running off it; a short one
             // keeps its own width, right-aligned as before.
-            div().absolute().top(px(chrome::TITLE_BAR_HEIGHT + 44.)).left(px(16.)).right(px(16. + docked)).flex().justify_end().child(
-                crate::ui::fade_in(
+            // A column aligned right: its width is fit to the text and never more than the window's,
+            // where a row let a long one run off the left edge.
+            div()
+                .absolute()
+                .top(px(chrome::TITLE_BAR_HEIGHT + 44.))
+                .left(px(16.))
+                .right(px(16. + docked))
+                .flex()
+                .flex_col()
+                .items_end()
+                .child(crate::ui::fade_in(
                     SharedString::from(format!("toast-{id}")),
                     div()
                         .min_w_0()
@@ -3525,7 +3710,7 @@ impl Workbench {
                         .text_color(hex(Chrome::BRIGHT))
                         .child(crate::ui::icon("circle-check", crate::ui::IconSize::INLINE, hex(Chrome::SUCCESS)))
                         // A long message (a translation, a path) wraps instead of running off the window.
-                        .child(div().min_w_0().child(text))
+                        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
                         // Closes it now instead of waiting out its timer.
                         .child(
                             div()
@@ -3540,8 +3725,7 @@ impl Workbench {
                                     cx.notify();
                                 })),
                         ),
-                ),
-            ),
+                )),
         )
     }
 
@@ -3571,7 +3755,7 @@ impl Workbench {
 
     /// Pages next to which the workspace list stays useful.
     pub(super) fn page_keeps_sidebar(page: Page) -> bool {
-        matches!(page, Page::Flow | Page::Git)
+        matches!(page, Page::Flow | Page::Git | Page::Board)
     }
 
     fn open_page(&mut self, page: Page, cx: &mut Context<Self>) {
@@ -3580,15 +3764,16 @@ impl Workbench {
             Page::Flow => "flow",
             Page::Usage => "usage",
             Page::Processes => "processes",
-            Page::Proxy => "proxy",
             Page::Worktrees => "worktrees",
             Page::Disk => "disk",
             Page::Browsers => "browsers",
             Page::Settings => "settings",
             Page::Extensions => "extensions",
             Page::Plugins => "plugins",
+            Page::Remote => "remote",
             Page::Idea => "idea",
             Page::Database => "database",
+            Page::Board => "board",
         };
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": feature }));
         self.page = if self.page == Some(page) { None } else { Some(page) };
@@ -3725,6 +3910,14 @@ pub fn other_agent(agent: Agent) -> Agent {
 /// How a saved pane comes back: resuming its session only if no other terminal here does already.
 /// Two agents on one transcript write over each other — a synced session continued in a new tab
 /// next to the one it came from, or two Codex panes that were both given the newest rollout.
+/// A pane of a chat tab comes back as what it was: a reviewer (by its title) still cannot edit.
+fn chat_spec(mut spec: LaunchSpec, chat: bool) -> LaunchSpec {
+    if chat && spec.title.starts_with(chat_team::REVIEW_PREFIX) {
+        spec.read_only = true;
+    }
+    spec
+}
+
 fn restored_spec(pane: &PaneSnapshot, claimed: &mut HashSet<String>) -> LaunchSpec {
     let spec = pane.launch_spec();
     match &spec.start {
@@ -3850,10 +4043,6 @@ impl Workbench {
                     .collect();
                 let listeners: Vec<(u64, Vec<u16>)> =
                     self.servers.listeners.iter().map(|(pane, l)| (*pane, l.iter().map(|l| l.port).collect())).collect();
-                let records: Vec<serde_json::Value> = crate::capture::records()
-                    .iter()
-                    .map(|r| serde_json::json!({ "pane": r.pane, "method": r.method, "endpoint": r.endpoint(), "path": r.path, "status": r.status, "sent": r.sent, "received": r.received, "open": r.duration_ms.is_none(), "error": r.error }))
-                    .collect();
                 eprintln!(
                     "probe: {}",
                     serde_json::json!({
@@ -3867,7 +4056,6 @@ impl Workbench {
                         "db": self.db.debug_state(),
                         "chatNotify": self.chat_notify.debug_state(),
                         "sync": self.sync.debug_state(),
-                        "capture": { "recording": crate::capture::is_recording(), "port": crate::capture::port(), "records": records },
                         "toast": self.toast.as_ref().map(|(text, _)| text.to_string()),
                         "plugins": {
                             "panel": self.plugin_panel,
@@ -3885,12 +4073,6 @@ impl Workbench {
                     })
                 );
             }
-            "capture" => match argument {
-                "stop" => crate::capture::stop(),
-                _ => {
-                    let _ = crate::capture::start();
-                }
-            },
             "edit" => self.debug_editor("edit", argument, window, cx),
             "editor" => {
                 let (command, argument) = argument.split_once(' ').unwrap_or((argument, ""));
@@ -3901,6 +4083,8 @@ impl Workbench {
             "docker" => self.debug_docker(argument, window, cx),
             "db" => self.debug_db(argument, window, cx),
             "chat-notify" => self.debug_chat_notify(argument, cx),
+            "remote" => self.debug_remote(argument, window, cx),
+            "diagnose" => self.debug_diagnose(argument, cx),
             "sync" => self.debug_sync(argument, window, cx),
             "backup" => self.debug_backup(argument, window, cx),
             "files" => match argument {
@@ -3912,15 +4096,16 @@ impl Workbench {
                     "flow" => Some(Page::Flow),
                     "usage" => Some(Page::Usage),
                     "processes" => Some(Page::Processes),
-                    "proxy" => Some(Page::Proxy),
                     "worktrees" => Some(Page::Worktrees),
                     "disk" => Some(Page::Disk),
                     "browsers" => Some(Page::Browsers),
                     "settings" => Some(Page::Settings),
                     "extensions" => Some(Page::Extensions),
                     "plugins" => Some(Page::Plugins),
+                    "remote" => Some(Page::Remote),
                     "idea" => Some(Page::Idea),
                     "db" => Some(Page::Database),
+                    "board" if settings(cx).board.enabled => Some(Page::Board),
                     "git" => Some(Page::Git),
                     _ => None,
                 };
@@ -4089,6 +4274,32 @@ impl Workbench {
                 }
             }
             "tab-menu" => self.open_tab_menu(argument.parse().unwrap_or(0), gpui::point(gpui::px(420.), gpui::px(60.)), cx),
+            // `subagents <session id>`: the active pane follows that Claude session and opens its
+            // subagents panel, without starting an agent (to look at a finished session's runs).
+            "subagents" => {
+                if let Some(pane) = self.active_pane() {
+                    let id = argument.trim().to_string();
+                    pane.update(cx, |view, _| {
+                        view.subagent_files = agentty_bridge::claude::subagent_activity(&id);
+                        view.session_id_live = Some(id);
+                    });
+                    self.toggle_agent_panel(&pane, agent_panel::PanelTab::Agents, cx);
+                }
+            }
+            "subagent-select" => self.select_subagent(argument.trim(), cx),
+            "subagent-popout" => self.pop_out_subagents(cx),
+            "subagent-top" => {
+                if let Some(panel) = self.subagents_shown() {
+                    eprintln!("subagent-top: offset={:?} max={:?}", panel.scroll.offset(), panel.scroll.max_offset());
+                    let y = argument.parse::<f32>().unwrap_or(0.);
+                    panel.scroll.set_offset(gpui::point(gpui::px(0.), gpui::px(-y)));
+                    // `subagent-top open`: every step opened, to look at outputs and changes.
+                    if argument == "open" {
+                        panel.expanded.extend(0..2_000);
+                    }
+                }
+                cx.notify();
+            }
             "resume-here" => {
                 if let Some(pane) = self.active_pane() {
                     let dir = pane.read(cx).display_cwd();
@@ -4242,6 +4453,16 @@ impl Workbench {
             "agentty-link" => self.open_agentty_link(argument, window, cx),
             // `plugin-panel <id>` / `plugin-command <id> <command>`.
             "plugin-panel" => self.toggle_plugin(argument, window, cx),
+            // `plugin-group`: opens or closes the activity bar's list of grouped plugins.
+            "plugin-group" => {
+                self.plugin_group_menu = !self.plugin_group_menu;
+                cx.notify();
+            }
+            // `plugin-pin-menu <id>`: the right-click menu of a plugin's activity-bar item.
+            "plugin-pin-menu" => {
+                self.plugin_pin_menu = Some((argument.to_string(), gpui::point(px(60.), px(560.))));
+                cx.notify();
+            }
             "plugin-command" => {
                 if let Some((plugin, command)) = argument.split_once(' ') {
                     self.run_plugin_command(plugin, command, None, cx);
@@ -4559,10 +4780,34 @@ impl Workbench {
                     self.toggle_zoom(&pane, window, cx);
                 }
             }
+            // `todo park <tab>` / `todo pane` (the active pane) / `todo unpark <tab>` / `todo menu` /
+            // `todo pane-menu`.
+            "todo" => {
+                let (action, index) = argument.split_once(' ').unwrap_or((argument, "0"));
+                let index = index.parse().unwrap_or(0);
+                match action {
+                    "park" => self.park_tab(index, window, cx),
+                    "unpark" => self.unpark_tab(index, window, cx),
+                    "pane" => {
+                        if let Some(pane) = self.active_pane() {
+                            self.park_pane(&pane, window, cx);
+                        }
+                    }
+                    "menu" => self.todo_menu = Some(gpui::point(gpui::px(60.), gpui::px(80.))),
+                    "pane-menu" => {
+                        if let Some(pane) = self.active_pane() {
+                            self.open_pane_menu(pane, gpui::point(gpui::px(420.), gpui::px(90.)), cx);
+                        }
+                    }
+                    _ => {}
+                }
+                cx.notify();
+            }
             "layout" => {
                 for ws in &self.workspaces {
                     let panes: Vec<usize> = ws.tabs.iter().map(|t| t.root.leaves().len()).collect();
-                    eprintln!("layout: ws={} tabs={panes:?} active_tab={}", ws.id, ws.active_tab);
+                    let todo: Vec<bool> = ws.tabs.iter().map(|t| t.todo).collect();
+                    eprintln!("layout: ws={} tabs={panes:?} todo={todo:?} active_tab={}", ws.id, ws.active_tab);
                 }
                 eprintln!("layout: confirm={}", self.close_confirm.is_some());
             }
@@ -4592,6 +4837,9 @@ impl Workbench {
                 view.update(cx, |view, cx| view.debug_action(argument, cx));
             }
             "launch" => self.open_launch(cx),
+            // `chat <folder>` opens a chat workspace; `chat send:<text>` sends from the composer of
+            // the chat in front, `chat terminal` flips its view, `chat state` prints it.
+            "chat" => self.debug_chat(argument, window, cx),
             "type" => {
                 if let Some(pane) = self.active_pane() {
                     let bytes = crate::debug::unescape(argument).into_bytes();

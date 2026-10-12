@@ -39,14 +39,20 @@ The AI processes running on your machine right now, with what started them. Usef
 
 ## Proxy
 
-A capture proxy that lists what your tabs talk to: start capture, open a tab, filter by endpoint.
+The proxy is now a plugin. **Proxy Capture** lists what your tabs and AI sessions talk to: start capture, open a tab, filter by text, tab or endpoint. Install it from **Plugins → Install from Git** with `https://github.com/empty-user77/agentty-proxy-capture` (it needs Node.js 18 or newer). Its eye icon is in the tab strip at the top right, and its panel opens docked on the right, beside the terminals.
 
-- Tabs opened **while capture is on** are routed through a proxy running on your own machine.
+Terminals and AI sessions opened **while capture is on** are routed through a proxy running on your own machine. **Apply to open terminals** does the same for shells that are already open.
+
+Capture works in one of two scopes:
+
+- **Terminal scope** (default): the terminals opened while capture is on — AI sessions or plain shells — and the ones you applied it to. Capture stops by itself once all of them are closed.
+- **Workspace scope** (**Capture all work in this workspace**): every terminal of the workspace in front, open shells included, and only its connections are listed. Capture stops by itself when the workspace is closed or deleted. AI sessions that were already open have to be restarted to be captured.
+
 - HTTPS stays encrypted. Only the host, port, byte counts and timing are recorded — no certificate is installed and nothing is decrypted.
-- For plain HTTP, the method, path and status are recorded, never headers or bodies.
-- Records live in memory, are limited in number, are never written to disk, and disappear when Agentty quits.
+- For plain HTTP, the method, path and status are recorded. Headers are recorded only when you turn on header recording, and credentials in them are shown as `***`.
+- Records live in memory, are never written to disk, and disappear when the plugin stops.
 
-Stopping capture stops the recording. Tabs that were given the proxy keep using it so they don't lose their network.
+Stopping capture stops the recording. Terminals that were given the proxy keep using it so they don't lose their network.
 
 ## Worktrees
 

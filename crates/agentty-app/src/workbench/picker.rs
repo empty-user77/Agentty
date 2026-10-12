@@ -157,8 +157,8 @@ impl Workbench {
                     picker.selected = 0;
                     picker.error = None;
                 }
-                TextInputEvent::Up => picker.selected = picker.selected.saturating_sub(1),
-                TextInputEvent::Down => picker.selected = (picker.selected + 1).min(count.saturating_sub(1)),
+                TextInputEvent::Up | TextInputEvent::Previous => picker.selected = picker.selected.saturating_sub(1),
+                TextInputEvent::Down | TextInputEvent::Next => picker.selected = (picker.selected + 1).min(count.saturating_sub(1)),
                 TextInputEvent::Confirmed => {
                     // Enter opens a typed path or the highlighted folder; "Select" starts.
                     let typed = looks_like_path(&query).then(|| expand(&query)).flatten();

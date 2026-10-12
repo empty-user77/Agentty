@@ -268,3 +268,25 @@ fn an_import_never_writes_a_connector_host_binding_from_the_file() {
     assert!(!importable(&secret("some.other.service", "linear"), &ids));
     assert!(importable(&secret(DATABASE_SERVICE, "d1"), &ids));
 }
+
+#[test]
+fn the_jira_token_never_travels_with_the_settings() {
+    let dir = temp_dir("jira");
+    sample(&dir);
+    write(
+        &dir,
+        "settings.json",
+        &json!({"settingsVersion": 6, "board": {"enabled": true, "jira": {"enabled": true, "site": "https://team.atlassian.net", "email": "someone@example.com", "jql": "assignee = currentUser()"}}}),
+    );
+    let token = "placeholder-jira-token";
+    let read = |service: &str, _: &str| -> Option<String> { service.starts_with(crate::jira::KEYCHAIN_SERVICE).then(|| token.to_string()) };
+    for scope in [Scope::Full, Scope::Sync] {
+        let bundle = collect_from(&dir, scope, Some("pw"), "0.0.0", &read).unwrap();
+        assert!(!serde_json::to_string(&bundle).unwrap().contains(token));
+        if let Some(sealed) = bundle.secrets.as_ref() {
+            let plain = crypto::open("pw", sealed).unwrap();
+            assert!(!String::from_utf8_lossy(&plain).contains(token));
+        }
+    }
+    let _ = fs::remove_dir_all(dir);
+}

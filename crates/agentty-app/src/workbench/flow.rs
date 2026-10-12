@@ -876,6 +876,7 @@ impl Workbench {
                             if let Some((w, tab)) = this.locate(&jump) {
                                 this.activate_workspace(w, window, cx);
                                 this.workspaces[w].active_tab = tab;
+                                this.workspaces[w].tabs[tab].todo = false;
                                 this.workspaces[w].tabs[tab].active = jump.clone();
                                 this.focus_pane(&jump, window, cx);
                             }
@@ -891,6 +892,7 @@ impl Workbench {
                         if let Some((w, tab)) = this.locate(&body_jump) {
                             this.activate_workspace(w, window, cx);
                             this.workspaces[w].active_tab = tab;
+                            this.workspaces[w].tabs[tab].todo = false;
                             this.workspaces[w].tabs[tab].active = body_jump.clone();
                             this.focus_pane(&body_jump, window, cx);
                         }

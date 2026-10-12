@@ -14,7 +14,27 @@ use crate::theme::{hex, hex_alpha, Chrome};
 
 actions!(
     text_input,
-    [Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Paste, Cut, Copy, Confirm, Cancel, MoveUp, MoveDown]
+    [
+        Backspace,
+        Delete,
+        Left,
+        Right,
+        SelectLeft,
+        SelectRight,
+        SelectAll,
+        Home,
+        End,
+        Paste,
+        Cut,
+        Copy,
+        Confirm,
+        Cancel,
+        MoveUp,
+        MoveDown,
+        NextField,
+        PreviousField,
+        NewLine
+    ]
 );
 
 const CONTEXT: &str = "TextInput";
@@ -34,7 +54,10 @@ pub fn bind_keys(cx: &mut App) {
         crate::key("home", Home, Some(CONTEXT)),
         crate::key("end", End, Some(CONTEXT)),
         crate::key("enter", Confirm, Some(CONTEXT)),
+        crate::key("shift-enter", NewLine, Some(CONTEXT)),
         crate::key("escape", Cancel, Some(CONTEXT)),
+        crate::key("tab", NextField, Some(CONTEXT)),
+        crate::key("shift-tab", PreviousField, Some(CONTEXT)),
         crate::key("up", MoveUp, Some(CONTEXT)),
         crate::key("down", MoveDown, Some(CONTEXT)),
     ]);
@@ -44,6 +67,9 @@ pub enum TextInputEvent {
     Changed,
     Confirmed,
     Cancelled,
+    /// Tab and Shift+Tab: the form moves to its next or previous field.
+    Next,
+    Previous,
     Blurred,
     Up,
     Down,
@@ -70,12 +96,18 @@ pub struct TextInput {
     keep_pasted_lines: bool,
     /// Rows shown when the field holds many lines; 0 is the usual one-line field.
     rows: usize,
+    /// A message composer: Enter sends (Confirmed) and Shift+Enter adds a line.
+    enter_sends: bool,
     /// First line drawn, when the text is taller than `rows`.
     scroll_line: usize,
     /// Each visible line of the last paint: where it starts in the content, and its layout.
     last_lines: Vec<(usize, ShapedLine)>,
     /// Right-click menu, at the position it was opened.
     menu_at: Option<Point<Pixels>>,
+    /// Syntax colors of a text area (byte range, color), for the text it holds now.
+    colors: std::rc::Rc<Vec<(Range<usize>, u32)>>,
+    /// Blinking of the caret while the field has focus.
+    blink: crate::caret_blink::CaretBlink,
     _blur: Option<gpui::Subscription>,
 }
 
@@ -95,7 +127,10 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        let blur = cx.on_blur(&focus_handle, window, |_, _, cx| cx.emit(TextInputEvent::Blurred));
+        let blur = cx.on_blur(&focus_handle, window, |this, _, cx| {
+            this.blink.stop();
+            cx.emit(TextInputEvent::Blurred)
+        });
         let content: SharedString = content.into();
         let len = content.len();
         Self {
@@ -112,9 +147,12 @@ impl TextInput {
             masked: false,
             keep_pasted_lines: false,
             rows: 0,
+            enter_sends: false,
             scroll_line: 0,
             last_lines: Vec::new(),
             menu_at: None,
+            colors: std::rc::Rc::default(),
+            blink: Default::default(),
             _blur: Some(blur),
         }
     }
@@ -140,6 +178,14 @@ impl TextInput {
     /// keeps its line breaks. One row or none is the usual single-line field.
     pub fn multiline(mut self, rows: usize) -> Self {
         self.rows = rows;
+        self
+    }
+
+    /// A field of `rows` lines where Enter sends what was written (Confirmed) and Shift+Enter starts
+    /// a new line, as in a chat.
+    pub fn composer(mut self, rows: usize) -> Self {
+        self.rows = rows;
+        self.enter_sends = true;
         self
     }
 
@@ -194,6 +240,33 @@ impl TextInput {
 
     pub fn text(&self) -> &str {
         &self.content
+    }
+
+    /// Colors a text area's text (code, JSON); the same list again changes nothing.
+    pub fn set_colors(&mut self, colors: std::rc::Rc<Vec<(Range<usize>, u32)>>, cx: &mut Context<Self>) {
+        if !std::rc::Rc::ptr_eq(&self.colors, &colors) {
+            self.colors = colors;
+            cx.notify();
+        }
+    }
+
+    /// Where the caret is, in bytes.
+    pub fn cursor(&self) -> usize {
+        self.cursor_offset()
+    }
+
+    /// Puts `text` in place of `range` (bytes) and the caret after it: a suggestion picked.
+    pub fn replace_range(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
+        let end = range.end.min(self.content.len());
+        let start = range.start.min(end);
+        if !self.content.is_char_boundary(start) || !self.content.is_char_boundary(end) {
+            return;
+        }
+        self.content = (self.content[..start].to_owned() + text + &self.content[end..]).into();
+        self.selected_range = start + text.len()..start + text.len();
+        self.marked_range = None;
+        cx.emit(TextInputEvent::Changed);
+        cx.notify();
     }
 
     /// Gives this field the keyboard and selects what is in it (⌘L in the browser's address bar).
@@ -334,6 +407,16 @@ impl TextInput {
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
         cx.notify()
+    }
+
+    /// Whether the caret is drawn in this frame: blinking while focused, solid right after the
+    /// caret moved or the text changed.
+    fn caret_visible(&mut self, focused: bool, cx: &mut Context<Self>) -> bool {
+        let key = (self.selected_range.clone(), self.content.len(), self.marked_range.clone());
+        let mut blink = std::mem::take(&mut self.blink);
+        let visible = blink.update(focused, key, cx, |input: &mut TextInput| &mut input.blink);
+        self.blink = blink;
+        visible
     }
 
     fn cursor_offset(&self) -> usize {
@@ -695,14 +778,16 @@ impl Element for TextElement {
             window.paint_quad(selection);
         }
         let line_height = window.line_height();
-        let focused = focus_handle.is_focused(window);
+        // An inactive window has no blinking caret (like native fields); activation repaints.
+        let focused = focus_handle.is_focused(window) && window.is_window_active();
         if !prepaint.lines.is_empty() {
             let lines = std::mem::take(&mut prepaint.lines);
             for (index, (_, line)) in lines.iter().enumerate() {
                 let origin = point(bounds.origin.x, bounds.origin.y + line_height * index as f32);
                 let _ = line.paint(origin, line_height, window, cx);
             }
-            if focused {
+            let caret = self.input.update(cx, |input, cx| input.caret_visible(focused, cx));
+            if caret {
                 if let Some(cursor) = prepaint.cursor.take() {
                     window.paint_quad(cursor);
                 }
@@ -715,7 +800,8 @@ impl Element for TextElement {
         }
         let Some(line) = prepaint.line.take() else { return };
         let _ = line.paint(bounds.origin, line_height, window, cx);
-        if focused {
+        let caret = self.input.update(cx, |input, cx| input.caret_visible(focused, cx));
+        if caret {
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);
             }
@@ -734,6 +820,7 @@ impl TextElement {
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = window.line_height();
+        let colors = self.input.read(cx).colors.clone();
         let (content, selected_range, cursor, rows, placeholder) = {
             let input = self.input.read(cx);
             let placeholder = input
@@ -800,7 +887,29 @@ impl TextElement {
                 continue;
             }
             let row_text = &text[start..end];
-            let shaped = shape(window, row_text);
+            let shaped = if placeholder.is_none() && !colors.is_empty() {
+                // The row in its syntax colors: runs cut where the colored stretches begin and end.
+                let mut runs = Vec::new();
+                let mut at = start;
+                let mut push = |len: usize, color| {
+                    if len > 0 {
+                        runs.push(TextRun { len, font: style.font(), color, background_color: None, underline: None, strikethrough: None });
+                    }
+                };
+                for (range, rgb) in colors.iter().filter(|(r, _)| r.end > start && r.start < end) {
+                    let (from, to) = (range.start.max(start), range.end.min(end));
+                    if from < at || !text.is_char_boundary(from) || !text.is_char_boundary(to) {
+                        continue;
+                    }
+                    push(from - at, style.color);
+                    push(to - from, hex(*rgb));
+                    at = to;
+                }
+                push(end - at, style.color);
+                window.text_system().shape_line(SharedString::from(row_text.to_string()), font_size, &runs, None)
+            } else {
+                shape(window, row_text)
+            };
             let top = bounds.top() + line_height * (index - scroll) as f32;
             if placeholder.is_none() {
                 if selected_range.is_empty() {
@@ -909,6 +1018,9 @@ impl Render for TextInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
+            // Lines are cut to the field's width: a text area as wide as its own content had
+            // none in some places (a card in a grid) and wrapped a letter a line.
+            .when(self.is_multiline(), |d| d.w_full())
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
@@ -926,14 +1038,21 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::copy))
             // In a field of many lines Enter adds one, and Up and Down walk through them; in a
             // one-line field they mean what they always did to whoever owns it.
-            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+            .on_action(cx.listener(|this, _: &NewLine, window, cx| {
                 if this.is_multiline() {
+                    this.replace_text_in_range(None, "\n", window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+                if this.is_multiline() && !this.enter_sends {
                     this.replace_text_in_range(None, "\n", window, cx);
                 } else {
                     cx.emit(TextInputEvent::Confirmed);
                 }
             }))
             .on_action(cx.listener(|_, _: &Cancel, _, cx| cx.emit(TextInputEvent::Cancelled)))
+            .on_action(cx.listener(|_, _: &NextField, _, cx| cx.emit(TextInputEvent::Next)))
+            .on_action(cx.listener(|_, _: &PreviousField, _, cx| cx.emit(TextInputEvent::Previous)))
             .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
                 if this.is_multiline() {
                     this.move_line(false, false, cx);

@@ -183,9 +183,15 @@ pub enum SocketMessage {
     /// `tasks\t{"cwd":…,"tasks":[…]}` from `agentty tasks`: an agent asks to start work in parallel
     /// sessions; answered on `reply` once the user said yes or no.
     Tasks(TasksRequest),
+    /// `tasksctl\t{"action":"status"|"send",…}` from `agentty tasks status|send`: a chat's lead
+    /// asks about its workers or sends one a message; answered on `reply`.
+    TasksCtl(TasksCtlRequest),
     /// `db\t{"cwd":…,"action":…}` from `agentty db`: an agent reads a project database, or asks to
     /// change it; answered on `reply` (writes only after the user approved the exact statement).
     Db(DbRequest),
+    /// `plugins\t{"action":"list"|"call",…}` from `agentty mcp-plugins`: an agent lists or calls
+    /// the tools plugins offer; answered on `reply` once the plugin answered.
+    Plugins(PluginsRequest),
     /// `debug\t<command>\t<argument>`; only accepted when `AGENTTY_DEBUG=1`.
     Debug(String, String),
     /// `open\t["agentty://…", "/folder", …]` from a second launch (Windows / Linux single instance).
@@ -299,6 +305,64 @@ pub struct TasksRequest {
     pub tasks: Vec<TaskSpec>,
     /// One JSON line, as [`browser_reply`] makes it.
     pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// An agent lists or calls the tools plugins offer (`agentty mcp-plugins`).
+#[derive(Debug, Clone)]
+pub struct PluginsRequest {
+    /// The pane the connection belongs to (the asking agent).
+    pub pane: u64,
+    /// `{"action": "list"}` or `{"action": "call", "plugin": …, "tool": …, "arguments": {…}}`.
+    pub args: serde_json::Value,
+    /// One JSON line, as [`browser_reply`] makes it.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// What a chat's lead asks about one of its workers, or all of them (`agentty tasks status|send|
+/// result|stop|review`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TasksCtl {
+    pub action: String,
+    /// The worker's title (every action but `status`).
+    pub to: String,
+    /// The message (`send`), or what a reviewer should look at (`review`, optional).
+    pub prompt: String,
+    /// `claude` or `codex` for a reviewer (`review`, optional: the chat's choice otherwise).
+    pub agent: Option<String>,
+}
+
+/// A [`TasksCtl`] from a pane, answered on `reply`.
+#[derive(Debug, Clone)]
+pub struct TasksCtlRequest {
+    /// The pane the connection belongs to (the asking agent).
+    pub pane: u64,
+    pub ctl: TasksCtl,
+    /// One JSON line, as [`browser_reply`] makes it.
+    pub reply: std::sync::mpsc::Sender<String>,
+}
+
+/// Parses a `tasksctl` request and checks it: a known action, the worker it names, bounded sizes.
+pub fn parse_tasks_ctl(value: &serde_json::Value) -> Result<TasksCtl, String> {
+    let action = value["action"].as_str().unwrap_or_default().to_string();
+    let to: String = value["to"].as_str().unwrap_or_default().chars().filter(|c| !c.is_control()).collect();
+    let to = to.trim().to_string();
+    let prompt = value["prompt"].as_str().unwrap_or_default().to_string();
+    let agent = value["agent"].as_str().map(str::to_lowercase);
+    if to.chars().count() > MAX_TITLE || prompt.chars().count() > MAX_PROMPT {
+        return Err(format!("the title is at most {MAX_TITLE} characters and the prompt at most {MAX_PROMPT}"));
+    }
+    if agent.as_deref().is_some_and(|a| !is_agent_label(a)) {
+        return Err("agent must be claude or codex".into());
+    }
+    match action.as_str() {
+        "status" => {}
+        "send" if to.is_empty() || prompt.trim().is_empty() => return Err("send needs --to <title> and --prompt <text>".into()),
+        "result" | "stop" if to.is_empty() => return Err(format!("{action} needs --to <title>")),
+        "review" if to.is_empty() => return Err("review needs --worker <title>".into()),
+        "send" | "result" | "stop" | "review" => {}
+        _ => return Err("unknown action (status, send, result, stop or review)".into()),
+    }
+    Ok(TasksCtl { action, to, prompt, agent })
 }
 
 /// An agent asks something of a database of its project (`agentty db`).
@@ -486,8 +550,9 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 return;
             }
             // Creating a tree is a `git worktree add`: seconds at most. When the user is asked which
-            // tree to use, a first line says so and the answer takes as long as they do.
-            let mut wait = Duration::from_secs(30);
+            // tree to use, a first line says so and the answer takes up to `ASK_WAIT` (the dialog
+            // closes then), plus the tree for a late "new worktree".
+            let mut wait = TREE_WAIT;
             loop {
                 let response = answer.recv_timeout(wait).unwrap_or_else(|_| browser_reply(Err("timed out".into())));
                 if let Some(writer) = writer.as_mut() {
@@ -497,7 +562,7 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 if !is_asking(&response) {
                     break;
                 }
-                wait = ASK_WAIT;
+                wait = ASK_WAIT + TREE_WAIT;
             }
             continue;
         }
@@ -524,6 +589,24 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
             }
             continue;
         }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("tasksctl\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let response = match parse_tasks_ctl(&request) {
+                Ok(ctl) => {
+                    let (reply, answer) = std::sync::mpsc::channel();
+                    if tx.unbounded_send(SocketMessage::TasksCtl(TasksCtlRequest { pane, ctl, reply })).is_err() {
+                        return;
+                    }
+                    answer.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| browser_reply(Err("timed out".into())))
+                }
+                Err(error) => browser_reply(Err(error)),
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
         if let (Some(json), Some(pane)) = (line.strip_prefix("db\t"), pane) {
             let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
             let cwd = std::path::PathBuf::from(request["cwd"].as_str().unwrap_or_default());
@@ -536,6 +619,26 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
                 answer
                     .recv_timeout(Duration::from_secs(15 * 60))
                     .unwrap_or_else(|_| browser_reply(Err("no answer in time (a write needs the user's approval in Agentty)".into())))
+            } else {
+                browser_reply(Err("bad request".into()))
+            };
+            if let Some(writer) = writer.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(writer, "{response}");
+            }
+            continue;
+        }
+        if let (Some(json), Some(pane)) = (line.strip_prefix("plugins\t"), pane) {
+            let request: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let response = if matches!(request["action"].as_str(), Some("list" | "call")) {
+                let (reply, answer) = std::sync::mpsc::channel();
+                if tx.unbounded_send(SocketMessage::Plugins(PluginsRequest { pane, args: request, reply })).is_err() {
+                    return;
+                }
+                // The app gives up on a plugin after `plugins::mcp::CALL_TIMEOUT`; a little more here.
+                answer
+                    .recv_timeout(crate::plugins::mcp::CALL_TIMEOUT + Duration::from_secs(10))
+                    .unwrap_or_else(|_| browser_reply(Err("the plugin did not answer in time".into())))
             } else {
                 browser_reply(Err("bad request".into()))
             };
@@ -571,12 +674,27 @@ fn serve(stream: Stream, caller: Caller, debug: bool, tx: UnboundedSender<Socket
 }
 
 /// The agents a shell pane asks a working tree for (`label` of [`WorktreeRequest`]).
+/// Codex names a new session in a side conversation of its own, and reports that one finishing too:
+/// its "reply" is the name, as JSON (`{"title":"…"}`). That is not the end of the agent's turn.
+pub fn is_codex_titling(message: Option<&str>) -> bool {
+    let Some(message) = message.map(str::trim).filter(|m| m.starts_with('{')) else { return false };
+    serde_json::from_str::<serde_json::Value>(message)
+        .ok()
+        .and_then(|value| value.as_object().map(|object| object.len() == 1 && object.contains_key("title")))
+        .unwrap_or(false)
+}
+
 pub fn is_agent_label(label: &str) -> bool {
     matches!(label, "claude" | "codex")
 }
 
-/// How long an agent typed into a shell waits for the user to pick its working tree.
-const ASK_WAIT: Duration = Duration::from_secs(600);
+/// How long an agent typed into a shell waits for the user to pick its working tree. Without an
+/// answer by then (no dialog came up, or it was left open) the agent starts where it was typed,
+/// and the dialog closes.
+pub const ASK_WAIT: Duration = Duration::from_secs(30);
+
+/// How long creating a working tree may take (`git worktree add`).
+const TREE_WAIT: Duration = Duration::from_secs(30);
 
 /// A reply that only says the user is being asked; the real answer follows on the next line.
 fn is_asking(reply: &str) -> bool {
@@ -608,13 +726,10 @@ pub fn worktree_for(args: &[String]) -> i32 {
     let mut line = String::new();
     let _ = reader.read_line(&mut line);
     let mut reply: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
-    // Another agent already works here and the user is asked where this one goes: say so under
-    // the command, and wait for the choice (Agentty's own dialog), not for a machine.
+    // Another agent already works here and the user is asked where this one goes: wait for the
+    // choice (Agentty's own dialog), not for a machine.
     if reply["result"]["asking"] == true {
-        if let Some(message) = reply["result"]["message"].as_str() {
-            eprintln!("{message}");
-        }
-        let _ = reader.get_ref().set_read_timeout(Some(ASK_WAIT));
+        let _ = reader.get_ref().set_read_timeout(Some(ASK_WAIT + TREE_WAIT));
         line.clear();
         let _ = reader.read_line(&mut line);
         reply = serde_json::from_str(line.trim()).unwrap_or_default();
@@ -726,6 +841,20 @@ mod tests {
         let many: Vec<_> = (0..MAX_TASKS + 1).map(|i| serde_json::json!({ "title": format!("t{i}"), "prompt": "x" })).collect();
         assert!(parse_tasks(&serde_json::Value::Array(many)).is_err());
         assert!(parse_tasks(&serde_json::json!({ "title": "a" })).is_err());
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "status" })).is_ok());
+        assert!(is_codex_titling(Some(r#"{"title":"Review API due date"}"#)));
+        assert!(!is_codex_titling(Some(r#"{"title":"x","body":"y"}"#)));
+        assert!(!is_codex_titling(Some("Done: the title is fixed.")));
+        assert!(!is_codex_titling(None));
+        let send = parse_tasks_ctl(&serde_json::json!({ "action": "send", "to": " API\n", "prompt": "go on" })).unwrap();
+        assert_eq!((send.to.as_str(), send.prompt.as_str()), ("API", "go on"));
+        let review = parse_tasks_ctl(&serde_json::json!({ "action": "review", "to": "API", "agent": "Codex" })).unwrap();
+        assert_eq!(review.agent.as_deref(), Some("codex"));
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "review", "to": "API", "agent": "sh" })).is_err());
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "stop" })).is_err());
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "result", "to": "API" })).is_ok());
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "send", "to": "API" })).is_err());
+        assert!(parse_tasks_ctl(&serde_json::json!({ "action": "rm" })).is_err());
     }
 
     #[test]

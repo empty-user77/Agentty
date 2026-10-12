@@ -262,6 +262,9 @@ pub struct TerminalView {
     spawned: bool,
     /// Input sent before the process started; flushed right after spawning.
     pending_input: Vec<Vec<u8>>,
+    /// Prompts for `submit_prompt` that wait for the previous one's Enter, and whether one is mid-send.
+    submit_queue: std::collections::VecDeque<String>,
+    submit_busy: bool,
     pub error: Option<String>,
     focus_handle: FocusHandle,
     marked_text: Option<String>,
@@ -315,6 +318,11 @@ pub struct TerminalView {
     pub last_activity_ms: u64,
     pub live_cwd: Option<PathBuf>,
     pub git_branch: Option<String>,
+    /// The size the remote page asked for while it shows this terminal (columns, lines); the
+    /// pane's own size again once it lets go.
+    pub remote_size: Option<(usize, usize)>,
+    /// The grid the pane itself last laid out, to go back to when the remote page lets go.
+    own_grid: Option<GridSize>,
     /// Name of the linked git worktree the pane works in (`None` in a project's own folder).
     pub worktree: Option<String>,
     /// The project folder the pane works in (the main working tree of the repository it last worked
@@ -428,6 +436,8 @@ impl TerminalView {
             backend: None,
             spawned: false,
             pending_input: Vec::new(),
+            submit_queue: Default::default(),
+            submit_busy: false,
             error: None,
             focus_handle: cx.focus_handle(),
             marked_text: None,
@@ -459,6 +469,8 @@ impl TerminalView {
             last_activity_ms: crate::ui::now_ms(),
             live_cwd: None,
             git_branch: None,
+            remote_size: None,
+            own_grid: None,
             worktree: None,
             project_dir: None,
             cwd_gone: false,
@@ -733,6 +745,149 @@ impl TerminalView {
                 (0..columns).map(|c| line[Column(c)].c).collect::<String>().trim_end().to_string()
             })
             .collect()
+    }
+
+    /// The live screen for the remote page (`crate::remote`): rows of styled runs in the colors
+    /// this pane is drawn in, whatever the user scrolled to here.
+    pub fn remote_screen(&self, theme: &TerminalTheme) -> Option<crate::remote::snapshot::Screen> {
+        use crate::remote::snapshot::{Run, Screen, BOLD, DIM, ITALIC, STRIKE, UNDERLINE, WIDE};
+        let backend = self.backend.as_ref()?;
+        let term = backend.term.lock();
+        let colors = term.colors();
+        let grid = term.grid();
+        let (rows, columns) = (grid.screen_lines(), grid.columns());
+        let rgb = |color: Hsla| {
+            let c = gpui::Rgba::from(color);
+            (((c.r * 255.).round() as u32) << 16) | (((c.g * 255.).round() as u32) << 8) | (c.b * 255.).round() as u32
+        };
+        let mut lines = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let line = &grid[Line(row as i32)];
+            let mut runs: Vec<Run> = Vec::new();
+            for col in 0..columns {
+                let cell = &line[Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let mut fg = resolve_color(cell.fg, colors, theme, cell.flags.contains(Flags::BOLD));
+                let mut bg = resolve_color(cell.bg, colors, theme, false);
+                if cell.flags.contains(Flags::INVERSE) {
+                    std::mem::swap(&mut fg, &mut bg);
+                }
+                let mut style = 0;
+                for (flag, bit) in [(Flags::BOLD, BOLD), (Flags::ITALIC, ITALIC), (Flags::STRIKEOUT, STRIKE), (Flags::WIDE_CHAR, WIDE)] {
+                    if cell.flags.contains(flag) {
+                        style |= bit;
+                    }
+                }
+                if cell.flags.intersects(Flags::ALL_UNDERLINES) {
+                    style |= UNDERLINE;
+                }
+                if cell.flags.contains(Flags::DIM) || fg.a < 1. {
+                    style |= DIM;
+                }
+                let (fg, bg) = (rgb(fg), rgb(bg));
+                let f = (fg != theme.foreground).then_some(fg);
+                let b = (bg != theme.background).then_some(bg);
+                let mut text = String::new();
+                text.push(if cell.c == '\0' { ' ' } else { cell.c });
+                if let Some(extra) = cell.zerowidth() {
+                    text.extend(extra.iter());
+                }
+                // Wide glyphs stay runs of their own so the page can give each two cells.
+                match runs.last_mut() {
+                    Some(last) if last.f == f && last.b == b && last.s == style && style & WIDE == 0 => last.t.push_str(&text),
+                    _ => runs.push(Run { t: text, f, b, s: style }),
+                }
+            }
+            // Trailing blank cells in the default style carry nothing.
+            if let Some(last) = runs.last_mut() {
+                if last.b.is_none() && last.s & UNDERLINE == 0 {
+                    let trimmed = last.t.trim_end_matches(' ').len();
+                    last.t.truncate(trimmed);
+                }
+            }
+            runs.retain(|r| !r.t.is_empty());
+            lines.push(runs);
+        }
+        let cursor = term.mode().contains(TermMode::SHOW_CURSOR).then(|| {
+            let point = grid.cursor.point;
+            (point.column.0 as u16, point.line.0.max(0) as u16)
+        });
+        Some(Screen { cols: columns as u16, rows: rows as u16, cursor, fg: theme.foreground, bg: theme.background, lines })
+    }
+
+    /// A key from the remote page, by its GPUI name: what the program gets is what typing it here
+    /// would send, and the pane's state follows the same way.
+    pub fn remote_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
+        self.note_key(keystroke, cx);
+        let printable = !keystroke.modifiers.control && !keystroke.modifiers.alt && keystroke.key.chars().count() == 1;
+        let bytes = if printable {
+            Some(keystroke.key.as_bytes().to_vec())
+        } else {
+            // Alt is Meta on the page (a phone has no Option key to type with).
+            keys::to_escape(keystroke, self.mode(), true, self.live_agent.is_some())
+        };
+        if let Some(bytes) = bytes {
+            self.marked_text = None;
+            self.write_user_input(bytes);
+            cx.notify();
+        }
+    }
+
+    /// What a key tells about the agent's state, before it reaches the program: Esc may interrupt
+    /// a turn, and Enter in Codex starts one.
+    fn note_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
+        if keystroke.key == "escape" && matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_))
+        {
+            self.esc_at = Some(Instant::now());
+        }
+        if keystroke.key == "enter" && self.agent_kind() == Some(PaneKind::Codex) && !keystroke.modifiers.shift {
+            // Codex has no "prompt submitted" hook; Enter is the best signal (the screen check
+            // corrects it within seconds if nothing started).
+            self.ask_gate.resume();
+            self.status = AgentStatus::Working;
+            self.working_since = Some(Instant::now());
+            self.quiet_ticks = 0;
+            cx.emit(TerminalEvent::StatusChanged);
+        }
+    }
+
+    /// Text typed on the remote page: as typed, line breaks as Return, other control characters
+    /// dropped (those come as keys).
+    pub fn remote_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let text: String =
+            text.replace("\r\n", "\r").replace('\n', "\r").chars().filter(|c| !c.is_control() || matches!(c, '\r' | '\t')).collect();
+        if !text.is_empty() {
+            self.marked_text = None;
+            self.write_user_input(text.into_bytes());
+            cx.notify();
+        }
+    }
+
+    /// The remote page shows this terminal at `size` (columns, lines), or lets go with `None`.
+    /// The grid changes at once, painted or not.
+    pub fn set_remote_size(&mut self, size: Option<(usize, usize)>, cx: &mut Context<Self>) {
+        if self.remote_size == size {
+            return;
+        }
+        self.remote_size = size;
+        if let Some(backend) = self.backend.as_mut() {
+            let current = backend.size();
+            // A pane never laid out yet (its workspace not shown) still has the size it started with.
+            if self.own_grid.is_none() {
+                self.own_grid = Some(current);
+            }
+            // A pane out of sight is not laid out again until shown, so it goes back at once.
+            let grid = match size {
+                Some((columns, lines)) => Some(GridSize { columns, lines, ..current }),
+                None => self.own_grid,
+            };
+            if let Some(grid) = grid {
+                backend.resize(grid);
+            }
+        }
+        cx.notify();
     }
 
     /// Corrects the hook-reported status with what the agent's screen shows. Hooks don't fire
@@ -1117,6 +1272,12 @@ impl TerminalView {
     }
 
     /// Title for tabs and lists: shell titles like `user@host:~/code` are shortened to the path.
+    /// The Claude Code session this pane's agent writes to now: the one its hooks named last (a
+    /// `/clear` starts another), else the one it was started or found with.
+    pub fn current_session(&self) -> Option<String> {
+        self.hook_session.clone().or_else(|| self.session_id_live.clone()).or_else(|| self.spec.session_id.clone())
+    }
+
     pub fn display_title(&self) -> String {
         let title = self.title.trim();
         let title = match title.split_once(':') {
@@ -1126,6 +1287,7 @@ impl TerminalView {
         // Agent CLIs put their own mark in front of the window title ("✳ Claude Code"). Next to
         // the logo it reads as two icons, so the mark goes.
         let title = strip_agent_mark(title);
+        let title = program_of_command_line(title).unwrap_or(title);
         if title.is_empty() {
             self.spec.title.clone()
         } else if title == "~" {
@@ -1193,6 +1355,11 @@ impl TerminalView {
                 cx.emit(TerminalEvent::StatusChanged);
                 cx.notify();
             }
+            return;
+        }
+        // Codex finishing the side conversation that names its session: the turn goes on, and that
+        // conversation (it has no transcript) is not the session this pane follows.
+        if kind == SignalKind::Stop && crate::agent_signal::is_codex_titling(message.as_deref()) {
             return;
         }
         self.last_activity_ms = crate::ui::now_ms();
@@ -1457,8 +1624,15 @@ impl TerminalView {
         self.write_user_input(bytes);
     }
 
-    /// Submits text to the program as if pasted and entered by the user.
+    /// Submits text to the program as if pasted and entered by the user. One at a time: a prompt
+    /// submitted while the previous one still waits for its Enter queues behind it, since a second
+    /// paste inside that window would merge into the same input.
     pub fn submit_prompt(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.submit_busy {
+            self.submit_queue.push_back(text);
+            return;
+        }
+        self.submit_busy = true;
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
         self.write_user_input(paste_payload(&text, bracketed));
         if self.agent_kind() == Some(PaneKind::Codex) {
@@ -1470,7 +1644,13 @@ impl TerminalView {
         // Give the TUI a moment to process the paste before pressing Enter.
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(200)).await;
-            let _ = this.update(cx, |view, _| view.write(b"\r".to_vec()));
+            let _ = this.update(cx, |view, cx| {
+                view.write(b"\r".to_vec());
+                view.submit_busy = false;
+                if let Some(next) = view.submit_queue.pop_front() {
+                    view.submit_prompt(next, cx);
+                }
+            });
         })
         .detach();
     }
@@ -1598,19 +1778,7 @@ impl TerminalView {
                 return;
             }
         }
-        if keystroke.key == "escape" && matches!(self.status, AgentStatus::Working | AgentStatus::Permission(_) | AgentStatus::Question(_))
-        {
-            self.esc_at = Some(Instant::now());
-        }
-        if keystroke.key == "enter" && self.agent_kind() == Some(PaneKind::Codex) && !keystroke.modifiers.shift {
-            // Codex has no "prompt submitted" hook; Enter is the best signal (the screen check
-            // corrects it within seconds if nothing started).
-            self.ask_gate.resume();
-            self.status = AgentStatus::Working;
-            self.working_since = Some(Instant::now());
-            self.quiet_ticks = 0;
-            cx.emit(TerminalEvent::StatusChanged);
-        }
+        self.note_key(keystroke, cx);
         if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta, self.live_agent.is_some()) {
             // This key went to the program rather than to the input method, so whatever was being
             // composed is not what the program has. Drawing it on would put it over the text the
@@ -2225,6 +2393,12 @@ impl Element for TerminalElement {
             if !view.spawned {
                 view.spawn(grid, cx);
             }
+            // While the remote page is looking at this terminal, its size is the page's.
+            view.own_grid = Some(grid);
+            let grid = match view.remote_size {
+                Some((columns, lines)) => GridSize { columns, lines, ..grid },
+                None => grid,
+            };
             view.backend.as_mut().map(|backend| {
                 backend.resize(grid);
                 backend.term.clone()
@@ -2553,28 +2727,32 @@ impl Element for TerminalElement {
         let over_link = self.view.read(cx).hover_link.is_some();
         window.set_cursor_style(if over_link { CursorStyle::PointingHand } else { CursorStyle::IBeam }, &frame.hitbox);
 
-        window.paint_layer(bounds, |window| {
-            for quad in frame.backgrounds.drain(..) {
-                window.paint_quad(quad);
-            }
-            for (origin, line) in &frame.lines {
-                let _ = line.paint(*origin, frame.line_height, window, cx);
-            }
-            for quad in frame.decorations.drain(..) {
-                window.paint_quad(quad);
-            }
-            if let Some(cursor) = frame.cursor.take() {
-                window.paint_quad(cursor);
-            }
-            if let Some((origin, line)) = &frame.cursor_text {
-                let _ = line.paint(*origin, frame.line_height, window, cx);
-            }
-            if let Some((backdrop, glyphs)) = frame.marked.take() {
-                window.paint_quad(backdrop);
-                for (origin, line) in glyphs {
-                    let _ = line.paint(origin, frame.line_height, window, cx);
+        // Clipped to the pane: while the remote page sizes this terminal (`remote_size`), its grid
+        // can be larger than the pane, and must not spill over its neighbours.
+        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            window.paint_layer(bounds, |window| {
+                for quad in frame.backgrounds.drain(..) {
+                    window.paint_quad(quad);
                 }
-            }
+                for (origin, line) in &frame.lines {
+                    let _ = line.paint(*origin, frame.line_height, window, cx);
+                }
+                for quad in frame.decorations.drain(..) {
+                    window.paint_quad(quad);
+                }
+                if let Some(cursor) = frame.cursor.take() {
+                    window.paint_quad(cursor);
+                }
+                if let Some((origin, line)) = &frame.cursor_text {
+                    let _ = line.paint(*origin, frame.line_height, window, cx);
+                }
+                if let Some((backdrop, glyphs)) = frame.marked.take() {
+                    window.paint_quad(backdrop);
+                    for (origin, line) in glyphs {
+                        let _ = line.paint(origin, frame.line_height, window, cx);
+                    }
+                }
+            })
         });
     }
 }
@@ -2710,7 +2888,7 @@ mod session_claims {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_symbol_glyph, is_web_link};
+    use super::{is_symbol_glyph, is_web_link, program_of_command_line};
 
     #[test]
     fn opens_only_web_hyperlinks() {
@@ -2734,6 +2912,16 @@ mod tests {
         assert_eq!(shorten("ray@mac:~/code"), "~/code");
         assert_eq!(shorten("✳ Claude Code"), "✳ Claude Code");
         assert_eq!(shorten("vim: file.rs"), "vim: file.rs");
+    }
+
+    #[test]
+    fn command_chains_are_titled_by_their_program() {
+        assert_eq!(program_of_command_line("cd  && claude"), Some("claude"));
+        assert_eq!(program_of_command_line("cd /tmp/x && claude --resume"), Some("claude"));
+        assert_eq!(program_of_command_line("FOO=1 sudo /usr/bin/codex; true; ls"), Some("ls"));
+        assert_eq!(program_of_command_line("vim main.rs"), None);
+        assert_eq!(program_of_command_line("~/code"), None);
+        assert_eq!(program_of_command_line("cd  &&"), Some("cd"));
     }
 
     #[test]
@@ -2810,6 +2998,21 @@ mod screen_tests {
 /// bracketed paste early, so everything after it would arrive as real keystrokes and run — the same
 /// reason a clipboard paste strips them. Without bracketed paste the text is kept on one line, so it
 /// is never submitted by a newline of its own.
+/// A shell that titles its window with the command line just typed gives `cd <dir> && claude`
+/// (and, with the path stripped, `cd  && claude`): what names the tab is the program that runs, so
+/// the last command of a chain is reduced to its program name (`claude`). Titles that are not a
+/// chain (`vim main.rs`, `~/code`) are left alone.
+pub fn program_of_command_line(title: &str) -> Option<&str> {
+    let last = title.rsplit(['&', ';', '|']).map(str::trim).find(|part| !part.is_empty())?;
+    if last.len() == title.len() {
+        return None;
+    }
+    // Leading `VAR=value` assignments and `sudo` / `env` are not the program.
+    let program = last.split_whitespace().find(|word| !word.contains('=') && !matches!(*word, "sudo" | "env" | "exec" | "command"))?;
+    let name = program.rsplit('/').next().unwrap_or(program);
+    (!name.is_empty()).then_some(name)
+}
+
 /// Drops a decorative glyph an agent CLI puts in front of its window title (`✳`, `✶`, `●` …).
 /// Letters, digits, `~`, `/` and quotes are titles, not marks, so they stay.
 pub fn strip_agent_mark(title: &str) -> &str {

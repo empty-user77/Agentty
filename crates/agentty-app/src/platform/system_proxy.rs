@@ -1,11 +1,9 @@
-//! Pointing the machine's own proxy settings at Agentty's capture proxy, so traffic from other
-//! apps — an external browser, anything using the system configuration — is listed too.
+//! What is left of "capture this Mac" now that capture is the Proxy Capture plugin: putting the
+//! machine's proxy settings back when an older Agentty was killed while it had pointed them at its
+//! own capture proxy. That Agentty wrote what each network service had to a file first; until that
+//! file is gone the machine may be pointed at a dead port, with no network at all.
 //!
-//! macOS only, through `networksetup`. What each network service had before is written to a file
-//! first and put back when capture stops, when Agentty quits, and on the next launch if Agentty
-//! was killed while it was on: the user must never be left with a proxy pointing at a dead port.
-//! Changing these settings needs administrator rights, so the call can fail — it is reported, not
-//! retried, and nothing is left half-applied.
+//! macOS only, through `networksetup`. The plugin keeps its own record and puts back its own.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -22,14 +20,10 @@ pub struct ServiceProxy {
     pub secure_port: u16,
 }
 
-/// The settings replaced while the machine is captured.
+/// The settings replaced while the machine was captured.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Previous {
     pub services: Vec<ServiceProxy>,
-}
-
-pub fn supported() -> bool {
-    cfg!(target_os = "macos")
 }
 
 fn state_file() -> PathBuf {
@@ -49,87 +43,11 @@ fn networksetup(args: &[&str]) -> std::io::Result<String> {
 
 #[cfg(not(target_os = "macos"))]
 fn networksetup(_: &[&str]) -> std::io::Result<String> {
-    Err(std::io::Error::other("only macOS can be captured this way"))
+    Err(std::io::Error::other("only macOS was captured this way"))
 }
 
-/// Network services that can carry a proxy, disabled ones (`*`) left out.
-pub fn services() -> Vec<String> {
-    let Ok(text) = networksetup(&["-listallnetworkservices"]) else { return Vec::new() };
-    text.lines().skip(1).filter(|line| !line.starts_with('*') && !line.trim().is_empty()).map(|line| line.trim().to_string()).collect()
-}
-
-/// Reads `Enabled` / `Server` / `Port` out of a `-getwebproxy` answer.
-fn parse_proxy(text: &str) -> (bool, String, u16) {
-    let field = |name: &str| {
-        text.lines().find_map(|line| {
-            let (key, value) = line.split_once(':')?;
-            key.trim().eq_ignore_ascii_case(name).then(|| value.trim().to_string())
-        })
-    };
-    let enabled = field("Enabled").is_some_and(|v| v.eq_ignore_ascii_case("yes"));
-    let server = field("Server").unwrap_or_default();
-    let port = field("Port").and_then(|v| v.parse().ok()).unwrap_or(0);
-    (enabled, server, port)
-}
-
-fn read_service(service: &str) -> ServiceProxy {
-    let web = networksetup(&["-getwebproxy", service]).map(|t| parse_proxy(&t)).unwrap_or((false, String::new(), 0));
-    let secure = networksetup(&["-getsecurewebproxy", service]).map(|t| parse_proxy(&t)).unwrap_or((false, String::new(), 0));
-    ServiceProxy {
-        service: service.to_string(),
-        web_enabled: web.0,
-        web_server: web.1,
-        web_port: web.2,
-        secure_enabled: secure.0,
-        secure_server: secure.1,
-        secure_port: secure.2,
-    }
-}
-
-/// Whether the machine is pointed at `port` on the loopback interface right now.
-pub fn points_at(port: u16) -> bool {
-    services().iter().any(|service| {
-        let current = read_service(service);
-        current.secure_enabled && current.secure_port == port && is_loopback(&current.secure_server)
-    })
-}
-
-fn is_loopback(server: &str) -> bool {
-    matches!(server, "127.0.0.1" | "localhost" | "::1")
-}
-
-/// Sends the machine's HTTP and HTTPS traffic to `port` on the loopback interface. The settings
-/// replaced are written to disk first, so they can be put back even after a crash.
-pub fn enable(port: u16) -> std::io::Result<Previous> {
-    let services = services();
-    if services.is_empty() {
-        return Err(std::io::Error::other("no network service to capture"));
-    }
-    // Already pointed here (a second click, or a restore that did not finish): keep the settings
-    // that were saved the first time rather than recording Agentty's own as "what was there".
-    if points_at(port) {
-        if let Some(previous) = saved_previous() {
-            return Ok(previous);
-        }
-    }
-    let previous = Previous { services: services.iter().map(|s| read_service(s)).collect() };
-    // Another Agentty (a second data dir, a dev build beside the real one) already has the machine
-    // pointed at its own capture port. Recording that as "what was there before" would lose the
-    // user's real settings for good, so this refuses instead.
-    if previous.services.iter().any(|s| s.secure_enabled && is_loopback(&s.secure_server) && s.secure_port != port) {
-        return Err(std::io::Error::other("the machine already goes through another local proxy — turn that one off first"));
-    }
-    save_previous(&previous);
-    let port = port.to_string();
-    for service in &services {
-        networksetup(&["-setwebproxy", service, "127.0.0.1", &port])?;
-        networksetup(&["-setsecurewebproxy", service, "127.0.0.1", &port])?;
-    }
-    Ok(previous)
-}
-
-/// Puts back what [`enable`] replaced.
-pub fn restore(previous: &Previous) -> std::io::Result<()> {
+/// Puts back what was replaced.
+fn restore(previous: &Previous) -> std::io::Result<()> {
     let mut failure = None;
     for entry in &previous.services {
         let restore_one = |kind: &str, enabled: bool, server: &str, port: u16| -> std::io::Result<()> {
@@ -160,22 +78,12 @@ pub fn restore(previous: &Previous) -> std::io::Result<()> {
     }
 }
 
-fn save_previous(previous: &Previous) {
-    let path = state_file();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(json) = serde_json::to_vec_pretty(previous) {
-        let _ = std::fs::write(path, json);
-    }
-}
-
-pub fn saved_previous() -> Option<Previous> {
+fn saved_previous() -> Option<Previous> {
     serde_json::from_slice(&std::fs::read(state_file()).ok()?).ok()
 }
 
-/// Called at startup: Agentty was killed while the machine was captured, so put the settings back
-/// before anything else tries to use the network.
+/// Called at startup: an older Agentty was killed while the machine was captured, so put the
+/// settings back before anything else tries to use the network.
 pub fn restore_after_crash() {
     let Some(previous) = saved_previous() else { return };
     if let Err(err) = restore(&previous) {
@@ -186,14 +94,6 @@ pub fn restore_after_crash() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reads_what_networksetup_prints() {
-        let text = "Enabled: Yes\nServer: 127.0.0.1\nPort: 51234\nAuthenticated Proxy Enabled: 0\n";
-        assert_eq!(parse_proxy(text), (true, "127.0.0.1".to_string(), 51234));
-        let off = "Enabled: No\nServer: \nPort: 0\nAuthenticated Proxy Enabled: 0\n";
-        assert_eq!(parse_proxy(off), (false, String::new(), 0));
-    }
 
     /// A failed restore keeps the record: it is the only way the next launch can put the settings
     /// back, and deleting it stranded the machine on a dead port.
@@ -210,17 +110,14 @@ mod tests {
                 secure_port: 0,
             }],
         };
-        save_previous(&previous);
+        let path = state_file();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&path, serde_json::to_vec(&previous).unwrap()).unwrap();
         // `networksetup` cannot know this service, so the restore fails on every platform.
         assert!(restore(&previous).is_err());
         assert!(saved_previous().is_some(), "the record is still there to try again");
-        let _ = std::fs::remove_file(state_file());
-    }
-
-    #[test]
-    fn loopback_is_recognised() {
-        assert!(is_loopback("127.0.0.1"));
-        assert!(is_loopback("localhost"));
-        assert!(!is_loopback("proxy.corp.example"));
+        let _ = std::fs::remove_file(path);
     }
 }

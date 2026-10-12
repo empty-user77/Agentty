@@ -26,6 +26,7 @@ plugin.start();
 |---|---|
 | `onActivate(info => …)` | 插件已启动；`info` 中有 `plugin.dataDir`、`language`、`context` |
 | `command(id, ({ context, args }) => …)` | 命令从命令面板被执行 |
+| `tool(name, handler)` | AI 智能体调用工具；处理器接收 `{ args, context }` 并返回答复。错误作为工具错误发送 |
 | `onPanelOpen(context => …)` | 面板变为可见 —— 在这里绘制 |
 | `onPanelClose(context => …)` | 面板被隐藏 |
 | `onEvent(elementId, (event, context) => …)` | 该 id 的 UI 元素被操作 |
@@ -45,11 +46,13 @@ plugin.start();
 | `notify(message, kind)` —— `info`、`success`、`warning`、`error` | |
 | `setBadge(text)` —— 标签栏按钮上最多 8 个字符 | |
 | `getContext()` | |
+| `hostInfo()` — Agentty 版本、API 版本、语言，以及能绘制的面板元素（`uiFeatures`） | |
 | `openUrl(url)` —— http/https | |
 | `copy(text)` —— 复制到剪贴板 | |
 | `revealPath(path)` —— 在文件管理器中显示 | `workspace.read` |
 | `injectPrompt(request)` | `prompt.inject` |
 | `sendToTerminal({ paneId, text, submit })` | `terminal.write` |
+| `setTerminalProxy({ port, token })` · `setTerminalProxy({ port: null })` | `terminal.proxy` |
 | `getSession({ paneId, maxTurns })` | `session.read` |
 | `listWorkspaces()` | `workspace.read` |
 | `fetch(request)` —— HTTP 请求 | `net.request` |
@@ -76,8 +79,23 @@ plugin.start();
 | `ui.badge(text, tone)` | `neutral`、`info`、`success`、`warning`、`error` | |
 | `ui.spinner(text)` | | |
 | `ui.divider()` | | |
+| `ui.flow(id, steps)` | 步骤 `{ id, title, subtitle, icon, state, selected, side }`；`state`: `off`、`on`、`active`、`done`、`error` | 带 `event.item` 的 `select` |
+| `ui.popover(id, title, children)` | 面板旁边的卡片 | `close` |
+| `ui.card(children, { title, subtitle, icon, tone })` | 浮起的方框；`tone` 决定图标和边框颜色（API 4） | |
+| `ui.grid(children, { columns, gap })` | 1–6 个等宽列（API 4） | |
+| `ui.tabs(id, [{ id, label, icon, badge }], value, children)` | 标签页；children 是选中标签页的内容（API 4） | 带标签页 id 的 `change` |
+| `ui.table(id, [{ label, align, grow }], [{ id, cells, tone }], { empty, selected })` | 表头下的行（API 4） | 带 `event.item` 的 `select` |
+| `ui.keyValue([{ label, value, tone, mono }])` | 标签与值（API 4） | |
+| `ui.stat(label, value, { detail, icon, tone })` | 醒目显示的一个数字（API 4） | |
+| `ui.progress(value, { label, detail, tone })` | 进度条，`value` 取 0 到 1（API 4） | |
+| `ui.callout(text, { title, icon, tone })` | 带颜色的提示，默认 `info`（API 4） | |
+| `ui.select(id, [{ value, label }], value, { placeholder, disabled })` | 下拉框（API 4） | 带取值的 `change` |
+| `ui.checkbox(id, label, value, { description, disabled })` | 复选框（API 4） | 带新布尔值的 `change` |
+| `ui.code(text, { language, title })` | 着色的代码和复制按钮（API 4） | |
 
 null 与 false 的子元素会被跳过，因此 `条件 && ui.text('…')` 可以直接使用。
+
+什么内容该用哪个元素，以及可以直接起步的完整界面，见 [设计面板](/docs/plugin-ui-guide)。标为 API 4 的元素需要在清单中写上 `"apiVersion": 4`。
 
 ```js
 plugin.onPanelOpen(async (context) => {
@@ -165,7 +183,22 @@ await plugin.injectPrompt({
 
 凡是由其他应用或链接发起的，请使用 `ask`。
 
+## AI 智能体的工具
+
+```js
+plugin.tool('list_containers', async ({ args }) => {
+  const containers = await listContainers({ all: args.all === true });
+  return containers.map((c) => `${c.name}: ${c.state}`).join('\n');
+});
+```
+
+在调用 `plugin.start()` 前注册工具。当智能体调用工具时，它会获得你的答复（字符串、任意 JSON 值或 MCP 格式的内容）。处理器中抛出的错误会作为工具错误发送给智能体。
+
+为了提供工具，插件必须声明 `mcp.tools` 权限和 `apiVersion: 5`。每个插件最多 32 个工具。查看[清单参考](/docs/plugin-manifest)了解架构和限制。
+
 ## 会话与终端
+
+要让新开的终端经过代理，请声明 `terminal.proxy` 权限和 `apiVersion: 6`，然后调用 `plugin.setTerminalProxy({ port, token })`。`plugin.setTerminalProxy({ port: null })` 用于停止代理。地址由 Agentty 根据端口在 127.0.0.1 上生成，插件无法把终端指向别处。详见[权限](/docs/plugin-permissions)。
 
 ```js
 const session = await plugin.getSession({ paneId: context.pane.id, maxTurns: 200 });

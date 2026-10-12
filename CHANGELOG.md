@@ -5,6 +5,199 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-10-11
+
+### Added
+- Plugin permission `terminal.proxy` and plugin API version 6 with `terminal/setProxy`: a plugin can route the terminals and AI sessions opened from then on through a proxy it runs on 127.0.0.1. The Node SDK adds `setTerminalProxy`.
+
+### Changed
+- Proxy monitoring moved out of Agentty into the [Proxy Capture](https://github.com/empty-user77/agentty-proxy-capture) plugin, installed from Plugins → Install from Git. The Monitoring → Proxy tab is removed.
+- In a plugin's panel, ticking a checkbox or flipping a toggle counts as using the plugin, like a click, so the plugin
+  can act on it in your terminals right away. Typing in a field still does not.
+- The Korean user guide reads more naturally.
+
+## [0.2.15] - 2026-10-10
+
+### Added
+- Voice input in the Mac app: a microphone in the status bar of agent tabs (Claude Code, Codex, …)
+  and chats shows whether it is recording. Click it or press ⇧⌘M, speak, and the words go into the
+  prompt; Enter sends them straight away, Esc cancels. Speech is transcribed on your Mac by a local
+  model and no audio leaves the computer.
+- Settings → Voice input: install the Small or Large-v3 Turbo model (Turbo is recommended and the
+  default), pick the one in use, delete a model, and set the language (automatic, Korean or
+  English). Transcription uses the GPU and a vocabulary of developer terms, and ignores silence
+  instead of inventing sentences. The same controls stay on the remote access page.
+- Development board (Settings → Development board, off by default): a kanban board of tickets that
+  agents work on. Moving a ticket to "instructed" creates a worktree and starts its agent with the
+  ticket, and the ticket follows the agent through development, review and QA.
+- Work on later (TODO): right-click a tab or a split pane to set it aside while its terminals keep
+  running; a TODO button beside the start page lists them per workspace and brings them back.
+- From three sidebar plugins on, the unpinned ones fold into one activity-bar item; pin the plugins
+  you use most to keep their own icon.
+- Settings → About shows build information (version, commit, build date, target) and the plugin
+  and marketplace API versions.
+- The synced sessions list scrolls, shows up to 50 sessions and links to the sync repository.
+
+### Changed
+- Build my idea is a card in the start page's "Get started" grid, and Chat · team has its own icon.
+- The text caret blinks in text fields.
+- A plugin panel with no open tab shows a clearer, plugin-neutral message.
+
+### Fixed
+- Messages written in a chat while the lead agent starts, works or waits on you are delivered once,
+  in order, and their bubbles clear.
+- The close pane / tab dialog takes the keyboard: Enter confirms, Esc cancels.
+- A tab started with a command chain (`cd <folder> && claude`) is titled after the program.
+- A floating plugin panel stays inside the window and docks again when dragged narrower.
+- Voice uploads from the remote page are smaller and limited in size and number.
+
+### Security
+- Plugin network requests check every address a name resolves to, and conversation and app-state
+  files are created private from the start.
+- Development board tickets are passed to agents as data, and a damaged board file is kept aside
+  instead of overwritten.
+
+## [0.2.14] - 2026-10-08
+
+### Added
+- Chat workspaces: chat with one lead agent that plans the work and starts up to four workers, each
+  in its own terminal and git worktree, reporting back as they finish a turn. In a git repository
+  the chat gets its own branch — workers start from it and are merged back, and your project folder
+  is left alone until you ask for the result. Optional reviewers read and run the workers' changes
+  without editing; pick the worker and reviewer agents (Claude Code or Codex) from the chat's bar.
+  Start one from the start page or the + menu, and drive it from the remote page too, voice included.
+- A chat workspace watches the plan usage of the agents it runs and shows the window closest to
+  running out in its bar — amber from 70%, red from 85% — with how full it is and when it resets.
+- Plugins can offer tools to the AI agents you run: a plugin that asks for the new `mcp.tools`
+  permission exposes its tools to Claude Code and Codex in Agentty over MCP, with an "Allow MCP
+  connection" switch on its Permissions tab (on by default) and every call checked and logged on
+  the host side.
+- Plugin panels can show pictures and node graphs (plugin API 5): `image` draws a picture from the
+  plugin's own folder and can take pictures dropped from the Finder, and `graph` lays out node cards
+  on a canvas joined by wires, with ports, states and nodes the user can drag — the way an image
+  pipeline is drawn. A graph can take the panel's height, and the user zooms it (buttons, or ⌘ /
+  Ctrl with the scroll wheel) and scrolls inside it.
+- Voice prompts from the remote page: tap the microphone, speak, and the words appear in the
+  prompt box to check and send. The clip is transcribed on your Mac by a local model you install
+  from Settings → Remote access (a one-time download, verified and kept on the machine); no audio
+  ever leaves your computer.
+- Plugin panels for real tools, continued: text fields suggest as you type (`completions` — the
+  variables of an API client from `{{` or a few letters), a grid's sidebar column can be dragged
+  wider or narrower (`resizable`, the width sent back to keep), and a plugin can open itself in an
+  Agentty window of its own (`workspace/openWindow`, or the link `agentty://open/<id>?window=new`).
+  A grid can take the panel's height with each column scrolling on its own (`fill`), tabs keep
+  their strip while their content scrolls, scroll sideways when they do not fit and can carry a
+  `+` menu (`addMenu`), list rows can be marked `selected`, and a button with only an icon is a
+  square.
+- Plugin panels have eleven new elements (plugin API 4): cards, grids, tabs, tables, label/value
+  lists, stats, progress bars, callouts, drop-downs, checkboxes and code blocks with syntax colors
+  and a copy button.
+- A plugin workspace without pages (a plugin that does not drive the browser) is the plugin's
+  panel across the whole area, with the tab's terminals under it only while a job runs; a
+  drop-down beside a field takes the width of its options instead of half the row.
+- Layout for real tools: a grid's columns can be given widths (`["240px", "1"]` is a sidebar
+  beside a page), list rows can be indented as a tree and carry a colored tag (an HTTP method),
+  tabs can have a close button, and text fields can use the monospace font for code and JSON.
+- UI Gallery, a plugin that comes with Agentty: every panel element live with the code that draws
+  it, and whole example screens to start a plugin from. A new guide, "Designing a panel", says
+  which element to use for what.
+
+### Changed
+- Plugin panels look more like the rest of Agentty: buttons and fields share one height, list rows
+  show their icon in a tinted tile, and titles, badges, switches and empty lists were redrawn.
+
+### Fixed
+- Voice dictation in an agent that records from the microphone (for example Claude Code or Codex
+  `/voice`) now works inside Agentty's terminals: the app carries the microphone entitlement and
+  usage description, so macOS asks for microphone access the first time instead of silently
+  denying it.
+- A program plugin's Permissions tab no longer fails to draw its warning icon when opened.
+
+## [0.2.13] - 2026-10-03
+
+### Added
+- Remote access opens on a home page: what waits for you, what is working, every workspace and
+  your plugins with their state and what each automation is doing.
+- Remote access can open a new tab (terminal, Claude Code or Codex) in a workspace and wake a
+  sleeping workspace, without changing what the Mac's screen shows.
+
+## [0.2.12] - 2026-10-02
+
+### Fixed
+- Remote access no longer refuses to start with "Tailscale is already sharing something else on
+  port 8743" when what is left on that port is an earlier Agentty's own, now-closed page. Agentty
+  takes it over; anything else on the port is still left alone.
+
+## [0.2.11] - 2026-10-02
+
+### Added
+- Remote access: open your workspaces from a browser on your phone, tablet or another computer
+  over your own Tailscale network. See every workspace, tab and split pane with its status, watch
+  a terminal live and type into it, answer an agent's question with quick buttons, send prompts,
+  and get browser notifications. Open it from the globe-and-monitor icon in the side menu.
+  - Reachable only through Tailscale, only by the Tailscale account that owns the Mac, and only
+    with a web password; it stops within seconds whenever Tailscale disconnects and comes back
+    when it reconnects.
+  - A green dot on its icon shows when it is on; Unlock on its page lifts a sign-in lock.
+  - Hide it entirely in Settings → General, or one workspace from that workspace's menu.
+- Slack, Discord and Telegram notices arrive as formatted cards; Telegram folds the agent's reply
+  into an expandable quote. With remote access on and details included, they link straight to the
+  terminal.
+- Notifications can also be sent while the session is on screen, for when Agentty is open but
+  used from elsewhere.
+- An HTML file open in the editor can be shown as a page in the in-app browser.
+
+### Fixed
+- Mini mode, the menu bar list, notifications and chat messages name a workspace exactly as its
+  sidebar card does.
+- A chat notice that fails to send shows in the notification list with the reason.
+- Slack channel names in Korean and other scripts are accepted.
+
+## [0.2.10] - 2026-10-01
+
+Replaces 0.2.9, which was withdrawn shortly after release.
+
+### Changed
+- Diagnose problems moved from the wrench on each pane's bar to its own section in
+  Settings → System check; Help → Diagnose problems stays.
+
+## [0.2.9] - 2026-10-01
+
+### Added
+- Help → Diagnose problems, also the wrench on a pane's bar: checks the agent CLIs, their settings
+  and the terminal setup — an agent installed but not found by new terminals, several copies of one
+  CLI, Claude Code's fullscreen screen turned off, settings files with a syntax error, variables
+  that confuse Claude Code set in shell startup files, missing terminal integration files. Fix or
+  Fix all puts them right and keeps a copy of every file it changes.
+- With several copies of Claude Code or Codex installed, Agentty starts the newest one, in tabs and
+  when typed into a terminal; the status bar and System check show that version.
+- Tab strip: a Git button to clone a repository into the terminal's folder, searching GitHub when
+  the `gh` CLI is signed in. It shows in a plain terminal whose folder is empty or holds only
+  folders.
+- Settings → Windows lists every Agentty window with its workspaces: bring forward, reopen or
+  delete.
+- Settings: an option to start Claude Code and Codex in their own no-approval mode, for
+  tabs and for agents typed into a terminal (off by default).
+- Workspace search says where each result matched and marks the words in the conversation line.
+
+### Changed
+- Claude Code keeps its fullscreen screen in Agentty when it was chosen with `/tui fullscreen`.
+- When another agent already works in the folder, the question where a typed `claude` or `codex`
+  starts no longer prints a line in the terminal; unanswered for 30 seconds, the agent starts where
+  it was typed.
+- The Files button keeps its tree icon and turns purple when worktrees are around.
+- Faster conversation search while typing; search boxes have a clear button and Escape clears them.
+- Notifications are silent.
+- Narrow panes show a short status instead of a cut-off one.
+- Cosmica plugin 1.2.0: save on top, save into Cosmica folders, one-click continue of a note.
+
+### Fixed
+- Each pane's AI status bar follows its own session: several Codex panes in one folder no longer
+  show each other's model and context.
+- The bot token and channel fields in Settings → Notifications take the keyboard again.
+- A workspace linked into a session no longer disappears when its parent sits in a collapsed group.
+- Settings → Terminal style scrolls smoothly.
+
 ## [0.2.8] - 2026-09-30
 
 ### Added

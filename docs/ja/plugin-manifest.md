@@ -49,7 +49,7 @@ description: agentty-plugin.json のすべてのフィールド — 識別情報
 |---|---|---|
 | `main` | 必須 | プラグインフォルダからの相対パスのエントリポイント |
 | `runtime` | `node` | `node`（ログインシェル `PATH` の Node.js 18+）、`python`（`python3 <main>`）、`executable`（`<main>` を直接実行）、または `wasm` — `<main>` が Agentty 自身の実行する WebAssembly モジュール。[Rust と WebAssembly](/docs/plugin-rust) を参照 |
-| `apiVersion` | `1` | 作成時に基準としたプラグイン API のバージョン。`2` は [AgentOS プラグイン](/docs/plugin-agentos)に必要な `host/timer` と `pane/status` を加えます。古いバージョンしか話せない Agentty は、実行できないものを入れる代わりにその旨を伝えます |
+| `apiVersion` | `1` | 作成時に基準としたプラグイン API のバージョン。`2` は [AgentOS プラグイン](/docs/plugin-agentos)に必要な `host/timer` と `pane/status` を、`3` はアプリ内ブラウザ（`browser.control`）を、`4` はパネル要素 `card`、`grid`、`tabs`、`table`、`keyValue`、`stat`、`progress`、`callout`、`select`、`checkbox`、`code` を加えます（[パネルのデザイン](/docs/plugin-ui-guide)）。`6` は新しいターミナルをプラグインのプロキシ経由にする `terminal/setProxy`（`terminal.proxy`）を加えます。古いバージョンしか話せない Agentty は、実行できないものを入れる代わりにその旨を伝えます |
 | `activationEvents` | `[]` | `["onStartup"]` なら Agentty と同時に起動、なければ最初の使用時 |
 
 Agentty はプラグインフォルダを作業ディレクトリとしてプログラムを起動します。`wasm` プラグインはプログラムを起動しません。モジュールは Agentty の中で動き、作業ディレクトリも環境変数もファイルもありません。
@@ -64,7 +64,7 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 ## 権限
 
 ```json
-"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read"]
+"permissions": ["net.request", "prompt.inject", "terminal.write", "session.read", "workspace.read", "mcp.tools"]
 ```
 
 | 権限 | できること |
@@ -74,6 +74,8 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 | `terminal.write` | 開いているペインへの入力 |
 | `session.read` | AI 会話の読み取り |
 | `workspace.read` | ワークスペース一覧の取得、コンテキストのフォルダ・タイトル項目の参照 |
+| `mcp.tools` | AI エージェントにツールを提供。`apiVersion: 5` と `contributes.tools` が必須 |
+| `terminal.proxy` | 新しいターミナルと AI セッションを、プラグインが動かすプロキシ経由にする。`apiVersion: 6` が必須、`wasm` は不可 |
 
 使うものだけを求めてください。一覧はインストール前に利用者へ表示され、権限のない呼び出しは失敗します。[プラグインの権限](/docs/plugin-permissions)を参照してください。
 
@@ -132,6 +134,39 @@ Agentty はプラグインフォルダを作業ディレクトリとしてプロ
 
 コマンドはコマンドパレットから実行します。`paneBar` と `when` はなくなりました。これらが残っているマニフェストもこれまで通りインストール・実行でき、フィールドは無視されます。ただし**そのボタンを前提に作られたプラグインはボタンを失い**、コマンドはパレットから実行することになります。
 
+### AI エージェント向けツール
+
+```json
+"contributes": {
+  "tools": [
+    {
+      "name": "list_containers",
+      "description": "Lists the Docker containers this plugin manages, with their state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "all": { "type": "boolean" }
+        }
+      },
+      "readOnly": true
+    }
+  ]
+}
+```
+
+プラグインは Agentty で動いている AI エージェント (Claude Code、Codex) へツールを提供できます。`mcp.tools` 権限と `apiVersion: 5` が必須で、一緒に宣言する必要があります。
+
+プラグインは、自分で動かすプロキシを経由させて新しいターミナルを通せます。`terminal.proxy` 権限と `apiVersion: 6` が必須で、`wasm` プラグインでは使えません。
+
+| フィールド | 必須 | 説明 |
+|---|---|---|
+| `name` | はい | 1～48 文字。`a-z`、`0-9`、`_` のみ、文字で始まる |
+| `description` | はい | 1～1000 文字。エージェントが知るツールのすべて |
+| `inputSchema` | | JSON Schema、型は `object`、最大 16 KB |
+| `readOnly` | | ブール値（既定値 `false`）。エージェントへのヒント |
+
+プラグインあたり最大 32 個のツール。プラグインは `tools/call` リクエストに文字列、任意の JSON 値、または MCP 形式のコンテンツ (`{ "content": [...], "isError": false }`) で応答します。詳細は[プラグインプロトコル](/docs/plugin-protocol)を参照してください。
+
 ## アイコン
 
 `icon` には次の名前を使います。それ以外はパズルのピースとして表示されます。
@@ -141,10 +176,10 @@ app-window arrow-down arrow-left arrow-right arrow-up arrow-up-right at-sign bel
 blocks book-open bookmark bot brain bug calendar chart-column check chevron-down chevron-right
 chevron-up circle-check circle-dot circle-pause circle-x clipboard clipboard-paste clock cloud
 code columns-2 command container copy database download ellipsis external-link eye file-input
-file-plus file-text folder folder-open folder-plus git-branch git-commit-horizontal
+file-plus file-text folder folder-git-2 folder-open folder-plus git-branch git-commit-horizontal
 git-pull-request globe grip-vertical hammer hash history house image info key-round
 layout-panel-left lightbulb link list list-tree loader-circle mail maximize-2 message-circle-question
-message-square minimize-2 minus network notebook notebook-pen package panel-left-close
+message-square message-square-code minimize-2 minus network notebook notebook-pen package panel-left-close
 panel-left-open pencil picture-in-picture-2 play plug plus power puzzle refresh-cw rocket rotate-cw
 rows-2 save scroll-text search send settings shield-alert sparkles square square-plus
 square-terminal star sticky-note tag terminal trash-2 undo-2 unlink upload users wand-sparkles
