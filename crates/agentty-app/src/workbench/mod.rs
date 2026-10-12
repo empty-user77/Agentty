@@ -18,6 +18,7 @@ mod chrome;
 mod confirm;
 mod content_search;
 mod context_menu;
+mod db_diagram;
 mod db_page;
 mod diagnostics;
 mod disk_page;

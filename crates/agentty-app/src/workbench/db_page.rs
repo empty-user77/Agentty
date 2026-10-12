@@ -217,11 +217,11 @@ pub(super) struct DbState {
     loading: bool,
     generation: u64,
     stale: bool,
-    selected: Option<String>,
+    pub(super) selected: Option<String>,
     tables: Vec<TableInfo>,
     table: Option<String>,
     result: Option<QueryResult>,
-    message: Option<(String, bool)>,
+    pub(super) message: Option<(String, bool)>,
     busy: bool,
     query: Option<Entity<TextInput>>,
     /// The SQL editor: multi-line, highlighted, and as tall as the user drags it.
@@ -247,6 +247,10 @@ pub(super) struct DbState {
     next_approval: u64,
     /// When the approval now in front was first shown; clicks in the first moments are ignored.
     front_since: Option<std::time::Instant>,
+    /// Rows and queries, or the connection's relationship diagram.
+    pub(super) view: super::db_diagram::DbView,
+    pub(super) diagram: Option<super::db_diagram::Diagram>,
+    pub(super) diagram_loading: bool,
 }
 
 impl DbState {
@@ -275,6 +279,8 @@ impl DbState {
             "rows": self.result.as_ref().map(|r| r.rows.len()),
             "message": self.message,
             "approvals": self.approvals.len(),
+            "view": format!("{:?}", self.view),
+            "diagram": self.diagram.as_ref().map(|d| d.debug_state()),
         })
     }
 }
@@ -387,7 +393,7 @@ impl Workbench {
         .detach();
     }
 
-    fn selected_connection(&self) -> Option<&Connection> {
+    pub(super) fn selected_connection(&self) -> Option<&Connection> {
         let id = self.db.selected.as_ref()?;
         self.db.connections.iter().find(|c| &c.id == id)
     }
@@ -408,6 +414,7 @@ impl Workbench {
 
     fn select_db_connection(&mut self, id: String, cx: &mut Context<Self>) {
         self.db.selected = Some(id.clone());
+        self.db.diagram = None;
         self.db.tables.clear();
         self.db.table = None;
         self.db.clear_result();
@@ -432,13 +439,16 @@ impl Workbench {
                     Ok(tables) => this.db.tables = tables,
                     Err(err) => this.db.message = Some((format!("{err:#}"), true)),
                 }
+                if this.db.view == super::db_diagram::DbView::Diagram && this.db.message.is_none() {
+                    this.load_db_diagram(cx);
+                }
                 cx.notify();
             });
         })
         .detach();
     }
 
-    fn open_db_table(&mut self, table: String, cx: &mut Context<Self>) {
+    pub(super) fn open_db_table(&mut self, table: String, cx: &mut Context<Self>) {
         let Some(connection) = self.selected_connection().cloned() else { return };
         self.db.table = Some(table.clone());
         self.db.busy = true;
@@ -721,6 +731,32 @@ impl Workbench {
                 }
             }
             "table" => self.open_db_table(rest.to_string(), cx),
+            // `db diagram` shows it, `db diagram data` goes back to the rows, `db diagram focus
+            // <table>` finds a table, `db diagram inferred` shows or hides the inferred lines,
+            // `db diagram zoom <n>` zooms.
+            "diagram" => {
+                let (what, value) = rest.split_once(' ').unwrap_or((rest, ""));
+                match what {
+                    "data" => self.set_db_view(super::db_diagram::DbView::Data, cx),
+                    "reload" => self.load_db_diagram(cx),
+                    "focus" => {
+                        if let Some(diagram) = self.db.diagram.as_mut() {
+                            diagram.reveal(value);
+                        }
+                    }
+                    "inferred" => {
+                        if let Some(diagram) = self.db.diagram.as_mut() {
+                            diagram.show_inferred = !diagram.show_inferred;
+                        }
+                    }
+                    "zoom" => {
+                        if let (Some(diagram), Ok(zoom)) = (self.db.diagram.as_ref(), value.parse::<f32>()) {
+                            diagram.zoom.set(zoom);
+                        }
+                    }
+                    _ => self.set_db_view(super::db_diagram::DbView::Diagram, cx),
+                }
+            }
             "query" => {
                 if let Some(editor) = self.db.editor.clone() {
                     editor.update(cx, |editor, cx| editor.set_active_text(rest, cx));
@@ -1172,7 +1208,15 @@ impl Workbench {
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .child(icon(if table.kind == "view" { "eye" } else { "rows-2" }, 12., hex(Chrome::MUTED)))
                     .child(div().min_w_0().truncate().t_small().text_color(hex(Chrome::FOREGROUND)).child(table.name.clone()))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_db_table(name.clone(), cx))),
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        match this.db.diagram.as_mut().filter(|_| this.db.view == super::db_diagram::DbView::Diagram) {
+                            Some(diagram) => {
+                                diagram.reveal(&name);
+                                cx.notify();
+                            }
+                            None => this.open_db_table(name.clone(), cx),
+                        }
+                    })),
             );
         }
 
@@ -1217,16 +1261,25 @@ impl Workbench {
                         .child(action_button("db-run", t(cx, "db.run"), cx.listener(|this, _: &ClickEvent, _, cx| this.run_db_query(cx)))),
                 )
         });
-        let mut body = div().flex_1().min_w_0().h_full().flex().flex_col().children(query);
+        let diagram = db.view == super::db_diagram::DbView::Diagram;
+        let mut body = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .when(db.selected.is_some(), |d| d.child(self.render_db_view_tabs(cx)))
+            .when(!diagram, |d| d.children(query));
         if let Some((text, error)) = &db.message {
             body = body.child(
                 div().px_3().py_2().t_small().text_color(hex(if *error { Chrome::ERROR } else { Chrome::SUCCESS })).child(text.clone()),
             );
         }
-        if db.busy {
+        if db.busy && !diagram {
             body = body.child(crate::ui::loading_row(t(cx, "db.loading")));
         }
         body = body.child(match &db.result {
+            _ if diagram => self.render_db_diagram(cx),
             Some(result) => self.render_db_grid(result, cx),
             None => div().p_4().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "db.pick_table")).into_any_element(),
         });
