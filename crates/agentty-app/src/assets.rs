@@ -59,6 +59,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/laptop.svg", include_bytes!("../assets/icons/laptop.svg")),
     ("icons/monitor.svg", include_bytes!("../assets/icons/monitor.svg")),
     ("icons/eye.svg", include_bytes!("../assets/icons/eye.svg")),
+    ("icons/eye-off.svg", include_bytes!("../assets/icons/eye-off.svg")),
     ("icons/play.svg", include_bytes!("../assets/icons/play.svg")),
     ("icons/square.svg", include_bytes!("../assets/icons/square.svg")),
     ("icons/lightbulb.svg", include_bytes!("../assets/icons/lightbulb.svg")),

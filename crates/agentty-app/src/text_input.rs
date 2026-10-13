@@ -92,6 +92,16 @@ pub struct TextInput {
     is_selecting: bool,
     /// Secret entry: shows bullets and refuses copy/cut.
     masked: bool,
+    /// A masked field just refused Korean input (typed with the Korean keyboard on): said under
+    /// it until a key it takes is typed.
+    refused_hangul: bool,
+    /// A masked field shown as typed (its owner's eye button).
+    revealed: bool,
+    /// Where the character just typed into a masked field starts: it shows for a moment, as a
+    /// phone's password box does, then becomes a bullet. Gone with any other change.
+    peek: Option<usize>,
+    /// Which peek the running timer is for.
+    peek_generation: u64,
     /// Multi-line pastes are handed to the owner (`PastedLines`) instead of being joined.
     keep_pasted_lines: bool,
     /// Rows shown when the field holds many lines; 0 is the usual one-line field.
@@ -129,6 +139,7 @@ impl TextInput {
         let focus_handle = cx.focus_handle();
         let blur = cx.on_blur(&focus_handle, window, |this, _, cx| {
             this.blink.stop();
+            this.peek = None;
             cx.emit(TextInputEvent::Blurred)
         });
         let content: SharedString = content.into();
@@ -145,6 +156,10 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
             masked: false,
+            refused_hangul: false,
+            revealed: false,
+            peek: None,
+            peek_generation: 0,
             keep_pasted_lines: false,
             rows: 0,
             enter_sends: false,
@@ -242,6 +257,80 @@ impl TextInput {
         &self.content
     }
 
+    /// What to say under a masked field while it has the keyboard: Korean input was refused, or
+    /// Caps Lock is on (an i18n key). The owner shows it; a `ModifiersChanged` redraws it.
+    pub fn typing_warning(&self, window: &Window) -> Option<&'static str> {
+        if !self.masked || !self.focus_handle.is_focused(window) {
+            return None;
+        }
+        if self.refused_hangul {
+            Some("input.hangul_refused")
+        } else if window.capslock().on {
+            Some("input.caps_lock")
+        } else {
+            None
+        }
+    }
+
+    /// Whether a masked field shows what it holds (the eye button beside it).
+    pub fn revealed(&self) -> bool {
+        self.revealed
+    }
+
+    pub fn set_revealed(&mut self, revealed: bool, cx: &mut Context<Self>) {
+        self.revealed = revealed;
+        self.peek = None;
+        cx.notify();
+    }
+
+    /// After an edit of a masked field: one character typed shows for a moment; anything else
+    /// (a paste, a deletion) shows nothing.
+    fn update_peek(&mut self, typed: &str, at: usize, cx: &mut Context<Self>) {
+        self.peek = None;
+        self.peek_generation += 1;
+        if !self.masked || self.revealed || typed.chars().count() != 1 {
+            return;
+        }
+        self.peek = Some(at);
+        let generation = self.peek_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.peek_generation == generation {
+                    this.peek = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// What a masked field draws: a bullet for each character, but the one just typed.
+    fn masked_display(&self) -> String {
+        self.content.char_indices().map(|(i, c)| if Some(i) == self.peek { c } else { '•' }).collect()
+    }
+
+    /// A byte offset in the content as one in `masked_display`.
+    fn masked_offset(&self, offset: usize) -> usize {
+        self.content[..offset].char_indices().map(|(i, c)| if Some(i) == self.peek { c.len_utf8() } else { '•'.len_utf8() }).sum()
+    }
+
+    /// `text` as a masked field takes it: without Hangul, which no password or key here holds,
+    /// and which only means the Korean keyboard is on. Notes whether any was dropped.
+    fn masked_text<'a>(&mut self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.masked {
+            return text.into();
+        }
+        let refused = text.chars().any(is_hangul);
+        if refused {
+            self.refused_hangul = true;
+            return text.chars().filter(|c| !is_hangul(*c)).collect::<String>().into();
+        }
+        if !text.is_empty() {
+            self.refused_hangul = false;
+        }
+        text.into()
+    }
     /// Colors a text area's text (code, JSON); the same list again changes nothing.
     pub fn set_colors(&mut self, colors: std::rc::Rc<Vec<(Range<usize>, u32)>>, cx: &mut Context<Self>) {
         if !std::rc::Rc::ptr_eq(&self.colors, &colors) {
@@ -265,6 +354,7 @@ impl TextInput {
         self.content = (self.content[..start].to_owned() + text + &self.content[end..]).into();
         self.selected_range = start + text.len()..start + text.len();
         self.marked_range = None;
+        self.peek = None;
         cx.emit(TextInputEvent::Changed);
         cx.notify();
     }
@@ -295,6 +385,7 @@ impl TextInput {
         } else {
             text
         };
+        self.peek = None;
         self.selected_range = self.content.len()..self.content.len();
         self.marked_range = None;
         cx.emit(TextInputEvent::Changed);
@@ -439,10 +530,9 @@ impl TextInput {
             return self.content.len();
         }
         let index = line.closest_index_for_x(position.x - bounds.left());
-        if self.masked {
-            // The layout holds bullets (3 bytes each); map back to a content byte offset.
-            let chars = index / '•'.len_utf8();
-            return self.content.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(self.content.len());
+        if self.masked && !self.revealed {
+            // The layout holds bullets (and the character just typed); map back to the content.
+            return self.content.char_indices().map(|(i, _)| i).find(|&i| self.masked_offset(i) >= index).unwrap_or(self.content.len());
         }
         index
     }
@@ -544,11 +634,13 @@ impl EntityInputHandler for TextInput {
     }
 
     fn replace_text_in_range(&mut self, range_utf16: Option<Range<usize>>, new_text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let new_text = &*self.masked_text(new_text);
         let range =
             range_utf16.as_ref().map(|r| self.range_from_utf16(r)).or(self.marked_range.clone()).unwrap_or(self.selected_range.clone());
         self.content = (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
+        self.update_peek(new_text, range.start, cx);
         // A finished syllable can come with the next one already begun (한 + ㄴ): that one goes
         // back in as marked text after it (see `platform::ime`).
         if let Some(pending) = crate::platform::ime::pending_composition(window) {
@@ -567,6 +659,20 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A masked field composes nothing: Korean is refused, and so is its half-typed syllable.
+        if self.masked {
+            let refused = new_text.chars().any(is_hangul);
+            self.refused_hangul |= refused;
+            self.marked_range = None;
+            self.peek = None;
+            if refused || new_text.is_empty() {
+                if refused {
+                    cx.emit(TextInputEvent::Changed);
+                }
+                cx.notify();
+                return;
+            }
+        }
         let range =
             range_utf16.as_ref().map(|r| self.range_from_utf16(r)).or(self.marked_range.clone()).unwrap_or(self.selected_range.clone());
         self.content = (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
@@ -614,6 +720,11 @@ impl EntityInputHandler for TextInput {
         let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
         Some(self.offset_to_utf16(utf8_index))
     }
+}
+
+/// Hangul syllables and jamo (compatibility and conjoining).
+fn is_hangul(c: char) -> bool {
+    matches!(c, '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}' | '\u{AC00}'..='\u{D7FF}')
 }
 
 /// Where each line of `content` starts.
@@ -702,17 +813,17 @@ impl Element for TextElement {
         let selected_range = input.selected_range.clone();
         let cursor = input.cursor_offset();
         let style = window.text_style();
-        let masked = input.masked && !content.is_empty();
+        let masked = input.masked && !input.revealed && !content.is_empty();
         let (display_text, text_color) = if content.is_empty() {
             let placeholder = input.placeholder_key.map_or_else(|| input.placeholder.clone(), |key| crate::i18n::t(cx, key).into());
             (placeholder, hex_alpha(Chrome::FOREGROUND, 0.4))
         } else if masked {
-            (SharedString::from("•".repeat(content.chars().count())), style.color)
+            (SharedString::from(input.masked_display()), style.color)
         } else {
             (content.clone(), style.color)
         };
-        // Byte offsets in the content map to bullet offsets (each bullet is 3 bytes).
-        let to_display = |offset: usize| if masked { content[..offset].chars().count() * '•'.len_utf8() } else { offset };
+        // Byte offsets in the content map to offsets in the bullets.
+        let to_display = |offset: usize| if masked { input.masked_offset(offset) } else { offset };
 
         let run = TextRun {
             len: display_text.len(),

@@ -170,8 +170,20 @@ impl Workbench {
                 view.remote_key(&gpui::Keystroke { modifiers, key: key.clone(), key_char: None }, cx);
             }
             Command::Text { text, .. } => view.remote_text(text, cx),
-            Command::Prompt { text, .. } => view.submit_prompt(text.clone(), cx),
+            Command::Prompt { text, images, .. } if images.is_empty() => view.submit_prompt(text.clone(), cx),
+            // The images first, on their own, as a drop on the terminal pastes them; the prompt
+            // once the program has taken them in (one paste right after another would merge).
+            Command::Prompt { text, images, .. } => {
+                view.drop_paths(images);
+                let text = text.clone();
+                cx.spawn(async move |view, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
+                    let _ = view.update(cx, |view, cx| view.submit_prompt(text, cx));
+                })
+                .detach();
+            }
             Command::Resize { cols, rows, .. } => view.set_remote_size(Some((*cols as usize, *rows as usize)), cx),
+            Command::Scroll { lines, .. } => view.remote_scroll(*lines, cx),
             Command::Release { .. } => view.set_remote_size(None, cx),
             Command::Wake { .. } | Command::NewTab { .. } | Command::Chat { .. } => {}
         });
@@ -386,6 +398,8 @@ impl Workbench {
                 }
             }
             TextInputEvent::Cancelled => this.close_password_dialog(cx),
+            // The warning under the fields (Korean input, Caps Lock) follows what was typed.
+            TextInputEvent::Changed | TextInputEvent::Blurred => cx.notify(),
             _ => {}
         });
         self.remote_page.input_events.push(events);
@@ -466,10 +480,35 @@ impl Workbench {
         let password_set = cx.try_global::<remote::Remote>().is_some_and(|r| r.password_set == Some(true));
         let first = self.remote_input(0, window, cx);
         let second = self.remote_input(1, window, cx);
-        let field = |input: Entity<TextInput>| {
+        // The eye beside each field shows or hides both: they hold the same password.
+        let revealed = first.read(cx).revealed();
+        let inputs = [first.clone(), second.clone()];
+        let field = |input: Entity<TextInput>, id: &'static str| {
             let focus = input.clone();
+            let inputs = inputs.clone();
+            let eye = div()
+                .id(id)
+                .flex_shrink_0()
+                .p_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|s| s.bg(hex_alpha(Chrome::FOREGROUND, 0.08)))
+                .tooltip(crate::ui::Tooltip::text(t(cx, if revealed { "remote.password_hide" } else { "remote.password_show" }), None))
+                .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(move |_, _, cx| {
+                    for input in &inputs {
+                        input.update(cx, |input, cx| input.set_revealed(!revealed, cx));
+                    }
+                })
+                .child(crate::ui::icon(if revealed { "eye-off" } else { "eye" }, 14., hex(Chrome::MUTED)));
             div()
                 .w_full()
+                .flex()
+                .items_center()
+                .gap_2()
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                     window.focus(&gpui::Focusable::focus_handle(&focus, cx));
                     window.prevent_default();
@@ -483,12 +522,16 @@ impl Workbench {
                 .border_color(hex_alpha(NEON_CYAN, 0.35))
                 .bg(hex(0x0b0e11))
                 .t_body()
-                .child(input)
+                .child(div().flex_1().min_w_0().child(input))
+                .child(eye)
         };
         let saving = self.remote_page.saving;
+        let warning = [&first, &second].into_iter().find_map(|input| input.read(cx).typing_warning(window));
         Some(
             div()
                 .id("remote-password-overlay")
+                // Caps Lock turned on or off: the warning follows.
+                .on_modifiers_changed(cx.listener(|_, _: &gpui::ModifiersChangedEvent, _, cx| cx.notify()))
                 .absolute()
                 .inset_0()
                 .flex()
@@ -524,8 +567,9 @@ impl Workbench {
                                 ),
                         )
                         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "remote.password_rules")))
-                        .child(field(first))
-                        .child(field(second))
+                        .child(field(first, "remote-password-eye-1"))
+                        .child(field(second, "remote-password-eye-2"))
+                        .children(warning.map(|key| div().t_small().text_color(hex(Chrome::WARNING)).child(t(cx, key))))
                         .children(self.remote_page.dialog_error.clone().map(|e| div().t_small().text_color(hex(Chrome::ERROR)).child(e)))
                         .child(
                             div()
@@ -713,6 +757,8 @@ impl Workbench {
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.start_voice_download(m, cx)),
                 ))
             };
+            // The name wraps and the buttons keep their size: in the status bar's narrow popover a
+            // long name in Korean or Japanese pushed them out of the box.
             body = body.child(
                 div()
                     .flex()
@@ -722,32 +768,39 @@ impl Workbench {
                     .py_2()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .flex()
                             .flex_col()
                             .child(
-                                div().flex().items_center().gap_2().child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(name)).when(
-                                    recommended,
-                                    |d| {
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_x_2()
+                                    .child(div().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(name))
+                                    .when(recommended, |d| {
                                         d.child(
                                             div()
+                                                .flex_none()
                                                 .px_1p5()
                                                 .rounded_md()
                                                 .t_caption()
+                                                .whitespace_nowrap()
                                                 .bg(hex(NEON_GREEN).opacity(0.15))
                                                 .text_color(hex(NEON_GREEN))
                                                 .child(t(cx, "remote.voice.recommended")),
                                         )
-                                    },
-                                ),
+                                    }),
                             )
                             .child(muted(mb)),
                     )
-                    .child(right),
+                    .child(right.flex_none().whitespace_nowrap()),
             );
         }
         // The language prompts are spoken in: detection is often wrong for a short prompt.
         let current = settings(cx).voice.language;
-        let mut languages = div().flex().gap_1();
+        let mut languages = div().flex().flex_wrap().gap_1();
         for language in crate::settings::VoiceLanguage::ALL {
             languages = languages.child(crate::ui::chip(
                 gpui::SharedString::from(format!("voice-lang-{language:?}")),
@@ -759,12 +812,12 @@ impl Workbench {
                 },
             ));
         }
+        // The chips go under the label, wrapping: five of them never fit beside it in the popover.
         body = body.child(
             div()
                 .flex()
-                .items_center()
-                .justify_between()
-                .gap_3()
+                .flex_col()
+                .gap_2()
                 .py_2()
                 .child(
                     div()

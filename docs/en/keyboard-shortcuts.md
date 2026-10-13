@@ -55,6 +55,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Font zoom in / out / reset | ⌘= / ⌘- / ⌘0 |
 | Copy / paste / select all / clear | ⌘C / ⌘V / ⌘A / ⌘K |
 | Git page: commit / push / fetch / refresh | ⌘↩ / ⌘P / ⇧⌘T / ⌘R |
+| File editor: find in file / next / previous | ⌘F / ↩ or ⌘G / ⇧↩ |
 | File editor: save / format / close file | ⌘S / ⇧⌥F / ⌘W |
 | File editor: Markdown preview on / off (macOS) | ⇧⌘V |
 

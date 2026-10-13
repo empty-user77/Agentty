@@ -8,6 +8,7 @@ pub mod buffer;
 mod element;
 pub mod external;
 pub mod file;
+mod find;
 pub mod format;
 pub mod highlight;
 pub mod language;
@@ -120,6 +121,7 @@ pub fn bind_keys(cx: &mut App) {
         // VS Code's "Open Preview".
         key("cmd-shift-v", TogglePreview, c),
     ]);
+    find::bind_keys(cx);
     // Moving by word and to the ends of lines and of the file: macOS and PC conventions differ.
     if cfg!(target_os = "macos") {
         cx.bind_keys([
@@ -339,6 +341,8 @@ pub struct CodeEditor {
     preview_replies: futures::channel::mpsc::UnboundedSender<PageReply>,
     /// Blinking of the caret while the editor has focus.
     blink: crate::caret_blink::CaretBlink,
+    /// The find bar (⌘F), while open.
+    find: Option<find::FindBar>,
 }
 
 impl EventEmitter<EditorEvent> for CodeEditor {}
@@ -401,6 +405,7 @@ impl CodeEditor {
             blink: Default::default(),
             preview_next: None,
             preview_replies,
+            find: None,
         }
     }
 
@@ -1527,6 +1532,7 @@ impl CodeEditor {
             })).collect::<Vec<_>>(),
             "active": self.active,
             "confirm": self.confirm.is_some(),
+            "find": self.find_matches().map(|(matches, current)| serde_json::json!({ "matches": matches.len(), "current": current })),
             "preview": {
                 "view": self.preview.view.borrow().is_some(),
                 "covered": self.preview.covered,
@@ -1551,6 +1557,15 @@ impl CodeEditor {
                     }
                 });
             }
+            // The find bar opened with a query, as typed into it.
+            "find" => {
+                self.open_find(window, cx);
+                if let Some(input) = self.find.as_ref().map(|bar| bar.input.clone()) {
+                    input.update(cx, |input, cx| input.set_text(argument.to_string(), cx));
+                    self.find_query_changed(cx);
+                }
+            }
+            "find-next" => self.find_step(argument != "back", cx),
             "goto" => {
                 let mut parts = argument.split(':').map(|p| p.parse::<usize>().unwrap_or(1));
                 let (line, column) = (parts.next().unwrap_or(1), parts.next().unwrap_or(1));
@@ -1759,8 +1774,9 @@ impl Render for CodeEditor {
             self.preview.rendering = false;
             self.preview.asking = false;
         }
+        let find_bar = self.render_find_bar(cx);
         let Some(doc) = self.docs.get(self.active) else {
-            return div().id("code-editor").size_full().bg(hex(Chrome::EDITOR));
+            return div().id("code-editor-root").size_full().child(div().id("code-editor").size_full().bg(hex(Chrome::EDITOR)));
         };
         let body = if previewing {
             // The native page is laid over this element once its place is known. A question
@@ -1806,7 +1822,7 @@ impl Render for CodeEditor {
         } else {
             self.render_placeholder(doc, cx).into_any_element()
         };
-        div()
+        let editor = div()
             .id("code-editor")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
@@ -1901,7 +1917,9 @@ impl Render for CodeEditor {
             .children(self.render_notice(doc, cx))
             .child(body)
             .child(self.render_status(doc, cx))
-            .children(self.render_confirm(cx))
+            .children(self.render_confirm(cx));
+        // The find bar beside the editor's key context, not in it: what is typed there stays there.
+        div().id("code-editor-root").size_full().relative().child(editor).children(find_bar)
     }
 }
 

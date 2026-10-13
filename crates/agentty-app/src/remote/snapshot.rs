@@ -150,15 +150,32 @@ fn is_zero(value: &u8) -> bool {
     *value == 0
 }
 
+/// Lines of scrollback sent above the screen, the newest ones: enough to read back through an
+/// agent's last answers on a phone, little enough to copy on every round.
+pub const REMOTE_HISTORY: usize = 1000;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Screen {
     pub cols: u16,
     pub rows: u16,
-    /// Column and row of the cursor, when it shows.
+    /// How many of `lines` are scrollback, above the screen's `rows`.
+    pub history: u16,
+    /// The program scrolls itself (Claude Code's full-screen UI, vim, less): it has no scrollback
+    /// here, and a swipe on the page goes to it as the mouse wheel.
+    pub program_scrolls: bool,
+    /// Column and row of the cursor on the screen (not counting `history`), when it shows.
     pub cursor: Option<(u16, u16)>,
     pub fg: u32,
     pub bg: u32,
+    /// The scrollback lines, oldest first, then the screen's.
     pub lines: Vec<Vec<Run>>,
+}
+
+/// What one viewer was last sent of a screen.
+#[derive(Debug, Default)]
+pub struct Sent {
+    cols: u16,
+    hashes: Vec<u64>,
 }
 
 fn line_hash(line: &[Run]) -> u64 {
@@ -167,19 +184,64 @@ fn line_hash(line: &[Run]) -> u64 {
     hasher.finish()
 }
 
-/// What changed on a screen since a viewer last got it. `sent` holds that viewer's row hashes and
-/// is brought up to date; the first call (or a new size) sends every row.
-pub fn screen_update(pane: u64, screen: &Screen, sent: &mut Vec<u64>) -> Option<Value> {
+/// How many lines left the top since `old`: output scrolls everything up, so without this every
+/// line would look changed and all of the scrollback would go again. The shift that leaves the
+/// fewest lines to send wins; 0 when nothing scrolled.
+fn scrolled_by(old: &[u64], new: &[u64]) -> usize {
+    // Lines to send if `shift` lines left: those that differ, and those past the old end.
+    let cost = |shift: usize, limit: usize| {
+        let overlap = old.len() - shift;
+        let mut cost = new.len().saturating_sub(overlap);
+        for (i, hash) in new.iter().enumerate().take(overlap) {
+            if old[i + shift] != *hash {
+                cost += 1;
+                if cost >= limit {
+                    break;
+                }
+            }
+        }
+        cost
+    };
+    let mut best = (0, cost(0, usize::MAX));
+    // Only shifts that line up the first few lines are worth counting.
+    const ANCHOR: usize = 3;
+    if new.len() < ANCHOR {
+        return 0;
+    }
+    let candidates = (1..old.len().saturating_sub(ANCHOR - 1)).filter(|&k| old[k..k + ANCHOR] == new[..ANCHOR]);
+    for shift in candidates.take(16) {
+        let cost = cost(shift, best.1);
+        if cost < best.1 {
+            best = (shift, cost);
+        }
+    }
+    best.0
+}
+
+/// What changed on a screen since a viewer last got it. `sent` is what that viewer has and is
+/// brought up to date; the first call (or a new width) sends every line. Otherwise `shift` lines
+/// leave the top of what the viewer has, what remains is made `len` lines long, and `lines` are
+/// the ones that differ, by their new index.
+pub fn screen_update(pane: u64, screen: &Screen, sent: &mut Sent) -> Option<Value> {
     let hashes: Vec<u64> = screen.lines.iter().map(|l| line_hash(l)).collect();
-    let full = sent.len() != hashes.len();
-    let changed: Vec<Value> =
-        hashes.iter().enumerate().filter(|(i, h)| full || sent.get(*i) != Some(h)).map(|(i, _)| json!([i, screen.lines[i]])).collect();
-    *sent = hashes;
+    let full = sent.hashes.is_empty() || sent.cols != screen.cols;
+    let shift = if full { 0 } else { scrolled_by(&sent.hashes, &hashes) };
+    let changed: Vec<Value> = hashes
+        .iter()
+        .enumerate()
+        .filter(|(i, h)| full || sent.hashes.get(i + shift) != Some(h))
+        .map(|(i, _)| json!([i, screen.lines[i]]))
+        .collect();
+    *sent = Sent { cols: screen.cols, hashes };
     Some(json!({
         "pane": pane,
         "full": full,
+        "shift": shift,
+        "len": screen.lines.len(),
         "cols": screen.cols,
         "rows": screen.rows,
+        "history": screen.history,
+        "programScrolls": screen.program_scrolls,
         "cursor": screen.cursor,
         "fg": screen.fg,
         "bg": screen.bg,
@@ -195,6 +257,8 @@ mod tests {
         Screen {
             cols: 10,
             rows: rows.len() as u16,
+            history: 0,
+            program_scrolls: false,
             cursor: Some((0, 0)),
             fg: 0xffffff,
             bg: 0,
@@ -204,15 +268,48 @@ mod tests {
 
     #[test]
     fn sends_everything_first_then_only_what_changed() {
-        let mut sent = Vec::new();
+        let mut sent = Sent::default();
         let first = screen_update(3, &screen(&["a", "b", "c"]), &mut sent).unwrap();
         assert_eq!(first["full"], true);
         assert_eq!(first["lines"].as_array().unwrap().len(), 3);
         let second = screen_update(3, &screen(&["a", "B", "c"]), &mut sent).unwrap();
         assert_eq!(second["full"], false);
+        assert_eq!(second["shift"], 0);
         assert_eq!(second["lines"], json!([[1, [{ "t": "B" }]]]));
-        let resized = screen_update(3, &screen(&["a", "B"]), &mut sent).unwrap();
-        assert_eq!(resized["full"], true, "a new size sends every row");
+        let mut wider = screen(&["a", "B", "c"]);
+        wider.cols = 20;
+        let resized = screen_update(3, &wider, &mut sent).unwrap();
+        assert_eq!(resized["full"], true, "a new width sends every line");
+    }
+
+    #[test]
+    fn scrollback_growing_sends_only_the_new_lines() {
+        let mut sent = Sent::default();
+        screen_update(3, &screen(&["a", "b", "c", "d"]), &mut sent).unwrap();
+        // A line went into the scrollback and a new one came in at the bottom.
+        let grown = screen_update(3, &screen(&["a", "b", "c", "d", "e"]), &mut sent).unwrap();
+        assert_eq!(grown["full"], false);
+        assert_eq!((grown["shift"].clone(), grown["len"].clone()), (json!(0), json!(5)));
+        assert_eq!(grown["lines"], json!([[4, [{ "t": "e" }]]]));
+    }
+
+    #[test]
+    fn scrolling_past_the_kept_history_shifts_instead_of_resending() {
+        let mut sent = Sent::default();
+        screen_update(3, &screen(&["a", "b", "c", "d", "e", "f"]), &mut sent).unwrap();
+        let scrolled = screen_update(3, &screen(&["c", "d", "e", "f", "g", "h"]), &mut sent).unwrap();
+        assert_eq!(scrolled["full"], false);
+        assert_eq!(scrolled["shift"], 2);
+        assert_eq!(scrolled["lines"], json!([[4, [{ "t": "g" }]], [5, [{ "t": "h" }]]]));
+    }
+
+    #[test]
+    fn a_cleared_screen_is_not_taken_for_a_scroll() {
+        let mut sent = Sent::default();
+        screen_update(3, &screen(&["a", "b", "c", "d"]), &mut sent).unwrap();
+        let cleared = screen_update(3, &screen(&["x", "", "", ""]), &mut sent).unwrap();
+        assert_eq!(cleared["shift"], 0);
+        assert_eq!(cleared["lines"].as_array().unwrap().len(), 4);
     }
 
     #[test]

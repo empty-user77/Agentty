@@ -9,12 +9,15 @@
 
 const STRINGS = {
   en: {
+    toLatest: "Latest ↓",
     signIn: "Sign in", password: "Password",
     wrong: "Wrong password.", locked: "Too many wrong passwords. Try again in {s} s.", noPassword: "No password is set in Agentty yet.",
     failed: "Couldn't reach Agentty.", signOut: "Sign out", notify: "Notify me", notifyOn: "Notifying",
     noWorkspaces: "No workspaces are open in Agentty.", sleeping: "This workspace is asleep. Wake it up to start its terminals again.",
     send: "Send", promptHint: "Prompt for this terminal…", live: "Connected", offline: "Reconnecting…",
     micStart: "Dictate a prompt", micRecording: "Recording — tap to stop", micBusy: "Transcribing…", micDenied: "Microphone access was blocked.", micFailed: "Couldn't transcribe. Try again.", micTooBusy: "The Mac is busy transcribing. Try again in a moment.",
+    capsLock: "Caps Lock is on.", hangulInput: "Passwords can only use English letters.", showPassword: "Show password", hidePassword: "Hide password",
+    attach: "Attach images",attachRemove: "Remove image", attachFailed: "Couldn't attach this image.", attachWait: "Images are still uploading.",
     privacy: "Privacy Policy", terms: "Terms of Service", eula: "License Agreement", device: "Device", ip: "Tailnet IP", account: "Account", target: "Connecting to", secure: "Security", secureValue: "Tailscale (WireGuard) · HTTPS", browser: "Browser", shownOnly: "Shown here only; nothing is stored.",
     tooLong: "Too long.", busy: "Agentty is busy; try again.", finished: "Finished", asks: "Asks you", panes: "Split panes",
     home: "Home", needsYou: "Needs you", workingNow: "Working", workspacesTitle: "Workspaces", plugins: "Plugins",
@@ -27,12 +30,15 @@ const STRINGS = {
     chat: "Chat", chatHint: "Message the lead agent…", chatEmpty: "Write to the lead agent. It plans the work and starts workers on the Mac; their terminals are in the pane list.", leadWaits: "The lead is waiting for you in its terminal.",
   },
   ko: {
+    toLatest: "최신 ↓",
     signIn: "로그인", password: "비밀번호",
     wrong: "비밀번호가 틀렸습니다.", locked: "비밀번호가 여러 번 틀렸습니다. {s}초 뒤에 다시 시도하세요.", noPassword: "Agentty에 아직 비밀번호가 설정되지 않았습니다.",
     failed: "Agentty에 연결하지 못했습니다.", signOut: "로그아웃", notify: "알림 받기", notifyOn: "알림 켜짐",
     noWorkspaces: "Agentty에 열린 작업공간이 없습니다.", sleeping: "쉬고 있는 작업공간입니다. 깨우면 터미널이 다시 시작됩니다.",
     send: "보내기", promptHint: "이 터미널에 보낼 프롬프트…", live: "연결됨", offline: "다시 연결하는 중…",
     micStart: "음성으로 입력", micRecording: "녹음 중 — 눌러서 멈추기", micBusy: "변환 중…", micDenied: "마이크 사용이 차단되었습니다.", micFailed: "변환하지 못했습니다. 다시 시도하세요.", micTooBusy: "Mac이 다른 음성을 변환하는 중입니다. 잠시 후 다시 시도하세요.",
+    capsLock: "Caps Lock이 켜져 있습니다.", hangulInput: "비밀번호는 영어로만 설정 가능합니다.", showPassword: "비밀번호 보기", hidePassword: "비밀번호 숨기기",
+    attach: "이미지 첨부",attachRemove: "이미지 빼기", attachFailed: "이 이미지를 첨부하지 못했습니다.", attachWait: "이미지를 아직 올리는 중입니다.",
     privacy: "개인정보처리방침", terms: "이용약관", eula: "라이선스 계약", device: "접속 기기", ip: "Tailnet IP", account: "계정", target: "접속 대상", secure: "보안", secureValue: "Tailscale(WireGuard) 암호화 · HTTPS", browser: "브라우저", shownOnly: "이 화면에 보여 주기만 하고 저장하지 않습니다.",
     tooLong: "너무 깁니다.", busy: "Agentty가 바쁩니다. 다시 시도하세요.", finished: "작업 완료", asks: "요청", panes: "분할창",
     home: "홈", needsYou: "응답 대기", workingNow: "작업 중", workspacesTitle: "작업공간", plugins: "플러그인",
@@ -45,12 +51,15 @@ const STRINGS = {
     chat: "채팅", chatHint: "리드 에이전트에게 메시지…", chatEmpty: "리드 에이전트에게 말해 보세요. 작업을 계획하고 Mac에서 워커를 띄웁니다. 워커 터미널은 분할창 목록에 있습니다.", leadWaits: "리드가 터미널에서 응답을 기다립니다.",
   },
   ja: {
+    toLatest: "最新へ ↓",
     signIn: "サインイン", password: "パスワード",
     wrong: "パスワードが違います。", locked: "パスワードの誤りが多すぎます。{s} 秒後に再試行してください。", noPassword: "Agentty にまだパスワードが設定されていません。",
     failed: "Agentty に接続できませんでした。", signOut: "サインアウト", notify: "通知を受け取る", notifyOn: "通知オン",
     noWorkspaces: "Agentty で開いているワークスペースはありません。", sleeping: "休止中のワークスペースです。起こすとターミナルがまた始まります。",
     send: "送信", promptHint: "このターミナルへのプロンプト…", live: "接続中", offline: "再接続しています…",
     micStart: "音声で入力", micRecording: "録音中 — タップで停止", micBusy: "文字起こし中…", micDenied: "マイクの使用がブロックされました。", micFailed: "文字起こしできませんでした。もう一度お試しください。", micTooBusy: "Mac が別の音声を文字起こし中です。少し待ってからもう一度お試しください。",
+    capsLock: "Caps Lock がオンです。", hangulInput: "パスワードは英字でのみ設定できます。", showPassword: "パスワードを表示", hidePassword: "パスワードを隠す",
+    attach: "画像を添付",attachRemove: "画像を外す", attachFailed: "この画像を添付できませんでした。", attachWait: "画像をまだアップロードしています。",
     privacy: "プライバシーポリシー", terms: "利用規約", eula: "ライセンス契約", device: "接続端末", ip: "Tailnet IP", account: "アカウント", target: "接続先", secure: "セキュリティ", secureValue: "Tailscale（WireGuard）暗号化 · HTTPS", browser: "ブラウザ", shownOnly: "表示するだけで、保存はしません。",
     tooLong: "長すぎます。", busy: "Agentty が混み合っています。もう一度お試しください。", finished: "完了", asks: "質問", panes: "分割ペイン",
     home: "ホーム", needsYou: "応答待ち", workingNow: "作業中", workspacesTitle: "ワークスペース", plugins: "プラグイン",
@@ -63,12 +72,15 @@ const STRINGS = {
     chat: "チャット", chatHint: "リードエージェントにメッセージ…", chatEmpty: "リードエージェントに書いてください。作業を計画し、Mac でワーカーを起動します。ワーカーのターミナルはペイン一覧にあります。", leadWaits: "リードがターミナルで返答を待っています。",
   },
   zh: {
+    toLatest: "最新 ↓",
     signIn: "登录", password: "密码",
     wrong: "密码错误。", locked: "密码错误次数过多，请在 {s} 秒后重试。", noPassword: "Agentty 尚未设置密码。",
     failed: "无法连接 Agentty。", signOut: "退出登录", notify: "接收通知", notifyOn: "通知已开启",
     noWorkspaces: "Agentty 中没有打开的工作区。", sleeping: "这个工作区处于休眠状态。唤醒后终端会重新启动。",
     send: "发送", promptHint: "发送给此终端的提示…", live: "已连接", offline: "正在重新连接…",
     micStart: "语音输入", micRecording: "录音中 — 点按停止", micBusy: "转写中…", micDenied: "麦克风访问被阻止。", micFailed: "转写失败，请重试。", micTooBusy: "Mac 正在转写其他语音，请稍后再试。",
+    capsLock: "大写锁定已开启。", hangulInput: "密码只能使用英文字母设置。", showPassword: "显示密码", hidePassword: "隐藏密码",
+    attach: "附加图片",attachRemove: "移除图片", attachFailed: "无法附加这张图片。", attachWait: "图片仍在上传。",
     privacy: "隐私政策", terms: "服务条款", eula: "许可协议", device: "接入设备", ip: "Tailnet IP", account: "账号", target: "连接目标", secure: "安全", secureValue: "Tailscale（WireGuard）加密 · HTTPS", browser: "浏览器", shownOnly: "仅在此显示，不会保存。",
     tooLong: "太长了。", busy: "Agentty 正忙，请重试。", finished: "已完成", asks: "询问", panes: "分屏",
     home: "主页", needsYou: "等待回应", workingNow: "工作中", workspacesTitle: "工作区", plugins: "插件",
@@ -121,6 +133,8 @@ const state = {
   rows: [],
   lines: [],
   screen: null,
+  // The terminal stays at its newest line as output comes in; off while the user reads back.
+  follow: true,
   // Text at a fixed, readable size (the app's own by default; A− / A+ change it). The terminal
   // takes as many columns and lines as fit the page at that size while it is shown here.
   size: (() => {
@@ -195,8 +209,8 @@ async function signIn(event) {
   button.disabled = true;
   $("login-error").textContent = "";
   try {
-    const { status, data } = await api("/api/login", { password: input.value });
-    input.value = "";
+    const { status, data } = await api("/api/login", { password: pw.real.join("") });
+    clearPassword();
     input.blur();
     if (status === 200) return start();
     if (status === 429) return lockedFor(data.lockedFor || 60);
@@ -205,6 +219,104 @@ async function signIn(event) {
     $("login-error").textContent = T.failed;
   }
   button.disabled = false;
+}
+
+// ---- Password box ----
+//
+// A text box the page masks itself, so the character just typed can show for a moment (as a
+// phone's password box does) and the eye can show it all. The box shows `display()`; the
+// password is `pw.real`. Each edit is read back as what changed between the two displays: the
+// same number of characters, so a place in one is the same place in the other.
+
+/// Hangul syllables and jamo: passwords are set in English only (the Mac refuses Korean too), so
+/// Korean here only means the Korean keyboard is on.
+const HANGUL = /[ᄀ-ᇿ㄰-㆏ꥠ-꥿가-퟿]/;
+const BULLET = "•";
+const pw = { real: [], shown: [], peek: -1, timer: null, revealed: false, capsLock: false, refused: false };
+
+const display = () => pw.real.map((c, i) => (pw.revealed || i === pw.peek ? c : BULLET));
+
+function showPassword(caret) {
+  const input = $("password");
+  pw.shown = display();
+  input.value = pw.shown.join("");
+  if (caret != null && document.activeElement === input) {
+    const at = pw.shown.slice(0, caret).join("").length;
+    input.setSelectionRange(at, at);
+  }
+}
+
+/// Reads an edit of the box into `pw.real`, keeping Korean out.
+function passwordEdited() {
+  const input = $("password");
+  const next = [...input.value];
+  const old = pw.shown;
+  let start = 0;
+  while (start < old.length && start < next.length && old[start] === next[start]) start++;
+  let end = 0;
+  while (end < old.length - start && end < next.length - start && old[old.length - 1 - end] === next[next.length - 1 - end]) end++;
+  const typed = next.slice(start, next.length - end);
+  const kept = typed.filter((c) => !HANGUL.test(c));
+  if (kept.length < typed.length) pw.refused = true;
+  else if (kept.length) pw.refused = false;
+  pw.real = [...pw.real.slice(0, start), ...kept, ...pw.real.slice(old.length - end)];
+  clearTimeout(pw.timer);
+  pw.peek = kept.length === 1 && !pw.revealed ? start : -1;
+  if (pw.peek >= 0) {
+    pw.timer = setTimeout(() => {
+      const caret = caretChars();
+      pw.peek = -1;
+      showPassword(caret);
+    }, 1000);
+  }
+  showPassword(start + kept.length);
+}
+
+/// Where the caret is, in characters.
+function caretChars() {
+  const input = $("password");
+  return [...input.value.slice(0, input.selectionStart || 0)].length;
+}
+
+function passwordHint(event) {
+  const input = $("password");
+  if (event && typeof event.getModifierState === "function") pw.capsLock = event.getModifierState("CapsLock");
+  const focused = document.activeElement === input;
+  if (!focused) pw.refused = false;
+  const text = !focused ? "" : pw.refused ? T.hangulInput : pw.capsLock ? T.capsLock : "";
+  $("login-hint").textContent = text;
+  $("login-hint").hidden = !text;
+}
+
+function clearPassword() {
+  clearTimeout(pw.timer);
+  pw.real = [];
+  pw.peek = -1;
+  showPassword(null);
+}
+
+function setupPasswordBox() {
+  const input = $("password");
+  // A Korean syllable being composed is read once it is done (then refused).
+  input.addEventListener("input", (event) => {
+    if (!event.isComposing) passwordEdited();
+    passwordHint(event);
+  });
+  input.addEventListener("compositionend", (event) => {
+    passwordEdited();
+    passwordHint(event);
+  });
+  for (const type of ["keydown", "keyup", "focus", "blur"]) input.addEventListener(type, passwordHint);
+  const eye = $("password-eye");
+  eye.addEventListener("pointerdown", (event) => event.preventDefault()); // the box keeps the keyboard
+  eye.addEventListener("click", () => {
+    pw.revealed = !pw.revealed;
+    pw.peek = -1;
+    eye.setAttribute("aria-pressed", String(pw.revealed));
+    eye.setAttribute("aria-label", pw.revealed ? T.hidePassword : T.showPassword);
+    showPassword(document.activeElement === input ? caretChars() : null);
+  });
+  eye.setAttribute("aria-label", T.showPassword);
 }
 
 async function signOut() {
@@ -329,9 +441,28 @@ function onOverview(data) {
 
 /// Where to start: the pane in the address (a notification's link), else home.
 function pickStart() {
+  if (!openAskedPane()) goHome();
+}
+
+/// Opens the pane the address names (`#6`), if it is still there: an agent's session, or any
+/// terminal of a tab. Whether it did.
+function openAskedPane() {
   const asked = Number((location.hash || "").slice(1));
-  if (asked && Number.isInteger(asked) && session(asked)) return selectPane(asked);
-  goHome();
+  if (!asked || !Number.isInteger(asked)) return false;
+  if (session(asked)) {
+    selectPane(asked);
+    return true;
+  }
+  for (const ws of state.workspaces) {
+    const index = ws.tabs.findIndex((tab) => tab.panes.includes(asked));
+    if (index >= 0 && !ws.sleeping) {
+      state.workspace = ws.id;
+      state.tab = index;
+      switchPane(asked);
+      return true;
+    }
+  }
+  return false;
 }
 
 function goHome() {
@@ -378,6 +509,7 @@ function switchPane(pane) {
     state.rows = [];
     state.lines = [];
     state.screen = null;
+    state.follow = true;
     $("term").replaceChildren();
     if (pane != null) history.replaceState(null, "", "#" + pane);
     listen();
@@ -668,6 +800,8 @@ function renderKeys(needs) {
     keys.append(b);
     return b;
   };
+  // Enter first and larger: the key pressed most, within reach whatever the row is scrolled to.
+  add("⏎", "enter", {}, "enter");
   if (needs) {
     add("1", "1", {}, "answer");
     add("2", "2", {}, "answer");
@@ -680,7 +814,6 @@ function renderKeys(needs) {
   add("↓", "down");
   add("←", "left");
   add("→", "right");
-  add("⏎", "enter");
   add("^C", "c", { ctrl: true });
   add("Ctrl", "ctrl").classList.toggle("on", state.ctrl);
   // Text size, kept on this device.
@@ -932,26 +1065,54 @@ function sendText(text) {
 
 // ---- The terminal ----
 
+// The cursor as [column, line], the line counted from the top of the scrollback sent above the
+// screen.
+function cursorLine(screen) {
+  return screen && screen.cursor ? [screen.cursor[0], (screen.history || 0) + screen.cursor[1]] : null;
+}
+
+// Lines of scrollback come above the screen. At the bottom (or close), the terminal follows what
+// comes in; scrolled up, it stays on the lines being read while new ones arrive below, and a
+// button leads back down.
 function onScreen(update) {
   if (update.pane !== state.pane) return;
   const term = $("term");
-  if (update.full || !state.screen || state.screen.cols !== update.cols || state.screen.rows !== update.rows) {
+  const wrap = $("term-wrap");
+  // The first line in view and where it sits, to keep it there when lines leave the top.
+  let anchor = null;
+  if (!state.follow) {
+    const top = wrap.scrollTop;
+    const row = state.rows.find((r) => !r.hidden && r.offsetTop + r.offsetHeight > top);
+    if (row) anchor = { row, offset: row.offsetTop - top };
+  }
+  let before = cursorLine(state.screen);
+  if (update.full || !state.screen || state.screen.cols !== update.cols) {
     term.replaceChildren();
     state.rows = [];
     state.lines = [];
-    for (let i = 0; i < update.rows; i++) {
-      const row = el("div", "row");
-      term.append(row);
-      state.rows.push(row);
-      state.lines.push([]);
-    }
+    before = null;
+  } else if (update.shift) {
+    // Lines that left the top of the kept scrollback.
+    for (const row of state.rows.splice(0, update.shift)) row.remove();
+    state.lines.splice(0, update.shift);
+    if (before) before[1] -= update.shift;
   }
-  const before = state.screen && state.screen.cursor;
+  const len = update.len != null ? update.len : update.rows;
+  while (state.rows.length > len) {
+    state.rows.pop().remove();
+    state.lines.pop();
+  }
+  while (state.rows.length < len) {
+    const row = el("div", "row");
+    term.append(row);
+    state.rows.push(row);
+    state.lines.push([]);
+  }
   state.screen = update;
   term.style.background = hex(update.bg);
   term.style.color = hex(update.fg);
   // The frame around it too, so a scrollbar's gutter shows no stripe of another color.
-  $("term-wrap").style.background = hex(update.bg);
+  wrap.style.background = hex(update.bg);
   const dirty = new Set();
   for (const [index, runs] of update.lines) {
     if (index >= state.rows.length) continue;
@@ -959,19 +1120,90 @@ function onScreen(update) {
     dirty.add(index);
   }
   // The cursor is drawn inside its row's text, so a row it left or entered is drawn again too.
-  if (before) dirty.add(before[1]);
-  if (update.cursor) dirty.add(update.cursor[1]);
+  const cursor = cursorLine(update);
+  if (before && before[1] >= 0) dirty.add(before[1]);
+  if (cursor) dirty.add(cursor[1]);
   for (const index of dirty) renderRow(index);
   // Empty rows under the last text (or the cursor) are left out: a shell's prompt sits at the
   // top of a tall screen, and scrolling to the bottom would show nothing but blank rows.
-  let last = update.cursor ? update.cursor[1] : 0;
+  let last = cursor ? cursor[1] : 0;
   state.lines.forEach((runs, index) => {
     if (runs.some((r) => r.t.trim() || r.b != null)) last = Math.max(last, index);
   });
   state.rows.forEach((row, index) => (row.hidden = index > last));
   layoutTerm();
+  if (state.follow) {
+    wrap.scrollTop = wrap.scrollHeight;
+  } else if (anchor && anchor.row.isConnected && !anchor.row.hidden) {
+    wrap.scrollTop = anchor.row.offsetTop - anchor.offset;
+  }
+  showToLatest();
+}
+
+// Following again once the reader is back at the bottom; the button shows while they are not.
+function onTermScroll() {
   const wrap = $("term-wrap");
+  state.follow = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 40;
+  showToLatest();
+}
+
+function showToLatest() {
+  const button = $("to-latest");
+  if (button.hidden !== state.follow) button.hidden = state.follow;
+}
+
+// A program that scrolls itself (Claude Code's full-screen UI, vim, less) keeps no scrollback
+// in the terminal: there is nothing here to scroll, so a swipe or the wheel goes to it as the
+// mouse wheel would, a line per line's height moved.
+let pendingScroll = 0;
+let scrollTimer = null;
+
+function programScrolls() {
+  return !!(state.screen && state.screen.programScrolls);
+}
+
+function scrollProgram(pixels) {
+  pendingScroll += pixels / (1.25 * state.size);
+  if (scrollTimer) return;
+  // Gathered for a moment, so a swipe is a few requests, not one per touch event.
+  scrollTimer = setTimeout(() => {
+    scrollTimer = null;
+    const lines = Math.max(-60, Math.min(60, Math.trunc(pendingScroll)));
+    if (!lines || state.pane == null) return;
+    pendingScroll -= lines;
+    input({ pane: state.pane, kind: "scroll", lines });
+  }, 50);
+}
+
+function setupProgramScroll() {
+  const wrap = $("term-wrap");
+  let lastY = null;
+  wrap.addEventListener("touchstart", (e) => {
+    lastY = e.touches.length === 1 ? e.touches[0].clientY : null;
+    pendingScroll = 0;
+  }, { passive: true });
+  wrap.addEventListener("touchmove", (e) => {
+    if (lastY == null || !programScrolls() || e.touches.length !== 1) return;
+    const y = e.touches[0].clientY;
+    // Finger down: back up through what came before, as on any page.
+    scrollProgram(y - lastY);
+    lastY = y;
+    e.preventDefault();
+  }, { passive: false });
+  wrap.addEventListener("touchend", () => (lastY = null), { passive: true });
+  wrap.addEventListener("wheel", (e) => {
+    if (!programScrolls() || e.ctrlKey) return;
+    const pixels = e.deltaMode === 1 ? e.deltaY * 1.25 * state.size : e.deltaY;
+    scrollProgram(-pixels);
+    e.preventDefault();
+  }, { passive: false });
+}
+
+function toLatest() {
+  const wrap = $("term-wrap");
+  state.follow = true;
   wrap.scrollTop = wrap.scrollHeight;
+  showToLatest();
 }
 
 // A row that is only a horizontal rule (Claude Code's dividers): kept on one line and cut at the
@@ -982,7 +1214,7 @@ function renderRow(index) {
   const row = state.rows[index];
   if (!row) return;
   const runs = state.lines[index] || [];
-  const cursor = state.screen && state.screen.cursor;
+  const cursor = cursorLine(state.screen);
   const cursorCol = cursor && cursor[1] === index ? cursor[0] : -1;
   const nodes = [];
   let col = 0;
@@ -1097,7 +1329,13 @@ const KEY_NAMES = {
 
 function setupKeyboard() {
   const keyboard = $("keyboard");
-  $("term").addEventListener("click", () => keyboard.focus({ preventScroll: true }));
+  // On a touch screen a tap on the terminal goes to the prompt box below it: the phone's keyboard
+  // is for writing a prompt there, not for typing into the terminal key by key. With a mouse and
+  // a keyboard, typing goes straight to the terminal.
+  $("term").addEventListener("click", () => {
+    if (matchMedia("(pointer: coarse)").matches) $("prompt").focus({ preventScroll: true });
+    else keyboard.focus({ preventScroll: true });
+  });
   // Korean, Japanese and Chinese are typed through the input method. Its events are not to be
   // trusted for the text (Safari's compositionend can carry a half-built syllable, and the next
   // composition may start before the last one settles), so the field itself is the record:
@@ -1190,12 +1428,146 @@ function setupPrompt() {
   $("prompt-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const text = prompt.value;
-    if (!text.trim() || state.pane == null) return;
+    if (state.pane == null) return;
+    if (attachments.some((a) => !a.path && !a.failed)) return alert(T.attachWait);
+    const images = attachments.filter((a) => a.path).map((a) => a.path);
+    if (!text.trim() && !images.length) return;
     // To a chat's lead, as the chat sends it (its instructions go in front the first time).
-    input({ pane: state.pane, kind: inChat() ? "chat" : "prompt", text });
+    input({ pane: state.pane, kind: inChat() ? "chat" : "prompt", text, images });
     prompt.value = "";
+    clearAttachments();
     grow();
   });
+}
+
+// ---- Images ----
+//
+// Attached from the button, pasted into the prompt box or dropped on it. Each is uploaded to the
+// Mac at once (made smaller first when it is a large photo) and sent with the next prompt, which
+// the Mac pastes in front of it as a drop on the terminal would.
+
+const ATTACH_MAX_SIDE = 2000;
+const ATTACH_MAX_BYTES = 4 * 1024 * 1024;
+const ATTACH_MAX = 10;
+const attachments = []; // { url, path, failed }
+
+function setupAttachments() {
+  const btn = $("attach-button");
+  const picker = $("attach-input");
+  btn.setAttribute("aria-label", T.attach);
+  btn.title = T.attach;
+  btn.addEventListener("click", () => picker.click());
+  picker.addEventListener("change", () => {
+    [...picker.files].forEach(addAttachment);
+    picker.value = "";
+  });
+  $("prompt").addEventListener("paste", (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    files.forEach(addAttachment);
+  });
+  const form = $("prompt-form");
+  form.addEventListener("dragover", (e) => {
+    if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+    e.preventDefault();
+    form.classList.add("dragging");
+  });
+  form.addEventListener("dragleave", () => form.classList.remove("dragging"));
+  form.addEventListener("drop", (e) => {
+    form.classList.remove("dragging");
+    const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    files.forEach(addAttachment);
+  });
+}
+
+// A photo as the agent needs it: at most ATTACH_MAX_SIDE pixels a side and a few MB, in a format
+// it reads (PNG, JPEG, GIF, WebP; anything else, such as HEIC, becomes JPEG). Null if the browser
+// can't read it as an image.
+async function shrinkImage(file) {
+  const readable = ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type);
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch (_) {
+    return readable && file.size <= ATTACH_MAX_BYTES ? file : null;
+  }
+  const scale = Math.min(1, ATTACH_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  if (readable && scale === 1 && file.size <= ATTACH_MAX_BYTES) {
+    bitmap.close();
+    return file;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; // JPEG has no transparency
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+}
+
+function addAttachment(file) {
+  if (state.pane == null || attachments.length >= ATTACH_MAX || !file.type.startsWith("image/")) return;
+  const item = { url: URL.createObjectURL(file), path: null, failed: false };
+  attachments.push(item);
+  renderAttachments();
+  const pane = state.pane;
+  (async () => {
+    const blob = await shrinkImage(file);
+    if (!blob) throw new Error("not an image");
+    // Raw bytes; the JSON content type only satisfies the same-origin (CSRF) check, as for voice.
+    const res = await fetch(`/api/attach?pane=${pane}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Agentty": "1" },
+      body: blob,
+    });
+    if (res.status === 401) showLogin();
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    if (!data.path) throw new Error("no path");
+    item.path = data.path;
+  })()
+    .catch(() => { item.failed = true; })
+    .finally(renderAttachments);
+}
+
+function removeAttachment(item) {
+  const at = attachments.indexOf(item);
+  if (at < 0) return;
+  attachments.splice(at, 1);
+  URL.revokeObjectURL(item.url);
+  renderAttachments();
+}
+
+function clearAttachments() {
+  attachments.splice(0).forEach((a) => URL.revokeObjectURL(a.url));
+  renderAttachments();
+}
+
+function renderAttachments() {
+  const box = $("attachments");
+  box.replaceChildren(...attachments.map((item) => {
+    const chip = document.createElement("div");
+    chip.className = "attachment" + (item.failed ? " failed" : item.path ? "" : " pending");
+    if (item.failed) chip.title = T.attachFailed;
+    const img = document.createElement("img");
+    img.src = item.url;
+    img.alt = "";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", T.attachRemove);
+    remove.addEventListener("click", () => removeAttachment(item));
+    chip.append(img, remove);
+    return chip;
+  }));
+  box.hidden = !attachments.length;
 }
 
 // ---- Voice ----
@@ -1499,6 +1871,11 @@ async function start() {
 
 window.addEventListener("DOMContentLoaded", () => {
   $("login-form").addEventListener("submit", signIn);
+  setupPasswordBox();
+  // A notification's link opened in a page already showing: only the address's `#pane` changed.
+  window.addEventListener("hashchange", () => {
+    if (state.started && Number((location.hash || "").slice(1)) !== state.pane) openAskedPane();
+  });
   $("logout-button").addEventListener("click", signOut);
   $("menu-button").addEventListener("click", () => openDrawer("sidebar"));
   $("panes-button").addEventListener("click", () => openDrawer("panes"));
@@ -1526,8 +1903,13 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   // The area changes with the window, the keyboard on a phone, and the bars around it.
   new ResizeObserver(() => fitTerm()).observe($("term-wrap"), { box: "border-box" });
+  $("term-wrap").addEventListener("scroll", onTermScroll, { passive: true });
+  $("to-latest").addEventListener("click", toLatest);
+  $("to-latest").textContent = T.toLatest;
+  setupProgramScroll();
   setupKeyboard();
   setupPrompt();
+  setupAttachments();
   setupChat();
   setupVoice();
   start();

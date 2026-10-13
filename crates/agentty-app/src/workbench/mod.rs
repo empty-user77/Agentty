@@ -3394,9 +3394,13 @@ impl Render for Workbench {
             }))
             .on_action(cx.listener(|this, _: &ToggleFiles, _, cx| this.toggle_files_panel(cx)))
             .on_action(cx.listener(|this, _: &FindInTerminal, window, cx| {
-                // The terminal behind the editor is not on screen to search.
+                // The terminal behind the editor is not on screen to search: the file in front is.
                 if !this.editor_visible(cx) {
                     this.open_find(window, cx)
+                } else if this.file_diff.is_none() {
+                    if let Some(editor) = this.editor.clone() {
+                        editor.update(cx, |editor, cx| editor.open_find(window, cx));
+                    }
                 }
             }))
             .on_action(cx.listener(|_, _: &ZoomIn, _, cx| update_settings(cx, |s| s.font_size = (s.font_size + 1.).min(32.))))
@@ -4073,6 +4077,22 @@ impl Workbench {
                         },
                     })
                 );
+            }
+            // Keys as if pressed, through the key bindings to whatever has focus: `cmd-f`, `a`, `enter`.
+            // (After this update: the workbench handles keys of its own.)
+            "keystroke" => {
+                let keys: Vec<String> = argument.split_whitespace().map(str::to_string).collect();
+                window.defer(cx, move |window, cx| {
+                    for key in keys {
+                        match gpui::Keystroke::parse(&key) {
+                            Ok(keystroke) => {
+                                let handled = window.dispatch_keystroke(keystroke, cx);
+                                eprintln!("keystroke {key}: {handled}");
+                            }
+                            Err(err) => eprintln!("keystroke {key}: {err}"),
+                        }
+                    }
+                });
             }
             "edit" => self.debug_editor("edit", argument, window, cx),
             "editor" => {
