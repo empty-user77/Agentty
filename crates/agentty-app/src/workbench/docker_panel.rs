@@ -435,10 +435,11 @@ impl Workbench {
                         .rounded_sm()
                         .t_small()
                         .bg(hex(0x2d2d30))
+                        .when(crate::theme::is_light(), crate::ui::outlined)
                         .text_color(hex(Chrome::FOREGROUND))
                         .when(!busy, |d| {
                             d.cursor_pointer()
-                                .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+                                .hover(crate::ui::hover_fill)
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.docker_action(action, None, cx)))
                         })
                         .when(busy, |d| d.opacity(0.5))
@@ -501,7 +502,7 @@ impl Workbench {
                                         .t_small()
                                         .cursor_pointer()
                                         .bg(hex_alpha(Chrome::ERROR, 0.7))
-                                        .text_color(hex(Chrome::BRIGHT))
+                                        .text_color(hex(Chrome::ON_ACCENT))
                                         .hover(|s| s.bg(hex(Chrome::ERROR)))
                                         .child(t(cx, "docker.down"))
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.docker_action(Action::Down, None, cx))),

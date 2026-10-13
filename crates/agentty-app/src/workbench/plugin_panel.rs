@@ -550,9 +550,9 @@ impl Workbench {
                             .t_small()
                             .font_weight(crate::theme::EMPHASIS)
                             .bg(hex(Chrome::ACCENT))
-                            .text_color(hex(Chrome::BRIGHT))
+                            .text_color(hex(Chrome::ON_ACCENT))
                             .hover(|s| s.bg(hex_alpha(Chrome::ACCENT, 0.82)))
-                            .child(icon("plus", IconSize::INLINE, hex(Chrome::BRIGHT)))
+                            .child(icon("plus", IconSize::INLINE, hex(Chrome::ON_ACCENT)))
                             .child(t(cx, "plugins.new_automation"))
                             .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                                 // A double click is one instance, not two.
@@ -899,7 +899,7 @@ impl Workbench {
                         .rounded_sm()
                         .bg(hex(Chrome::ACCENT))
                         .t_caption()
-                        .text_color(hex(Chrome::BRIGHT))
+                        .text_color(hex(Chrome::ON_ACCENT))
                         .child(badge),
                 )
             })
@@ -960,7 +960,7 @@ impl Workbench {
             }))
             .child(
                 icon("blocks", IconSize::ACTIVITY, if lit { hex(Chrome::BRIGHT) } else { hex(0x858585) })
-                    .group_hover(ID, |s| s.text_color(hex(Chrome::BRIGHT))),
+                    .group_hover(ID, |s| s.text_color(hex(Chrome::ON_ACCENT))),
             )
             .when(badge, |d| d.child(div().absolute().bottom(px(10.)).right(px(10.)).size(px(7.)).rounded_full().bg(hex(Chrome::ACCENT))))
             .when(self.plugin_group_menu, |d| d.child(self.render_plugin_group_menu(cx)))
@@ -1027,7 +1027,7 @@ impl Workbench {
                             .rounded_sm()
                             .bg(hex(Chrome::ACCENT))
                             .t_caption()
-                            .text_color(hex(Chrome::BRIGHT))
+                            .text_color(hex(Chrome::ON_ACCENT))
                             .child(badge),
                     )
                 })

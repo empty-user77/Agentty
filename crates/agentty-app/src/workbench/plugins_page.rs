@@ -1240,7 +1240,7 @@ impl Workbench {
                     }
                 })
             })
-            .when(confirming, |d| d.bg(hex(Chrome::ERROR)).text_color(hex(Chrome::BRIGHT))),
+            .when(confirming, |d| d.bg(hex(Chrome::ERROR)).text_color(hex(Chrome::ON_ACCENT))),
         )
     }
 

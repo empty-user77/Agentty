@@ -79,7 +79,7 @@ impl Render for DragPreview {
             .rounded_md()
             .bg(hex(Chrome::ACCENT))
             .t_body()
-            .text_color(hex(Chrome::BRIGHT))
+            .text_color(hex(Chrome::ON_ACCENT))
             .shadow_lg()
             .child(self.title.clone())
     }
@@ -2296,7 +2296,7 @@ impl Workbench {
                 .py_1p5()
                 .rounded_md()
                 .cursor_pointer()
-                .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                .hover(crate::ui::hover_fill)
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| action(this, window, cx)))
                 // The launcher is where a tool is chosen: its colour is the point here.
                 .child(match logo {

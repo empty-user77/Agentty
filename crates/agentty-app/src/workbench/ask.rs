@@ -124,6 +124,7 @@ impl Workbench {
                     .t_body()
                     .cursor_pointer()
                     .bg(hex(0x2d2d30))
+                    .when(crate::theme::is_light(), crate::ui::outlined)
                     .text_color(hex(Chrome::BRIGHT))
                     .hover(|s| s.opacity(0.85))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {

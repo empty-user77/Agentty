@@ -130,7 +130,7 @@ impl Workbench {
                                 .px_0p5()
                                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| save(hud::toggled(&for_toggle, item), cx)))
-                                .child(div().size(px(16.)).rounded_full().bg(hex(Chrome::BRIGHT))),
+                                .child(div().size(px(16.)).rounded_full().bg(hex(Chrome::ON_ACCENT))),
                         )
                     })
                     .child(

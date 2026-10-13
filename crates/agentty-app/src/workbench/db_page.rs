@@ -1239,7 +1239,7 @@ impl Workbench {
                         .flex_shrink_0()
                         .cursor(gpui::CursorStyle::ResizeUpDown)
                         .bg(hex(Chrome::BORDER))
-                        .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                        .hover(crate::ui::hover_fill)
                         .on_drag(DbQueryDrag, |_, _, _, cx| cx.new(|_| DbQueryDrag))
                         // Moves by how far the pointer is from the bar drawn in the last frame, so
                         // it follows the pointer however far it was dragged in one go.
@@ -1357,7 +1357,7 @@ impl Workbench {
                             .right(px(-2.))
                             .w(px(5.))
                             .cursor(gpui::CursorStyle::ResizeLeftRight)
-                            .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                            .hover(crate::ui::hover_fill)
                             .on_drag(DbGridDrag, |_, _, _, cx| cx.new(|_| DbGridDrag))
                             .on_drag_move(cx.listener(move |this, event: &gpui::DragMoveEvent<DbGridDrag>, _, cx| {
                                 let delta = f32::from(event.event.position.x) - f32::from(event.bounds.origin.x);
@@ -1633,7 +1633,8 @@ impl Workbench {
                 .t_body()
                 .cursor_pointer()
                 .bg(if danger { hex(Chrome::ERROR) } else { hex(0x2d2d30) })
-                .text_color(hex(Chrome::BRIGHT))
+                .when(!(danger) && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if danger { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
                 .hover(|s| s.opacity(0.85))
                 .child(label)
         };
@@ -1737,7 +1738,7 @@ fn column_handle(tables: bool, cx: &mut Context<Workbench>) -> gpui::Stateful<gp
         .flex_shrink_0()
         .h_full()
         .cursor(gpui::CursorStyle::ResizeLeftRight)
-        .hover(|s| s.bg(hex(Chrome::ACCENT)))
+        .hover(crate::ui::hover_fill)
         .on_drag(DbColumnDrag, |_, _, _, cx| cx.new(|_| DbColumnDrag))
         // Moves by how far the pointer is from the edge drawn in the last frame.
         .on_drag_move(cx.listener(move |this, event: &gpui::DragMoveEvent<DbColumnDrag>, _, cx| {

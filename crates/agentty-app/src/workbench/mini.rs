@@ -140,6 +140,8 @@ impl MiniPeek {
 
 impl gpui::Render for MiniPeek {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Dark like the mini window it opens from.
+        let _dark = crate::theme::DarkOnly::hold();
         let title = self.pane.read(cx).display_title();
         let tool = self.pane.read(cx).tool_id();
         let pane_id = self.pane_id;
@@ -278,6 +280,8 @@ impl MiniView {
 
 impl Render for MiniView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Dark in any appearance: it floats over other apps, beside the menu bar.
+        let _dark = crate::theme::DarkOnly::hold();
         let Some(workbench) = self.workbench.upgrade() else { return div().into_any_element() };
         let all = workbench.read(cx).agent_summaries(cx);
         let live: Vec<u64> = all.iter().map(|a| a.pane_id).collect();
@@ -311,7 +315,9 @@ impl Render for MiniView {
 
         let mut bubbles = div().flex().flex_col().gap_2();
         for (index, bubble) in self.bubbles.clone().into_iter().enumerate() {
-            let (pane_id, color, ask) = (bubble.pane_id, bubble.color, bubble.ask);
+            let (pane_id, ask) = (bubble.pane_id, bubble.ask);
+            // Taken now, while the dark-only hold is on: the tail is painted after `render` returns.
+            let tail = hex_alpha(bubble.color, 0.7);
             let ago = crate::ui::relative_time(bubble.at.elapsed().as_millis() as u64, 0);
             // Allow / Deny go the way a notification's buttons do: to the main window, which types
             // them only while this very request still waits.
@@ -324,7 +330,7 @@ impl Render for MiniView {
                     .t_small()
                     .font_weight(crate::theme::EMPHASIS)
                     .cursor_pointer()
-                    .when(primary, |d| d.bg(hex(Chrome::ATTENTION)).text_color(hex(Chrome::BRIGHT)))
+                    .when(primary, |d| d.bg(hex(Chrome::ATTENTION)).text_color(hex(Chrome::ON_ACCENT)))
                     .when(!primary, |d| d.border_1().border_color(hex(Chrome::BORDER)).text_color(hex(Chrome::FOREGROUND)))
                     .hover(|s| s.opacity(0.85))
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -394,7 +400,7 @@ impl Render for MiniView {
                                 path.line_to(gpui::point(x + px(7.), y + px(7.)));
                                 path.close();
                                 if let Ok(path) = path.build() {
-                                    window.paint_path(path, hex_alpha(color, 0.7));
+                                    window.paint_path(path, tail);
                                 }
                             },
                         )

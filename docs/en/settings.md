@@ -7,7 +7,7 @@ description: What each page of Settings (⌘,) does.
 
 ## General
 
-Language (English, 한국어, 日本語, 中文), and the behavior of the things you meet daily:
+Language (English, 한국어, 日本語, 中文), **Appearance** (System, Dark or Light — System follows macOS as it switches; terminals keep the theme from Terminal Style either way), and the behavior of the things you meet daily:
 
 | Setting | What it does |
 |---|---|

@@ -941,8 +941,8 @@ impl GitView {
                 .t_body()
                 .cursor_pointer()
                 .bg(hex(if self.merge_mode { Chrome::ACCENT } else { 0x2d2d30 }))
-                .text_color(hex(Chrome::BRIGHT))
-                .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                .text_color(hex(Chrome::ON_ACCENT))
+                .hover(crate::ui::hover_fill)
                 // A long branch name is cut short inside the menu's fixed width.
                 .child(div().min_w_0().truncate().child(if self.merge_mode {
                     t(cx, "git.cancel_merge").to_string()
@@ -1114,7 +1114,7 @@ impl GitView {
                     .t_body()
                     .font_weight(crate::theme::EMPHASIS)
                     .bg(hex(Chrome::ACCENT))
-                    .text_color(hex(Chrome::BRIGHT))
+                    .text_color(hex(Chrome::ON_ACCENT))
                     .when(!can_commit, |d| d.opacity(0.45))
                     .when(can_commit, |d| d.cursor_pointer().hover(|s| s.bg(hex(0x1a8ae6))))
                     .child(match self.busy {
@@ -1174,7 +1174,7 @@ impl GitView {
                     .rounded_sm()
                     .when(!confirming, |d| d.invisible().group_hover("git-file", |s| s.visible()))
                     .when(confirming, |d| {
-                        d.px_1().bg(hex(Chrome::ERROR)).t_caption().text_color(hex(Chrome::BRIGHT)).child(t(cx, "git.discard_confirm"))
+                        d.px_1().bg(hex(Chrome::ERROR)).t_caption().text_color(hex(Chrome::ON_ACCENT)).child(t(cx, "git.discard_confirm"))
                     })
                     .when(!confirming, |d| d.child(icon("undo-2", IconSize::INLINE, hex(Chrome::MUTED))))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1466,9 +1466,9 @@ impl Render for GitView {
                 .rounded_md()
                 .cursor_pointer()
                 .bg(hex(Chrome::ACCENT))
-                .text_color(hex(Chrome::BRIGHT))
+                .text_color(hex(Chrome::ON_ACCENT))
                 .hover(|s| s.opacity(0.85))
-                .child(icon("sparkles", IconSize::INLINE, hex(Chrome::BRIGHT)))
+                .child(icon("sparkles", IconSize::INLINE, hex(Chrome::ON_ACCENT)))
                 .child(t(cx, "git.ai_resolve"))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.message = None;

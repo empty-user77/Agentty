@@ -5,7 +5,7 @@ use super::keys;
 use crate::agent_signal::{SignalKind, SignalSocket};
 use crate::launch::{next_pane_id, LaunchSpec, PaneKind};
 use crate::settings::{settings, terminal_theme, AdvisorChoice, CursorShapeSetting, SYMBOLS_FONT};
-use crate::theme::{hex, Chrome, TerminalTheme};
+use crate::theme::{hex, raw, Chrome, TerminalTheme};
 use agentty_bridge::model::Agent;
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -2190,7 +2190,7 @@ impl TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let background = hex(terminal_theme(cx).background);
+        let background = raw(terminal_theme(cx).background);
         let container = div().id("terminal").key_context("Terminal").track_focus(&self.focus_handle).size_full().bg(background);
 
         if let Some(error) = &self.error {
@@ -2543,7 +2543,7 @@ impl Element for TerminalElement {
         let colors = content.colors;
         let display_offset = content.display_offset;
         let selection = content.selection;
-        let default_bg = hex(theme.background);
+        let default_bg = raw(theme.background);
 
         let make_run = |len: usize, style: CellStyle| TextRun {
             len,
@@ -2646,12 +2646,12 @@ impl Element for TerminalElement {
                 if let Some(index) = matches.iter().position(|m| m.contains(&indexed.point)) {
                     bg = if index == *current { gpui::rgba(0xe8a33dff).into() } else { gpui::rgba(0xe8a33d59).into() };
                     if index == *current {
-                        fg = hex(0x1b1b1b);
+                        fg = raw(0x1b1b1b);
                     }
                 }
             }
             if selection.is_some_and(|s| s.contains(indexed.point)) {
-                bg = hex(theme.selection);
+                bg = raw(theme.selection);
             }
 
             let bg_visible = bg != default_bg;
@@ -2708,7 +2708,7 @@ impl Element for TerminalElement {
                     point(origin.x + cell_width * col as f32, origin.y + line_height * row as f32),
                     size(cell_width * width as f32, line_height),
                 );
-                let color = hex(theme.cursor);
+                let color = raw(theme.cursor);
                 frame.cursor = Some(match (focused, cursor_shape) {
                     (false, _) | (true, CursorShape::HollowBlock) => outline(cursor_bounds, color, BorderStyle::Solid),
                     (true, CursorShape::Beam) => fill(Bounds::new(cursor_bounds.origin, size(px(2.), line_height)), color),
@@ -2764,7 +2764,7 @@ impl Element for TerminalElement {
             } else {
                 cursor_col
             };
-            let fg = hex(theme.foreground);
+            let fg = raw(theme.foreground);
             // Shaped whole, never a glyph at a time. An input method hands over a syllable still
             // being built as its separate jamo (한 arrives as ᄒ ᅡ ᆫ); shaping the string is what
             // puts them back together. Shaping each character on its own draws three letters side
@@ -2780,7 +2780,7 @@ impl Element for TerminalElement {
             let shaped = text_system.shape_line(SharedString::from(text), font_size, &[run], None);
             let pos = point(origin.x + cell_width * start as f32, origin.y + line_height * cursor_row as f32);
             // The cells underneath are hidden, so nothing shows through from behind.
-            let backdrop = fill(Bounds::new(pos, size(shaped.width, line_height)), hex(theme.background));
+            let backdrop = fill(Bounds::new(pos, size(shaped.width, line_height)), raw(theme.background));
             let glyphs = vec![(pos, shaped)];
             frame.marked = Some((backdrop, glyphs));
         }
@@ -2857,7 +2857,7 @@ fn to_rgb(value: u32) -> Rgb {
 }
 
 fn rgb_to_hsla(rgb: Rgb) -> Hsla {
-    hex(((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | rgb.b as u32)
+    raw(((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | rgb.b as u32)
 }
 
 fn default_color(theme: &TerminalTheme, index: usize) -> u32 {
@@ -2874,7 +2874,7 @@ fn resolve_color(color: AnsiColor, colors: &Colors, theme: &TerminalTheme, bold:
         AnsiColor::Spec(rgb) => rgb_to_hsla(rgb),
         AnsiColor::Indexed(index) => {
             let index = if bold && index < 8 { index + 8 } else { index } as usize;
-            colors[index].map(rgb_to_hsla).unwrap_or_else(|| hex(theme.indexed(index as u8)))
+            colors[index].map(rgb_to_hsla).unwrap_or_else(|| raw(theme.indexed(index as u8)))
         }
         AnsiColor::Named(named) => {
             let mut index = named as usize;
@@ -2886,15 +2886,15 @@ fn resolve_color(color: AnsiColor, colors: &Colors, theme: &TerminalTheme, bold:
             }
             let dim_start = NamedColor::DimBlack as usize;
             let dimmed = |value: u32| {
-                let mut c = hex(value);
+                let mut c = raw(value);
                 c.a = 0.66;
                 c
             };
             match index {
-                0..=15 => hex(theme.ansi[index]),
+                0..=15 => raw(theme.ansi[index]),
                 i if (dim_start..dim_start + 8).contains(&i) => dimmed(theme.ansi[i - dim_start]),
                 i if i == NamedColor::DimForeground as usize => dimmed(theme.foreground),
-                _ => hex(default_color(theme, index)),
+                _ => raw(default_color(theme, index)),
             }
         }
     }

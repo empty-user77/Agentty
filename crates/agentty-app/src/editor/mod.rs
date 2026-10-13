@@ -1243,7 +1243,8 @@ impl CodeEditor {
                 .t_small()
                 .cursor_pointer()
                 .bg(if primary { hex(Chrome::ACCENT) } else { hex(0x2d2d30) })
-                .text_color(hex(Chrome::BRIGHT))
+                .when(!(primary) && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if primary { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
                 .hover(|s| s.opacity(0.85))
                 .child(label)
         };
@@ -1443,7 +1444,8 @@ impl CodeEditor {
                     .t_body()
                     .cursor_pointer()
                     .bg(if index == 0 { hex(Chrome::ACCENT) } else { hex(0x2d2d30) })
-                    .text_color(hex(Chrome::BRIGHT))
+                    .when(!(index == 0) && crate::theme::is_light(), crate::ui::outlined)
+                    .text_color(hex(if index == 0 { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
                     .hover(|s| s.opacity(0.85))
                     .child(label)
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.answer(choice, window, cx))),
