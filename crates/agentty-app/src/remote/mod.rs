@@ -12,7 +12,9 @@
 //!
 //! It is off until the user sets a password and turns it on, and it runs only while Tailscale
 //! does: signed out, disconnected or quit, and the server and `serve` go down within seconds,
-//! coming back by themselves once Tailscale is connected again. A debug build started with
+//! coming back by themselves once Tailscale is connected again. While on, the page is also asked
+//! for through Tailscale every half minute and after the Mac wakes; when it stops answering,
+//! everything starts over by itself (`watch_health`). A debug build started with
 //! `AGENTTY_DEBUG=1 AGENTTY_REMOTE_DEV=1` serves on `http://127.0.0.1:<port>` without Tailscale, for
 //! testing; a release build has no such mode (`dev_mode`).
 
@@ -40,6 +42,18 @@ const FAST_FOR: Duration = Duration::from_millis(1500);
 const TAILSCALE_CHECK: Duration = Duration::from_secs(3);
 /// How often the tailnet port is checked for Funnel while on.
 const FUNNEL_CHECK: Duration = Duration::from_secs(15);
+/// How often, while on, the page is asked for through Tailscale, the way another device reaches
+/// it: Tailscale can be connected and still have lost the way in (its entry gone or broken after
+/// sleep, a network change or its own restart).
+const HEALTH_CHECK: Duration = Duration::from_secs(30);
+/// Failed checks in a row before remote access starts over: one can be a passing hiccup.
+const HEALTH_FAILURES: u32 = 2;
+/// A round this much later than due means the Mac slept: the page is checked at once.
+const SLEPT: Duration = Duration::from_secs(10);
+/// Waits before starting again after a start that failed for no lasting reason, doubling each
+/// time up to the last.
+const RETRY_DELAYS: [Duration; 5] =
+    [Duration::from_secs(10), Duration::from_secs(30), Duration::from_secs(60), Duration::from_secs(120), Duration::from_secs(300)];
 
 /// Why remote access is not on.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +117,16 @@ pub struct Remote {
     last_dashboard: Option<std::time::Instant>,
     /// When the workspace list was last built: at most every TICK, even in fast rounds.
     last_overview: Option<std::time::Instant>,
+    /// When the page was last checked through Tailscale, whether an answer is awaited, and how
+    /// many checks in a row failed.
+    last_health: Option<std::time::Instant>,
+    health_checking: bool,
+    health_failures: u32,
+    /// When a start that failed for no lasting reason is tried again, and how many tries so far.
+    retry_at: Option<std::time::Instant>,
+    retries: usize,
+    /// When the last round ran, to notice the Mac slept.
+    last_tick: Option<std::time::Instant>,
 }
 
 impl Global for Remote {}
@@ -189,6 +213,10 @@ pub fn init(cx: &mut App) {
 /// Turns remote access on or off and remembers it.
 pub fn set_enabled(on: bool, cx: &mut App) {
     update_settings(cx, move |s| s.remote.enabled = on);
+    // Turned on or off by hand: automatic retries start over from the shortest wait.
+    let remote = cx.global_mut::<Remote>();
+    remote.retries = 0;
+    remote.retry_at = None;
     if on && settings(cx).remote.feature {
         start(cx);
     } else {
@@ -230,6 +258,13 @@ fn fail(problem: Problem, generation: u64, cx: &mut App) {
     if remote.generation != generation {
         return;
     }
+    // Nothing the user has to fix (Tailscale refused or couldn't reach the page this time): it is
+    // tried again by itself, later each time. The others wait for the user or for Tailscale.
+    remote.retry_at = matches!(problem, Problem::Other(_)).then(|| {
+        let wait = RETRY_DELAYS[remote.retries.min(RETRY_DELAYS.len() - 1)];
+        remote.retries += 1;
+        std::time::Instant::now() + wait
+    });
     remote.phase = Phase::Failed(problem);
     cx.refresh_windows();
 }
@@ -418,6 +453,10 @@ pub fn start(cx: &mut App) {
                 old.shutdown();
             }
             remote.last_funnel_check = Some(std::time::Instant::now());
+            remote.last_health = Some(std::time::Instant::now());
+            remote.health_failures = 0;
+            remote.retries = 0;
+            remote.retry_at = None;
             remote.watched_tailscale = (status.login.clone(), status.dns_name.clone());
             if keep_awake && cfg!(target_os = "macos") {
                 // `-i`: no idle sleep while Agentty runs (`-w`); the display may still sleep.
@@ -640,6 +679,70 @@ fn watch_tailscale(cx: &mut App) {
     .detach();
 }
 
+/// While on, every HEALTH_CHECK (and right after the Mac wakes): is Tailscale's entry still there,
+/// and does the page answer through it? Twice in a row not, and remote access starts over, as
+/// turning it off and on would (every session signs in again). A start that failed for no lasting
+/// reason is tried again here too, after its wait.
+fn watch_health(cx: &mut App) {
+    if dev_mode() {
+        return;
+    }
+    let enabled = settings(cx).remote.feature && settings(cx).remote.enabled;
+    let remote = cx.global_mut::<Remote>();
+    let now = std::time::Instant::now();
+    if remote.last_tick.is_some_and(|at| now.duration_since(at) >= SLEPT) {
+        remote.last_health = None;
+    }
+    remote.last_tick = Some(now);
+    if enabled && matches!(remote.phase, Phase::Failed(Problem::Other(_))) && remote.retry_at.is_some_and(|at| now >= at) {
+        remote.retry_at = None;
+        return start(cx);
+    }
+    let (Phase::On { url }, Some((port, target))) = (&remote.phase, &remote.served) else { return };
+    if !enabled || remote.health_checking || remote.last_health.is_some_and(|at| at.elapsed() < HEALTH_CHECK) {
+        return;
+    }
+    let (url, port, target) = (url.clone(), *port, target.clone());
+    remote.last_health = Some(now);
+    remote.health_checking = true;
+    let generation = remote.generation;
+    cx.spawn(async move |cx| {
+        // `None`: couldn't tell this time (the tool slow to answer, no curl); not a failure.
+        let healthy = cx
+            .background_executor()
+            .spawn(async move {
+                match tailscale::still_served(port, &target) {
+                    Some(false) => Some(false),
+                    _ => tailscale::reachable(&url),
+                }
+            })
+            .await;
+        let _ = cx.update(|cx| {
+            let remote = cx.global_mut::<Remote>();
+            remote.health_checking = false;
+            if remote.generation != generation || !matches!(remote.phase, Phase::On { .. }) {
+                return;
+            }
+            match healthy {
+                Some(true) => remote.health_failures = 0,
+                Some(false) => {
+                    remote.health_failures += 1;
+                    if remote.health_failures >= HEALTH_FAILURES {
+                        remote.health_failures = 0;
+                        start(cx);
+                    } else {
+                        // Asked again soon rather than a whole HEALTH_CHECK later.
+                        let soon = HEALTH_CHECK - Duration::from_secs(5);
+                        remote.last_health = std::time::Instant::now().checked_sub(soon);
+                    }
+                }
+                None => {}
+            }
+        });
+    })
+    .detach();
+}
+
 /// Characters of a plugin's failure kept for the page.
 const MAX_PLUGIN_ERROR_CHARS: usize = 300;
 
@@ -696,6 +799,7 @@ fn plugin_overview(automations: &[(String, String, String, bool)], cx: &App) -> 
 /// One round: the page's input into the terminals, then sessions and watched screens out.
 fn tick(cx: &mut App) {
     watch_tailscale(cx);
+    watch_health(cx);
     let Some(hub) = hub(cx) else { return };
     let windows = crate::workbenches(cx);
     let commands = hub.take_commands();

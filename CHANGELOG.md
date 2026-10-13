@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Remote access recovers by itself when its page stops answering while Tailscale stays connected (after sleep or a
+  network change, for example): it checks the page every half minute and when the Mac wakes, and restarts when it
+  doesn't answer twice in a row. A start that fails for a passing reason is retried, waiting longer each time.
+
 ## [0.2.18] - 2026-10-13
 
 ### Added
