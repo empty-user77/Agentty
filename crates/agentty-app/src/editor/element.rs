@@ -361,6 +361,23 @@ impl Element for EditorElement {
             let mut backgrounds = Vec::new();
             let selection = doc.buffer.selection;
             let (sel_start, sel_end) = selection.range();
+            // Find matches on the lines in view, under the selection; the selected one stronger.
+            if let Some(bar) = editor.find.as_ref() {
+                let from = bar.matches.partition_point(|(start, _)| start.line < first);
+                for &(start, end) in bar.matches[from..].iter().take_while(|(start, _)| start.line < last) {
+                    let Some(line) = laid.iter().find(|l| l.index == start.line) else { continue };
+                    let x0 = f32::from(line.shaped.x_for_index(line.display.to_display(start.col)));
+                    let x1 = f32::from(line.shaped.x_for_index(line.display.to_display(end.col)));
+                    let current = (start, end) == (sel_start, sel_end);
+                    backgrounds.push(fill(
+                        Bounds::new(
+                            point(px(text_left - scroll.x + x0), px(row_top(start.line))),
+                            size(px((x1 - x0).max(2.)), px(line_height)),
+                        ),
+                        hex_alpha(0xe2a03f, if current { 0.55 } else { 0.25 }),
+                    ));
+                }
+            }
             if selection.is_empty() {
                 backgrounds.push(fill(
                     Bounds::new(point(bounds.left(), px(row_top(cursor.line))), size(bounds.size.width, px(line_height))),

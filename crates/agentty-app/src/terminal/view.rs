@@ -748,9 +748,10 @@ impl TerminalView {
     }
 
     /// The live screen for the remote page (`crate::remote`): rows of styled runs in the colors
-    /// this pane is drawn in, whatever the user scrolled to here.
+    /// this pane is drawn in, whatever the user scrolled to here, after the newest
+    /// `REMOTE_HISTORY` lines of scrollback so the page can be scrolled back too.
     pub fn remote_screen(&self, theme: &TerminalTheme) -> Option<crate::remote::snapshot::Screen> {
-        use crate::remote::snapshot::{Run, Screen, BOLD, DIM, ITALIC, STRIKE, UNDERLINE, WIDE};
+        use crate::remote::snapshot::{Run, Screen, BOLD, DIM, ITALIC, REMOTE_HISTORY, STRIKE, UNDERLINE, WIDE};
         let backend = self.backend.as_ref()?;
         let term = backend.term.lock();
         let colors = term.colors();
@@ -760,9 +761,10 @@ impl TerminalView {
             let c = gpui::Rgba::from(color);
             (((c.r * 255.).round() as u32) << 16) | (((c.g * 255.).round() as u32) << 8) | (c.b * 255.).round() as u32
         };
-        let mut lines = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let line = &grid[Line(row as i32)];
+        let history = grid.history_size().min(REMOTE_HISTORY);
+        let mut lines = Vec::with_capacity(history + rows);
+        for row in -(history as i32)..rows as i32 {
+            let line = &grid[Line(row)];
             let mut runs: Vec<Run> = Vec::new();
             for col in 0..columns {
                 let cell = &line[Column(col)];
@@ -810,11 +812,24 @@ impl TerminalView {
             runs.retain(|r| !r.t.is_empty());
             lines.push(runs);
         }
-        let cursor = term.mode().contains(TermMode::SHOW_CURSOR).then(|| {
+        let mode = *term.mode();
+        let cursor = mode.contains(TermMode::SHOW_CURSOR).then(|| {
             let point = grid.cursor.point;
             (point.column.0 as u16, point.line.0.max(0) as u16)
         });
-        Some(Screen { cols: columns as u16, rows: rows as u16, cursor, fg: theme.foreground, bg: theme.background, lines })
+        // As `program_scrolls`, read here under the lock already held.
+        let program_scrolls =
+            mode.intersects(TermMode::MOUSE_MODE) || (mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL));
+        Some(Screen {
+            cols: columns as u16,
+            rows: rows as u16,
+            history: history as u16,
+            program_scrolls,
+            cursor,
+            fg: theme.foreground,
+            bg: theme.background,
+            lines,
+        })
     }
 
     /// A key from the remote page, by its GPUI name: what the program gets is what typing it here
@@ -2075,23 +2090,52 @@ impl TerminalView {
         }
         self.scroll_remainder -= lines as f32;
 
+        let cell = self.viewport_cell(event.position);
+        if !self.scroll_program(lines, event.modifiers.shift, cell) {
+            if let Some(backend) = &self.backend {
+                backend.term.lock().scroll_display(Scroll::Delta(lines));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Whether the program scrolls itself (Claude Code's full-screen UI, vim, less) rather than
+    /// the terminal's scrollback.
+    fn program_scrolls(&self, shift: bool) -> bool {
         let mode = self.mode();
-        if self.mouse_captured(event.modifiers.shift) {
+        self.mouse_captured(shift) || (mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL))
+    }
+
+    /// `lines` of wheel (positive: up) to a program that scrolls itself; false when it doesn't.
+    fn scroll_program(&mut self, lines: i32, shift: bool, cell: Option<(usize, usize)>) -> bool {
+        if self.mouse_captured(shift) {
             // Wheel as mouse buttons 4/5 (codes 64/65), one report per line.
-            if let Some(cell) = self.viewport_cell(event.position) {
+            if let Some(cell) = cell {
                 let button = if lines > 0 { 64 } else { 65 };
                 for _ in 0..lines.unsigned_abs().min(20) {
                     self.report_mouse(button, cell, true);
                 }
             }
-        } else if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+            true
+        } else if self.program_scrolls(shift) {
             // Full-screen apps without mouse reporting (less, vim) scroll with arrow keys.
             let arrow: &[u8] = if lines > 0 { b"\x1bOA" } else { b"\x1bOB" };
             self.write(arrow.repeat(lines.unsigned_abs() as usize));
-        } else if let Some(backend) = &self.backend {
-            backend.term.lock().scroll_display(Scroll::Delta(lines));
+            true
+        } else {
+            false
         }
-        cx.notify();
+    }
+
+    /// A swipe on the remote page, for a program that scrolls itself: as the wheel over the
+    /// middle of the screen. Anything else the page scrolls on its own copy of the scrollback,
+    /// so the pane here stays where it is.
+    pub fn remote_scroll(&mut self, lines: i32, cx: &mut Context<Self>) {
+        let Some(size) = self.backend.as_ref().map(|b| b.size()) else { return };
+        let cell = Some((size.columns / 2, size.lines / 2));
+        if self.scroll_program(lines, false, cell) {
+            cx.notify();
+        }
     }
 }
 

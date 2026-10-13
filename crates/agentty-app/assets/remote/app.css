@@ -162,6 +162,11 @@ button:disabled { opacity: .5; cursor: default; }
 .term.wrap .row { height: auto; min-height: 1.25em; }
 .term.wrap .row.rule { white-space: pre; overflow: hidden; height: 1.25em; }
 .term-wrap:has(.term.wrap) { overflow-x: hidden; }
+/* Back to the newest line after reading back: pinned to the terminal's bottom corner, taking no room. */
+.latest-dock { position: sticky; bottom: 0; left: 0; height: 0; }
+.to-latest { position: absolute; right: 12px; bottom: 12px; font-size: 13px; padding: 7px 12px; border-radius: 16px;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text); box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
+.to-latest[hidden] { display: none; }
 .keyboard { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; pointer-events: none; }
 .keys { display: flex; gap: 6px; padding: 8px 10px 0; overflow-x: auto; flex-shrink: 0; background: var(--panel); border-top: 1px solid var(--border); scrollbar-width: none; }
 .keys::-webkit-scrollbar { display: none; }

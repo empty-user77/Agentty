@@ -172,6 +172,7 @@ impl Workbench {
             Command::Text { text, .. } => view.remote_text(text, cx),
             Command::Prompt { text, .. } => view.submit_prompt(text.clone(), cx),
             Command::Resize { cols, rows, .. } => view.set_remote_size(Some((*cols as usize, *rows as usize)), cx),
+            Command::Scroll { lines, .. } => view.remote_scroll(*lines, cx),
             Command::Release { .. } => view.set_remote_size(None, cx),
             Command::Wake { .. } | Command::NewTab { .. } | Command::Chat { .. } => {}
         });
@@ -713,6 +714,8 @@ impl Workbench {
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.start_voice_download(m, cx)),
                 ))
             };
+            // The name wraps and the buttons keep their size: in the status bar's narrow popover a
+            // long name in Korean or Japanese pushed them out of the box.
             body = body.child(
                 div()
                     .flex()
@@ -722,32 +725,39 @@ impl Workbench {
                     .py_2()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .flex()
                             .flex_col()
                             .child(
-                                div().flex().items_center().gap_2().child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(name)).when(
-                                    recommended,
-                                    |d| {
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_x_2()
+                                    .child(div().min_w_0().t_body().text_color(hex(Chrome::BRIGHT)).child(name))
+                                    .when(recommended, |d| {
                                         d.child(
                                             div()
+                                                .flex_none()
                                                 .px_1p5()
                                                 .rounded_md()
                                                 .t_caption()
+                                                .whitespace_nowrap()
                                                 .bg(hex(NEON_GREEN).opacity(0.15))
                                                 .text_color(hex(NEON_GREEN))
                                                 .child(t(cx, "remote.voice.recommended")),
                                         )
-                                    },
-                                ),
+                                    }),
                             )
                             .child(muted(mb)),
                     )
-                    .child(right),
+                    .child(right.flex_none().whitespace_nowrap()),
             );
         }
         // The language prompts are spoken in: detection is often wrong for a short prompt.
         let current = settings(cx).voice.language;
-        let mut languages = div().flex().gap_1();
+        let mut languages = div().flex().flex_wrap().gap_1();
         for language in crate::settings::VoiceLanguage::ALL {
             languages = languages.child(crate::ui::chip(
                 gpui::SharedString::from(format!("voice-lang-{language:?}")),
@@ -759,12 +769,12 @@ impl Workbench {
                 },
             ));
         }
+        // The chips go under the label, wrapping: five of them never fit beside it in the popover.
         body = body.child(
             div()
                 .flex()
-                .items_center()
-                .justify_between()
-                .gap_3()
+                .flex_col()
+                .gap_2()
                 .py_2()
                 .child(
                     div()

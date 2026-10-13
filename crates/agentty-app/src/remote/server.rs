@@ -108,6 +108,9 @@ pub enum Command {
     Chat { pane: u64, text: String },
     /// The page shows this terminal at this size: the terminal takes it while watched.
     Resize { pane: u64, cols: u16, rows: u16 },
+    /// A swipe on a terminal whose program scrolls itself (Claude Code's full-screen UI, less):
+    /// `lines` up (positive) or down, as the mouse wheel would.
+    Scroll { pane: u64, lines: i32 },
     /// No page shows this terminal any more: back to the pane's own size.
     Release { pane: u64 },
     /// A sleeping workspace brought back, its saved tabs started again.
@@ -125,6 +128,7 @@ impl Command {
             | Command::Prompt { pane, .. }
             | Command::Chat { pane, .. }
             | Command::Resize { pane, .. }
+            | Command::Scroll { pane, .. }
             | Command::Release { pane } => Some(*pane),
             Command::Wake { .. } | Command::NewTab { .. } => None,
         }
@@ -251,11 +255,16 @@ struct InputBody {
     cols: u16,
     #[serde(default)]
     rows: u16,
+    #[serde(default)]
+    lines: i32,
 }
 
 /// The sizes a page may give a terminal: a phone held upright up to a wide desktop window.
 const COLS: std::ops::RangeInclusive<u16> = 20..=400;
 const ROWS: std::ops::RangeInclusive<u16> = 5..=200;
+/// Lines one scroll input may move, and what waits for the app to pass on: a fast swipe, not a
+/// flood of wheel events.
+const SCROLL_LINES: i32 = 60;
 
 /// Key names the page may send: what `terminal::keys` turns into bytes, and single characters.
 fn allowed_key(key: &str) -> bool {
@@ -818,6 +827,7 @@ impl Hub {
             "resize" if COLS.contains(&body.cols) && ROWS.contains(&body.rows) => {
                 Command::Resize { pane: body.pane, cols: body.cols, rows: body.rows }
             }
+            "scroll" if body.lines != 0 && body.lines.abs() <= SCROLL_LINES => Command::Scroll { pane: body.pane, lines: body.lines },
             _ => return Response::json(400, &json!({ "error": "bad request" })),
         };
         // Held while queueing: a size is only taken while a page shows that terminal, and the
@@ -832,6 +842,15 @@ impl Hub {
             if let Some(waiting) = inbox.iter_mut().find(|c| matches!(c, Command::Resize { pane: p, .. } if *p == pane)) {
                 *waiting = command;
                 return Response::json(200, &json!({ "ok": true }));
+            }
+        }
+        // Scrolling right after scrolling the same terminal joins it, up to a swipe's worth.
+        if let Command::Scroll { pane, lines } = command {
+            if let Some(Command::Scroll { pane: p, lines: waiting }) = inbox.last_mut() {
+                if *p == pane {
+                    *waiting = (*waiting + lines).clamp(-SCROLL_LINES, SCROLL_LINES);
+                    return Response::json(200, &json!({ "ok": true }));
+                }
             }
         }
         // The app drains this several times a second; a flood waits its turn rather than grows.
@@ -984,7 +1003,7 @@ impl Hub {
         let started = Instant::now();
         let mut sent_sessions = 0u64;
         let mut sent_screen = 0u64;
-        let mut rows: Vec<u64> = Vec::new();
+        let mut rows = super::snapshot::Sent::default();
         let mut last_write = Instant::now();
         loop {
             if self.stop.load(Ordering::SeqCst)
@@ -1602,15 +1621,21 @@ mod tests {
         assert_eq!(input(json!({ "pane": 7, "kind": "resize", "cols": 5, "rows": 30 })), 400, "too narrow");
         assert_eq!(input(json!({ "pane": 7, "kind": "resize", "cols": 48, "rows": 900 })), 400, "too tall");
         assert_eq!(input(json!({ "pane": 7, "kind": "resize" })), 400, "no size");
+        assert_eq!(input(json!({ "pane": 7, "kind": "scroll", "lines": 3 })), 200);
+        assert_eq!(input(json!({ "pane": 7, "kind": "scroll", "lines": 50 })), 200);
+        assert_eq!(input(json!({ "pane": 7, "kind": "scroll", "lines": 20 })), 200);
+        assert_eq!(input(json!({ "pane": 7, "kind": "scroll", "lines": 0 })), 400, "no scrolling");
+        assert_eq!(input(json!({ "pane": 7, "kind": "scroll", "lines": -500 })), 400, "too far at once");
         assert_eq!(
             hub.take_commands(),
             vec![
                 Command::Prompt { pane: 7, text: "run the tests".into() },
                 Command::Chat { pane: 7, text: "add a login page".into() },
                 Command::Key { pane: 7, key: "c".into(), ctrl: true, alt: false, shift: false },
-                Command::Resize { pane: 7, cols: 50, rows: 30 }
+                Command::Resize { pane: 7, cols: 50, rows: 30 },
+                Command::Scroll { pane: 7, lines: SCROLL_LINES }
             ],
-            "the newer size replaced the one still waiting"
+            "the newer size replaced the one still waiting, and scrolls in a row joined up to a swipe's worth"
         );
         hub.watch(7, 1);
         hub.watch(7, -1);
@@ -1755,6 +1780,8 @@ mod tests {
         let screen = Screen {
             cols: 4,
             rows: 1,
+            history: 0,
+            program_scrolls: false,
             cursor: None,
             fg: 0xffffff,
             bg: 0,

@@ -9,6 +9,7 @@
 
 const STRINGS = {
   en: {
+    toLatest: "Latest ↓",
     signIn: "Sign in", password: "Password",
     wrong: "Wrong password.", locked: "Too many wrong passwords. Try again in {s} s.", noPassword: "No password is set in Agentty yet.",
     failed: "Couldn't reach Agentty.", signOut: "Sign out", notify: "Notify me", notifyOn: "Notifying",
@@ -27,6 +28,7 @@ const STRINGS = {
     chat: "Chat", chatHint: "Message the lead agent…", chatEmpty: "Write to the lead agent. It plans the work and starts workers on the Mac; their terminals are in the pane list.", leadWaits: "The lead is waiting for you in its terminal.",
   },
   ko: {
+    toLatest: "최신 ↓",
     signIn: "로그인", password: "비밀번호",
     wrong: "비밀번호가 틀렸습니다.", locked: "비밀번호가 여러 번 틀렸습니다. {s}초 뒤에 다시 시도하세요.", noPassword: "Agentty에 아직 비밀번호가 설정되지 않았습니다.",
     failed: "Agentty에 연결하지 못했습니다.", signOut: "로그아웃", notify: "알림 받기", notifyOn: "알림 켜짐",
@@ -45,6 +47,7 @@ const STRINGS = {
     chat: "채팅", chatHint: "리드 에이전트에게 메시지…", chatEmpty: "리드 에이전트에게 말해 보세요. 작업을 계획하고 Mac에서 워커를 띄웁니다. 워커 터미널은 분할창 목록에 있습니다.", leadWaits: "리드가 터미널에서 응답을 기다립니다.",
   },
   ja: {
+    toLatest: "最新へ ↓",
     signIn: "サインイン", password: "パスワード",
     wrong: "パスワードが違います。", locked: "パスワードの誤りが多すぎます。{s} 秒後に再試行してください。", noPassword: "Agentty にまだパスワードが設定されていません。",
     failed: "Agentty に接続できませんでした。", signOut: "サインアウト", notify: "通知を受け取る", notifyOn: "通知オン",
@@ -63,6 +66,7 @@ const STRINGS = {
     chat: "チャット", chatHint: "リードエージェントにメッセージ…", chatEmpty: "リードエージェントに書いてください。作業を計画し、Mac でワーカーを起動します。ワーカーのターミナルはペイン一覧にあります。", leadWaits: "リードがターミナルで返答を待っています。",
   },
   zh: {
+    toLatest: "最新 ↓",
     signIn: "登录", password: "密码",
     wrong: "密码错误。", locked: "密码错误次数过多，请在 {s} 秒后重试。", noPassword: "Agentty 尚未设置密码。",
     failed: "无法连接 Agentty。", signOut: "退出登录", notify: "接收通知", notifyOn: "通知已开启",
@@ -121,6 +125,8 @@ const state = {
   rows: [],
   lines: [],
   screen: null,
+  // The terminal stays at its newest line as output comes in; off while the user reads back.
+  follow: true,
   // Text at a fixed, readable size (the app's own by default; A− / A+ change it). The terminal
   // takes as many columns and lines as fit the page at that size while it is shown here.
   size: (() => {
@@ -378,6 +384,7 @@ function switchPane(pane) {
     state.rows = [];
     state.lines = [];
     state.screen = null;
+    state.follow = true;
     $("term").replaceChildren();
     if (pane != null) history.replaceState(null, "", "#" + pane);
     listen();
@@ -932,26 +939,54 @@ function sendText(text) {
 
 // ---- The terminal ----
 
+// The cursor as [column, line], the line counted from the top of the scrollback sent above the
+// screen.
+function cursorLine(screen) {
+  return screen && screen.cursor ? [screen.cursor[0], (screen.history || 0) + screen.cursor[1]] : null;
+}
+
+// Lines of scrollback come above the screen. At the bottom (or close), the terminal follows what
+// comes in; scrolled up, it stays on the lines being read while new ones arrive below, and a
+// button leads back down.
 function onScreen(update) {
   if (update.pane !== state.pane) return;
   const term = $("term");
-  if (update.full || !state.screen || state.screen.cols !== update.cols || state.screen.rows !== update.rows) {
+  const wrap = $("term-wrap");
+  // The first line in view and where it sits, to keep it there when lines leave the top.
+  let anchor = null;
+  if (!state.follow) {
+    const top = wrap.scrollTop;
+    const row = state.rows.find((r) => !r.hidden && r.offsetTop + r.offsetHeight > top);
+    if (row) anchor = { row, offset: row.offsetTop - top };
+  }
+  let before = cursorLine(state.screen);
+  if (update.full || !state.screen || state.screen.cols !== update.cols) {
     term.replaceChildren();
     state.rows = [];
     state.lines = [];
-    for (let i = 0; i < update.rows; i++) {
-      const row = el("div", "row");
-      term.append(row);
-      state.rows.push(row);
-      state.lines.push([]);
-    }
+    before = null;
+  } else if (update.shift) {
+    // Lines that left the top of the kept scrollback.
+    for (const row of state.rows.splice(0, update.shift)) row.remove();
+    state.lines.splice(0, update.shift);
+    if (before) before[1] -= update.shift;
   }
-  const before = state.screen && state.screen.cursor;
+  const len = update.len != null ? update.len : update.rows;
+  while (state.rows.length > len) {
+    state.rows.pop().remove();
+    state.lines.pop();
+  }
+  while (state.rows.length < len) {
+    const row = el("div", "row");
+    term.append(row);
+    state.rows.push(row);
+    state.lines.push([]);
+  }
   state.screen = update;
   term.style.background = hex(update.bg);
   term.style.color = hex(update.fg);
   // The frame around it too, so a scrollbar's gutter shows no stripe of another color.
-  $("term-wrap").style.background = hex(update.bg);
+  wrap.style.background = hex(update.bg);
   const dirty = new Set();
   for (const [index, runs] of update.lines) {
     if (index >= state.rows.length) continue;
@@ -959,19 +994,90 @@ function onScreen(update) {
     dirty.add(index);
   }
   // The cursor is drawn inside its row's text, so a row it left or entered is drawn again too.
-  if (before) dirty.add(before[1]);
-  if (update.cursor) dirty.add(update.cursor[1]);
+  const cursor = cursorLine(update);
+  if (before && before[1] >= 0) dirty.add(before[1]);
+  if (cursor) dirty.add(cursor[1]);
   for (const index of dirty) renderRow(index);
   // Empty rows under the last text (or the cursor) are left out: a shell's prompt sits at the
   // top of a tall screen, and scrolling to the bottom would show nothing but blank rows.
-  let last = update.cursor ? update.cursor[1] : 0;
+  let last = cursor ? cursor[1] : 0;
   state.lines.forEach((runs, index) => {
     if (runs.some((r) => r.t.trim() || r.b != null)) last = Math.max(last, index);
   });
   state.rows.forEach((row, index) => (row.hidden = index > last));
   layoutTerm();
+  if (state.follow) {
+    wrap.scrollTop = wrap.scrollHeight;
+  } else if (anchor && anchor.row.isConnected && !anchor.row.hidden) {
+    wrap.scrollTop = anchor.row.offsetTop - anchor.offset;
+  }
+  showToLatest();
+}
+
+// Following again once the reader is back at the bottom; the button shows while they are not.
+function onTermScroll() {
   const wrap = $("term-wrap");
+  state.follow = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 40;
+  showToLatest();
+}
+
+function showToLatest() {
+  const button = $("to-latest");
+  if (button.hidden !== state.follow) button.hidden = state.follow;
+}
+
+// A program that scrolls itself (Claude Code's full-screen UI, vim, less) keeps no scrollback
+// in the terminal: there is nothing here to scroll, so a swipe or the wheel goes to it as the
+// mouse wheel would, a line per line's height moved.
+let pendingScroll = 0;
+let scrollTimer = null;
+
+function programScrolls() {
+  return !!(state.screen && state.screen.programScrolls);
+}
+
+function scrollProgram(pixels) {
+  pendingScroll += pixels / (1.25 * state.size);
+  if (scrollTimer) return;
+  // Gathered for a moment, so a swipe is a few requests, not one per touch event.
+  scrollTimer = setTimeout(() => {
+    scrollTimer = null;
+    const lines = Math.max(-60, Math.min(60, Math.trunc(pendingScroll)));
+    if (!lines || state.pane == null) return;
+    pendingScroll -= lines;
+    input({ pane: state.pane, kind: "scroll", lines });
+  }, 50);
+}
+
+function setupProgramScroll() {
+  const wrap = $("term-wrap");
+  let lastY = null;
+  wrap.addEventListener("touchstart", (e) => {
+    lastY = e.touches.length === 1 ? e.touches[0].clientY : null;
+    pendingScroll = 0;
+  }, { passive: true });
+  wrap.addEventListener("touchmove", (e) => {
+    if (lastY == null || !programScrolls() || e.touches.length !== 1) return;
+    const y = e.touches[0].clientY;
+    // Finger down: back up through what came before, as on any page.
+    scrollProgram(y - lastY);
+    lastY = y;
+    e.preventDefault();
+  }, { passive: false });
+  wrap.addEventListener("touchend", () => (lastY = null), { passive: true });
+  wrap.addEventListener("wheel", (e) => {
+    if (!programScrolls() || e.ctrlKey) return;
+    const pixels = e.deltaMode === 1 ? e.deltaY * 1.25 * state.size : e.deltaY;
+    scrollProgram(-pixels);
+    e.preventDefault();
+  }, { passive: false });
+}
+
+function toLatest() {
+  const wrap = $("term-wrap");
+  state.follow = true;
   wrap.scrollTop = wrap.scrollHeight;
+  showToLatest();
 }
 
 // A row that is only a horizontal rule (Claude Code's dividers): kept on one line and cut at the
@@ -982,7 +1088,7 @@ function renderRow(index) {
   const row = state.rows[index];
   if (!row) return;
   const runs = state.lines[index] || [];
-  const cursor = state.screen && state.screen.cursor;
+  const cursor = cursorLine(state.screen);
   const cursorCol = cursor && cursor[1] === index ? cursor[0] : -1;
   const nodes = [];
   let col = 0;
@@ -1097,7 +1203,13 @@ const KEY_NAMES = {
 
 function setupKeyboard() {
   const keyboard = $("keyboard");
-  $("term").addEventListener("click", () => keyboard.focus({ preventScroll: true }));
+  // On a touch screen a tap on the terminal goes to the prompt box below it: the phone's keyboard
+  // is for writing a prompt there, not for typing into the terminal key by key. With a mouse and
+  // a keyboard, typing goes straight to the terminal.
+  $("term").addEventListener("click", () => {
+    if (matchMedia("(pointer: coarse)").matches) $("prompt").focus({ preventScroll: true });
+    else keyboard.focus({ preventScroll: true });
+  });
   // Korean, Japanese and Chinese are typed through the input method. Its events are not to be
   // trusted for the text (Safari's compositionend can carry a half-built syllable, and the next
   // composition may start before the last one settles), so the field itself is the record:
@@ -1526,6 +1638,10 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   // The area changes with the window, the keyboard on a phone, and the bars around it.
   new ResizeObserver(() => fitTerm()).observe($("term-wrap"), { box: "border-box" });
+  $("term-wrap").addEventListener("scroll", onTermScroll, { passive: true });
+  $("to-latest").addEventListener("click", toLatest);
+  $("to-latest").textContent = T.toLatest;
+  setupProgramScroll();
   setupKeyboard();
   setupPrompt();
   setupChat();
