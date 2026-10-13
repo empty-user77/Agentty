@@ -615,6 +615,13 @@ strings! {
         "長い時間見ることになるターミナルのテーマを選んでください。",
         "选择你会长时间看着的终端主题。"
     ],
+    "onboarding.appearance_title" => ["Light or dark?", "밝게, 또는 어둡게", "ライトか、ダークか", "浅色还是深色？"],
+    "onboarding.appearance_body" => [
+        "How Agentty itself looks. System follows macOS as it switches; you can change it any time in Settings.",
+        "Agentty 화면을 어떻게 볼지 고르세요. 시스템을 고르면 macOS 설정을 따라 바뀝니다. 언제든 설정에서 바꿀 수 있습니다.",
+        "Agentty 自体の見た目を選んでください。システムにすると macOS の設定に合わせて切り替わります。設定からいつでも変更できます。",
+        "选择 Agentty 本身的外观。跟随系统会随 macOS 设置切换；随时可以在设置中更改。"
+    ],
     "onboarding.look_more" => [
         "Fonts, cursor and colors of your own: Settings → Terminal Style",
         "글꼴 · 커서 · 색상은 설정 → 터미널 스타일에서 더 바꿀 수 있습니다",
@@ -1081,6 +1088,19 @@ strings! {
     "todo.all_parked" => ["Every tab here is in TODO", "이 작업공간의 탭이 모두 TODO에 있습니다", "このワークスペースのタブはすべて TODO にあります", "此工作区的标签页都在 TODO 中"],
     "todo.all_parked_hint" => ["Pick one to continue, or open a new tab with +.", "이어서 할 탭을 고르거나 + 로 새 탭을 여세요.", "続けるタブを選ぶか、+ で新しいタブを開いてください。", "选择一个继续，或点击 + 打开新标签页。"],
     "settings.appearance" => ["Terminal Style", "터미널 스타일", "ターミナルスタイル", "终端样式"],
+    "settings.app_appearance" => ["Appearance", "화면 모드", "外観", "外观"],
+    "settings.app_appearance_hint" => [
+        "Light or dark for Agentty itself; terminals keep their theme (Terminal Style).",
+        "Agentty 화면을 밝게 또는 어둡게 그립니다. 터미널은 터미널 스타일의 테마를 그대로 씁니다.",
+        "Agentty 自体を明るく、または暗く表示します。ターミナルはターミナルスタイルのテーマのままです。",
+        "Agentty 本身使用浅色或深色；终端保留其主题（终端样式）。"
+    ],
+    "appearance.system" => ["System", "시스템", "システム", "跟随系统"],
+    "appearance.dark" => ["Dark", "다크", "ダーク", "深色"],
+    "appearance.light" => ["Light", "라이트", "ライト", "浅色"],
+    "appearance.system_body" => ["Matches your OS setting", "OS 설정에 맞춤", "OS の設定に合わせる", "跟随系统设置"],
+    "appearance.dark_body" => ["Easy on the eyes", "눈이 편한 화면", "目にやさしい画面", "护眼"],
+    "appearance.light_body" => ["Bright and crisp", "밝고 선명한 화면", "明るくくっきり", "明亮清晰"],
     "settings.shortcuts" => ["Keyboard Shortcuts", "단축키", "キーボードショートカット", "快捷键"],
     "settings.about" => ["About Agentty", "Agentty 정보", "Agentty について", "关于 Agentty"],
     "settings.about_links" => ["Links", "링크", "リンク", "链接"],

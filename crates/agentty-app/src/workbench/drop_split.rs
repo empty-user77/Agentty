@@ -464,6 +464,7 @@ impl Workbench {
                                 .rounded_sm()
                                 .cursor_pointer()
                                 .bg(hex(0x2d2d30))
+                                .when(crate::theme::is_light(), crate::ui::outlined)
                                 .text_color(hex(Chrome::FOREGROUND))
                                 .hover(|s| s.bg(hex(Chrome::HOVER)))
                                 .child(t(cx, "confirm.cancel"))

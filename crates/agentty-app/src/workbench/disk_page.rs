@@ -264,6 +264,7 @@ impl Workbench {
             .overflow_hidden()
             .flex()
             .bg(hex(0x2d2d30))
+            .when(crate::theme::is_light(), crate::ui::outlined)
             .child(div().h_full().w(gpui::relative(used_part)).bg(hex(Chrome::BLUE)))
             .child(div().h_full().w(gpui::relative(clear_part)).bg(hex(Chrome::ORANGE)));
         let legend = |color: u32, label: String| {

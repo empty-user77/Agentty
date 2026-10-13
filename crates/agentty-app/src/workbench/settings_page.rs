@@ -267,7 +267,7 @@ pub(super) fn korean_font_notice(id: &'static str, cx: &gpui::App) -> Option<Div
                     .cursor_pointer()
                     .t_small()
                     .bg(hex(Chrome::ACCENT))
-                    .text_color(hex(Chrome::BRIGHT))
+                    .text_color(hex(Chrome::ON_ACCENT))
                     .hover(|s| s.opacity(0.85))
                     .child(t(cx, "font.korean_download"))
                     .on_click(|_, _, cx| cx.open_url(KOREAN_FONT_URL)),
@@ -346,8 +346,15 @@ fn terminal_preview(preview: Option<super::Pane>, cx: &mut Context<Workbench>) -
         // Before its first paint there is nothing to show yet; the box keeps its place.
         None => div().h(px(170.)),
     };
-    section(t(cx, "settings.preview_live"))
-        .child(div().rounded_md().overflow_hidden().border_1().border_color(hex(Chrome::BORDER)).bg(hex(theme.background)).child(body))
+    section(t(cx, "settings.preview_live")).child(
+        div()
+            .rounded_md()
+            .overflow_hidden()
+            .border_1()
+            .border_color(hex(Chrome::BORDER))
+            .bg(crate::theme::raw(theme.background))
+            .child(body),
+    )
 }
 
 /// Settings → About: the build and the interface versions, as a key/value list, with a button that
@@ -585,12 +592,13 @@ pub(super) fn switch(
         .when(on, |d| d.justify_end())
         .px_0p5()
         .on_click(on_click)
-        .child(div().size(px(16.)).rounded_full().bg(hex(Chrome::BRIGHT)))
+        .child(div().size(px(16.)).rounded_full().bg(hex(Chrome::ON_ACCENT)))
 }
 
 fn theme_card(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut Context<Workbench>) -> impl IntoElement {
     let name = theme.name.clone();
-    let swatches = div().flex().gap_0p5().children(theme.ansi[1..7].iter().map(|c| div().size(px(10.)).rounded_sm().bg(hex(*c))));
+    let swatches =
+        div().flex().gap_0p5().children(theme.ansi[1..7].iter().map(|c| div().size(px(10.)).rounded_sm().bg(crate::theme::raw(*c))));
     div()
         .id(("theme", index))
         .w(px(168.))
@@ -608,7 +616,7 @@ fn theme_card(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut Cont
                 .h(px(64.))
                 .p_2()
                 .rounded_t_md()
-                .bg(hex(theme.background))
+                .bg(crate::theme::raw(theme.background))
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -618,10 +626,10 @@ fn theme_card(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut Cont
                     div()
                         .flex()
                         .gap_1()
-                        .child(div().text_color(hex(theme.ansi[2])).child("~/code"))
-                        .child(div().text_color(hex(theme.ansi[4])).child("main")),
+                        .child(div().text_color(crate::theme::raw(theme.ansi[2])).child("~/code"))
+                        .child(div().text_color(crate::theme::raw(theme.ansi[4])).child("main")),
                 )
-                .child(div().text_color(hex(theme.foreground)).child("$ cargo run"))
+                .child(div().text_color(crate::theme::raw(theme.foreground)).child("$ cargo run"))
                 .child(swatches),
         )
         .child(
@@ -1242,6 +1250,13 @@ impl Workbench {
             ));
         }
 
+        // Light, dark or the system's, as previews of each (the system's is half of both).
+        let appearances =
+            div().flex().gap_3().pb_2().children(crate::settings::Appearance::ALL.into_iter().enumerate().map(|(i, appearance)| {
+                super::onboarding_setup::appearance_card("settings-appearance", i, appearance, prefs.appearance == appearance, 92., cx)
+                    .w(px(232.))
+            }));
+
         // Explicit rows: GPUI's layout doesn't size wrapped flex rows correctly inside a column.
         let mut theme_grid = div().flex().flex_col().gap_3();
         for (row_index, chunk) in themes.chunks(THEMES_PER_ROW).enumerate() {
@@ -1397,6 +1412,8 @@ impl Workbench {
                 .child(
                     section(t(cx, "settings.group.basics"))
                         .child(row(t(cx, "settings.language"), languages))
+                        .child(row_with_hint(t(cx, "settings.app_appearance"), t(cx, "settings.app_appearance_hint"), div()))
+                        .child(appearances)
                         .child(row_with_hint(
                             t(cx, "settings.idea_mode"),
                             t(cx, "settings.idea_mode_hint"),
@@ -1734,6 +1751,15 @@ impl Workbench {
                 ),
             ),
         )
+    }
+}
+
+/// The i18n key naming an appearance.
+pub(super) fn appearance_label(appearance: crate::settings::Appearance) -> &'static str {
+    match appearance {
+        crate::settings::Appearance::System => "appearance.system",
+        crate::settings::Appearance::Dark => "appearance.dark",
+        crate::settings::Appearance::Light => "appearance.light",
     }
 }
 

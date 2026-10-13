@@ -232,7 +232,8 @@ impl Workbench {
                 .t_body()
                 .cursor_pointer()
                 .bg(if primary { hex(Chrome::ERROR) } else { hex(0x2d2d30) })
-                .text_color(hex(Chrome::BRIGHT))
+                .when(!(primary) && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if primary { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
                 .hover(|s| s.opacity(0.85))
                 .child(label.to_string())
         };

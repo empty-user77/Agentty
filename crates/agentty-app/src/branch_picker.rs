@@ -268,12 +268,12 @@ impl BranchPicker {
                     .t_body()
                     .cursor_pointer()
                     .text_color(hex(Chrome::FOREGROUND))
-                    .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+                    .hover(crate::ui::hover_fill)
                     .child(
                         div()
                             .w(px(IconSize::INLINE))
                             .flex_shrink_0()
-                            .when(current, |d| d.child(icon("check", IconSize::INLINE, hex(Chrome::BRIGHT)))),
+                            .when(current, |d| d.child(icon("check", IconSize::INLINE, hex(Chrome::ON_ACCENT)))),
                     )
                     .child(icon(if remote { "globe" } else { "git-branch" }, 12., hex(Chrome::MUTED)))
                     .child(div().flex_1().min_w_0().truncate().child(label))
@@ -710,7 +710,7 @@ impl Render for BranchPicker {
                 .t_body()
                 .cursor_pointer()
                 .text_color(hex(Chrome::FOREGROUND))
-                .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+                .hover(crate::ui::hover_fill)
                 .child(icon("plus", IconSize::INLINE, hex(Chrome::MUTED)))
                 .child(t(cx, "git.new_branch"))
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {

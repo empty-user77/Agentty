@@ -567,7 +567,7 @@ impl Render for IdeaView {
                     .text_color(hex(Chrome::BRIGHT))
                     .bg(if ready && !no_agent { hex(Chrome::ACCENT) } else { hex(Chrome::HOVER) })
                     .when(ready && !no_agent, |d| d.cursor_pointer().hover(|s| s.bg(hex(Chrome::BLUE))))
-                    .child(icon("sparkles", IconSize::BUTTON, hex(Chrome::BRIGHT)))
+                    .child(icon("sparkles", IconSize::BUTTON, hex(Chrome::ON_ACCENT)))
                     .child(t(cx, "idea.start"))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if !no_agent {

@@ -1385,9 +1385,9 @@ impl Workbench {
                     .t_body()
                     .cursor_pointer()
                     .bg(hex(Chrome::ACCENT))
-                    .text_color(hex(Chrome::BRIGHT))
+                    .text_color(hex(Chrome::ON_ACCENT))
                     .hover(|s| s.opacity(0.85))
-                    .child(icon("plus", IconSize::INLINE, hex(Chrome::BRIGHT)))
+                    .child(icon("plus", IconSize::INLINE, hex(Chrome::ON_ACCENT)))
                     .child(t(cx, "board.new_ticket"))
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_ticket_editor(None, window, cx))),
             );
@@ -1682,7 +1682,8 @@ impl Workbench {
                 .t_body()
                 .cursor_pointer()
                 .bg(if primary { hex(Chrome::ACCENT) } else { hex(0x2d2d30) })
-                .text_color(hex(Chrome::BRIGHT))
+                .when(!(primary) && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if primary { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
                 .hover(|s| s.opacity(0.85))
                 .child(text)
         };
@@ -1828,7 +1829,8 @@ impl Workbench {
                 .t_body()
                 .cursor_pointer()
                 .bg(if primary { hex(Chrome::ACCENT) } else { hex(0x2d2d30) })
-                .text_color(hex(Chrome::BRIGHT))
+                .when(!(primary) && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if primary { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
                 .hover(|s| s.opacity(0.85))
                 .child(text)
         };
@@ -1879,7 +1881,8 @@ impl Workbench {
                 .t_body()
                 .cursor_pointer()
                 .bg(if primary { hex(Chrome::ACCENT) } else { hex(0x2d2d30) })
-                .text_color(hex(Chrome::BRIGHT))
+                .when(!(primary) && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if primary { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
                 .hover(|s| s.opacity(0.85))
                 .child(text)
         };

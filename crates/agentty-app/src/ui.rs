@@ -161,6 +161,8 @@ pub const ICONS: &[&str] = &[
     "cloud",
     "eye",
     "eye-off",
+    "moon",
+    "sun",
     "play",
     "square",
     "lightbulb",
@@ -402,9 +404,27 @@ fn action_button_base(id: impl Into<ElementId>, on_click: impl Fn(&ClickEvent, &
         .t_small()
         .cursor_pointer()
         .bg(hex(0x2d2d30))
+        .when(crate::theme::is_light(), outlined)
         .text_color(hex(Chrome::FOREGROUND))
-        .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+        .hover(hover_fill)
         .on_click(on_click)
+}
+
+/// A button or option under the pointer. On the dark chrome it fills with the accent; on white it
+/// only deepens a shade, as light interfaces show it (a blue flash over every row reads as a
+/// selection, not a hover).
+pub fn hover_fill(style: gpui::StyleRefinement) -> gpui::StyleRefinement {
+    if crate::theme::is_light() {
+        style.bg(hex(Chrome::HOVER))
+    } else {
+        style.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::ON_ACCENT))
+    }
+}
+
+/// A secondary button in light mode: white with a hairline border, as light interfaces draw
+/// them. A grey fill (what reads as a button on the dark chrome) looks pasted on over white.
+pub fn outlined<E: Styled>(element: E) -> E {
+    element.bg(hex(Chrome::EDITOR)).border_1().border_color(hex(Chrome::OVERLAY_BORDER))
 }
 
 /// Segmented-control style option.
@@ -462,7 +482,7 @@ fn menu_item_base(id: impl Into<ElementId>, on_click: impl Fn(&ClickEvent, &mut 
         .t_body()
         .cursor_pointer()
         .text_color(hex(Chrome::FOREGROUND))
-        .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+        .hover(crate::ui::hover_fill)
         .on_click(on_click)
 }
 

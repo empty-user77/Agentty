@@ -68,3 +68,6 @@ pub fn color_panel_color() -> Option<u32> {
 pub fn color_panel_visible() -> bool {
     false
 }
+
+/// Light or dark native parts follow the system here.
+pub fn set_app_appearance(_light: Option<bool>) {}

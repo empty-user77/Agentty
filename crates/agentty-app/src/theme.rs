@@ -4,15 +4,144 @@
 use gpui::{rgb, FontWeight, Hsla, Rgba};
 use std::path::{Path, PathBuf};
 
+/// A chrome colour, as the current appearance shows it. The chrome is designed dark; in light mode
+/// every near-grey (the surfaces, borders and text) is turned around ([`light_counterpart`]), and
+/// coloured accents stay what they are. Colours that are content rather than chrome — a terminal
+/// theme's, a preview of one — go through [`raw`] instead.
 pub fn hex(value: u32) -> Hsla {
-    rgb(value).into()
+    raw(if is_light() { light_counterpart(value) } else { value })
 }
 
 pub fn hex_alpha(value: u32, alpha: f32) -> Hsla {
+    let value = if is_light() { light_counterpart(value) } else { value };
     let mut color: Rgba = rgb(value);
     color.a = alpha;
     color.into()
 }
+
+/// A colour exactly as given, whatever the appearance: terminal themes, theme previews, colours
+/// that must read the same on any chrome.
+pub fn raw(value: u32) -> Hsla {
+    rgb(value).into()
+}
+
+static LIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the chrome is drawn light now.
+pub fn is_light() -> bool {
+    LIGHT.load(std::sync::atomic::Ordering::Relaxed) && DARK_ONLY.with(|depth| depth.get() == 0)
+}
+
+thread_local! {
+    /// Views being drawn that stay dark in any appearance (see [`DarkOnly`]).
+    static DARK_ONLY: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Held while a view that is always dark draws itself — the menu bar popover and the mini window,
+/// which float over whatever is on screen and keep the look of the menu bar's own. Colours are
+/// taken as the elements are built, so holding it for the `render` call covers them.
+pub struct DarkOnly;
+
+impl DarkOnly {
+    #[must_use]
+    pub fn hold() -> Self {
+        DARK_ONLY.with(|depth| depth.set(depth.get() + 1));
+        DarkOnly
+    }
+}
+
+impl Drop for DarkOnly {
+    fn drop(&mut self) {
+        DARK_ONLY.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+/// Sets the appearance the chrome is drawn in; whether it changed (every window then repaints).
+pub fn set_light(light: bool) -> bool {
+    LIGHT.swap(light, std::sync::atomic::Ordering::Relaxed) != light
+}
+
+/// The light-mode twin of a dark-chrome colour. The named chrome colours have a hand-picked twin;
+/// any other near-grey has its lightness turned around on a curve that keeps dark surfaces close
+/// to white and light text dark enough to read; a colour with hue (an accent, a status, a brand)
+/// is left alone, and so is [`INK`], which is already chosen to read on a light fill.
+pub fn light_counterpart(value: u32) -> u32 {
+    if let Some((_, light)) = LIGHT_TWINS.iter().find(|(dark, _)| *dark == value) {
+        return *light;
+    }
+    let (r, g, b) = (((value >> 16) & 0xff) as f32, ((value >> 8) & 0xff) as f32, (value & 0xff) as f32);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    // A grey, or nearly: up to a slight cool or warm tint.
+    // Pure black is the scrim behind dialogs and the shade of shadows: it dims in either appearance.
+    if value == INK || value == Chrome::ON_ACCENT || value == 0x000000 {
+        return value;
+    }
+    if max - min > 24. {
+        // A colour made to glow on dark (neon cyan, pale green) washes out on white: a bright one
+        // is taken darker until it reads; deeper ones (the brands, the accents) stay as they are.
+        // Luminance follows the channels to about the power 2.2: this lands it near 0.13, deep
+        // enough for code and small text on white.
+        let shade = (0.13 / luminance(value).max(0.13)).powf(1. / 2.2);
+        let channel = |c: f32| ((c * shade).round().clamp(0., 255.)) as u32;
+        return (channel(r) << 16) | (channel(g) << 8) | channel(b);
+    }
+    let lightness = (max + min) / 2. / 255.;
+    let turned = if lightness <= 0.35 {
+        1. - 0.45 * lightness
+    } else if lightness <= 0.65 {
+        0.84 - (lightness - 0.35) / 0.30 * 0.56
+    } else {
+        0.28 - (lightness - 0.65) / 0.35 * 0.22
+    };
+    // The tint carries over: the same offsets from the grey, around the new lightness.
+    let target = (turned.clamp(0., 1.) * 255.).round();
+    let grey = (max + min) / 2.;
+    let channel = |c: f32| ((target + (c - grey)).round().clamp(0., 255.)) as u32;
+    (channel(r) << 16) | (channel(g) << 8) | channel(b)
+}
+
+/// The chrome colours with a twin of their own in light mode: (dark, light).
+const LIGHT_TWINS: &[(u32, u32)] = &[
+    (Chrome::ACTIVITY_BAR, 0xf3f3f5),
+    (Chrome::SIDE_BAR, 0xf6f6f8),
+    (Chrome::EDITOR, 0xffffff),
+    (Chrome::PANEL, 0xf8f8fa),
+    (Chrome::TAB_INACTIVE, 0xf1f1f3),
+    (Chrome::BORDER, 0xdedee3),
+    (Chrome::FOREGROUND, 0x1e1e23),
+    (Chrome::BRIGHT, 0x111114),
+    (Chrome::MUTED, 0x55555e),
+    (Chrome::HOVER, 0xe9e9ed),
+    (Chrome::SELECTED, 0xdcdce3),
+    (Chrome::OVERLAY, 0xffffff),
+    (Chrome::OVERLAY_BORDER, 0xd2d2d9),
+    // Code: the editor's Dark+ colours (`editor::highlight`) become Light+, VS Code's own light
+    // palette — saturated and deep, made for reading code on white rather than darkened pastels.
+    (0xd4d4d4, 0x1f1f1f), // text
+    (0x6a9955, 0x008000), // comments
+    (0xce9178, 0xa31515), // strings
+    (0xd7ba7d, 0xb35c00), // escapes
+    (0xd16969, 0x811f3f), // regular expressions
+    (0xb5cea8, 0x098658), // numbers
+    (0x569cd6, 0x0000ff), // keywords
+    (0x4fc1ff, 0x0070c1), // constants
+    (0xc586c0, 0xaf00db), // control flow
+    (0xdcdcaa, 0x795e26), // functions
+    (0x4ec9b0, 0x267f99), // types
+    (0x9cdcfe, 0x001080), // variables
+    (0x3794ff, 0x006ab1), // links
+    (0x6796e6, 0x0451a5), // list markers
+    (0xf44747, 0xcd3131), // invalid
+    // Accents dark enough to read on white; the main one already does, and stays.
+    (Chrome::ACCENT, Chrome::ACCENT),
+    (Chrome::ERROR, 0xd13438),
+    (Chrome::ATTENTION, 0x1f78d1),
+    (Chrome::SUCCESS, 0x2e8b3d),
+    (Chrome::WARNING, 0xa86f00),
+    (Chrome::BLUE, 0x1f6fd1),
+    (Chrome::GREEN, 0x0f8a76),
+    (Chrome::ORANGE, 0xb86a00),
+];
 
 /// `value` mixed toward white by `amount` (0…1), kept fully opaque. Translucency over the dark
 /// chrome turns a colour into mud; a lighter solid tone is what "a shade brighter" should mean.
@@ -58,10 +187,10 @@ pub fn contrast(a: u32, b: u32) -> f32 {
 /// one. A colour the user picked for a card can be anything — a pale yellow leaves white letters
 /// invisible — so the choice is measured against the fill rather than assumed.
 pub fn ink_on(background: u32) -> u32 {
-    if contrast(INK, background) >= contrast(Chrome::BRIGHT, background) {
+    if contrast(INK, background) >= contrast(Chrome::ON_ACCENT, background) {
         INK
     } else {
-        Chrome::BRIGHT
+        Chrome::ON_ACCENT
     }
 }
 
@@ -85,6 +214,8 @@ impl Chrome {
     pub const FOREGROUND: u32 = 0xd2d2d8;
     /// Not pure white: at this size it glares against the dark chrome.
     pub const BRIGHT: u32 = 0xf2f2f5;
+    /// Text on a coloured fill (an accent button, a badge): light in either appearance.
+    pub const ON_ACCENT: u32 = 0xf4f4f7;
     pub const MUTED: u32 = 0x8e8e96;
     pub const ACCENT: u32 = 0x0078d4;
     pub const ATTENTION: u32 = 0x3b9cff;
@@ -342,6 +473,31 @@ pub fn parse_itermcolors(path: &Path) -> anyhow::Result<TerminalTheme> {
 }
 
 #[cfg(test)]
+mod light_tests {
+    use super::*;
+
+    #[test]
+    fn light_mode_turns_the_chrome_around_and_keeps_what_must_read() {
+        // Surfaces go light, text goes dark, and text stays readable on the new surfaces.
+        for (surface, text) in [(Chrome::EDITOR, Chrome::FOREGROUND), (Chrome::SIDE_BAR, Chrome::MUTED), (Chrome::PANEL, Chrome::BRIGHT)] {
+            let (surface, text) = (light_counterpart(surface), light_counterpart(text));
+            assert!(luminance(surface) > 0.8 && contrast(surface, text) >= 4.5, "{surface:06x} / {text:06x}");
+        }
+        // Any other dark grey turns light, in the same order: darker in dark is lighter in light.
+        let (a, b) = (light_counterpart(0x252526), light_counterpart(0x333338));
+        assert!(luminance(a) > luminance(b) && luminance(b) > 0.75);
+        // Ink chosen for a fill, the light text on accents, and deep accents stay as they are.
+        assert_eq!(light_counterpart(INK), INK);
+        assert_eq!(light_counterpart(0x000000), 0x000000);
+        assert_eq!(light_counterpart(Chrome::ON_ACCENT), Chrome::ON_ACCENT);
+        assert_eq!(light_counterpart(0x1b46a8), 0x1b46a8);
+        // A colour that glows on dark is taken down until it reads on white.
+        let cyan = light_counterpart(0x4dd4f0);
+        assert!(contrast(cyan, 0xffffff) >= 3.0, "{cyan:06x}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -409,14 +565,14 @@ mod tone_tests {
     #[test]
     fn ink_follows_the_fill_and_always_takes_the_higher_contrast() {
         assert_eq!(ink_on(0xffffff), INK, "white card, dark letters");
-        assert_eq!(ink_on(0x000000), Chrome::BRIGHT, "black card, light letters");
+        assert_eq!(ink_on(0x000000), Chrome::ON_ACCENT, "black card, light letters");
         // The pale end of the built-in palette, where white letters used to wash out.
         for light in [0xf0b357, 0x7aa2f7, 0x5fd1a0, 0xe887b6, 0x94a3b8, 0xb69cfb, 0x4fc7d3, 0xe97b7b] {
             assert_eq!(ink_on(light), INK, "{light:#08x} is a light fill");
         }
         // The deep end, where dark letters would.
         for dark in [0x1b46a8, 0x136b3a, 0x8f2c2c, 0x5b34c2, 0x076a75, 0x9a2c63, 0x3a4553, 0x2f6fed] {
-            assert_eq!(ink_on(dark), Chrome::BRIGHT, "{dark:#08x} is a dark fill");
+            assert_eq!(ink_on(dark), Chrome::ON_ACCENT, "{dark:#08x} is a dark fill");
         }
     }
 

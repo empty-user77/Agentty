@@ -250,3 +250,21 @@ pub fn note_recent_folder(path: &std::path::Path) {
         let _: () = msg_send![controller, noteNewRecentDocumentURL: url];
     }
 }
+
+/// Draws the app's own AppKit parts (title bars, menus, scroll bars) light (`Some(true)`), dark
+/// (`Some(false)`) or as the system is set (`None`), to match the chrome.
+pub fn set_app_appearance(light: Option<bool>) {
+    unsafe {
+        let app: Id = msg_send![objc::class!(NSApplication), sharedApplication];
+        let appearance: Id = match light {
+            None => std::ptr::null_mut(),
+            Some(light) => {
+                let name = if light { "NSAppearanceNameAqua" } else { "NSAppearanceNameDarkAqua" };
+                let name = std::ffi::CString::new(name).unwrap_or_default();
+                let name: Id = msg_send![objc::class!(NSString), stringWithUTF8String: name.as_ptr()];
+                msg_send![objc::class!(NSAppearance), appearanceNamed: name]
+            }
+        };
+        let _: () = msg_send![app, setAppearance: appearance];
+    }
+}

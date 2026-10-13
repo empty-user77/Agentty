@@ -8,14 +8,14 @@ use super::onboarding::Step;
 use super::settings_page::switch;
 use super::Workbench;
 use crate::i18n::{t, tf};
-use crate::settings::{settings, update_settings, Language, LinkOpener, Settings, SettingsStore};
+use crate::settings::{settings, update_settings, Appearance, Language, LinkOpener, Settings, SettingsStore};
 use crate::theme::{hex, hex_alpha, Chrome, TerminalTheme};
 use crate::ui::{chip, icon, IconSize, TypeScale};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString, Window};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The steps on the card, in order.
-const STEPS: [Step; 4] = [Step::Agents, Step::Look, Step::Work, Step::Notify];
+const STEPS: [Step; 5] = [Step::Appearance, Step::Agents, Step::Look, Step::Work, Step::Notify];
 
 /// The card's own surfaces: a shade darker than the panels, as a sheet laid over the app.
 const CARD: u32 = 0x19191b;
@@ -41,6 +41,7 @@ impl Workbench {
         let index = STEPS.iter().position(|s| *s == step).unwrap_or(0);
         let last = index + 1 == STEPS.len();
         let body = match step {
+            Step::Appearance => self.setup_appearance(cx),
             Step::Agents => self.setup_agents(cx),
             Step::Look => self.setup_look(cx),
             Step::Work => self.setup_work(cx),
@@ -213,7 +214,6 @@ impl Workbench {
         div()
             .flex()
             .flex_col()
-            .child(eyebrow(t(cx, "onboarding.eyebrow")))
             .child(title(t(cx, "onboarding.agents_title")))
             .child(subtitle(t(cx, "onboarding.agents_body")))
             .child(div().mt(px(36.)).mb_3().t_body().text_color(hex(Chrome::MUTED)).child(found_label))
@@ -226,6 +226,24 @@ impl Workbench {
                 prefs.always_bypass,
                 |s| s.always_bypass = !s.always_bypass,
             ))
+    }
+
+    /// The first step: light or dark (or the system's), as three large previews.
+    fn setup_appearance(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let current = settings(cx).appearance;
+        div()
+            .flex()
+            .flex_col()
+            .child(eyebrow(t(cx, "onboarding.eyebrow")))
+            .child(title(t(cx, "onboarding.appearance_title")))
+            .child(subtitle(t(cx, "onboarding.appearance_body")))
+            .child(div().mt(px(36.)).w_full().flex().justify_between().children(Appearance::ALL.into_iter().enumerate().map(
+                |(i, appearance)| {
+                    appearance_card("onboarding-appearance", i, appearance, current == appearance, 180., cx)
+                        .w(gpui::relative(AGENT_WIDTH))
+                        .flex_none()
+                },
+            )))
     }
 
     fn setup_look(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -609,23 +627,29 @@ fn secondary_button(
 /// A terminal theme as a small screen of it: a prompt, a command, an agent's line and its colors.
 fn theme_preview(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut Context<Workbench>) -> impl IntoElement {
     let name = theme.name.clone();
-    let line = |width: f32, color: u32| div().h(px(5.)).w(px(width)).rounded_full().bg(hex(color));
+    let line = |width: f32, color: u32| div().h(px(5.)).w(px(width)).rounded_full().bg(crate::theme::raw(color));
     let screen = div()
         .h(px(78.))
         .p_3()
         .rounded_md()
-        .bg(hex(theme.background))
+        .bg(crate::theme::raw(theme.background))
         .border_1()
         .border_color(hex_alpha(Chrome::BRIGHT, 0.08))
         .flex()
         .flex_col()
         .gap_2()
         .child(div().flex().gap_1p5().child(line(34., theme.ansi[2])).child(line(22., theme.ansi[4])).child(line(46., theme.foreground)))
-        .child(div().flex().gap_1p5().child(div().size(px(5.)).rounded_full().bg(hex(theme.ansi[5]))).child(line(96., theme.foreground)))
+        .child(
+            div()
+                .flex()
+                .gap_1p5()
+                .child(div().size(px(5.)).rounded_full().bg(crate::theme::raw(theme.ansi[5])))
+                .child(line(96., theme.foreground)),
+        )
         .child(line(70., hex_dim(theme.foreground)))
         .child(div().flex().gap_1p5().child(line(18., theme.ansi[1])).child(line(58., theme.ansi[3])))
         .child(div().flex_1())
-        .child(div().flex().gap_1().children(theme.ansi[1..7].iter().map(|c| div().size(px(8.)).rounded_sm().bg(hex(*c)))));
+        .child(div().flex().gap_1().children(theme.ansi[1..7].iter().map(|c| div().size(px(8.)).rounded_sm().bg(crate::theme::raw(*c)))));
     div()
         .id(("onboarding-theme", index))
         .w(gpui::relative(THEME_WIDTH))
@@ -662,4 +686,96 @@ fn theme_preview(index: usize, theme: &TerminalTheme, selected: bool, cx: &mut C
 fn hex_dim(color: u32) -> u32 {
     let mix = |shift: u32| ((((color >> shift) & 0xff) + 0x80) / 2) << shift;
     mix(16) | mix(8) | mix(0)
+}
+
+/// Light, dark or the system's, as a small window of Agentty in it: the system's card is half of
+/// each. The preview colours are fixed (`raw`): they show the choice, not the chrome around it.
+pub(super) fn appearance_card(
+    id: &'static str,
+    index: usize,
+    appearance: Appearance,
+    selected: bool,
+    preview_height: f32,
+    cx: &mut Context<Workbench>,
+) -> gpui::Stateful<gpui::Div> {
+    // (window, sidebar, line, border) of each appearance.
+    const DARK: (u32, u32, u32, u32) = (0x1e1e21, 0x151517, 0x3a3a42, 0x2f2f34);
+    const LIGHT: (u32, u32, u32, u32) = (0xffffff, 0xf1f1f4, 0xd9d9e0, 0xdedee3);
+    let raw = crate::theme::raw;
+    let half = |(window, sidebar, line, border): (u32, u32, u32, u32), with_sidebar: bool, share: f32| {
+        let bar = |width: f32| div().h(px(5.)).w(px(width)).rounded_full().bg(raw(line));
+        div()
+            .w(gpui::relative(share))
+            .flex_none()
+            .overflow_hidden()
+            .h_full()
+            .flex()
+            .bg(raw(window))
+            .when(with_sidebar, |d| {
+                d.child(
+                    div()
+                        .w(px(64.))
+                        .h_full()
+                        .p_2()
+                        .flex()
+                        .flex_col()
+                        .gap_1p5()
+                        .bg(raw(sidebar))
+                        .border_r_1()
+                        .border_color(raw(border))
+                        .child(div().flex().gap_1().child(div().size(px(5.)).rounded_full().bg(raw(0x8b5cf6))).child(bar(38.)))
+                        .child(bar(30.))
+                        .child(bar(42.)),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(div().flex().gap_1().child(bar(26.)).child(bar(18.)))
+                    .child(bar(90.))
+                    .child(bar(70.))
+                    .child(div().flex_1())
+                    .child(div().h(px(7.)).w_full().rounded_full().border_1().border_color(raw(border))),
+            )
+    };
+    let screen = div().h(px(preview_height)).rounded_md().overflow_hidden().border_1().border_color(raw(0x3a3a40)).flex();
+    let screen = match appearance {
+        Appearance::Dark => screen.child(half(DARK, true, 1.)),
+        Appearance::Light => screen.child(half(LIGHT, true, 1.)),
+        Appearance::System => screen.child(half(DARK, true, 0.5)).child(half(LIGHT, true, 0.5)),
+    };
+    let (glyph, body) = match appearance {
+        Appearance::System => ("monitor", "appearance.system_body"),
+        Appearance::Dark => ("moon", "appearance.dark_body"),
+        Appearance::Light => ("sun", "appearance.light_body"),
+    };
+    div()
+        .id((id, index))
+        .p_2()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .rounded_lg()
+        .cursor_pointer()
+        .bg(hex(if selected { Chrome::SELECTED } else { TILE }))
+        .border_1()
+        .border_color(if selected { hex_alpha(Chrome::BRIGHT, 0.6) } else { hex(CARD_BORDER) })
+        .hover(|s| s.border_color(hex_alpha(Chrome::BRIGHT, 0.35)))
+        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.appearance = appearance)))
+        .child(screen)
+        .child(
+            div()
+                .px_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon(glyph, IconSize::BUTTON, hex(Chrome::FOREGROUND)))
+                .child(div().t_large().text_color(hex(Chrome::BRIGHT)).child(t(cx, super::settings_page::appearance_label(appearance))))
+                .child(div().flex_1())
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, body))),
+        )
 }

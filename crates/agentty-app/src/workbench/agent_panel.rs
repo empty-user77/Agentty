@@ -612,8 +612,9 @@ impl Workbench {
                     .t_small()
                     .cursor_pointer()
                     .bg(hex(0x2d2d30))
+                    .when(crate::theme::is_light(), crate::ui::outlined)
                     .text_color(hex(Chrome::FOREGROUND))
-                    .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+                    .hover(crate::ui::hover_fill)
                     .child(label)
             };
             list = list.child(
@@ -792,8 +793,9 @@ impl Workbench {
                     .flex_shrink_0()
                     .cursor_pointer()
                     .bg(if primary { hex_alpha(Chrome::ACCENT, 0.9) } else { hex(0x2d2d30) })
+                    .when(!(primary) && crate::theme::is_light(), crate::ui::outlined)
                     .text_color(hex(if primary { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
-                    .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+                    .hover(crate::ui::hover_fill)
                     .child(label)
             };
             let ticked = self.agent_panel.as_ref().is_some_and(|p| p.selected_peers.contains(&peer_id));
@@ -886,8 +888,9 @@ impl Workbench {
                             .t_small()
                             .cursor_pointer()
                             .bg(hex(0x2d2d30))
+                            .when(crate::theme::is_light(), crate::ui::outlined)
                             .text_color(hex(Chrome::FOREGROUND))
-                            .hover(|s| s.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)))
+                            .hover(crate::ui::hover_fill)
                             .child(t(cx, "collab.share_context"))
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.connect_many(pane_id, &share, false, cx))),
                     )
@@ -900,8 +903,8 @@ impl Workbench {
                             .t_small()
                             .cursor_pointer()
                             .bg(hex_alpha(Chrome::ACCENT, 0.9))
-                            .text_color(hex(Chrome::BRIGHT))
-                            .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                            .text_color(hex(Chrome::ON_ACCENT))
+                            .hover(crate::ui::hover_fill)
                             .child(t(cx, "collab.make_live"))
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.connect_many(pane_id, &live, true, cx))),
                     ),

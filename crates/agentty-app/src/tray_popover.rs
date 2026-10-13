@@ -573,6 +573,8 @@ impl TrayPopover {
 
 impl Render for TrayPopover {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Dark in any appearance, like the menu bar it hangs from.
+        let _dark = crate::theme::DarkOnly::hold();
         let snapshot = Snapshot::gather(cx);
         // The window follows the panel's measured height (after this frame: resizing
         // synchronously re-enters the window being painted).

@@ -66,6 +66,22 @@ impl Language {
     }
 }
 
+/// How the app's chrome is drawn. Terminals keep their own theme either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Appearance {
+    /// Follows the system's light or dark setting.
+    System,
+    /// What Agentty has always been, and what a settings file from before this choice keeps.
+    #[default]
+    Dark,
+    Light,
+}
+
+impl Appearance {
+    pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Dark, Appearance::Light];
+}
+
 /// Where links (⌘-click in terminals) open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -270,6 +286,8 @@ pub struct Settings {
     /// Menu bar icon; closing the window keeps Agentty running there.
     pub menu_bar: bool,
     pub link_opener: LinkOpener,
+    /// Light or dark chrome (or the system's).
+    pub appearance: Appearance,
     /// App the file editor's "Open in editor" button uses.
     pub external_editor: ExternalEditor,
     pub browser: BrowserSettings,
@@ -820,6 +838,7 @@ impl Default for Settings {
             voice: VoiceSettings::default(),
             menu_bar: true,
             link_opener: LinkOpener::InApp,
+            appearance: Appearance::Dark,
             external_editor: ExternalEditor::Auto,
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
@@ -1115,7 +1134,28 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
         }
         crate::platform::wakelock::set(store.settings.prevent_sleep);
     });
+    apply_appearance(cx);
     cx.refresh_windows();
+}
+
+/// Draws the chrome as the appearance setting says: the colours (`theme::set_light`) and AppKit's
+/// own parts. Called at start, after every settings change, and when the system switches between
+/// light and dark (which only matters while the setting follows the system).
+pub fn apply_appearance(cx: &mut App) {
+    let appearance = settings(cx).appearance;
+    crate::native::set_app_appearance(match appearance {
+        Appearance::System => None,
+        Appearance::Dark => Some(false),
+        Appearance::Light => Some(true),
+    });
+    let light = match appearance {
+        Appearance::Light => true,
+        Appearance::Dark => false,
+        Appearance::System => matches!(cx.window_appearance(), gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight),
+    };
+    if crate::theme::set_light(light) {
+        cx.refresh_windows();
+    }
 }
 
 /// Puts settings from elsewhere in place of the ones in use (an imported configuration, or another
@@ -1137,6 +1177,7 @@ pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Resul
         agentty_bridge::voice::set_preferred_model(store.settings.voice.model.as_deref());
     });
     crate::remote::refresh_voice(cx);
+    apply_appearance(cx);
     cx.refresh_windows();
     Ok(())
 }

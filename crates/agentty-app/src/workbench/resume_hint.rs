@@ -118,7 +118,7 @@ impl Workbench {
                 .py_0p5()
                 .rounded_sm()
                 .bg(hex(Chrome::ACCENT))
-                .text_color(hex(Chrome::BRIGHT))
+                .text_color(hex(Chrome::ON_ACCENT))
                 .cursor_pointer()
                 .hover(|s| s.bg(hex(0x1a8ae6)))
                 .child(label)
@@ -252,7 +252,7 @@ impl Workbench {
                         .flex()
                         .items_start()
                         .gap_2()
-                        .hover(|s| s.bg(hex(Chrome::ACCENT)))
+                        .hover(crate::ui::hover_fill)
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                             this.resume_in_pane(&session_pane, chosen.clone(), window, cx)
                         }))

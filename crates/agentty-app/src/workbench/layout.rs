@@ -843,8 +843,9 @@ impl Workbench {
                 .rounded_md()
                 .t_small()
                 .bg(hex(0x2d2d30))
+                .when(crate::theme::is_light(), crate::ui::outlined)
                 .text_color(hex(if enabled { Chrome::BRIGHT } else { Chrome::MUTED }))
-                .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(hex(Chrome::ACCENT))))
+                .when(enabled, |d| d.cursor_pointer().hover(crate::ui::hover_fill))
                 .child(if running {
                     crate::ui::spinner(IconSize::INLINE, hex(Chrome::BRIGHT)).into_any_element()
                 } else {
@@ -928,9 +929,9 @@ impl Workbench {
                     .cursor_pointer()
                     .t_small()
                     .bg(hex(Chrome::ACCENT))
-                    .text_color(hex(Chrome::BRIGHT))
+                    .text_color(hex(Chrome::ON_ACCENT))
                     .hover(|s| s.opacity(0.85))
-                    .child(icon("sparkles", IconSize::INLINE, hex(Chrome::BRIGHT)))
+                    .child(icon("sparkles", IconSize::INLINE, hex(Chrome::ON_ACCENT)))
                     .child(t(cx, "git.ai_resolve"))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         cx.stop_propagation();

@@ -1031,6 +1031,8 @@ impl Workbench {
             }
         })
         .detach();
+        // The system switched between light and dark: the chrome follows when set to.
+        cx.observe_window_appearance(window, |_, _, cx| crate::settings::apply_appearance(cx)).detach();
         this.first_run_onboarding(cx);
         this.startup_system_check(cx);
         this.refresh_sessions(cx);
@@ -2761,6 +2763,7 @@ impl Workbench {
                                         .t_body()
                                         .cursor_pointer()
                                         .bg(hex(0x2d2d30))
+                                        .when(crate::theme::is_light(), crate::ui::outlined)
                                         .text_color(hex(Chrome::BRIGHT))
                                         .hover(|s| s.opacity(0.85))
                                         .on_click(
@@ -2777,7 +2780,7 @@ impl Workbench {
                                         .t_body()
                                         .cursor_pointer()
                                         .bg(hex(Chrome::ACCENT))
-                                        .text_color(hex(Chrome::BRIGHT))
+                                        .text_color(hex(Chrome::ON_ACCENT))
                                         .hover(|s| s.opacity(0.85))
                                         .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
                                             let value = this.rename.as_ref().map(|r| r.input.read(cx).text().trim().to_string());

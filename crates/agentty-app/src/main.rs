@@ -665,6 +665,7 @@ fn main() {
             eprintln!("agentty: failed to load bundled fonts: {err:#}");
         }
         settings::SettingsStore::init(cx);
+        settings::apply_appearance(cx);
         // The newest copy of each agent CLI: last run's choice for the tabs restored now, a fresh
         // look in the background for the ones opened later.
         agent_bins::load_saved();

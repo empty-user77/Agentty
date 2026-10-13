@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Step {
+    Appearance,
     Agents,
     Look,
     Work,
@@ -290,7 +291,8 @@ impl Workbench {
 
     pub(super) fn open_onboarding(&mut self, cx: &mut Context<Self>) {
         self.page = None;
-        self.onboarding = Some(Onboarding { step: Step::Agents, current: Task::all()[0], progress: HashMap::new(), seen: HashSet::new() });
+        self.onboarding =
+            Some(Onboarding { step: Step::Appearance, current: Task::all()[0], progress: HashMap::new(), seen: HashSet::new() });
         cx.notify();
     }
 
@@ -458,7 +460,7 @@ impl Workbench {
             .rounded_md()
             .cursor_pointer()
             .t_body()
-            .when(primary, |d| d.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::BRIGHT)).hover(|s| s.opacity(0.9)))
+            .when(primary, |d| d.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::ON_ACCENT)).hover(|s| s.opacity(0.9)))
             .when(!primary, |d| d.text_color(hex(Chrome::MUTED)).hover(|s| s.text_color(hex(Chrome::BRIGHT)).bg(hex(Chrome::HOVER))))
             .child(label.to_string())
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
@@ -527,6 +529,7 @@ impl Workbench {
                     .py_0p5()
                     .rounded_sm()
                     .bg(hex(0x2d2d30))
+                    .when(crate::theme::is_light(), crate::ui::outlined)
                     .border_1()
                     .border_color(hex(Chrome::OVERLAY_BORDER))
                     .t_small()

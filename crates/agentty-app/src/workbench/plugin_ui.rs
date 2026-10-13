@@ -902,7 +902,7 @@ impl Workbench {
                         .flex()
                         .when(*value, |d| d.justify_end())
                         .bg(if *value { hex(Chrome::ACCENT) } else { hex(0x3a3a40) })
-                        .child(div().size(px(13.)).rounded_full().bg(hex(Chrome::BRIGHT))),
+                        .child(div().size(px(13.)).rounded_full().bg(hex(Chrome::ON_ACCENT))),
                 )
                 .child(label.clone())
                 .into_any_element(),
