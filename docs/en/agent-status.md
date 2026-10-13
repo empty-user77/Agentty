@@ -42,6 +42,12 @@ Agentty passes the agent a status hook on the command line when the pane starts.
 - Whether to notify while Agentty is the front application.
 - Questions and permission requests always notify, unless you are looking at that pane.
 - One question from an agent gives one notification, even though the agent reports it more than once. A new question after you answered notifies again.
+
+### Allow or deny from the notification
+
+A permission request from Claude Code or Codex shows what it asks (the tool and, for a command, its lines) with **Allow** and **Deny** buttons, on macOS and in the mini window. Allow answers "Yes" once; Deny answers "No" (Esc), and the agent waits for what to do instead. Neither brings Agentty to the front. "Yes, and don't ask again" stays in the terminal.
+
+Agentty types the answer only while that same request still waits on screen. If you already answered it in the terminal, or the agent moved on, the button opens the pane instead. On macOS, Allow needs the Mac to be unlocked. With the banner style, the buttons show when you point at the notification; choose the **Alerts** style for Agentty in System Settings → Notifications to keep them on screen. Questions (a choice between answers) are answered in the terminal.
 - "In front" means Agentty is the active application at that moment.
 
 ### To your phone

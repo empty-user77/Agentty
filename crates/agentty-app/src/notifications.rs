@@ -43,12 +43,14 @@ extern "C" fn did_receive(_: &Object, _: Sel, _center: Id, response: Id, handler
         let request: Id = msg_send![notification, request];
         let identifier: Id = msg_send![request, identifier];
         let utf8: *const std::os::raw::c_char = msg_send![identifier, UTF8String];
+        let action: Id = msg_send![response, actionIdentifier];
+        let action_utf8: *const std::os::raw::c_char = msg_send![action, UTF8String];
+        let action =
+            if action_utf8.is_null() { String::new() } else { std::ffi::CStr::from_ptr(action_utf8).to_string_lossy().into_owned() };
         if !utf8.is_null() {
             let identifier = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
-            if let Some(pane) =
-                identifier.strip_prefix("agentty-pane-").and_then(|rest| rest.split('-').next()).and_then(|id| id.parse().ok())
-            {
-                crate::status_item::push_action(crate::status_item::TrayAction::Focus(pane));
+            if let Some(tray) = response_action(&identifier, &action) {
+                crate::status_item::push_action(tray);
             }
         }
         let handler = handler as *mut Block<(), ()>;
@@ -90,6 +92,62 @@ pub fn prepare() {
     let _ = center();
 }
 
+/// Whether macOS lets Agentty notify, as last read by [`check_permission`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Permission {
+    /// Not read yet, or no way to tell (a development build outside an app bundle).
+    Unknown,
+    NotAsked,
+    Denied,
+    Allowed,
+}
+
+static PERMISSION: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn permission() -> Permission {
+    match PERMISSION.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Permission::NotAsked,
+        2 => Permission::Denied,
+        3 => Permission::Allowed,
+        _ => Permission::Unknown,
+    }
+}
+
+/// Reads the permission again (the answer comes a moment later, see [`permission`]).
+pub fn check_permission() {
+    let Some(center) = center() else { return };
+    let completion = ConcreteBlock::new(|settings: Id| {
+        if settings.is_null() {
+            return;
+        }
+        // UNAuthorizationStatus: notDetermined 0, denied 1, authorized 2, provisional 3, ephemeral 4.
+        let status: isize = unsafe { msg_send![settings, authorizationStatus] };
+        let value = match status {
+            0 => 1,
+            1 => 2,
+            2..=4 => 3,
+            _ => 0,
+        };
+        PERMISSION.store(value, std::sync::atomic::Ordering::Relaxed);
+    })
+    .copy();
+    unsafe {
+        let _: () = msg_send![center, getNotificationSettingsWithCompletionHandler: &*completion];
+    }
+}
+
+/// Asks macOS for permission (its dialog shows only while it was never answered), then reads it.
+pub fn ask_permission() {
+    let Some(center) = center() else { return };
+    let completion = ConcreteBlock::new(|_granted: BOOL, _error: Id| check_permission()).copy();
+    unsafe {
+        let _: () = msg_send![center, requestAuthorizationWithOptions: (4usize | 2 | 1) completionHandler: &*completion];
+    }
+}
+
+/// System Settings → Notifications, where a denied permission is turned back on.
+pub const SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+
 pub fn show(pane_id: u64, title: &str, body: &str) {
     let Some(center) = center() else {
         return show_with_osascript(title, body);
@@ -104,15 +162,72 @@ pub fn show(pane_id: u64, title: &str, body: &str) {
         let request: Id = msg_send![class!(UNNotificationRequest), requestWithIdentifier: ns_string(&identifier) content: content trigger: std::ptr::null_mut::<Object>()];
         let _: () = msg_send![center, addNotificationRequest: request withCompletionHandler: std::ptr::null_mut::<Object>()];
         let _: () = msg_send![content, release];
-        if pane_id != 0 {
-            let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
-            let list = shown.entry(pane_id).or_default();
-            list.push(identifier);
-            // A pane that keeps notifying keeps only its latest ones on record.
-            let excess = list.len().saturating_sub(20);
-            list.drain(..excess);
-        }
+        remember(pane_id, identifier);
     }
+}
+
+/// The category of permission requests: Allow and Deny buttons.
+const REQUEST_CATEGORY: &str = "agentty.request";
+const ALLOW: &str = "agentty.allow";
+const DENY: &str = "agentty.deny";
+
+/// A permission request (`ask`, see `TerminalView::ask_serial`) of `pane_id`, with Allow / Deny
+/// buttons that answer it without bringing Agentty up. `body` says what would be allowed.
+pub fn show_request(pane_id: u64, ask: u64, title: &str, body: &str, allow: &str, deny: &str) {
+    let Some(center) = center() else {
+        return show_with_osascript(title, body);
+    };
+    unsafe {
+        // Set again each time: the button titles follow the app's language.
+        // Allow needs the Mac unlocked (authentication required); Deny is marked destructive.
+        let allow: Id =
+            msg_send![class!(UNNotificationAction), actionWithIdentifier: ns_string(ALLOW) title: ns_string(allow) options: 1usize];
+        let deny: Id =
+            msg_send![class!(UNNotificationAction), actionWithIdentifier: ns_string(DENY) title: ns_string(deny) options: 2usize];
+        let actions: Id = msg_send![class!(NSMutableArray), array];
+        let _: () = msg_send![actions, addObject: allow];
+        let _: () = msg_send![actions, addObject: deny];
+        let intents: Id = msg_send![class!(NSArray), array];
+        let category: Id = msg_send![class!(UNNotificationCategory), categoryWithIdentifier: ns_string(REQUEST_CATEGORY) actions: actions intentIdentifiers: intents options: 0usize];
+        let categories: Id = msg_send![class!(NSSet), setWithObject: category];
+        let _: () = msg_send![center, setNotificationCategories: categories];
+
+        let content: Id = msg_send![class!(UNMutableNotificationContent), new];
+        let _: () = msg_send![content, setTitle: ns_string(title)];
+        let _: () = msg_send![content, setBody: ns_string(body)];
+        let _: () = msg_send![content, setCategoryIdentifier: ns_string(REQUEST_CATEGORY)];
+        let identifier = format!("agentty-pane-{pane_id}-{}-ask-{ask}", crate::ui::now_ms());
+        let request: Id = msg_send![class!(UNNotificationRequest), requestWithIdentifier: ns_string(&identifier) content: content trigger: std::ptr::null_mut::<Object>()];
+        let _: () = msg_send![center, addNotificationRequest: request withCompletionHandler: std::ptr::null_mut::<Object>()];
+        let _: () = msg_send![content, release];
+        remember(pane_id, identifier);
+    }
+}
+
+/// What a click on notification `identifier` asks for: its Allow / Deny button answers the
+/// request it names; anything else (the notification itself) opens its pane.
+fn response_action(identifier: &str, action: &str) -> Option<crate::status_item::TrayAction> {
+    use crate::status_item::TrayAction;
+    let rest = identifier.strip_prefix("agentty-pane-")?;
+    let pane: u64 = rest.split('-').next()?.parse().ok()?;
+    let ask = rest.split_once("-ask-").and_then(|(_, ask)| ask.parse::<u64>().ok());
+    match (action, ask) {
+        (ALLOW, Some(ask)) => Some(TrayAction::Answer { pane, ask, allow: true }),
+        (DENY, Some(ask)) => Some(TrayAction::Answer { pane, ask, allow: false }),
+        _ => Some(TrayAction::Focus(pane)),
+    }
+}
+
+fn remember(pane_id: u64, identifier: String) {
+    if pane_id == 0 {
+        return;
+    }
+    let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
+    let list = shown.entry(pane_id).or_default();
+    list.push(identifier);
+    // A pane that keeps notifying keeps only its latest ones on record.
+    let excess = list.len().saturating_sub(20);
+    list.drain(..excess);
 }
 
 /// Identifiers of the notifications each pane has in Notification Center.
@@ -150,10 +265,23 @@ pub fn applescript_string(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::applescript_string;
+    use super::{applescript_string, response_action, ALLOW, DENY};
+    use crate::status_item::TrayAction;
 
     #[test]
     fn escapes_applescript() {
         assert_eq!(applescript_string("say \"hi\" \\ now\n"), "\"say \\\"hi\\\" \\\\ now\"");
+    }
+
+    #[test]
+    fn buttons_answer_the_request_they_came_with() {
+        let default = "com.apple.UNNotificationDefaultActionIdentifier";
+        let answer = |pane, ask, allow| Some(TrayAction::Answer { pane, ask, allow });
+        assert_eq!(response_action("agentty-pane-7-1700000000000-ask-3", ALLOW), answer(7, 3, true));
+        assert_eq!(response_action("agentty-pane-7-1700000000000-ask-3", DENY), answer(7, 3, false));
+        // The notification itself opens its pane; so does a button on one that names no request.
+        assert_eq!(response_action("agentty-pane-7-1700000000000-ask-3", default), Some(TrayAction::Focus(7)));
+        assert_eq!(response_action("agentty-pane-7-1700000000000", ALLOW), Some(TrayAction::Focus(7)));
+        assert_eq!(response_action("something-else", ALLOW), None);
     }
 }

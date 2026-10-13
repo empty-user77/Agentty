@@ -4,6 +4,27 @@
 
 pub fn prepare() {}
 
+/// Whether notifications may show: not something these platforms ask the app.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)] // the same variants as on macOS; only `Unknown` occurs here
+pub enum Permission {
+    Unknown,
+    NotAsked,
+    Denied,
+    Allowed,
+}
+
+pub fn permission() -> Permission {
+    Permission::Unknown
+}
+
+pub fn check_permission() {}
+
+pub fn ask_permission() {}
+
+/// Where notifications are turned on and off ("" where there is no such page to open).
+pub const SETTINGS_URL: &str = if cfg!(windows) { "ms-settings:notifications" } else { "" };
+
 pub fn show(_pane_id: u64, title: &str, body: &str) {
     let (title, body) = (clean(title, 120), clean(body, 300));
     std::thread::spawn(move || {
@@ -27,6 +48,12 @@ pub fn show(_pane_id: u64, title: &str, body: &str) {
             .stderr(std::process::Stdio::null())
             .status();
     });
+}
+
+/// A permission request: shown like any notification here (no Allow / Deny buttons yet); it is
+/// answered in the terminal or the mini window.
+pub fn show_request(pane_id: u64, _ask: u64, title: &str, body: &str, _allow: &str, _deny: &str) {
+    show(pane_id, title, body);
 }
 
 /// Toasts and `notify-send` notifications are not taken back here: they expire on their own.

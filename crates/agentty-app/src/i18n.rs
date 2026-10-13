@@ -604,6 +604,76 @@ strings! {
     "onboarding.opt_idea_body" => ["“Build my idea” on the start page", "시작 화면에 “아이디어 실현하기” 표시", "スタート画面に「アイデアを実現」を表示", "在起始页显示“实现我的想法”"],
     "onboarding.to_tour" => ["Next: try the features", "다음: 기능 따라 하기", "次へ: 機能を試す", "下一步：体验功能"],
     "onboarding.finish" => ["Finish", "완료", "完了", "完成"],
+    "onboarding.continue" => ["Continue", "계속", "続ける", "继续"],
+    "onboarding.try_features" => ["Try the features", "기능 따라 하기", "機能を試す", "体验功能"],
+    "onboarding.eyebrow" => ["Welcome to Agentty", "Agentty에 오신 것을 환영합니다", "Agentty へようこそ", "欢迎使用 Agentty"],
+    "onboarding.agents_title" => ["Your agents, side by side", "에이전트를 한곳에서", "エージェントをひとつの場所で", "在一处使用所有智能体"],
+    "onboarding.agents_body" => [
+        "Agentty works with the AI coding CLIs on your Mac. Claude Code and Codex show their status, sessions and context; the others open in tabs of their own.",
+        "Agentty는 이 Mac에 설치된 AI 코딩 CLI와 함께 일합니다. Claude Code와 Codex는 상태 · 세션 · 컨텍스트까지 보여 주고, 다른 에이전트는 각자의 탭에서 열립니다.",
+        "Agentty はこの Mac の AI コーディング CLI と連携します。Claude Code と Codex は状態・セッション・コンテキストまで表示し、その他のエージェントはそれぞれのタブで開きます。",
+        "Agentty 与这台 Mac 上的 AI 编程 CLI 协同工作。Claude Code 和 Codex 会显示状态、会话和上下文，其他智能体在各自的标签页中打开。"
+    ],
+    "onboarding.agents_found" => ["Found on this Mac  {n}", "이 Mac에서 찾음  {n}", "この Mac で検出  {n}", "在这台 Mac 上找到  {n}"],
+    "onboarding.agent_looking" => ["Looking…", "찾는 중…", "検索中…", "查找中…"],
+    "onboarding.agent_missing" => ["Not installed", "설치되지 않음", "未インストール", "未安装"],
+    "onboarding.bypass" => ["Skip permission prompts", "권한 확인 건너뛰기", "許可の確認をスキップ", "跳过权限确认"],
+    "onboarding.look_title" => ["Make it feel like home", "편안한 화면으로 맞추세요", "居心地のよい画面に", "打造舒适的界面"],
+    "onboarding.look_body" => [
+        "Pick the terminal theme you will look at for hours.",
+        "오래 보고 있을 터미널 테마를 고르세요.",
+        "長い時間見ることになるターミナルのテーマを選んでください。",
+        "选择你会长时间看着的终端主题。"
+    ],
+    "onboarding.look_more" => [
+        "Fonts, cursor and colors of your own: Settings → Terminal Style",
+        "글꼴 · 커서 · 색상은 설정 → 터미널 스타일에서 더 바꿀 수 있습니다",
+        "フォント・カーソル・色は 設定 → ターミナルスタイル で変更できます",
+        "字体、光标和颜色可在 设置 → 终端样式 中更改"
+    ],
+    "onboarding.work_title" => ["How you work", "작업 방식을 고르세요", "作業スタイルを選ぶ", "选择工作方式"],
+    "onboarding.notify_title" => ["Notifications", "알림 설정", "通知の設定", "通知设置"],
+    "onboarding.notify_body" => [
+        "Agentty tells you when an agent finishes or needs you, and a permission request can be allowed or denied right in its notification.",
+        "에이전트가 작업을 끝내거나 도움이 필요할 때 알려 드립니다. 권한 요청은 알림에서 바로 허용하거나 거부할 수 있습니다.",
+        "エージェントの完了や助けが必要なときにお知らせします。許可のリクエストは通知から直接許可・拒否できます。",
+        "智能体完成或需要你时会通知你。权限请求可以直接在通知中允许或拒绝。"
+    ],
+    "onboarding.notify_permission" => ["Allow Agentty's notifications", "Agentty 알림 허용", "Agentty の通知を許可", "允许 Agentty 通知"],
+    "onboarding.notify_allowed" => ["Allowed.", "허용되어 있습니다.", "許可されています。", "已允许。"],
+    "onboarding.notify_denied" => [
+        "Turned off. Turn them on in System Settings.",
+        "꺼져 있습니다. 시스템 설정에서 켜 주세요.",
+        "オフになっています。システム設定でオンにしてください。",
+        "已关闭。请在系统设置中开启。"
+    ],
+    "onboarding.notify_not_asked" => [
+        "Not allowed yet: click Allow, then Allow in the macOS dialog.",
+        "아직 허용하지 않았습니다. 허용을 누른 뒤 macOS 대화 상자에서 허용을 누르세요.",
+        "まだ許可されていません。「許可」を押し、macOS のダイアログで許可してください。",
+        "尚未允许：点击允许，然后在 macOS 对话框中点击允许。"
+    ],
+    "onboarding.notify_unknown" => [
+        "Check them in your system's settings.",
+        "시스템 설정에서 확인할 수 있습니다.",
+        "システムの設定で確認できます。",
+        "可在系统设置中查看。"
+    ],
+    "onboarding.notify_ask" => ["Allow", "허용", "許可", "允许"],
+    "onboarding.notify_open_settings" => ["Open System Settings", "시스템 설정 열기", "システム設定を開く", "打开系统设置"],
+    "onboarding.notify_test" => ["Send a test notification", "테스트 알림 보내기", "テスト通知を送る", "发送测试通知"],
+    "onboarding.notify_test_body" => [
+        "Notifications from Agentty look like this.",
+        "Agentty 알림은 이렇게 표시됩니다.",
+        "Agentty の通知はこのように表示されます。",
+        "Agentty 的通知看起来是这样的。"
+    ],
+    "onboarding.notify_requests_body" => [
+        "Questions and permission requests from a session you are not looking at; Claude Code and Codex requests come with Allow and Deny.",
+        "보고 있지 않은 세션의 질문과 권한 요청을 알립니다. Claude Code · Codex의 권한 요청에는 허용 · 거부 버튼이 붙습니다.",
+        "見ていないセッションの質問と許可リクエストを通知します。Claude Code・Codex の許可リクエストには許可・拒否ボタンが付きます。",
+        "通知你未在查看的会话中的问题和权限请求；Claude Code 和 Codex 的权限请求带有允许和拒绝按钮。"
+    ],
     "onboarding.later" => ["Close the tour", "투어 닫기", "ツアーを閉じる", "关闭导览"],
     "onboarding.tour" => ["Follow along", "기능 따라 하기", "一緒にやってみる", "跟着做"],
     "onboarding.ring_hint" => ["Look for the blinking yellow ring", "깜빡이는 노란 테두리를 찾으세요", "点滅している黄色い枠を探してください", "请找到闪烁的黄色边框"],
@@ -1653,6 +1723,8 @@ strings! {
     "notice.shortcut" => ["⇧⌘U jumps to the latest unread", "⇧⌘U: 가장 최근 읽지 않은 알림으로 이동", "⇧⌘U: 最新の未読へ移動", "⇧⌘U：跳转到最新未读"],
     "notice.none_unread" => ["No unread notifications", "읽지 않은 알림이 없습니다", "未読の通知はありません", "没有未读通知"],
     "notice.message" => ["Message", "메시지", "メッセージ", "消息"],
+    "notice.allow" => ["Allow", "허용", "許可", "允许"],
+    "notice.deny" => ["Deny", "거부", "拒否", "拒绝"],
     "notice.bell" => ["Terminal bell", "터미널 벨", "ターミナルベル", "终端响铃"],
     "settings.system_notifications" => ["Show macOS notifications when an agent finishes or needs input", "에이전트가 작업을 끝내거나 입력을 기다리면 macOS 알림 표시", "エージェントの完了や入力待ちを macOS 通知で表示", "智能体完成或等待输入时显示 macOS 通知"],
     "settings.system_notifications_hint" => [

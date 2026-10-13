@@ -26,6 +26,8 @@ const FOLD_SECONDS: f64 = 0.18;
 const HEADER: f32 = 40.;
 const ROW: f32 = 46.;
 const BUBBLE: f32 = 64.;
+/// The Allow / Deny row of a bubble that brings a permission request.
+const ASK_ROW: f32 = 30.;
 const MAX_BUBBLES: usize = 3;
 /// Idle agents listed before "More" (working and waiting ones are always listed).
 const RECENT_ROWS: usize = 5;
@@ -109,6 +111,8 @@ struct Bubble {
     text: String,
     color: u32,
     at: Instant,
+    /// A permission request it can answer right here (its number, see `TerminalView::ask_serial`).
+    ask: Option<u64>,
 }
 
 pub struct MiniState {
@@ -218,15 +222,21 @@ impl MiniView {
         }
     }
 
-    pub fn push_bubble(&mut self, pane_id: u64, title: String, text: String, kind: NoticeKind, cx: &mut Context<Self>) {
+    pub fn push_bubble(&mut self, pane_id: u64, title: String, text: String, kind: NoticeKind, ask: Option<u64>, cx: &mut Context<Self>) {
         let color = match kind {
             NoticeKind::Finished => Chrome::SUCCESS,
             NoticeKind::Permission | NoticeKind::Question => Chrome::ATTENTION,
             _ => Chrome::PURPLE,
         };
         self.bubbles.retain(|b| b.pane_id != pane_id);
-        self.bubbles.insert(0, Bubble { pane_id, title, text, color, at: Instant::now() });
+        self.bubbles.insert(0, Bubble { pane_id, title, text, color, at: Instant::now(), ask });
         self.bubbles.truncate(MAX_BUBBLES);
+        cx.notify();
+    }
+
+    /// The pane's request was answered: its bubble has nothing left to ask.
+    pub fn drop_bubbles_of(&mut self, pane_id: u64, cx: &mut Context<Self>) {
+        self.bubbles.retain(|b| b.pane_id != pane_id);
         cx.notify();
     }
 
@@ -250,9 +260,9 @@ impl MiniView {
         });
     }
 
-    fn desired_height(rows: usize, bubbles: usize, more: bool) -> f32 {
+    fn desired_height(rows: usize, bubbles: usize, asking: usize, more: bool) -> f32 {
         let rows = rows.clamp(1, MAX_ROWS);
-        bubbles as f32 * (BUBBLE + 8.) + HEADER + rows as f32 * ROW + if more { MORE_ROW } else { 0. } + 10.
+        bubbles as f32 * (BUBBLE + 8.) + asking as f32 * ASK_ROW + HEADER + rows as f32 * ROW + if more { MORE_ROW } else { 0. } + 10.
     }
 
     /// Working and waiting agents first, then the most recently active; `hidden` = how many "More" reveals.
@@ -277,7 +287,8 @@ impl Render for MiniView {
         let (agents, hidden) = Self::arrange(all, self.expanded);
         let can_collapse = self.expanded && total > agents.len().min(RECENT_ROWS);
 
-        let height = Self::desired_height(agents.len(), self.bubbles.len(), hidden > 0 || can_collapse);
+        let asking = self.bubbles.iter().filter(|b| b.ask.is_some()).count();
+        let height = Self::desired_height(agents.len(), self.bubbles.len(), asking, hidden > 0 || can_collapse);
         if (height - self.height).abs() > 0.5 {
             self.height = height;
             if let Some(ns) = native::ns_window(window) {
@@ -300,13 +311,43 @@ impl Render for MiniView {
 
         let mut bubbles = div().flex().flex_col().gap_2();
         for (index, bubble) in self.bubbles.clone().into_iter().enumerate() {
-            let (pane_id, color) = (bubble.pane_id, bubble.color);
+            let (pane_id, color, ask) = (bubble.pane_id, bubble.color, bubble.ask);
             let ago = crate::ui::relative_time(bubble.at.elapsed().as_millis() as u64, 0);
+            // Allow / Deny go the way a notification's buttons do: to the main window, which types
+            // them only while this very request still waits.
+            let answer = move |label: String, allow: bool, primary: bool| {
+                div()
+                    .id(if allow { ("mini-allow", index) } else { ("mini-deny", index) })
+                    .px_3()
+                    .py_0p5()
+                    .rounded_md()
+                    .t_small()
+                    .font_weight(crate::theme::EMPHASIS)
+                    .cursor_pointer()
+                    .when(primary, |d| d.bg(hex(Chrome::ATTENTION)).text_color(hex(Chrome::BRIGHT)))
+                    .when(!primary, |d| d.border_1().border_color(hex(Chrome::BORDER)).text_color(hex(Chrome::FOREGROUND)))
+                    .hover(|s| s.opacity(0.85))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(ask) = ask {
+                            crate::status_item::push_action(crate::status_item::TrayAction::Answer { pane: pane_id, ask, allow });
+                        }
+                    })
+                    .child(label)
+            };
+            let answers = ask.map(|_| {
+                div().flex().justify_end().gap_2().pt_1().child(answer(t(cx, "notice.deny").to_string(), false, false)).child(answer(
+                    t(cx, "notice.allow").to_string(),
+                    true,
+                    true,
+                ))
+            });
             bubbles = bubbles.child(
                 div()
                     .id(("mini-bubble", index))
                     .relative()
-                    .h(px(BUBBLE))
+                    .h(px(BUBBLE + if ask.is_some() { ASK_ROW } else { 0. }))
                     .px_3()
                     .py_2()
                     .flex()
@@ -340,6 +381,7 @@ impl Render for MiniView {
                             .child(div().text_color(hex(Chrome::MUTED)).child(ago)),
                     )
                     .child(div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(bubble.text))
+                    .children(answers)
                     // Tail pointing down at the panel.
                     .child(
                         gpui::canvas(
@@ -632,6 +674,7 @@ impl Workbench {
                 cx.activate(true);
                 self.jump_to_pane_id(id, window, cx);
             }
+            TrayAction::Answer { pane, ask, allow } => self.answer_request(pane, ask, allow, window, cx),
             TrayAction::FocusPlugin { plugin, instance } => {
                 window.activate_window();
                 cx.activate(true);
@@ -751,7 +794,7 @@ impl Workbench {
         let visible = native::is_visible(main);
         let area = native::visible_frame(main).unwrap_or(saved);
         let rows = self.agent_summaries(cx).len().min(RECENT_ROWS);
-        let height = MiniView::desired_height(rows, 0, false) as f64;
+        let height = MiniView::desired_height(rows, 0, 0, false) as f64;
         // Each Agentty window gets its own mini panel, side by side from the right edge.
         let shift = self.slot as f64 * (MINI_WIDTH as f64 + 12.);
         // GPUI window bounds are top-left based on the window's display.
@@ -863,10 +906,10 @@ mod tests {
 
     #[test]
     fn height_grows_with_rows_and_bubbles() {
-        let base = MiniView::desired_height(0, 0, false);
-        assert_eq!(base, MiniView::desired_height(1, 0, false));
-        assert!(MiniView::desired_height(3, 1, false) > MiniView::desired_height(3, 0, false));
-        assert_eq!(MiniView::desired_height(50, 0, false), MiniView::desired_height(super::MAX_ROWS, 0, false));
+        let base = MiniView::desired_height(0, 0, 0, false);
+        assert_eq!(base, MiniView::desired_height(1, 0, 0, false));
+        assert!(MiniView::desired_height(3, 1, 0, false) > MiniView::desired_height(3, 0, 0, false));
+        assert_eq!(MiniView::desired_height(50, 0, 0, false), MiniView::desired_height(super::MAX_ROWS, 0, 0, false));
     }
 
     #[test]

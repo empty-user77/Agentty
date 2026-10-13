@@ -297,6 +297,12 @@ pub struct TerminalView {
     quiet_ticks: u8,
     /// Whether the request the agent waits on was already announced (one notice per request).
     ask_gate: AskGate,
+    /// Number of the request the agent waits on, new for each one announced: an answer from a
+    /// notification names it, and is typed only while that very request still waits.
+    pub ask_serial: u64,
+    /// What the waiting permission request asks: (tool, the request in full as `request_text`
+    /// clipped it).
+    pub ask_request: Option<(String, Option<String>)>,
     /// Subagents of the current session, newest last.
     pub subagents: Vec<SubagentRun>,
     /// Descriptions of Agent tool calls whose subagent has not reported `SubagentStart` yet.
@@ -458,6 +464,8 @@ impl TerminalView {
             esc_at: None,
             quiet_ticks: 0,
             ask_gate: AskGate::default(),
+            ask_serial: 0,
+            ask_request: None,
             subagents: Vec::new(),
             pending_subagent_tasks: Default::default(),
             last_tool: None,
@@ -1000,11 +1008,49 @@ impl TerminalView {
         if first || !self.status.needs_user() {
             self.status = status;
             self.attention = true;
+            self.ask_serial += 1;
+            // Whoever announces a permission request says what it asks (`ask_request`).
+            self.ask_request = None;
             true
         } else {
             self.status = merge_waiting(&self.status, status);
             false
         }
+    }
+
+    /// The keys that answer this agent's approval prompt: (allow once, deny). Claude Code takes
+    /// its first option, "1. Yes"; Codex its "Yes, proceed" (`y`); both deny with Esc ("No, and
+    /// tell … what to do differently"). `None` for agents whose prompt is not known here.
+    fn approval_keys(&self) -> Option<(&'static [u8], &'static [u8])> {
+        match self.tool_id() {
+            "claude" => Some((b"1", b"\x1b")),
+            "codex" => Some((b"y", b"\x1b")),
+            _ => None,
+        }
+    }
+
+    /// Whether the waiting request can be answered from outside the terminal (a notification's
+    /// buttons): a permission request of an agent whose prompt is known — never a question, whose
+    /// first option is an answer the user did not pick.
+    pub fn answerable_request(&self) -> bool {
+        matches!(self.status, AgentStatus::Permission(_))
+            && self.approval_keys().is_some()
+            && !self.ask_request.as_ref().is_some_and(|(tool, _)| tool == "AskUserQuestion")
+    }
+
+    /// Answers permission request `serial` (allow once, or deny): only while that very request
+    /// still waits and the screen shows the approval prompt, so a late click never types into
+    /// whatever came after it. Whether the keys went in.
+    pub fn answer_request(&mut self, serial: u64, allow: bool) -> bool {
+        if serial != self.ask_serial || !self.answerable_request() {
+            return false;
+        }
+        let Some((yes, no)) = self.approval_keys() else { return false };
+        if classify_screen(&self.screen_lines(80)).permission.is_none() {
+            return false;
+        }
+        self.write_user_input((if allow { yes } else { no }).to_vec());
+        true
     }
 
     /// The model in the newest Claude Code welcome banner on this terminal: the row under
@@ -1436,6 +1482,9 @@ impl TerminalView {
             SignalKind::Permission => {
                 let label = detail.tool.as_deref().map(|tool| tool_label(tool, detail.target.as_deref()));
                 let new = self.wait_on_user(AgentStatus::Permission(label.clone()));
+                if new {
+                    self.ask_request = detail.tool.clone().map(|tool| (tool, detail.request.clone()));
+                }
                 return self.finish_signal(new.then_some(NoticeKind::Permission), label, cx);
             }
             SignalKind::Notification => match detail.notification_type.as_deref() {
