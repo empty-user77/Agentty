@@ -50,10 +50,16 @@ const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 const MAX_TRANSCRIPTIONS: usize = 2;
 /// How long a refused request's unread body is drained so its answer arrives (`linger`).
 const LINGER: Duration = Duration::from_secs(3);
-/// Refused voice uploads drained at once; past this the connection just closes, so refusals
-/// can't hold every connection the server has.
+/// Images attached at once: each holds its body (up to `VOICE_MAX_BODY`) until it is written.
+const MAX_ATTACHING: usize = 4;
+/// Images being saved now (see [`MAX_ATTACHING`]).
+static ATTACHING: AtomicUsize = AtomicUsize::new(0);
+/// How long an attached image is kept: long enough for the agent to read it, then cleared away.
+const ATTACHMENT_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// Refused uploads drained at once; past this the connection just closes, so refusals can't
+/// hold every connection the server has.
 const MAX_LINGERS: usize = 4;
-/// Refused voice uploads being drained now (see [`MAX_LINGERS`]).
+/// Refused uploads being drained now (see [`MAX_LINGERS`]).
 static LINGERING: AtomicUsize = AtomicUsize::new(0);
 /// Longest text one input may carry (a prompt pasted from a phone).
 pub const MAX_INPUT_CHARS: usize = 16_000;
@@ -101,8 +107,9 @@ pub enum Command {
     Key { pane: u64, key: String, ctrl: bool, alt: bool, shift: bool },
     /// Typed text, as typed.
     Text { pane: u64, text: String },
-    /// A prompt: pasted, then Enter.
-    Prompt { pane: u64, text: String },
+    /// A prompt: pasted, then Enter. `images` (attached on the page) are pasted first, alone, as
+    /// dropping them on the terminal would, so an agent CLI takes them as images.
+    Prompt { pane: u64, text: String, images: Vec<std::path::PathBuf> },
     /// A message written in a chat, for its lead (`pane`): sent as the app's own chat sends it,
     /// with the lead's instructions in front the first time.
     Chat { pane: u64, text: String },
@@ -257,6 +264,9 @@ struct InputBody {
     rows: u16,
     #[serde(default)]
     lines: i32,
+    /// Paths `/api/attach` returned, for a prompt or a chat message.
+    #[serde(default)]
+    images: Vec<String>,
 }
 
 /// The sizes a page may give a terminal: a phone held upright up to a wide desktop window.
@@ -506,15 +516,15 @@ impl Hub {
         let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
         let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
         let deadline = Instant::now() + REQUEST_DEADLINE;
-        let voice = std::cell::Cell::new(false);
+        let upload = std::cell::Cell::new(false);
         let request = match http::read_request(&mut stream, deadline, |head| {
-            voice.set(http::is_voice(&head.path));
+            upload.set(http::is_upload(&head.path));
             if config.secret.as_deref().is_some_and(|secret| strip_secret(&head.path, secret).is_none()) {
                 return Err(404);
             }
             let (host, login) = self.admitted(head, &config, true).map_err(|refused| refused.status)?;
-            if http::is_voice(&head.path) {
-                self.voice_admitted(head, &config, &host, &login)?;
+            if http::is_upload(&head.path) {
+                self.upload_admitted(head, &config, &host, &login)?;
             }
             Ok(())
         }) {
@@ -529,9 +539,10 @@ impl Hub {
                     _ => 400,
                 };
                 send(&mut stream, &Response::new(status, "text/plain", http::reason(status)), false);
-                // Only a voice upload sends a body big enough to be still arriving (the page acts
-                // on its 401 / 429); a few at a time, so refusals can't take every connection.
-                if voice.get() && matches!(error, HttpError::Refused(_) | HttpError::BodyTooLarge) {
+                // Only an upload (voice clip, image) sends a body big enough to be still arriving
+                // (the page acts on its 401 / 429); a few at a time, so refusals can't take every
+                // connection.
+                if upload.get() && matches!(error, HttpError::Refused(_) | HttpError::BodyTooLarge) {
                     if let Some(_slot) = Slot::take(&LINGERING, MAX_LINGERS) {
                         linger(&mut stream);
                     }
@@ -590,10 +601,11 @@ impl Hub {
         Ok((host.to_string(), login))
     }
 
-    /// The voice upload's head, checked in full before its body (up to `VOICE_MAX_BODY`) is read:
-    /// a POST from this page (check 4), a session of this login (check 3), and a transcription
-    /// slot free. `route` checks it all again once the body is in.
-    fn voice_admitted(&self, request: &Request, config: &Config, host: &str, login: &str) -> Result<(), u16> {
+    /// An upload's head (voice clip or image), checked in full before its body (up to
+    /// `VOICE_MAX_BODY`) is read: a POST from this page (check 4), a session of this login
+    /// (check 3), and for a voice clip a transcription slot free, for an image a saving slot.
+    /// `route` checks it all again once the body is in.
+    fn upload_admitted(&self, request: &Request, config: &Config, host: &str, login: &str) -> Result<(), u16> {
         if request.method != "POST" {
             return Err(405);
         }
@@ -605,7 +617,12 @@ impl Hub {
         if !self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(token, login, SystemTime::now()) {
             return Err(401);
         }
-        if self.transcribing.load(Ordering::SeqCst) >= MAX_TRANSCRIPTIONS {
+        let busy = if http::is_voice(&request.path) {
+            self.transcribing.load(Ordering::SeqCst) >= MAX_TRANSCRIPTIONS
+        } else {
+            ATTACHING.load(Ordering::SeqCst) >= MAX_ATTACHING
+        };
+        if busy {
             return Err(429);
         }
         Ok(())
@@ -714,6 +731,7 @@ impl Hub {
             }
             ("POST", "/api/input") => Routed::Response(self.input(request)),
             ("POST", "/api/voice") => Routed::Response(self.voice(request)),
+            ("POST", "/api/attach") => Routed::Response(self.attach(request)),
             ("POST", "/api/workspace") => Routed::Response(self.workspace_action(request)),
             _ => Routed::Response(Response::json(404, &json!({ "error": "not found" }))),
         }
@@ -817,13 +835,23 @@ impl Hub {
         if body.text.chars().count() > MAX_INPUT_CHARS {
             return Response::json(413, &json!({ "error": "too long" }));
         }
+        // Images attached on the page go with a prompt or a chat message, and only ones it saved.
+        let Some(images) = attached_images(&attachments_dir(), &body.images) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        let has_images = !images.is_empty();
         let command = match body.kind.as_str() {
-            "key" if allowed_key(&body.key) => {
+            "key" if allowed_key(&body.key) && !has_images => {
                 Command::Key { pane: body.pane, key: body.key, ctrl: body.ctrl, alt: body.alt, shift: body.shift }
             }
-            "text" if !body.text.is_empty() => Command::Text { pane: body.pane, text: body.text },
-            "prompt" if !body.text.trim().is_empty() => Command::Prompt { pane: body.pane, text: body.text },
-            "chat" if !body.text.trim().is_empty() => Command::Chat { pane: body.pane, text: body.text },
+            "text" if !body.text.is_empty() && !has_images => Command::Text { pane: body.pane, text: body.text },
+            "prompt" if !body.text.trim().is_empty() || has_images => Command::Prompt { pane: body.pane, text: body.text, images },
+            // The lead gets the paths in its message: a chat message is not pasted as typed.
+            "chat" if !body.text.trim().is_empty() || has_images => {
+                let paths = images.iter().map(|p| crate::launch::shell_quote(&p.display().to_string()));
+                let text = paths.chain(Some(body.text).filter(|t| !t.trim().is_empty())).collect::<Vec<_>>().join(" ");
+                Command::Chat { pane: body.pane, text }
+            }
             "resize" if COLS.contains(&body.cols) && ROWS.contains(&body.rows) => {
                 Command::Resize { pane: body.pane, cols: body.cols, rows: body.rows }
             }
@@ -896,6 +924,35 @@ impl Hub {
             Ok(text) => Response::json(200, &json!({ "text": text })),
             Err(_) => Response::json(500, &json!({ "error": "transcribe failed" })),
         }
+    }
+
+    /// Saves an image attached on the page (raw bytes in the body) where the agent can read it, and
+    /// returns its path, which the page sends back with its prompt (`images`): an agent CLI takes
+    /// a pasted image path as the image. Only PNG, JPEG, GIF and WebP, told
+    /// by their bytes, not by what the page says; the file is private (`0600`) and removed after
+    /// `ATTACHMENT_LIFETIME`.
+    fn attach(&self, request: &Request) -> Response {
+        let Some(pane) = request.query_param("pane").and_then(|t| t.parse::<u64>().ok()) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        if !self.is_session(pane) {
+            return Response::json(404, &json!({ "error": "no such session" }));
+        }
+        let Some(_slot) = Slot::take(&ATTACHING, MAX_ATTACHING) else {
+            return Response::json(429, &json!({ "error": "busy" }));
+        };
+        let Some(extension) = image_extension(&request.body) else {
+            return Response::json(415, &json!({ "error": "not an image" }));
+        };
+        let dir = attachments_dir();
+        remove_old_attachments(&dir, SystemTime::now());
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        let millis = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let path = dir.join(format!("image-{millis}-{}.{extension}", COUNT.fetch_add(1, Ordering::SeqCst)));
+        if agentty_bridge::fsutil::write_private(&path, &request.body).is_err() {
+            return Response::json(500, &json!({ "error": "not saved" }));
+        }
+        Response::json(200, &json!({ "path": path.display().to_string() }))
     }
 
     /// Wakes a sleeping workspace, or opens a tab in one. Only workspaces the page is shown (the
@@ -1080,6 +1137,58 @@ fn strip_secret(path: &str, secret: &str) -> Option<String> {
         "" => Some("/".to_string()),
         _ if tail.starts_with('/') => Some(tail.to_string()),
         _ => None,
+    }
+}
+
+/// Where images attached on the page are kept, in Agentty's own (private) data folder.
+fn attachments_dir() -> std::path::PathBuf {
+    agentty_bridge::fsutil::data_dir().join("remote-attachments")
+}
+
+/// Images one prompt may carry.
+const MAX_IMAGES: usize = 10;
+
+/// The images a prompt names, when every one is a file `/api/attach` saved in `dir` (by the name
+/// it gives, no other folder or file); `None` otherwise.
+fn attached_images(dir: &std::path::Path, paths: &[String]) -> Option<Vec<std::path::PathBuf>> {
+    if paths.len() > MAX_IMAGES {
+        return None;
+    }
+    paths
+        .iter()
+        .map(|path| {
+            let path = std::path::Path::new(path);
+            let name = path.file_name()?.to_str()?;
+            let ours = name.starts_with("image-") && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
+            (ours && path.parent() == Some(dir) && path.is_file()).then(|| path.to_path_buf())
+        })
+        .collect()
+}
+
+/// The file extension of an image an agent CLI reads, from its first bytes; `None` for anything else.
+fn image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+/// Removes attached images older than `ATTACHMENT_LIFETIME` (files only, never a folder).
+fn remove_old_attachments(dir: &std::path::Path, now: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        let old = meta.modified().ok().and_then(|at| now.duration_since(at).ok()).is_some_and(|age| age > ATTACHMENT_LIFETIME);
+        if meta.is_file() && old {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
@@ -1505,6 +1614,58 @@ mod tests {
     }
 
     #[test]
+    fn an_attached_image_is_checked_before_and_after_its_body() {
+        let hub = hub("secret-password");
+        hub.publish(Vec::new(), vec![session(7)], Vec::new());
+        let cookie = sign_in(&hub, "secret-password");
+        let head_only = |req: Req| req.raw().replace("Content-Length: 2\r\n\r\n{}", "Content-Length: 4000000\r\n\r\n");
+        let attach = |pane: u64| Req::post(if pane == 7 { "/api/attach?pane=7" } else { "/api/attach?pane=8" }, json!({}));
+        assert_eq!(send(&hub, &head_only(attach(7))).0, 401, "no session");
+        assert_eq!(send(&hub, &head_only(Req { cookie: Some(cookie.clone()), marker: false, ..attach(7) })).0, 403, "not from the page");
+        // Signed in, the body is read: a terminal that is not a session, then bytes that are not an
+        // image (whatever the page calls them), are refused.
+        assert_eq!(send(&hub, &Req { cookie: Some(cookie.clone()), ..attach(8) }.raw()).0, 404);
+        assert_eq!(send(&hub, &Req { cookie: Some(cookie), ..attach(7) }.raw()).0, 415);
+        hub.shutdown();
+    }
+
+    #[test]
+    fn images_are_told_by_their_bytes_and_cleared_when_old() {
+        assert_eq!(image_extension(b"\x89PNG\r\n\x1a\nrest"), Some("png"));
+        assert_eq!(image_extension(&[0xff, 0xd8, 0xff, 0xe0]), Some("jpg"));
+        assert_eq!(image_extension(b"GIF89a.."), Some("gif"));
+        assert_eq!(image_extension(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_extension(b"<svg onload=x>"), None);
+        assert_eq!(image_extension(b"RIFF\0\0\0\0WAVE"), None);
+        let dir = std::env::temp_dir().join(format!("agentty-attach-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        std::fs::write(dir.join("image.png"), b"png").unwrap();
+        remove_old_attachments(&dir, SystemTime::now());
+        assert!(dir.join("image.png").exists(), "a new one stays");
+        remove_old_attachments(&dir, SystemTime::now() + ATTACHMENT_LIFETIME + Duration::from_secs(60));
+        assert!(!dir.join("image.png").exists(), "an old one goes");
+        assert!(dir.join("folder").exists(), "folders are left alone");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_prompt_names_only_images_the_page_attached() {
+        let dir = std::env::temp_dir().join(format!("agentty-attached-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("image-1-0.png"), b"png").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+        let path = |name: &str| dir.join(name).display().to_string();
+        assert_eq!(attached_images(&dir, &[]), Some(Vec::new()));
+        assert_eq!(attached_images(&dir, &[path("image-1-0.png")]), Some(vec![dir.join("image-1-0.png")]));
+        assert_eq!(attached_images(&dir, &[path("notes.txt")]), None, "not one it saved");
+        assert_eq!(attached_images(&dir, &[path("image-9-9.png")]), None, "not there");
+        assert_eq!(attached_images(&dir, &[path("../image-1-0.png")]), None, "another folder");
+        assert_eq!(attached_images(&dir, &["/etc/passwd".into()]), None);
+        assert_eq!(attached_images(&dir, &vec![path("image-1-0.png"); MAX_IMAGES + 1]), None, "too many");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn a_refused_upload_still_gets_its_answer() {
         // The page sends its whole clip at once; refused before the body is read, the answer must
         // reach it rather than be lost to a reset connection.
@@ -1629,7 +1790,7 @@ mod tests {
         assert_eq!(
             hub.take_commands(),
             vec![
-                Command::Prompt { pane: 7, text: "run the tests".into() },
+                Command::Prompt { pane: 7, text: "run the tests".into(), images: Vec::new() },
                 Command::Chat { pane: 7, text: "add a login page".into() },
                 Command::Key { pane: 7, key: "c".into(), ctrl: true, alt: false, shift: false },
                 Command::Resize { pane: 7, cols: 50, rows: 30 },

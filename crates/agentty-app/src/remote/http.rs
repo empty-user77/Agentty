@@ -121,6 +121,17 @@ pub fn is_voice(path: &str) -> bool {
     path.ends_with("/api/voice")
 }
 
+/// Whether `path` is an image attached from the page's prompt box, which gets the same room as a
+/// voice clip (the page shrinks photos well below it first). `admit` checks its session too.
+pub fn is_attach(path: &str) -> bool {
+    path.ends_with("/api/attach")
+}
+
+/// A request whose body may be as large as `VOICE_MAX_BODY`: a voice clip or an attached image.
+pub fn is_upload(path: &str) -> bool {
+    is_voice(path) || is_attach(path)
+}
+
 /// Reads one request by `deadline` (a voice upload's body by `VOICE_BODY_TIME` after its head
 /// instead). `admit` sees the head before any body is read: a request it refuses ends there, so a
 /// stranger can't make the server wait for a body.
@@ -158,9 +169,10 @@ pub fn read_request(
         Some(_) => return Err(HttpError::Bad),
         None => 0,
     };
-    // A voice upload is a short audio clip (16 kHz mono WAV, capped to two minutes on decode), so
-    // it needs more room and time than the small JSON bodies every other route sends.
-    let voice = is_voice(&request.path);
+    // A voice upload is a short audio clip (16 kHz mono WAV, capped to two minutes on decode), an
+    // attachment an image: they need more room and time than the small JSON bodies every other
+    // route sends.
+    let voice = is_upload(&request.path);
     let max_body = if voice { VOICE_MAX_BODY } else { MAX_BODY };
     let deadline = if voice { deadline.max(Instant::now() + VOICE_BODY_TIME) } else { deadline };
     if length > max_body {
@@ -407,6 +419,7 @@ mod tests {
         let result = read_request(&mut input.as_bytes(), Instant::now() + Duration::from_millis(40), slow_admit);
         assert_eq!(result, Err(HttpError::Gone));
         assert!(is_voice("/api/voice") && is_voice("/s3cr3t/api/voice") && !is_voice("/api/voice/x"));
+        assert!(is_upload("/s3cr3t/api/attach") && is_upload("/api/voice") && !is_upload("/api/input"));
     }
 
     #[test]

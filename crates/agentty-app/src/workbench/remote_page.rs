@@ -170,7 +170,18 @@ impl Workbench {
                 view.remote_key(&gpui::Keystroke { modifiers, key: key.clone(), key_char: None }, cx);
             }
             Command::Text { text, .. } => view.remote_text(text, cx),
-            Command::Prompt { text, .. } => view.submit_prompt(text.clone(), cx),
+            Command::Prompt { text, images, .. } if images.is_empty() => view.submit_prompt(text.clone(), cx),
+            // The images first, on their own, as a drop on the terminal pastes them; the prompt
+            // once the program has taken them in (one paste right after another would merge).
+            Command::Prompt { text, images, .. } => {
+                view.drop_paths(images);
+                let text = text.clone();
+                cx.spawn(async move |view, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
+                    let _ = view.update(cx, |view, cx| view.submit_prompt(text, cx));
+                })
+                .detach();
+            }
             Command::Resize { cols, rows, .. } => view.set_remote_size(Some((*cols as usize, *rows as usize)), cx),
             Command::Scroll { lines, .. } => view.remote_scroll(*lines, cx),
             Command::Release { .. } => view.set_remote_size(None, cx),

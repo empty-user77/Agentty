@@ -24,6 +24,8 @@ The page is laid out like Agentty itself:
 
 You can type into the terminal directly using an on-screen key bar with Esc, Tab, Shift+Tab, arrow keys, Enter, Ctrl+C, a sticky Ctrl key, and quick buttons (1/2/3) when an agent is asking for an answer. Or send a prompt from the box at the bottom — press Enter on a computer, or Shift+Enter to add a line.
 
+**Images** — the picture button beside the box attaches photos or screenshots; you can also paste or drop them into the box. They go with your next prompt, as if dropped on the terminal on the Mac, so Claude Code or Codex sees them. Large photos are made smaller on the phone first. The Mac keeps them for a week in Agentty's data folder, readable only by you.
+
 **Notify me** on the page switches on browser notifications when a session finishes or asks something while you are looking elsewhere.
 
 While you look at a terminal on the page, it takes the page's size: as many columns and lines as fit your screen, so nothing wraps or scrolls sideways. **A−** and **A+** change the text size (kept on that device). When no page shows the terminal any more, it goes back to its size in the app. The page can be added to your home screen as an app.

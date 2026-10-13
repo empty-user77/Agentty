@@ -16,6 +16,7 @@ const STRINGS = {
     noWorkspaces: "No workspaces are open in Agentty.", sleeping: "This workspace is asleep. Wake it up to start its terminals again.",
     send: "Send", promptHint: "Prompt for this terminal…", live: "Connected", offline: "Reconnecting…",
     micStart: "Dictate a prompt", micRecording: "Recording — tap to stop", micBusy: "Transcribing…", micDenied: "Microphone access was blocked.", micFailed: "Couldn't transcribe. Try again.", micTooBusy: "The Mac is busy transcribing. Try again in a moment.",
+    attach: "Attach images", attachRemove: "Remove image", attachFailed: "Couldn't attach this image.", attachWait: "Images are still uploading.",
     privacy: "Privacy Policy", terms: "Terms of Service", eula: "License Agreement", device: "Device", ip: "Tailnet IP", account: "Account", target: "Connecting to", secure: "Security", secureValue: "Tailscale (WireGuard) · HTTPS", browser: "Browser", shownOnly: "Shown here only; nothing is stored.",
     tooLong: "Too long.", busy: "Agentty is busy; try again.", finished: "Finished", asks: "Asks you", panes: "Split panes",
     home: "Home", needsYou: "Needs you", workingNow: "Working", workspacesTitle: "Workspaces", plugins: "Plugins",
@@ -35,6 +36,7 @@ const STRINGS = {
     noWorkspaces: "Agentty에 열린 작업공간이 없습니다.", sleeping: "쉬고 있는 작업공간입니다. 깨우면 터미널이 다시 시작됩니다.",
     send: "보내기", promptHint: "이 터미널에 보낼 프롬프트…", live: "연결됨", offline: "다시 연결하는 중…",
     micStart: "음성으로 입력", micRecording: "녹음 중 — 눌러서 멈추기", micBusy: "변환 중…", micDenied: "마이크 사용이 차단되었습니다.", micFailed: "변환하지 못했습니다. 다시 시도하세요.", micTooBusy: "Mac이 다른 음성을 변환하는 중입니다. 잠시 후 다시 시도하세요.",
+    attach: "이미지 첨부", attachRemove: "이미지 빼기", attachFailed: "이 이미지를 첨부하지 못했습니다.", attachWait: "이미지를 아직 올리는 중입니다.",
     privacy: "개인정보처리방침", terms: "이용약관", eula: "라이선스 계약", device: "접속 기기", ip: "Tailnet IP", account: "계정", target: "접속 대상", secure: "보안", secureValue: "Tailscale(WireGuard) 암호화 · HTTPS", browser: "브라우저", shownOnly: "이 화면에 보여 주기만 하고 저장하지 않습니다.",
     tooLong: "너무 깁니다.", busy: "Agentty가 바쁩니다. 다시 시도하세요.", finished: "작업 완료", asks: "요청", panes: "분할창",
     home: "홈", needsYou: "응답 대기", workingNow: "작업 중", workspacesTitle: "작업공간", plugins: "플러그인",
@@ -54,6 +56,7 @@ const STRINGS = {
     noWorkspaces: "Agentty で開いているワークスペースはありません。", sleeping: "休止中のワークスペースです。起こすとターミナルがまた始まります。",
     send: "送信", promptHint: "このターミナルへのプロンプト…", live: "接続中", offline: "再接続しています…",
     micStart: "音声で入力", micRecording: "録音中 — タップで停止", micBusy: "文字起こし中…", micDenied: "マイクの使用がブロックされました。", micFailed: "文字起こしできませんでした。もう一度お試しください。", micTooBusy: "Mac が別の音声を文字起こし中です。少し待ってからもう一度お試しください。",
+    attach: "画像を添付", attachRemove: "画像を外す", attachFailed: "この画像を添付できませんでした。", attachWait: "画像をまだアップロードしています。",
     privacy: "プライバシーポリシー", terms: "利用規約", eula: "ライセンス契約", device: "接続端末", ip: "Tailnet IP", account: "アカウント", target: "接続先", secure: "セキュリティ", secureValue: "Tailscale（WireGuard）暗号化 · HTTPS", browser: "ブラウザ", shownOnly: "表示するだけで、保存はしません。",
     tooLong: "長すぎます。", busy: "Agentty が混み合っています。もう一度お試しください。", finished: "完了", asks: "質問", panes: "分割ペイン",
     home: "ホーム", needsYou: "応答待ち", workingNow: "作業中", workspacesTitle: "ワークスペース", plugins: "プラグイン",
@@ -73,6 +76,7 @@ const STRINGS = {
     noWorkspaces: "Agentty 中没有打开的工作区。", sleeping: "这个工作区处于休眠状态。唤醒后终端会重新启动。",
     send: "发送", promptHint: "发送给此终端的提示…", live: "已连接", offline: "正在重新连接…",
     micStart: "语音输入", micRecording: "录音中 — 点按停止", micBusy: "转写中…", micDenied: "麦克风访问被阻止。", micFailed: "转写失败，请重试。", micTooBusy: "Mac 正在转写其他语音，请稍后再试。",
+    attach: "附加图片", attachRemove: "移除图片", attachFailed: "无法附加这张图片。", attachWait: "图片仍在上传。",
     privacy: "隐私政策", terms: "服务条款", eula: "许可协议", device: "接入设备", ip: "Tailnet IP", account: "账号", target: "连接目标", secure: "安全", secureValue: "Tailscale（WireGuard）加密 · HTTPS", browser: "浏览器", shownOnly: "仅在此显示，不会保存。",
     tooLong: "太长了。", busy: "Agentty 正忙，请重试。", finished: "已完成", asks: "询问", panes: "分屏",
     home: "主页", needsYou: "等待回应", workingNow: "工作中", workspacesTitle: "工作区", plugins: "插件",
@@ -1302,12 +1306,146 @@ function setupPrompt() {
   $("prompt-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const text = prompt.value;
-    if (!text.trim() || state.pane == null) return;
+    if (state.pane == null) return;
+    if (attachments.some((a) => !a.path && !a.failed)) return alert(T.attachWait);
+    const images = attachments.filter((a) => a.path).map((a) => a.path);
+    if (!text.trim() && !images.length) return;
     // To a chat's lead, as the chat sends it (its instructions go in front the first time).
-    input({ pane: state.pane, kind: inChat() ? "chat" : "prompt", text });
+    input({ pane: state.pane, kind: inChat() ? "chat" : "prompt", text, images });
     prompt.value = "";
+    clearAttachments();
     grow();
   });
+}
+
+// ---- Images ----
+//
+// Attached from the button, pasted into the prompt box or dropped on it. Each is uploaded to the
+// Mac at once (made smaller first when it is a large photo) and sent with the next prompt, which
+// the Mac pastes in front of it as a drop on the terminal would.
+
+const ATTACH_MAX_SIDE = 2000;
+const ATTACH_MAX_BYTES = 4 * 1024 * 1024;
+const ATTACH_MAX = 10;
+const attachments = []; // { url, path, failed }
+
+function setupAttachments() {
+  const btn = $("attach-button");
+  const picker = $("attach-input");
+  btn.setAttribute("aria-label", T.attach);
+  btn.title = T.attach;
+  btn.addEventListener("click", () => picker.click());
+  picker.addEventListener("change", () => {
+    [...picker.files].forEach(addAttachment);
+    picker.value = "";
+  });
+  $("prompt").addEventListener("paste", (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    files.forEach(addAttachment);
+  });
+  const form = $("prompt-form");
+  form.addEventListener("dragover", (e) => {
+    if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+    e.preventDefault();
+    form.classList.add("dragging");
+  });
+  form.addEventListener("dragleave", () => form.classList.remove("dragging"));
+  form.addEventListener("drop", (e) => {
+    form.classList.remove("dragging");
+    const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    files.forEach(addAttachment);
+  });
+}
+
+// A photo as the agent needs it: at most ATTACH_MAX_SIDE pixels a side and a few MB, in a format
+// it reads (PNG, JPEG, GIF, WebP; anything else, such as HEIC, becomes JPEG). Null if the browser
+// can't read it as an image.
+async function shrinkImage(file) {
+  const readable = ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type);
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch (_) {
+    return readable && file.size <= ATTACH_MAX_BYTES ? file : null;
+  }
+  const scale = Math.min(1, ATTACH_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  if (readable && scale === 1 && file.size <= ATTACH_MAX_BYTES) {
+    bitmap.close();
+    return file;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; // JPEG has no transparency
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+}
+
+function addAttachment(file) {
+  if (state.pane == null || attachments.length >= ATTACH_MAX || !file.type.startsWith("image/")) return;
+  const item = { url: URL.createObjectURL(file), path: null, failed: false };
+  attachments.push(item);
+  renderAttachments();
+  const pane = state.pane;
+  (async () => {
+    const blob = await shrinkImage(file);
+    if (!blob) throw new Error("not an image");
+    // Raw bytes; the JSON content type only satisfies the same-origin (CSRF) check, as for voice.
+    const res = await fetch(`/api/attach?pane=${pane}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Agentty": "1" },
+      body: blob,
+    });
+    if (res.status === 401) showLogin();
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    if (!data.path) throw new Error("no path");
+    item.path = data.path;
+  })()
+    .catch(() => { item.failed = true; })
+    .finally(renderAttachments);
+}
+
+function removeAttachment(item) {
+  const at = attachments.indexOf(item);
+  if (at < 0) return;
+  attachments.splice(at, 1);
+  URL.revokeObjectURL(item.url);
+  renderAttachments();
+}
+
+function clearAttachments() {
+  attachments.splice(0).forEach((a) => URL.revokeObjectURL(a.url));
+  renderAttachments();
+}
+
+function renderAttachments() {
+  const box = $("attachments");
+  box.replaceChildren(...attachments.map((item) => {
+    const chip = document.createElement("div");
+    chip.className = "attachment" + (item.failed ? " failed" : item.path ? "" : " pending");
+    if (item.failed) chip.title = T.attachFailed;
+    const img = document.createElement("img");
+    img.src = item.url;
+    img.alt = "";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", T.attachRemove);
+    remove.addEventListener("click", () => removeAttachment(item));
+    chip.append(img, remove);
+    return chip;
+  }));
+  box.hidden = !attachments.length;
 }
 
 // ---- Voice ----
@@ -1644,6 +1782,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setupProgramScroll();
   setupKeyboard();
   setupPrompt();
+  setupAttachments();
   setupChat();
   setupVoice();
   start();

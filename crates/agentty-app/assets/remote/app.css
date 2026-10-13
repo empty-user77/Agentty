@@ -173,11 +173,26 @@ button:disabled { opacity: .5; cursor: default; }
 .keys button { flex-shrink: 0; font-family: var(--mono); font-size: 13px; padding: 7px 11px; }
 .keys button.answer { border-color: var(--attention); }
 .keys button.on { background: var(--accent); color: #1b1206; border-color: var(--accent); }
-.prompt { display: flex; gap: 8px; padding: 8px 10px; padding-bottom: calc(8px + var(--safe-bottom)); background: var(--panel); flex-shrink: 0; align-items: flex-end; }
+.prompt { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 10px; padding-bottom: calc(8px + var(--safe-bottom)); background: var(--panel); flex-shrink: 0; align-items: flex-end; }
 .prompt textarea { flex: 1; min-width: 0; resize: none; max-height: 30vh; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); line-height: 1.35; }
 .prompt .mic { flex-shrink: 0; width: 42px; padding: 0; display: flex; align-items: center; justify-content: center; color: var(--text); }
 .prompt .mic.recording { background: #e5484d; border-color: #e5484d; color: #fff; animation: mic-pulse 1.2s ease-in-out infinite; }
 .prompt .mic.busy { opacity: .55; }
+.prompt .mic.attach { width: 36px; }
+/* One line of hint, however narrow the box: it never wraps under the first line. */
+.prompt textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prompt.dragging textarea { border-color: var(--accent); }
+/* Images attached to the next prompt, in a row of their own above it. */
+.attachments { flex-basis: 100%; display: flex; gap: 8px; overflow-x: auto; padding: 6px 2px 0; }
+.attachments[hidden] { display: none; }
+.attachment { position: relative; flex: none; width: 56px; height: 56px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); }
+.attachment img { width: 100%; height: 100%; object-fit: cover; border-radius: 7px; display: block; }
+.attachment.pending img { opacity: .45; }
+.attachment.failed { border-color: #e5484d; }
+.attachment.failed img { opacity: .35; }
+.attachment .remove { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
 @keyframes mic-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { .prompt .mic.recording { animation: none; } }
 
