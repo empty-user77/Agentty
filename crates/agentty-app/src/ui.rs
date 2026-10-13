@@ -160,6 +160,7 @@ pub const ICONS: &[&str] = &[
     "database",
     "cloud",
     "eye",
+    "eye-off",
     "play",
     "square",
     "lightbulb",

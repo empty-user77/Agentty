@@ -58,6 +58,13 @@ button:disabled { opacity: .5; cursor: default; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; }
 .login-card { width: 100%; max-width: 360px; padding: 28px 22px; display: flex; flex-direction: column; gap: 12px; text-align: center; }
 .login-card h1 { margin: 0 0 4px; font-size: 22px; }
+.password-box { position: relative; display: flex; }
+.password-box input { flex: 1; min-width: 0; padding-right: 46px !important; letter-spacing: .12em; }
+.password-box .eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 38px; height: 38px; padding: 0; display: flex; align-items: center; justify-content: center; background: transparent; border: 0; color: var(--muted); }
+.password-box .eye .eye-closed, .password-box .eye[aria-pressed="true"] .eye-open { display: none; }
+.password-box .eye[aria-pressed="true"] .eye-closed { display: block; }
+.login-hint {margin: -4px 0 0; font-size: 13px; color: #e5a50a; text-align: left; }
+.login-hint[hidden] { display: none; }
 .login-card input { padding: 11px 12px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); }
 .logo { width: 52px; height: 52px; margin: 0 auto; }
 .logo-small { width: 20px; height: 20px; }
@@ -172,13 +179,16 @@ button:disabled { opacity: .5; cursor: default; }
 .keys::-webkit-scrollbar { display: none; }
 .keys button { flex-shrink: 0; font-family: var(--mono); font-size: 13px; padding: 7px 11px; }
 .keys button.answer { border-color: var(--attention); }
+.keys button.enter { position: sticky; left: 0; z-index: 1; font-size: 18px; padding: 4px 20px; background: var(--panel-2); border-color: var(--accent); color: var(--text); font-weight: 700; box-shadow: 6px 0 8px var(--panel); }
 .keys button.on { background: var(--accent); color: #1b1206; border-color: var(--accent); }
 .prompt { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 10px; padding-bottom: calc(8px + var(--safe-bottom)); background: var(--panel); flex-shrink: 0; align-items: flex-end; }
 .prompt textarea { flex: 1; min-width: 0; resize: none; max-height: 30vh; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); line-height: 1.35; }
-.prompt .mic { flex-shrink: 0; width: 42px; padding: 0; display: flex; align-items: center; justify-content: center; color: var(--text); }
+.prompt .mic { flex-shrink: 0; width: 42px; height: 42px; padding: 0; display: flex; align-items: center; justify-content: center; color: var(--text); }
 .prompt .mic.recording { background: #e5484d; border-color: #e5484d; color: #fff; animation: mic-pulse 1.2s ease-in-out infinite; }
 .prompt .mic.busy { opacity: .55; }
-.prompt .mic.attach { width: 36px; }
+.prompt button[type=submit] { height: 42px; flex-shrink: 0; }
+.prompt .mic.attach { width: 34px; background: transparent; border-color: transparent; color: var(--muted); }
+.prompt .mic.attach:hover { color: var(--text); }
 /* One line of hint, however narrow the box: it never wraps under the first line. */
 .prompt textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .prompt.dragging textarea { border-color: var(--accent); }

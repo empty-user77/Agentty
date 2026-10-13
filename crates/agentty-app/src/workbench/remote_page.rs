@@ -398,6 +398,8 @@ impl Workbench {
                 }
             }
             TextInputEvent::Cancelled => this.close_password_dialog(cx),
+            // The warning under the fields (Korean input, Caps Lock) follows what was typed.
+            TextInputEvent::Changed | TextInputEvent::Blurred => cx.notify(),
             _ => {}
         });
         self.remote_page.input_events.push(events);
@@ -478,10 +480,35 @@ impl Workbench {
         let password_set = cx.try_global::<remote::Remote>().is_some_and(|r| r.password_set == Some(true));
         let first = self.remote_input(0, window, cx);
         let second = self.remote_input(1, window, cx);
-        let field = |input: Entity<TextInput>| {
+        // The eye beside each field shows or hides both: they hold the same password.
+        let revealed = first.read(cx).revealed();
+        let inputs = [first.clone(), second.clone()];
+        let field = |input: Entity<TextInput>, id: &'static str| {
             let focus = input.clone();
+            let inputs = inputs.clone();
+            let eye = div()
+                .id(id)
+                .flex_shrink_0()
+                .p_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|s| s.bg(hex_alpha(Chrome::FOREGROUND, 0.08)))
+                .tooltip(crate::ui::Tooltip::text(t(cx, if revealed { "remote.password_hide" } else { "remote.password_show" }), None))
+                .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(move |_, _, cx| {
+                    for input in &inputs {
+                        input.update(cx, |input, cx| input.set_revealed(!revealed, cx));
+                    }
+                })
+                .child(crate::ui::icon(if revealed { "eye-off" } else { "eye" }, 14., hex(Chrome::MUTED)));
             div()
                 .w_full()
+                .flex()
+                .items_center()
+                .gap_2()
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                     window.focus(&gpui::Focusable::focus_handle(&focus, cx));
                     window.prevent_default();
@@ -495,12 +522,16 @@ impl Workbench {
                 .border_color(hex_alpha(NEON_CYAN, 0.35))
                 .bg(hex(0x0b0e11))
                 .t_body()
-                .child(input)
+                .child(div().flex_1().min_w_0().child(input))
+                .child(eye)
         };
         let saving = self.remote_page.saving;
+        let warning = [&first, &second].into_iter().find_map(|input| input.read(cx).typing_warning(window));
         Some(
             div()
                 .id("remote-password-overlay")
+                // Caps Lock turned on or off: the warning follows.
+                .on_modifiers_changed(cx.listener(|_, _: &gpui::ModifiersChangedEvent, _, cx| cx.notify()))
                 .absolute()
                 .inset_0()
                 .flex()
@@ -536,8 +567,9 @@ impl Workbench {
                                 ),
                         )
                         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "remote.password_rules")))
-                        .child(field(first))
-                        .child(field(second))
+                        .child(field(first, "remote-password-eye-1"))
+                        .child(field(second, "remote-password-eye-2"))
+                        .children(warning.map(|key| div().t_small().text_color(hex(Chrome::WARNING)).child(t(cx, key))))
                         .children(self.remote_page.dialog_error.clone().map(|e| div().t_small().text_color(hex(Chrome::ERROR)).child(e)))
                         .child(
                             div()
