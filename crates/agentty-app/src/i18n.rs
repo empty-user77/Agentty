@@ -596,7 +596,6 @@ strings! {
     "onboarding.opt_idea_body" => ["“Build my idea” on the start page", "시작 화면에 “아이디어 실현하기” 표시", "スタート画面に「アイデアを実現」を表示", "在起始页显示“实现我的想法”"],
     "onboarding.finish" => ["Finish", "완료", "完了", "完成"],
     "onboarding.continue" => ["Continue", "계속", "続ける", "继续"],
-    "onboarding.try_features" => ["Try the features", "기능 따라 하기", "機能を試す", "体验功能"],
     "onboarding.eyebrow" => ["Welcome to Agentty", "Agentty에 오신 것을 환영합니다", "Agentty へようこそ", "欢迎使用 Agentty"],
     "onboarding.agents_title" => ["Your agents, side by side", "에이전트를 한곳에서", "エージェントをひとつの場所で", "在一处使用所有智能体"],
     "onboarding.agents_body" => [

@@ -1,7 +1,7 @@
 //! The setup steps of the first-run onboarding, on one large card: the agents found on this Mac
 //! (and whether they ask before acting), the look (language, terminal theme, font), how to work
 //! (links, working trees, servers, idea mode) and notifications. A progress bar and "n / 4" on top;
-//! Skip at the bottom left, Back and Continue (⌘↩) at the right. The last step starts Agentty, or
+//! Skip at the bottom left, Back and Continue (⌘↩) at the right. The last step's Get started opens
 //! the follow-along tour (`onboarding`).
 
 use super::onboarding::Step;
@@ -76,14 +76,8 @@ impl Workbench {
                     this.go_to(STEPS[index - 1], cx)
                 }));
         }
-        if last {
-            right = right.child(secondary_button("onboarding-tour", t(cx, "onboarding.try_features").to_string(), cx, |this, _, cx| {
-                this.go_to(Step::Tour, cx)
-            }));
-        }
         let primary_label = if last { t(cx, "onboarding.start") } else { t(cx, "onboarding.continue") };
-        right = right
-            .child(primary_button("onboarding-continue", primary_label.to_string(), cx, |this, window, cx| this.setup_next(window, cx)));
+        right = right.child(primary_button("onboarding-continue", primary_label.to_string(), cx, |this, _, cx| this.setup_next(cx)));
 
         let footer = div()
             .flex()
@@ -140,21 +134,22 @@ impl Workbench {
     }
 
     /// ⌘↩ (Ctrl+Enter elsewhere) is Continue while a setup step is shown.
-    pub(super) fn onboarding_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn onboarding_key(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) -> bool {
         let shown = self.onboarding.as_ref().is_some_and(|o| o.step != Step::Tour);
         let keys = &event.keystroke;
         if shown && keys.key == "enter" && keys.modifiers.secondary() && !keys.modifiers.shift {
-            self.setup_next(window, cx);
+            self.setup_next(cx);
             return true;
         }
         false
     }
 
-    fn setup_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn setup_next(&mut self, cx: &mut Context<Self>) {
         let Some(step) = self.onboarding.as_ref().map(|o| o.step) else { return };
         match STEPS.iter().position(|s| *s == step) {
             Some(i) if i + 1 < STEPS.len() => self.go_to(STEPS[i + 1], cx),
-            _ => self.finish_onboarding(window, cx),
+            // "Get started" goes on to the follow-along tour.
+            _ => self.go_to(Step::Tour, cx),
         }
     }
 
