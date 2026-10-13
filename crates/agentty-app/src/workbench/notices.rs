@@ -69,14 +69,33 @@ impl Workbench {
         let in_view = self.pane_in_view(pane_id, cx);
         let asks = matches!(kind, NoticeKind::Permission | NoticeKind::Question);
         let answer_request = asks && prefs.notify_answer_requests && !in_view;
+        // A permission request that can be answered without the terminal: its notification and
+        // mini bubble carry Allow / Deny, and say in full what would be allowed.
+        let view = pane.read(cx);
+        let ask = (kind == NoticeKind::Permission && view.answerable_request()).then_some(view.ask_serial);
+        let request = ask.and_then(|_| view.ask_request.clone()).map(|(tool, request)| match request {
+            Some(request) => format!("{tool}\n{request}"),
+            None => tool,
+        });
         if prefs.system_notifications && kind != NoticeKind::Bell && (background || prefs.notify_when_focused || answer_request) {
-            crate::notifications::show(pane_id, &view_title_for_bubble(&source, &workspace), &text);
+            let title = view_title_for_bubble(&source, &workspace);
+            match ask {
+                Some(ask) => crate::notifications::show_request(
+                    pane_id,
+                    ask,
+                    &title,
+                    request.as_deref().unwrap_or(&text),
+                    t(cx, "notice.allow"),
+                    t(cx, "notice.deny"),
+                ),
+                None => crate::notifications::show(pane_id, &title, &text),
+            }
         }
         self.send_chat_notice(pane_id, kind, &source, &workspace, &text, cx);
         if kind != NoticeKind::Bell {
             if let Some(mini) = self.mini.as_ref().map(|m| m.view.clone()) {
                 let title = view_title_for_bubble(&source, &workspace);
-                mini.update(cx, |m, cx| m.push_bubble(pane_id, title, text.clone(), kind, cx));
+                mini.update(cx, |m, cx| m.push_bubble(pane_id, title, text.clone(), kind, ask, cx));
             }
         }
         // The workspace with the latest result moves to the top of its group — opt-in: a fixed
@@ -135,6 +154,31 @@ impl Workbench {
         self.notices_open = false;
         cx.notify();
         true
+    }
+
+    /// A notification's (or the mini window's) Allow / Deny for permission request `ask` of
+    /// `pane_id`. Typed into the terminal only while that request still waits there; otherwise
+    /// (answered meanwhile, another request since, the prompt gone) the pane is brought up instead,
+    /// so the click is never lost and never lands on something else.
+    pub(super) fn answer_request(&mut self, pane_id: u64, ask: u64, allow: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let pane = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id);
+        let answered = pane.is_some_and(|pane| pane.update(cx, |view, _| view.answer_request(ask, allow)));
+        if answered {
+            self.mark_pane_read(pane_id);
+            crate::notifications::withdraw(pane_id);
+            if let Some(mini) = self.mini.as_ref().map(|m| m.view.clone()) {
+                mini.update(cx, |m, cx| m.drop_bubbles_of(pane_id, cx));
+            }
+            cx.notify();
+            return;
+        }
+        if self.mini.is_some() {
+            self.exit_mini(Some(pane_id), window, cx);
+        } else {
+            window.activate_window();
+            cx.activate(true);
+            self.jump_to_pane_id(pane_id, window, cx);
+        }
     }
 
     pub(super) fn jump_to_unread(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -1162,7 +1162,7 @@ fn run_tray_actions(cx: &mut App) {
         // Focus goes to the window holding that pane (or that plugin's workspace); everything
         // else to the main window.
         let target = match &action {
-            status_item::TrayAction::Focus(pane) => {
+            status_item::TrayAction::Focus(pane) | status_item::TrayAction::Answer { pane, .. } => {
                 windows.iter().find(|w| w.read(cx).is_ok_and(|wb| wb.has_pane(*pane, cx))).or(windows.first()).copied()
             }
             status_item::TrayAction::FocusPlugin { plugin, .. } => {

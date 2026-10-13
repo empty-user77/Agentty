@@ -1,5 +1,5 @@
-//! First-run onboarding: a welcome, the handful of settings worth choosing on day one, then a
-//! follow-along tour. The first two steps are a dialog; the tour is a card that stays out of the way
+//! First-run onboarding: a few steps on a full card (the agents found, the look, how to work,
+//! notifications; see `onboarding_setup`), then a follow-along tour. The tour is a card that stays out of the way
 //! and teaches one feature at a time as numbered steps. Only the step to do now is lit: it says
 //! where to click (the real button gets a pulsing ring) and which keys do the same, the app notices
 //! when it was done, ticks it, says what just happened on screen, and lights the next step. "Do it
@@ -9,16 +9,18 @@
 use super::{Page, Workbench};
 use crate::i18n::{t, tf};
 use crate::launch::{home_dir, LaunchSpec, PaneKind};
-use crate::settings::{settings, update_settings, Language, LinkOpener, Settings};
+use crate::settings::{settings, update_settings};
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::{chip, icon, IconSize, TypeScale};
-use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, SharedString, Window};
+use crate::ui::{icon, IconSize, TypeScale};
+use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Window};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Step {
-    Welcome,
-    Basics,
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Step {
+    Agents,
+    Look,
+    Work,
+    Notify,
     Tour,
 }
 
@@ -256,7 +258,7 @@ impl Task {
 }
 
 pub(super) struct Onboarding {
-    step: Step,
+    pub(super) step: Step,
     /// Task the tour card is teaching right now.
     current: Task,
     /// Steps finished, per task.
@@ -288,17 +290,17 @@ impl Workbench {
 
     pub(super) fn open_onboarding(&mut self, cx: &mut Context<Self>) {
         self.page = None;
-        self.onboarding = Some(Onboarding { step: Step::Welcome, current: Task::all()[0], progress: HashMap::new(), seen: HashSet::new() });
+        self.onboarding = Some(Onboarding { step: Step::Agents, current: Task::all()[0], progress: HashMap::new(), seen: HashSet::new() });
         cx.notify();
     }
 
     /// Every feature was tried: the tour closes and the start page is what comes next.
-    fn finish_onboarding(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn finish_onboarding(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_onboarding(cx);
         self.open_welcome(window, cx);
     }
 
-    fn close_onboarding(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_onboarding(&mut self, cx: &mut Context<Self>) {
         self.onboarding = None;
         update_settings(cx, |s| s.onboarding_done = true);
         cx.notify();
@@ -432,36 +434,9 @@ impl Workbench {
     pub(super) fn render_onboarding(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let onboarding = self.onboarding.as_ref()?;
         Some(match onboarding.step {
-            Step::Welcome => self.render_onboarding_dialog(self.render_onboarding_welcome(cx)),
-            Step::Basics => self.render_onboarding_dialog(self.render_onboarding_basics(cx)),
             Step::Tour => self.render_onboarding_tour(onboarding, cx),
+            step => self.render_setup(step, cx),
         })
-    }
-
-    fn render_onboarding_dialog(&self, card: gpui::Div) -> AnyElement {
-        div()
-            .id("onboarding-overlay")
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(hex_alpha(0x000000, 0.55))
-            .occlude()
-            .child(
-                card.w(px(620.))
-                    .max_h(gpui::relative(0.9))
-                    .p_6()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .rounded_xl()
-                    .bg(hex(Chrome::OVERLAY))
-                    .border_1()
-                    .border_color(hex(Chrome::OVERLAY_BORDER))
-                    .shadow_lg(),
-            )
-            .into_any_element()
     }
 
     fn onboarding_button(
@@ -489,292 +464,11 @@ impl Workbench {
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
     }
 
-    fn go_to(&mut self, step: Step, cx: &mut Context<Self>) {
+    pub(super) fn go_to(&mut self, step: Step, cx: &mut Context<Self>) {
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.step = step;
         }
         cx.notify();
-    }
-
-    fn render_onboarding_welcome(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let prefs = settings(cx).clone();
-        let mut languages = div().flex().flex_wrap().gap_1();
-        for language in Language::ALL {
-            languages = languages.child(chip(
-                SharedString::from(format!("onboarding-lang-{language:?}")),
-                if language == Language::System { t(cx, "settings.language_system") } else { language.native_name() },
-                prefs.language == language,
-                cx.listener(move |_, _: &ClickEvent, _, cx| {
-                    update_settings(cx, move |s| s.language = language);
-                    crate::set_app_menus(cx);
-                }),
-            ));
-        }
-        let point = |glyph: &'static str, color: u32, title: &'static str, body: &'static str, cx: &mut Context<Self>| {
-            div()
-                .flex()
-                .items_start()
-                .gap_3()
-                .child(crate::brand::tinted_tile(color, 28.).mt_0p5().child(icon(glyph, IconSize::BUTTON, hex(color))))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, title)))
-                        .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, body))),
-                )
-        };
-        div()
-            .child(
-                div().flex().items_center().gap_3().child(gpui::img("brand/logo.png").size(px(52.))).child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .t_heading()
-                                .font_weight(crate::theme::EMPHASIS)
-                                .text_color(hex(Chrome::BRIGHT))
-                                .child(t(cx, "onboarding.welcome")),
-                        )
-                        .child(div().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, "tagline"))),
-                ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(point("columns-2", Chrome::BLUE, "onboarding.point_terminals", "onboarding.point_terminals_body", cx))
-                    .child(point("workflow", Chrome::PURPLE, "onboarding.point_sessions", "onboarding.point_sessions_body", cx))
-                    .child(point("rocket", Chrome::ORANGE, "onboarding.point_ship", "onboarding.point_ship_body", cx)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "settings.language")))
-                    .child(languages),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(self.onboarding_button(
-                        "onboarding-skip",
-                        t(cx, "onboarding.skip"),
-                        false,
-                        |this, _, cx| this.close_onboarding(cx),
-                        cx,
-                    ))
-                    .child(self.onboarding_button(
-                        "onboarding-start",
-                        t(cx, "onboarding.start"),
-                        true,
-                        |this, _, cx| this.go_to(Step::Basics, cx),
-                        cx,
-                    )),
-            )
-    }
-
-    fn render_onboarding_basics(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let prefs = settings(cx).clone();
-        let switch = |id: &'static str, on: bool, change: fn(&mut Settings), cx: &mut Context<Self>| {
-            div()
-                .id(id)
-                .flex_shrink_0()
-                .w(px(36.))
-                .h(px(20.))
-                .rounded_full()
-                .cursor_pointer()
-                .bg(if on { hex(Chrome::ACCENT) } else { hex(0x3c3c3c) })
-                .flex()
-                .items_center()
-                .when(on, |d| d.justify_end())
-                .px_0p5()
-                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, change)))
-                .child(div().size(px(16.)).rounded_full().bg(hex(Chrome::BRIGHT)))
-        };
-        // A row is read at a glance: an icon, a short name, one line of what it does. The long
-        // explanations stay in Settings, where someone looks for them.
-        let row = |glyph: &'static str, color: u32, title: &str, body: &str, control: AnyElement| {
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .py_2()
-                .child(crate::brand::tinted_tile(color, 30.).child(icon(glyph, IconSize::BUTTON, hex(color))))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(div().truncate().t_body().text_color(hex(Chrome::BRIGHT)).child(title.to_string()))
-                        .child(div().truncate().t_small().text_color(hex(Chrome::MUTED)).child(body.to_string())),
-                )
-                .child(control)
-        };
-        let opener = |id: &'static str, label: &'static str, value: LinkOpener, cx: &mut Context<Self>| {
-            chip(
-                id,
-                t(cx, label),
-                prefs.link_opener == value,
-                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.link_opener = value)),
-            )
-        };
-        let openers = div()
-            .flex()
-            .flex_shrink_0()
-            .gap_1()
-            .when(crate::platform::HAS_WEBVIEW, |d| d.child(opener("onboarding-link-inapp", "settings.link_inapp", LinkOpener::InApp, cx)))
-            .child(opener("onboarding-link-external", "settings.link_external", LinkOpener::External, cx));
-        let in_app = prefs.link_opener == LinkOpener::InApp && crate::platform::HAS_WEBVIEW;
-        // The terminal font: the default (which follows the language), or the other of the two
-        // that matter here — the bundled one and, on macOS when it is installed, D2Coding. Every other font
-        // is in Settings → Terminal Style.
-        let default_font = crate::settings::default_terminal_font(cx);
-        let font_chip = |id: &'static str, label: String, value: &'static str, cx: &mut Context<Self>| {
-            chip(
-                id,
-                label,
-                prefs.font_family == value,
-                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.font_family = value.to_string())),
-            )
-        };
-        let fonts = div()
-            .flex()
-            .flex_shrink_0()
-            .gap_1()
-            .child(font_chip("onboarding-font-default", tf(cx, "settings.font_default", &[("font", default_font)]), "", cx))
-            .when(default_font != crate::settings::BUNDLED_FONT, |d| {
-                d.child(font_chip("onboarding-font-bundled", crate::settings::BUNDLED_FONT.to_string(), crate::settings::BUNDLED_FONT, cx))
-            })
-            .when(
-                cfg!(target_os = "macos") && default_font != crate::settings::KOREAN_FONT && crate::settings::korean_font_installed(cx),
-                |d| {
-                    d.child(font_chip("onboarding-font-korean", crate::settings::KOREAN_FONT.to_string(), crate::settings::KOREAN_FONT, cx))
-                },
-            );
-        // Only on a fresh install: "show again" later is a tour, not a setup step. Settings →
-        // Terminal Style keeps the same notice for as long as it applies.
-        let font_notice =
-            (!prefs.onboarding_done).then(|| super::settings_page::korean_font_notice("onboarding-korean-font", cx)).flatten();
-
-        let list = div()
-            .id("onboarding-basics")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .child(row(
-                "globe",
-                Chrome::BLUE,
-                t(cx, "onboarding.opt_links"),
-                t(cx, "onboarding.opt_links_body"),
-                openers.into_any_element(),
-            ))
-            .when(in_app, |d| {
-                d.child(row(
-                    "zap",
-                    Chrome::GREEN,
-                    t(cx, "onboarding.opt_auto_open"),
-                    t(cx, "onboarding.opt_auto_open_body"),
-                    switch(
-                        "onboarding-auto-open",
-                        prefs.browser.auto_open_servers,
-                        |s| s.browser.auto_open_servers = !s.browser.auto_open_servers,
-                        cx,
-                    )
-                    .into_any_element(),
-                ))
-            })
-            .child(row("code", Chrome::ORANGE, t(cx, "onboarding.opt_font"), t(cx, "onboarding.opt_font_body"), fonts.into_any_element()))
-            .children(font_notice)
-            .child(row(
-                "git-fork",
-                Chrome::PURPLE,
-                t(cx, "onboarding.opt_worktree"),
-                t(cx, "onboarding.opt_worktree_body"),
-                switch("onboarding-worktree", prefs.auto_worktree, |s| s.auto_worktree = !s.auto_worktree, cx).into_any_element(),
-            ))
-            .child(row(
-                "power",
-                Chrome::ERROR,
-                t(cx, "onboarding.opt_stop_servers"),
-                t(cx, "onboarding.opt_stop_servers_body"),
-                switch("onboarding-stop-servers", prefs.stop_servers_on_close, |s| s.stop_servers_on_close = !s.stop_servers_on_close, cx)
-                    .into_any_element(),
-            ))
-            .child(row(
-                "bell",
-                Chrome::ORANGE,
-                t(cx, "onboarding.opt_notify"),
-                t(cx, "onboarding.opt_notify_body"),
-                switch("onboarding-notifications", prefs.system_notifications, |s| s.system_notifications = !s.system_notifications, cx)
-                    .into_any_element(),
-            ))
-            .child(row(
-                "lightbulb",
-                Chrome::WARNING,
-                t(cx, "onboarding.opt_idea"),
-                t(cx, "onboarding.opt_idea_body"),
-                switch("onboarding-idea", prefs.idea_mode, |s| s.idea_mode = !s.idea_mode, cx).into_any_element(),
-            ));
-
-        div()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .t_heading()
-                            .font_weight(crate::theme::EMPHASIS)
-                            .text_color(hex(Chrome::BRIGHT))
-                            .child(t(cx, "onboarding.basics")),
-                    )
-                    .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "onboarding.basics_body"))),
-            )
-            .child(list)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(self.onboarding_button(
-                        "onboarding-back",
-                        t(cx, "onboarding.back"),
-                        false,
-                        |this, _, cx| this.go_to(Step::Welcome, cx),
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(self.onboarding_button(
-                                "onboarding-finish-now",
-                                t(cx, "onboarding.finish"),
-                                false,
-                                |this, _, cx| this.close_onboarding(cx),
-                                cx,
-                            ))
-                            .child(self.onboarding_button(
-                                "onboarding-tour",
-                                t(cx, "onboarding.to_tour"),
-                                true,
-                                |this, _, cx| this.go_to(Step::Tour, cx),
-                                cx,
-                            )),
-                    ),
-            )
     }
 
     /// The tour card: bottom left, clear of the browser and the panels docked at the right.

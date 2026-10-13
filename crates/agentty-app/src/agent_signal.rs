@@ -214,6 +214,9 @@ pub struct SignalDetail {
     pub tool: Option<String>,
     /// Short description of what the tool does (command, file, task description).
     pub target: Option<String>,
+    /// The same, whole enough to decide on: a command's every line (up to a few, clipped), shown
+    /// where the request can be answered without the terminal (the notification's buttons).
+    pub request: Option<String>,
     /// Subagent the event belongs to: (agent id, agent type).
     pub subagent: Option<(String, String)>,
     /// The hook that sent it (`PreToolUse`, `PostToolUse`, …), when the agent says.
@@ -439,11 +442,17 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
         .or_else(|| ["description", "command", "file_path", "pattern", "url", "prompt"].iter().find_map(|k| input[*k].as_str()))
         .map(first_line)
         .filter(|s| !s.is_empty());
+    let request = ["command", "file_path", "url", "pattern", "description", "prompt"]
+        .iter()
+        .find_map(|k| input[*k].as_str())
+        .map(request_text)
+        .filter(|s| !s.is_empty());
     let subagent = text("agent_id").map(|id| (id, text("agent_type").unwrap_or_default()));
     let detail = SignalDetail {
         notification_type: text("notification_type"),
         tool: text("tool_name"),
         target,
+        request,
         subagent,
         event: text("hook_event_name"),
         // Only an id's characters: it becomes part of a transcript path.
@@ -453,6 +462,32 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
             .filter(|id| id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')),
     };
     Some(AgentSignal { pane_id, kind, message, detail })
+}
+
+/// What a request asks, to be judged without the terminal: up to 6 non-empty lines and 500
+/// characters, with "…" where anything was left out, so a clipped command never reads as whole.
+fn request_text(text: &str) -> String {
+    const LINES: usize = 6;
+    const CHARS: usize = 500;
+    let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
+    let mut out = String::new();
+    let mut clipped = lines.len() > LINES;
+    for line in lines.iter().take(LINES) {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        let room = CHARS.saturating_sub(out.chars().count());
+        if line.chars().count() > room {
+            out.extend(line.chars().take(room));
+            clipped = true;
+            break;
+        }
+        out.push_str(line);
+    }
+    if clipped {
+        out.push('…');
+    }
+    out
 }
 
 /// Binds the socket and starts the accept thread.
@@ -866,10 +901,23 @@ mod tests {
     }
 
     #[test]
+    fn a_clipped_request_says_so() {
+        assert_eq!(super::request_text("a\n\n  \nb  \n"), "a\nb");
+        let many = (1..=9).map(|n| n.to_string()).collect::<Vec<_>>().join("\n");
+        assert_eq!(super::request_text(&many), "1\n2\n3\n4\n5\n6…");
+        let long = "x".repeat(800);
+        let clipped = super::request_text(&long);
+        assert_eq!(clipped.chars().count(), 501);
+        assert!(clipped.ends_with('…'));
+    }
+
+    #[test]
     fn parses_hook_details() {
         let s = parse_line(&format!("2\tpermission\t{}", r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf target\nls"}}"#)).unwrap();
         assert_eq!(s.kind, SignalKind::Permission);
         assert_eq!((s.detail.tool.as_deref(), s.detail.target.as_deref()), (Some("Bash"), Some("rm -rf target")));
+        // What is asked, in full: the second line of a command is part of what would be allowed.
+        assert_eq!(s.detail.request.as_deref(), Some("rm -rf target\nls"));
         let s = parse_line(&format!(
             "2\tnotification\t{}",
             r#"{"message":"Claude is waiting for your input","notification_type":"idle_prompt"}"#

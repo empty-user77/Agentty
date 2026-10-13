@@ -8,6 +8,13 @@ pub enum TrayAction {
     Show,
     ToggleMini,
     Focus(u64),
+    /// A notification's Allow / Deny button: answers permission request `ask` of `pane` without
+    /// bringing Agentty up.
+    Answer {
+        pane: u64,
+        ask: u64,
+        allow: bool,
+    },
     /// A plugin automation row was clicked: brings up that plugin's workspace with this
     /// automation's tab in front.
     FocusPlugin {

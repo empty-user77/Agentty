@@ -40,6 +40,7 @@ pub mod mini;
 mod notices;
 mod notify_settings;
 mod onboarding;
+mod onboarding_setup;
 mod palette;
 pub mod panes;
 mod persist;
@@ -3223,6 +3224,11 @@ impl Render for Workbench {
         self.prepare_docker(cx);
         self.prepare_db(window, cx);
         self.advance_tour(cx);
+        // The onboarding card answers ⌘↩: on a fresh window nothing holds the keyboard yet, and a
+        // key reaches no one without a focused element.
+        if self.onboarding.as_ref().is_some_and(|o| o.is_modal()) && window.focused(cx).is_none() {
+            window.focus(&self.focus_handle);
+        }
         self.prepare_plugins_page(window, cx);
         self.prepare_style_preview(cx);
         self.broadcast_plugin_context(window, cx);
@@ -3290,6 +3296,10 @@ impl Render for Workbench {
                 if event.keystroke.key == "escape" && this.connect_pick.is_some() {
                     this.cancel_connect_pick(cx);
                     // One Esc does one thing: a recording goes on until the next.
+                    return cx.stop_propagation();
+                }
+                // ⌘↩ is Continue on the onboarding card.
+                if this.onboarding_key(event, window, cx) {
                     return cx.stop_propagation();
                 }
                 // A close confirmation owns the keyboard.
