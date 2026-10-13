@@ -5,6 +5,36 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-10-13
+
+### Added
+- Light mode: Settings → General → Appearance offers System, Dark or Light as preview cards; System follows macOS as
+  it switches. Code in the editor uses a light palette made for reading on white. Terminals keep their own theme, and
+  the menu bar popover and mini window stay dark. Dark remains the default.
+- Allow or deny a permission request from Claude Code or Codex right in its notification (and in the mini window):
+  the notification shows what is asked, and the answer is typed only while that same request still waits.
+- A new first-run onboarding: light or dark, the agents found on this Mac, the terminal theme, how you work and
+  notifications, each on its own step; Get started then opens the follow-along tour.
+- Attach images from the remote page: a paperclip button beside the prompt box (or paste / drop) sends pictures with
+  the next prompt, and Claude Code / Codex receive them as images. Large photos are shrunk on the phone first.
+- Find in the file editor: ⌘F opens a find bar with all matches highlighted and a match count; ↩ / ⇧↩ step through
+  them.
+- Password boxes on the remote page and in the remote access settings show the character just typed for a moment,
+  and an eye button shows or hides the whole password. They point out when Caps Lock is on.
+
+### Changed
+- Remote page: Enter is the first and larger key in the key row and stays at the left; prompt buttons line up with
+  the text box.
+- Remote access passwords use English letters only: Korean input is refused with a message instead of being saved
+  as a password a phone keyboard could not type.
+
+### Fixed
+- Remote page on phones: the terminal keeps its history and no longer jumps to the bottom while you read; a swipe
+  scrolls full-screen programs such as Claude Code; tapping the terminal opens the prompt box's keyboard; the voice
+  input popup fits the screen.
+- A notification's "open" link goes to its terminal, also when the remote page is already open and for plain
+  terminals.
+
 ## [0.2.17] - 2026-10-12
 
 ### Added

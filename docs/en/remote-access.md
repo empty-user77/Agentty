@@ -43,7 +43,7 @@ You need:
 ## Setup
 
 1. Click **Remote access** (the globe-and-monitor icon) in the side menu
-2. Set a **Web password** (at least 8 characters, entered twice)
+2. Set a **Web password** (at least 8 characters in English letters, digits and symbols, entered twice; the eye button shows what you typed)
 3. Turn on **Remote access**
 4. Copy the address that appears (`https://<machine>.<tailnet>.ts.net:8743/`), or tap **Open** to go there directly
 5. On the other device, sign in with your web password
