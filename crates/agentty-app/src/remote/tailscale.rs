@@ -412,6 +412,13 @@ pub fn parse_response(raw: &[u8]) -> Option<Answer> {
     Some((status, headers, body))
 }
 
+/// Whether the entry on `https_port` still points at `target`; `None` when the configuration
+/// couldn't be read (a slow answer is not a lost entry).
+pub fn still_served(https_port: u16, target: &str) -> Option<bool> {
+    let json = serve_config()?;
+    Some(served_target(&json, https_port).is_some_and(|served| same_target(&served, target)))
+}
+
 /// Takes the entry on `https_port` down if it points at `target`, and then forgets the marker.
 /// While Tailscale is stopped it shows no configuration (and keeps it for when it is back), so
 /// the marker stays until an "off" really ran: the next start or quit tries again.
