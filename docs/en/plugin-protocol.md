@@ -34,6 +34,7 @@ When stdin closes or `shutdown` arrives, exit. A plugin still running 1.5 second
 | `url/open` | notification | `{ path, query, url, context }` |
 | `pane/status` | notification | `{ paneId, status, running, agent, title, cwd }` — a pane this plugin started changed what it is doing (`workspace.read`, API 2) |
 | `tools/call` | request — answer it | `{ name, arguments, context }` — an AI agent is calling a tool (`mcp.tools`, API 5) |
+| `plugin/uninstall` | request — answer it | `{ context }` — the user is uninstalling the plugin; sent only when the manifest lists `onUninstall` in `activationEvents`, starting it first if needed. Remove what it put outside its data folder (a helper program it installed, say), then answer. Agentty waits up to 5 seconds, then removes it either way |
 | `shutdown` | notification | `{}` |
 
 `initialize` is sent first, followed immediately by whatever started the plugin — a command, the panel opening, or a link. Answer `initialize` with any result, for example `{}`.

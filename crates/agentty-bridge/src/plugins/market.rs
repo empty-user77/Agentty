@@ -79,7 +79,8 @@ pub struct Entry {
     #[serde(default = "first_api_version")]
     pub api_version: u32,
     /// `["onStartup"]`: the plugin starts with Agentty (an automation that runs on a schedule).
-    /// Nothing else is taken from a listing.
+    /// `"onUninstall"`: it is asked to clean up before it is removed. Nothing else is taken from a
+    /// listing.
     #[serde(default)]
     pub activation_events: Vec<String>,
     /// The AI agents the plugin works with (left out: Claude Code), shown on the card.
@@ -218,7 +219,12 @@ impl Entry {
             main: format!("{}.wasm", self.id),
             runtime: super::manifest::Runtime::Wasm,
             api_version: self.api_version,
-            activation_events: self.activation_events.iter().filter(|e| e.as_str() == "onStartup").cloned().collect(),
+            activation_events: self
+                .activation_events
+                .iter()
+                .filter(|e| matches!(e.as_str(), "onStartup" | "onUninstall"))
+                .cloned()
+                .collect(),
             contributes: super::manifest::Contributes {
                 commands: Vec::new(),
                 panel: Some(super::manifest::PanelContribution {
@@ -367,6 +373,16 @@ mod tests {
                 "size": 93292
             }
         })
+    }
+
+    #[test]
+    fn a_listing_keeps_only_the_activation_events_agentty_knows() {
+        let mut value = entry();
+        value["activationEvents"] = json!(["onStartup", "onUninstall", "onCommand:x"]);
+        let manifest = Entry::checked(value).unwrap().manifest();
+        assert_eq!(manifest.activation_events, ["onStartup", "onUninstall"]);
+        assert!(manifest.starts_with_agentty() && manifest.cleans_up_on_uninstall());
+        assert!(!Entry::checked(entry()).unwrap().manifest().cleans_up_on_uninstall(), "only when it says so");
     }
 
     #[test]

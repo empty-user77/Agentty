@@ -634,6 +634,25 @@ pub fn send_if_running(id: &str, method: &str, params: Value, cx: &App) {
     }
 }
 
+/// How long a plugin has to clean up when the user uninstalls it.
+pub const UNINSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Asks a plugin that declared `onUninstall` to clean up before it is removed (`plugin/uninstall`),
+/// starting it first if it is not running. The receiver gets its answer; `None` when it is not
+/// asked (it did not declare it, it is disabled, or it was never allowed to run).
+pub fn ask_to_uninstall(id: &str, cx: &mut App) -> Option<std::sync::mpsc::Receiver<String>> {
+    let wants = plugin(cx, id).and_then(|p| p.manifest.as_ref()).is_some_and(Manifest::cleans_up_on_uninstall);
+    if !wants {
+        return None;
+    }
+    let context = default_context(cx);
+    if !ensure_started(id, &context, cx) {
+        return None;
+    }
+    log(id, "asked to clean up before it is uninstalled", cx);
+    mcp::ask(id, "plugin/uninstall", json!({ "context": context }), cx)
+}
+
 pub fn stop(id: &str, cx: &mut App) {
     mcp::abandon(id, cx);
     terminal_proxy::release(id);

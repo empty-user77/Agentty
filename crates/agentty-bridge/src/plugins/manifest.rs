@@ -54,6 +54,7 @@ pub struct Manifest {
     #[serde(default = "default_api_version")]
     pub api_version: u32,
     /// `onStartup` starts the plugin with Agentty; otherwise it starts on first use.
+    /// `onUninstall` has it asked to clean up (`plugin/uninstall`) before it is removed.
     #[serde(default)]
     pub activation_events: Vec<String>,
     #[serde(default)]
@@ -458,6 +459,12 @@ impl Manifest {
 
     pub fn starts_with_agentty(&self) -> bool {
         self.activation_events.iter().any(|e| e == "onStartup")
+    }
+
+    /// Whether the plugin wants `plugin/uninstall` before it is removed, to take away what it put
+    /// outside its data folder (a helper program it installed, say).
+    pub fn cleans_up_on_uninstall(&self) -> bool {
+        self.activation_events.iter().any(|e| e == "onUninstall")
     }
 
     /// Entry point inside `dir`.

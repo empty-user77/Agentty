@@ -34,6 +34,7 @@ stdin が閉じるか `shutdown` が来たら終了してください。`shutdow
 | `url/open` | 通知 | `{ path, query, url, context }` |
 | `pane/status` | 通知 | `{ paneId, status, running, agent, title, cwd }` — このプラグインが開始したペインの状態が変わった（`workspace.read`、API 2） |
 | `tools/call` | リクエスト — 応答が必要 | `{ name, arguments, context }` — AI エージェントがツールを呼び出している（`mcp.tools`、API 5） |
+| `plugin/uninstall` | リクエスト — 応答する | `{ context }` — ユーザーがプラグインをアンインストールしています。マニフェストの `activationEvents` に `onUninstall` があるときだけ送られ、必要なら先に起動します。データフォルダの外に置いたもの（インストールした補助プログラムなど）を消してから応答してください。Agentty は最大 5 秒待ち、どちらにしても削除します |
 | `shutdown` | 通知 | `{}` |
 
 `initialize` が最初に来て、その直後にプラグインを起動させたもの（コマンド、パネルを開く、リンク）が続きます。`initialize` には任意の結果で応答すれば十分です（例: `{}`）。

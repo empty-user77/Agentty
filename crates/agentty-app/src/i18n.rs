@@ -2278,6 +2278,7 @@ strings! {
     "plugins.update_confirm" => ["Click again to update and allow it", "한 번 더 누르면 업데이트하고 허용", "もう一度押すと更新して許可", "再次点击以更新并允许"],
     "plugins.update_all_asking" => ["{n} ask for more than they had — update those one at a time.", "{n}개는 이전보다 많은 권한을 요구합니다 — 하나씩 업데이트하세요.", "{n} 件は以前より多くを要求しています — 個別に更新してください。", "{n} 个请求的权限比原来多 — 请逐个更新。"],
     "plugins.confirm_uninstall" => ["Click again to remove it and its data", "한 번 더 누르면 데이터까지 제거", "もう一度押すとデータごと削除", "再次点击，连同数据一起卸载"],
+    "plugins.uninstalling" => ["Uninstalling…", "제거하는 중…", "アンインストール中…", "正在卸载…"],
     "plugins.uninstalled" => ["{name} was uninstalled", "{name}을(를) 제거했습니다", "{name} を削除しました", "已卸载 {name}"],
     "plugins.enable" => ["Enable", "사용", "有効にする", "启用"],
     "plugins.disable" => ["Disable", "사용 안 함", "無効にする", "停用"],

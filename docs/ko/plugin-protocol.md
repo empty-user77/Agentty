@@ -34,6 +34,7 @@ stdin이 닫히거나 `shutdown`이 오면 종료하세요. `shutdown` 후 1.5�
 | `url/open` | 알림 | `{ path, query, url, context }` |
 | `pane/status` | 알림 | `{ paneId, status, running, agent, title, cwd }` — 이 플러그인이 시작한 페인의 상태가 바뀜 (`workspace.read`, API 2) |
 | `tools/call` | 요청 — 응답 필요 | `{ name, arguments, context }` — AI 에이전트가 도구를 호출함 (`mcp.tools`, API 5) |
+| `plugin/uninstall` | 요청 — 응답 필요 | `{ context }` — 사용자가 플러그인을 제거하는 중입니다. 매니페스트의 `activationEvents`에 `onUninstall`이 있을 때만 보내며, 실행 중이 아니면 먼저 시작합니다. 데이터 폴더 밖에 만든 것(설치한 보조 프로그램 등)을 지운 뒤 응답하세요. Agentty는 최대 5초 기다린 뒤 어느 쪽이든 제거합니다 |
 | `shutdown` | 알림 | `{}` |
 
 `initialize`가 먼저 오고, 바로 뒤에 플러그인을 시작하게 한 메시지(명령, 패널 열기, 링크)가 옵니다. `initialize`에는 아무 결과나 응답하면 됩니다(예: `{}`).
