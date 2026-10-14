@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Board: Jira issues are added one at a time from **Add from Jira**: paste the issue's address or type its key
+  (`AB-12`). The JQL search in Settings → Development board is gone; **Test the connection** there checks the site,
+  e-mail and API token.
+
+### Fixed
+- Text longer than a one-line field (a pasted API token, a long address) no longer spills past the field: it slides
+  to keep the caret in view.
+- The right-click menu of a tab, and the TODO list, scroll on a short window instead of running off the screen.
+
 ### Fixed
 - Text selected in Codex's prompt (and in other programs that keep redrawing the same lines) stays selected and can
   be copied; before, the redraw cleared the selection right away.

@@ -220,7 +220,7 @@ impl Workbench {
             .into_any_element()
     }
 
-    pub(super) fn render_todo_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    pub(super) fn render_todo_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let position: Point<Pixels> = self.todo_menu?;
         let ws = self.workspaces.get(self.active_workspace)?;
         let todo = ws.todo_tabs();
@@ -239,6 +239,7 @@ impl Workbench {
         for index in todo {
             list = list.child(self.render_todo_row(ws, index, "todo-menu-row", cx));
         }
+        let list = crate::ui::fit_to_window(list, "todo-menu", window);
         Some(gpui::deferred(gpui::anchored().position(position).snap_to_window_with_margin(px(8.)).child(list)).with_priority(3))
     }
 

@@ -496,7 +496,7 @@ pub enum BoardCleanup {
     Never,
 }
 
-/// Jira Cloud, for importing issues as tickets. The API token is in the Keychain, not here.
+/// Jira Cloud, for adding issues as tickets. The API token is in the Keychain, not here.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct JiraSettings {
@@ -504,8 +504,6 @@ pub struct JiraSettings {
     /// `https://team.atlassian.net`.
     pub site: String,
     pub email: String,
-    /// The issues an import brings in.
-    pub jql: String,
 }
 
 /// Which agent starts work through a harness.

@@ -502,6 +502,13 @@ pub fn popover() -> Div {
         .text_color(hex(Chrome::FOREGROUND))
 }
 
+/// A menu as tall as the window allows: on a short window it stops 8 px from the edges (where
+/// `snap_to_window_with_margin` puts it) and scrolls the rest instead of running off the screen.
+pub fn fit_to_window(menu: Div, id: impl Into<ElementId>, window: &Window) -> Stateful<Div> {
+    let room = window.viewport_size().height - px(16.);
+    menu.id(id).max_h(room.max(px(80.))).overflow_y_scroll()
+}
+
 /// Spinner + text, for anything loading.
 pub fn loading_row(text: impl Into<SharedString>) -> Div {
     div()

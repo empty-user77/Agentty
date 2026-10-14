@@ -1,5 +1,5 @@
 //! Settings → Development board: turning the board on, how tickets run (which agent, a worktree or
-//! the project folder, whether agents may split their work), and Jira Cloud for importing issues.
+//! the project folder, whether agents may split their work), and Jira Cloud for adding issues as tickets.
 
 use super::settings_page::{row_with_hint, section, toggle};
 use super::Workbench;
@@ -14,7 +14,6 @@ use gpui::{div, prelude::*, px, AppContext, ClickEvent, Context, Entity, Focusab
 pub struct JiraFields {
     site: Entity<TextInput>,
     email: Entity<TextInput>,
-    jql: Entity<TextInput>,
     token: Entity<TextInput>,
     _subscriptions: Vec<Subscription>,
 }
@@ -68,7 +67,6 @@ impl Workbench {
             };
             let site = text(jira.site, "https://team.atlassian.net", window, cx);
             let email = text(jira.email, "you@example.com", window, cx);
-            let jql = text(jira.jql, "project = AB AND statusCategory != Done ORDER BY updated DESC", window, cx);
             let token = cx.new(|cx| TextInput::localized("", "board.jira_token_placeholder", window, cx).masked());
             // Typed values are kept as they are typed; the token only with Save or Enter.
             let keep = |input: &Entity<TextInput>, put: fn(&mut crate::settings::JiraSettings, String), cx: &mut Context<Self>| {
@@ -82,14 +80,13 @@ impl Workbench {
             let subscriptions = vec![
                 keep(&site, |j, v| j.site = v, cx),
                 keep(&email, |j, v| j.email = v, cx),
-                keep(&jql, |j, v| j.jql = v, cx),
                 cx.subscribe(&token, |this, _, event: &TextInputEvent, cx| {
                     if matches!(event, TextInputEvent::Confirmed) {
                         this.save_jira_token(cx);
                     }
                 }),
             ];
-            self.board_jira.fields = Some(JiraFields { site, email, jql, token, _subscriptions: subscriptions });
+            self.board_jira.fields = Some(JiraFields { site, email, token, _subscriptions: subscriptions });
         }
         self.board_jira.fields.as_ref().expect("made above")
     }
@@ -168,11 +165,11 @@ impl Workbench {
         let jira = crate::settings::settings(cx).board.jira.clone();
         self.board_jira.busy = true;
         cx.spawn(async move |this, cx| {
-            let found = cx.background_spawn(async move { agentty_bridge::jira::search(&jira.site, &jira.email, &jira.jql) }).await;
+            let found = cx.background_spawn(async move { agentty_bridge::jira::check(&jira.site, &jira.email) }).await;
             let _ = this.update(cx, |this, cx| {
                 this.board_jira.busy = false;
                 this.board_jira.message = Some(match found {
-                    Ok(issues) => (true, tf(cx, "board.jira_found", &[("n", &issues.len().to_string())])),
+                    Ok(name) => (true, tf(cx, "board.jira_connected", &[("name", &name)])),
                     Err(err) => (false, super::board::jira_error_text(&err, cx)),
                 });
                 cx.notify();
@@ -289,9 +286,9 @@ impl Workbench {
         ));
         if prefs.jira.enabled {
             self.check_jira_token_saved(cx);
-            let (site, email, jql, token) = {
+            let (site, email, token) = {
                 let fields = self.jira_fields(window, cx);
-                (fields.site.clone(), fields.email.clone(), fields.jql.clone(), fields.token.clone())
+                (fields.site.clone(), fields.email.clone(), fields.token.clone())
             };
             let labelled = |label: &'static str, control: gpui::AnyElement| {
                 div().flex().flex_col().gap_1().child(div().t_small().text_color(hex(Chrome::MUTED)).child(label)).child(control)
@@ -322,7 +319,6 @@ impl Workbench {
                     if saved { t(cx, "board.jira_token_is_saved") } else { t(cx, "board.jira_token") },
                     token_row.into_any_element(),
                 ))
-                .child(labelled(t(cx, "board.jira_jql"), field_box(&jql).into_any_element()))
                 .child(
                     div()
                         .flex()
