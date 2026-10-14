@@ -89,7 +89,7 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(super) fn render_tab_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    pub(super) fn render_tab_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.tab_menu.as_ref()?;
         let (index, position) = (menu.index, menu.position);
         let active = self.workspaces.get(self.active_workspace)?;
@@ -142,6 +142,7 @@ impl Workbench {
             ));
         }
         list = list.children(self.render_reopen_tabs(cx));
+        let list = crate::ui::fit_to_window(list, "tab-menu", window);
         Some(gpui::deferred(gpui::anchored().position(position).snap_to_window_with_margin(px(8.)).child(list)).with_priority(3))
     }
 }

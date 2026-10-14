@@ -3594,8 +3594,8 @@ impl Render for Workbench {
             .child(self.render_status_bar(cx))
             .when_some(self.picker.as_ref().map(|_| ()), |d, _| d.child(self.render_picker(cx)))
             .when_some(self.palette.as_ref().map(|_| ()), |d, _| d.child(self.render_palette(cx)))
-            .children(self.render_tab_menu(cx))
-            .children(self.render_todo_menu(cx))
+            .children(self.render_tab_menu(window, cx))
+            .children(self.render_todo_menu(window, cx))
             .children(self.render_pane_menu(cx))
             .children(self.render_tree_menu(cx))
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
@@ -4372,6 +4372,7 @@ impl Workbench {
                     "backup" => settings_page::SettingsSection::Backup,
                     "system" => settings_page::SettingsSection::System,
                     "notifications" => settings_page::SettingsSection::Notifications,
+                    "board" => settings_page::SettingsSection::Board,
                     _ => settings_page::SettingsSection::General,
                 };
                 cx.notify();

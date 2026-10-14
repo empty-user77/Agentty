@@ -89,6 +89,9 @@ pub struct TextInput {
     marked_range: Option<Range<usize>>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// How far a one-line field's text is shifted left, so the caret stays inside the field when
+    /// the text is longer than it (a pasted token, a long address).
+    scroll_x: Pixels,
     is_selecting: bool,
     /// Secret entry: shows bullets and refuses copy/cut.
     masked: bool,
@@ -154,6 +157,7 @@ impl TextInput {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
+            scroll_x: px(0.),
             is_selecting: false,
             masked: false,
             refused_hangul: false,
@@ -529,7 +533,7 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        let index = line.closest_index_for_x(position.x - bounds.left());
+        let index = line.closest_index_for_x(position.x - bounds.left() + self.scroll_x);
         if self.masked && !self.revealed {
             // The layout holds bullets (and the character just typed); map back to the content.
             return self.content.char_indices().map(|(i, _)| i).find(|&i| self.masked_offset(i) >= index).unwrap_or(self.content.len());
@@ -708,18 +712,34 @@ impl EntityInputHandler for TextInput {
         }
         let last_layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
+        let left = bounds.left() - self.scroll_x;
         Some(Bounds::from_corners(
-            point(bounds.left() + last_layout.x_for_index(range.start), bounds.top()),
-            point(bounds.left() + last_layout.x_for_index(range.end), bounds.bottom()),
+            point(left + last_layout.x_for_index(range.start), bounds.top()),
+            point(left + last_layout.x_for_index(range.end), bounds.bottom()),
         ))
     }
 
     fn character_index_for_point(&mut self, point: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
         let line_point = self.last_bounds?.localize(&point)?;
         let last_layout = self.last_layout.as_ref()?;
-        let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
+        let utf8_index = last_layout.index_for_x(line_point.x + self.scroll_x)?;
         Some(self.offset_to_utf16(utf8_index))
     }
+}
+
+/// How far a one-line field's text is shifted left: as before when the caret is in view, else
+/// just enough to bring it in, and never further than the text needs (so a shorter text slides
+/// back). A little room is kept at the right edge for the caret itself.
+fn scroll_to_show(scroll: Pixels, caret: Pixels, text_width: Pixels, field_width: Pixels) -> Pixels {
+    let room = (field_width - px(2.)).max(px(0.));
+    let mut scroll = scroll;
+    if caret - scroll > room {
+        scroll = caret - room;
+    }
+    if caret < scroll {
+        scroll = caret;
+    }
+    scroll.min((text_width - room).max(px(0.))).max(px(0.))
 }
 
 /// Hangul syllables and jamo (compatibility and conjoining).
@@ -856,11 +876,14 @@ impl Element for TextElement {
             if display_text.contains(['\n', '\r']) { display_text.replace(['\n', '\r'], " ").into() } else { display_text };
         let line = window.text_system().shape_line(display_text, font_size, &runs, None);
         let cursor_pos = line.x_for_index(to_display(cursor));
+        // Text wider than the field slides so the caret stays in view, and back as it shrinks.
+        let scroll = scroll_to_show(input.scroll_x, cursor_pos, line.width, bounds.size.width);
+        let left = bounds.left() - scroll;
         let (selection, cursor) = if selected_range.is_empty() {
             (
                 None,
                 Some(fill(
-                    Bounds::new(point(bounds.left() + cursor_pos, bounds.top()), size(px(1.5), bounds.bottom() - bounds.top())),
+                    Bounds::new(point(left + cursor_pos, bounds.top()), size(px(1.5), bounds.bottom() - bounds.top())),
                     hex(Chrome::BLUE),
                 )),
             )
@@ -868,14 +891,15 @@ impl Element for TextElement {
             (
                 Some(fill(
                     Bounds::from_corners(
-                        point(bounds.left() + line.x_for_index(to_display(selected_range.start)), bounds.top()),
-                        point(bounds.left() + line.x_for_index(to_display(selected_range.end)), bounds.bottom()),
+                        point(left + line.x_for_index(to_display(selected_range.start)), bounds.top()),
+                        point(left + line.x_for_index(to_display(selected_range.end)), bounds.bottom()),
                     ),
                     hex_alpha(Chrome::ACCENT, 0.45),
                 )),
                 None,
             )
         };
+        self.input.update(cx, |input, _| input.scroll_x = scroll);
         PrepaintState { line: Some(line), lines: Vec::new(), cursor, selections: selection.into_iter().collect() }
     }
 
@@ -891,6 +915,14 @@ impl Element for TextElement {
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
         window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.input.clone()), cx);
+        // Nothing is drawn past the field's edges, however long its text.
+        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| self.paint_clipped(bounds, prepaint, window, cx));
+    }
+}
+
+impl TextElement {
+    fn paint_clipped(&mut self, bounds: Bounds<Pixels>, prepaint: &mut PrepaintState, window: &mut Window, cx: &mut App) {
+        let focus_handle = self.input.read(cx).focus_handle.clone();
         for selection in prepaint.selections.drain(..) {
             window.paint_quad(selection);
         }
@@ -916,7 +948,8 @@ impl Element for TextElement {
             return;
         }
         let Some(line) = prepaint.line.take() else { return };
-        let _ = line.paint(bounds.origin, line_height, window, cx);
+        let scroll = self.input.read(cx).scroll_x;
+        let _ = line.paint(point(bounds.origin.x - scroll, bounds.origin.y), line_height, window, cx);
         let caret = self.input.update(cx, |input, cx| input.caret_visible(focused, cx));
         if caret {
             if let Some(cursor) = prepaint.cursor.take() {
@@ -1215,6 +1248,21 @@ mod tests {
     use super::*;
 
     const TEXT: &str = "one\ntwo\n\nfour";
+
+    #[test]
+    fn a_long_line_slides_to_keep_the_caret_in_the_field() {
+        let field = px(102.);
+        // Short text: never shifted.
+        assert_eq!(scroll_to_show(px(0.), px(40.), px(40.), field), px(0.));
+        // Typing past the right edge: shifted just enough.
+        assert_eq!(scroll_to_show(px(0.), px(300.), px(300.), field), px(200.));
+        // The caret moved back inside the shown part: left where it is.
+        assert_eq!(scroll_to_show(px(200.), px(250.), px(300.), field), px(200.));
+        // Home: back to the start.
+        assert_eq!(scroll_to_show(px(200.), px(0.), px(300.), field), px(0.));
+        // Text deleted down to less than the field: slides back.
+        assert_eq!(scroll_to_show(px(200.), px(60.), px(60.), field), px(0.));
+    }
 
     #[test]
     fn lines_are_found_by_their_breaks() {

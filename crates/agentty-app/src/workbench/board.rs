@@ -369,6 +369,15 @@ pub struct TicketEditor {
     _subscriptions: Vec<Subscription>,
 }
 
+/// "Add from Jira": the field for an issue's key or address, whether it is being fetched, and why
+/// the last try failed.
+pub struct JiraAdd {
+    input: Entity<TextInput>,
+    busy: bool,
+    error: Option<String>,
+    _subscription: Subscription,
+}
+
 /// "More instructions" for a ticket.
 pub struct FollowUp {
     id: u64,
@@ -396,8 +405,8 @@ pub struct BoardState {
     pending: HashSet<u64>,
     /// Parallel tasks of a ticket that finished, waiting to be reported to its lead agent.
     finished_tasks: HashMap<u64, Vec<String>>,
-    /// A Jira import is running.
-    importing: bool,
+    /// "Add from Jira": the issue's key or address.
+    jira_add: Option<JiraAdd>,
     /// "Clean up?" after a sign-off.
     cleanup: Option<CleanupAsk>,
 }
@@ -446,18 +455,12 @@ pub(super) fn jira_error_text(err: &anyhow::Error, cx: &gpui::App) -> String {
         E::CredentialsInUrl => t(cx, "board.jira_err_userinfo").to_string(),
         E::NoHost => t(cx, "board.jira_err_host").to_string(),
         E::NoEmail => t(cx, "board.jira_err_email").to_string(),
-        E::NoSearch => t(cx, "board.jira_err_jql").to_string(),
         E::NoToken => t(cx, "board.jira_err_token").to_string(),
+        E::NotIssue => t(cx, "board.jira_err_issue").to_string(),
+        E::OtherSite(site) => tf(cx, "board.jira_err_other_site", &[("site", site)]),
+        E::NotFound(key) => tf(cx, "board.jira_err_not_found", &[("key", key)]),
         E::Unexpected => t(cx, "board.jira_err_unexpected").to_string(),
         E::Refused => t(cx, "board.jira_err_refused").to_string(),
-        // Jira's own explanation of a bad search is in its language: shown after ours.
-        E::SearchFailed(detail) => {
-            let base = t(cx, "board.jira_err_search");
-            match detail {
-                Some(detail) => format!("{base} {detail}"),
-                None => base.to_string(),
-            }
-        }
         E::Status(status) => tf(cx, "board.jira_err_status", &[("status", &status.to_string())]),
         E::Unreachable(site) => tf(cx, "board.jira_err_unreachable", &[("site", site)]),
     }
@@ -946,6 +949,7 @@ impl Workbench {
     fn close_board_dialogs(&mut self, cx: &mut Context<Self>) {
         self.board.editor = None;
         self.board.follow_up = None;
+        self.board.jira_add = None;
         cx.notify();
     }
 
@@ -992,37 +996,63 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Brings the issues of the Jira search into the backlog (those already on the board are left
-    /// alone), for the project the board shows when it shows one.
-    fn import_jira(&mut self, cx: &mut Context<Self>) {
-        if self.board.importing {
+    fn open_jira_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| TextInput::localized("", "board.jira_add_placeholder", window, cx));
+        let subscription = cx.subscribe_in(&input, window, |this, _, event: &TextInputEvent, _, cx| match event {
+            TextInputEvent::Cancelled => this.close_board_dialogs(cx),
+            TextInputEvent::Confirmed => this.add_from_jira(cx),
+            TextInputEvent::Changed => {
+                if let Some(add) = this.board.jira_add.as_mut() {
+                    add.error = None;
+                }
+            }
+            _ => {}
+        });
+        input.focus_handle(cx).focus(window);
+        self.board.editor = None;
+        self.board.follow_up = None;
+        self.board.jira_add = Some(JiraAdd { input, busy: false, error: None, _subscription: subscription });
+        cx.notify();
+    }
+
+    /// Fetches the issue named in the "Add from Jira" field and puts it in the backlog, for the
+    /// project the board shows when it shows one. One already on the board is not added again.
+    fn add_from_jira(&mut self, cx: &mut Context<Self>) {
+        let Some(add) = self.board.jira_add.as_mut() else { return };
+        let entered = add.input.read(cx).text().trim().to_string();
+        if add.busy || entered.is_empty() {
             return;
         }
+        add.busy = true;
+        add.error = None;
         let prefs = crate::settings::settings(cx).board.clone();
         let (project, agent) = (self.board.filter.clone(), prefs.agent.id());
-        self.board.importing = true;
         cx.spawn(async move |this, cx| {
             let jira = prefs.jira;
-            let found = cx.background_spawn(async move { agentty_bridge::jira::search(&jira.site, &jira.email, &jira.jql) }).await;
+            let found = cx.background_spawn(async move { agentty_bridge::jira::fetch_issue(&jira.site, &jira.email, &entered) }).await;
             let _ = this.update(cx, |this, cx| {
-                this.board.importing = false;
                 match found {
-                    Ok(issues) => {
+                    Ok(issue) => {
                         let now = crate::ui::now_ms();
                         let added = this.board_update(|file| {
-                            let tickets = tickets_from_issues(file, &issues, project, agent, now);
-                            let added = tickets.len();
+                            let tickets = tickets_from_issues(file, std::slice::from_ref(&issue), project, agent, now);
+                            let added = !tickets.is_empty();
                             for ticket in tickets {
                                 file.add(ticket);
                             }
                             added
                         });
-                        this.show_toast(
-                            tf(cx, "board.jira_imported", &[("n", &added.to_string()), ("found", &issues.len().to_string())]),
-                            cx,
-                        );
+                        let key = if added { "board.jira_added" } else { "board.jira_already" };
+                        this.show_toast(tf(cx, key, &[("key", &issue.key)]), cx);
+                        this.board.jira_add = None;
                     }
-                    Err(err) => this.show_toast(format!("Jira: {}", jira_error_text(&err, cx)), cx),
+                    Err(err) => {
+                        let text = jira_error_text(&err, cx);
+                        if let Some(add) = this.board.jira_add.as_mut() {
+                            add.busy = false;
+                            add.error = Some(text);
+                        }
+                    }
                 }
                 cx.notify();
             });
@@ -1363,15 +1393,12 @@ impl Workbench {
             .child(div().t_heading().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "page.board")))
             .child(div().flex_1().min_w_0().child(filters))
             .when(crate::settings::settings(cx).board.jira.enabled, |d| {
-                d.child(
-                    crate::ui::action_button_with_icon(
-                        "board-jira-import",
-                        "download",
-                        t(cx, "board.jira_import"),
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.import_jira(cx)),
-                    )
-                    .when(self.board.importing, |b| b.opacity(0.5)),
-                )
+                d.child(crate::ui::action_button_with_icon(
+                    "board-jira-add",
+                    "download",
+                    t(cx, "board.jira_add"),
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.open_jira_add(window, cx)),
+                ))
             })
             .child(
                 div()
@@ -1514,6 +1541,9 @@ impl Workbench {
             page = page.child(dialog);
         }
         if let Some(dialog) = self.render_follow_up(cx) {
+            page = page.child(dialog);
+        }
+        if let Some(dialog) = self.render_jira_add(cx) {
             page = page.child(dialog);
         }
         page.into_any_element()
@@ -1917,6 +1947,59 @@ impl Workbench {
     }
 }
 
+impl Workbench {
+    fn render_jira_add(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let add = self.board.jira_add.as_ref()?;
+        let (input, busy, error) = (add.input.clone(), add.busy, add.error.clone());
+        let button = |id: &'static str, text: String, primary: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .t_body()
+                .cursor_pointer()
+                .bg(if primary { hex(Chrome::ACCENT) } else { hex(0x2d2d30) })
+                .when(!primary && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if primary { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
+                .hover(|s| s.opacity(0.85))
+                .child(text)
+        };
+        Some(dialog(
+            "board-jira-add-dialog",
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(div().flex().items_center().gap_2().child(icon("download", IconSize::BUTTON, hex(Chrome::BRIGHT))).child(
+                    div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "board.jira_add")),
+                ))
+                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "board.jira_add_hint")))
+                .child(super::board_settings::field_box(&input))
+                .when_some(error, |d, error| d.child(div().t_small().text_color(hex(Chrome::ERROR)).child(error)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .when(busy, |d| d.child(crate::ui::spinner(IconSize::INLINE, hex(Chrome::MUTED))))
+                        .child(
+                            button("board-jira-add-cancel", t(cx, "board.cancel").to_string(), false)
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_board_dialogs(cx))),
+                        )
+                        .child(
+                            button("board-jira-add-confirm", t(cx, "board.jira_add").to_string(), true)
+                                .when(busy, |b| b.opacity(0.5))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_from_jira(cx))),
+                        ),
+                )
+                .into_any_element(),
+            cx,
+        ))
+    }
+}
+
 /// A dialog over the board, closed by clicking outside it.
 fn dialog(id: &'static str, content: AnyElement, cx: &mut Context<Workbench>) -> AnyElement {
     div()
@@ -2164,7 +2247,7 @@ mod tests {
         let json = serde_json::to_value(&board).unwrap();
         let mut keys: Vec<&str> = json["jira"].as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["email", "enabled", "jql", "site"]);
+        assert_eq!(keys, ["email", "enabled", "site"]);
         assert!(!serde_json::to_string(&json).unwrap().to_ascii_lowercase().contains("token"));
     }
 
