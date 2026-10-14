@@ -271,6 +271,10 @@ pub struct TerminalView {
     layout: Option<Layout>,
     scroll_remainder: f32,
     selecting: bool,
+    /// The selection the user made and its text when last seen. A program redrawing a line
+    /// (Codex its prompt, every frame) makes the terminal drop any selection touching it, even
+    /// when the same text is written back; it comes back as long as its text is unchanged.
+    kept_selection: Option<(Selection, String)>,
     /// Find-in-terminal matches (all of scrollback) and the one selected.
     pub search: Option<(std::rc::Rc<Vec<Match>>, usize)>,
     /// A mouse press was reported to the program; its drag and release go there too.
@@ -450,6 +454,7 @@ impl TerminalView {
             layout: None,
             scroll_remainder: 0.,
             selecting: false,
+            kept_selection: None,
             search: None,
             mouse_reporting: false,
             last_mouse_cell: None,
@@ -1812,6 +1817,7 @@ impl TerminalView {
             term.scroll_display(Scroll::Bottom);
             term.selection = None;
         }
+        self.kept_selection = None;
         self.cursor_visible = true;
         self.write(bytes);
     }
@@ -1860,6 +1866,7 @@ impl TerminalView {
         if crate::webview::perform_in_page(crate::webview::EditCommand::Copy) {
             return;
         }
+        self.restore_selection();
         let text = self.backend.as_ref().and_then(|b| b.term.lock().selection_to_string());
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -1868,11 +1875,13 @@ impl TerminalView {
 
     /// Copies the selected text and clears the selection; false when nothing is selected.
     fn copy_and_deselect(&mut self, cx: &mut Context<Self>) -> bool {
+        self.restore_selection();
         let Some(backend) = &self.backend else { return false };
         let mut term = backend.term.lock();
         let Some(text) = term.selection_to_string().filter(|t| !t.is_empty()) else { return false };
         term.selection = None;
         drop(term);
+        self.kept_selection = None;
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         cx.notify();
         true
@@ -1916,7 +1925,25 @@ impl TerminalView {
             selection.update(GridPoint::new(bottom, last_col), Side::Right);
             term.selection = Some(selection);
         }
+        self.remember_selection();
         cx.notify();
+    }
+
+    /// Notes the selection the user just made (or changed), with its text.
+    fn remember_selection(&mut self) {
+        self.kept_selection = self.backend.as_ref().and_then(|backend| {
+            let term = backend.term.lock();
+            let selection = term.selection.clone()?;
+            Some((selection, term.selection_to_string().unwrap_or_default()))
+        });
+    }
+
+    /// Puts back the user's selection if the terminal dropped it while its text stayed the same,
+    /// and follows it where the terminal moved it (output scrolling it up).
+    fn restore_selection(&mut self) {
+        if let Some(backend) = &self.backend {
+            restore_selection(&mut backend.term.lock(), &mut self.kept_selection);
+        }
     }
 
     fn grid_point(&self, position: Point<Pixels>) -> Option<(GridPoint, Side)> {
@@ -2010,6 +2037,7 @@ impl TerminalView {
             _ => SelectionType::Simple,
         };
         backend.term.lock().selection = Some(Selection::new(ty, point, side));
+        self.remember_selection();
         self.selecting = true;
         cx.notify();
     }
@@ -2032,11 +2060,13 @@ impl TerminalView {
             return;
         }
         let Some((point, side)) = self.grid_point(event.position) else { return };
+        self.restore_selection();
         if let Some(backend) = &self.backend {
             if let Some(selection) = backend.term.lock().selection.as_mut() {
                 selection.update(point, side);
             }
         }
+        self.remember_selection();
         cx.notify();
     }
 
@@ -2109,6 +2139,7 @@ impl TerminalView {
             return;
         }
         self.selecting = false;
+        self.restore_selection();
         let mut empty_selection = true;
         if let Some(backend) = &self.backend {
             let mut term = backend.term.lock();
@@ -2116,6 +2147,11 @@ impl TerminalView {
                 term.selection = None;
             }
             empty_selection = term.selection.is_none();
+        }
+        if empty_selection {
+            self.kept_selection = None;
+        } else {
+            self.remember_selection();
         }
         // A plain click (no drag) on a link opens it too.
         let released = self.grid_point(event.position).map(|(point, _)| point);
@@ -2494,10 +2530,11 @@ impl Element for TerminalElement {
                 Some((columns, lines)) => GridSize { columns, lines, ..grid },
                 None => grid,
             };
-            view.backend.as_mut().map(|backend| {
+            if let Some(backend) = view.backend.as_mut() {
                 backend.resize(grid);
-                backend.term.clone()
-            })
+            }
+            view.restore_selection();
+            view.backend.as_ref().map(|backend| backend.term.clone())
         }) else {
             return frame;
         };
@@ -2981,9 +3018,53 @@ mod session_claims {
     }
 }
 
+/// `TerminalView::restore_selection` on a terminal: the kept selection follows the terminal's
+/// while it has one, comes back while its text is unchanged, and is forgotten once it is not.
+fn restore_selection<T>(term: &mut alacritty_terminal::Term<T>, kept: &mut Option<(Selection, String)>) {
+    let Some((selection, text)) = kept.as_mut() else { return };
+    if let Some(current) = &term.selection {
+        *selection = current.clone();
+        return;
+    }
+    term.selection = Some(selection.clone());
+    if term.selection_to_string().unwrap_or_default() != *text {
+        term.selection = None;
+        *kept = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_symbol_glyph, is_web_link, program_of_command_line};
+
+    #[test]
+    fn a_selection_survives_a_redraw_of_the_same_text() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        use alacritty_terminal::term::{test::TermSize, Config, Term};
+        use alacritty_terminal::vte::ansi::Processor;
+
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 4), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"> fix the bug");
+        let mut selection = Selection::new(SelectionType::Simple, Point::new(Line(0), Column(2)), Side::Left);
+        selection.update(Point::new(Line(0), Column(12)), Side::Right);
+        term.selection = Some(selection);
+        let mut kept = term.selection.clone().map(|s| (s, term.selection_to_string().unwrap()));
+        assert_eq!(kept.as_ref().unwrap().1, "fix the bug");
+
+        // The prompt drawn again, the way Codex does every frame: the line cleared and rewritten.
+        parser.advance(&mut term, b"\r\x1b[K> fix the bug");
+        assert!(term.selection.is_none(), "the terminal drops it");
+        super::restore_selection(&mut term, &mut kept);
+        assert_eq!(term.selection_to_string().as_deref(), Some("fix the bug"), "and it comes back");
+
+        // The text really changed: it stays gone.
+        parser.advance(&mut term, b"\r\x1b[K> something else");
+        super::restore_selection(&mut term, &mut kept);
+        assert!(term.selection.is_none() && kept.is_none());
+    }
 
     #[test]
     fn opens_only_web_hyperlinks() {
