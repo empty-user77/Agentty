@@ -84,6 +84,8 @@ pub struct Config {
     /// The path prefix `serve` adds to everything it forwards (check 0). `None` on the private
     /// Unix socket, which only Tailscale opens, and in the local test mode.
     pub secret: Option<String>,
+    /// The folder the page may open workspaces in (`folders::root`); `None`: it may not.
+    pub folders: Option<std::path::PathBuf>,
 }
 
 impl Config {
@@ -124,6 +126,8 @@ pub enum Command {
     Wake { workspace: u64 },
     /// A new tab in a workspace, with a shell or an agent, where the workspace is.
     NewTab { workspace: u64, kind: PaneKind },
+    /// A new workspace in a folder under the remote folder (checked), with a shell or an agent.
+    OpenFolder { folder: std::path::PathBuf, kind: PaneKind },
 }
 
 impl Command {
@@ -137,7 +141,7 @@ impl Command {
             | Command::Resize { pane, .. }
             | Command::Scroll { pane, .. }
             | Command::Release { pane } => Some(*pane),
-            Command::Wake { .. } | Command::NewTab { .. } => None,
+            Command::Wake { .. } | Command::NewTab { .. } | Command::OpenFolder { .. } => None,
         }
     }
 }
@@ -233,10 +237,17 @@ struct LoginBody {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkspaceBody {
+    #[serde(default)]
     workspace: u64,
     action: String,
     #[serde(default)]
     tool: String,
+    /// For `open` and `mkdir`: folder names under the remote folder, joined with `/`.
+    #[serde(default)]
+    path: String,
+    /// For `mkdir`: the new folder's name.
+    #[serde(default)]
+    name: String,
 }
 
 /// Tabs the page may open in a minute: a few by hand, never a loop starting hundreds of shells.
@@ -714,6 +725,7 @@ impl Hub {
                 self.record("remote.log.signed_out", &login, request.header("user-agent").unwrap_or(""));
                 Routed::Response(Response::json(200, &json!({ "ok": true })).with("Set-Cookie", expired_cookie(&config)))
             }
+            ("GET", "/api/folders") => Routed::Response(self.folders(request, &config)),
             ("GET", "/api/sessions") => {
                 let voice = self.voice_available();
                 let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
@@ -957,10 +969,81 @@ impl Hub {
 
     /// Wakes a sleeping workspace, or opens a tab in one. Only workspaces the page is shown (the
     /// user's own, not left out of remote access) can be named.
+    /// The subfolders of a folder under the remote folder (`?path=`), for picking one to open.
+    fn folders(&self, request: &Request, config: &Config) -> Response {
+        let Some(root) = &config.folders else { return Response::json(404, &json!({ "error": "not found" })) };
+        let path = request.query_param("path").unwrap_or_default();
+        match super::folders::list(root, &path) {
+            Ok(folders) => Response::json(200, &json!({ "root": super::folders::ROOT_NAME, "path": path, "folders": folders })),
+            Err(err) if matches!(err.kind(), std::io::ErrorKind::InvalidInput | std::io::ErrorKind::NotFound) => {
+                Response::json(404, &json!({ "error": "no such folder" }))
+            }
+            Err(_) => Response::json(500, &json!({ "error": "couldn't read the folder" })),
+        }
+    }
+
+    /// Takes one of the minute's new tabs (a new workspace counts as one); false when they are
+    /// all taken.
+    fn take_new_tab(&self) -> bool {
+        let mut opened = self.new_tabs.lock().unwrap_or_else(|e| e.into_inner());
+        while opened.front().is_some_and(|at| at.elapsed() >= NEW_TAB_WINDOW) {
+            opened.pop_front();
+        }
+        if opened.len() >= MAX_NEW_TABS {
+            return false;
+        }
+        opened.push_back(Instant::now());
+        true
+    }
+
     fn workspace_action(&self, request: &Request) -> Response {
         let Ok(body) = serde_json::from_slice::<WorkspaceBody>(&request.body) else {
             return Response::json(400, &json!({ "error": "bad request" }));
         };
+        let kind = |tool: &str| match tool {
+            "shell" => Some(PaneKind::Shell),
+            "claude" => Some(PaneKind::Claude),
+            "codex" => Some(PaneKind::Codex),
+            _ => None,
+        };
+        // Folders under the remote folder: a new one made, or one opened as a workspace.
+        if matches!(body.action.as_str(), "open" | "mkdir") {
+            let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
+            let Some(root) = &config.folders else { return Response::json(404, &json!({ "error": "not found" })) };
+            let kind = kind(&body.tool);
+            if body.action == "open" && kind.is_none() || body.action == "mkdir" && !body.tool.is_empty() {
+                return Response::json(400, &json!({ "error": "bad request" }));
+            }
+            // Checked first, then counted as a new tab: a page in a loop makes no more folders than
+            // it opens tabs, and a mistyped name costs none.
+            let folder = super::folders::resolve(root, &body.path).and_then(|folder| {
+                if kind.is_none() && !super::folders::valid_name(&body.name) {
+                    return Err(std::io::ErrorKind::InvalidInput.into());
+                }
+                if !self.take_new_tab() {
+                    return Err(std::io::ErrorKind::QuotaExceeded.into());
+                }
+                match kind {
+                    Some(_) => Ok(folder),
+                    None => super::folders::create(root, &body.path, &body.name),
+                }
+            });
+            let folder = match folder {
+                Ok(folder) => folder,
+                Err(err) if err.kind() == std::io::ErrorKind::QuotaExceeded => return Response::json(429, &json!({ "error": "busy" })),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Response::json(409, &json!({ "error": "exists" }));
+                }
+                Err(err) if matches!(err.kind(), std::io::ErrorKind::InvalidInput | std::io::ErrorKind::NotFound) => {
+                    return Response::json(400, &json!({ "error": "bad folder" }));
+                }
+                Err(_) => return Response::json(500, &json!({ "error": "couldn't make the folder" })),
+            };
+            return match kind {
+                Some(kind) => self.queue(Command::OpenFolder { folder, kind }),
+                None => Response::json(200, &json!({ "ok": true })),
+            };
+        }
         let known = self.view.lock().unwrap_or_else(|e| e.into_inner()).workspaces.iter().any(|w| w.id == body.workspace);
         if !known {
             return Response::json(404, &json!({ "error": "no such workspace" }));
@@ -968,24 +1051,19 @@ impl Hub {
         let command = match (body.action.as_str(), body.tool.as_str()) {
             ("wake", "") => Command::Wake { workspace: body.workspace },
             ("new", tool) => {
-                let kind = match tool {
-                    "shell" => PaneKind::Shell,
-                    "claude" => PaneKind::Claude,
-                    "codex" => PaneKind::Codex,
-                    _ => return Response::json(400, &json!({ "error": "bad request" })),
-                };
-                let mut opened = self.new_tabs.lock().unwrap_or_else(|e| e.into_inner());
-                while opened.front().is_some_and(|at| at.elapsed() >= NEW_TAB_WINDOW) {
-                    opened.pop_front();
-                }
-                if opened.len() >= MAX_NEW_TABS {
+                let Some(kind) = kind(tool) else { return Response::json(400, &json!({ "error": "bad request" })) };
+                if !self.take_new_tab() {
                     return Response::json(429, &json!({ "error": "busy" }));
                 }
-                opened.push_back(Instant::now());
                 Command::NewTab { workspace: body.workspace, kind }
             }
             _ => return Response::json(400, &json!({ "error": "bad request" })),
         };
+        self.queue(command)
+    }
+
+    /// Hands a command to the app's next round.
+    fn queue(&self, command: Command) -> Response {
         let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
         if inbox.len() >= 256 {
             return Response::json(429, &json!({ "error": "busy" }));
@@ -1375,7 +1453,7 @@ mod tests {
     }
 
     fn hub(password: &str) -> Arc<Hub> {
-        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None };
+        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None, folders: None };
         Hub::start(config, Some(auth::hash_for_tests(password)), Listener::tcp().unwrap()).unwrap()
     }
 
@@ -1509,7 +1587,7 @@ mod tests {
     fn serves_on_a_private_socket() {
         let base = std::env::temp_dir().join(format!("agentty-hub-test-{}", std::process::id()));
         let path = base.join("remote").join("web.sock");
-        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None };
+        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None, folders: None };
         let hub = Hub::start(config, Some(auth::hash_for_tests("secret-password")), Listener::unix(&path).unwrap()).unwrap();
         let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
@@ -1536,7 +1614,8 @@ mod tests {
 
     #[test]
     fn only_requests_with_the_secret_path_get_in() {
-        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: Some("s3cr3t".into()) };
+        let config =
+            Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: Some("s3cr3t".into()), folders: None };
         let hub = Hub::start(config, Some(auth::hash_for_tests("secret-password")), Listener::tcp().unwrap()).unwrap();
         // What Tailscale forwards: the secret in front of the page's own path.
         let (status, _, body) = send(&hub, &Req::get("/s3cr3t/").raw());
@@ -1757,6 +1836,52 @@ mod tests {
     }
 
     #[test]
+    fn opens_workspaces_in_the_remote_folder_only() {
+        let hub = hub("secret-password");
+        let cookie = sign_in(&hub, "secret-password");
+        let get = |path: &str| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get(path) }.raw());
+        let act = |body: serde_json::Value| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::post("/api/workspace", body) }.raw()).0;
+        assert_eq!(get("/api/folders").0, 404, "no remote folder: nothing to list");
+        assert_eq!(act(json!({ "action": "open", "path": "", "tool": "shell" })), 404);
+        assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "app" })), 404);
+
+        let base = std::env::temp_dir().join(format!("agentty-remote-api-{}-{}", std::process::id(), crate::ui::now_ms()));
+        let root = base.join("AgenttyRemote");
+        let config = hub.config.read().unwrap().clone();
+        hub.set_config(Config { folders: Some(root.clone()), ..config });
+        let (status, _, body) = get("/api/folders");
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("\"folders\":[]"), "made on first use: {body}");
+        assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "app" })), 200);
+        assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "app" })), 409, "already there");
+        assert_eq!(act(json!({ "action": "mkdir", "path": "app", "name": "web" })), 200);
+        assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "x", "tool": "shell" })), 400, "making a folder opens nothing");
+        assert_eq!(act(json!({ "action": "open", "path": "app", "tool": "claude" })), 200);
+        assert_eq!(act(json!({ "action": "open", "path": "app/web", "tool": "codex" })), 200);
+        assert!(get("/api/folders").2.contains("\"folders\":[\"app\"]"));
+        assert!(get("/api/folders?path=app").2.contains("\"folders\":[\"web\"]"));
+        for path in ["..", "../..", "/etc", "app/..", ".ssh", "missing"] {
+            assert_eq!(act(json!({ "action": "open", "path": path, "tool": "shell" })), 400, "{path}");
+            assert_eq!(get(&format!("/api/folders?path={path}")).0, 404, "{path}");
+        }
+        assert_eq!(act(json!({ "action": "mkdir", "path": "", "name": "../out" })), 400);
+        assert_eq!(act(json!({ "action": "open", "path": "app", "tool": "rm -rf" })), 400, "only the known tools");
+        assert_eq!(act(json!({ "action": "open", "path": "app" })), 400, "opened with a known tool only");
+        let made = root.canonicalize().unwrap().join("app");
+        assert_eq!(
+            hub.take_commands(),
+            vec![
+                Command::OpenFolder { folder: made.clone(), kind: PaneKind::Claude },
+                Command::OpenFolder { folder: made.join("web"), kind: PaneKind::Codex }
+            ]
+        );
+        let anonymous = send(&hub, &Req::get("/api/folders").raw()).0;
+        assert_eq!(anonymous, 401, "needs a session");
+        hub.shutdown();
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn signs_in_and_works_then_signs_out() {
         let hub = hub("secret-password");
         hub.publish(Vec::new(), vec![session(7)], Vec::new());
@@ -1818,7 +1943,7 @@ mod tests {
 
     #[test]
     fn a_session_is_bound_to_its_tailscale_login() {
-        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None };
+        let config = Config { owner: Some(OWNER.into()), hosts: vec![HOST.into()], https: true, secret: None, folders: None };
         let hub = Hub::start(config.clone(), Some(auth::hash_for_tests("secret-password")), Listener::tcp().unwrap()).unwrap();
         let cookie = sign_in(&hub, "secret-password");
         // The owner changes (another account signs in to Tailscale on this Mac).

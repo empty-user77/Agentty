@@ -154,6 +154,7 @@ impl Workbench {
         match command {
             Command::Wake { workspace } => return self.remote_wake(*workspace, cx),
             Command::NewTab { workspace, kind } => return self.remote_new_tab(*workspace, *kind, cx),
+            Command::OpenFolder { folder, kind } => return self.remote_open_folder(folder.clone(), *kind, cx),
             // To a chat's lead the page may reach (in a workspace it is allowed in).
             Command::Chat { pane, text } => {
                 if !self.remote_panes().any(|(_, p)| p.read(cx).pane_id == *pane) {
@@ -185,7 +186,7 @@ impl Workbench {
             Command::Resize { cols, rows, .. } => view.set_remote_size(Some((*cols as usize, *rows as usize)), cx),
             Command::Scroll { lines, .. } => view.remote_scroll(*lines, cx),
             Command::Release { .. } => view.set_remote_size(None, cx),
-            Command::Wake { .. } | Command::NewTab { .. } | Command::Chat { .. } => {}
+            Command::Wake { .. } | Command::NewTab { .. } | Command::OpenFolder { .. } | Command::Chat { .. } => {}
         });
         true
     }
@@ -227,6 +228,39 @@ impl Workbench {
         ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
         if !shown {
             ws.active_tab = ws.tabs.len() - 1;
+        }
+        self.persist(cx);
+        cx.notify();
+        true
+    }
+
+    /// A folder under the remote folder (the server checked it) opened from the page: a new tab in
+    /// the workspace already there, otherwise a new workspace at the end of the list. Like a new
+    /// tab, it leaves the desktop on the workspace it shows.
+    fn remote_open_folder(&mut self, folder: std::path::PathBuf, kind: crate::launch::PaneKind, cx: &mut Context<Self>) -> bool {
+        if let Some(id) = self.workspaces.iter().find(|ws| ws.cwd == folder && ws.plugin.is_none() && !ws.remote_hidden).map(|ws| ws.id) {
+            return self.remote_new_tab(id, kind, cx);
+        }
+        let pane = self.spawn_pane(crate::launch::LaunchSpec::new(kind, folder.clone()), cx);
+        let id = self.next_id();
+        self.workspaces.push(super::Workspace {
+            id,
+            name: None,
+            group: None,
+            cwd: folder,
+            tabs: vec![super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false }],
+            active_tab: 0,
+            dormant: None,
+            asleep_on_close: false,
+            closed_tabs: Vec::new(),
+            color: None,
+            plugin: None,
+            remote_hidden: false,
+        });
+        // With nothing open before, the desktop shows it: there is nothing else to show.
+        if self.workspaces.len() == 1 {
+            self.welcome = false;
+            self.active_workspace = 0;
         }
         self.persist(cx);
         cx.notify();
@@ -1295,6 +1329,16 @@ impl Workbench {
                     // Takes effect now: restarting re-reads it (and keeps the password, not the sessions).
                     if settings(cx).remote.enabled {
                         remote::start(cx);
+                    }
+                }),
+            ))
+            .child(row_with_hint(
+                t(cx, "remote.folder"),
+                &tf(cx, "remote.folder_hint", &[("path", &format!("~/{}", remote::folders::ROOT_NAME))]),
+                action_button("remote-open-folder", t(cx, "remote.folder_open"), |_, _, _| {
+                    if let Some(root) = remote::folders::root() {
+                        let _ = std::fs::create_dir_all(&root);
+                        crate::platform::open_folder(&root);
                     }
                 }),
             ))

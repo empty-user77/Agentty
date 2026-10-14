@@ -24,6 +24,7 @@ const STRINGS = {
     nothingWaiting: "Nothing is waiting for you.", nothingWorking: "No agent is working right now.", noPlugins: "No plugins installed.",
     wake: "Wake up", waking: "Waking…", newTab: "New tab", newIn: "New tab in {ws}", cancel: "Cancel",
     terminal: "Terminal", claude: "Claude Code", codex: "Codex", tooManyTabs: "Too many new tabs at once. Wait a minute.",
+    newWorkspace: "New workspace", openHere: "Open this folder with", newFolder: "New folder", folderName: "Folder name", create: "Create", up: "Up", noFolders: "No folders here yet.", folderExists: "A folder with this name is already here.", badFolderName: "Use a plain folder name (no / or leading dot).", folderHint: "Workspaces opened from here live in {root} on the Mac.",
     open: "{n} open", asleep: "Asleep", running: "{n} running",
     pstate: { running: "Running", starting: "Starting", stopped: "Stopped", failed: "Stopped with an error", consent: "Waiting for your OK", off: "Off" },
     astate: { working: "Working", idle: "Idle", error: "Error" },
@@ -45,6 +46,7 @@ const STRINGS = {
     nothingWaiting: "기다리는 요청이 없습니다.", nothingWorking: "지금 작업 중인 에이전트가 없습니다.", noPlugins: "설치된 플러그인이 없습니다.",
     wake: "깨우기", waking: "깨우는 중…", newTab: "새 탭", newIn: "{ws}에 새 탭", cancel: "취소",
     terminal: "터미널", claude: "Claude Code", codex: "Codex", tooManyTabs: "새 탭을 너무 많이 열었습니다. 1분 뒤에 다시 시도하세요.",
+    newWorkspace: "새 작업공간", openHere: "이 폴더를 열 도구", newFolder: "새 폴더", folderName: "폴더 이름", create: "만들기", up: "위로", noFolders: "아직 폴더가 없습니다.", folderExists: "같은 이름의 폴더가 이미 있습니다.", badFolderName: "/나 점(.)으로 시작하지 않는 폴더 이름을 쓰세요.", folderHint: "여기서 여는 작업공간은 Mac의 {root} 폴더 안에 있습니다.",
     open: "{n}개 열림", asleep: "쉬는 중", running: "{n}개 실행 중",
     pstate: { running: "실행 중", starting: "시작하는 중", stopped: "멈춤", failed: "오류로 멈춤", consent: "허용 대기", off: "꺼짐" },
     astate: { working: "작업 중", idle: "대기", error: "오류" },
@@ -66,6 +68,7 @@ const STRINGS = {
     nothingWaiting: "待っている質問はありません。", nothingWorking: "いま作業中のエージェントはありません。", noPlugins: "インストール済みのプラグインはありません。",
     wake: "起こす", waking: "起こしています…", newTab: "新しいタブ", newIn: "{ws} に新しいタブ", cancel: "キャンセル",
     terminal: "ターミナル", claude: "Claude Code", codex: "Codex", tooManyTabs: "新しいタブを開きすぎました。1 分後にもう一度お試しください。",
+    newWorkspace: "新しいワークスペース", openHere: "このフォルダを開くツール", newFolder: "新しいフォルダ", folderName: "フォルダ名", create: "作成", up: "上へ", noFolders: "まだフォルダがありません。", folderExists: "同じ名前のフォルダがすでにあります。", badFolderName: "/ やドット(.)で始まらないフォルダ名にしてください。", folderHint: "ここで開くワークスペースは Mac の {root} フォルダの中にあります。",
     open: "{n} 件 開いています", asleep: "休止中", running: "{n} 件 実行中",
     pstate: { running: "実行中", starting: "起動中", stopped: "停止", failed: "エラーで停止", consent: "許可待ち", off: "オフ" },
     astate: { working: "作業中", idle: "待機", error: "エラー" },
@@ -87,6 +90,7 @@ const STRINGS = {
     nothingWaiting: "没有等待你的请求。", nothingWorking: "现在没有正在工作的代理。", noPlugins: "没有安装插件。",
     wake: "唤醒", waking: "正在唤醒…", newTab: "新标签页", newIn: "在 {ws} 中新建标签页", cancel: "取消",
     terminal: "终端", claude: "Claude Code", codex: "Codex", tooManyTabs: "新建的标签页太多了，请一分钟后再试。",
+    newWorkspace: "新建工作区", openHere: "用以下工具打开此文件夹", newFolder: "新建文件夹", folderName: "文件夹名称", create: "创建", up: "上一级", noFolders: "这里还没有文件夹。", folderExists: "已有同名文件夹。", badFolderName: "请使用不含 / 且不以点(.)开头的文件夹名。", folderHint: "在这里打开的工作区位于 Mac 的 {root} 文件夹中。",
     open: "{n} 个已打开", asleep: "休眠中", running: "{n} 个运行中",
     pstate: { running: "运行中", starting: "正在启动", stopped: "已停止", failed: "因错误停止", consent: "等待你的允许", off: "已关闭" },
     astate: { working: "工作中", idle: "空闲", error: "错误" },
@@ -127,6 +131,10 @@ const state = {
   waking: null,
   // The workspace the new-tab sheet is open for.
   sheetFor: null,
+  // The folder sheet: the folder shown (names under the remote folder), what is in it, and a
+  // workspace asked for there and not seen yet ({ ids, tabs }: what was there when asked).
+  folderSheet: null,
+  pendingFolder: null,
   tab: 0,
   pane: null,
   events: null,
@@ -422,6 +430,18 @@ function onOverview(data) {
     state.workspace = pending.id;
     return selectTab(pending.tabs.length - 1);
   }
+  // A workspace opened from the folder sheet is here: show it (or the tab it got, when its
+  // folder was open already).
+  if (state.pendingFolder) {
+    const { ids, tabs } = state.pendingFolder;
+    const fresh = state.workspaces.find((w) => !ids.includes(w.id));
+    const grown = state.workspaces.find((w) => tabs[w.id] != null && w.tabs.length > tabs[w.id]);
+    if (fresh || grown) {
+      state.pendingFolder = null;
+      state.workspace = (fresh || grown).id;
+      return selectTab((fresh || grown).tabs.length - 1);
+    }
+  }
   // A workspace woken up here has its terminals now: show it if it is still the one on screen.
   const woken = state.waking != null && workspace(state.waking);
   if (woken && !woken.sleeping) {
@@ -562,11 +582,18 @@ function renderBadge() {
   badge.textContent = elsewhere;
 }
 
+function newWorkspaceButton() {
+  const b = el("button", "new-workspace", "+ " + T.newWorkspace);
+  b.type = "button";
+  b.addEventListener("click", () => openFolderSheet(""));
+  return b;
+}
+
 function renderWorkspaces() {
   const root = $("workspaces");
   root.replaceChildren();
   if (!state.workspaces.length) {
-    root.append(el("div", "empty-note", T.noWorkspaces));
+    root.append(el("div", "empty-note", T.noWorkspaces), newWorkspaceButton());
     return;
   }
   let lastGroup;
@@ -582,6 +609,7 @@ function renderWorkspaces() {
     lastGroup = ws.group;
     root.append(workspaceCard(ws));
   }
+  root.append(newWorkspaceButton());
 }
 
 function workspaceCard(ws) {
@@ -924,6 +952,7 @@ function renderHome() {
     row.append(actions);
     wsBox.append(row);
   }
+  wsBox.append(newWorkspaceButton());
 
   const pluginBox = section(T.plugins, state.plugins.length || null);
   if (!state.plugins.length) pluginBox.append(el("div", "empty-note", T.noPlugins));
@@ -1021,6 +1050,127 @@ async function newTab(id, tool) {
   // what shows now. Counting what shows is enough: any growth means the app took the request.
   state.pendingNew = { workspace: id, count: ws.sleeping ? 0 : ws.tabs.length };
   if (!(await workspaceAction({ workspace: id, action: "new", tool }))) state.pendingNew = null;
+}
+
+// ---- New workspaces, in folders under the remote folder on the Mac ----
+
+const joinPath = (path, name) => (path ? path + "/" + name : name);
+
+async function openFolderSheet(path) {
+  closeDrawers();
+  closeSheet();
+  let answer;
+  try {
+    answer = await api("/api/folders?path=" + encodeURIComponent(path));
+  } catch (_) {
+    return; // offline; the dot says so
+  }
+  if (answer.status === 401) return showLogin();
+  // Gone since (or never there): back to the top.
+  if (answer.status === 404 && path) return openFolderSheet("");
+  if (answer.status !== 200) return alert(T.failed);
+  state.folderSheet = { path, root: answer.data.root, folders: answer.data.folders || [] };
+  renderFolderSheet();
+  $("folder-sheet").hidden = false;
+  $("scrim").hidden = false;
+}
+
+function renderFolderSheet() {
+  const sheet = state.folderSheet;
+  if (!sheet) return;
+  $("folder-title").textContent = T.newWorkspace;
+  const crumbs = $("folder-path");
+  crumbs.replaceChildren();
+  const names = sheet.path ? sheet.path.split("/") : [];
+  [sheet.root, ...names].forEach((name, i) => {
+    if (i) crumbs.append(el("span", "sep", "/"));
+    const b = el("button", "crumb", name);
+    b.type = "button";
+    b.disabled = i === names.length;
+    b.addEventListener("click", () => openFolderSheet(names.slice(0, i).join("/")));
+    crumbs.append(b);
+  });
+  const list = $("folder-list");
+  list.replaceChildren();
+  if (sheet.path) {
+    const up = el("button", "folder-row up", "↑ " + T.up);
+    up.type = "button";
+    up.addEventListener("click", () => openFolderSheet(names.slice(0, -1).join("/")));
+    list.append(up);
+  }
+  if (!sheet.folders.length) list.append(el("div", "empty-note", T.noFolders));
+  for (const name of sheet.folders) {
+    const b = el("button", "folder-row");
+    b.type = "button";
+    b.append(el("span", "folder-icon"), el("span", "folder-name", name), el("span", "chevron", "›"));
+    b.addEventListener("click", () => openFolderSheet(joinPath(sheet.path, name)));
+    list.append(b);
+  }
+  $("folder-new-name").placeholder = T.folderName;
+  $("folder-new-name").setAttribute("aria-label", T.newFolder);
+  $("folder-create").textContent = T.create;
+  $("folder-error").textContent = "";
+  $("folder-open-label").textContent = T.openHere;
+  const choices = $("folder-choices");
+  choices.replaceChildren();
+  for (const [tool, label] of [["shell", T.terminal], ["claude", T.claude], ["codex", T.codex]]) {
+    const b = el("button", "sheet-choice");
+    b.type = "button";
+    b.append(el("span", "tool", TOOL_MARK[tool] || "•"), el("span", null, label));
+    b.addEventListener("click", () => openFolder(sheet.path, tool));
+    choices.append(b);
+  }
+  $("folder-hint").textContent = T.folderHint.replace("{root}", "~/" + sheet.root);
+  $("folder-cancel").textContent = T.cancel;
+}
+
+function closeFolderSheet() {
+  state.folderSheet = null;
+  $("folder-sheet").hidden = true;
+  $("scrim").hidden = true;
+}
+
+async function createFolder() {
+  const sheet = state.folderSheet;
+  const input = $("folder-new-name");
+  const name = input.value.trim();
+  if (!sheet || !name) return input.focus();
+  const error = $("folder-error");
+  if (name.startsWith(".") || /[\/\\:*?"<>|]/.test(name)) {
+    error.textContent = T.badFolderName;
+    return;
+  }
+  let answer;
+  try {
+    answer = await api("/api/workspace", { action: "mkdir", path: sheet.path, name });
+  } catch (_) {
+    return;
+  }
+  if (answer.status === 401) return showLogin();
+  if (answer.status === 409) error.textContent = T.folderExists;
+  else if (answer.status === 400) error.textContent = T.badFolderName;
+  else if (answer.status === 429) error.textContent = T.tooManyTabs;
+  else if (answer.status !== 200) error.textContent = T.failed;
+  else {
+    input.value = "";
+    openFolderSheet(joinPath(sheet.path, name));
+  }
+}
+
+async function openFolder(path, tool) {
+  closeFolderSheet();
+  const tabs = {};
+  for (const w of state.workspaces) tabs[w.id] = w.sleeping ? 0 : w.tabs.length;
+  state.pendingFolder = { ids: state.workspaces.map((w) => w.id), tabs };
+  try {
+    const { status } = await api("/api/workspace", { action: "open", path, tool });
+    if (status === 401) showLogin();
+    else if (status === 429) alert(T.tooManyTabs);
+    else if (status !== 200) alert(T.failed);
+    if (status !== 200) state.pendingFolder = null;
+  } catch (_) {
+    state.pendingFolder = null;
+  }
 }
 
 // ---- Drawers ----
@@ -1882,6 +2032,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("scrim").addEventListener("click", () => {
     closeDrawers();
     closeSheet();
+    closeFolderSheet();
   });
   $("home-label").textContent = T.home;
   $("home-link").addEventListener("click", () => {
@@ -1889,8 +2040,17 @@ window.addEventListener("DOMContentLoaded", () => {
     goHome();
   });
   $("new-cancel").addEventListener("click", closeSheet);
+  $("folder-cancel").addEventListener("click", closeFolderSheet);
+  $("folder-create").addEventListener("click", createFolder);
+  $("folder-new-name").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      createFolder();
+    }
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.sheetFor != null) closeSheet();
+    if (e.key === "Escape" && state.folderSheet) closeFolderSheet();
   });
   $("notify-button").addEventListener("click", async () => {
     await Notification.requestPermission();

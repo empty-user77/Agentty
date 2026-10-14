@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Remote access: open a new workspace from the page. **+ New workspace** browses the folders in `~/AgenttyRemote` on
+  the Mac, makes new ones there, and starts a terminal, Claude Code or Codex in the one you pick. The page can't
+  reach any folder outside it.
+
 ### Fixed
 - Remote access recovers by itself when its page stops answering while Tailscale stays connected (after sleep or a
   network change, for example): it checks the page every half minute and when the Mac wakes, and restarts when it
