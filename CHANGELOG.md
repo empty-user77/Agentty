@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Remote access: open a new workspace from the page. **+ New workspace** browses the folders in `~/AgenttyRemote` on
+  the Mac, makes new ones there, and starts a terminal, Claude Code or Codex in the one you pick. The page can't
+  reach any folder outside it.
+
 ### Changed
 - Board: Jira issues are added one at a time from **Add from Jira**: paste the issue's address or type its key
   (`AB-12`). The JQL search in Settings → Development board is gone; **Test the connection** there checks the site,
@@ -14,8 +19,6 @@ All notable changes to this project are documented here. The format follows
 - Text longer than a one-line field (a pasted API token, a long address) no longer spills past the field: it slides
   to keep the caret in view.
 - The right-click menu of a tab, and the TODO list, scroll on a short window instead of running off the screen.
-
-### Fixed
 - Text selected in Codex's prompt (and in other programs that keep redrawing the same lines) stays selected and can
   be copied; before, the redraw cleared the selection right away.
 - Remote access recovers by itself when its page stops answering while Tailscale stays connected (after sleep or a

@@ -20,6 +20,7 @@
 
 pub mod auth;
 pub mod conn;
+pub mod folders;
 pub mod http;
 pub mod server;
 pub mod snapshot;
@@ -308,7 +309,7 @@ pub fn start(cx: &mut App) {
             // Signed out, disconnected or quit: no page without Tailscale.
             let password = password.ok_or(Problem::NoPassword)?;
             if dev {
-                return Ok((Config { owner: None, hosts: Vec::new(), https: false, secret: None }, password));
+                return Ok((Config { owner: None, hosts: Vec::new(), https: false, secret: None, folders: folders::root() }, password));
             }
             if !status.installed {
                 return Err(Problem::NotInstalled);
@@ -323,7 +324,7 @@ pub fn start(cx: &mut App) {
             if https_port == 443 {
                 hosts.push(dns);
             }
-            Ok((Config { owner: Some(login), hosts, https: true, secret: None }, password))
+            Ok((Config { owner: Some(login), hosts, https: true, secret: None, folders: folders::root() }, password))
         })();
         let _ = cx.update(|cx| cx.global_mut::<Remote>().tailscale = Some(status.clone()));
         let (config, password) = match checked {

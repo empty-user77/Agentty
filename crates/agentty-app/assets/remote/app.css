@@ -286,6 +286,28 @@ button:disabled { opacity: .5; cursor: default; }
 .sheet-choices { display: flex; flex-direction: column; gap: 6px; }
 .sheet-choice { display: flex; align-items: center; gap: 10px; text-align: left; padding: 10px; }
 
+/* New workspace: folders under the remote folder on the Mac */
+.new-workspace { width: 100%; margin-top: 8px; color: var(--muted); background: transparent; border-style: dashed; text-align: left; }
+.folder-sheet { max-height: 85dvh; overflow-y: auto; }
+@media (min-width: 700px) { .folder-sheet { top: 12%; width: 420px; } }
+.folder-path { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-size: 13px; color: var(--muted); }
+.folder-path .crumb { background: transparent; border: none; padding: 2px 4px; color: var(--accent); overflow-wrap: anywhere; }
+.folder-path .crumb:disabled { color: var(--text); opacity: 1; font-weight: 600; }
+.folder-list { display: flex; flex-direction: column; gap: 4px; max-height: 38dvh; overflow-y: auto; }
+.folder-list .empty-note { padding: 6px 2px; }
+.folder-row { display: flex; align-items: center; gap: 10px; text-align: left; padding: 9px 10px; }
+.folder-row.up { color: var(--muted); }
+.folder-icon { width: 16px; height: 12px; border-radius: 2px; background: var(--accent); opacity: .8; flex-shrink: 0; }
+.folder-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.folder-row .chevron { color: var(--muted); }
+.folder-new { display: flex; gap: 6px; }
+/* 16px at least: iOS zooms into smaller inputs. */
+.folder-new input { flex: 1; min-width: 0; font-size: 16px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.folder-error { color: var(--error); font-size: 13px; min-height: 0; }
+.folder-error:empty { display: none; }
+.folder-label { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.folder-hint { font-size: 12px; color: var(--muted); }
+
 /* A chat's lead, shown as its chat. */
 .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chat-head { flex-shrink: 0; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
