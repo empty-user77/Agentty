@@ -18,6 +18,8 @@ The page is laid out like Agentty itself:
 
 **New tabs** — **+** at the end of the tabs (or beside a workspace on Home) opens a new tab in that workspace with a terminal, Claude Code or Codex, started in the workspace's folder. The page switches to it.
 
+**New workspaces** — **+ New workspace** (under the workspace list on Home and in the ☰ menu) opens a new workspace in a folder of `~/AgenttyRemote` on your Mac, with a terminal, Claude Code or Codex. Browse its folders, make a new one, then pick what to start; the page switches to it. The page can't reach any folder outside `~/AgenttyRemote`. Agentty makes that folder the first time, and **Show in Finder** on the Remote access page opens it on the Mac.
+
 **Sleeping workspaces** — a workspace that is asleep in Agentty shows **Wake up**: its saved tabs start again, and the page shows them. Neither changes what your Mac's screen shows.
 
 **Plugins** — Home lists your installed plugins with their state (running, stopped, stopped with an error) and what each automation is doing right now. The page only shows them: plugin workspaces don't open on the page, and plugins can't be started or stopped from it.

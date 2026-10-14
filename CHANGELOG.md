@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Remote access: open a new workspace from the page. **+ New workspace** browses the folders in `~/AgenttyRemote` on
+  the Mac, makes new ones there, and starts a terminal, Claude Code or Codex in the one you pick. The page can't
+  reach any folder outside it.
+
 ### Fixed
 - Text selected in Codex's prompt (and in other programs that keep redrawing the same lines) stays selected and can
   be copied; before, the redraw cleared the selection right away.
