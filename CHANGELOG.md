@@ -14,6 +14,8 @@ All notable changes to this project are documented here. The format follows
 - Board: Jira issues are added one at a time from **Add from Jira**: paste the issue's address or type its key
   (`AB-12`). The JQL search in Settings → Development board is gone; **Test the connection** there checks the site,
   e-mail and API token.
+- Board: the Jira site, e-mail and API token are kept when you press **Save** (or Enter in a field), not with every
+  key typed.
 
 ### Fixed
 - Text longer than a one-line field (a pasted API token, a long address) no longer spills past the field: it slides

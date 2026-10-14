@@ -68,36 +68,54 @@ impl Workbench {
             let site = text(jira.site, "https://team.atlassian.net", window, cx);
             let email = text(jira.email, "you@example.com", window, cx);
             let token = cx.new(|cx| TextInput::localized("", "board.jira_token_placeholder", window, cx).masked());
-            // Typed values are kept as they are typed; the token only with Save or Enter.
-            let keep = |input: &Entity<TextInput>, put: fn(&mut crate::settings::JiraSettings, String), cx: &mut Context<Self>| {
-                cx.subscribe(input, move |_, input, event: &TextInputEvent, cx| {
-                    if matches!(event, TextInputEvent::Changed) {
-                        let value = input.read(cx).text().trim().to_string();
-                        update_settings(cx, move |s| put(&mut s.board.jira, value));
-                    }
+            // Nothing is kept while typing: Save (or Enter in any field) keeps all three at once.
+            let watch = |input: &Entity<TextInput>, cx: &mut Context<Self>| {
+                cx.subscribe(input, |this, _, event: &TextInputEvent, cx| match event {
+                    TextInputEvent::Confirmed => this.save_jira(cx),
+                    // Redrawn so Save shows whether there is something to keep.
+                    TextInputEvent::Changed => cx.notify(),
+                    _ => {}
                 })
             };
-            let subscriptions = vec![
-                keep(&site, |j, v| j.site = v, cx),
-                keep(&email, |j, v| j.email = v, cx),
-                cx.subscribe(&token, |this, _, event: &TextInputEvent, cx| {
-                    if matches!(event, TextInputEvent::Confirmed) {
-                        this.save_jira_token(cx);
-                    }
-                }),
-            ];
+            let subscriptions = vec![watch(&site, cx), watch(&email, cx), watch(&token, cx)];
             self.board_jira.fields = Some(JiraFields { site, email, token, _subscriptions: subscriptions });
         }
         self.board_jira.fields.as_ref().expect("made above")
     }
 
-    fn save_jira_token(&mut self, cx: &mut Context<Self>) {
-        let Some(fields) = &self.board_jira.fields else { return };
-        let token = fields.token.read(cx).text().trim().to_string();
-        if token.is_empty() {
+    /// What the fields hold, trimmed: site, e-mail and a newly typed token (empty when none).
+    fn jira_typed(&self, cx: &Context<Self>) -> Option<(String, String, String)> {
+        let fields = self.board_jira.fields.as_ref()?;
+        let read = |input: &Entity<TextInput>| input.read(cx).text().trim().to_string();
+        Some((read(&fields.site), read(&fields.email), read(&fields.token)))
+    }
+
+    /// Whether Save has anything to keep.
+    fn jira_unsaved(&self, cx: &Context<Self>) -> bool {
+        let Some((site, email, token)) = self.jira_typed(cx) else { return false };
+        let jira = &crate::settings::settings(cx).board.jira;
+        site != jira.site || email != jira.email || !token.is_empty()
+    }
+
+    /// Keeps the site and e-mail in the settings and a newly typed token in the Keychain (in the
+    /// background: the Keychain may ask the user or be slow).
+    fn save_jira(&mut self, cx: &mut Context<Self>) {
+        if self.board_jira.busy {
             return;
         }
-        fields.token.update(cx, |input, cx| input.set_text("", cx));
+        let Some((site, email, token)) = self.jira_typed(cx) else { return };
+        update_settings(cx, move |s| {
+            s.board.jira.site = site;
+            s.board.jira.email = email;
+        });
+        if token.is_empty() {
+            self.board_jira.message = Some((true, t(cx, "board.jira_saved").to_string()));
+            cx.notify();
+            return;
+        }
+        if let Some(fields) = &self.board_jira.fields {
+            fields.token.update(cx, |input, cx| input.set_text("", cx));
+        }
         self.board_jira.busy = true;
         cx.spawn(async move |this, cx| {
             let saved = cx.background_spawn(async move { agentty_bridge::jira::store_token(&token) }).await;
@@ -106,7 +124,7 @@ impl Workbench {
                 this.board_jira.message = Some(match saved {
                     Ok(()) => {
                         this.board_jira.token_saved = Some(true);
-                        (true, t(cx, "board.jira_token_saved").to_string())
+                        (true, t(cx, "board.jira_saved").to_string())
                     }
                     Err(err) => (false, super::board::jira_error_text(&err, cx)),
                 });
@@ -160,7 +178,7 @@ impl Workbench {
         .detach();
     }
 
-    /// Runs the search once and says how many issues it found.
+    /// Signs in with the saved settings and says as whom.
     fn check_jira(&mut self, cx: &mut Context<Self>) {
         let jira = crate::settings::settings(cx).board.jira.clone();
         self.board_jira.busy = true;
@@ -295,23 +313,14 @@ impl Workbench {
             };
             let saved = self.board_jira.token_saved == Some(true);
             let busy = self.board_jira.busy;
-            let token_row = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(field_box(&token))
-                .child(action_button(
-                    "board-jira-token-save",
-                    t(cx, "board.save"),
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.save_jira_token(cx)),
+            let unsaved = self.jira_unsaved(cx);
+            let token_row = div().flex().items_center().gap_2().child(field_box(&token)).when(saved, |d| {
+                d.child(action_button(
+                    "board-jira-token-delete",
+                    t(cx, "board.jira_token_delete"),
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.delete_jira_token(cx)),
                 ))
-                .when(saved, |d| {
-                    d.child(action_button(
-                        "board-jira-token-delete",
-                        t(cx, "board.jira_token_delete"),
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.delete_jira_token(cx)),
-                    ))
-                });
+            });
             jira = jira
                 .child(labelled(t(cx, "board.jira_site"), field_box(&site).into_any_element()))
                 .child(labelled(t(cx, "board.jira_email"), field_box(&email).into_any_element()))
@@ -324,6 +333,14 @@ impl Workbench {
                         .flex()
                         .items_center()
                         .gap_2()
+                        .child(
+                            action_button(
+                                "board-jira-save",
+                                t(cx, "board.save"),
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.save_jira(cx)),
+                            )
+                            .when(!unsaved, |b| b.opacity(0.5)),
+                        )
                         .child(action_button(
                             "board-jira-check",
                             t(cx, "board.jira_check"),
