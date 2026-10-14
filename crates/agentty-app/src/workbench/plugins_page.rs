@@ -73,6 +73,8 @@ pub struct PluginsPage {
     creating: bool,
     tab: Tab,
     confirm_uninstall: Option<String>,
+    /// A plugin cleaning up before it is uninstalled (`plugin/uninstall`).
+    uninstalling: Option<String>,
     /// A plugin whose update wants more than it had, shown once before it is taken.
     confirm_update: Option<String>,
     busy: bool,
@@ -439,6 +441,39 @@ impl Workbench {
 
     fn uninstall_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         self.plugins_page.confirm_uninstall = None;
+        if self.plugins_page.uninstalling.is_some() {
+            return;
+        }
+        // A plugin that asked to clean up first (a helper program it installed) gets a few seconds.
+        let Some(answers) = plugins::ask_to_uninstall(id, cx) else { return self.remove_plugin(id, cx) };
+        self.plugins_page.uninstalling = Some(id.to_string());
+        cx.notify();
+        let id = id.to_string();
+        cx.spawn(async move |this, cx| {
+            let deadline = std::time::Instant::now() + plugins::UNINSTALL_TIMEOUT;
+            let answer = loop {
+                match answers.try_recv() {
+                    Ok(answer) => break Some(answer),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break None,
+                    Err(std::sync::mpsc::TryRecvError::Empty) if std::time::Instant::now() >= deadline => break None,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
+                cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let line = match answer {
+                    Some(answer) => format!("cleaned up before it was uninstalled: {answer}"),
+                    None => format!("did not clean up within {}s; uninstalled anyway", plugins::UNINSTALL_TIMEOUT.as_secs()),
+                };
+                plugins::log(&id, line, cx);
+                this.plugins_page.uninstalling = None;
+                this.remove_plugin(&id, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn remove_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         // Read before it goes: afterwards there is nothing left to ask what it was called.
         let name = plugins::plugin(cx, id).map_or_else(|| id.to_string(), |plugin| plugin.name().to_string());
         plugins::stop(id, cx);
@@ -1228,8 +1263,16 @@ impl Workbench {
                 }),
             ));
         }
+        let removing = self.plugins_page.uninstalling.as_deref() == Some(plugin.id.as_str());
+        let label = if removing {
+            "plugins.uninstalling"
+        } else if confirming {
+            "plugins.confirm_uninstall"
+        } else {
+            "plugins.uninstall"
+        };
         row.child(
-            action_button(button_id("uninstall"), t(cx, if confirming { "plugins.confirm_uninstall" } else { "plugins.uninstall" }), {
+            action_button(button_id("uninstall"), t(cx, label), {
                 let id = id.clone();
                 cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if confirming {

@@ -147,6 +147,19 @@ pub fn call(pane: u64, plugin_id: &str, tool: &str, arguments: Value, reply: Sen
     .detach();
 }
 
+/// Sends `method` as a request to a running plugin; its answer (or that it stopped) arrives on the
+/// receiver, as a socket reply line.
+pub fn ask(plugin_id: &str, method: &str, params: Value, cx: &mut App) -> Option<std::sync::mpsc::Receiver<String>> {
+    let state = host_mut(cx);
+    let request_id = state.next_request;
+    state.next_request += 1;
+    let process = state.runtimes.get(plugin_id).and_then(|r| r.process.as_ref())?;
+    process.send(request(request_id, method, params));
+    let (reply, answers) = std::sync::mpsc::channel();
+    state.tool_calls.insert(request_id, PendingCall { plugin: plugin_id.to_string(), reply });
+    Some(answers)
+}
+
 /// Delivers a plugin's answer to a tool call. Returns whether `request_id` was one (an answer to
 /// something else Agentty asked, `initialize`, is not).
 pub(super) fn answered(plugin_id: &str, request_id: &Value, result: Result<Value, String>, cx: &mut App) -> bool {

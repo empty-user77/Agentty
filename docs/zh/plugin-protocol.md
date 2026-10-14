@@ -34,6 +34,7 @@ Agentty 以插件文件夹作为工作目录启动程序：
 | `url/open` | 通知 | `{ path, query, url, context }` |
 | `pane/status` | 通知 | `{ paneId, status, running, agent, title, cwd }` —— 这个插件启动的某个窗格状态变了（`workspace.read`，API 2） |
 | `tools/call` | 请求 —— 需要应答 | `{ name, arguments, context }` —— 某个 AI 智能体在调用工具（`mcp.tools`，API 5） |
+| `plugin/uninstall` | 请求 — 需应答 | `{ context }` — 用户正在卸载插件；仅当清单的 `activationEvents` 含 `onUninstall` 时发送，必要时先启动它。删除它放在数据文件夹之外的东西（例如它安装的辅助程序）后应答。Agentty 最多等待 5 秒，之后无论如何都会删除 |
 | `shutdown` | 通知 | `{}` |
 
 `initialize` 最先到达，紧接着是启动该插件的那件事（命令、打开面板或链接）。对 `initialize` 用任意结果应答即可，例如 `{}`。
