@@ -5,10 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-10-14
+
 ### Added
 - Remote access: open a new workspace from the page. **+ New workspace** browses the folders in `~/AgenttyRemote` on
   the Mac, makes new ones there, and starts a terminal, Claude Code or Codex in the one you pick. The page can't
   reach any folder outside it.
+- Plugins can clean up before they are uninstalled: a plugin that lists `onUninstall` in `activationEvents` gets
+  `plugin/uninstall` and up to 5 seconds to remove what it installed outside its data folder.
 
 ### Changed
 - Board: Jira issues are added one at a time from **Add from Jira**: paste the issue's address or type its key
