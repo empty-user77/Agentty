@@ -392,7 +392,7 @@ strings! {
     "board.jira_token" => ["API token", "API 토큰", "API トークン", "API 令牌"],
     "board.jira_token_is_saved" => ["API token (saved in the Keychain; type a new one to replace it)", "API 토큰 (Keychain에 저장됨, 바꾸려면 새로 입력)", "API トークン（キーチェーンに保存済み。置き換えるには新しく入力）", "API 令牌（已保存在钥匙串中，输入新令牌即可替换）"],
     "board.jira_token_placeholder" => ["Paste the API token", "API 토큰 붙여넣기", "API トークンを貼り付け", "粘贴 API 令牌"],
-    "board.jira_token_saved" => ["API token saved in the Keychain.", "API 토큰을 Keychain에 저장했습니다.", "API トークンをキーチェーンに保存しました。", "API 令牌已保存到钥匙串。"],
+    "board.jira_saved" => ["Jira settings saved.", "Jira 설정을 저장했습니다.", "Jira の設定を保存しました。", "已保存 Jira 设置。"],
     "board.jira_token_delete" => ["Remove", "삭제", "削除", "删除"],
     "board.jira_token_how" => ["Create a token at id.atlassian.com → Security → API tokens. It is kept in the Keychain and only sent to the site above.", "토큰은 id.atlassian.com → 보안 → API 토큰에서 만듭니다. Keychain에 보관되고 위 사이트로만 전송됩니다.", "トークンは id.atlassian.com → セキュリティ → API トークンで作成します。キーチェーンに保管され、上のサイトにだけ送られます。", "在 id.atlassian.com → 安全 → API 令牌中创建令牌。它保存在钥匙串中，只会发送到上面的站点。"],
     "board.jira_check" => ["Test the connection", "연결 확인", "接続をテスト", "测试连接"],
