@@ -1110,14 +1110,14 @@ fn open_window(slot: usize, cx: &mut App) -> Option<gpui::WindowHandle<Workbench
     });
     let options = WindowOptions {
         window_bounds: Some(window_bounds),
-        // macOS draws the traffic lights over Agentty's own title bar; Windows and Linux keep the
-        // system title bar (Linux asks for server-side decorations; see `render_title_bar`).
+        // macOS draws the traffic lights over Agentty's own title bar; Windows and X11 keep the
+        // system title bar, Wayland gets Agentty's (see `platform::decorations`).
         titlebar: Some(TitlebarOptions {
             title: Some("Agentty".into()),
             appears_transparent: cfg!(target_os = "macos"),
             traffic_light_position: Some(point(px(12.), px(11.))),
         }),
-        window_decorations: (!cfg!(target_os = "macos")).then_some(gpui::WindowDecorations::Server),
+        window_decorations: platform::decorations::requested(cx.compositor_name()),
         window_min_size: Some(min_size),
         ..Default::default()
     };

@@ -523,7 +523,7 @@ impl Workbench {
         use gpui::{div, prelude::*, px};
         let prefs = crate::settings::settings(cx);
         let (panel_width, terminal_height) = (prefs.plugin_workspace_panel_width, prefs.plugin_workspace_terminal_height);
-        let panel = self.render_plugin_panel_contents(plugin, cx);
+        let panel = self.render_plugin_panel_contents(plugin, false, cx);
         let browser = self.render_browser(cx);
         let has_browser = browser.is_some();
         let handle = |id: &'static str, vertical: bool| {

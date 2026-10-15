@@ -26,8 +26,9 @@ impl gpui::Render for PluginWindow {
             window.remove_window();
             return div();
         };
-        let contents = workbench.update(cx, |workbench, cx| workbench.render_plugin_panel_contents(&plugin, cx));
+        let contents = workbench.update(cx, |workbench, cx| workbench.render_plugin_panel_contents(&plugin, true, cx));
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -35,6 +36,8 @@ impl gpui::Render for PluginWindow {
             .text_color(hex(Chrome::FOREGROUND))
             .font_family(".SystemUIFont")
             .children(contents)
+            // Last, so the window's edges stay grabbable over the panel.
+            .children(crate::platform::decorations::resize_edges(window))
     }
 }
 
@@ -108,6 +111,8 @@ impl Workbench {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(origin, size(px(WIDTH), px(HEIGHT))))),
             titlebar: Some(gpui::TitlebarOptions { title: Some(title.into()), ..Default::default() }),
+            // On Wayland the panel's header is the title bar (see `platform::decorations`).
+            window_decorations: crate::platform::decorations::requested(cx.compositor_name()),
             focus: true,
             show: true,
             ..Default::default()
@@ -164,7 +169,11 @@ impl Workbench {
         if let Some(handle) = self.plugin_windows.remove(plugin) {
             // Read by the release observer above, so this close is not taken for the user's.
             self.plugin_windows_closing.insert(plugin.to_string());
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            // Deferred: the close button in the window's own header runs while that window is
+            // being updated, and updating it again from there fails, leaving the window open.
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            });
         }
     }
 }

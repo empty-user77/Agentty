@@ -133,10 +133,10 @@ impl Workbench {
     }
 
     /// Agentty's own title bar. macOS draws the traffic lights over it; Windows and Linux use the
-    /// system title bar, except Linux compositors without server-side decorations (GNOME on
-    /// Wayland), where this bar also moves the window and carries its buttons.
+    /// system title bar, except on Wayland (see `platform::decorations`), where this bar also
+    /// moves the window and carries its buttons.
     pub(super) fn render_title_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let client_side = !cfg!(target_os = "macos") && matches!(window.window_decorations(), gpui::Decorations::Client { .. });
+        let client_side = crate::platform::decorations::client_side(window);
         if !cfg!(target_os = "macos") && !client_side {
             return div().into_any_element();
         }
@@ -156,10 +156,17 @@ impl Workbench {
             .text_color(hex(Chrome::MUTED))
             .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, _| {
                 if event.click_count == 2 {
+                    // macOS only; Agentty's own frame maximises like a system title bar.
                     window.titlebar_double_click();
+                    if client_side {
+                        window.zoom_window();
+                    }
                 } else if client_side {
                     window.start_window_move();
                 }
+            })
+            .when(client_side, |bar| {
+                bar.on_mouse_down(MouseButton::Right, |event: &MouseDownEvent, window, _| window.show_window_menu(event.position))
             })
             .child(if title.is_empty() { "Agentty".to_string() } else { format!("{title} — Agentty") })
             // Notifications live at the far right of the title bar, clear of everything else.

@@ -99,7 +99,43 @@ fn translate_binding<'a>(keys: &'a str, context: Option<&str>) -> Cow<'a, str> {
         return Cow::Borrowed(keys);
     }
     let text_field = context.is_some_and(|c| TEXT_CONTEXTS.contains(&c));
-    Cow::Owned(format(translate(chord, key, text_field), key))
+    let chord = translate(chord, key, text_field);
+    let (chord, key) = if cfg!(any(target_os = "linux", target_os = "freebsd")) { as_typed(chord, key) } else { (chord, key) };
+    Cow::Owned(format(chord, key))
+}
+
+/// gpui on Linux reports Shift with a punctuation or digit key as the character it types and
+/// drops the Shift (Ctrl+Shift+[ arrives as `ctrl-{`), so a binding has to be written that way to
+/// ever match. The characters are a US layout's, the layout these bindings are written for.
+fn as_typed(chord: Chord, key: &str) -> (Chord, &str) {
+    let typed = match key {
+        "[" => "{",
+        "]" => "}",
+        "," => "<",
+        "." => ">",
+        "/" => "?",
+        ";" => ":",
+        "'" => "\"",
+        "`" => "~",
+        "\\" => "|",
+        "-" => "_",
+        "=" => "+",
+        "1" => "!",
+        "2" => "@",
+        "3" => "#",
+        "4" => "$",
+        "5" => "%",
+        "6" => "^",
+        "7" => "&",
+        "8" => "*",
+        "9" => "(",
+        "0" => ")",
+        _ => return (chord, key),
+    };
+    if !chord.shift {
+        return (chord, key);
+    }
+    (Chord { shift: false, ..chord }, typed)
 }
 
 /// Whether a click with these modifiers opens links (⌘-click on macOS, Ctrl-click elsewhere).
@@ -219,6 +255,24 @@ mod tests {
         assert_eq!(t("ctrl-tab"), "ctrl-tab");
         assert_eq!(translate_binding("cmd-c", Some("TextInput")), "ctrl-c");
         assert_eq!(parse("cmd--"), (Chord { cmd: true, ..Chord::default() }, "-"));
+    }
+
+    #[test]
+    fn shifted_punctuation_is_bound_as_typed() {
+        let t = |keys: &str| {
+            let (chord, key) = parse(keys);
+            let (chord, key) = as_typed(translate(chord, key, false), key);
+            format(chord, key)
+        };
+        assert_eq!(t("cmd-["), "ctrl-{");
+        assert_eq!(t("cmd-]"), "ctrl-}");
+        assert_eq!(t("cmd-shift-["), "ctrl-alt-{");
+        assert_eq!(t("cmd-shift-]"), "ctrl-alt-}");
+        assert_eq!(t("cmd-,"), "ctrl-<");
+        // Letters keep their Shift, and keys pressed without Shift are left alone.
+        assert_eq!(t("cmd-t"), "ctrl-shift-t");
+        assert_eq!(t("cmd-="), "ctrl-=");
+        assert_eq!(t("cmd-1"), "alt-1");
     }
 
     /// Every chord bound in main.rs, with its context.

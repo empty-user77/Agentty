@@ -1036,7 +1036,8 @@ impl Workbench {
         })
         .detach();
         // The system switched between light and dark: the chrome follows when set to.
-        cx.observe_window_appearance(window, |_, _, cx| crate::settings::apply_appearance(cx)).detach();
+        // Told the window's own appearance, not the app's: see `settings::apply_appearance_with`.
+        cx.observe_window_appearance(window, |_, window, cx| crate::settings::apply_appearance_with(window.appearance(), cx)).detach();
         this.first_run_onboarding(cx);
         this.startup_system_check(cx);
         this.refresh_sessions(cx);
@@ -3642,6 +3643,8 @@ impl Render for Workbench {
             .children(self.render_onboarding(cx))
             .children(self.render_waiting_banner(cx))
             .children(self.render_toast(cx))
+            // Last, so the window's edges stay grabbable over panels and dialogs.
+            .children(crate::platform::decorations::resize_edges(window))
     }
 }
 
