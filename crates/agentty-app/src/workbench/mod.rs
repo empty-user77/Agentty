@@ -3617,6 +3617,8 @@ impl Render for Workbench {
             .children(self.render_onboarding(cx))
             .children(self.render_waiting_banner(cx))
             .children(self.render_toast(cx))
+            // Last, so the window's edges stay grabbable over panels and dialogs.
+            .children(crate::platform::decorations::resize_edges(window))
     }
 }
 

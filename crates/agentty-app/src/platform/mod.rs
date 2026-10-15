@@ -6,6 +6,7 @@
 //! that never depended on AppKit live here and are shared by both.
 
 pub mod app_nap;
+pub mod decorations;
 pub mod drops;
 pub mod frame;
 pub mod ime;
