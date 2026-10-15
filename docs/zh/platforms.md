@@ -14,7 +14,7 @@ Agentty 在 macOS 上开发，macOS 是基准平台。三个平台都已提供�
 | 通知 | 系统通知，点击打开窗格 | Toast | `notify-send` |
 | 内置浏览器 | 在 Agentty 内（WebKit） | 在 Agentty 内（WebView2） | 默认浏览器 |
 | 菜单栏图标、迷你模式 | ✓ | — | — |
-| 标题栏 | Agentty 自绘 | 系统 | 系统；合成器无装饰时由 Agentty 自绘 |
+| 标题栏 | Agentty 自绘 | 系统 | X11 用系统的；Wayland 由 Agentty 自绘（拖动移动窗口，拖边缘调整大小） |
 | 安装 | DMG | 安装程序（按用户） | `.deb` / `.rpm` |
 | 自动更新 | 安装后重启 | 安装后重启 | 指向新的软件包页面 |
 

@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-10-15
+
+### Added
+- Run configurations: a **Run** button in the pane header starts the project's `package.json` scripts (npm, pnpm,
+  yarn or bun) and Spring Boot applications (Gradle or Maven), or commands you add yourself. Output goes to a run log
+  under the terminals, with search, level filter, wrap and follow. The status bar lists the runs and every process of
+  the project listening on a port, and a run that fails on a taken port offers to stop the project's process holding
+  it and run again. Runs stop when Agentty quits.
+
+### Fixed
+- Linux (Wayland, e.g. Ubuntu on GNOME): the window can be moved and resized again. Agentty now draws its own title
+  bar there (drag to move, double-click to maximise, right-click for the window menu) and its edges resize the
+  window. Plugin panels opened in their own window get the same frame, and their close button closes them.
+- Linux: Agentty no longer crashes when the desktop switches between light and dark with the appearance set to
+  System, which also kept it from starting again afterwards.
+- Linux: shortcuts with Shift and a punctuation key (next / previous pane and tab, settings) work.
+
 ## [0.2.19] - 2026-10-14
 
 ### Added

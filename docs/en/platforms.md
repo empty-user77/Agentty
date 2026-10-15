@@ -14,7 +14,7 @@ Agentty is developed on macOS, which remains the reference platform. All three h
 | Notifications | System notifications, click opens the pane | Toast | `notify-send` |
 | In-app browser | Inside Agentty (WebKit) | Inside Agentty (WebView2) | Default browser |
 | Menu bar icon, mini mode | ✓ | — | — |
-| Title bar | Agentty's own | System | System, or Agentty's where the compositor has no decorations |
+| Title bar | Agentty's own | System | System on X11, Agentty's on Wayland (it moves the window; the edges resize it) |
 | Install | DMG | Setup program (per user) | `.deb` / `.rpm` |
 | Auto-update | Installs and relaunches | Installs and relaunches | Links to the new packages |
 

@@ -154,6 +154,15 @@
           }
         },
         {
+          "slug": "run-configurations",
+          "title": {
+            "en": "Run configurations",
+            "ko": "실행 구성",
+            "ja": "実行構成",
+            "zh": "运行配置"
+          }
+        },
+        {
           "slug": "build-my-idea",
           "title": {
             "en": "Build my idea",
