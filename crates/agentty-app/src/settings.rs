@@ -1140,6 +1140,14 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
 /// own parts. Called at start, after every settings change, and when the system switches between
 /// light and dark (which only matters while the setting follows the system).
 pub fn apply_appearance(cx: &mut App) {
+    let system = cx.window_appearance();
+    apply_appearance_with(system, cx);
+}
+
+/// `apply_appearance` with the system's appearance already known. A window's appearance observer
+/// passes the window's own: on Wayland it runs while gpui still holds the platform client, and
+/// asking the app (`cx.window_appearance()`) from there panics with "RefCell already borrowed".
+pub fn apply_appearance_with(system: gpui::WindowAppearance, cx: &mut App) {
     let appearance = settings(cx).appearance;
     crate::native::set_app_appearance(match appearance {
         Appearance::System => None,
@@ -1149,7 +1157,7 @@ pub fn apply_appearance(cx: &mut App) {
     let light = match appearance {
         Appearance::Light => true,
         Appearance::Dark => false,
-        Appearance::System => matches!(cx.window_appearance(), gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight),
+        Appearance::System => matches!(system, gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight),
     };
     if crate::theme::set_light(light) {
         cx.refresh_windows();

@@ -354,7 +354,9 @@ impl Workbench {
     }
 
     /// The panel itself — its header and what the plugin drew — without saying where it sits.
-    pub(super) fn render_plugin_panel_contents(&self, plugin_id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `own_window`: drawn in the panel's own window, whose title bar its header is where Agentty
+    /// draws the frame (Wayland, see `platform::decorations`).
+    pub(super) fn render_plugin_panel_contents(&self, plugin_id: &str, own_window: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plugin_id = plugin_id.to_string();
         let plugin = plugins::plugin(cx, &plugin_id)?.clone();
         let manifest = plugin.manifest.clone()?;
@@ -400,6 +402,26 @@ impl Workbench {
                     .t_body()
                     .font_weight(crate::theme::EMPHASIS)
                     .text_color(hex(Chrome::BRIGHT))
+                    .when(own_window, |title| {
+                        // Moves the window like a system title bar: drag, double-click to
+                        // maximise, right-click for the window menu.
+                        title
+                            .on_mouse_down(gpui::MouseButton::Left, |event: &gpui::MouseDownEvent, window, _| {
+                                if !crate::platform::decorations::client_side(window) {
+                                    return;
+                                }
+                                if event.click_count == 2 {
+                                    window.zoom_window();
+                                } else {
+                                    window.start_window_move();
+                                }
+                            })
+                            .on_mouse_down(gpui::MouseButton::Right, |event: &gpui::MouseDownEvent, window, _| {
+                                if crate::platform::decorations::client_side(window) {
+                                    window.show_window_menu(event.position);
+                                }
+                            })
+                    })
                     .child(panel_title),
             )
             .child(
@@ -616,7 +638,7 @@ impl Workbench {
             return None;
         }
         let width = self.plugin_panel_width(cx);
-        let contents = self.render_plugin_panel_contents(&plugin_id, cx)?;
+        let contents = self.render_plugin_panel_contents(&plugin_id, false, cx)?;
         Some(div().w(px(width)).flex_shrink_0().h_full().child(contents).into_any_element())
     }
 
@@ -628,7 +650,7 @@ impl Workbench {
         if matches!(mode, PanelMode::Push | PanelMode::Window | PanelMode::Workspace) {
             return None;
         }
-        let contents = self.render_plugin_panel_contents(&plugin_id, cx)?;
+        let contents = self.render_plugin_panel_contents(&plugin_id, false, cx)?;
         let panel = match mode {
             // Floating: above the row at its right edge, with its own edge to drag.
             PanelMode::Overlay => div()
