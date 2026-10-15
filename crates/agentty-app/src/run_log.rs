@@ -666,11 +666,9 @@ fn start_time(pid: u32) -> Option<String> {
 }
 
 /// Every process of group `group` and everything below them (a process that put itself in a
-/// group of its own is still a child of the run).
+/// group of its own is still a child of the run). Unix only: Windows ends a tree with `taskkill /T`.
+#[cfg(unix)]
 fn tree_of(group: u32) -> Vec<u32> {
-    if cfg!(windows) {
-        return Vec::new();
-    }
     let rows: Vec<(u32, u32, u32)> = run_ps(&["-A", "-o", "pid=,ppid=,pgid=,stat="])
         .lines()
         .filter_map(|line| {
