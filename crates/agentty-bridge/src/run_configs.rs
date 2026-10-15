@@ -529,7 +529,9 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].name, "api");
         assert!(found[0].kotlin);
-        assert!(found[0].command.ends_with("gradlew :api:bootRun"), "{}", found[0].command);
+        // The test's `gradlew` is not executable: `sh gradlew` then. `.\gradlew.bat` on Windows.
+        let wrapper = if cfg!(windows) { ".\\gradlew.bat" } else { "sh gradlew" };
+        assert_eq!(found[0].command, format!("{wrapper} :api:bootRun"));
         assert_eq!(found[0].dir, root);
 
         let maven = temp("maven");
