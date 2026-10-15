@@ -250,6 +250,11 @@ pub struct Settings {
     /// Width of the database panel docked right of the terminals.
     #[serde(default = "default_db_panel_width")]
     pub db_panel_width: f32,
+    /// Commands the user added to the run button, by project folder.
+    #[serde(default)]
+    pub run_configs: std::collections::BTreeMap<String, Vec<agentty_bridge::run_configs::CustomRun>>,
+    /// Height of the run log docked under the terminals.
+    pub run_log_height: f32,
     /// Height of its working-tree list once the user dragged it (0: as tall as its rows, up to a few).
     pub files_panel_trees_height: f32,
     /// Ask for a starting folder whenever a new workspace is opened.
@@ -823,6 +828,8 @@ impl Default for Settings {
             plugin_workspace_terminal_height: 280.,
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
             db_panel_width: crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH,
+            run_configs: std::collections::BTreeMap::new(),
+            run_log_height: crate::workbench::log_panel::DEFAULT_HEIGHT,
             files_panel_trees_height: 0.0,
             ask_directory: true,
             ask_directory_for_tabs: false,

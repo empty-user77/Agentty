@@ -48,6 +48,7 @@ mod plugins;
 mod plugins_mcp;
 mod procinfo;
 mod remote;
+mod run_log;
 mod settings;
 mod setup_check;
 mod shell_integration;
@@ -637,6 +638,9 @@ fn main() {
 
     // A crash leaves its reason in `<data dir>/crash.log`.
     crash_log::install();
+    // Servers the run log started before the last crash or kill: ended now, before anything
+    // starts them again on the same ports. Only after the lock: one Agentty per data folder.
+    std::thread::spawn(run_log::reap_orphans);
     // Windows: the keys the IME needs that gpui does not pass on (한/영, 한자, …).
     platform::ime::install();
     // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
@@ -701,6 +705,8 @@ fn main() {
         // A voice model still loaded when the process exits makes whisper.cpp's Metal teardown
         // abort: every quit after using voice would end in a crash report.
         cx.on_app_quit(|_| async { agentty_bridge::voice::unload() }).detach();
+        // Servers started in the run log have process groups of their own: no hangup ends them.
+        cx.on_app_quit(|_| async { run_log::stop_all() }).detach();
         remote::init(cx);
         cx.spawn(async move |cx| {
             while let Some(envelope) = plugin_events.next().await {

@@ -146,6 +146,7 @@ impl Workbench {
         let mut tree_chip = split.then(|| self.worktree_chip(pane, cx)).flatten();
         let mut collab = split.then(|| self.render_collab_chips(pane, cx)).flatten();
         let mut port_chips = split.then(|| self.port_chips(pane, cx)).flatten();
+        let mut run_control = split.then(|| self.render_run_control(pane, cx)).flatten();
         let hud = crate::hud::normalized(&crate::settings::settings(cx).hud);
         let width = self.pane_bounds.borrow().get(&pane.entity_id()).map(|b| f32::from(b.size.width)).unwrap_or(f32::MAX);
         let mut context_meter = {
@@ -336,6 +337,7 @@ impl Workbench {
                     }
                     d
                 })
+                .children(run_control.take())
                 .child(
                     div()
                         .flex()

@@ -2222,6 +2222,8 @@ impl Workbench {
             })
             .when(!in_plugin_workspace, |d| {
                 d
+                    // A tab of one pane has no pane bar: its run button sits here.
+                    .children(self.single_pane_tab().and_then(|pane| self.render_run_control(&pane, cx)).map(|run| div().mr_1().child(run)))
                     // Plugins with a panel, then cmux-style quick actions: icons only.
                     .children(self.render_plugin_header_buttons(cx))
                     // Only where a clone makes sense: a plain terminal in an empty folder (or one of
@@ -3029,6 +3031,7 @@ impl Workbench {
             }))
             .child(div().flex_1().min_w_0().truncate().children(self.status.clone()))
             .children(self.render_plugin_status_items(cx))
+            .children(self.render_run_chip(cx))
             .children(self.render_docker_chip(cx))
             .children(self.render_db_chip(cx))
             .children(self.render_status_icons(cx))

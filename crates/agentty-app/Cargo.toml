@@ -43,6 +43,8 @@ ring = "0.17"
 # Remote access: the page's address as a QR code to open on a phone. Only the encoder (no image,
 # SVG or terminal output); the settings page draws the modules itself.
 qrcode = { version = "0.14.1", default-features = false }
+# The run log's pattern filter. Already in the build through syntect / ignore, so nothing new is fetched.
+regex = "1.13"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 # The markdown preview's Content-Security-Policy lists its scripts by hash.

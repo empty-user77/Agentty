@@ -36,6 +36,7 @@ mod hud_settings;
 mod idea;
 mod install_hint;
 mod layout;
+pub(crate) mod log_panel;
 pub mod mini;
 mod notices;
 mod notify_settings;
@@ -58,6 +59,7 @@ mod prompt_dialog;
 mod remote_page;
 mod responsive;
 pub mod resume_hint;
+mod run_panel;
 mod servers;
 mod service_status;
 mod session_viewer;
@@ -448,6 +450,7 @@ pub struct Workbench {
     browser_net_drag: Option<(f32, f32)>,
     /// Docker of the active pane's project: the status bar chip and the panel docked at the right.
     docker: docker_panel::DockerState,
+    runs: run_panel::RunState,
     db: db_page::DbState,
     board: board::BoardState,
     board_jira: board_settings::JiraUi,
@@ -840,6 +843,7 @@ impl Workbench {
             files_trees_drag: None,
             browser_net_drag: None,
             docker: Default::default(),
+            runs: Default::default(),
             db: Default::default(),
             board: Default::default(),
             board_jira: Default::default(),
@@ -3098,6 +3102,7 @@ impl Workbench {
                 || self.browser_resizing
                 || self.files_resizing
                 || self.side_resizing.is_some()
+                || self.runs.log.drag.is_some()
                 || self.files_trees_drag.is_some()
                 || self.browser_net_drag.is_some()
                 || self.split_drag.is_some()
@@ -3107,6 +3112,10 @@ impl Workbench {
                 self.end_drags(cx);
             }
             return;
+        }
+        if self.runs.log.drag.is_some() {
+            let viewport = f32::from(window.viewport_size().height);
+            return self.drag_log_panel(f32::from(event.position.y), viewport, cx);
         }
         if let Some(drag) = self.plugin_ws_drag {
             let viewport = window.viewport_size();
@@ -3166,10 +3175,12 @@ impl Workbench {
             || self.browser_resizing
             || self.files_resizing
             || self.side_resizing.is_some()
+            || self.runs.log.drag.is_some()
             || self.files_trees_drag.is_some()
             || self.browser_net_drag.is_some()
             || self.plugin_ws_drag.is_some()
         {
+            self.runs.log.drag = None;
             self.plugin_ws_drag = None;
             self.sidebar_resizing = false;
             self.browser_resizing = false;
@@ -3225,6 +3236,7 @@ impl Render for Workbench {
         self.prepare_plugin_consent(window, cx);
         self.prepare_files_panel(cx);
         self.prepare_docker(cx);
+        self.prepare_runs(cx);
         self.prepare_db(window, cx);
         self.advance_tour(cx);
         // The onboarding card answers ⌘↩: on a fresh window nothing holds the keyboard yet, and a
@@ -3498,6 +3510,7 @@ impl Render for Workbench {
                         || this.browser_resizing
                         || this.files_resizing
                         || this.side_resizing.is_some()
+                        || this.runs.log.drag.is_some()
                         || this.files_trees_drag.is_some()
                         || this.browser_net_drag.is_some()
                         || this.split_drag.is_some()
@@ -3546,7 +3559,16 @@ impl Render for Workbench {
                                         .flex()
                                         // A floating or full-area panel is drawn over this row.
                                         .relative()
-                                        .child(div().flex_1().min_w_0().h_full().children(main.take()))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .h_full()
+                                                .flex()
+                                                .flex_col()
+                                                .child(div().flex_1().min_h_0().children(main.take()))
+                                                .when(self.page.is_none(), |d| d.children(self.render_log_panel(window, cx))),
+                                        )
                                         .when(self.page.is_none(), |d| {
                                             let docked = self.plugin_panel_width(cx) > 0.;
                                             d.children(self.render_browser_splitter(cx))
@@ -3597,6 +3619,8 @@ impl Render for Workbench {
             .children(self.render_tab_menu(window, cx))
             .children(self.render_todo_menu(window, cx))
             .children(self.render_pane_menu(cx))
+            .children(self.render_run_menu(window, cx))
+            .children(self.render_run_panel(window, cx))
             .children(self.render_tree_menu(cx))
             .when(self.updates.popup, |d| d.child(self.render_update_popup(window, cx)))
             .when(self.about_open, |d| d.child(self.render_about_dialog(cx)))
@@ -3609,6 +3633,7 @@ impl Render for Workbench {
             .children(self.render_ask(cx))
             .children(self.render_diagnostics(cx))
             .children(self.render_rename_dialog(cx))
+            .children(self.render_run_add_dialog(cx))
             .children(self.render_prompt_dialog(cx))
             .children(self.render_tasks_dialog(cx))
             .children(self.render_clone_dialog(cx))
@@ -4071,6 +4096,7 @@ impl Workbench {
                         "files": self.files_panel.as_ref().map(|p| p.debug_state()),
                         "editor": self.editor_debug_state(cx),
                         "docker": self.docker.debug_state(),
+                        "run": self.runs.debug_state(),
                         "db": self.db.debug_state(),
                         "chatNotify": self.chat_notify.debug_state(),
                         "sync": self.sync.debug_state(),
@@ -4115,6 +4141,8 @@ impl Workbench {
             "tree-menu" => self.debug_tree_menu(argument.parse().unwrap_or(0), cx),
             "tree-remove" => self.debug_tree_remove(argument, cx),
             "docker" => self.debug_docker(argument, window, cx),
+            "run" => self.debug_run(argument, window, cx),
+            "log" => self.debug_log(argument, cx),
             "db" => self.debug_db(argument, window, cx),
             "chat-notify" => self.debug_chat_notify(argument, cx),
             "remote" => self.debug_remote(argument, window, cx),
