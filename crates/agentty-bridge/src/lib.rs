@@ -33,6 +33,7 @@ pub mod plugins;
 pub mod pricing;
 pub mod process;
 pub mod protobuf;
+pub mod run_configs;
 pub mod search;
 pub mod secret_store;
 pub mod service_status;

@@ -616,6 +616,164 @@ fn serving(candidates: &[u32]) -> Vec<Listener> {
         .collect()
 }
 
+/// A process listening on TCP ports: what it is, and the folder it runs in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServingProcess {
+    pub pid: u32,
+    pub ports: Vec<u16>,
+    /// The program and its arguments, shortened for a row (a JVM's class path left out).
+    pub command: String,
+    /// Its process group (a run of the log is one group).
+    pub group: Option<u32>,
+}
+
+/// The process group of `pid`.
+fn group_of(pid: u32) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        let group = unsafe { libc::getpgid(pid as libc::pid_t) };
+        (group > 0).then_some(group as u32)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// Every process serving a TCP port (never this app) that works in `root`, or that runs under one
+/// of `shells` (the shells of panes in that project). Empty on Windows.
+pub fn serving_in(root: &std::path::Path, shells: &[u32]) -> Vec<ServingProcess> {
+    if cfg!(windows) {
+        return Vec::new();
+    }
+    let own = std::process::id();
+    let parents = process_parents();
+    let under_shell = |pid: u32| {
+        let mut current = pid;
+        for _ in 0..64 {
+            if shells.contains(&current) {
+                return true;
+            }
+            match parents.get(&current) {
+                Some(&parent) if parent > 1 && parent != current => current = parent,
+                _ => return false,
+            }
+        }
+        false
+    };
+    let mut found: Vec<ServingProcess> = tcp_listeners()
+        .into_iter()
+        .filter(|(pid, _)| *pid > 1 && *pid != own)
+        .filter(|(pid, _)| under_shell(*pid) || cwd_of(*pid).is_some_and(|dir| dir.starts_with(root)))
+        .map(|(pid, mut ports)| {
+            ports.sort_unstable();
+            ports.dedup();
+            ServingProcess { pid, ports, command: short_command(&process_args(pid)), group: group_of(pid) }
+        })
+        .collect();
+    found.sort_by_key(|p| p.ports.first().copied().unwrap_or(u16::MAX));
+    found
+}
+
+/// Whatever process listens on any of `ports`, wherever it runs (never this app). Empty on Windows.
+pub fn serving_on(ports: &[u16]) -> Vec<ServingProcess> {
+    if cfg!(windows) || ports.is_empty() {
+        return Vec::new();
+    }
+    let own = std::process::id();
+    tcp_listeners()
+        .into_iter()
+        .filter(|(pid, listening)| *pid > 1 && *pid != own && listening.iter().any(|p| ports.contains(p)))
+        .map(|(pid, mut listening)| {
+            listening.sort_unstable();
+            listening.dedup();
+            ServingProcess { pid, ports: listening, command: short_command(&process_args(pid)), group: group_of(pid) }
+        })
+        .collect()
+}
+
+/// `node …/bin/vite --port 5173` → `node vite --port 5173`; a JVM shows its main class or jar.
+pub fn short_command(args: &[String]) -> String {
+    let name = |arg: &str| std::path::Path::new(arg).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let Some(program) = args.first() else { return String::new() };
+    let program = name(program);
+    let mut words = vec![program.clone()];
+    if program == "java" {
+        let mut rest = args.iter().skip(1);
+        while let Some(arg) = rest.next() {
+            if arg == "-jar" {
+                words.extend(rest.next().map(|jar| name(jar)));
+                break;
+            }
+            if matches!(arg.as_str(), "-cp" | "-classpath" | "--class-path" | "-p" | "--module-path") {
+                rest.next();
+                continue;
+            }
+            if !arg.starts_with('-') {
+                words.push(arg.rsplit('.').next().unwrap_or(arg).to_string());
+                break;
+            }
+        }
+    } else {
+        for arg in args.iter().skip(1).take(6) {
+            words.push(if arg.contains('/') && !arg.starts_with('-') { name(arg) } else { arg.clone() });
+        }
+    }
+    let line = words.join(" ");
+    if line.chars().count() > 80 {
+        format!("{}…", line.chars().take(79).collect::<String>())
+    } else {
+        line
+    }
+}
+
+/// `SIGTERM` (or `SIGKILL` when `force`) to each of `pids`, never this app or pid 1.
+pub fn signal_all(pids: &[u32], force: bool) {
+    let own = std::process::id();
+    for &pid in pids.iter().filter(|&&pid| pid > 1 && pid != own) {
+        signal(pid, force);
+    }
+}
+
+/// Stops a server the user picked: `SIGTERM`, then `SIGKILL` if it still serves `port` a few
+/// seconds later (the same server, not a process that took over its pid). Blocks; call it off
+/// the UI thread. Whether it is gone.
+pub fn stop_serving(pid: u32, port: u16) -> bool {
+    let still_serving = || tcp_listeners().iter().any(|(p, ports)| *p == pid && ports.contains(&port));
+    if !still_serving() {
+        return true;
+    }
+    signal_all(&[pid], false);
+    // Waiting asks the kernel (cheap) whether the process is there, not `lsof` every time.
+    for _ in 0..12 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if !alive(pid) {
+            return true;
+        }
+    }
+    // Still the same server (its pid could belong to another process by now): only then forced.
+    if still_serving() {
+        signal_all(&[pid], true);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    !still_serving()
+}
+
+/// Whether a process `pid` exists (it may be someone else's, which still counts).
+fn alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let found = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        found || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
 #[cfg(unix)]
 fn signal(pid: u32, force: bool) {
     unsafe {
