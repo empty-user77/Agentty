@@ -2707,9 +2707,12 @@ impl Workbench {
             });
         let heading = |label: String| div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::FOREGROUND)).child(label);
         // A short window scrolls rather than stacking the page on top of its own footer.
+        // A definite width capped by the window, not a full width capped at WELCOME_WIDTH: the
+        // cards wrap against the width the layout was given, and with `max_w` that was the whole
+        // window, so a wide one put every card on one line, past the page's right edge.
         let page = div()
-            .w_full()
-            .max_w(px(WELCOME_WIDTH))
+            .w(px(WELCOME_WIDTH))
+            .max_w_full()
             .mx_auto()
             .flex()
             .flex_col()
