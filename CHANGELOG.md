@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-10-17
+
+### Fixed
+- The start page's cards stay inside the page on wide windows; before, they could all line up in one row and run
+  past its right edge.
+
 ## [0.2.20] - 2026-10-15
 
 ### Added
