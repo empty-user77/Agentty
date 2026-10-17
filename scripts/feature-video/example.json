@@ -1,0 +1,74 @@
+{
+  "slug": "remote-access",
+  "title": { "en": "Remote access", "ko": "원격 접속", "ja": "リモートアクセス", "zh": "远程访问" },
+  "tagline": {
+    "en": "Your agents, from your phone",
+    "ko": "휴대폰에서 에이전트를 그대로",
+    "ja": "スマホからエージェントを操作",
+    "zh": "用手机掌控你的智能体"
+  },
+  "narration": "en",
+  "scenes": [
+    {
+      "clip": "footage/enable.mov",
+      "from": 0.5,
+      "to": 9,
+      "speed": 1.5,
+      "headline": { "en": "Turn it on", "ko": "켜기만 하면 됩니다", "ja": "オンにするだけ", "zh": "一键开启" },
+      "subline": { "en": "Set a web password, switch on Remote access", "ko": "웹 비밀번호를 정하고 원격 접속을 켜세요", "ja": "Web パスワードを決めて、リモートアクセスをオン", "zh": "设置网页密码，打开远程访问" },
+      "zoom": { "rect": [1180, 260, 640, 360], "at": [2.2, 3.2], "back": [5.0, 5.8] },
+      "say": [
+        {
+          "en": "Set a web password and turn on remote access.",
+          "ko": "웹 비밀번호를 정하고 원격 접속을 켭니다.",
+          "ja": "Web パスワードを決めて、リモートアクセスをオンにします。",
+          "zh": "设置网页密码，然后打开远程访问。"
+        },
+        {
+          "en": "Only your own Tailscale account can reach the page.",
+          "ko": "이 페이지는 내 Tailscale 계정에서만 열립니다.",
+          "ja": "このページを開けるのは、自分の Tailscale アカウントだけです。",
+          "zh": "只有你自己的 Tailscale 账户能打开这个页面。"
+        }
+      ]
+    },
+    {
+      "clip": "footage/phone-prompt.mov",
+      "from": 1,
+      "to": 22,
+      "speed": 2,
+      "headline": { "en": "Send a prompt from anywhere", "ko": "어디서든 지시하세요", "ja": "どこからでも指示", "zh": "随时随地发出指令" },
+      "callouts": [
+        { "rect": [1240, 880, 600, 120], "at": [1.0, 3.5], "label": { "en": "Typed on the phone", "ko": "휴대폰에서 입력", "ja": "スマホで入力", "zh": "在手机上输入" } },
+        { "rect": [40, 120, 1120, 820], "at": [4.0, 7.0], "label": { "en": "Runs on your Mac, live", "ko": "맥에서 실시간으로 실행", "ja": "Mac でリアルタイムに実行", "zh": "在 Mac 上实时运行" } }
+      ],
+      "say": [
+        {
+          "en": "Type a prompt on your phone, and the agent on your Mac starts right away.",
+          "ko": "휴대폰에서 지시를 입력하면 맥의 에이전트가 바로 움직입니다.",
+          "ja": "スマホで指示を入力すると、Mac のエージェントがすぐに動き出します。",
+          "zh": "在手机上输入指令，Mac 上的智能体立刻开始工作。"
+        },
+        {
+          "en": "You watch the same terminal, live.",
+          "ko": "같은 터미널을 실시간으로 보고 있습니다.",
+          "ja": "同じターミナルをリアルタイムで見られます。",
+          "zh": "你看到的是同一个终端，实时同步。"
+        }
+      ]
+    },
+    {
+      "clip": "footage/phone-answer.mov",
+      "speed": 1.5,
+      "headline": { "en": "Answer when it asks", "ko": "물어보면 바로 답하세요", "ja": "質問にはすぐ答える", "zh": "有问题，马上回复" },
+      "say": [
+        {
+          "en": "When an agent needs you, answer with one tap and let it keep going.",
+          "ko": "에이전트가 나를 기다리면 한 번 탭해서 답하고 계속 진행시키세요.",
+          "ja": "エージェントが待っているときは、ワンタップで答えて続けさせましょう。",
+          "zh": "智能体需要你时，轻点一下回复，让它继续工作。"
+        }
+      ]
+    }
+  ]
+}
