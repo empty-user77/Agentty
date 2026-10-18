@@ -62,7 +62,8 @@ case "${1:-}" in
     mkdir -p "$DIR/data"
     env_extra=()
     [ "${2:-}" = --remote ] && env_extra=(AGENTTY_REMOTE_DEV=1)
-    env "${env_extra[@]}" AGENTTY_DATA_DIR="$DIR/data" AGENTTY_DEBUG=1 "$REPO/target/debug/agentty" >"$LOG" 2>&1 &
+    # `${a[@]+…}`: macOS's bash 3.2 calls an empty array unbound under `set -u`.
+    env ${env_extra[@]+"${env_extra[@]}"} AGENTTY_DATA_DIR="$DIR/data" AGENTTY_DEBUG=1 "$REPO/target/debug/agentty" >"$LOG" 2>&1 &
     echo $! >"$DIR/app.pid"
     for _ in $(seq 1 60); do [ -n "$(socket)" ] && break; sleep 0.5; done
     [ -n "$(socket)" ] || { say "app did not come up, see $LOG"; exit 1; }

@@ -46,9 +46,10 @@ You need:
 
 1. Click **Remote access** (the globe-and-monitor icon) in the side menu
 2. Set a **Web password** (at least 8 characters in English letters, digits and symbols, entered twice; the eye button shows what you typed)
-3. Turn on **Remote access**
-4. Copy the address that appears (`https://<machine>.<tailnet>.ts.net:8743/`), or tap **Open** to go there directly
-5. On the other device, sign in with your web password
+3. Press **Issue certificate** under **Before turning it on**: Tailscale gets this computer's HTTPS certificate (once per computer; the first time can take a minute, and Tailscale renews it by itself)
+4. Turn on **Remote access** — the switch works once every step in **Before turning it on** is checked
+5. Copy the address that appears (`https://<machine>.<tailnet>.ts.net:8743/`), or tap **Open** to go there directly
+6. On the other device, sign in with your web password
 
 That's it. Your sessions are now visible on that device.
 
@@ -106,6 +107,9 @@ Connect in the Tailscale app on your Mac.
 
 **HTTPS certificates are off**
 Enable MagicDNS and HTTPS in your Tailscale admin console (DNS settings). This creates certificates for your tailnet domain.
+
+**Couldn't turn on: Tailscale can't reach Agentty's page**
+Often this computer's HTTPS certificate wasn't there yet. Turn remote access off, press **Issue certificate**, and turn it on again.
 
 **Serve is off**
 Agentty shows a button in Settings to turn on Serve. Tap it to open the Tailscale admin console.

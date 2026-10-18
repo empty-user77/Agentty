@@ -83,9 +83,19 @@ pub enum Phase {
     Failed(Problem),
 }
 
+/// Getting this machine's HTTPS certificate from the Remote access page.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Certificate {
+    #[default]
+    Idle,
+    Issuing,
+    Failed(String),
+}
+
 #[derive(Default)]
 pub struct Remote {
     hub: Option<Arc<Hub>>,
+    pub certificate: Certificate,
     /// Servers stopped but still holding their ports (`Hub::pause`) until the Tailscale entry
     /// that pointed at them is surely gone: a new start replaced it, or the marker went.
     parked: Vec<Arc<Hub>>,
@@ -247,6 +257,62 @@ pub fn refresh_tailscale(cx: &mut App) {
         let status = cx.background_executor().spawn(async { tailscale::status() }).await;
         let _ = cx.update(|cx| {
             cx.global_mut::<Remote>().tailscale = Some(status);
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+}
+
+/// Whether this machine's HTTPS certificate is known to be there: Tailscale gets one only on the
+/// first request for it, which can take longer than a start waits, so it is issued beforehand.
+pub fn certificate_ready(cx: &App) -> bool {
+    if dev_mode() {
+        return true;
+    }
+    let dns = cx.global::<Remote>().tailscale.as_ref().and_then(|s| s.dns_name.clone());
+    dns.is_some_and(|dns| settings(cx).remote.certificates.contains(&dns))
+}
+
+/// Everything remote access needs before it can be turned on: Tailscale connected with HTTPS
+/// certificates on for the tailnet, a web password, and this machine's certificate.
+pub fn ready_to_turn_on(cx: &App) -> bool {
+    let remote = cx.global::<Remote>();
+    let tailscale_ready =
+        dev_mode() || remote.tailscale.as_ref().is_some_and(|s| s.running && s.login.is_some() && s.dns_name.is_some() && s.https);
+    tailscale_ready && remote.password_set == Some(true) && certificate_ready(cx)
+}
+
+fn remember_certificate(dns: String, cx: &mut App) {
+    if settings(cx).remote.certificates.contains(&dns) {
+        return;
+    }
+    update_settings(cx, move |s| {
+        s.remote.certificates.push(dns);
+        // A machine renamed now and then: only the latest few names matter.
+        let extra = s.remote.certificates.len().saturating_sub(8);
+        s.remote.certificates.drain(..extra);
+    });
+}
+
+/// Has Tailscale issue this machine's HTTPS certificate (the Remote access page's button).
+pub fn issue_certificate(cx: &mut App) {
+    let Some(dns) = cx.global::<Remote>().tailscale.as_ref().and_then(|s| s.dns_name.clone()) else { return };
+    if cx.global::<Remote>().certificate == Certificate::Issuing {
+        return;
+    }
+    cx.global_mut::<Remote>().certificate = Certificate::Issuing;
+    cx.refresh_windows();
+    cx.spawn(async move |cx| {
+        let domain = dns.clone();
+        let result = cx.background_executor().spawn(async move { tailscale::issue_certificate(&domain) }).await;
+        let _ = cx.update(|cx| {
+            cx.global_mut::<Remote>().certificate = match result {
+                Ok(()) => {
+                    remember_certificate(dns, cx);
+                    Certificate::Idle
+                }
+                Err(why) => Certificate::Failed(why),
+            };
             cx.refresh_windows();
         });
     })
@@ -465,6 +531,10 @@ pub fn start(cx: &mut App) {
                     std::process::Command::new("/usr/bin/caffeinate").args(["-i", "-w", &std::process::id().to_string()]).spawn().ok();
             }
             remote.phase = Phase::On { url };
+            // The page answered over HTTPS through Tailscale: the certificate is there.
+            if let (false, Some(dns)) = (dev, status.dns_name.clone()) {
+                remember_certificate(dns, cx);
+            }
             cx.refresh_windows();
         });
     })

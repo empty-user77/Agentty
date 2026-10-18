@@ -620,11 +620,15 @@ pub struct RemoteSettings {
     pub https_port: u16,
     /// Keeps the Mac from idle sleep while remote access is on, so the page stays reachable.
     pub keep_awake: bool,
+    /// Tailnet names (`machine.tailnet.ts.net`) this machine has an HTTPS certificate for: issued
+    /// from the Remote access page, or seen working by a start. Remote access is turned on only
+    /// for one of these.
+    pub certificates: Vec<String>,
 }
 
 impl Default for RemoteSettings {
     fn default() -> Self {
-        RemoteSettings { feature: true, enabled: false, https_port: 8743, keep_awake: true }
+        RemoteSettings { feature: true, enabled: false, https_port: 8743, keep_awake: true, certificates: Vec::new() }
     }
 }
 

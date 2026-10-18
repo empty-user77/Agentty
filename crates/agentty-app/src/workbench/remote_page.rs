@@ -870,6 +870,111 @@ impl Workbench {
 
     /// The Remote access page as a dashboard: a status panel with the address and its QR code,
     /// live counters, the security checks, the activity log, and the cards to set it up.
+    /// The steps before remote access can be turned on, in order, each with what does it: Tailscale
+    /// connected, HTTPS certificates on for the tailnet, a web password, and this machine's
+    /// certificate (issued here: Tailscale would otherwise get it on the first request, slower
+    /// than a start waits for).
+    fn render_remote_setup(&mut self, tailscale: Option<&remote::tailscale::Status>, password_set: bool, cx: &mut Context<Self>) -> Div {
+        let mono = crate::settings::terminal_font(cx);
+        let connected = tailscale.map(|s| s.running && s.login.is_some() && s.dns_name.is_some());
+        let https = connected.and_then(|c| c.then(|| tailscale.is_some_and(|s| s.https)));
+        let certificate = https.and_then(|h| h.then(|| remote::certificate_ready(cx)));
+        let job = cx.global::<remote::Remote>().certificate.clone();
+        let host = tailscale.and_then(|s| s.dns_name.clone()).unwrap_or_default();
+        let step = |n: usize, done: Option<bool>, label: String, sub: String, action: Option<gpui::AnyElement>| {
+            let (mark, color) = match done {
+                Some(true) => ("✓".to_string(), NEON_GREEN),
+                Some(false) => (n.to_string(), NEON_AMBER),
+                None => ("·".to_string(), Chrome::MUTED),
+            };
+            div()
+                .flex()
+                .items_start()
+                .gap_3()
+                .child(
+                    div()
+                        .w(gpui::px(16.))
+                        .flex_shrink_0()
+                        .font_family(mono.clone())
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(hex(color))
+                        .child(mark),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().t_body().text_color(hex(if done == Some(true) { Chrome::MUTED } else { Chrome::BRIGHT })).child(label))
+                        .when(!sub.is_empty(), |d| d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(sub)))
+                        .when_some(action.filter(|_| done == Some(false)), |d, action| d.child(div().flex().child(action))),
+                )
+        };
+        let tailscale_sub = match tailscale {
+            _ if connected == Some(true) => host.clone(),
+            Some(s) if s.installed => t(cx, "remote.setup.tailscale_connect").to_string(),
+            Some(_) => t(cx, "remote.setup.tailscale_install").to_string(),
+            None => String::new(),
+        };
+        let install = tailscale.filter(|s| !s.installed).map(|_| {
+            action_button("remote-setup-install", t(cx, "remote.install_tailscale"), |_, _, cx| cx.open_url(TAILSCALE_DOWNLOAD))
+                .into_any_element()
+        });
+        let admin = action_button("remote-setup-dns", t(cx, "remote.open_admin_dns"), |_, _, cx| cx.open_url(TAILSCALE_ADMIN_DNS));
+        let password = action_button(
+            "remote-setup-password",
+            t(cx, "remote.setup.set_password"),
+            cx.listener(|this, _: &ClickEvent, window, cx| this.open_password_dialog(window, cx)),
+        );
+        let (certificate_sub, issue) = match &job {
+            remote::Certificate::Issuing => (t(cx, "remote.setup.cert_issuing").to_string(), None),
+            remote::Certificate::Failed(why) => (
+                tf(cx, "remote.setup.cert_failed", &[("reason", why)]),
+                Some(action_button("remote-setup-cert", t(cx, "remote.setup.issue_cert"), |_, _, cx| remote::issue_certificate(cx))),
+            ),
+            remote::Certificate::Idle if certificate.is_none() => (t(cx, "remote.setup.cert_waiting").to_string(), None),
+            remote::Certificate::Idle => (
+                tf(cx, "remote.setup.cert_sub", &[("host", &host)]),
+                Some(action_button("remote-setup-cert", t(cx, "remote.setup.issue_cert"), |_, _, cx| remote::issue_certificate(cx))),
+            ),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .border_color(hex_alpha(NEON_AMBER, 0.3))
+            .bg(hex_alpha(NEON_AMBER, 0.04))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(div().flex_1().t_body().font_weight(gpui::FontWeight::SEMIBOLD).child(t(cx, "remote.setup.title")))
+                    .child(action_button("remote-setup-recheck", t(cx, "remote.setup.recheck"), |_, _, cx| remote::refresh_tailscale(cx))),
+            )
+            .child(step(1, connected, t(cx, "remote.setup.tailscale").to_string(), tailscale_sub, install))
+            .child(step(
+                2,
+                https,
+                t(cx, "remote.setup.https").to_string(),
+                t(cx, "remote.setup.https_sub").to_string(),
+                Some(admin.into_any_element()),
+            ))
+            .child(step(
+                3,
+                Some(password_set),
+                t(cx, "remote.sec.password").to_string(),
+                t(cx, "remote.sec.password_sub").to_string(),
+                Some(password.into_any_element()),
+            ))
+            .child(step(4, certificate, t(cx, "remote.setup.cert").to_string(), certificate_sub, issue.map(|b| b.into_any_element())))
+    }
+
     pub(super) fn render_remote_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
         if !self.remote_page.looked_up {
             self.remote_page.looked_up = true;
@@ -984,31 +1089,38 @@ impl Workbench {
             }
             _ => {}
         }
-        // No password, no remote access: turning it on then asks for one first.
-        let can_turn_on = password_set;
+        // Off: what turning it on takes, step by step. The switch turns it on only once every
+        // step is done (off it always turns).
+        let ready = remote::ready_to_turn_on(cx);
         let on = prefs.enabled;
+        if !on {
+            status = status.child(self.render_remote_setup(tailscale.as_ref(), password_set, cx));
+        }
         status = status.child(
             div()
                 .flex()
                 .items_center()
                 .gap_3()
                 .pt_1()
-                .child(switch(
-                    "remote-enabled",
-                    on,
-                    cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        if on {
-                            remote::set_enabled(false, cx);
-                        } else if can_turn_on {
-                            remote::set_enabled(true, cx);
-                        } else {
-                            this.open_password_dialog(window, cx);
-                        }
-                    }),
-                ))
-                .child(div().flex().flex_col().child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "remote.enable"))).child(
-                    muted(if can_turn_on { t(cx, "remote.enable_hint") } else { t(cx, "remote.enable_needs_password") }.to_string()),
-                )),
+                .child(
+                    switch(
+                        "remote-enabled",
+                        on,
+                        cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            if on {
+                                remote::set_enabled(false, cx);
+                            } else if ready {
+                                remote::set_enabled(true, cx);
+                            }
+                        }),
+                    )
+                    .when(!on && !ready, |d| d.opacity(0.4).cursor_default()),
+                )
+                .child(
+                    div().flex().flex_col().child(div().t_body().text_color(hex(Chrome::BRIGHT)).child(t(cx, "remote.enable"))).child(
+                        muted(if on || ready { t(cx, "remote.enable_hint") } else { t(cx, "remote.enable_needs_setup") }.to_string()),
+                    ),
+                ),
         );
         let mut hero = div().flex().flex_wrap().gap_6().items_start().child(status);
         if let Phase::On { url } = &phase {
