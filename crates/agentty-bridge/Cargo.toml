@@ -28,6 +28,8 @@ url = "2.5.8"
 memchr = "2"
 whisper-rs = { version = "0.16", optional = true }
 hound = { version = "3.5", optional = true }
+# Session sync's local store (a single SQLite file): SQLite compiled in, nothing to install.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [features]
 # On-device voice-to-text. Compiles whisper.cpp (needs cmake + a C/C++ toolchain); on by default

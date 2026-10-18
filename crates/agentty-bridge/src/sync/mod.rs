@@ -4,6 +4,9 @@
 //! Every device writes only its own files (its device file, its section of each workspace's
 //! metadata, its sessions' folders), so pushes never conflict on content: a push that loses the
 //! race fetches, resets to the remote and writes its own files again.
+//!
+//! Instead of a repository, the sync can go into a SQLite file on this computer (`sqlite`): a
+//! backup of the sessions with nothing to set up, read back the same way ("Continue").
 
 pub mod mask;
 pub mod model;
@@ -12,6 +15,7 @@ pub mod repo;
 pub mod restore;
 pub mod session;
 pub mod settings;
+pub mod sqlite;
 #[cfg(test)]
 mod tests;
 
@@ -45,6 +49,9 @@ pub struct SyncConfig {
     pub settings_changed_at: String,
     /// Each plugin's settings as this computer last synced them (plugin id → state).
     pub plugin_settings: BTreeMap<String, plugin_settings::Mark>,
+    /// With a git repository: after every sync, what the clone holds also goes into the SQLite
+    /// file (`default_sqlite_file`), a copy on this computer that outlives the repository.
+    pub sqlite_copy: bool,
 }
 
 impl SyncConfig {
@@ -80,6 +87,86 @@ fn config_path() -> PathBuf {
 
 fn clone_dir() -> PathBuf {
     sync_dir().join("repo")
+}
+
+/// Where the SQLite sync file goes: in the data folder itself, where the user finds it.
+pub fn default_sqlite_file() -> PathBuf {
+    crate::fsutil::data_dir().join("sessions.sqlite")
+}
+
+/// What a sync writes into: a git repository's clone, or a SQLite file with its working tree. Both
+/// keep the tree at `clone_dir()`, which every other step reads and writes.
+trait Backend {
+    fn dir(&self) -> &Path;
+    fn is_cloned(&self) -> bool;
+    fn ensure_clone(&self) -> Result<()>;
+    fn fetch(&self) -> Result<()>;
+    fn reset_to_remote(&self) -> Result<()>;
+    fn is_empty_or_readme_only(&self) -> bool;
+    fn commit_all(&self, message: &str, author: &Author) -> Result<bool>;
+    fn push(&self) -> Result<Pushed>;
+}
+
+impl Backend for Repo {
+    fn dir(&self) -> &Path {
+        &self.dir
+    }
+    fn is_cloned(&self) -> bool {
+        Repo::is_cloned(self)
+    }
+    fn ensure_clone(&self) -> Result<()> {
+        Repo::ensure_clone(self)
+    }
+    fn fetch(&self) -> Result<()> {
+        Repo::fetch(self)
+    }
+    fn reset_to_remote(&self) -> Result<()> {
+        Repo::reset_to_remote(self)
+    }
+    fn is_empty_or_readme_only(&self) -> bool {
+        Repo::is_empty_or_readme_only(self)
+    }
+    fn commit_all(&self, message: &str, author: &Author) -> Result<bool> {
+        Repo::commit_all(self, message, author)
+    }
+    fn push(&self) -> Result<Pushed> {
+        Repo::push(self)
+    }
+}
+
+impl Backend for sqlite::SqliteStore {
+    fn dir(&self) -> &Path {
+        &self.dir
+    }
+    fn is_cloned(&self) -> bool {
+        sqlite::SqliteStore::is_cloned(self)
+    }
+    fn ensure_clone(&self) -> Result<()> {
+        sqlite::SqliteStore::ensure_clone(self)
+    }
+    fn fetch(&self) -> Result<()> {
+        sqlite::SqliteStore::fetch(self)
+    }
+    fn reset_to_remote(&self) -> Result<()> {
+        sqlite::SqliteStore::reset_to_remote(self)
+    }
+    fn is_empty_or_readme_only(&self) -> bool {
+        sqlite::SqliteStore::is_empty_or_readme_only(self)
+    }
+    fn commit_all(&self, _message: &str, _author: &Author) -> Result<bool> {
+        sqlite::SqliteStore::commit_all(self)
+    }
+    /// The file is on this computer: stored is as far as it goes.
+    fn push(&self) -> Result<Pushed> {
+        Ok(Pushed::Done)
+    }
+}
+
+fn backend_for(remote: &Remote, branch: &str) -> Box<dyn Backend> {
+    match remote {
+        Remote::Sqlite { path } => Box::new(sqlite::SqliteStore::new(clone_dir(), PathBuf::from(path))),
+        _ => Box::new(Repo::new(clone_dir(), remote.clone(), branch)),
+    }
 }
 
 /// The saved settings, with a device id and name made up on first use.
@@ -252,6 +339,9 @@ pub struct SyncOutcome {
     pub settings_held: Vec<String>,
     /// Plugins whose settings were taken from another computer: (plugin id, its name).
     pub plugin_settings_applied: Vec<(String, String)>,
+    /// Why the SQLite copy (`SyncConfig::sqlite_copy`) could not be updated; the sync itself went
+    /// through.
+    pub sqlite_copy_error: Option<String>,
 }
 
 /// A session past the retention period, as the popover lists it for the user's OK.
@@ -284,7 +374,7 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
     let mut config = load_config();
     let remote = config.remote.clone().ok_or(SyncError::NotConnected)?;
     let _lock = Lock::take()?;
-    let repo = Repo::new(clone_dir(), remote.clone(), config.branch.clone());
+    let repo = backend_for(&remote, &config.branch);
     if !repo.is_cloned() {
         repo.ensure_clone()?;
     }
@@ -299,11 +389,20 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
         with_settings = SyncRequest { settings, ..request.clone() };
         request = &with_settings;
     }
-    let outcome = run(&repo, &mut config, request, &Locate::agents());
+    let outcome = run(repo.as_ref(), &mut config, request, &Locate::agents());
     // Ids given out in this pass are kept even when the push failed: the next pass reuses them.
     let assigned: Vec<(String, String)> =
         request.workspaces.iter().filter_map(|w| config.workspaces.get(&w.local_key).map(|id| (w.local_key.clone(), id.clone()))).collect();
-    let outcome = outcome.map(|o| SyncOutcome { computer: stats_in(&repo.dir, &this_computer_devices(&o.overview, &config)), ..o });
+    let outcome = outcome.map(|o| SyncOutcome { computer: stats_in(repo.dir(), &this_computer_devices(&o.overview, &config)), ..o });
+    // The pass went through: the clone as it is now (every computer's sessions) into the file
+    // too, still under the lock. Checked by size and time, so an unchanged clone costs little.
+    let outcome = outcome.map(|o| match config.sqlite_copy && !remote.is_sqlite() {
+        true => {
+            let copy = sqlite::SqliteStore::new(clone_dir(), default_sqlite_file());
+            SyncOutcome { sqlite_copy_error: copy.commit_all().err().map(|e| format!("{e:#}")), ..o }
+        }
+        false => o,
+    });
     let at = outcome.as_ref().ok().map(|o| o.at.clone());
     let (fingerprint, changed_at) = (config.settings_fingerprint.clone(), config.settings_changed_at.clone());
     let plugin_marks = config.plugin_settings.clone();
@@ -397,42 +496,42 @@ fn agent_knows_folder(agent: Agent, relative: &Path, cwd: &Path) -> bool {
     }
 }
 
-fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Locate) -> Result<SyncOutcome, SyncError> {
+fn run(repo: &dyn Backend, config: &mut SyncConfig, request: &SyncRequest, locate: &Locate) -> Result<SyncOutcome, SyncError> {
     let device_name = config.device_name.clone();
     let author = Author { device_name: &device_name };
     let mut last_error = None;
     for _ in 0..5 {
         repo.fetch()?;
         repo.reset_to_remote()?;
-        if !repo.dir.join(MARKER_FILE).is_file() {
+        if !repo.dir().join(MARKER_FILE).is_file() {
             if !repo.is_empty_or_readme_only() {
                 return Err(SyncError::NotSyncRepository);
             }
-            initialize(&repo.dir, &config.device_id)?;
+            initialize(repo.dir(), &config.device_id)?;
         }
-        write_folder_readmes(&repo.dir)?;
+        write_folder_readmes(repo.dir())?;
         if let Some(days) = request.retention.filter(|d| *d > 0) {
             let retention = Retention { days, changed_at: now_stamp(), changed_by: config.device_id.clone() };
-            if read_retention(&repo.dir) != days {
-                session::write_json(&repo.dir.join(RETENTION_FILE), &retention)?;
+            if read_retention(repo.dir()) != days {
+                session::write_json(&repo.dir().join(RETENTION_FILE), &retention)?;
             }
         }
-        let uploaded = write_device_files(&repo.dir, config, request, locate)?;
+        let uploaded = write_device_files(repo.dir(), config, request, locate)?;
         // Deleting waits for the user's OK: only what they agreed to, and only while still old.
-        let old = old_sessions(&repo.dir, retention_cutoff(&repo.dir));
+        let old = old_sessions(repo.dir(), retention_cutoff(repo.dir()));
         let (approved, prune_pending): (Vec<PruneItem>, Vec<PruneItem>) =
             old.into_iter().partition(|item| request.prune.iter().any(|ok| ok.same(item)));
-        delete_sessions(&repo.dir, &approved)?;
+        delete_sessions(repo.dir(), &approved)?;
         let (incoming, settings_held) = match &request.settings {
             Some(local) => {
-                let step = settings::step(&repo.dir, config, local)?;
+                let step = settings::step(repo.dir(), config, local)?;
                 (step.incoming, step.held)
             }
             None => (None, Vec::new()),
         };
         // Plugins' settings go with the rest of the settings.
         let (plugins_applied, settings_held) = if request.settings.is_some() {
-            let plugins = plugin_settings::step(&repo.dir, &locate.data, config, &locate.plugins)?;
+            let plugins = plugin_settings::step(repo.dir(), &locate.data, config, &locate.plugins)?;
             let mut held = settings_held;
             held.extend(plugins.held.iter().map(|id| format!("plugin:{id}")));
             (plugins.applied, held)
@@ -449,7 +548,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
             return Ok(SyncOutcome {
                 pushed: false,
                 sessions_uploaded: 0,
-                overview: read_overview(&repo.dir),
+                overview: read_overview(repo.dir()),
                 at: now_stamp(),
                 settings: incoming,
                 settings_held: settings_held.clone(),
@@ -463,7 +562,7 @@ fn run(repo: &Repo, config: &mut SyncConfig, request: &SyncRequest, locate: &Loc
                 return Ok(SyncOutcome {
                     pushed: true,
                     sessions_uploaded: uploaded,
-                    overview: read_overview(&repo.dir),
+                    overview: read_overview(repo.dir()),
                     at: now_stamp(),
                     settings: incoming,
                     settings_held,
@@ -578,26 +677,35 @@ pub fn connect(remote: Remote) -> Result<Connected, SyncError> {
     let _lock = Lock::take()?;
     let dir = clone_dir();
     let _ = fs::remove_dir_all(&dir);
-    let mut repo = Repo::new(dir, remote.clone(), "main");
+    // A SQLite file already there (an earlier backup, or one copied from another computer) is
+    // joined like a repository other devices use: its sessions come back into the tree.
+    let (repo, branch): (Box<dyn Backend>, String) = match &remote {
+        Remote::Sqlite { path } => (Box::new(sqlite::SqliteStore::new(dir, PathBuf::from(path))), "main".into()),
+        _ => {
+            let mut git = Repo::new(dir, remote.clone(), "main");
+            git.ensure_clone()?;
+            git.branch = git.detect_branch();
+            let branch = git.branch.clone();
+            (Box::new(git), branch)
+        }
+    };
     repo.ensure_clone()?;
-    repo.branch = repo.detect_branch();
     // Saved now, so the device id written into the repository is the one this computer keeps.
     let config = update_config(|c| c.clone())?;
-    let outcome = if repo.dir.join(MARKER_FILE).is_file() {
-        Connected::Joined { devices: read_overview(&repo.dir).computers().len() }
+    let outcome = if repo.dir().join(MARKER_FILE).is_file() {
+        Connected::Joined { devices: read_overview(repo.dir()).computers().len() }
     } else if repo.is_empty_or_readme_only() {
         repo.reset_to_remote()?;
-        initialize(&repo.dir, &config.device_id)?;
+        initialize(repo.dir(), &config.device_id)?;
         repo.commit_all("sync: set up", &Author { device_name: &config.device_name })?;
         if repo.push()? == Pushed::Rejected {
             return Err(SyncError::Failed("the repository changed while it was being set up; try again".into()));
         }
         Connected::Created
     } else {
-        let _ = fs::remove_dir_all(&repo.dir);
+        let _ = fs::remove_dir_all(repo.dir());
         return Err(SyncError::NotSyncRepository);
     };
-    let branch = repo.branch.clone();
     update_config(|c| {
         c.remote = Some(remote);
         c.branch = branch;
@@ -620,7 +728,8 @@ pub fn set_github_ssh(ssh: bool) -> Result<()> {
     Ok(())
 }
 
-/// Forgets the repository on this computer. Nothing is deleted from the repository.
+/// Forgets the repository on this computer. Nothing is deleted from the repository (a SQLite file
+/// stays where it is, to be connected again).
 pub fn disconnect() -> Result<()> {
     let _lock = Lock::take().map_err(|e| anyhow::anyhow!("{e}"))?;
     update_config(|c| {

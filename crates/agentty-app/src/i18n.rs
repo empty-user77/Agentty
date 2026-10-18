@@ -2732,6 +2732,7 @@ strings! {
     "sync.connected_new" => ["Connected. The repository is set up for sync.", "연결되었습니다. 동기화용 저장소를 준비했습니다.", "接続しました。同期用にリポジトリを準備しました。", "已连接。仓库已设置为同步用。"],
     "sync.connected_joined" => ["Connected to a sync repository used by {n} computer(s).", "컴퓨터 {n}대가 쓰는 동기화 저장소에 연결되었습니다.", "{n} 台のコンピュータが使う同期リポジトリに接続しました。", "已连接到 {n} 台电脑使用的同步仓库。"],
     "sync.disconnected" => ["Disconnected. Nothing was deleted from the repository.", "연결을 해제했습니다. 저장소에서는 아무것도 지우지 않았습니다.", "接続を解除しました。リポジトリからは何も削除していません。", "已断开连接。仓库中的内容没有删除。"],
+    "sync.intro_sqlite" => ["Workspaces and their agent sessions are kept in a SQLite file on this computer, so they can be continued even after the agent lost them.", "작업공간과 에이전트 세션을 이 컴퓨터의 SQLite 파일에 보관해, 에이전트 쪽에서 사라져도 다시 이어서 쓸 수 있습니다.", "ワークスペースとエージェントのセッションをこのコンピュータの SQLite ファイルに保存し、エージェント側で消えても続けられます。", "工作区及其智能体会话保存在这台电脑上的 SQLite 文件中，即使智能体那边丢失了也能继续使用。"],
     "sync.intro" => ["Workspaces and their agent sessions are kept in a private git repository you own, so another computer can pick them up. Each computer writes only its own files.", "작업공간과 에이전트 세션을 내 비공개 git 저장소에 보관해 다른 컴퓨터에서 이어서 쓸 수 있습니다. 컴퓨터마다 자기 파일만 씁니다.", "ワークスペースとエージェントのセッションを自分の非公開 git リポジトリに保存し、別のコンピュータで続けられます。各コンピュータは自分のファイルだけを書き込みます。", "工作区及其智能体会话保存在你自己的私有 git 仓库中，另一台电脑可以接着用。每台电脑只写入自己的文件。"],
     "sync.setup" => ["Connect a repository", "저장소 연결", "リポジトリを接続", "连接仓库"],
     "sync.repository" => ["Repository", "저장소", "リポジトリ", "仓库"],
@@ -2821,6 +2822,38 @@ strings! {
     "sync.computer_id_body" => ["Each computer is told apart by an id Agentty makes for it in ~/.agentty (nothing about the hardware is read). If you delete the ~/.agentty folder, this computer gets a new id and shows up as another computer.", "컴퓨터는 Agentty가 ~/.agentty에 만들어 두는 고유 ID로 구분합니다(하드웨어 정보는 읽지 않습니다). ~/.agentty 폴더를 지우면 새 ID가 만들어져 다른 컴퓨터로 표시됩니다.", "コンピュータは Agentty が ~/.agentty に作る ID で区別します（ハードウェアの情報は読みません）。~/.agentty フォルダを削除すると新しい ID が作られ、別のコンピュータとして表示されます。", "每台电脑通过 Agentty 在 ~/.agentty 中生成的 ID 来区分（不读取硬件信息）。删除 ~/.agentty 文件夹后会生成新 ID，并显示为另一台电脑。"],
     "sync.method_github" => ["GitHub (gh)", "GitHub (gh)", "GitHub (gh)", "GitHub (gh)"],
     "sync.method_url" => ["git URL (SSH / HTTPS)", "git URL (SSH / HTTPS)", "git URL (SSH / HTTPS)", "git URL (SSH / HTTPS)"],
+    "sync.method_sqlite" => ["This computer (SQLite)", "이 컴퓨터 (SQLite)", "このコンピュータ（SQLite）", "这台电脑（SQLite）"],
+    "sync.sqlite_body" => [
+        "Sessions are kept in one SQLite file in Agentty's folder on this computer: nothing to install, no account. If a session disappears from the agent's own folder (~/.claude, ~/.codex), Continue brings it back from the file. It stays on this computer: for other computers, use a git repository.",
+        "세션을 이 컴퓨터의 Agentty 폴더에 있는 SQLite 파일 하나에 보관합니다. 따로 설치할 것도, 계정도 필요 없습니다. 에이전트 폴더(~/.claude, ~/.codex)에서 세션이 사라져도 '이어하기'로 이 파일에서 되살릴 수 있습니다. 이 컴퓨터에만 있으니 다른 컴퓨터와 나누려면 git 저장소를 쓰세요.",
+        "セッションはこのコンピュータの Agentty フォルダにある SQLite ファイル 1 つに保存されます。インストールもアカウントも不要です。エージェントのフォルダ（~/.claude、~/.codex）からセッションが消えても、「続ける」でこのファイルから戻せます。このコンピュータにだけあるので、他のコンピュータと共有するには git リポジトリを使ってください。",
+        "会话保存在这台电脑 Agentty 文件夹中的一个 SQLite 文件里：无需安装，也不需要账号。即使会话从智能体自己的文件夹（~/.claude、~/.codex）中消失，也可以用“继续”从该文件恢复。它只在这台电脑上；要与其他电脑共享，请使用 git 仓库。"
+    ],
+    "sync.sqlite_new" => ["Made when you start using it", "사용을 누르면 만들어집니다", "使い始めると作成されます", "开始使用时创建"],
+    "sync.sqlite_existing" => ["Already there: its sessions come back", "이미 있는 파일입니다. 안의 세션을 다시 불러옵니다", "既にあるファイルです。中のセッションを読み込みます", "文件已存在：其中的会话会被重新载入"],
+    "sync.sqlite_use" => ["Use", "사용", "使う", "使用"],
+    "sync.sqlite_file" => ["SQLite file", "SQLite 파일", "SQLite ファイル", "SQLite 文件"],
+    "sync.sqlite_file_hint" => [
+        "{size}. This one file is the whole backup: copied into Agentty's folder on another computer and used there, it brings the sessions back. Disconnecting keeps it.",
+        "{size}. 이 파일 하나가 백업 전체입니다. 다른 컴퓨터의 Agentty 폴더에 복사해서 사용하면 세션이 되살아납니다. 연결을 끊어도 파일은 남습니다.",
+        "{size}。このファイル 1 つがバックアップのすべてです。別のコンピュータの Agentty フォルダにコピーして使うと、セッションが戻ります。接続を解除してもファイルは残ります。",
+        "{size}。这一个文件就是全部备份：复制到另一台电脑的 Agentty 文件夹并在那里使用，会话就会恢复。断开连接后文件仍会保留。"
+    ],
+    "sync.sqlite_copy" => ["Also keep a SQLite copy", "SQLite에도 함께 보관", "SQLite にも保存", "同时保存一份 SQLite 副本"],
+    "sync.sqlite_copy_hint" => [
+        "After every sync, what the repository holds also goes into {file} on this computer: sessions come back from it even without the repository.",
+        "동기화할 때마다 저장소 내용을 이 컴퓨터의 {file}에도 저장합니다. 저장소가 없어도 이 파일에서 세션을 되살릴 수 있습니다.",
+        "同期のたびに、リポジトリの内容をこのコンピュータの {file} にも保存します。リポジトリがなくても、このファイルからセッションを戻せます。",
+        "每次同步后，仓库的内容也会保存到这台电脑上的 {file}：即使没有仓库，也能从中恢复会话。"
+    ],
+    "sync.sqlite_copy_hint_size" => [
+        "After every sync, what the repository holds also goes into {file} ({size}) on this computer: sessions come back from it even without the repository.",
+        "동기화할 때마다 저장소 내용을 이 컴퓨터의 {file}({size})에도 저장합니다. 저장소가 없어도 이 파일에서 세션을 되살릴 수 있습니다.",
+        "同期のたびに、リポジトリの内容をこのコンピュータの {file}（{size}）にも保存します。リポジトリがなくても、このファイルからセッションを戻せます。",
+        "每次同步后，仓库的内容也会保存到这台电脑上的 {file}（{size}）：即使没有仓库，也能从中恢复会话。"
+    ],
+    "sync.sqlite_copy_failed" => ["Synced, but the SQLite copy wasn't updated: {reason}", "동기화는 됐지만 SQLite 사본은 갱신하지 못했습니다: {reason}", "同期しましたが、SQLite のコピーは更新できませんでした: {reason}", "已同步，但 SQLite 副本未能更新：{reason}"],
+    "sync.sqlite_reveal" => ["Show in folder", "폴더에서 보기", "フォルダで表示", "在文件夹中显示"],
     "sync.looking_up" => ["Looking for the GitHub CLI…", "GitHub CLI를 확인하는 중…", "GitHub CLI を確認しています…", "正在查找 GitHub CLI…"],
     "sync.gh_missing" => ["The GitHub CLI (gh) is not installed or not signed in. Run `gh auth login`, or connect with a git URL instead.", "GitHub CLI(gh)가 설치되어 있지 않거나 로그인되어 있지 않습니다. `gh auth login`을 실행하거나 git URL로 연결하세요.", "GitHub CLI (gh) がインストールされていないか、サインインしていません。`gh auth login` を実行するか、git URL で接続してください。", "未安装或未登录 GitHub CLI (gh)。请运行 `gh auth login`，或改用 git URL 连接。"],
     "sync.gh_account" => ["Signed in to GitHub as {login}", "GitHub에 {login}(으)로 로그인됨", "GitHub に {login} としてサインイン中", "已以 {login} 登录 GitHub"],
