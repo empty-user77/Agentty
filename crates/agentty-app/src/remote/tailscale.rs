@@ -51,15 +51,23 @@ struct Output {
 /// is off: on macOS the tool brings the VPN back up just by asking it something, and a VPN the
 /// user turned off must stay off.
 fn run(args: &[&str], timeout: Duration) -> Option<Output> {
+    run_with(args, timeout, true)
+}
+
+/// `run`, with stdout thrown away unread when `keep_out` is false (`out` is then empty).
+fn run_with(args: &[&str], timeout: Duration, keep_out: bool) -> Option<Output> {
     if vpn_off() {
         return None;
     }
-    let mut child = Command::new(binary()?).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
-    let mut stdout = child.stdout.take()?;
+    let stdout = if keep_out { Stdio::piped() } else { Stdio::null() };
+    let mut child = Command::new(binary()?).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().ok()?;
+    let stdout = child.stdout.take();
     let mut stderr = child.stderr.take()?;
     let out = std::thread::spawn(move || {
         let mut text = String::new();
-        let _ = stdout.read_to_string(&mut text);
+        if let Some(mut stdout) = stdout {
+            let _ = stdout.read_to_string(&mut text);
+        }
         text
     });
     let err = std::thread::spawn(move || {
@@ -123,6 +131,19 @@ pub fn parse_status(json: &str) -> Status {
     status.login = user_id.and_then(|id| value["User"][&id]["LoginName"].as_str().map(str::to_string)).filter(|l| !l.is_empty());
     status.https = value["CertDomains"].as_array().is_some_and(|d| !d.is_empty());
     status
+}
+
+/// Has Tailscale get this machine's HTTPS certificate for `domain` now, rather than on the first
+/// request through `serve` (which then takes longer than a start waits for). Only Tailscale keeps
+/// it, and renews it: what the tool prints, the private key included, goes nowhere.
+pub fn issue_certificate(domain: &str) -> Result<(), String> {
+    let output = run_with(&["cert", "--cert-file", "-", "--key-file", "-", domain], Duration::from_secs(150), false)
+        .ok_or_else(|| "tailscale did not run".to_string())?;
+    if output.ok {
+        return Ok(());
+    }
+    let line = output.all.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("tailscale cert failed");
+    Err(redact(line).chars().take(200).collect())
 }
 
 /// A device on the tailnet, as `tailscale whois` describes it.
