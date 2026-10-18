@@ -28,8 +28,10 @@ url = "2.5.8"
 memchr = "2"
 whisper-rs = { version = "0.16", optional = true }
 hound = { version = "3.5", optional = true }
-# Session sync's local store (a single SQLite file): SQLite compiled in, nothing to install.
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+# Session sync's local store (a single SQLite file), through the SQLite every system already has:
+# macOS's /usr/lib/libsqlite3 and Linux's libsqlite3 (a package dependency), so the app stays its
+# size. Windows has no sqlite3 library to link against, so there it is compiled in.
+rusqlite = { version = "0.40.2", features = ["bundled-windows"] }
 
 [features]
 # On-device voice-to-text. Compiles whisper.cpp (needs cmake + a C/C++ toolchain); on by default
