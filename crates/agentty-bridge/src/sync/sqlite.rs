@@ -185,6 +185,10 @@ fn tree_files(dir: &Path) -> HashMap<String, Seen> {
     while let Some(folder) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(&folder) else { continue };
         for entry in entries.flatten() {
+            // A git clone's own data, when the file is a copy of one (`SyncConfig::sqlite_copy`).
+            if entry.file_name() == ".git" {
+                continue;
+            }
             let path = entry.path();
             let Ok(kind) = entry.file_type() else { continue };
             if kind.is_dir() {

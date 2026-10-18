@@ -49,6 +49,9 @@ pub struct SyncConfig {
     pub settings_changed_at: String,
     /// Each plugin's settings as this computer last synced them (plugin id → state).
     pub plugin_settings: BTreeMap<String, plugin_settings::Mark>,
+    /// With a git repository: after every sync, what the clone holds also goes into the SQLite
+    /// file (`default_sqlite_file`), a copy on this computer that outlives the repository.
+    pub sqlite_copy: bool,
 }
 
 impl SyncConfig {
@@ -336,6 +339,9 @@ pub struct SyncOutcome {
     pub settings_held: Vec<String>,
     /// Plugins whose settings were taken from another computer: (plugin id, its name).
     pub plugin_settings_applied: Vec<(String, String)>,
+    /// Why the SQLite copy (`SyncConfig::sqlite_copy`) could not be updated; the sync itself went
+    /// through.
+    pub sqlite_copy_error: Option<String>,
 }
 
 /// A session past the retention period, as the popover lists it for the user's OK.
@@ -388,6 +394,15 @@ pub fn sync(request: &SyncRequest) -> Result<SyncOutcome, SyncError> {
     let assigned: Vec<(String, String)> =
         request.workspaces.iter().filter_map(|w| config.workspaces.get(&w.local_key).map(|id| (w.local_key.clone(), id.clone()))).collect();
     let outcome = outcome.map(|o| SyncOutcome { computer: stats_in(repo.dir(), &this_computer_devices(&o.overview, &config)), ..o });
+    // The pass went through: the clone as it is now (every computer's sessions) into the file
+    // too, still under the lock. Checked by size and time, so an unchanged clone costs little.
+    let outcome = outcome.map(|o| match config.sqlite_copy && !remote.is_sqlite() {
+        true => {
+            let copy = sqlite::SqliteStore::new(clone_dir(), default_sqlite_file());
+            SyncOutcome { sqlite_copy_error: copy.commit_all().err().map(|e| format!("{e:#}")), ..o }
+        }
+        false => o,
+    });
     let at = outcome.as_ref().ok().map(|o| o.at.clone());
     let (fingerprint, changed_at) = (config.settings_fingerprint.clone(), config.settings_changed_at.clone());
     let plugin_marks = config.plugin_settings.clone();

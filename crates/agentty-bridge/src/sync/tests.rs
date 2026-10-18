@@ -810,6 +810,34 @@ fn readmes_from_an_earlier_version_are_brought_up_to_date() {
 }
 
 #[test]
+fn a_git_clone_copied_into_sqlite_comes_back_without_git() {
+    let root = temp("sqlite-copy");
+    let url = bare(&root.join("remote.git"));
+    let home = root.join("home");
+    fs::create_dir_all(home.join("claude")).unwrap();
+    fs::write(home.join("claude/s.jsonl"), "{\"n\":1}\n").unwrap();
+    let a = device("dev-a", "A", &url);
+    let repo = Repo::new(root.join("clone"), a.remote.clone().unwrap(), "main");
+    repo.ensure_clone().unwrap();
+    let request = SyncRequest { workspaces: vec![workspace("ws", &root, &["s"])], ..Default::default() };
+    assert!(run(&repo, &mut a.clone(), &request, &locate(&home)).unwrap().pushed);
+
+    // What `sync` does after a pass with the copy on.
+    let file = root.join("sessions.sqlite");
+    assert!(sqlite::SqliteStore::new(repo.dir.clone(), file.clone()).commit_all().unwrap());
+    assert!(!sqlite::SqliteStore::new(repo.dir.clone(), file.clone()).commit_all().unwrap(), "unchanged clone");
+
+    // The repository gone: the file alone makes the tree again, sessions and all, no git data.
+    let elsewhere = sqlite::SqliteStore::new(root.join("restored"), file);
+    elsewhere.ensure_clone().unwrap();
+    assert!(!elsewhere.dir.join(".git").exists());
+    assert!(elsewhere.dir.join(MARKER_FILE).is_file());
+    let overview = read_overview(&elsewhere.dir);
+    assert_eq!(overview.computers().len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_sqlite_file_keeps_sessions_the_agent_lost() {
     let root = temp("sqlite");
     let home = root.join("home");

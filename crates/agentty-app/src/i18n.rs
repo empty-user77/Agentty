@@ -2825,6 +2825,20 @@ strings! {
         "{size}。このファイル 1 つがバックアップのすべてです。別のコンピュータの Agentty フォルダにコピーして使うと、セッションが戻ります。接続を解除してもファイルは残ります。",
         "{size}。这一个文件就是全部备份：复制到另一台电脑的 Agentty 文件夹并在那里使用，会话就会恢复。断开连接后文件仍会保留。"
     ],
+    "sync.sqlite_copy" => ["Also keep a SQLite copy", "SQLite에도 함께 보관", "SQLite にも保存", "同时保存一份 SQLite 副本"],
+    "sync.sqlite_copy_hint" => [
+        "After every sync, what the repository holds also goes into {file} on this computer: sessions come back from it even without the repository.",
+        "동기화할 때마다 저장소 내용을 이 컴퓨터의 {file}에도 저장합니다. 저장소가 없어도 이 파일에서 세션을 되살릴 수 있습니다.",
+        "同期のたびに、リポジトリの内容をこのコンピュータの {file} にも保存します。リポジトリがなくても、このファイルからセッションを戻せます。",
+        "每次同步后，仓库的内容也会保存到这台电脑上的 {file}：即使没有仓库，也能从中恢复会话。"
+    ],
+    "sync.sqlite_copy_hint_size" => [
+        "After every sync, what the repository holds also goes into {file} ({size}) on this computer: sessions come back from it even without the repository.",
+        "동기화할 때마다 저장소 내용을 이 컴퓨터의 {file}({size})에도 저장합니다. 저장소가 없어도 이 파일에서 세션을 되살릴 수 있습니다.",
+        "同期のたびに、リポジトリの内容をこのコンピュータの {file}（{size}）にも保存します。リポジトリがなくても、このファイルからセッションを戻せます。",
+        "每次同步后，仓库的内容也会保存到这台电脑上的 {file}（{size}）：即使没有仓库，也能从中恢复会话。"
+    ],
+    "sync.sqlite_copy_failed" => ["Synced, but the SQLite copy wasn't updated: {reason}", "동기화는 됐지만 SQLite 사본은 갱신하지 못했습니다: {reason}", "同期しましたが、SQLite のコピーは更新できませんでした: {reason}", "已同步，但 SQLite 副本未能更新：{reason}"],
     "sync.sqlite_reveal" => ["Show in folder", "폴더에서 보기", "フォルダで表示", "在文件夹中显示"],
     "sync.looking_up" => ["Looking for the GitHub CLI…", "GitHub CLI를 확인하는 중…", "GitHub CLI を確認しています…", "正在查找 GitHub CLI…"],
     "sync.gh_missing" => ["The GitHub CLI (gh) is not installed or not signed in. Run `gh auth login`, or connect with a git URL instead.", "GitHub CLI(gh)가 설치되어 있지 않거나 로그인되어 있지 않습니다. `gh auth login`을 실행하거나 git URL로 연결하세요.", "GitHub CLI (gh) がインストールされていないか、サインインしていません。`gh auth login` を実行するか、git URL で接続してください。", "未安装或未登录 GitHub CLI (gh)。请运行 `gh auth login`，或改用 git URL 连接。"],

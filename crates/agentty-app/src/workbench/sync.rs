@@ -555,6 +555,9 @@ impl Workbench {
                         this.sync.computer = outcome.computer;
                         this.sync.prune_pending = outcome.prune_pending;
                         this.sync.settings_held = if this.sync.config.settings { outcome.settings_held } else { Vec::new() };
+                        if let Some(reason) = outcome.sqlite_copy_error {
+                            this.sync.message = Some((tf(cx, "sync.sqlite_copy_failed", &[("reason", &reason)]), true));
+                        }
                         // With the ids handed out in this pass.
                         this.sync.config = bridge::load_config();
                         this.sync.status = Status::Synced;
@@ -614,6 +617,16 @@ impl Workbench {
     /// Whether settings travel with the sync.
     pub(super) fn sync_settings_on(&self) -> bool {
         self.sync.config.connected() && self.sync.config.settings
+    }
+
+    /// Turns the SQLite copy of a git sync on (filled by a sync right away) or off (the file stays).
+    fn set_sqlite_copy(&mut self, on: bool, cx: &mut Context<Self>) {
+        let _ = bridge::update_config(|c| c.sqlite_copy = on);
+        self.sync.config.sqlite_copy = on;
+        if on {
+            self.sync_now(cx);
+        }
+        cx.notify();
     }
 
     fn set_sync_settings(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -1726,7 +1739,34 @@ impl Workbench {
                         action_button("sync-sqlite-reveal", t(cx, "sync.sqlite_reveal"), move |_, _, _| crate::platform::reveal(&file)),
                     ))
                 }
-                _ => repository.child(row_with_hint(t(cx, "sync.transport"), t(cx, "sync.transport_hint"), transport)),
+                // A git repository can also leave a copy of everything in the SQLite file.
+                _ => {
+                    let copy = self.sync.config.sqlite_copy;
+                    let file = agentty_bridge::sync::default_sqlite_file();
+                    let size = std::fs::metadata(&file).map(|m| m.len()).ok();
+                    let hint = match size {
+                        Some(size) => tf(cx, "sync.sqlite_copy_hint_size", &[("file", &sqlite_label(&file)), ("size", &human_size(size))]),
+                        None => tf(cx, "sync.sqlite_copy_hint", &[("file", &sqlite_label(&file))]),
+                    };
+                    repository.child(row_with_hint(t(cx, "sync.transport"), t(cx, "sync.transport_hint"), transport)).child(row_with_hint(
+                        t(cx, "sync.sqlite_copy"),
+                        &hint,
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .when(size.is_some(), |d| {
+                                d.child(action_button("sync-sqlite-copy-reveal", t(cx, "sync.sqlite_reveal"), move |_, _, _| {
+                                    crate::platform::reveal(&file)
+                                }))
+                            })
+                            .child(switch(
+                                "sync-sqlite-copy",
+                                copy,
+                                cx.listener(move |this, _: &ClickEvent, _, cx| this.set_sqlite_copy(!copy, cx)),
+                            )),
+                    ))
+                }
             };
             // Old sessions: one period for the whole repository. A choice here is only a draft
             // until Save: deleting from every computer is too much to follow a stray click.
@@ -2106,6 +2146,11 @@ impl Workbench {
 
 /// Retention periods offered in Settings → Sync (days); any other is "Custom".
 const RETENTION_PRESETS: [u32; 4] = [30, 90, 180, 365];
+
+/// The SQLite file as the settings show it (`~/.agentty/sessions.sqlite`).
+fn sqlite_label(file: &std::path::Path) -> String {
+    Remote::Sqlite { path: file.to_string_lossy().into_owned() }.label()
+}
 
 /// `1.2 MB`, `640 KB`, `12 B`.
 fn human_size(bytes: u64) -> String {
