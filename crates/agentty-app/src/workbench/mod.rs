@@ -48,6 +48,8 @@ mod persist;
 mod picker;
 pub mod plugin_browser;
 mod plugin_graph;
+// The file editor shows pictures the same way plugins do.
+pub(crate) use plugin_graph::{file_is_raster, raster_format};
 mod plugin_host;
 mod plugin_panel;
 mod plugin_ui;
