@@ -26,6 +26,8 @@ pub enum Remote {
     },
     /// Any git URL (SSH, HTTPS with the user's credential helper, or a local path for tests).
     Git { url: String },
+    /// A SQLite file on this computer (`super::sqlite`): no git, no account, no other computer.
+    Sqlite { path: String },
 }
 
 impl Remote {
@@ -34,7 +36,12 @@ impl Remote {
             Remote::Github { repo, ssh: false } => format!("https://github.com/{repo}.git"),
             Remote::Github { repo, ssh: true } => format!("git@github.com:{repo}.git"),
             Remote::Git { url } => url.clone(),
+            Remote::Sqlite { path } => path.clone(),
         }
+    }
+
+    pub fn is_sqlite(&self) -> bool {
+        matches!(self, Remote::Sqlite { .. })
     }
 
     /// The repository's page, to open from the UI: GitHub's for a GitHub repository (either
@@ -50,14 +57,22 @@ impl Remote {
                     clean.starts_with("https://").then(|| clean.trim_end_matches('/').trim_end_matches(".git").to_string())
                 }
             },
+            Remote::Sqlite { .. } => None,
         }
     }
 
-    /// Short label for the UI: `owner/name`, or the URL without credentials.
+    /// Short label for the UI: `owner/name`, the URL without credentials, or the file (`~/…`).
     pub fn label(&self) -> String {
         match self {
             Remote::Github { repo, .. } => repo.clone(),
             Remote::Git { url } => strip_credentials(url),
+            Remote::Sqlite { path } => {
+                let home = crate::fsutil::home();
+                match Path::new(path).strip_prefix(&home) {
+                    Ok(rest) => format!("~/{}", rest.to_string_lossy()),
+                    Err(_) => path.clone(),
+                }
+            }
         }
     }
 
@@ -253,7 +268,7 @@ fn sync_candidates(lines: &str) -> Result<Vec<GithubRepo>> {
 }
 
 /// Files a new repository may start with that do not keep it from being used for sync.
-fn setup_file(name: &str) -> bool {
+pub(super) fn setup_file(name: &str) -> bool {
     let name = name.to_lowercase();
     name.starts_with("readme") || name.starts_with("license") || name == ".gitignore" || name == ".gitattributes"
 }
@@ -291,6 +306,8 @@ pub fn visibility(remote: &Remote) -> Visibility {
     if let Some(repo) = match remote {
         Remote::Github { repo, .. } => Some(repo.clone()),
         Remote::Git { url } => github_repo_of(url).filter(|_| find_tool("gh").is_some()),
+        // A file in the user's own folder, private like the data folder it is in.
+        Remote::Sqlite { .. } => return Visibility::Private,
     } {
         return match gh(&["repo", "view", &repo, "--json", "visibility", "--jq", ".visibility"]) {
             Ok(v) if v.trim().eq_ignore_ascii_case("PRIVATE") => Visibility::Private,

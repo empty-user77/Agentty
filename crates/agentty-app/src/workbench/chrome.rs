@@ -638,7 +638,7 @@ impl Workbench {
         if !self.groups.is_empty() && (!ungrouped.is_empty() || dragging) {
             ungrouped_open = !self.ungrouped_collapsed;
             let label = t(cx, "ungrouped").into();
-            list = list.child(self.render_group_header(None, label, self.ungrouped_collapsed, ungrouped.len(), window, cx));
+            list = list.child(self.render_group_header(None, label, self.ungrouped_collapsed, ungrouped.len(), window, cx).mt_1p5());
         }
         if ungrouped_open {
             for index in ungrouped {
@@ -652,11 +652,13 @@ impl Workbench {
             // A group with a colour is drawn inside a frame of it, header included, so it reads as
             // one block; the header keeps its own rounded top.
             let accent = super::accent_color(group.color);
+            // The space above a group goes outside the frame, not between it and the header.
             let mut block = div().flex().flex_col().gap_px().map(|d| match accent {
-                Some(color) => d.rounded_md().border_1().border_color(hex_alpha(color, 0.55)).p_px(),
+                Some(color) => d.mt_1p5().rounded_md().border_1().border_color(hex_alpha(color, 0.55)).p_px(),
                 None => d,
             });
-            block = block.child(self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, members.len(), window, cx));
+            let header = self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, members.len(), window, cx);
+            block = block.child(header.when(accent.is_none(), |d| d.mt_1p5()));
             if group.collapsed {
                 list = list.child(block);
                 continue;
@@ -839,14 +841,13 @@ impl Workbench {
         count: usize,
         _: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::Stateful<gpui::Div> {
         let id = SharedString::from(format!("group-header-{}", group.unwrap_or(0)));
         let drag_title: SharedString = name.clone().into();
         div()
             .id(id)
             .relative()
             .group("group-header")
-            .mt_1p5()
             .px_2()
             .py_0p5()
             .flex()

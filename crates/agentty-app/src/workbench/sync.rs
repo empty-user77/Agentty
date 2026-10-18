@@ -46,7 +46,9 @@ pub(super) enum Status {
 /// Which way the repository is chosen in settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Method {
+    /// A SQLite file on this computer: nothing to set up.
     #[default]
+    Sqlite,
     Github,
     Url,
 }
@@ -1653,7 +1655,11 @@ impl Workbench {
             .message
             .clone()
             .map(|(text, error)| div().t_small().text_color(hex(if error { Chrome::ERROR } else { Chrome::SUCCESS })).child(text));
-        let intro = div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.intro"));
+        let sqlite = match &self.sync.config.remote {
+            Some(remote) => remote.is_sqlite(),
+            None => self.sync.method == Method::Sqlite,
+        };
+        let intro = div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, if sqlite { "sync.intro_sqlite" } else { "sync.intro" }));
 
         if let Some(remote) = self.sync.config.remote.clone() {
             let paused = self.sync.config.paused;
@@ -1707,8 +1713,21 @@ impl Workbench {
                         ))
                 }
                 Remote::Git { .. } => div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.via_git_url")),
+                Remote::Sqlite { .. } => div(),
             };
-            let repository = repository.child(row_with_hint(t(cx, "sync.transport"), t(cx, "sync.transport_hint"), transport));
+            let repository = match &remote {
+                // The file is the whole backup: where it is, how big, and how to bring it back.
+                Remote::Sqlite { path } => {
+                    let file = std::path::PathBuf::from(path);
+                    let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+                    repository.child(row_with_hint(
+                        t(cx, "sync.sqlite_file"),
+                        &tf(cx, "sync.sqlite_file_hint", &[("size", &human_size(size))]),
+                        action_button("sync-sqlite-reveal", t(cx, "sync.sqlite_reveal"), move |_, _, _| crate::platform::reveal(&file)),
+                    ))
+                }
+                _ => repository.child(row_with_hint(t(cx, "sync.transport"), t(cx, "sync.transport_hint"), transport)),
+            };
             // Old sessions: one period for the whole repository. A choice here is only a draft
             // until Save: deleting from every computer is too much to follow a stray click.
             let saved = self.retention_days();
@@ -1884,6 +1903,15 @@ impl Workbench {
             .flex()
             .gap_1()
             .child(chip(
+                "sync-method-sqlite",
+                t(cx, "sync.method_sqlite"),
+                method == Method::Sqlite,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.sync.method = Method::Sqlite;
+                    cx.notify();
+                }),
+            ))
+            .child(chip(
                 "sync-method-gh",
                 t(cx, "sync.method_github"),
                 method == Method::Github,
@@ -1904,6 +1932,21 @@ impl Workbench {
         let mut setup = section(t(cx, "sync.setup")).child(intro).child(methods);
         let busy = self.sync.connecting;
         match method {
+            Method::Sqlite => {
+                let file = agentty_bridge::sync::default_sqlite_file();
+                let remote = Remote::Sqlite { path: file.to_string_lossy().into_owned() };
+                let exists = file.is_file();
+                setup = setup.child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.sqlite_body"))).child(row_with_hint(
+                    &remote.label(),
+                    t(cx, if exists { "sync.sqlite_existing" } else { "sync.sqlite_new" }),
+                    action_button(
+                        "sync-connect-sqlite",
+                        t(cx, "sync.sqlite_use"),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.connect_sync(remote.clone(), cx)),
+                    )
+                    .when(busy, |b| b.opacity(0.5)),
+                ));
+            }
             Method::Github => match &self.sync.gh_login {
                 None => setup = setup.child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "sync.looking_up"))),
                 Some(None) => setup = setup.child(div().t_small().text_color(hex(Chrome::WARNING)).child(t(cx, "sync.gh_missing"))),

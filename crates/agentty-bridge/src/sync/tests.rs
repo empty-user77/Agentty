@@ -808,3 +808,38 @@ fn readmes_from_an_earlier_version_are_brought_up_to_date() {
     assert!(root.join("workspace/README.md").is_file());
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn a_sqlite_file_keeps_sessions_the_agent_lost() {
+    let root = temp("sqlite");
+    let home = root.join("home");
+    fs::create_dir_all(home.join("claude")).unwrap();
+    fs::write(home.join("claude/s.jsonl"), "{\"cwd\":\"/a/app\",\"sessionId\":\"s\",\"uuid\":\"1\"}\n").unwrap();
+    let file = root.join("sessions.sqlite");
+    let config = SyncConfig {
+        remote: Some(Remote::Sqlite { path: file.to_string_lossy().into() }),
+        branch: "main".into(),
+        device_id: "dev-a".into(),
+        device_name: "Office".into(),
+        ..Default::default()
+    };
+    let store = sqlite::SqliteStore::new(root.join("tree"), file.clone());
+    store.ensure_clone().unwrap();
+    let sync = SyncRequest { workspaces: vec![workspace("ws", &root, &["s"])], ..Default::default() };
+    let first = run(&store, &mut config.clone(), &sync, &locate(&home)).unwrap();
+    assert!(first.pushed && first.sessions_uploaded == 1);
+    assert!(!run(&store, &mut config.clone(), &sync, &locate(&home)).unwrap().pushed, "nothing new");
+
+    // The agent's transcript and the working tree are both gone: the file alone brings it back.
+    fs::remove_file(home.join("claude/s.jsonl")).unwrap();
+    fs::remove_dir_all(&store.dir).unwrap();
+    store.ensure_clone().unwrap();
+    assert_eq!(read_overview(&store.dir).computers().len(), 1);
+    let here = root.join("app");
+    fs::create_dir_all(&here).unwrap();
+    let restored = restore_in(&store.dir, &config, &request(&here), &locate(&home)).unwrap();
+    assert_eq!(restored.outcome, RestoreOutcome::Downloaded);
+    let back = (locate(&home).transcript)(Agent::Claude, "s").unwrap();
+    assert!(fs::read_to_string(back).unwrap().contains("\"uuid\":\"1\""));
+    let _ = fs::remove_dir_all(root);
+}
