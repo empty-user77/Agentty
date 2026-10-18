@@ -112,7 +112,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends build-essential pkg-config \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
-            libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev zsh >/dev/null
+            libvulkan-dev libfontconfig-dev libfreetype-dev libzstd-dev libsqlite3-dev zsh >/dev/null
       - name: Install toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

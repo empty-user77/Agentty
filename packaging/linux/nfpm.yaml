@@ -43,7 +43,8 @@ scripts:
   postinstall: packaging/linux/postinstall.sh
   postremove: packaging/linux/postinstall.sh
 
-# The libraries the binary links or loads at run time (GPUI: xkbcommon, X11/xcb, Wayland, Vulkan, fontconfig).
+# The libraries the binary links or loads at run time (GPUI: xkbcommon, X11/xcb, Wayland, Vulkan, fontconfig;
+# session sync's SQLite store: the system's libsqlite3).
 # The install check in the release workflow installs each package in a clean container and fails when `ldd`
 # reports a missing library.
 depends:
@@ -58,6 +59,7 @@ depends:
   - libfontconfig1
   - libfreetype6
   - libzstd1
+  - libsqlite3-0
 recommends:
   - mesa-vulkan-drivers
   - git
@@ -79,6 +81,7 @@ overrides:
       - fontconfig
       - freetype
       - libzstd
+      - sqlite-libs
     recommends:
       - mesa-vulkan-drivers
       - git

@@ -128,7 +128,7 @@ and workspace files. macOS does this through the system already.
 Releases carry `Agentty-X.Y.Z-linux-amd64.deb` (Debian 12+, Ubuntu 22.04+) and `Agentty-X.Y.Z-linux-x86_64.rpm`
 (RHEL / Rocky / Alma 9+, Fedora), x86_64 only. They install `/usr/bin/agentty`, the desktop entry (application menu
 and `agentty://` links) and the icon, and depend on the libraries GPUI loads (xkbcommon, xcb, Wayland, the Vulkan
-loader, fontconfig, freetype); a Vulkan driver (`mesa-vulkan-drivers`) is recommended. Install with
+loader, fontconfig, freetype) and SQLite (session sync's local store); a Vulkan driver (`mesa-vulkan-drivers`) is recommended. Install with
 `sudo apt install ./….deb` or `sudo dnf install ./….rpm`. Agentty announces new versions and opens the release page;
 the package manager installs them.
 
@@ -148,11 +148,11 @@ Windows for its hooks.
 
 ### Linux
 
-Install the libraries GPUI loads, then build:
+Install the libraries GPUI loads and SQLite, then build:
 
 ```sh
 sudo apt install pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-  libx11-xcb-dev libvulkan-dev libfontconfig-dev libzstd-dev
+  libx11-xcb-dev libvulkan-dev libfontconfig-dev libzstd-dev libsqlite3-dev
 cargo build --release -p agentty-app
 ```
 
