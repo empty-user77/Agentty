@@ -2648,7 +2648,7 @@ strings! {
     "editor.read_only_outside" => ["This file is a link to {path}, outside the project. It is read-only until you allow editing it.", "이 파일은 프로젝트 밖의 {path}를 가리키는 링크입니다. 편집을 허용하기 전까지 읽기 전용입니다.", "このファイルはプロジェクト外の {path} へのリンクです。編集を許可するまで読み取り専用です。", "此文件是指向项目之外 {path} 的链接。在你允许编辑之前为只读。"],
     "editor.read_only_permission" => ["You don't have permission to change this file.", "이 파일을 수정할 권한이 없습니다.", "このファイルを変更する権限がありません。", "你没有修改此文件的权限。"],
     "editor.allow_edit" => ["Allow editing", "편집 허용", "編集を許可", "允许编辑"],
-    "editor.binary" => ["This file is not text (an image, an archive or a compiled file), so it can't be shown here.", "텍스트가 아닌 파일(이미지, 압축 파일, 컴파일된 파일 등)이라 여기서 보여 줄 수 없습니다.", "テキストではないファイル（画像、アーカイブ、コンパイル済みファイルなど）のため、ここでは表示できません。", "此文件不是文本（图片、压缩包或编译产物），无法在此显示。"],
+    "editor.binary" => ["This file is not text (an archive, a compiled file or a format that can't be previewed), so it can't be shown here.", "텍스트가 아닌 파일(압축 파일, 컴파일된 파일, 미리보기를 지원하지 않는 형식 등)이라 여기서 보여 줄 수 없습니다.", "テキストではないファイル（アーカイブ、コンパイル済みファイル、プレビューできない形式など）のため、ここでは表示できません。", "此文件不是文本（压缩包、编译产物或无法预览的格式），无法在此显示。"],
     "editor.too_large" => ["This file is too large to open here ({size}).", "여기서 열기에는 너무 큰 파일입니다 ({size}).", "ここで開くには大きすぎるファイルです（{size}）。", "文件太大，无法在此打开（{size}）。"],
     "editor.open_failed" => ["Could not open the file: {error}", "파일을 열지 못했습니다: {error}", "ファイルを開けませんでした: {error}", "无法打开文件: {error}"],
     "editor.save_failed" => ["Could not save: {error}", "저장하지 못했습니다: {error}", "保存できませんでした: {error}", "无法保存: {error}"],

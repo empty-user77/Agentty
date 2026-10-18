@@ -214,6 +214,8 @@ struct Notice {
 
 enum Content {
     Text,
+    /// A picture, shown fitted to the editor (never larger than it is).
+    Image(std::sync::Arc<gpui::Image>),
     Binary,
     TooLarge(u64),
     Failed(String),
@@ -292,6 +294,7 @@ impl Document {
                 self.target = file.target;
                 self.read_only = file.read_only;
             }
+            Opened::Image(image) => self.content = Content::Image(image),
             Opened::Binary => self.content = Content::Binary,
             Opened::TooLarge(size) => self.content = Content::TooLarge(size),
             Opened::Failed(error) => self.content = Content::Failed(error),
@@ -1340,7 +1343,7 @@ impl CodeEditor {
             Content::Binary => t(cx, "editor.binary").to_string(),
             Content::TooLarge(size) => tf(cx, "editor.too_large", &[("size", &format!("{:.1} MB", *size as f64 / 1_048_576.))]),
             Content::Failed(error) => tf(cx, "editor.open_failed", &[("error", error)]),
-            Content::Text => String::new(),
+            Content::Text | Content::Image(_) => String::new(),
         };
         div()
             .flex_1()
@@ -1661,6 +1664,7 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
             doc.read_only = file.read_only;
             doc.stamp = file.stamp;
         }
+        Opened::Image(image) => doc.content = Content::Image(image),
         Opened::Binary => doc.content = Content::Binary,
         Opened::TooLarge(size) => doc.content = Content::TooLarge(size),
         Opened::Failed(error) => doc.content = Content::Failed(error),
@@ -1820,6 +1824,18 @@ impl Render for CodeEditor {
                 .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
                 .on_scroll_wheel(cx.listener(Self::scroll_wheel))
                 .child(element::EditorElement::new(cx.entity()))
+                .into_any_element()
+        } else if let Content::Image(image) = &doc.content {
+            // Scaled down to fit, never up: a small icon stays sharp at its own size.
+            div()
+                .id("editor-image")
+                .flex_1()
+                .min_h_0()
+                .p_4()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(gpui::img(image.clone()).size_full().object_fit(gpui::ObjectFit::ScaleDown))
                 .into_any_element()
         } else {
             self.render_placeholder(doc, cx).into_any_element()

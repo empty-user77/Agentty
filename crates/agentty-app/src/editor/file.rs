@@ -13,6 +13,8 @@ use std::time::SystemTime;
 pub const EDITABLE_LIMIT: u64 = 2 * 1024 * 1024;
 /// Files larger than this are not opened at all.
 pub const OPEN_LIMIT: u64 = 20 * 1024 * 1024;
+/// Pictures larger than this are not shown.
+pub const IMAGE_LIMIT: u64 = 64 * 1024 * 1024;
 /// A line this long (minified code) makes the file read-only: it could not be shown usefully.
 pub const LONG_LINE: usize = 20_000;
 
@@ -47,7 +49,9 @@ pub enum ReadOnly {
 #[derive(Debug)]
 pub enum Opened {
     Text(TextFile),
-    /// Contains NUL bytes: an image, an archive, a compiled file…
+    /// A picture (PNG, JPEG, GIF or WebP): shown, never edited.
+    Image(std::sync::Arc<gpui::Image>),
+    /// Contains NUL bytes: an archive, a compiled file…
     Binary,
     /// Bigger than [`OPEN_LIMIT`] (its size).
     TooLarge(u64),
@@ -110,13 +114,18 @@ pub fn open(path: &Path, project: &Path) -> Opened {
     if !meta.is_file() {
         return Opened::Failed("not a file".into());
     }
-    if meta.len() > OPEN_LIMIT {
+    let picture = crate::workbench::file_is_raster(&target);
+    if meta.len() > if picture { IMAGE_LIMIT } else { OPEN_LIMIT } {
         return Opened::TooLarge(meta.len());
     }
     let bytes = match std::fs::read(&target) {
         Ok(bytes) => bytes,
         Err(err) => return Opened::Failed(err.to_string()),
     };
+    // Known by its first bytes, whatever its name says.
+    if let Some(format) = crate::workbench::raster_format(&bytes) {
+        return Opened::Image(std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)));
+    }
     if bytes[..bytes.len().min(8192)].contains(&0) {
         return Opened::Binary;
     }
@@ -320,6 +329,11 @@ mod tests {
         let dir = temp_dir("kinds");
         std::fs::write(dir.join("img.png"), b"\x89PNG\x00\x01").unwrap();
         assert!(matches!(open(&dir.join("img.png"), &dir), Opened::Binary));
+        // A picture by its first bytes, whatever its name.
+        std::fs::write(dir.join("shot"), b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR").unwrap();
+        assert!(matches!(open(&dir.join("shot"), &dir), Opened::Image(_)));
+        std::fs::write(dir.join("photo.jpg"), b"\xff\xd8\xff\xe0\x00\x10JFIF").unwrap();
+        assert!(matches!(open(&dir.join("photo.jpg"), &dir), Opened::Image(_)));
         std::fs::write(dir.join("latin1.txt"), b"caf\xe9").unwrap();
         assert_eq!(text(open(&dir.join("latin1.txt"), &dir)).read_only, Some(ReadOnly::NotUtf8));
         std::fs::write(dir.join("min.js"), "x".repeat(LONG_LINE + 1)).unwrap();

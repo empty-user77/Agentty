@@ -75,4 +75,4 @@ You confirm every such request; an agent cannot start panes on its own.
 
 Click a file in the files panel to open it next to your terminals: syntax colors for the common languages, undo and redo, **⌘S** to save, **⇧⌥F** to format with the formatter you have installed (Prettier, google-java-format, ktlint, rustfmt, gofmt, Black).
 
-Files an agent changes reload by themselves. **Open in editor** hands the file to VS Code, Cursor or your system editor. Files are only ever read and written, never run.
+Pictures (PNG, JPEG, GIF, WebP) open as a preview, scaled down to fit. Files an agent changes reload by themselves. **Open in editor** hands the file to VS Code, Cursor or your system editor. Files are only ever read and written, never run.
