@@ -5,14 +5,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.22] - 2026-10-19
+
 ### Added
 - Session Flow: move and zoom the chart, so every session can be reached however many there are. Scroll or drag the
   empty space to move the view, ⌘ + scroll to zoom around the pointer, and the buttons at the bottom right to zoom out,
   zoom in, go back to 100% or fit every session in view.
+- Session sync can keep sessions in a SQLite file on this computer (Settings → Sync → **This computer (SQLite)**),
+  with no repository or account. A session lost from the agent's own folder comes back with Continue, and the file
+  can be copied to another computer to bring the sessions there.
+- A git sync can also keep a SQLite copy of every computer's sessions after each sync, as a backup that works without
+  the repository.
+- The file editor shows PNG, JPEG, GIF and WebP pictures as a preview instead of "not text".
+
+### Changed
+- Linux packages now depend on the system's SQLite library (`libsqlite3-0` / `sqlite-libs`).
 
 ### Fixed
 - A name typed on the new-workspace page is kept when the workspace starts in a working tree of its own, or when you
   pick a recent session there; before, the tree's or the session's name replaced it.
+- Remote access on a new computer: the Remote access page lists each step turning it on takes, with a button for each,
+  including issuing this computer's HTTPS certificate. Before, the first start could fail with "Tailscale can't reach
+  Agentty's page".
+- A collapsed coloured workspace group no longer has more space above its title than below.
 
 ## [0.2.21] - 2026-10-17
 
