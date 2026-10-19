@@ -5,8 +5,8 @@
 use super::{Pane, Workbench};
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::TypeScale;
 use crate::ui::{hint, kind_color, tilde};
+use crate::ui::{Tooltip, Type, TypeScale};
 use agentty_bridge::claude::PeerSession;
 use agentty_bridge::model::Agent;
 use gpui::{
@@ -28,6 +28,35 @@ const WORKSPACE_COLORS: [u32; 8] = [0x4daafc, 0xb180d7, 0x89d185, 0xe8a33d, 0xf1
 const NODE_HEIGHT: f32 = 128.;
 /// Node width plus the gap that holds edge labels.
 const COLUMN_STEP: f32 = 470.;
+/// How far the chart zooms out and in, and the step of its buttons (as the other diagrams).
+const ZOOM_RANGE: (f32, f32) = (0.3, 2.);
+const ZOOM_STEP: f32 = 1.2;
+/// Room kept around the nodes when zooming to fit.
+const FIT_MARGIN: f32 = 40.;
+/// Below this zoom a card drops its open button: the card itself opens the session too.
+const SMALL_CARD_ZOOM: f32 = 0.7;
+
+fn clamp_zoom(zoom: f32) -> f32 {
+    if zoom.is_finite() {
+        zoom.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1)
+    } else {
+        1.
+    }
+}
+
+/// How the chart is looked at: its zoom, and how far it is moved inside the canvas (screen
+/// pixels). Node positions stay in the chart's own pixels whatever the view.
+#[derive(Clone, Copy)]
+struct FlowView {
+    zoom: f32,
+    pan: Point<Pixels>,
+}
+
+impl Default for FlowView {
+    fn default() -> Self {
+        Self { zoom: 1., pan: point(px(0.), px(0.)) }
+    }
+}
 
 /// The cell `preferred_index` would land on, in the row-major grid the chart lays nodes out on —
 /// skipping every cell `existing` already occupies, so two nodes never draw on top of each other
@@ -106,8 +135,19 @@ enum ShareMode {
 }
 
 enum FlowDrag {
-    Move { pane: u64, grab: Point<Pixels> },
-    Connect { from: u64 },
+    /// `grab` is where the card was taken, in the chart's own pixels from its corner.
+    Move {
+        pane: u64,
+        grab: Point<Pixels>,
+    },
+    Connect {
+        from: u64,
+    },
+    /// The empty canvas dragged: where the pointer went down and the pan then.
+    Pan {
+        from: Point<Pixels>,
+        pan: Point<Pixels>,
+    },
 }
 
 #[derive(Default)]
@@ -117,6 +157,7 @@ pub struct FlowState {
     drag: Option<FlowDrag>,
     pointer: Point<Pixels>,
     canvas: Rc<Cell<Bounds<Pixels>>>,
+    view: FlowView,
     /// Panes whose next finished turn is a reply to context we injected; not forwarded, so two
     /// live links in opposite directions can't ping-pong forever.
     replying: HashSet<u64>,
@@ -135,12 +176,61 @@ impl FlowState {
 
     pub fn drag_to(&mut self, position: Point<Pixels>) {
         self.pointer = position;
-        if let Some(FlowDrag::Move { pane, grab }) = &self.drag {
-            let origin = self.canvas.get().origin;
-            let x = (position.x - origin.x - grab.x).max(px(0.));
-            let y = (position.y - origin.y - grab.y).max(px(0.));
-            self.positions.insert(*pane, point(x, y));
+        match &self.drag {
+            Some(FlowDrag::Move { pane, grab }) => {
+                let at = self.to_chart(position);
+                let (pane, x, y) = (*pane, (at.x - grab.x).max(px(0.)), (at.y - grab.y).max(px(0.)));
+                self.positions.insert(pane, point(x, y));
+            }
+            Some(FlowDrag::Pan { from, pan }) => self.view.pan = *pan + (position - *from),
+            _ => {}
         }
+    }
+
+    /// A chart point, relative to the canvas, as it is drawn now.
+    fn to_canvas(&self, at: Point<Pixels>) -> Point<Pixels> {
+        let z = self.view.zoom;
+        point(self.view.pan.x + at.x * z, self.view.pan.y + at.y * z)
+    }
+
+    /// The chart point under a window position.
+    fn to_chart(&self, position: Point<Pixels>) -> Point<Pixels> {
+        let (origin, z) = (self.canvas.get().origin, self.view.zoom);
+        point((position.x - origin.x - self.view.pan.x) / z, (position.y - origin.y - self.view.pan.y) / z)
+    }
+
+    /// Zooms to `zoom`, keeping the chart point under `anchor` (a window position) where it is.
+    fn zoom_at(&mut self, zoom: f32, anchor: Point<Pixels>) {
+        let at = self.to_chart(anchor);
+        let origin = self.canvas.get().origin;
+        self.view.zoom = clamp_zoom(zoom);
+        let z = self.view.zoom;
+        self.view.pan = point(anchor.x - origin.x - at.x * z, anchor.y - origin.y - at.y * z);
+    }
+
+    /// Zooms around the middle of the canvas (the zoom buttons).
+    fn zoom_middle(&mut self, zoom: f32) {
+        let bounds = self.canvas.get();
+        self.zoom_at(zoom, bounds.center());
+    }
+
+    /// Every card in view (never above 100%), in the middle of the canvas.
+    fn fit(&mut self) {
+        let size = self.canvas.get().size;
+        let (vw, vh) = (f32::from(size.width), f32::from(size.height));
+        let mut out = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for p in self.positions.values() {
+            let (x, y) = (f32::from(p.x), f32::from(p.y));
+            out = (out.0.min(x), out.1.min(y), out.2.max(x + NODE_WIDTH), out.3.max(y + NODE_HEIGHT));
+        }
+        if out.0 > out.2 || vw <= 0. || vh <= 0. {
+            self.view = FlowView::default();
+            return;
+        }
+        let (w, h) = (out.2 - out.0, out.3 - out.1);
+        let z = clamp_zoom(((vw - FIT_MARGIN) / w).min((vh - FIT_MARGIN) / h).min(1.));
+        self.view.zoom = z;
+        self.view.pan = point(px(vw / 2. - (out.0 + w / 2.) * z), px(vh / 2. - (out.1 + h / 2.) * z));
     }
 
     /// Prompts queued for a busy pane.
@@ -176,10 +266,10 @@ impl FlowState {
     }
 
     fn node_at(&self, position: Point<Pixels>) -> Option<u64> {
-        let origin = self.canvas.get().origin;
+        let at = self.to_chart(position);
         self.positions.iter().find_map(|(id, p)| {
-            let bounds = Bounds::new(point(origin.x + p.x, origin.y + p.y), size(px(NODE_WIDTH), px(NODE_HEIGHT)));
-            bounds.contains(&position).then_some(*id)
+            let bounds = Bounds::new(*p, size(px(NODE_WIDTH), px(NODE_HEIGHT)));
+            bounds.contains(&at).then_some(*id)
         })
     }
 }
@@ -665,8 +755,8 @@ impl Workbench {
         let mut labels = Vec::new();
         for edge in &self.flow.edges {
             let (Some(a), Some(b)) = (position_of(edge.from), position_of(edge.to)) else { continue };
-            let start = point(a.x + px(NODE_WIDTH), a.y + px(NODE_HEIGHT / 2.));
-            let end = point(b.x, b.y + px(NODE_HEIGHT / 2.));
+            let start = self.flow.to_canvas(point(a.x + px(NODE_WIDTH), a.y + px(NODE_HEIGHT / 2.)));
+            let end = self.flow.to_canvas(point(b.x, b.y + px(NODE_HEIGHT / 2.)));
             let color = match edge.status {
                 EdgeStatus::Sharing => Chrome::ORANGE,
                 EdgeStatus::Shared(_) => Chrome::ATTENTION,
@@ -682,7 +772,7 @@ impl Workbench {
             Some(FlowDrag::Connect { from }) => position_of(*from).map(|a| {
                 let origin = self.flow.canvas.get().origin;
                 (
-                    point(a.x + px(NODE_WIDTH), a.y + px(NODE_HEIGHT / 2.)),
+                    self.flow.to_canvas(point(a.x + px(NODE_WIDTH), a.y + px(NODE_HEIGHT / 2.))),
                     point(self.flow.pointer.x - origin.x, self.flow.pointer.y - origin.y),
                 )
             }),
@@ -690,40 +780,80 @@ impl Workbench {
         };
 
         let canvas_bounds = self.flow.canvas.clone();
-        let mut area = div().id("flow-canvas").relative().flex_1().min_h_0().overflow_hidden().child(
-            canvas(
-                move |bounds, _, _| canvas_bounds.set(bounds),
-                move |bounds, _, window, _| {
-                    let o = bounds.origin;
-                    let mut draw = |start: Point<Pixels>, end: Point<Pixels>, color: u32| {
-                        let (s, e) = (point(o.x + start.x, o.y + start.y), point(o.x + end.x, o.y + end.y));
-                        let bend = px(((f32::from(e.x) - f32::from(s.x)).abs() / 2.).max(60.));
-                        let mut path = PathBuilder::stroke(px(2.));
-                        path.move_to(s);
-                        path.cubic_bezier_to(e, point(s.x + bend, s.y), point(e.x - bend, e.y));
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, hex(color));
-                        }
-                        let mut arrow = PathBuilder::fill();
-                        arrow.move_to(e);
-                        arrow.line_to(point(e.x - px(9.), e.y - px(5.)));
-                        arrow.line_to(point(e.x - px(9.), e.y + px(5.)));
-                        arrow.close();
-                        if let Ok(arrow) = arrow.build() {
-                            window.paint_path(arrow, hex(color));
-                        }
-                    };
-                    for (start, end, color) in &curves {
-                        draw(*start, *end, *color);
-                    }
-                    if let Some((start, end)) = pending {
-                        draw(start, end, Chrome::BLUE);
-                    }
-                },
+        let zoom = self.flow.view.zoom;
+        let entity = cx.entity().downgrade();
+        let mut area = div()
+            .id("flow-canvas")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            // Dragging the empty canvas moves the view (a card's header moves the card).
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.flow.drag = Some(FlowDrag::Pan { from: event.position, pan: this.flow.view.pan });
+                    this.flow.pointer = event.position;
+                    cx.notify();
+                }),
             )
-            .absolute()
-            .size_full(),
-        );
+            .when(matches!(self.flow.drag, Some(FlowDrag::Pan { .. })), |d| d.cursor(gpui::CursorStyle::ClosedHand))
+            .child(
+                canvas(
+                    move |bounds, _, _| canvas_bounds.set(bounds),
+                    move |bounds, _, window, _| {
+                        // The wheel moves the view; with ⌘ or Ctrl it zooms around the pointer.
+                        let entity = entity.clone();
+                        window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
+                            if phase != gpui::DispatchPhase::Bubble || !bounds.contains(&event.position) {
+                                return;
+                            }
+                            let delta = event.delta.pixel_delta(px(16.));
+                            let zooming = event.modifiers.platform || event.modifiers.control;
+                            let _ = entity.update(cx, |this, cx| {
+                                if zooming {
+                                    let dy = f32::from(delta.y);
+                                    if dy != 0. {
+                                        let zoom = this.flow.view.zoom * (1. + dy * 0.004);
+                                        this.flow.zoom_at(zoom, event.position);
+                                    }
+                                } else {
+                                    this.flow.view.pan += delta;
+                                }
+                                cx.notify();
+                            });
+                            cx.stop_propagation();
+                        });
+                        let o = bounds.origin;
+                        let mut draw = |start: Point<Pixels>, end: Point<Pixels>, color: u32| {
+                            let (s, e) = (point(o.x + start.x, o.y + start.y), point(o.x + end.x, o.y + end.y));
+                            let bend = px(((f32::from(e.x) - f32::from(s.x)).abs() / 2.).max(60. * zoom));
+                            let mut path = PathBuilder::stroke(px((2. * zoom).max(1.)));
+                            path.move_to(s);
+                            path.cubic_bezier_to(e, point(s.x + bend, s.y), point(e.x - bend, e.y));
+                            if let Ok(path) = path.build() {
+                                window.paint_path(path, hex(color));
+                            }
+                            let mut arrow = PathBuilder::fill();
+                            arrow.move_to(e);
+                            arrow.line_to(point(e.x - px(9.), e.y - px(5.)));
+                            arrow.line_to(point(e.x - px(9.), e.y + px(5.)));
+                            arrow.close();
+                            if let Ok(arrow) = arrow.build() {
+                                window.paint_path(arrow, hex(color));
+                            }
+                        };
+                        for (start, end, color) in &curves {
+                            draw(*start, *end, *color);
+                        }
+                        if let Some((start, end)) = pending {
+                            draw(start, end, Chrome::BLUE);
+                        }
+                    },
+                )
+                .absolute()
+                .size_full(),
+            );
 
         for (pane, id, position) in nodes {
             area = area.child(self.render_flow_node(&pane, id, position, cx));
@@ -760,6 +890,8 @@ impl Workbench {
         }
         if panes.is_empty() && !demo {
             area = area.child(div().absolute().top(px(40.)).left(px(40.)).right(px(40.)).child(hint(t(cx, "flow.empty"))));
+        } else {
+            area = area.child(self.render_flow_zoom(cx));
         }
 
         div()
@@ -787,6 +919,56 @@ impl Workbench {
                     .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "flow.hint"))),
             )
             .child(area)
+    }
+
+    /// − 100% + and fit, at the bottom right corner (as the other diagrams have).
+    fn render_flow_zoom(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let set = |zoom: fn(&FlowState) -> Option<f32>| {
+            move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
+                match zoom(&this.flow) {
+                    Some(zoom) => this.flow.zoom_middle(zoom),
+                    None => this.flow.fit(),
+                }
+                cx.notify();
+            }
+        };
+        let button =
+            |id: &'static str, glyph: &'static str, tip: &'static str, zoom: fn(&FlowState) -> Option<f32>, cx: &mut Context<Self>| {
+                crate::ui::icon_only(id, glyph, cx.listener(set(zoom))).tooltip(Tooltip::text(SharedString::from(t(cx, tip)), None))
+            };
+        div()
+            .absolute()
+            .bottom(px(10.))
+            .right(px(10.))
+            .px_1()
+            .py_0p5()
+            .flex()
+            .items_center()
+            .gap_0p5()
+            .rounded_md()
+            .border_1()
+            .border_color(hex(Chrome::BORDER))
+            .bg(hex_alpha(super::plugin_ui::RAISED, 0.94))
+            .shadow_lg()
+            .occlude()
+            // The bar is no place to start moving the view from.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(button("flow-zoom-out", "minus", "plugins.graph.zoom_out", |f| Some(f.view.zoom / ZOOM_STEP), cx))
+            .child(
+                div()
+                    .id("flow-zoom-reset")
+                    .w(px(44.))
+                    .text_center()
+                    .t_caption()
+                    .font_family(super::plugin_ui::MONO)
+                    .text_color(hex(Chrome::FOREGROUND))
+                    .cursor_pointer()
+                    .tooltip(Tooltip::text(SharedString::from(t(cx, "plugins.graph.zoom_reset")), None))
+                    .on_click(cx.listener(set(|_| Some(1.))))
+                    .child(format!("{}%", (self.flow.view.zoom * 100.).round())),
+            )
+            .child(button("flow-zoom-in", "plus", "plugins.graph.zoom_in", |f| Some(f.view.zoom * ZOOM_STEP), cx))
+            .child(button("flow-zoom-fit", "maximize-2", "flow.zoom_fit", |_| None, cx))
     }
 
     fn render_flow_node(&self, pane: &Pane, id: u64, position: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
@@ -817,14 +999,17 @@ impl Workbench {
         let jump = pane.clone();
         let body_jump = pane.clone();
         let accent = kind_color(view.display_kind());
+        // The card follows the chart's zoom: where it is drawn, and every size inside it.
+        let (at, z) = (self.flow.to_canvas(position), self.flow.view.zoom);
+        let s = |v: f32| px(v * z);
 
         div()
             .id(("flow-node", id as usize))
             .absolute()
-            .left(position.x)
-            .top(position.y)
-            .w(px(NODE_WIDTH))
-            .h(px(NODE_HEIGHT))
+            .left(at.x)
+            .top(at.y)
+            .w(s(NODE_WIDTH))
+            .h(s(NODE_HEIGHT))
             .rounded_lg()
             .bg(hex(Chrome::OVERLAY))
             .border_2()
@@ -841,9 +1026,9 @@ impl Workbench {
                     .id(("flow-node-header", id as usize))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
+                    .gap(s(8.))
+                    .px(s(12.))
+                    .py(s(8.))
                     .rounded_t_lg()
                     .bg(hex_alpha(accent, 0.18))
                     .cursor_grab()
@@ -851,37 +1036,39 @@ impl Workbench {
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            let origin = this.flow.canvas.get().origin;
                             let current = this.flow.positions.get(&id).copied().unwrap_or(position);
-                            let grab = point(event.position.x - origin.x - current.x, event.position.y - origin.y - current.y);
+                            let at = this.flow.to_chart(event.position);
+                            let grab = point(at.x - current.x, at.y - current.y);
                             this.flow.drag = Some(FlowDrag::Move { pane: id, grab });
                             this.flow.pointer = event.position;
                         }),
                     )
-                    .child(crate::brand::avatar(view.tool_id(), 18.))
+                    .child(crate::brand::avatar(view.tool_id(), 18. * z))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .t_body()
+                            .text_size(s(Type::BODY))
                             .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::BRIGHT))
                             .child(view.display_title()),
                     )
-                    .child(crate::ui::icon_only(
-                        ("flow-open", id as usize),
-                        "arrow-up-right",
-                        cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            if let Some((w, tab)) = this.locate(&jump) {
-                                this.activate_workspace(w, window, cx);
-                                this.workspaces[w].active_tab = tab;
-                                this.workspaces[w].tabs[tab].todo = false;
-                                this.workspaces[w].tabs[tab].active = jump.clone();
-                                this.focus_pane(&jump, window, cx);
-                            }
-                        }),
-                    )),
+                    .when(z >= SMALL_CARD_ZOOM, |d| {
+                        d.child(crate::ui::icon_only(
+                            ("flow-open", id as usize),
+                            "arrow-up-right",
+                            cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                if let Some((w, tab)) = this.locate(&jump) {
+                                    this.activate_workspace(w, window, cx);
+                                    this.workspaces[w].active_tab = tab;
+                                    this.workspaces[w].tabs[tab].todo = false;
+                                    this.workspaces[w].tabs[tab].active = jump.clone();
+                                    this.focus_pane(&jump, window, cx);
+                                }
+                            }),
+                        ))
+                    }),
             )
             .child(
                 // Clicking the body opens the session (dragging happens on the header and handle).
@@ -897,21 +1084,21 @@ impl Workbench {
                             this.focus_pane(&body_jump, window, cx);
                         }
                     }))
-                    .px_3()
-                    .pt_1()
+                    .px(s(12.))
+                    .pt(s(4.))
                     .flex()
                     .flex_col()
-                    .gap_0p5()
-                    .t_small()
+                    .gap(s(2.))
+                    .text_size(s(Type::SMALL))
                     .child(div().truncate().text_color(hex(status_color)).child(status))
                     .when_some(location, |d, (color, label)| {
                         d.child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1p5()
+                                .gap(s(6.))
                                 .min_w_0()
-                                .child(div().flex_shrink_0().size(px(8.)).rounded_sm().bg(hex(color)))
+                                .child(div().flex_shrink_0().size(s(8.)).rounded_sm().bg(hex(color)))
                                 .child(div().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(label)),
                         )
                     })
@@ -922,9 +1109,9 @@ impl Workbench {
                 div()
                     .id(("flow-handle", id as usize))
                     .absolute()
-                    .right(px(-8.))
-                    .top(px(NODE_HEIGHT / 2. - 8.))
-                    .size(px(16.))
+                    .right(s(-8.))
+                    .top(s(NODE_HEIGHT / 2. - 8.))
+                    .size(s(16.))
                     .rounded_full()
                     .bg(hex(accent))
                     .border_2()
@@ -942,9 +1129,7 @@ impl Workbench {
                     ),
             )
             // Input side marker.
-            .child(
-                div().absolute().left(px(-5.)).top(px(NODE_HEIGHT / 2. - 5.)).size(px(10.)).rounded_full().bg(hex(Chrome::OVERLAY_BORDER)),
-            )
+            .child(div().absolute().left(s(-5.)).top(s(NODE_HEIGHT / 2. - 5.)).size(s(10.)).rounded_full().bg(hex(Chrome::OVERLAY_BORDER)))
     }
 
     /// An example card of the onboarding tour: looks like a session, can be moved and linked to the
@@ -957,13 +1142,15 @@ impl Workbench {
         let hovered_target = connecting && self.flow.node_at(self.flow.pointer) == Some(id);
         // The tour points at the handle of the first card until the two are linked.
         let ring = id == DEMO_SOURCE && self.tour_target() == Some("flow-demo-handle");
+        let (at, z) = (self.flow.to_canvas(position), self.flow.view.zoom);
+        let s = |v: f32| px(v * z);
         div()
             .id(("flow-demo-node", (u64::MAX - id) as usize))
             .absolute()
-            .left(position.x)
-            .top(position.y)
-            .w(px(NODE_WIDTH))
-            .h(px(NODE_HEIGHT))
+            .left(at.x)
+            .top(at.y)
+            .w(s(NODE_WIDTH))
+            .h(s(NODE_HEIGHT))
             .rounded_lg()
             .bg(hex(Chrome::OVERLAY))
             .border_2()
@@ -975,9 +1162,9 @@ impl Workbench {
                     .id(("flow-demo-header", (u64::MAX - id) as usize))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
+                    .gap(s(8.))
+                    .px(s(12.))
+                    .py(s(8.))
                     .rounded_t_lg()
                     .bg(hex_alpha(accent, 0.18))
                     .cursor_grab()
@@ -985,20 +1172,20 @@ impl Workbench {
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            let origin = this.flow.canvas.get().origin;
                             let current = this.flow.positions.get(&id).copied().unwrap_or(position);
-                            let grab = point(event.position.x - origin.x - current.x, event.position.y - origin.y - current.y);
+                            let at = this.flow.to_chart(event.position);
+                            let grab = point(at.x - current.x, at.y - current.y);
                             this.flow.drag = Some(FlowDrag::Move { pane: id, grab });
                             this.flow.pointer = event.position;
                         }),
                     )
-                    .child(crate::brand::avatar(crate::brand::kind_id(kind), 18.))
+                    .child(crate::brand::avatar(crate::brand::kind_id(kind), 18. * z))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .t_body()
+                            .text_size(s(Type::BODY))
                             .font_weight(crate::theme::EMPHASIS)
                             .text_color(hex(Chrome::BRIGHT))
                             .child(title),
@@ -1009,19 +1196,19 @@ impl Workbench {
                             .px_1p5()
                             .rounded_sm()
                             .bg(hex_alpha(Chrome::WARNING, 0.25))
-                            .t_caption()
+                            .text_size(s(Type::CAPTION))
                             .text_color(hex(Chrome::WARNING))
                             .child(t(cx, "flow.demo_tag")),
                     ),
             )
             .child(
                 div()
-                    .px_3()
-                    .pt_1()
+                    .px(s(12.))
+                    .pt(s(4.))
                     .flex()
                     .flex_col()
-                    .gap_0p5()
-                    .t_small()
+                    .gap(s(2.))
+                    .text_size(s(Type::SMALL))
                     .child(
                         div()
                             .text_color(hex(Chrome::FOREGROUND))
@@ -1033,9 +1220,9 @@ impl Workbench {
                 div()
                     .id(("flow-demo-handle", (u64::MAX - id) as usize))
                     .absolute()
-                    .right(px(-8.))
-                    .top(px(NODE_HEIGHT / 2. - 8.))
-                    .size(px(16.))
+                    .right(s(-8.))
+                    .top(s(NODE_HEIGHT / 2. - 8.))
+                    .size(s(16.))
                     .rounded_full()
                     .bg(hex(accent))
                     .border_2()
@@ -1056,15 +1243,13 @@ impl Workbench {
                 d.child(
                     div()
                         .absolute()
-                        .right(px(-16.))
-                        .top(px(NODE_HEIGHT / 2. - 16.))
+                        .right(s(-16.))
+                        .top(s(NODE_HEIGHT / 2. - 16.))
                         .size(px(32.))
                         .child(crate::ui::pulse_ring("flow-demo-handle", true)),
                 )
             })
-            .child(
-                div().absolute().left(px(-5.)).top(px(NODE_HEIGHT / 2. - 5.)).size(px(10.)).rounded_full().bg(hex(Chrome::OVERLAY_BORDER)),
-            )
+            .child(div().absolute().left(s(-5.)).top(s(NODE_HEIGHT / 2. - 5.)).size(s(10.)).rounded_full().bg(hex(Chrome::OVERLAY_BORDER)))
     }
 
     fn render_edge_label(&self, edge: FlowEdge, mid: Point<Pixels>, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1138,8 +1323,78 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{cluster_links, grid_slot};
-    use gpui::{point, px};
+    use super::{cluster_links, grid_slot, FlowState, FlowView, NODE_HEIGHT, NODE_WIDTH, ZOOM_RANGE};
+    use gpui::{point, px, size, Bounds};
+
+    /// A chart shown in a canvas at (100, 50), 800 × 600 on the window.
+    fn chart() -> FlowState {
+        let flow = FlowState::default();
+        flow.canvas.set(Bounds::new(point(px(100.), px(50.)), size(px(800.), px(600.))));
+        flow
+    }
+
+    /// Zooming with the wheel keeps the point under the pointer where it is, at any zoom.
+    #[test]
+    fn zooming_keeps_the_point_under_the_pointer() {
+        let mut flow = chart();
+        flow.view = FlowView { zoom: 1.3, pan: point(px(-40.), px(25.)) };
+        let pointer = point(px(420.), px(300.));
+        let before = flow.to_chart(pointer);
+        flow.zoom_at(0.6, pointer);
+        let after = flow.to_chart(pointer);
+        assert!((f32::from(before.x) - f32::from(after.x)).abs() < 0.01);
+        assert!((f32::from(before.y) - f32::from(after.y)).abs() < 0.01);
+        // And chart → canvas → window lands on the pointer again.
+        let back = flow.to_canvas(after);
+        assert!((f32::from(back.x) + 100. - 420.).abs() < 0.01 && (f32::from(back.y) + 50. - 300.).abs() < 0.01);
+    }
+
+    #[test]
+    fn zoom_stays_in_range() {
+        let mut flow = chart();
+        flow.zoom_middle(50.);
+        assert_eq!(flow.view.zoom, ZOOM_RANGE.1);
+        flow.zoom_middle(0.001);
+        assert_eq!(flow.view.zoom, ZOOM_RANGE.0);
+        flow.zoom_middle(f32::NAN);
+        assert_eq!(flow.view.zoom, 1.);
+    }
+
+    /// The reported problem: sessions below the canvas could not be reached. Fit brings every card
+    /// into the canvas, never above 100%.
+    #[test]
+    fn fit_shows_every_card() {
+        let mut flow = chart();
+        for i in 0..12u64 {
+            flow.positions.insert(i, grid_slot(&flow.positions.values().copied().collect::<Vec<_>>(), i as usize, 2));
+        }
+        flow.fit();
+        assert!(flow.view.zoom <= 1. && flow.view.zoom >= ZOOM_RANGE.0);
+        for p in flow.positions.values() {
+            let (a, b) = (flow.to_canvas(*p), flow.to_canvas(point(p.x + px(NODE_WIDTH), p.y + px(NODE_HEIGHT))));
+            assert!(f32::from(a.x) >= 0. && f32::from(a.y) >= 0., "{a:?}");
+            assert!(f32::from(b.x) <= 800. && f32::from(b.y) <= 600., "{b:?}");
+        }
+        // A chart that already fits stays at 100%.
+        let mut small = chart();
+        small.positions.insert(1, point(px(40.), px(60.)));
+        small.fit();
+        assert_eq!(small.view.zoom, 1.);
+    }
+
+    /// Dropping a link and dragging a card find the card under the pointer in a moved, zoomed view.
+    #[test]
+    fn cards_are_found_where_they_are_drawn() {
+        let mut flow = chart();
+        flow.positions.insert(7, point(px(500.), px(700.)));
+        flow.view = FlowView { zoom: 0.5, pan: point(px(10.), px(-20.)) };
+        // Drawn at pan + p·z = (260, 330) in the canvas: (360, 380) on the window.
+        assert_eq!(flow.node_at(point(px(365.), px(385.))), Some(7));
+        assert_eq!(flow.node_at(point(px(355.), px(385.))), None);
+        // The card's far corner is drawn at half its size.
+        assert_eq!(flow.node_at(point(px(360. + NODE_WIDTH * 0.5 - 1.), px(380. + NODE_HEIGHT * 0.5 - 1.))), Some(7));
+        assert_eq!(flow.node_at(point(px(360. + NODE_WIDTH * 0.5 + 1.), px(385.))), None);
+    }
 
     /// Links between workspaces gather them under the one the first link started from; two panes
     /// of the same workspace are not a cluster.

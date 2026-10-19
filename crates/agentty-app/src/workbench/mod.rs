@@ -1471,6 +1471,15 @@ impl Workbench {
         self.persist(cx);
     }
 
+    /// Names the workspace `create_workspace` just added, unless it already has the name the user
+    /// typed on the new-workspace page: what the user wrote wins over a session's title or a
+    /// working tree's name.
+    pub(super) fn name_new_workspace(&mut self, name: String) {
+        if let Some(ws) = self.workspaces.last_mut() {
+            ws.name.get_or_insert(name);
+        }
+    }
+
     /// Opens `folder` (picked from the Dock's recent list or Finder): switches to a workspace
     /// already there, otherwise starts a terminal workspace in it.
     pub fn open_folder(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -2272,9 +2281,7 @@ impl Workbench {
         let cwd = session.cwd.as_ref().map(PathBuf::from).filter(|p| p.is_dir()).unwrap_or_else(home_dir);
         let spec = LaunchSpec::resume(session.agent, session.id.clone(), session.title.clone(), cwd);
         self.create_workspace(spec, window, cx);
-        if let Some(ws) = self.workspaces.last_mut() {
-            ws.name = Some(session.title.clone());
-        }
+        self.name_new_workspace(session.title.clone());
         self.show_resumed_terminal(cx);
         if !compact {
             return;
@@ -2527,9 +2534,7 @@ impl Workbench {
                         let cwd = handoff.cwd.as_ref().map(PathBuf::from).filter(|p| p.is_dir()).unwrap_or_else(home_dir);
                         let title = format!("{} ← {}", session.title, from.display_name());
                         this.create_workspace(LaunchSpec::with_prompt(to, handoff.prompt.clone(), title.clone(), cwd), window, cx);
-                        if let Some(ws) = this.workspaces.last_mut() {
-                            ws.name = Some(title);
-                        }
+                        this.name_new_workspace(title);
                         let n = handoff.turn_count.to_string();
                         let path = handoff.path.display().to_string();
                         this.set_status(tf(cx, "migrate.done", &[("n", &n), ("name", &path)]), cx);
