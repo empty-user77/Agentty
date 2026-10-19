@@ -227,9 +227,7 @@ impl Workbench {
                                 let project = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                                 this.launch_in(choice, target, inside.unwrap_or_else(|| tree.path.clone()), Some(&root), window, cx);
                                 if target == LaunchTarget::NewWorkspace {
-                                    if let Some(ws) = this.workspaces.last_mut() {
-                                        ws.name = Some(format!("{project} ⑂ {}", tree.name()));
-                                    }
+                                    this.name_new_workspace(format!("{project} ⑂ {}", tree.name()));
                                     this.persist(cx);
                                 }
                                 let branch = tree.branch.clone().unwrap_or_else(|| tree.name());

@@ -7,6 +7,8 @@ description: Share context between two running agents by drawing a line from one
 
 Drag a line from one session to another and the target receives the source's context — what it is working on, what it has decided, where it is. It works across Claude Code and Codex.
 
+With many sessions, move around the chart: scroll, or drag the empty space, to move the view; **⌘** + scroll zooms around the pointer. The buttons at the bottom right zoom out and in, go back to 100%, and fit every session in view.
+
 ## Link modes
 
 | Mode | Behavior |

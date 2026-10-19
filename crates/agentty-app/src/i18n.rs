@@ -2381,6 +2381,7 @@ strings! {
     "plugins.graph.zoom_in" => ["Zoom in (⌘ + scroll)", "확대 (⌘ + 스크롤)", "拡大（⌘ + スクロール）", "放大（⌘ + 滚动）"],
     "plugins.graph.zoom_out" => ["Zoom out (⌘ + scroll)", "축소 (⌘ + 스크롤)", "縮小（⌘ + スクロール）", "缩小（⌘ + 滚动）"],
     "plugins.graph.zoom_reset" => ["Actual size", "원래 크기", "実寸", "实际大小"],
+    "flow.zoom_fit" => ["Show every session", "모든 세션 보기", "すべてのセッションを表示", "显示所有会话"],
     "plugins.graph.zoom_fit" => ["Fit the graph", "그래프에 맞추기", "グラフに合わせる", "适应画布"],
     "plugins.image.drop" => ["Drop an image here", "이미지를 여기에 놓으세요", "ここに画像をドロップ", "将图片拖放到此处"],
     "plugins.new_automation" => ["Start new", "새로 시작", "新しく始める", "重新开始"],

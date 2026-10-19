@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Session Flow: move and zoom the chart, so every session can be reached however many there are. Scroll or drag the
+  empty space to move the view, ⌘ + scroll to zoom around the pointer, and the buttons at the bottom right to zoom out,
+  zoom in, go back to 100% or fit every session in view.
+
+### Fixed
+- A name typed on the new-workspace page is kept when the workspace starts in a working tree of its own, or when you
+  pick a recent session there; before, the tree's or the session's name replaced it.
+
 ## [0.2.21] - 2026-10-17
 
 ### Fixed

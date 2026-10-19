@@ -902,7 +902,10 @@ impl Workbench {
                             this.create_workspace(spec, window, cx);
                             // The new workspace syncs into the one the session came from.
                             if let Some(ws) = this.workspaces.last_mut() {
-                                ws.name = entry.workspace_name.clone().or(Some(restored.title.clone()));
+                                // A name typed on the new-workspace page stays.
+                                if ws.name.is_none() {
+                                    ws.name = entry.workspace_name.clone().or(Some(restored.title.clone()));
+                                }
                                 let key = format!("{}:{}", this.slot, ws.id);
                                 if entry.plugin.is_none() {
                                     let sync_id = entry.sync_id.clone();
