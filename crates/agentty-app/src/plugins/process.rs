@@ -413,6 +413,10 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// How long a test waits for a real Node plugin. It answers in under a second; a busy Windows
+    /// runner has taken more than 20 s to start Node while the other tests ran.
+    const NODE_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+
     #[test]
     fn login_path_survives_spaces_and_shell_noise() {
         let path = "/Users/me/.nvm/versions/node/v22.0.0/bin:/Users/me/Library/Application Support/JetBrains/Toolbox/scripts:/usr/bin";
@@ -488,10 +492,10 @@ mod tests {
             "command/execute",
             serde_json::json!({ "command": "t.ping", "context": { "pane": { "id": 7 } } }),
         ));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let deadline = std::time::Instant::now() + NODE_WAIT;
         let mut panel = None;
         while std::time::Instant::now() < deadline && panel.is_none() {
-            match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+            match rx.recv_timeout(NODE_WAIT) {
                 Ok(ProcessEvent::Message(Incoming::Request { id, method, params })) if method == "ui/setPanel" => {
                     process.send(agentty_bridge::plugins::response(&id, Ok(serde_json::Value::Null)));
                     panel = Some(params);
@@ -555,10 +559,10 @@ mod tests {
         process.send(call(2, "count", serde_json::json!({ "n": 3 })));
         process.send(call(3, "fail", serde_json::json!({})));
         process.send(call(4, "missing", serde_json::json!({})));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let deadline = std::time::Instant::now() + NODE_WAIT;
         let mut answers = std::collections::HashMap::new();
         while std::time::Instant::now() < deadline && answers.len() < 3 {
-            match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+            match rx.recv_timeout(NODE_WAIT) {
                 Ok(ProcessEvent::Message(Incoming::Response { id, result })) if id != serde_json::json!(1) => {
                     answers.insert(id.as_u64().unwrap(), result);
                 }
