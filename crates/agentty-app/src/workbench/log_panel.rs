@@ -16,8 +16,8 @@ use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, icon_only_sized, tilde, Tooltip, TypeScale};
 use futures::StreamExt;
 use gpui::{
-    div, list, prelude::*, px, AnyElement, ClickEvent, Context, Entity, HighlightStyle, ListAlignment, ListState, SharedString, StyledText,
-    Subscription, Window,
+    div, list, prelude::*, px, AnyElement, ClickEvent, Context, Entity, HighlightStyle, ListAlignment, ListState, Pixels, SharedString,
+    StyledText, Subscription, Window,
 };
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
@@ -87,6 +87,11 @@ pub(super) struct LogTab {
     unseen_errors: usize,
     /// Scrolled to the end: new lines keep it there. Scrolling up stops that until it is back.
     follow: Rc<Cell<bool>>,
+    /// Where the list's top was when it was last kept at the end (line, offset in it), to tell
+    /// when the user moved it up.
+    pinned_at: Cell<Option<(usize, Pixels)>>,
+    /// A scroll showed the last line: follow the end again.
+    end_seen: Rc<Cell<bool>>,
     conflict: Option<Conflict>,
     /// The number of the first line of the current run: what came before is an earlier run's.
     run_start: usize,
@@ -228,12 +233,14 @@ impl Workbench {
                     restart: false,
                     unseen_errors: 0,
                     follow: Rc::new(Cell::new(true)),
+                    pinned_at: Cell::new(None),
+                    end_seen: Rc::new(Cell::new(false)),
                     conflict: None,
                     run_start: 0,
                 });
                 let tab = self.runs.log.tabs.last().expect("just pushed");
-                let follow = tab.follow.clone();
-                tab.list.set_scroll_handler(move |event, _, _| follow.set(event.visible_range.end >= event.count));
+                let end_seen = tab.end_seen.clone();
+                tab.list.set_scroll_handler(move |event, _, _| end_seen.set(event.visible_range.end >= event.count));
                 id
             }
         };
@@ -260,7 +267,7 @@ impl Workbench {
         tab.run += 1;
         tab.restart = false;
         tab.conflict = None;
-        tab.follow.set(true);
+        tab.follow_again();
         let run = tab.run;
         {
             let mut store = tab.store.borrow_mut();
@@ -427,6 +434,9 @@ impl Workbench {
         let matcher = self.log().matcher();
         let filter = self.log().filter.clone();
         let tab = &self.runs.log.tabs[index];
+        // Read before any line goes in or out: a scroll since the last frame is still to be
+        // noticed, and dropping old lines renumbers the rest.
+        let following = tab.still_following();
         let mut store = tab.store.borrow_mut();
         let store = &mut *store;
         let dropped = store.buffer.dropped();
@@ -442,8 +452,8 @@ impl Workbench {
         let added = store.shown.len() - before;
         if added > 0 {
             tab.list.splice(before..before, added);
-            if tab.follow.get() {
-                tab.list.scroll_to_reveal_item(store.shown.len() - 1);
+            if following {
+                tab.pin_to_end(store.shown.len());
             }
         }
         errors
@@ -461,10 +471,8 @@ impl Workbench {
         store.shown = shown;
         store.scanned = dropped + store.buffer.len();
         tab.list.reset(store.shown.len());
-        if !store.shown.is_empty() {
-            tab.list.scroll_to_reveal_item(store.shown.len() - 1);
-        }
-        tab.follow.set(true);
+        tab.follow_again();
+        tab.pin_to_end(store.shown.len());
     }
 
     fn apply_log_filter(&mut self, cx: &mut Context<Self>) {
@@ -1073,8 +1081,8 @@ impl Workbench {
         let count = tab.store.borrow().shown.len();
         let empty = count == 0;
         // Following the end: it stays in view when the area changes too (a banner, a resize).
-        if tab.follow.get() && count > 0 {
-            tab.list.scroll_to_reveal_item(count - 1);
+        if tab.still_following() {
+            tab.pin_to_end(count);
         }
         div()
             .id("run-log-lines")
@@ -1091,6 +1099,45 @@ impl Workbench {
             })
             .child(crate::ui::list_scrollbar(tab.list.clone()))
             .into_any_element()
+    }
+}
+
+impl LogTab {
+    /// Whether the view still follows the end of the log.
+    ///
+    /// It stops once the list's top is above where it was last kept at the end (the wheel or the
+    /// scrollbar moved it), and follows again when a scroll shows the last line. The list's own
+    /// scroll event can't be asked the first: it reports the range from before the scroll, so a
+    /// log at its end still looked there and was pulled back at once (only lines coming in while
+    /// it ran let the user get away). Positions are compared by line, not by pixel: lines never
+    /// drawn have no height yet.
+    fn still_following(&self) -> bool {
+        if self.follow.get() {
+            let top = self.list.logical_scroll_top();
+            let above = self.pinned_at.get().is_some_and(|pinned| (top.item_ix, top.offset_in_item) < pinned);
+            if above {
+                self.follow.set(false);
+                self.end_seen.set(false);
+            }
+        } else if self.end_seen.take() {
+            self.follow.set(true);
+        }
+        self.follow.get()
+    }
+
+    /// Shows the last of `count` lines and remembers where that left the list.
+    fn pin_to_end(&self, count: usize) {
+        if count > 0 {
+            self.list.scroll_to_reveal_item(count - 1);
+            let top = self.list.logical_scroll_top();
+            self.pinned_at.set(Some((top.item_ix, top.offset_in_item)));
+        }
+    }
+
+    /// Follows the end from now on, wherever the list was left before.
+    fn follow_again(&self) {
+        self.follow.set(true);
+        self.pinned_at.set(None);
     }
 }
 
