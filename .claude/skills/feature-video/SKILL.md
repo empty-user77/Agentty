@@ -75,6 +75,7 @@ export VIDEO_DIR=<scratchpad>/video-<slug>      # app.log, data/, footage/ live 
 df -h /                                          # under ~20 GB free: clean up first (CLAUDE.md → Build output)
 $D demo-project                                  # ~/agentty-demo/taskboard, a harmless git project
 $D start            # or: $D start --remote  (remote page on http://127.0.0.1:<port>, no Tailscale)
+                    #     $D start --release (plugins: a debug build runs WebAssembly far too slowly)
 $D cmd setting language=en                       # English UI in the footage; subtitles do the translating
 $D cmd setting appearance=dark
 ```

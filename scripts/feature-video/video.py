@@ -49,7 +49,7 @@ VOICES = {"en": "en-US-AndrewNeural", "ko": "ko-KR-InJoonNeural", "ja": "ja-JP-K
 # Footage sits in a framed box under the headline band.
 BOX = (120, 150, 1680, 880)
 RADIUS = 18
-LEAD, GAP, TAIL = 0.5, 0.35, 0.7  # narration: before the first line, between lines, after the last
+LEAD, GAP, TAIL = 0.15, 0.2, 0.2  # narration: before the first line, between lines, after the last (kept short: long pauses read as dead air)
 
 FONTS = {
     # (path, index of the bold face, index of the regular face)
@@ -196,7 +196,8 @@ def callout_png(rect, label, lang, path):
         fnt = font(lang, 30)
         lw = fnt.getlength(label)
         lx = min(max(x + w / 2 - lw / 2 - 18, 20), W - lw - 56)
-        ly = y + h + 18 if y + h + 80 < H - 120 else y - 70
+        # Below the ring only when it stays clear of a two-line subtitle; above it otherwise.
+        ly = y + h + 18 if y + h + 80 < H - 230 else y - 70
         draw.rounded_rectangle([lx, ly, lx + lw + 36, ly + 50], 25, fill=ACCENT + (240,))
         draw.text((lx + 18, ly + 6), label, font=fnt, fill=BG_TOP)
     img.save(path)
@@ -352,13 +353,8 @@ def scene_clip(scene, base, seconds, out, work):
     under, over = frame_layers(rect, work)
 
     start = 0.0 if is_image else float(scene.get("from", 0))
-    pre, label = blur_graph(blur_regions(src, scene), start), "[1:v]"
-    if pre:
-        pre, label = pre + ";", "[src]"
-    chain = [f"crop={cw}:{ch}:{cx}:{cy}"]
-    if not is_image:
-        speed = float(scene.get("speed", 1))
-        chain += [f"setpts=(PTS-STARTPTS)/{speed}", f"fps={FPS}"]
+    speed = 1.0 if is_image else float(scene.get("speed", 1))
+    end = float(scene["to"]) if "to" in scene and not is_image else 1e9
     zoom = scene.get("zoom")
     if zoom:
         # Ease from the whole picture into `rect` (same coordinates as `crop`) between `at[0]` and `at[1]`.
@@ -369,6 +365,27 @@ def scene_clip(scene, base, seconds, out, work):
             zx, zw = zx - (zh * aspect - zw) / 2, zh * aspect
         else:
             zy, zh = zy - (zw / aspect - zh) / 2, zw / aspect
+    # Work with no more pixels than the frame shows: the crop drawn `w` wide, magnified by the zoom.
+    # A full-screen Retina recording is twice that and more; shrinking it first (and dropping the
+    # frames the speed-up skips) makes a scene several times faster to build.
+    k = min(1.0, w * (cw / zw if zoom else 1) / cw)
+    sc = lambda v: v * k
+    # Speed up and drop frames before anything else, so the blurs run on the frames that are kept.
+    head = [] if is_image else [f"setpts=(PTS-STARTPTS)/{speed}", f"fps={FPS}"]
+    if k < 1:
+        head.append(f"scale={round(sw * k / 2) * 2}:{round(sh * k / 2) * 2}")
+    regions = [
+        r for r in blur_regions(src, scene)
+        if float(r.get("from", 0)) < end and float(r.get("to", 1e9)) > start
+    ]
+    blur = blur_graph(regions, start, speed, k, "[pre]")
+    pre = f"[1:v]{','.join(head) or 'null'}[pre];" + (blur + ";" if blur else "")
+    label = "[src]" if blur else "[pre]"
+    crop = (cx, cy, cw, ch)  # callouts are placed in footage pixels
+    cx, cy, cw, ch = (round(sc(v)) for v in crop)
+    chain = [f"crop={cw}:{ch}:{cx}:{cy}"]
+    if zoom:
+        zx, zy, zw, zh = (sc(v) for v in (zx, zy, zw, zh))
         t0, t1 = zoom.get("at", [0.5, 1.5])
         back = zoom.get("back")
         p = f"(if(lt(it,{t0}),0,if(gt(it,{t1}),1,(it-{t0})/({t1}-{t0}))))"
@@ -400,7 +417,7 @@ def scene_clip(scene, base, seconds, out, work):
          "-loop", "1", "-framerate", str(FPS), "-t", f"{seconds}", "-i", str(over),
          "-filter_complex", graph, "-map", "[v]", "-t", f"{seconds}", "-an",
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-r", str(FPS), str(out)])
-    return rect, (cx, cy, cw, ch)
+    return rect, crop
 
 
 def blur_regions(src, scene):
@@ -414,20 +431,29 @@ def blur_regions(src, scene):
     return regions
 
 
-def blur_graph(regions, start):
-    """Filters that blur each region (footage pixels, footage seconds) on input 1, ending in [src]."""
+def blur_graph(regions, start, speed=1.0, scale=1.0, first="[1:v]"):
+    """Filters that blur each region (footage pixels, footage seconds) on `first`, ending in [src].
+
+    `first` is already sped up by `speed` from `start` and shrunk by `scale`."""
     if not regions:
         return ""
-    parts, last = [], "[1:v]"
+    # One split into the frame and a copy per region, then the blurred pieces laid on one by one.
+    # A chain of split → overlay per region instead grows exponentially slower with the count
+    # (16 regions: a minute before the first frame).
+    n = len(regions)
+    parts = [f"{first}split={n + 1}[base]" + "".join(f"[c{k}]" for k in range(n))]
+    last = "[base]"
     for k, r in enumerate(regions):
-        x, y, w, h = (max(0, int(v)) for v in r["rect"])
+        x, y, w, h = (max(0, int(v * scale)) for v in r["rect"])
         w, h = max(w, 8), max(h, 8)
         when = ""
         if "from" in r or "to" in r:
-            a, b = float(r.get("from", 0)) - start, float(r.get("to", 1e9)) - start
+            a = (float(r.get("from", 0)) - start) / speed
+            b = (float(r.get("to", 1e9)) - start) / speed
             when = f":enable='between(t,{a:.3f},{b:.3f})'"
-        nxt = "[src]" if k == len(regions) - 1 else f"[r{k}]"
-        parts.append(f"{last}split[k{k}][c{k}];[c{k}]crop={w}:{h}:{x}:{y},gblur=sigma=14:steps=3[g{k}];[k{k}][g{k}]overlay={x}:{y}{when}{nxt}")
+        nxt = "[src]" if k == n - 1 else f"[r{k}]"
+        parts.append(f"[c{k}]crop={w}:{h}:{x}:{y},gblur=sigma=14:steps=3[g{k}]")
+        parts.append(f"{last}[g{k}]overlay={x}:{y}{when}{nxt}")
         last = nxt
     return ";".join(parts)
 
@@ -479,7 +505,18 @@ def build(args):
         else:
             src = base / scene["clip"]
             end = float(scene["to"]) if "to" in scene else duration(src)
-            footage = (end - float(scene.get("from", 0))) / float(scene.get("speed", 1))
+            raw = end - float(scene.get("from", 0))
+            # `fit`: the footage plays at whatever speed makes it last as long as the narration, so
+            # the voice never stops over a picture that has nothing left to show.
+            if scene.get("fit") and spoken_len:
+                scene["speed"] = raw / spoken_len
+            footage = raw / float(scene.get("speed", 1))
+            # Callouts and zooms timed in footage seconds (`src`) follow the speed.
+            speed, start = float(scene.get("speed", 1)), float(scene.get("from", 0))
+            for timed in [*scene.get("callouts", []), *([scene["zoom"]] if "zoom" in scene else [])]:
+                for src_key, key in (("src", "at"), ("src_back", "back")):
+                    if src_key in timed:
+                        timed[key] = [round((v - start) / speed, 3) for v in timed[src_key]]
         seconds = round(max(footage, spoken_len, float(scene.get("min", 0))), 3)
         timeline.append({"start": t, "seconds": seconds, "lines": lines})
         print(f"scene {i + 1}: {seconds:.1f}s (footage {footage:.1f}s, narration {spoken_len:.1f}s)")
@@ -636,9 +673,12 @@ def private_patterns(extra=()):
             names.append(subprocess.run(cmd, capture_output=True, text=True).stdout.strip())
         except OSError:
             pass
-    words = {w for n in names for w in re.split(r"[\s'’]+", n) if len(w) > 2}
+    # Whole words only, and not the model words of a computer name ("Ray's MacBook Pro"): those
+    # would blur "prompt" and "iPhone 15 Pro".
+    generic = {"macbook", "pro", "air", "mini", "imac", "studio", "mac", "the"}
+    words = {w for n in names for w in re.split(r"[\s'’]+", n) if len(w) > 2 and w.lower() not in generic}
     if words:
-        found["account"] = r"(?i)(" + "|".join(re.escape(w) for w in sorted(words)) + r")"
+        found["account"] = r"(?i)\b(" + "|".join(re.escape(w) for w in sorted(words)) + r")\b"
     for k, p in enumerate(extra):
         found[f"extra{k + 1}"] = p
     return found
@@ -702,6 +742,40 @@ def ocr(args):
     sys.exit(1 if hits else 0)
 
 
+def cut(args):
+    """Joins pieces of one recording into a new one (`from:to[:speed]` each), so a scene skips the
+    waiting in between. The source's blur map (`.blur.json`) is carried over to the new times."""
+    src, out = Path(args.footage), Path(args.out)
+    pieces = []
+    for spec in args.pieces:
+        parts = [float(v) for v in spec.split(":")]
+        pieces.append((parts[0], parts[1], parts[2] if len(parts) > 2 else 1.0))
+    # A screen recording stores a frame only when the screen changes: a piece starting on a still
+    # screen begins with a frame from seconds earlier, and timing the piece from it stretches it.
+    # `fps` first turns the recording into one frame every 1/FPS s, so every cut lands exactly.
+    graph, labels, t, mapping = [], [], 0.0, []
+    graph.append(f"[0:v]fps={FPS},split={len(pieces)}" + "".join(f"[s{k}]" for k in range(len(pieces))))
+    for k, (a, b, speed) in enumerate(pieces):
+        graph.append(f"[s{k}]trim=start={a}:end={b},setpts=(PTS-STARTPTS)/{speed}[p{k}]")
+        labels.append(f"[p{k}]")
+        mapping.append((a, b, speed, t))
+        t += (b - a) / speed
+    graph.append(f"{''.join(labels)}concat=n={len(pieces)}:v=1:a=0,fps={FPS}[v]")
+    run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-filter_complex", ";".join(graph), "-map", "[v]",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", str(out)])
+    sidecar = src.with_name(src.name + ".blur.json")
+    if sidecar.exists():
+        moved = []
+        for r in json.loads(sidecar.read_text()):
+            lo, hi = float(r.get("from", 0)), float(r.get("to", 1e9))
+            for a, b, speed, at in mapping:
+                x, y = max(lo, a), min(hi, b)
+                if x < y:
+                    moved.append({**r, "from": round(at + (x - a) / speed, 3), "to": round(at + (y - a) / speed, 3)})
+        out.with_name(out.name + ".blur.json").write_text(json.dumps(moved, indent=1))
+    print(f"{out}  {t:.1f}s")
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -726,8 +800,14 @@ def main():
     d.add_argument("--every", default="0.5")
     d.add_argument("--pad", default="6")
     d.add_argument("--also", action="append", help="another regex to treat as private")
+    c = sub.add_parser("cut")
+    c.add_argument("footage")
+    c.add_argument("out")
+    c.add_argument("pieces", nargs="+", help="from:to[:speed] in the footage's seconds")
     args = parser.parse_args()
-    if args.cmd == "build":
+    if args.cmd == "cut":
+        cut(args)
+    elif args.cmd == "build":
         build(args)
     elif args.cmd == "brand":
         langs = args.langs.split(",") if args.langs else LANGS

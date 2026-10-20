@@ -2,7 +2,8 @@
 # Drives a demo Agentty (debug build, its own data folder) for a feature video: start it, send it debug
 # commands, wait for what a pane shows, and record its window.
 #
-#   drive.sh start [--remote]       debug build with AGENTTY_DEBUG=1 and a throwaway data folder, window 1920x1080
+#   drive.sh start [--remote] [--release]   debug (or release) build with AGENTTY_DEBUG=1 and a throwaway data folder, window 1920x1080
+#                                   (or the largest 16:9 that fits a smaller screen)
 #   drive.sh cmd <command> [arg]    one debug command (see `debug_command` in workbench/mod.rs)
 #   drive.sh wait <regex> [secs]    until the active pane's screen matches
 #   drive.sh prompt <text>          type into the active pane, then Enter (sent apart, so it is not a paste)
@@ -31,7 +32,7 @@ socket() {
 }
 send() { printf 'debug\t%s\t%s\n' "$1" "${2:-}" | nc -U -w 1 "$(socket)"; }
 say() { echo "[$(date +%H:%M:%S)] $*"; }
-lines() { grep -c "$1" "$LOG" 2>/dev/null || echo 0; }
+lines() { local n; n=$(grep -c "$1" "$LOG" 2>/dev/null); echo "${n:-0}"; }
 # The active pane's visible lines, freshly reported.
 screen() {
   local before; before=$(lines 'screen-lines:')
@@ -51,24 +52,62 @@ nums = [float(n) for n in re.findall(r"(?:x|y|width|height): (-?[\d.]+)", line)]
 (x, y, w, h), (_, sy, _, sh) = nums[0:4], nums[4:8]
 # Cocoa y grows upwards from the bottom of the main screen; the visible frame tells its height.
 from subprocess import check_output
-screen_h = float(re.search(r"(\d+) x (\d+)", check_output(["system_profiler", "SPDisplaysDataType"], text=True).split("UI Looks like:")[1]).group(2))
+# Newer macOS no longer prints "UI Looks like"; a Retina panel at its default scale is half its pixels.
+info = check_output(["system_profiler", "SPDisplaysDataType"], text=True)
+looks = re.search(r"UI Looks like: (\d+) x (\d+)", info)
+pixels = re.search(r"Resolution: (\d+) x (\d+)( Retina)?", info)
+screen_h = float(looks.group(2)) if looks else float(pixels.group(2)) / (2 if pixels.group(3) else 1)
 print(f"{int(x)},{int(screen_h - y - h)},{int(w)},{int(h)}")'
+}
+
+# 1920x1080 when the screen's visible area holds it from where the window is, else the largest 16:9 size that does.
+window_fit() {
+  local before; before=$(lines '^frame:')
+  send frame
+  for _ in $(seq 1 30); do [ "$(lines '^frame:')" -gt "$before" ] && break; sleep 0.1; done
+  grep '^frame:' "$LOG" | tail -1 | python3 -c '
+import re, sys
+nums = [float(n) for n in re.findall(r"(?:x|y|width|height): (-?[\d.]+)", sys.stdin.read())]
+if len(nums) == 8:
+    # Resizing keeps the top-left corner of the window, so the room is from there to the right and bottom edges.
+    (x, y, _, h), (sx, sy, sw, _) = nums[0:4], nums[4:8]
+    sw, sh = sx + sw - x, y + h - sy
+    if sw < 1920 or sh < 1080:
+        w = int(min(sw, sh * 16 / 9)) // 16 * 16
+        print(f"{w}x{w * 9 // 16}")'
 }
 
 case "${1:-}" in
   start)
     [ -n "$(pid)" ] && kill -0 "$(pid)" 2>/dev/null && { say "already running (pid $(pid))"; exit 0; }
-    (cd "$REPO" && cargo build -p agentty-app 2>&1 | tail -1)
-    mkdir -p "$DIR/data"
+    # --release: the optimized build. Plugins (WebAssembly) run many times slower in a debug build:
+    # a load test there manages about 0.4 requests a second. The remote dev mode needs a debug build.
+    profile=debug
     env_extra=()
-    [ "${2:-}" = --remote ] && env_extra=(AGENTTY_REMOTE_DEV=1)
+    for flag in "${@:2}"; do
+      case "$flag" in
+        --remote) env_extra=(AGENTTY_REMOTE_DEV=1) ;;
+        --release) profile=release ;;
+      esac
+    done
+    if [ "$profile" = release ]; then
+      (cd "$REPO" && cargo build --release -p agentty-app 2>&1 | tail -1)
+    else
+      (cd "$REPO" && cargo build -p agentty-app 2>&1 | tail -1)
+    fi
+    mkdir -p "$DIR/data"
     # `${a[@]+…}`: macOS's bash 3.2 calls an empty array unbound under `set -u`.
-    env ${env_extra[@]+"${env_extra[@]}"} AGENTTY_DATA_DIR="$DIR/data" AGENTTY_DEBUG=1 "$REPO/target/debug/agentty" >"$LOG" 2>&1 &
+    # -AppleLanguages: pages in the in-app browser (the remote page among them) read the app's
+    # language list, which is the Mac's unless given; the footage is in English.
+    env ${env_extra[@]+"${env_extra[@]}"} AGENTTY_DATA_DIR="$DIR/data" AGENTTY_DEBUG=1 "$REPO/target/$profile/agentty" -AppleLanguages '(en)' >"$LOG" 2>&1 &
     echo $! >"$DIR/app.pid"
     for _ in $(seq 1 60); do [ -n "$(socket)" ] && break; sleep 0.5; done
     [ -n "$(socket)" ] || { say "app did not come up, see $LOG"; exit 1; }
     sleep 2
     send resize 1920x1080
+    # A smaller screen (a laptop's 1512x982) can't hold 1920x1080: the largest 16:9 window that fits.
+    fit="$(window_fit)"
+    [ -n "$fit" ] && send resize "$fit"
     send activate
     say "running (pid $(pid)), data in $DIR/data"
     ;;
