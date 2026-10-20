@@ -750,15 +750,19 @@ def cut(args):
     for spec in args.pieces:
         parts = [float(v) for v in spec.split(":")]
         pieces.append((parts[0], parts[1], parts[2] if len(parts) > 2 else 1.0))
+    # A screen recording stores a frame only when the screen changes: a piece starting on a still
+    # screen begins with a frame from seconds earlier, and timing the piece from it stretches it.
+    # `fps` first turns the recording into one frame every 1/FPS s, so every cut lands exactly.
     graph, labels, t, mapping = [], [], 0.0, []
+    graph.append(f"[0:v]fps={FPS},split={len(pieces)}" + "".join(f"[s{k}]" for k in range(len(pieces))))
     for k, (a, b, speed) in enumerate(pieces):
-        graph.append(f"[0:v]trim=start={a}:end={b},setpts=(PTS-STARTPTS)/{speed}[p{k}]")
+        graph.append(f"[s{k}]trim=start={a}:end={b},setpts=(PTS-STARTPTS)/{speed}[p{k}]")
         labels.append(f"[p{k}]")
         mapping.append((a, b, speed, t))
         t += (b - a) / speed
-    graph.append(f"{''.join(labels)}concat=n={len(pieces)}:v=1:a=0[v]")
+    graph.append(f"{''.join(labels)}concat=n={len(pieces)}:v=1:a=0,fps={FPS}[v]")
     run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-filter_complex", ";".join(graph), "-map", "[v]",
-         "-c:v", "h264_videotoolbox", "-b:v", "24M", "-r", str(FPS), str(out)])
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", str(out)])
     sidecar = src.with_name(src.name + ".blur.json")
     if sidecar.exists():
         moved = []
