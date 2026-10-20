@@ -4614,6 +4614,17 @@ impl Workbench {
                     self.send_plugin_event(plugin, event, cx);
                 }
             }
+            // `drop-files <x> <y> <path>[|<path>…]`: what dropping those files from the Finder at that
+            // point of the window does.
+            "drop-files" => {
+                let mut parts = argument.splitn(3, ' ');
+                let x = parts.next().and_then(|v| v.parse::<f32>().ok());
+                let y = parts.next().and_then(|v| v.parse::<f32>().ok());
+                if let (Some(x), Some(y), Some(paths)) = (x, y, parts.next()) {
+                    let paths: Vec<PathBuf> = paths.split('|').map(PathBuf::from).collect();
+                    self.drop_files_at((x, y), &paths, window, cx);
+                }
+            }
             // `plugin-folder <path>`: the "Install from folder" button without its file picker.
             "plugin-folder" => {
                 let result = agentty_bridge::plugins::store::install_from_folder(std::path::Path::new(argument));

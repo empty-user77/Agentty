@@ -448,8 +448,12 @@ impl Workbench {
                 into: into.clone().unwrap_or_else(|| "dropped".into()),
             };
             frame = frame.child(
+                // Pinned to the frame's corner: an absolute child without an inset sits where it
+                // would flow, below the picture, and took the drops meant for the slot under it.
                 canvas(move |bounds, _, _| zones.borrow_mut().push(PluginDropZone { bounds, ..zone.clone() }), |_, _, _, _| {})
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full(),
             );
         }
