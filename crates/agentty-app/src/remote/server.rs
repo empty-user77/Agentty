@@ -128,6 +128,9 @@ pub enum Command {
     NewTab { workspace: u64, kind: PaneKind },
     /// A new workspace in a folder under the remote folder (checked), with a shell or an agent.
     OpenFolder { folder: std::path::PathBuf, kind: PaneKind },
+    /// A local dev server a terminal runs (`port`, checked against the overview) shown on the
+    /// tailnet through Agentty's proxy (`devproxy`).
+    OpenPort { port: u16 },
 }
 
 impl Command {
@@ -141,7 +144,7 @@ impl Command {
             | Command::Resize { pane, .. }
             | Command::Scroll { pane, .. }
             | Command::Release { pane } => Some(*pane),
-            Command::Wake { .. } | Command::NewTab { .. } | Command::OpenFolder { .. } => None,
+            Command::Wake { .. } | Command::NewTab { .. } | Command::OpenFolder { .. } | Command::OpenPort { .. } => None,
         }
     }
 }
@@ -400,6 +403,51 @@ impl Hub {
 
     pub fn set_config(&self, config: Config) {
         *self.config.write().unwrap_or_else(|e| e.into_inner()) = config;
+    }
+
+    pub fn config(&self) -> Config {
+        self.config.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Checks 2 and 3 for a request to a dev server's proxy (`devproxy`), which the page's own
+    /// checks cover too: `login` is who Tailscale says sent it (`None`: no proxy added one), and
+    /// the session cookie must be one of that login's. The page's cookie reaches the dev server's
+    /// address as well: cookies are kept per machine name, not per port.
+    pub fn admits(&self, login: Option<&str>, cookie_header: Option<&str>) -> bool {
+        let config = self.config();
+        if self.paused.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
+            return false;
+        }
+        let login = match (&config.owner, login) {
+            (Some(owner), Some(login)) if login.eq_ignore_ascii_case(owner) => login.to_string(),
+            (None, _) => "local".to_string(),
+            _ => return false,
+        };
+        let name = config.cookie_name();
+        let token = cookie_header
+            .into_iter()
+            .flat_map(|h| h.split(';'))
+            .filter_map(|pair| pair.trim().split_once('='))
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| v)
+            .unwrap_or("");
+        self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(token, &login, SystemTime::now())
+    }
+
+    /// Whether a terminal the page may see runs a server on `port` now (the overview's ports).
+    pub fn dev_port_allowed(&self, port: u16) -> bool {
+        self.view.lock().unwrap_or_else(|e| e.into_inner()).workspaces.iter().any(|w| w.ports.iter().any(|p| p.port == port))
+    }
+
+    /// The name of the page's session cookie, which a dev server must neither see nor replace.
+    pub fn cookie_name(&self) -> &'static str {
+        self.config().cookie_name()
+    }
+
+    /// A signed-in session for `login`, as a sign-in would make (tests of other modules).
+    #[cfg(test)]
+    pub fn session_for_tests(&self, login: &str) -> String {
+        self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.create(login, "test", SystemTime::now())
     }
 
     /// A new password (or none): every session ends.
@@ -745,6 +793,7 @@ impl Hub {
             ("POST", "/api/voice") => Routed::Response(self.voice(request)),
             ("POST", "/api/attach") => Routed::Response(self.attach(request)),
             ("POST", "/api/workspace") => Routed::Response(self.workspace_action(request)),
+            ("POST", "/api/devserver") => Routed::Response(self.open_dev_server(request)),
             _ => Routed::Response(Response::json(404, &json!({ "error": "not found" }))),
         }
     }
@@ -1062,6 +1111,23 @@ impl Hub {
         self.queue(command)
     }
 
+    /// `{"port": 3000}`: a dev server a terminal runs, to be shown on the tailnet. Only a port the
+    /// overview lists (a server started in a terminal the page may see); the app answers through
+    /// the overview, where the port gets its address once it is served.
+    fn open_dev_server(&self, request: &Request) -> Response {
+        #[derive(Deserialize)]
+        struct Body {
+            port: u16,
+        }
+        let Ok(body) = serde_json::from_slice::<Body>(&request.body) else {
+            return Response::json(400, &json!({ "error": "bad request" }));
+        };
+        if !self.dev_port_allowed(body.port) {
+            return Response::json(404, &json!({ "error": "no such server" }));
+        }
+        self.queue(Command::OpenPort { port: body.port })
+    }
+
     /// Hands a command to the app's next round.
     fn queue(&self, command: Command) -> Response {
         let mut inbox = self.inbox.lock().unwrap_or_else(|e| e.into_inner());
@@ -1069,7 +1135,7 @@ impl Hub {
             return Response::json(429, &json!({ "error": "busy" }));
         }
         // Asked twice before the app's round (a double tap): once is enough.
-        if matches!(command, Command::Wake { .. }) && inbox.contains(&command) {
+        if matches!(command, Command::Wake { .. } | Command::OpenPort { .. }) && inbox.contains(&command) {
             return Response::json(200, &json!({ "ok": true }));
         }
         inbox.push(command);
@@ -1206,7 +1272,7 @@ fn overview(view: &View, voice: bool) -> serde_json::Value {
 
 /// `path` without the secret prefix (`/<secret>/app.js` → `/app.js`), or `None` when it does not
 /// start with it. Compared in constant time.
-fn strip_secret(path: &str, secret: &str) -> Option<String> {
+pub(super) fn strip_secret(path: &str, secret: &str) -> Option<String> {
     let rest = path.strip_prefix('/')?;
     let (head, tail) = rest.split_at_checked(secret.len())?;
     let same = head.len() == secret.len() && head.bytes().zip(secret.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0;
@@ -1794,6 +1860,7 @@ mod tests {
             sleeping: true,
             active_tab: 0,
             tabs: Vec::new(),
+            ports: Vec::new(),
         }
     }
 

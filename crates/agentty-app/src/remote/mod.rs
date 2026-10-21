@@ -20,6 +20,7 @@
 
 pub mod auth;
 pub mod conn;
+pub mod devproxy;
 pub mod folders;
 pub mod http;
 pub mod server;
@@ -138,6 +139,20 @@ pub struct Remote {
     retries: usize,
     /// When the last round ran, to notice the Mac slept.
     last_tick: Option<std::time::Instant>,
+    /// Local dev servers the page asked to open, by port: each behind its own proxy (`devproxy`)
+    /// and, through Tailscale, at `https://<machine>:<port>`.
+    dev_servers: std::collections::HashMap<u16, DevServer>,
+}
+
+/// One dev server shown on the tailnet.
+struct DevServer {
+    proxy: devproxy::DevProxy,
+    /// Where the page opens it, once Tailscale serves it.
+    url: Option<String>,
+    /// Why it could not be shown: `taken`, `funnel`, `enable`, `failed`.
+    error: Option<&'static str>,
+    /// The Tailscale entry made for it, to take down again (none in the local test mode).
+    served: bool,
 }
 
 impl Global for Remote {}
@@ -160,6 +175,8 @@ fn load_password() -> Option<String> {
 
 pub fn init(cx: &mut App) {
     cx.set_global(Remote::default());
+    // Dev-server entries a previous run left are never this run's: they all go.
+    cx.background_executor().spawn(async { tailscale::clean_port_leftovers() }).detach();
     // A previous run that crashed (or was killed) never turned its serve off. Starting again takes
     // it down first (`serve_on`); otherwise it goes now.
     if !(settings(cx).remote.feature && settings(cx).remote.enabled) {
@@ -192,6 +209,7 @@ pub fn init(cx: &mut App) {
     .detach();
     cx.on_app_quit(|cx| {
         let remote = cx.global_mut::<Remote>();
+        let dev_entries = take_dev_servers(remote);
         let served = remote.served.take();
         if let Some(hub) = remote.hub.take() {
             hub.shutdown();
@@ -207,6 +225,9 @@ pub fn init(cx: &mut App) {
         // the marker, for the next launch to take down.
         let (done, finished) = futures::channel::oneshot::channel::<()>();
         let _ = std::thread::Builder::new().name("agentty-remote-quit".into()).spawn(move || {
+            for (port, target) in dev_entries {
+                tailscale::port_off(port, &target);
+            }
             match served {
                 Some((port, target)) => tailscale::serve_off(port, &target),
                 // Quit while still starting: whatever that start recorded goes too.
@@ -555,8 +576,18 @@ fn stop_serving(cx: &mut App) {
         let _ = child.kill();
         let _ = child.wait();
     }
+    let dev_entries = take_dev_servers(remote);
     if let Some((port, target)) = remote.served.take() {
         cx.background_executor().spawn(async move { tailscale::serve_off(port, &target) }).detach();
+    }
+    if !dev_entries.is_empty() {
+        cx.background_executor()
+            .spawn(async move {
+                for (port, target) in dev_entries {
+                    tailscale::port_off(port, &target);
+                }
+            })
+            .detach();
     }
     // Terminals sized for a page go back to their panes. Deferred: this often runs from a
     // button on the workbench, inside an update of it.
@@ -868,6 +899,109 @@ fn plugin_overview(automations: &[(String, String, String, bool)], cx: &App) -> 
 }
 
 /// One round: the page's input into the terminals, then sessions and watched screens out.
+/// Stops every dev server's proxy and returns the Tailscale entries made for them, to take down.
+fn take_dev_servers(remote: &mut Remote) -> Vec<(u16, String)> {
+    remote
+        .dev_servers
+        .drain()
+        .filter_map(|(port, server)| {
+            server.proxy.stop();
+            server.served.then(|| (port, server.proxy.serve_target()))
+        })
+        .collect()
+}
+
+/// Shows the dev server on `port` (one the page may see, checked by the server) on the tailnet:
+/// a proxy in front of it, and Tailscale pointed at the proxy. The page learns the address from
+/// the overview. In the local test mode the proxy itself is the address.
+fn open_dev_server(port: u16, cx: &mut App) {
+    let Some(hub) = hub(cx) else { return };
+    let remote = cx.global_mut::<Remote>();
+    // Shown already, or on its way; one that failed is tried again.
+    if remote.dev_servers.get(&port).is_some_and(|s| s.error.is_none()) {
+        return;
+    }
+    if let Some(old) = remote.dev_servers.remove(&port) {
+        old.proxy.stop();
+    }
+    let dev = dev_mode();
+    let dns = remote.tailscale.as_ref().and_then(|s| s.dns_name.clone());
+    if !dev && dns.is_none() {
+        return;
+    }
+    let host = dns.clone().map(|dns| format!("{dns}:{port}"));
+    let secret = (!dev).then(auth::new_token);
+    let Ok(proxy) = devproxy::DevProxy::start(hub, port, host.filter(|_| !dev), secret, !dev) else { return };
+    if dev {
+        let url = format!("http://127.0.0.1:{}/", proxy.local_port());
+        remote.dev_servers.insert(port, DevServer { proxy, url: Some(url), error: None, served: false });
+        return;
+    }
+    let target = proxy.serve_target();
+    remote.dev_servers.insert(port, DevServer { proxy, url: None, error: None, served: true });
+    let dns = dns.unwrap_or_default();
+    cx.spawn(async move |cx| {
+        let (host, serve_target) = (dns.clone(), target.clone());
+        let result = cx.background_executor().spawn(async move { tailscale::port_on(port, &host, &serve_target) }).await;
+        let _ = cx.update(|cx| {
+            let remote = cx.global_mut::<Remote>();
+            let Some(server) = remote.dev_servers.get_mut(&port) else {
+                // Stopped meanwhile: what was just set up goes again.
+                if result.is_ok() {
+                    let target = target.clone();
+                    cx.background_executor().spawn(async move { tailscale::port_off(port, &target) }).detach();
+                }
+                return;
+            };
+            match result {
+                Ok(()) => server.url = Some(format!("https://{dns}:{port}/")),
+                Err(error) => {
+                    server.served = false;
+                    server.error = Some(match error {
+                        tailscale::ServeError::PortTaken => "taken",
+                        tailscale::ServeError::Funnel => "funnel",
+                        tailscale::ServeError::NeedsEnabling(_) => "enable",
+                        tailscale::ServeError::Failed(_) => "failed",
+                    });
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+/// The overview's ports with the addresses of those shown on the tailnet; servers no terminal
+/// the page may see runs any more are taken down.
+fn fill_dev_servers(workspaces: &mut [snapshot::WorkspaceInfo], cx: &mut App) {
+    let running: std::collections::HashSet<u16> = workspaces.iter().flat_map(|w| w.ports.iter().map(|p| p.port)).collect();
+    let remote = cx.global_mut::<Remote>();
+    let gone: Vec<u16> = remote.dev_servers.keys().copied().filter(|port| !running.contains(port)).collect();
+    let mut entries = Vec::new();
+    for port in gone {
+        if let Some(server) = remote.dev_servers.remove(&port) {
+            server.proxy.stop();
+            if server.served {
+                entries.push((port, server.proxy.serve_target()));
+            }
+        }
+    }
+    for info in workspaces.iter_mut().flat_map(|w| w.ports.iter_mut()) {
+        if let Some(server) = remote.dev_servers.get(&info.port) {
+            info.url = server.url.clone();
+            info.error = server.error.map(str::to_string);
+        }
+    }
+    if !entries.is_empty() {
+        cx.background_executor()
+            .spawn(async move {
+                for (port, target) in entries {
+                    tailscale::port_off(port, &target);
+                }
+            })
+            .detach();
+    }
+}
+
 fn tick(cx: &mut App) {
     watch_tailscale(cx);
     watch_health(cx);
@@ -879,6 +1013,10 @@ fn tick(cx: &mut App) {
     }
     let watched_now = hub.watched();
     for command in commands {
+        if let server::Command::OpenPort { port } = command {
+            open_dev_server(port, cx);
+            continue;
+        }
         // Its last page left and came back before this round: it is shown again, at the size
         // that page sends.
         if let server::Command::Release { pane } = command {
@@ -918,6 +1056,7 @@ fn tick(cx: &mut App) {
         });
     }
     if overview {
+        fill_dev_servers(&mut workspaces, cx);
         hub.publish(workspaces, sessions, plugin_overview(&automations, cx));
     }
     // The dashboard's counters and log follow along, about once a second, while it is open.

@@ -469,6 +469,107 @@ pub fn serve_off_if(https_port: u16, target: &str, epoch: u64) {
     }
 }
 
+// ---- Local dev servers on the tailnet: one entry per server, apart from the page's own ----
+//
+// A dev server shown on the page gets its own entry, `https://<machine>:<port>` sent to an Agentty
+// proxy that checks every request as the page does (`devproxy`). These entries have a marker of
+// their own: the page's entry and its leftover handling never see them, and they never touch it.
+
+/// Marks the dev-server entries this Agentty serves: [{port, target}], so a crash leaves a trace
+/// to take down at the next launch.
+fn ports_marker() -> PathBuf {
+    agentty_bridge::fsutil::data_dir().join("remote-serve-ports.json")
+}
+
+fn port_entries() -> Vec<(u16, String)> {
+    let Ok(text) = std::fs::read_to_string(ports_marker()) else { return Vec::new() };
+    let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(&text) else { return Vec::new() };
+    entries.iter().filter_map(|e| Some((u16::try_from(e["port"].as_u64()?).ok()?, e["target"].as_str()?.to_string()))).collect()
+}
+
+/// Private (`0600`), like the page's marker: the targets hold secret paths.
+fn write_port_entries(entries: &[(u16, String)]) {
+    if entries.is_empty() {
+        let _ = std::fs::remove_file(ports_marker());
+        return;
+    }
+    let json: Vec<Value> = entries.iter().map(|(port, target)| serde_json::json!({ "port": port, "target": target })).collect();
+    let _ = agentty_bridge::fsutil::write_private(&ports_marker(), Value::Array(json).to_string().as_bytes());
+}
+
+/// Shares a dev server's proxy (`target`) at `https://<host>:<https_port>`. Refuses a port the
+/// configuration already uses (the page's own, or anything set up by hand).
+pub fn port_on(https_port: u16, host: &str, target: &str) -> Result<(), ServeError> {
+    let _serial = SERVE.lock().unwrap_or_else(|e| e.into_inner());
+    match serve_config().map(|json| port_in_use(&json, https_port)) {
+        Some(Ok(false)) => {}
+        Some(Ok(true)) => return Err(ServeError::PortTaken),
+        _ => return Err(ServeError::Failed("couldn't read the tailscale serve configuration".into())),
+    }
+    // Recorded first: a crash right after must still leave a trace to clean up.
+    let mut entries = port_entries();
+    entries.retain(|(port, _)| *port != https_port);
+    entries.push((https_port, target.to_string()));
+    write_port_entries(&entries);
+    let undo = |why: ServeError| {
+        port_off_locked(https_port, target);
+        Err(why)
+    };
+    if let Some(Ok(())) = local_api::set_serve(host, https_port, target) {
+        if funnel_on(https_port) {
+            return undo(ServeError::Funnel);
+        }
+        return Ok(());
+    }
+    let https = format!("--https={https_port}");
+    let Some(output) = run(&["serve", "--bg", "--yes", &https, target], Duration::from_secs(20)) else {
+        return undo(ServeError::Failed("tailscale did not run".into()));
+    };
+    if let Some(url) = enable_url(&output.all) {
+        return undo(ServeError::NeedsEnabling(url));
+    }
+    if !output.ok {
+        let line = output.all.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("tailscale serve failed");
+        return undo(ServeError::Failed(redact(line).chars().take(200).collect()));
+    }
+    if funnel_on(https_port) {
+        return undo(ServeError::Funnel);
+    }
+    Ok(())
+}
+
+/// Takes a dev server's entry down, if it still points at `target`.
+pub fn port_off(https_port: u16, target: &str) {
+    let _serial = SERVE.lock().unwrap_or_else(|e| e.into_inner());
+    port_off_locked(https_port, target);
+}
+
+fn port_off_locked(https_port: u16, target: &str) {
+    let Some(json) = serve_config() else { return };
+    if served_target(&json, https_port).is_some_and(|served| same_target(&served, target)) {
+        let https = format!("--https={https_port}");
+        if !run(&["serve", "--yes", &https, "off"], Duration::from_secs(10)).is_some_and(|o| o.ok) {
+            // Still up: the marker keeps it for the next try.
+            return;
+        }
+    }
+    let mut entries = port_entries();
+    entries.retain(|(port, old)| !(*port == https_port && old == target));
+    write_port_entries(&entries);
+}
+
+/// Takes down every dev-server entry a previous run left (a crash, or a quit Tailscale didn't
+/// answer in time). Only while Tailscale runs: stopped, it shows no configuration to check.
+pub fn clean_port_leftovers() {
+    if !status().running {
+        return;
+    }
+    let _serial = SERVE.lock().unwrap_or_else(|e| e.into_inner());
+    for (port, target) in port_entries() {
+        port_off_locked(port, &target);
+    }
+}
+
 /// Where the entry on `port` sends requests to (`http://127.0.0.1:1234`, `unix:/path`).
 pub fn served_target(json: &str, port: u16) -> Option<String> {
     let value = serde_json::from_str::<Value>(json).ok()?;
