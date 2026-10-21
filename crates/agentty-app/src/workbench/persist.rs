@@ -121,6 +121,27 @@ pub struct WorkspaceSnapshot {
     /// Left out of remote access: the web page neither lists it nor reaches its terminals.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remote_hidden: bool,
+    /// Pinned, marked unread, nested under another workspace: what the card's menu sets.
+    #[serde(default, flatten)]
+    pub marks: WorkspaceMarks,
+}
+
+/// What a workspace's menu marks it with, beside its name and colour.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMarks {
+    /// Kept at the top of its group: cards moving up when an agent finishes go below it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
+    /// Marked unread by hand: the card shows the attention mark until the workspace is opened.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unread: bool,
+    /// Put to sleep from the menu: the card is drawn faded until the workspace is opened again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asleep: bool,
+    /// The workspace this one is listed under (its parent working tree, as the user set it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -657,6 +678,19 @@ mod tests {
         assert_eq!(pane.tool.as_deref(), Some("claude"));
         // A plugin workspace's tab stays the same automation across a restart.
         assert_eq!(back.tabs[0].instance.as_ref().map(|i| i.id.as_str()), Some("a1"));
+    }
+
+    /// Pinned, unread and the parent come back after a restart; a card with none of them writes
+    /// none of them.
+    #[test]
+    fn menu_marks_survive_the_round_trip() {
+        let plain: WorkspaceSnapshot = serde_json::from_str(r#"{"id":1,"cwd":"/tmp","tabs":[]}"#).unwrap();
+        assert_eq!(plain.marks, WorkspaceMarks::default());
+        let written = serde_json::to_string(&plain).unwrap();
+        assert!(!written.contains("pinned") && !written.contains("parent"), "{written}");
+        let marked = WorkspaceSnapshot { marks: WorkspaceMarks { pinned: true, unread: true, asleep: true, parent: Some(7) }, ..plain };
+        let back: WorkspaceSnapshot = serde_json::from_str(&serde_json::to_string(&marked).unwrap()).unwrap();
+        assert_eq!(back.marks, WorkspaceMarks { pinned: true, unread: true, asleep: true, parent: Some(7) });
     }
 
     #[test]
