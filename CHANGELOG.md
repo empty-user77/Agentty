@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- macOS: the tabs sit in the title bar next to the window buttons, with the sidebar button beside them, so the
+  terminals get the row the tab strip took. The notification bell moves to the sidebar's header while the sidebar
+  shows. **Tabs in the title bar** in Workspace Options turns it off.
+- Workspace Options (the **⚙** in the workspace list's header): card layout, grouping (none, your groups, or by
+  project with a repository's worktrees together), order (manual, recent activity, name) and filters for sleeping
+  workspaces, workspaces on `main` / `master` and plugin workspaces.
 - Remote access: file paths in a terminal's output or a chat are links; tapping one opens the file in a viewer over
   the page, one tab per file — pictures, Markdown (rendered), text and code, PDFs in a tab of their own. Only files in
   that terminal's project folder open, nothing hidden and no key files.

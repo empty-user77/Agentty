@@ -82,6 +82,7 @@ mod voice_input;
 mod webview_setup;
 mod windows_page;
 mod workspace_menu;
+mod workspace_options;
 pub mod worktrees;
 
 use crate::agent_signal::AgentSignal;
@@ -414,6 +415,8 @@ pub struct Workbench {
     /// Where in the window the open workspace menu was asked for, so a card near the bottom of the
     /// sidebar opens its menu upwards instead of off the edge.
     workspace_menu_at: f32,
+    /// The workspace list's options menu (the settings button in its header) is open.
+    workspace_options_open: bool,
     /// The workspace menu's flyout (Open In, Move to Group) unfolded beside it.
     workspace_submenu: Option<workspace_menu::Submenu>,
     /// The apps "Open In" offers, looked up each time the workspace menu opens.
@@ -829,6 +832,7 @@ impl Workbench {
             launcher_target: LaunchTarget::NewTab,
             workspace_menu: None,
             workspace_menu_at: 0.,
+            workspace_options_open: false,
             workspace_submenu: None,
             open_in_apps: Vec::new(),
             parent_picker: None,
@@ -3608,7 +3612,8 @@ impl Render for Workbench {
                             .flex()
                             .flex_col()
                             // A plugin's workspace has a layout of its own (its tabs sit with its terminals).
-                            .when(plugin_workspace.is_none(), |d| d.child(self.render_tab_strip(cx)))
+                            // With the unified header the tabs are in the title bar instead.
+                            .when(plugin_workspace.is_none() && !self.unified_header(cx), |d| d.child(self.render_tab_strip(cx)))
                             .children(self.render_service_banner(cx))
                             .when_some(plugin_workspace.clone(), |d, plugin| {
                                 d.child(self.render_plugin_workspace(&plugin, main.take(), cx))
@@ -3663,13 +3668,16 @@ impl Render for Workbench {
                                         .child(gpui::deferred(self.render_sync_popover(cx)).with_priority(3)),
                                 )
                             })
-                            // Opens under the bell, at the right end of the title bar.
+                            // Opens under the bell: at the right end of the title bar, or beside the
+                            // sidebar when the bell is in its header.
                             .when(self.notices_open, |d| {
+                                let in_sidebar = self.notices_in_sidebar(cx);
                                 d.child(
                                     div()
                                         .absolute()
                                         .top(px(4.))
-                                        .right(px(8.))
+                                        .when(in_sidebar, |d| d.left(px(4.)))
+                                        .when(!in_sidebar, |d| d.right(px(8.)))
                                         .child(gpui::deferred(self.render_notices(cx)).with_priority(3)),
                                 )
                             }),

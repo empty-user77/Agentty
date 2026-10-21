@@ -15,6 +15,9 @@ Each row in the sidebar (**⌘B**) is a workspace, with a folder it opens in. **
 - Double-click a name to rename it.
 - **⌥⌘↓ / ⌥⌘↑** move between workspaces, **⌘1…⌘9** jump to one.
 - Every workspace, its tabs, splits and groups come back after a restart.
+- The **⚙** in the list's header opens **Workspace Options**: card layout (detailed or compact), grouping (none, your groups, or by project — a repository and its worktrees together), order (manual, recent activity, name), filters (hide sleeping workspaces, workspaces on `main` / `master`, plugin workspaces) and whether the tabs sit in the title bar. The workspace you are in is always listed.
+
+On macOS the tabs sit in the title bar next to the window buttons, with the sidebar button (**⌘B**) beside them; double-click the empty part of the bar to zoom the window. Turn **Tabs in the title bar** off in Workspace Options for a tab row of its own.
 
 A workspace row shows the status of its agents, so you can see which project needs you without opening it.
 

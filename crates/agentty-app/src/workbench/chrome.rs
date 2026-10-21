@@ -145,15 +145,18 @@ impl Workbench {
             return div().into_any_element();
         }
         let title = self.workspaces.get(self.active_workspace).map(|ws| self.workspace_title(ws, cx)).unwrap_or_default();
+        // The unified header: the tabs move up here, next to the sidebar button, and the bar stops
+        // being a row of its own. A plugin's workspace keeps its tabs with its own layout.
+        let unified = self.unified_header(cx) && self.front_plugin_workspace(cx).filter(|_| self.page.is_none()).is_none();
         div()
             .id("title-bar")
             .h(px(TITLE_BAR_HEIGHT))
             .flex_shrink_0()
             .flex()
             .items_center()
-            .justify_center()
+            .when(!unified, |bar| bar.justify_center())
             .relative()
-            .bg(hex(Chrome::ACTIVITY_BAR))
+            .bg(hex(if unified { Chrome::TAB_INACTIVE } else { Chrome::ACTIVITY_BAR }))
             .border_b_1()
             .border_color(hex(Chrome::BORDER))
             .t_small()
@@ -172,9 +175,24 @@ impl Workbench {
             .when(client_side, |bar| {
                 bar.on_mouse_down(MouseButton::Right, |event: &MouseDownEvent, window, _| window.show_window_menu(event.position))
             })
-            .child(if title.is_empty() { "Agentty".to_string() } else { format!("{title} — Agentty") })
+            .when(unified, |bar| {
+                bar.child(self.render_unified_header(window, cx)).child(
+                    // In line with the tabs, not over them: the strip's own buttons end where these start.
+                    div()
+                        .flex_shrink_0()
+                        .pr_2()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(self.render_sync_button(cx))
+                        .when(!self.notices_in_sidebar(cx), |d| d.child(self.render_notices_button(cx))),
+                )
+            })
+            .when(!unified, |bar| bar.child(if title.is_empty() { "Agentty".to_string() } else { format!("{title} — Agentty") }))
             // Notifications live at the far right of the title bar, clear of everything else.
-            .when(!client_side, |bar| {
+            .when(!client_side && !unified, |bar| {
                 bar.child(
                     div()
                         .absolute()
@@ -187,7 +205,7 @@ impl Workbench {
                         // The bell must not start a window move.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(self.render_sync_button(cx))
-                        .child(self.render_notices_button(cx)),
+                        .when(!self.notices_in_sidebar(cx), |d| d.child(self.render_notices_button(cx))),
                 )
             })
             .when(client_side, |bar| {
@@ -402,25 +420,14 @@ impl Workbench {
             }),
         )
         .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.hide_sidebar"), Some("⌘B")));
+        // With the unified header the sidebar button lives in the title bar, by the traffic lights.
+        let collapse = (!self.unified_header(cx)).then_some(collapse);
+        let bell = self.notices_in_sidebar(cx).then(|| self.render_notices_button(cx));
         let actions = match self.panel {
             SidePanel::Workspaces => div()
                 .flex()
                 .gap_0p5()
-                // How the cards are drawn, where they are: the start page has its own tab now, so
-                // this is the one thing the list's own header should carry.
-                .child({
-                    let compact = settings(cx).compact_workspaces;
-                    icon_only(
-                        "sidebar-density",
-                        // `rows-2` reads as the roomy card list, `list` as the thin one: the icon
-                        // shows what a click would switch to.
-                        if compact { "rows-2" } else { "list" },
-                        cx.listener(|_, _: &ClickEvent, _, cx| {
-                            crate::settings::update_settings(cx, |s| s.compact_workspaces = !s.compact_workspaces);
-                        }),
-                    )
-                    .tooltip(crate::ui::Tooltip::text(t(cx, if compact { "workspaces.as_cards" } else { "workspaces.as_list" }), None))
-                })
+                .children(bell)
                 .child(
                     icon_only(
                         "sidebar-new-group",
@@ -439,10 +446,13 @@ impl Workbench {
                     )
                     .tooltip(crate::ui::Tooltip::text(t(cx, "new.workspace"), Some("⌘N"))),
                 )
-                .child(collapse),
+                // How the list is laid out, grouped, ordered and filtered.
+                .child(self.render_workspace_options_button(cx))
+                .children(collapse),
             SidePanel::Sessions => div()
                 .flex()
                 .gap_0p5()
+                .children(bell)
                 .child(if self.sessions_loading {
                     div()
                         .size(px(crate::ui::ICON_BUTTON))
@@ -456,7 +466,7 @@ impl Workbench {
                         .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.refresh"), None))
                         .into_any_element()
                 })
-                .child(collapse),
+                .children(collapse),
         };
         // Title and session content, debounced the same way the sessions panel searches: title
         // matches show at once, content matches trail in from the background.
@@ -623,6 +633,42 @@ impl Workbench {
         // wherever they are in the list; unlinking puts them straight back. A workspace whose
         // leader is folded away is listed in its own place instead: it must never go missing.
         let mut linked = self.linked_workspaces(cx);
+        // Grouped another way than by the user's groups (the options menu): nothing folds, so every
+        // linked leader is on screen with its followers.
+        let grouping = settings(cx).workspace_list.grouping;
+        if grouping != crate::settings::WorkspaceGrouping::Groups {
+            let all = self.list_order((0..self.workspaces.len()).filter(|i| !linked.followers.contains(i)).collect(), cx);
+            if grouping == crate::settings::WorkspaceGrouping::None {
+                // Pinned first and children under their parents, as in the groups.
+                for (index, depth) in self.nested_order(&all) {
+                    list =
+                        list.child(div().pl(px(NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)));
+                }
+                return list;
+            }
+            for (project, members) in self.by_project(&all, cx) {
+                list = list.child(
+                    div()
+                        .mt_1p5()
+                        .px_2()
+                        .py_0p5()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .t_small()
+                        .text_color(hex(Chrome::MUTED))
+                        .child(icon("folder", IconSize::INLINE, hex(Chrome::MUTED)))
+                        .child(div().flex_1().min_w_0().truncate().t_body().font_weight(crate::theme::EMPHASIS).child(project))
+                        .child(members.len().to_string()),
+                );
+                for (index, depth) in self.nested_order(&members) {
+                    list = list.child(
+                        div().pl(px(12. + NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)),
+                    );
+                }
+            }
+            return list;
+        }
         let shown = |index: usize| match self.workspaces[index].group {
             None => self.groups.is_empty() || !self.ungrouped_collapsed,
             Some(gid) => self.groups.iter().any(|g| g.id == gid && !g.collapsed),
@@ -633,8 +679,10 @@ impl Workbench {
                 linked.followers.remove(&follower);
             }
         }
-        let ungrouped: Vec<usize> =
-            (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group.is_none() && !linked.followers.contains(i)).collect();
+        let ungrouped: Vec<usize> = self.list_order(
+            (0..self.workspaces.len()).filter(|i| self.workspaces[*i].group.is_none() && !linked.followers.contains(i)).collect(),
+            cx,
+        );
         // The "ungrouped" header matters once groups exist and something is (or is being dragged)
         // outside them.
         let dragging = cx.has_active_drag();
@@ -651,9 +699,12 @@ impl Workbench {
             }
         }
         for group in &self.groups {
-            let members: Vec<usize> = (0..self.workspaces.len())
-                .filter(|i| self.workspaces[*i].group == Some(group.id) && !linked.followers.contains(i))
-                .collect();
+            let members: Vec<usize> = self.list_order(
+                (0..self.workspaces.len())
+                    .filter(|i| self.workspaces[*i].group == Some(group.id) && !linked.followers.contains(i))
+                    .collect(),
+                cx,
+            );
             // A group with a colour is drawn inside a frame of it, header included, so it reads as
             // one block; the header keeps its own rounded top.
             let accent = super::accent_color(group.color);
@@ -1814,9 +1865,24 @@ impl Workbench {
     }
 
     pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_tab_strip_in(false, cx)
+    }
+
+    /// The tab strip, as a row of its own or (`in_title_bar`) inside the unified header, where it
+    /// fills the bar's height and its empty space acts as the title bar: a double-click there zooms
+    /// the window instead of opening a tab.
+    pub(super) fn render_tab_strip_in(&self, in_title_bar: bool, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let in_plugin_workspace = self.front_plugin_workspace(cx).is_some() && self.page.is_none();
-        // Tabs take the room they need (scrolling when crowded); the spacer gets the rest.
-        let mut tabs = div().id("tabs").flex().flex_shrink().min_w_0().h_full().overflow_x_scroll();
+        // Tabs take the room they need (scrolling when crowded); the spacer gets the rest. In the
+        // title bar a press on a tab is the tab's, never the bar's (a double-click must not zoom).
+        let mut tabs = div()
+            .id("tabs")
+            .flex()
+            .flex_shrink()
+            .min_w_0()
+            .h_full()
+            .overflow_x_scroll()
+            .when(in_title_bar, |d| d.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()));
         // The start page is always the first tab, whatever else is open: it is how everything else
         // is reached, and hunting for it depended on which screen you happened to be on.
         let home_active = self.welcome && self.page.is_none();
@@ -2083,15 +2149,13 @@ impl Workbench {
 
         div()
             .id("tab-strip")
-            .h(px(TAB_HEIGHT))
+            .map(|d| if in_title_bar { d.h_full() } else { d.h(px(TAB_HEIGHT)).border_b_1().border_color(hex(Chrome::BORDER)) })
             .flex_shrink_0()
             .flex()
             .items_center()
             .pr_1()
             .gap_0p5()
             .bg(hex(Chrome::TAB_INACTIVE))
-            .border_b_1()
-            .border_color(hex(Chrome::BORDER))
             .child(tabs)
             // New tab / agent / workspace: right after the last tab, and pinned at the end of the
             // strip once the tabs scroll.
@@ -2138,14 +2202,17 @@ impl Workbench {
                     .flex_1()
                     .min_w(px(24.))
                     .h_full()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            if event.click_count == 2 {
-                                this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, window, cx);
-                            }
-                        }),
-                    )
+                    // In the title bar the press goes on to the bar (zoom on double-click).
+                    .when(!in_title_bar, |d| {
+                        d.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                if event.click_count == 2 {
+                                    this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, window, cx);
+                                }
+                            }),
+                        )
+                    })
                     // Right-click: the same menu as the + button, where the click was.
                     .on_mouse_down(
                         MouseButton::Right,
