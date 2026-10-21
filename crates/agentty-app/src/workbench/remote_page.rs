@@ -256,6 +256,7 @@ impl Workbench {
             color: None,
             plugin: None,
             remote_hidden: false,
+            marks: Default::default(),
         });
         // With nothing open before, the desktop shows it: there is nothing else to show.
         if self.workspaces.len() == 1 {
