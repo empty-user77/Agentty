@@ -15,6 +15,7 @@ The page is laid out like Agentty itself:
 - **Split panes** — when the tab is split, the button at the top right opens the list of its panes, with each one's state and what it asks; tap one to switch to it.
 - **The terminal** — the chosen pane's live screen in the middle.
 - **Chat workspaces** — a [chat workspace](/docs/chat-workspace) opens as its chat: the conversation, plan usage and a box to write to its lead; **Terminal** switches to the lead's terminal.
+- **Files in the output** — a file path in the terminal or the chat (`shots/home.png`, `NOTES.md`, `src/app.ts`) is underlined; tap it to open the file in a viewer over the page, one tab per file. Pictures are shown as they are, Markdown rendered, other text as text; a PDF opens in a tab of its own. Only files in that terminal's project folder open, nothing hidden (`.env`, `.git`, …) and no key files.
 
 **New tabs** — **+** at the end of the tabs (or beside a workspace on Home) opens a new tab in that workspace with a terminal, Claude Code or Codex, started in the workspace's folder. The page switches to it.
 
@@ -93,6 +94,14 @@ From the remote page you can speak a prompt instead of typing it. Tap the microp
 The audio is transcribed **on your Mac** by a local model — nothing is sent to any outside service. Install a model once from **Settings → Voice input** (the same card is also on the Remote access page): **Large-v3 Turbo** (recommended, about 574 MB) or the lighter **Small** (about 488 MB). It downloads to your Mac, is verified and kept there, and runs on the Mac's GPU. In the same place you can choose the spoken language (Automatic, Korean, English — a short prompt is sometimes mistaken for another language when detected automatically), pick which installed model is used, and delete a model. Once a model is installed, the microphone button appears on the remote page by itself.
 
 Your browser asks for microphone permission the first time, and the page must be served over HTTPS — it is, through Tailscale.
+
+## Dev servers
+
+When a terminal in a workspace runs a local server — `npm run dev`, `rails s`, a preview of a static site — its port shows under the workspace's tabs on the page, for example **↗ localhost:3000**. Tap it and the server opens in a new browser tab at `https://<machine>.<tailnet>.ts.net:3000/`, the same address name as the page with the server's port. The first time takes a few seconds while Tailscale sets the port up.
+
+Only you get in, the same as on the page: Agentty answers that address itself and passes a request on to the server only from your Tailscale account and a device signed in with the web password (sign in on the page first). The server sees the request as coming to `localhost:<port>`, and never gets your Agentty sign-in. It works like the server on the Mac would in a browser there, hot reload included.
+
+The address goes away when the server stops, when remote access is turned off and when Agentty quits. Agentty doesn't open a port that Tailscale already serves for something else, or one shared publicly with Funnel; the page tells you why instead.
 
 ## Hiding the feature
 

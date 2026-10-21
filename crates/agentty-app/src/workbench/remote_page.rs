@@ -5,7 +5,7 @@ use super::settings_page::{row_with_hint, switch};
 use super::Workbench;
 use crate::i18n::{t, tf};
 use crate::remote::server::Command;
-use crate::remote::snapshot::{Screen, SessionInfo, TabInfo, WorkspaceInfo};
+use crate::remote::snapshot::{PortInfo, Screen, SessionInfo, TabInfo, WorkspaceInfo};
 use crate::remote::{self, Phase, Problem};
 use crate::settings::{settings, terminal_theme, update_settings};
 use crate::terminal::AgentStatus;
@@ -109,6 +109,16 @@ impl Workbench {
                         AgentStatus::Permission(Some(what)) | AgentStatus::Question(Some(what)) => Some(what.chars().take(300).collect()),
                         _ => None,
                     };
+                    // Files the page may open from this terminal's output: in the working tree it
+                    // is in, or its workspace's folder (and that folder's tree).
+                    let dir = view.current_dir();
+                    let mut roots: Vec<std::path::PathBuf> = [Some(&dir), Some(&ws.cwd)]
+                        .into_iter()
+                        .flatten()
+                        .map(|d| agentty_bridge::worktree::tree_root(d).unwrap_or_else(|| d.clone()))
+                        .collect();
+                    roots.sort();
+                    roots.dedup();
                     sessions.push(SessionInfo {
                         pane: view.pane_id,
                         workspace: name.clone(),
@@ -124,6 +134,8 @@ impl Workbench {
                         elapsed: view.working_since.map(|t| t.elapsed().as_secs()),
                         last_activity_ms: view.last_activity_ms,
                         asks,
+                        dir,
+                        roots,
                     });
                 }
             }
@@ -138,6 +150,12 @@ impl Workbench {
                 sleeping: ws.tabs.is_empty(),
                 active_tab: ws.active_tab.min(tabs.len().saturating_sub(1)),
                 tabs,
+                // Addresses are filled in by `remote` for the ones it shows on the tailnet.
+                ports: self
+                    .ports_of(ws.tabs.iter().flat_map(|t| t.root.leaves()).map(|p| p.read(cx).pane_id))
+                    .into_iter()
+                    .map(|port| PortInfo { port, url: None, error: None })
+                    .collect(),
             });
         }
         (workspaces, sessions)
@@ -186,7 +204,11 @@ impl Workbench {
             Command::Resize { cols, rows, .. } => view.set_remote_size(Some((*cols as usize, *rows as usize)), cx),
             Command::Scroll { lines, .. } => view.remote_scroll(*lines, cx),
             Command::Release { .. } => view.set_remote_size(None, cx),
-            Command::Wake { .. } | Command::NewTab { .. } | Command::OpenFolder { .. } | Command::Chat { .. } => {}
+            Command::Wake { .. }
+            | Command::NewTab { .. }
+            | Command::OpenFolder { .. }
+            | Command::Chat { .. }
+            | Command::OpenPort { .. } => {}
         });
         true
     }

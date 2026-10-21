@@ -11,6 +11,9 @@ All notable changes to this project are documented here. The format follows
 - Workspace Options (the **⚙** in the workspace list's header): card layout, grouping (none, your groups, or by
   project with a repository's worktrees together), order (manual, recent activity, name) and filters for sleeping
   workspaces, workspaces on `main` / `master` and plugin workspaces.
+- Remote access: file paths in a terminal's output or a chat are links; tapping one opens the file in a viewer over
+  the page, one tab per file — pictures, Markdown (rendered), text and code, PDFs in a tab of their own. Only files in
+  that terminal's project folder open, nothing hidden and no key files.
 - The workspace menu (right-click a workspace, or its **⋯**) is reorganised with icons and gains: **Open In ›** an
   editor or IDE found on the computer (VS Code, Cursor, Zed, the JetBrains IDEs, Xcode …) or Finder, **Copy Path**,
   **Copy Worktree Name** / **Copy Branch Name**, **Pin** (kept at the top of its group, whatever is dragged above it),
@@ -20,6 +23,9 @@ All notable changes to this project are documented here. The format follows
   Worktree**.
 - The tab menu (right-click a tab) gets the same look: icons, and **Move to Workspace ›** as a submenu with a new
   workspace first and the others under their groups' names.
+- Remote access shows the dev servers a workspace's terminals run (`npm run dev` and the like) under its tabs. Tapping
+  one opens it in a new tab at the Mac's tailnet address with the server's port, for you only: Agentty passes requests
+  on only from your Tailscale account and a device signed in with the web password, hot reload included.
 
 ### Changed
 - A tab set aside with **Work on Later** now stops, like a sleeping workspace: what ran in it ends and only
@@ -27,6 +33,13 @@ All notable changes to this project are documented here. The format follows
   tabs saved by earlier versions come back the same way.
 - The subagent window lists running subagents first, then the most recently active, in the timeline and in the list
   alike.
+
+### Fixed
+- Linking two Claude Code sessions is reliable: a restored, resumed or `/clear`ed tab is found under the session it is
+  in now (it used to drop to a one-way handover without a word), a line drawn in Session Flow makes the same direct
+  link as a terminal's link button, a session that has just started is waited for a few seconds, and the first
+  session is told plainly to hand the other session's work over to it instead of doing it itself. A message for a
+  session showing a permission prompt or a question waits instead of answering it.
 
 ## [0.2.22] - 2026-10-19
 

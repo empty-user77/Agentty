@@ -5,6 +5,10 @@
 // Everything shown comes from terminals and agents, which anything running in them can set (a
 // window title is an escape sequence away), so text only ever goes in through textContent: never
 // innerHTML, never a URL, never a style string built from it. Colors pass a strict check first.
+// Two narrow exceptions, for the file viewer: a file path named in the output goes to the Mac as a
+// query value of this page's own `/api/file`, which decides what it may show; and a Markdown file
+// is rendered with raw HTML off (markdown-it) and then sanitized (DOMPurify) before it is shown,
+// under a policy that runs no script but this page's own.
 "use strict";
 
 const STRINGS = {
@@ -26,9 +30,13 @@ const STRINGS = {
     terminal: "Terminal", claude: "Claude Code", codex: "Codex", tooManyTabs: "Too many new tabs at once. Wait a minute.",
     newWorkspace: "New workspace", openHere: "Open this folder with", newFolder: "New folder", folderName: "Folder name", create: "Create", up: "Up", noFolders: "No folders here yet.", folderExists: "A folder with this name is already here.", badFolderName: "Use a plain folder name (no / or leading dot).", folderHint: "Workspaces opened from here live in {root} on the Mac.",
     open: "{n} open", asleep: "Asleep", running: "{n} running",
+    files: "Open files", closeFile: "Close", closeViewer: "Close the viewer", openPdf: "Open the PDF", fileCut: "Only the first 2 MB is shown.", fileLoading: "Opening…",
+    fileError: { 403: "This file can't be opened from here.", 404: "Not found in this terminal's folder.", 413: "Too large to show here.", 415: "This kind of file can't be shown.", 0: "Couldn't open this file." },
     pstate: { running: "Running", starting: "Starting", stopped: "Stopped", failed: "Stopped with an error", consent: "Waiting for your OK", off: "Off" },
     astate: { working: "Working", idle: "Idle", error: "Error" },
     chat: "Chat", chatHint: "Message the lead agent…", chatEmpty: "Write to the lead agent. It plans the work and starts workers on the Mac; their terminals are in the pane list.", leadWaits: "The lead is waiting for you in its terminal.",
+    devServers: "Dev servers", portOpen: "Open the server on port {port}", portOpening: "Opening…", portSlow: "The server didn't open in time. Try again.", portGone: "This server isn't running any more.", portFailed: "Couldn't open this server. Try again.",
+    portErrors: { taken: "Tailscale already serves port {port} for something else.", funnel: "Port {port} is shared publicly with Tailscale Funnel, so Agentty won't open it.", enable: "Turn on HTTPS for your tailnet in the Tailscale admin console first.", failed: "Couldn't open this server. Try again." },
   },
   ko: {
     toLatest: "최신 ↓",
@@ -48,9 +56,13 @@ const STRINGS = {
     terminal: "터미널", claude: "Claude Code", codex: "Codex", tooManyTabs: "새 탭을 너무 많이 열었습니다. 1분 뒤에 다시 시도하세요.",
     newWorkspace: "새 작업공간", openHere: "이 폴더를 열 도구", newFolder: "새 폴더", folderName: "폴더 이름", create: "만들기", up: "위로", noFolders: "아직 폴더가 없습니다.", folderExists: "같은 이름의 폴더가 이미 있습니다.", badFolderName: "/나 점(.)으로 시작하지 않는 폴더 이름을 쓰세요.", folderHint: "여기서 여는 작업공간은 Mac의 {root} 폴더 안에 있습니다.",
     open: "{n}개 열림", asleep: "쉬는 중", running: "{n}개 실행 중",
+    files: "열린 파일", closeFile: "닫기", closeViewer: "뷰어 닫기", openPdf: "PDF 열기", fileCut: "앞의 2MB만 보여 줍니다.", fileLoading: "여는 중…",
+    fileError: { 403: "여기서는 열 수 없는 파일입니다.", 404: "이 터미널의 폴더에서 찾을 수 없습니다.", 413: "너무 커서 여기서 보여 줄 수 없습니다.", 415: "보여 줄 수 없는 종류의 파일입니다.", 0: "파일을 열지 못했습니다." },
     pstate: { running: "실행 중", starting: "시작하는 중", stopped: "멈춤", failed: "오류로 멈춤", consent: "허용 대기", off: "꺼짐" },
     astate: { working: "작업 중", idle: "대기", error: "오류" },
     chat: "채팅", chatHint: "리드 에이전트에게 메시지…", chatEmpty: "리드 에이전트에게 말해 보세요. 작업을 계획하고 Mac에서 워커를 띄웁니다. 워커 터미널은 분할창 목록에 있습니다.", leadWaits: "리드가 터미널에서 응답을 기다립니다.",
+    devServers: "개발 서버", portOpen: "{port} 포트 서버 열기", portOpening: "여는 중…", portSlow: "서버가 제때 열리지 않았습니다. 다시 시도해 주세요.", portGone: "이 서버는 더 이상 실행 중이 아닙니다.", portFailed: "이 서버를 열지 못했습니다. 다시 시도해 주세요.",
+    portErrors: { taken: "Tailscale이 {port} 포트를 이미 다른 용도로 쓰고 있습니다.", funnel: "{port} 포트가 Tailscale Funnel로 공개되어 있어 Agentty가 열지 않습니다.", enable: "먼저 Tailscale 관리 콘솔에서 tailnet의 HTTPS를 켜 주세요.", failed: "이 서버를 열지 못했습니다. 다시 시도해 주세요." },
   },
   ja: {
     toLatest: "最新へ ↓",
@@ -70,9 +82,13 @@ const STRINGS = {
     terminal: "ターミナル", claude: "Claude Code", codex: "Codex", tooManyTabs: "新しいタブを開きすぎました。1 分後にもう一度お試しください。",
     newWorkspace: "新しいワークスペース", openHere: "このフォルダを開くツール", newFolder: "新しいフォルダ", folderName: "フォルダ名", create: "作成", up: "上へ", noFolders: "まだフォルダがありません。", folderExists: "同じ名前のフォルダがすでにあります。", badFolderName: "/ やドット(.)で始まらないフォルダ名にしてください。", folderHint: "ここで開くワークスペースは Mac の {root} フォルダの中にあります。",
     open: "{n} 件 開いています", asleep: "休止中", running: "{n} 件 実行中",
+    files: "開いたファイル", closeFile: "閉じる", closeViewer: "ビューアを閉じる", openPdf: "PDF を開く", fileCut: "先頭の 2 MB だけを表示しています。", fileLoading: "開いています…",
+    fileError: { 403: "ここからは開けないファイルです。", 404: "このターミナルのフォルダに見つかりません。", 413: "大きすぎて表示できません。", 415: "表示できない種類のファイルです。", 0: "ファイルを開けませんでした。" },
     pstate: { running: "実行中", starting: "起動中", stopped: "停止", failed: "エラーで停止", consent: "許可待ち", off: "オフ" },
     astate: { working: "作業中", idle: "待機", error: "エラー" },
     chat: "チャット", chatHint: "リードエージェントにメッセージ…", chatEmpty: "リードエージェントに書いてください。作業を計画し、Mac でワーカーを起動します。ワーカーのターミナルはペイン一覧にあります。", leadWaits: "リードがターミナルで返答を待っています。",
+    devServers: "開発サーバー", portOpen: "ポート {port} のサーバーを開く", portOpening: "開いています…", portSlow: "サーバーが時間内に開きませんでした。もう一度お試しください。", portGone: "このサーバーはもう動いていません。", portFailed: "このサーバーを開けませんでした。もう一度お試しください。",
+    portErrors: { taken: "Tailscale はポート {port} を既に別の用途で使っています。", funnel: "ポート {port} は Tailscale Funnel で公開されているため、Agentty は開きません。", enable: "先に Tailscale の管理コンソールで tailnet の HTTPS をオンにしてください。", failed: "このサーバーを開けませんでした。もう一度お試しください。" },
   },
   zh: {
     toLatest: "最新 ↓",
@@ -92,9 +108,13 @@ const STRINGS = {
     terminal: "终端", claude: "Claude Code", codex: "Codex", tooManyTabs: "新建的标签页太多了，请一分钟后再试。",
     newWorkspace: "新建工作区", openHere: "用以下工具打开此文件夹", newFolder: "新建文件夹", folderName: "文件夹名称", create: "创建", up: "上一级", noFolders: "这里还没有文件夹。", folderExists: "已有同名文件夹。", badFolderName: "请使用不含 / 且不以点(.)开头的文件夹名。", folderHint: "在这里打开的工作区位于 Mac 的 {root} 文件夹中。",
     open: "{n} 个已打开", asleep: "休眠中", running: "{n} 个运行中",
+    files: "已打开的文件", closeFile: "关闭", closeViewer: "关闭查看器", openPdf: "打开 PDF", fileCut: "只显示前 2 MB。", fileLoading: "正在打开…",
+    fileError: { 403: "无法从这里打开此文件。", 404: "在此终端的文件夹中找不到。", 413: "文件太大，无法在此显示。", 415: "无法显示此类文件。", 0: "无法打开此文件。" },
     pstate: { running: "运行中", starting: "正在启动", stopped: "已停止", failed: "因错误停止", consent: "等待你的允许", off: "已关闭" },
     astate: { working: "工作中", idle: "空闲", error: "错误" },
     chat: "聊天", chatHint: "给主控智能体发消息…", chatEmpty: "给主控智能体写消息。它会规划工作并在 Mac 上启动工作智能体，它们的终端在窗格列表中。", leadWaits: "主控智能体正在终端中等你回应。",
+    devServers: "开发服务器", portOpen: "打开端口 {port} 上的服务器", portOpening: "正在打开…", portSlow: "服务器未能及时打开，请重试。", portGone: "这个服务器已不再运行。", portFailed: "无法打开这个服务器，请重试。",
+    portErrors: { taken: "Tailscale 已将端口 {port} 用于其他用途。", funnel: "端口 {port} 已通过 Tailscale Funnel 公开，Agentty 不会打开它。", enable: "请先在 Tailscale 管理控制台中为 tailnet 开启 HTTPS。", failed: "无法打开这个服务器，请重试。" },
   },
 };
 const lang = (navigator.language || "en").slice(0, 2);
@@ -157,6 +177,11 @@ const state = {
   chatView: true,
   // The size last asked of the terminal being looked at ("pane:cols:rows").
   sized: null,
+  // Files opened from the output, one viewer tab each: { key, pane, path, name, loading, kind,
+  // text, cut, error }. `file`: the tab shown; `viewer`: whether the viewer is open.
+  files: [],
+  file: 0,
+  viewer: false,
 };
 
 const session = (pane) => state.sessions.find((s) => s.pane === pane);
@@ -418,6 +443,7 @@ function onOverview(data) {
   // If a recording is running and its terminal just closed, or voice was turned off, stop the mic
   // — its button is about to be hidden, which would otherwise leave no way to stop it.
   if (recorder && (!state.voice || !sessions.some((s) => s.pane === state.pane))) stopRecording();
+  watchPort();
   if (!state.started) {
     state.started = true;
     return pickStart();
@@ -560,6 +586,7 @@ function render() {
   redraw("workspaces", [state.workspaces, marks, state.workspace], renderWorkspaces);
   redraw("header", [ws, shown(session(state.pane)), state.tab], renderHeader);
   redraw("tabs", [ws && ws.tabs, state.tab, marks], renderTabs);
+  redraw("ports", [ws && !ws.sleeping && ws.ports, state.opening && state.opening.port], renderPorts);
   redraw("panes", [tab, tab && tab.panes.map((p) => [shown(session(p)), session(p)?.elapsed]), state.pane], renderPanes);
   redraw("body", [state.workspace, state.workspaces.length, ws && ws.sleeping, state.waking, shown(session(state.pane)), state.ctrl, state.size, inChat(), !!currentChat(), state.voice], renderBody);
   redraw("chat", [inChat() && currentChat()], renderChat);
@@ -677,6 +704,96 @@ function renderTabs() {
   nav.append(add);
 }
 
+// ---- Dev servers the workspace's terminals run, opened through Agentty on the tailnet ----
+
+function renderPorts() {
+  const box = $("ports");
+  box.replaceChildren();
+  const ws = workspace(state.workspace);
+  const ports = (ws && !ws.sleeping && ws.ports) || [];
+  box.hidden = !ports.length;
+  if (!ports.length) return;
+  box.append(el("span", "ports-title", T.devServers));
+  for (const p of ports) {
+    const opening = state.opening && state.opening.port === p.port;
+    const b = el("button", "port" + (p.error ? " failed" : ""), opening ? T.portOpening : `↗ localhost:${p.port}`);
+    b.type = "button";
+    b.disabled = opening;
+    b.title = T.portOpen.replace("{port}", p.port);
+    b.addEventListener("click", () => openPort(p.port));
+    box.append(b);
+  }
+}
+
+function portInfo(port) {
+  for (const w of state.workspaces) for (const p of w.ports || []) if (p.port === port) return p;
+  return null;
+}
+
+/// Only the addresses Agentty hands out: its tailnet name over https, or 127.0.0.1 in a dev build.
+function portUrl(p) {
+  try {
+    const url = new URL(p.url);
+    return url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "127.0.0.1") ? url.href : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function openPort(port) {
+  const known = portInfo(port);
+  const ready = known && known.url && portUrl(known);
+  if (ready) {
+    window.open(ready, "_blank", "noopener");
+    return;
+  }
+  if (state.opening) return;
+  // Opened while the tap still counts as the user's: a window opened after the wait is blocked.
+  const win = window.open("", "_blank");
+  // A failure from before this tap stays in the overview until the Mac takes the new try.
+  state.opening = { port, win, cleared: !(known && known.error), timer: setTimeout(() => settlePort(T.portSlow), 30000) };
+  render();
+  try {
+    const { status } = await api("/api/devserver", { port });
+    if (status === 401) {
+      settlePort(null);
+      showLogin();
+    } else if (status === 404) settlePort(T.portGone);
+    else if (status !== 200) settlePort(status === 429 ? T.busy : T.portFailed);
+  } catch (_) {
+    settlePort(T.portFailed);
+  }
+}
+
+function watchPort() {
+  const o = state.opening;
+  if (!o) return;
+  const p = portInfo(o.port);
+  if (!p) return settlePort(T.portGone);
+  if (!o.cleared) {
+    o.cleared = !p.error;
+    return;
+  }
+  const url = p.url && portUrl(p);
+  if (url) settlePort(null, url);
+  else if (p.error) settlePort(T.portErrors[p.error] || T.portFailed);
+}
+
+function settlePort(message, url) {
+  const o = state.opening;
+  if (!o) return;
+  clearTimeout(o.timer);
+  state.opening = null;
+  if (o.win && !o.win.closed) {
+    if (url) {
+      o.win.opener = null;
+      o.win.location.replace(url);
+    } else o.win.close();
+  } else if (url) window.open(url, "_blank", "noopener");
+  if (message) alert(message.replace("{port}", o.port));
+  render();
+}
+
 const TOOL_MARK = { claude: "✳", codex: "◎", gemini: "✦", shell: "$" };
 
 function renderPanes() {
@@ -780,15 +897,20 @@ function renderChat() {
 function chatEntry(entry) {
   const role = ["user", "lead", "report"].includes(entry.role) ? entry.role : "lead";
   const box = el("div", "msg " + role);
+  const textBox = (text) => {
+    const node = el("div", "text");
+    appendLinked(node, text);
+    return node;
+  };
   if (role !== "lead") {
-    box.append(el("div", "text", entry.text || ""));
+    box.append(textBox(entry.text || ""));
     return box;
   }
   let prose = [];
   let steps = [];
   const flushProse = () => {
     const text = prose.join("\n").replace(/\*\*/g, "").trim();
-    if (text) box.append(el("div", "text", text));
+    if (text) box.append(textBox(text));
     prose = [];
   };
   const flushSteps = () => {
@@ -1403,10 +1525,40 @@ function runNode(run) {
   if (s & 8) classes.push("s");
   if (s & 16) classes.push("d");
   if (s & 32) classes.push("w");
-  const span = el("span", classes.join(" "), run.t);
+  const span = el("span", classes.join(" "));
+  appendLinked(span, run.t);
   if (run.f != null) span.style.color = hex(run.f);
   if (run.b != null) span.style.background = hex(run.b);
   return span;
+}
+
+// A file path with an extension the viewer shows: `src/app.ts`, `./shots/a.png`, `~/notes.md`,
+// `/Users/me/x.pdf`. A path inside a URL (`https://…/a.png`) is left alone.
+const FILE_EXT =
+  "png|jpe?g|gif|webp|svg|bmp|ico|avif|pdf|md|markdown|mdx|txt|log|jsonl?|ya?ml|toml|csv|tsv|xml|html?|s?css|[cm]?[jt]sx?|" +
+  "rs|py|rb|go|java|kts?|swift|c|h|cc|cpp|hpp|cs|php|sh|sql|vue|svelte|diff|patch|lua|dart";
+const NAME = "[\\p{L}\\p{N}_@%+~-][\\p{L}\\p{N}_.@%+~-]*";
+const FILE_PATH = new RegExp(`(?:~\\/|\\.{1,2}\\/|\\/)?(?:${NAME}\\/)*${NAME}\\.(?:${FILE_EXT})(?![\\p{L}\\p{N}_])`, "giu");
+
+/// `text` into `parent` as text, with each file path in it a link the viewer opens (see
+/// `openFile`; the terminal or chat it is in is found from the page, not from the link).
+function appendLinked(parent, text) {
+  if (!text.includes(".")) {
+    parent.textContent = text;
+    return;
+  }
+  let last = 0;
+  for (const match of text.matchAll(FILE_PATH)) {
+    // Part of an address (`https://…/a.png`, a scheme just before): not a file here. A terminal
+    // draws a link in its own colour, so the scheme can be all this stretch of text has of it.
+    if (/[a-z][a-z0-9+.-]*:\/*\S*$/i.test(text.slice(0, match.index))) continue;
+    if (match.index > last) parent.append(text.slice(last, match.index));
+    const link = el("span", "file-link", match[0]);
+    link.dataset.path = match[0];
+    parent.append(link);
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parent.append(text.slice(last));
 }
 
 // The text stays at the chosen size; never sideways scrolling. The terminal is asked for the
@@ -1482,7 +1634,9 @@ function setupKeyboard() {
   // On a touch screen a tap on the terminal goes to the prompt box below it: the phone's keyboard
   // is for writing a prompt there, not for typing into the terminal key by key. With a mouse and
   // a keyboard, typing goes straight to the terminal.
-  $("term").addEventListener("click", () => {
+  $("term").addEventListener("click", (event) => {
+    const link = event.target.closest(".file-link");
+    if (link && state.pane != null) return openFile(state.pane, link.dataset.path);
     if (matchMedia("(pointer: coarse)").matches) $("prompt").focus({ preventScroll: true });
     else keyboard.focus({ preventScroll: true });
   });
@@ -1556,6 +1710,182 @@ function setupChat() {
   $("chat-toggle").addEventListener("click", () => {
     state.chatView = !state.chatView;
     render();
+  });
+  // A file named in the conversation opens from the lead's folder.
+  $("chat-log").addEventListener("click", (event) => {
+    const link = event.target.closest(".file-link");
+    const chat = currentChat();
+    if (link && chat) openFile(chat.lead, link.dataset.path);
+  });
+}
+
+// ---- The file viewer: files named in the output, opened in tabs over the page ----
+
+/// Opens `path` as named in terminal `pane`'s output (a tab of its own, or the one it has).
+function openFile(pane, path) {
+  const key = pane + "\n" + path;
+  let index = state.files.findIndex((f) => f.key === key);
+  if (index < 0) {
+    const file = { key, pane, path, name: path.split("/").pop() || path, loading: true };
+    state.files.push(file);
+    index = state.files.length - 1;
+    loadFile(file);
+  }
+  state.file = index;
+  state.viewer = true;
+  renderViewer();
+}
+
+const fileUrl = (file) => "/api/file?pane=" + encodeURIComponent(file.pane) + "&path=" + encodeURIComponent(file.path);
+const isPicture = (path) => /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(path);
+const isPdf = (path) => /\.pdf$/i.test(path);
+
+async function loadFile(file) {
+  // A picture or a PDF is shown from its address; asked for first only to know it is there.
+  const head = isPicture(file.path) || isPdf(file.path);
+  try {
+    const res = await fetch(fileUrl(file), { method: head ? "HEAD" : "GET", credentials: "same-origin" });
+    if (!res.ok) {
+      file.error = res.status;
+    } else {
+      file.kind = res.headers.get("X-Agentty-Kind") || "text";
+      file.cut = res.headers.get("X-Agentty-Cut") === "1";
+      if (!head) file.text = await res.text();
+    }
+  } catch (_) {
+    file.error = 0;
+  }
+  file.loading = false;
+  if (state.viewer && state.files[state.file] === file) renderViewer();
+}
+
+function closeFile(index) {
+  state.files.splice(index, 1);
+  if (state.file >= state.files.length) state.file = state.files.length - 1;
+  if (!state.files.length) state.viewer = false;
+  renderViewer();
+}
+
+function renderViewer() {
+  const viewer = $("viewer");
+  $("files-button").hidden = !state.files.length || state.viewer;
+  $("files-count").textContent = state.files.length > 1 ? String(state.files.length) : "";
+  viewer.hidden = !state.viewer || !state.files.length;
+  if (viewer.hidden) return;
+  const tabs = $("viewer-tabs");
+  tabs.replaceChildren(
+    ...state.files.map((file, index) => {
+      const tab = el("button", "viewer-tab" + (index === state.file ? " active" : ""));
+      tab.type = "button";
+      tab.title = file.path;
+      const close = el("span", "x", "✕");
+      close.setAttribute("aria-label", T.closeFile);
+      close.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeFile(index);
+      });
+      tab.append(el("span", "name", file.name), close);
+      tab.addEventListener("click", () => {
+        state.file = index;
+        renderViewer();
+      });
+      return tab;
+    }),
+  );
+  const file = state.files[state.file];
+  const body = $("viewer-body");
+  body.scrollTop = 0;
+  const parts = [el("div", "viewer-path", file.path)];
+  if (file.loading) {
+    parts.push(el("div", "viewer-error", T.fileLoading));
+  } else if (file.error != null) {
+    parts.push(el("div", "viewer-error", T.fileError[file.error] || T.fileError[0]));
+  } else if (file.kind === "image") {
+    const img = el("img");
+    img.alt = file.name;
+    img.src = fileUrl(file);
+    img.addEventListener("error", () => img.replaceWith(el("div", "viewer-error", T.fileError[0])));
+    parts.push(img);
+  } else if (file.kind === "pdf") {
+    const open = el("button", "primary", T.openPdf);
+    open.type = "button";
+    open.addEventListener("click", () => window.open(fileUrl(file), "_blank", "noopener"));
+    parts.push(open);
+  } else if (file.kind === "markdown") {
+    const box = el("div", "markdown");
+    parts.push(box);
+    showMarkdown(box, file);
+  } else {
+    parts.push(el("pre", null, file.text || ""));
+  }
+  if (file.cut) parts.push(el("div", "viewer-note", T.fileCut));
+  body.replaceChildren(...parts);
+}
+
+let markdownReady = null;
+/// The file editor's Markdown renderer and sanitizer, fetched from this page's own server the
+/// first time a Markdown file is opened.
+function loadMarkdown() {
+  if (!markdownReady) {
+    markdownReady = Promise.all(
+      ["/md/markdown-it.js", "/md/purify.js"].map(
+        (src) =>
+          new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.append(script);
+          }),
+      ),
+    ).catch((error) => {
+      markdownReady = null;
+      throw error;
+    });
+  }
+  return markdownReady;
+}
+
+async function showMarkdown(box, file) {
+  try {
+    await loadMarkdown();
+  } catch (_) {
+    box.replaceChildren(el("pre", null, file.text || ""));
+    return;
+  }
+  // Raw HTML off, then sanitized: the file is someone's text, never this page's code.
+  const html = window.markdownit({ html: false, linkify: true }).render(file.text || "");
+  box.innerHTML = window.DOMPurify.sanitize(html);
+  const folder = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
+  for (const a of box.querySelectorAll("a[href]")) {
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  }
+  // Pictures next to the file come from the Mac the way the file did; anything else stays out
+  // (the page's policy loads pictures from this page's own server only).
+  for (const img of box.querySelectorAll("img[src]")) {
+    const src = img.getAttribute("src");
+    if (/^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//")) continue;
+    img.src = fileUrl({ pane: file.pane, path: src.startsWith("/") ? src : folder + src });
+  }
+}
+
+function setupViewer() {
+  $("viewer-close").setAttribute("aria-label", T.closeViewer);
+  $("viewer-close").addEventListener("click", () => {
+    state.viewer = false;
+    renderViewer();
+  });
+  $("files-button").setAttribute("aria-label", T.files);
+  $("files-button").addEventListener("click", () => {
+    state.viewer = true;
+    renderViewer();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.viewer) {
+      state.viewer = false;
+      renderViewer();
+    }
   });
 }
 
@@ -2071,6 +2401,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setupPrompt();
   setupAttachments();
   setupChat();
+  setupViewer();
   setupVoice();
   start();
 });

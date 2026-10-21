@@ -24,6 +24,18 @@ pub struct WorkspaceInfo {
     pub sleeping: bool,
     pub active_tab: usize,
     pub tabs: Vec<TabInfo>,
+    /// Local servers its terminals run (`npm run dev`, …), as the sidebar's port chips.
+    pub ports: Vec<PortInfo>,
+}
+
+/// A local server a workspace's terminal runs, and where the page can open it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PortInfo {
+    pub port: u16,
+    /// Its address on the tailnet once it is shown there (asked for from the page).
+    pub url: Option<String>,
+    /// Why it could not be shown, when it could not.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -95,6 +107,14 @@ pub struct SessionInfo {
     pub last_activity_ms: u64,
     /// What a permission request or a question asks, when the agent said.
     pub asks: Option<String>,
+    /// Where the terminal works now: a path its output names is read from here. Never sent to the
+    /// page.
+    #[serde(skip)]
+    pub dir: std::path::PathBuf,
+    /// The folders the page may open files from for this terminal (`files`): its working tree
+    /// and its workspace's. Never sent to the page.
+    #[serde(skip)]
+    pub roots: Vec<std::path::PathBuf>,
 }
 
 /// An installed plugin and how it runs, for the page's home. Only shown: the page can't start,
