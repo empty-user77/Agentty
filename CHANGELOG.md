@@ -23,6 +23,13 @@ All notable changes to this project are documented here. The format follows
 - The subagent window lists running subagents first, then the most recently active, in the timeline and in the list
   alike.
 
+### Fixed
+- Linking two Claude Code sessions is reliable: a restored, resumed or `/clear`ed tab is found under the session it is
+  in now (it used to drop to a one-way handover without a word), a line drawn in Session Flow makes the same direct
+  link as a terminal's link button, a session that has just started is waited for a few seconds, and the first
+  session is told plainly to hand the other session's work over to it instead of doing it itself. A message for a
+  session showing a permission prompt or a question waits instead of answering it.
+
 ## [0.2.22] - 2026-10-19
 
 ### Added

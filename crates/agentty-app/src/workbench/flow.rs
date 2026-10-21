@@ -22,6 +22,47 @@ fn stop_messaging(name: &str) -> String {
     format!("The link with the Claude Code session \"{name}\" is closed in Agentty: stop sending it messages.")
 }
 
+/// The first of `candidates` (the session a pane is in now, then the one it was launched with)
+/// that is registered for messaging and not another pane's.
+fn registered_peer(
+    candidates: &[Option<String>],
+    owned_elsewhere: impl Fn(&str) -> bool,
+    registered: impl Fn(&str) -> Option<PeerSession>,
+) -> Option<PeerSession> {
+    candidates.iter().flatten().filter(|id| !owned_elsewhere(id)).find_map(|id| registered(id))
+}
+
+/// What the session a direct link starts from is told: who it works with, that work for that
+/// session's project is handed over rather than done here, and how to reach it. Without the plain
+/// instruction to delegate, a session told only "introduce yourself" went on doing it all itself.
+fn lead_intro(partner: &PeerSession) -> String {
+    format!(
+        "Agentty linked you with another Claude Code session on this machine: \"{name}\", working in {cwd}.\n\
+         - Reach it only with SendMessage, addressed to \"{name}\" exactly (ListAgents shows it if you are unsure).\n\
+         - Work that belongs in {cwd} is that session's: hand it over with a clear task — what to do, what you \
+         need back, and how to check it — instead of doing it yourself, then carry on with your own part.\n\
+         - Its answers arrive as messages. When you need its result, wait for that message rather than \
+         redoing the work.\n\
+         - If SendMessage can't find \"{name}\", say so here instead of quietly doing its work.\n\
+         Start by telling it what you are working on.",
+        name = partner.name,
+        cwd = partner.cwd.display(),
+    )
+}
+
+/// What the other side of a direct link is told: who will message it, and to answer that way.
+fn partner_intro(lead: &PeerSession) -> String {
+    format!(
+        "Agentty linked you with the Claude Code session \"{name}\" (working in {cwd}). It will send you \
+         tasks as messages. Do each one in this session's project, then report back to it with SendMessage, \
+         addressed to \"{name}\" exactly — what you did, what you found, and anything it has to decide. Ask it \
+         the same way when something is unclear. Don't wait for anything else: until it writes, carry on as \
+         before.",
+        name = lead.name,
+        cwd = lead.cwd.display(),
+    )
+}
+
 const NODE_WIDTH: f32 = 260.;
 /// Distinct colors so sessions from the same workspace are recognizable at a glance.
 const WORKSPACE_COLORS: [u32; 8] = [0x4daafc, 0xb180d7, 0x89d185, 0xe8a33d, 0xf14c4c, 0x4ec9b0, 0xd7ba7d, 0xc586c0];
@@ -35,6 +76,10 @@ const ZOOM_STEP: f32 = 1.2;
 const FIT_MARGIN: f32 = 40.;
 /// Below this zoom a card drops its open button: the card itself opens the session too.
 const SMALL_CARD_ZOOM: f32 = 0.7;
+/// How long two Claude Code sessions are waited for to register (a session just started or still
+/// resuming) before a link between them settles for a one-way document.
+const DIRECT_WAIT_STEP: std::time::Duration = std::time::Duration::from_secs(1);
+const DIRECT_WAIT_TRIES: u32 = 10;
 
 fn clamp_zoom(zoom: f32) -> f32 {
     if zoom.is_finite() {
@@ -362,11 +407,16 @@ impl Workbench {
                     }
                     return cx.notify();
                 }
+                // The same link as the pane's link button makes: two Claude Code sessions are
+                // introduced and message each other; anything else gets the conversation as a
+                // document. (A drag used to make only the document, so a session linked here
+                // never learned it had someone to hand work to.)
                 if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
-                    self.flow.edges.push(FlowEdge::new(from, to));
+                    self.connect_panes(from, to, false, cx);
+                } else {
+                    // Drawn again over an existing link: bring the other side up to date.
+                    self.share(from, to, cx);
                 }
-                // `share` leaves a direct link alone: those sessions message each other already.
-                self.share(from, to, cx);
             }
         }
         cx.notify();
@@ -415,19 +465,72 @@ impl Workbench {
         if from == to {
             return;
         }
-        match self.direct_peers(from, to, cx) {
-            Some((source, target)) => self.connect_directly(from, to, source, target, cx),
-            None => {
-                if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
-                    self.flow.edges.push(FlowEdge::new(from, to));
-                }
-                self.share(from, to, cx);
-                if live {
-                    self.set_live(from, to, true, cx);
+        if let Some((source, target)) = self.direct_peers(from, to, cx) {
+            self.connect_directly(from, to, source, target, cx);
+            return cx.notify();
+        }
+        if !(self.runs_claude(from, cx) && self.runs_claude(to, cx)) {
+            self.connect_by_context(from, to, live, cx);
+            return cx.notify();
+        }
+        // Two Claude Code sessions not registered yet (just started, or a tab still resuming) can
+        // message each other in a moment: wait for them before settling for a one-way document,
+        // which would leave the first session working on its own.
+        if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
+            self.flow.edges.push(FlowEdge::new(from, to));
+        }
+        cx.spawn(async move |this, cx| {
+            for _ in 0..DIRECT_WAIT_TRIES {
+                cx.background_executor().timer(DIRECT_WAIT_STEP).await;
+                let Ok(state) = this.update(cx, |this, cx| {
+                    // Disconnected meanwhile: nothing more to do.
+                    let wanted = this.flow.edges.iter().any(|e| e.from == from && e.to == to);
+                    (wanted, this.direct_peers(from, to, cx))
+                }) else {
+                    return;
+                };
+                match state {
+                    (false, _) => return,
+                    (true, Some((source, target))) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.connect_directly(from, to, source, target, cx);
+                            cx.notify();
+                        });
+                        return;
+                    }
+                    (true, None) => {}
                 }
             }
-        }
+            let _ = this.update(cx, |this, cx| {
+                if this.flow.edges.iter().any(|e| e.from == from && e.to == to) {
+                    this.connect_by_context(from, to, live, cx);
+                    this.set_status(t(cx, "flow.one_way"), cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
         cx.notify();
+    }
+
+    /// Whether the pane runs Claude Code now.
+    fn runs_claude(&self, pane_id: u64, cx: &gpui::App) -> bool {
+        self.all_panes().iter().any(|p| {
+            let view = p.read(cx);
+            view.pane_id == pane_id && view.is_running() && view.agent_kind() == Some(crate::launch::PaneKind::Claude)
+        })
+    }
+
+    /// The link for sessions that can't message each other: the source's conversation handed to
+    /// the target as a document (kept up to date with `live`).
+    fn connect_by_context(&mut self, from: u64, to: u64, live: bool, cx: &mut Context<Self>) {
+        if !self.flow.edges.iter().any(|e| e.from == from && e.to == to) {
+            self.flow.edges.push(FlowEdge::new(from, to));
+        }
+        self.share(from, to, cx);
+        if live {
+            self.set_live(from, to, true, cx);
+        }
     }
 
     /// Links one session to several at once (the ticked sessions in the panel): one agent working
@@ -457,25 +560,18 @@ impl Workbench {
         if view.agent_kind() != Some(crate::launch::PaneKind::Claude) || !view.is_running() {
             return None;
         }
-        // A pane Agentty launched knows its session id; for an agent started by hand the id is
-        // guessed from the newest transcript in its folder, which is another session's when two of
-        // them run in the same folder — so a guess that another pane owns for sure is dropped.
-        let launched = view.spec.kind == crate::launch::PaneKind::Claude;
-        let id = match (launched, &view.spec.session_id) {
-            (true, Some(id)) => id.clone(),
-            _ => {
-                let guess = view.session_id_live.clone()?;
-                let owned_elsewhere = panes.iter().filter(|p| p.read(cx).pane_id != pane_id).any(|p| {
-                    let other = p.read(cx);
-                    other.spec.kind == crate::launch::PaneKind::Claude && other.spec.session_id.as_deref() == Some(guess.as_str())
-                });
-                if owned_elsewhere {
-                    return None;
-                }
-                guess
-            }
-        };
-        agentty_bridge::claude::peer_session(&id).filter(|p| p.interactive)
+        // The session the pane's Claude Code is in now comes first: the one its process registered,
+        // which follows `/clear` and resumes. Both give the process a new session id, so the id a
+        // pane was launched with (every restored tab is a resume) is often no longer registered,
+        // and asking for it alone dropped the link to a one-way document without a word. The id it
+        // was launched with is the fallback, for a Claude Code too old to register by process.
+        let launched = (view.spec.kind == crate::launch::PaneKind::Claude).then(|| view.spec.session_id.clone()).flatten();
+        let others: Vec<&Pane> = panes.iter().filter(|p| p.read(cx).pane_id != pane_id).collect();
+        // A session another pane is in is that pane's (two agents in one folder share a project).
+        let owned_elsewhere = |id: &str| others.iter().any(|p| p.read(cx).session_id_live.as_deref() == Some(id));
+        registered_peer(&[view.session_id_live.clone(), launched], owned_elsewhere, |id| {
+            agentty_bridge::claude::peer_session(id).filter(|p| p.interactive)
+        })
     }
 
     /// Introduces two Claude Code sessions so they keep talking by themselves.
@@ -487,24 +583,8 @@ impl Workbench {
             }
             None => self.flow.edges.push(FlowEdge::direct(from, to)),
         }
-        self.deliver(
-            from,
-            format!(
-                "You are now working with another Claude Code session on this machine, named \"{}\" (in {}).                  Use ListAgents to confirm it is there, then SendMessage to introduce what you are working on and                  what you need from it. Keep collaborating with it directly: its replies arrive as messages.                  Agentty linked you; nothing else was shared with it yet.",
-                target.name,
-                target.cwd.display()
-            ),
-            cx,
-        );
-        self.deliver(
-            to,
-            format!(
-                "The Claude Code session \"{}\" (in {}) was linked with you in Agentty and will message you shortly.                  When it does, work with it and answer with SendMessage.",
-                source.name,
-                source.cwd.display()
-            ),
-            cx,
-        );
+        self.deliver(from, lead_intro(&target), cx);
+        self.deliver(to, partner_intro(&source), cx);
         self.set_status(tf(cx, "flow.direct_connected", &[("name", &target.name)]), cx);
     }
 
@@ -618,7 +698,10 @@ impl Workbench {
     /// Submits a prompt to a pane now, or queues it until the agent finishes its current turn.
     fn deliver(&mut self, pane_id: u64, prompt: String, cx: &mut Context<Self>) {
         let Some(target) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == pane_id) else { return };
-        if target.read(cx).status.in_turn() {
+        // Busy, or showing a permission prompt or a question: typed now, the message would answer
+        // that prompt instead of reaching the agent. It waits for the turn to end.
+        let status = &target.read(cx).status;
+        if status.in_turn() || status.needs_user() {
             self.flow.pending.entry(pane_id).or_default().push(prompt);
             return;
         }
@@ -1321,8 +1404,50 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{cluster_links, grid_slot, FlowState, FlowView, NODE_HEIGHT, NODE_WIDTH, ZOOM_RANGE};
+    use super::{
+        cluster_links, grid_slot, lead_intro, partner_intro, registered_peer, FlowState, FlowView, PeerSession, NODE_HEIGHT, NODE_WIDTH,
+        ZOOM_RANGE,
+    };
     use gpui::{point, px, size, Bounds};
+
+    fn peer(name: &str, session: &str) -> PeerSession {
+        PeerSession {
+            name: name.into(),
+            session_id: session.into(),
+            pid: 1,
+            cwd: "/work/web".into(),
+            status: "idle".into(),
+            interactive: true,
+        }
+    }
+
+    /// A resumed or `/clear`ed tab is in a new session: that one is what is registered, and the
+    /// one it was launched with is not looked for first (it used to be, and the link fell back to
+    /// a one-way document).
+    #[test]
+    fn the_session_a_pane_is_in_now_is_the_one_linked() {
+        let registry = |id: &str| (id == "now").then(|| peer("web", "now"));
+        let candidates = [Some("now".to_string()), Some("launched".to_string())];
+        assert_eq!(registered_peer(&candidates, |_| false, registry).map(|p| p.session_id), Some("now".into()));
+        // Not known yet: the launched id is still tried.
+        let launched_only = |id: &str| (id == "launched").then(|| peer("web", "launched"));
+        assert_eq!(
+            registered_peer(&[None, Some("launched".into())], |_| false, launched_only).map(|p| p.session_id),
+            Some("launched".into())
+        );
+        // Another pane's session is never this pane's.
+        assert!(registered_peer(&candidates, |id| id == "now", registry).is_none());
+    }
+
+    /// The first session is told plainly to hand work over and how; the other to report back.
+    #[test]
+    fn introductions_say_who_to_message_and_to_delegate() {
+        let lead = lead_intro(&peer("agentty-web", "a"));
+        assert!(lead.contains("SendMessage") && lead.contains("\"agentty-web\""));
+        assert!(lead.contains("instead of doing it yourself"));
+        let partner = partner_intro(&peer("agentty-be", "b"));
+        assert!(partner.contains("report back") && partner.contains("\"agentty-be\""));
+    }
 
     /// A chart shown in a canvas at (100, 50), 800 × 600 on the window.
     fn chart() -> FlowState {
