@@ -71,6 +71,15 @@ fn span(trace: &Trace, now: u64) -> Option<(u64, u64)> {
     Some((start, end.max(start + 1)))
 }
 
+/// Indices of `keys` — (still running, when it last did something in ms) — running ones first,
+/// then the most recently active: the timeline and the list show the subagents in this order, so
+/// what is happening now is at the top of both.
+fn recent_first(keys: &[(bool, u64)]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..keys.len()).collect();
+    order.sort_by_key(|&i| (!keys[i].0, std::cmp::Reverse(keys[i].1)));
+    order
+}
+
 fn status_icon(status: StepStatus, finished: bool) -> AnyElement {
     match status {
         StepStatus::Running if !finished => crate::ui::spinner(11., hex(Chrome::ORANGE)).into_any_element(),
@@ -86,6 +95,10 @@ impl Workbench {
         let traces = panel.traces.lock().unwrap_or_else(|e| e.into_inner());
         let trace_of = |id: &str| traces.get(id).map(|r| &r.trace);
         let running = agents.iter().filter(|a| trace_of(&a.id).is_some_and(|t| !t.finished)).count();
+        let keys: Vec<(bool, u64)> =
+            agents.iter().map(|a| trace_of(&a.id).map_or((false, 0), |t| (!t.finished, t.last_ms.or(t.started_ms).unwrap_or(0)))).collect();
+        let agents: Vec<&SubagentFile> = recent_first(&keys).into_iter().map(|i| &agents[i]).collect();
+        let agents = agents.as_slice();
 
         let header = div()
             .flex_shrink_0()
@@ -137,7 +150,7 @@ impl Workbench {
     fn render_gantt<'a>(
         &self,
         panel: &AgentPanel,
-        agents: &[SubagentFile],
+        agents: &[&SubagentFile],
         trace_of: &impl Fn(&str) -> Option<&'a Trace>,
         now: u64,
         cx: &mut Context<Self>,
@@ -292,7 +305,7 @@ impl Workbench {
     fn render_trace_list<'a>(
         &self,
         panel: &AgentPanel,
-        agents: &[SubagentFile],
+        agents: &[&SubagentFile],
         trace_of: &impl Fn(&str) -> Option<&'a Trace>,
         now: u64,
         cx: &mut Context<Self>,
@@ -773,4 +786,16 @@ fn progress_bar(done: usize, all: usize, color: u32) -> gpui::Div {
                 .child(div().h_full().rounded_full().w(relative(fraction)).bg(hex(color))),
         )
         .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(format!("{done}/{all}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recent_first;
+
+    #[test]
+    fn running_first_then_the_most_recent() {
+        // (running, last activity)
+        let keys = [(false, 100), (true, 50), (false, 300), (true, 200)];
+        assert_eq!(recent_first(&keys), [3, 1, 2, 0]);
+    }
 }

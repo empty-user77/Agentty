@@ -20,6 +20,8 @@ All notable changes to this project are documented here. The format follows
 - A tab set aside with **Work on Later (TODO)** now stops, like a sleeping workspace: what ran in it ends and only
   its layout is kept. Bringing it back from the TODO list starts it again, its agents continuing their sessions. TODO
   tabs saved by earlier versions come back the same way.
+- The subagent window lists running subagents first, then the most recently active, in the timeline and in the list
+  alike.
 
 ## [0.2.22] - 2026-10-19
 
