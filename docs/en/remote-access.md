@@ -15,6 +15,7 @@ The page is laid out like Agentty itself:
 - **Split panes** — when the tab is split, the button at the top right opens the list of its panes, with each one's state and what it asks; tap one to switch to it.
 - **The terminal** — the chosen pane's live screen in the middle.
 - **Chat workspaces** — a [chat workspace](/docs/chat-workspace) opens as its chat: the conversation, plan usage and a box to write to its lead; **Terminal** switches to the lead's terminal.
+- **Files in the output** — a file path in the terminal or the chat (`shots/home.png`, `NOTES.md`, `src/app.ts`) is underlined; tap it to open the file in a viewer over the page, one tab per file. Pictures are shown as they are, Markdown rendered, other text as text; a PDF opens in a tab of its own. Only files in that terminal's project folder open, nothing hidden (`.env`, `.git`, …) and no key files.
 
 **New tabs** — **+** at the end of the tabs (or beside a workspace on Home) opens a new tab in that workspace with a terminal, Claude Code or Codex, started in the workspace's folder. The page switches to it.
 

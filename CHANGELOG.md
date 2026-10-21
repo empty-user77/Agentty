@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Remote access: file paths in a terminal's output or a chat are links; tapping one opens the file in a viewer over
+  the page, one tab per file — pictures, Markdown (rendered), text and code, PDFs in a tab of their own. Only files in
+  that terminal's project folder open, nothing hidden and no key files.
 - The workspace menu (right-click a workspace, or its **⋯**) is reorganised with icons and gains: **Open In ›** an
   editor or IDE found on the computer (VS Code, Cursor, Zed, the JetBrains IDEs, Xcode …) or Finder, **Copy Path**,
   **Copy Worktree Name** / **Copy Branch Name**, **Pin** (kept at the top of its group, whatever is dragged above it),

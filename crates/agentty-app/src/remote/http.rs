@@ -61,6 +61,14 @@ impl Request {
     }
 }
 
+/// `text` with every byte but letters, digits and `-._~` written as `%XX` (RFC 3986's unreserved
+/// set): safe in a header value such as `filename*=UTF-8''…`.
+pub fn percent_encode(text: &str) -> String {
+    text.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
 fn percent_decode(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

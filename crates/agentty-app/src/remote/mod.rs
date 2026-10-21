@@ -20,6 +20,7 @@
 
 pub mod auth;
 pub mod conn;
+pub mod files;
 pub mod folders;
 pub mod http;
 pub mod server;
