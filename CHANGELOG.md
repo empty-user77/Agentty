@@ -16,6 +16,10 @@ All notable changes to this project are documented here. The format follows
 - The tab menu (right-click a tab) gets the same look: icons, and **Move to Workspace ›** as a submenu with a new
   workspace first and the others under their groups' names.
 
+### Changed
+- The subagent window lists running subagents first, then the most recently active, in the timeline and in the list
+  alike.
+
 ## [0.2.22] - 2026-10-19
 
 ### Added
