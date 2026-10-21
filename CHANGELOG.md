@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-10-22
+
 ### Added
 - macOS: the tabs sit in the title bar next to the window buttons, with the sidebar button beside them, so the
   terminals get the row the tab strip took. The notification bell moves to the sidebar's header while the sidebar
