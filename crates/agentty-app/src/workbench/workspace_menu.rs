@@ -22,7 +22,7 @@ const ROW: f32 = 28.;
 const RULE: f32 = 9.;
 
 /// What a menu row runs when the pointer comes onto it or leaves it.
-type HoverListener = Box<dyn Fn(&bool, &mut Window, &mut gpui::App)>;
+pub(super) type HoverListener = Box<dyn Fn(&bool, &mut Window, &mut gpui::App)>;
 
 /// The flyout unfolded beside the workspace menu.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,12 @@ pub(super) fn nest(members: &[usize], parent_of: impl Fn(usize) -> Option<usize>
 }
 
 /// A menu row: icon, label, and an action on click. `danger` rows are drawn in red.
-fn row(id: impl Into<ElementId>, glyph: &'static str, label: impl Into<SharedString>, danger: bool) -> gpui::Stateful<gpui::Div> {
+pub(super) fn row(
+    id: impl Into<ElementId>,
+    glyph: &'static str,
+    label: impl Into<SharedString>,
+    danger: bool,
+) -> gpui::Stateful<gpui::Div> {
     let ink = if danger { Chrome::ERROR } else { Chrome::FOREGROUND };
     div()
         .id(id)
@@ -99,7 +104,7 @@ fn row(id: impl Into<ElementId>, glyph: &'static str, label: impl Into<SharedStr
         .child(div().flex_1().min_w_0().truncate().child(label.into()))
 }
 
-fn rule() -> gpui::Div {
+pub(super) fn rule() -> gpui::Div {
     div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER))
 }
 

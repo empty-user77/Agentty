@@ -13,6 +13,8 @@ All notable changes to this project are documented here. The format follows
   under the one you pick, with a search over the others), **Sleep** (ends its programs and keeps the workspace as it
   was, its card faded with a moon; opening it starts its tabs and continues their agent sessions) and **Delete
   Worktree**.
+- The tab menu (right-click a tab) gets the same look: icons, and **Move to Workspace ›** as a submenu with a new
+  workspace first and the others under their groups' names.
 
 ## [0.2.22] - 2026-10-19
 
