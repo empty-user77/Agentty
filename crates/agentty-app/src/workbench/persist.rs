@@ -46,7 +46,8 @@ pub struct TabSnapshot {
     /// A chat's choice of agents for its workers and reviewers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_roles: Option<super::chat_team::ChatRoles>,
-    /// Set aside for later (TODO): hidden from the tab strip until brought back.
+    /// Legacy: a TODO tab saved among the live ones, from before TODO tabs were kept apart (see
+    /// [`take_old_todo_tabs`]). Read, never written.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub todo: bool,
 }
@@ -124,6 +125,23 @@ pub struct WorkspaceSnapshot {
     /// Pinned, marked unread, nested under another workspace: what the card's menu sets.
     #[serde(default, flatten)]
     pub marks: WorkspaceMarks,
+    /// Tabs set aside for later (TODO), newest first: kept as snapshots, nothing of theirs running.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parked: Vec<TabSnapshot>,
+}
+
+/// The TODO tabs of `snapshot`: the ones it keeps apart, then those an older layout saved among
+/// its tabs (flagged `todo`), which leave the tabs. The workspace's active tab keeps pointing at
+/// the same tab.
+pub fn take_old_todo_tabs(snapshot: &mut WorkspaceSnapshot) -> Vec<TabSnapshot> {
+    let active = snapshot.active_tab;
+    let before_active = snapshot.tabs.iter().take(active).filter(|t| t.todo).count();
+    let (old, tabs): (Vec<TabSnapshot>, Vec<TabSnapshot>) = std::mem::take(&mut snapshot.tabs).into_iter().partition(|t| t.todo);
+    snapshot.tabs = tabs;
+    snapshot.active_tab = active.saturating_sub(before_active).min(snapshot.tabs.len().saturating_sub(1));
+    let mut parked = std::mem::take(&mut snapshot.parked);
+    parked.extend(old.into_iter().map(|t| TabSnapshot { todo: false, ..t }));
+    parked
 }
 
 /// What a workspace's menu marks it with, beside its name and colour.
@@ -678,6 +696,41 @@ mod tests {
         assert_eq!(pane.tool.as_deref(), Some("claude"));
         // A plugin workspace's tab stays the same automation across a restart.
         assert_eq!(back.tabs[0].instance.as_ref().map(|i| i.id.as_str()), Some("a1"));
+    }
+
+    /// A layout saved while TODO tabs ran among the others: they come out of the tabs as parked
+    /// snapshots, after the ones already kept apart, and the active tab stays the same tab.
+    #[test]
+    fn old_todo_tabs_come_back_set_aside() {
+        let tab = |title: &str, todo: bool| TabSnapshot {
+            instance: None,
+            layout: NodeSnapshot::Pane(PaneSnapshot {
+                kind: PaneKind::Shell,
+                cwd: "/w".into(),
+                title: title.into(),
+                session_id: None,
+                tool: None,
+            }),
+            active_pane: 0,
+            zoomed_pane: None,
+            chat: false,
+            chat_roles: None,
+            todo,
+        };
+        let title = |t: &TabSnapshot| match &t.layout {
+            NodeSnapshot::Pane(p) => p.title.clone(),
+            NodeSnapshot::Split { .. } => String::new(),
+        };
+        let mut snapshot: WorkspaceSnapshot = serde_json::from_str(r#"{"id":1,"cwd":"/w","tabs":[]}"#).unwrap();
+        snapshot.tabs = vec![tab("a", false), tab("old", true), tab("b", false)];
+        snapshot.active_tab = 2;
+        snapshot.parked = vec![tab("kept", false)];
+        let parked = take_old_todo_tabs(&mut snapshot);
+        assert_eq!(snapshot.tabs.iter().map(title).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(snapshot.active_tab, 1, "still on b");
+        assert_eq!(parked.iter().map(title).collect::<Vec<_>>(), ["kept", "old"]);
+        assert!(parked.iter().all(|t| !t.todo));
+        assert!(snapshot.parked.is_empty());
     }
 
     /// Pinned, unread and the parent come back after a restart; a card with none of them writes

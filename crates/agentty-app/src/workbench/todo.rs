@@ -1,40 +1,36 @@
-//! TODO: tabs (and split panes) set aside to pick up later. A TODO tab leaves the tab strip but
-//! keeps its terminals running; each workspace has its own list, behind the button next to the
-//! start page tab, and clicking an entry brings the tab back where it was.
+//! TODO: tabs (and split panes) set aside to pick up later. A TODO tab leaves the tab strip and,
+//! like a sleeping workspace, stops: its terminals and agents end, and only a snapshot is kept
+//! (its splits, folders and agent sessions). Each workspace has its own list, behind the button
+//! next to the start page tab; clicking an entry starts the tab again, its agents continuing
+//! their sessions.
 
-use super::{Pane, PaneNode, Tab, Workbench, Workspace};
+use super::persist::{NodeSnapshot, TabSnapshot};
+use super::{Pane, Workbench, Workspace};
 use crate::i18n::t;
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, menu_item, popover, IconSize, TypeScale};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, MouseButton, Pixels, Point, SharedString, Window};
 
 impl Workspace {
-    /// Indices of the tabs shown in the tab strip.
+    /// Indices of the tabs shown in the tab strip: all of them, TODO tabs being kept apart.
     pub(super) fn visible_tabs(&self) -> Vec<usize> {
-        (0..self.tabs.len()).filter(|i| !self.tabs[*i].todo).collect()
+        (0..self.tabs.len()).collect()
     }
 
-    /// Indices of the tabs set aside in TODO.
-    pub(super) fn todo_tabs(&self) -> Vec<usize> {
-        (0..self.tabs.len()).filter(|i| self.tabs[*i].todo).collect()
-    }
-
-    /// Moves the active tab off a TODO tab onto the nearest one still in the strip: the next one,
-    /// else the one before. With every tab in TODO it stays put (the TODO list is shown instead).
+    /// Keeps the active tab on a tab that exists after one left the strip.
     pub(super) fn settle_active_tab(&mut self) {
-        let todo: Vec<bool> = self.tabs.iter().map(|tab| tab.todo).collect();
-        self.active_tab = settled_tab(&todo, self.active_tab);
+        self.active_tab = self.active_tab.min(self.tabs.len().saturating_sub(1));
     }
 }
 
-/// Where the active tab goes when tab `active` is in TODO: the next tab still shown, else the
-/// last one before it, else nowhere (every tab is in TODO).
-fn settled_tab(todo: &[bool], active: usize) -> usize {
-    if todo.get(active).is_some_and(|parked| !parked) {
-        return active;
-    }
-    let mut visible = (0..todo.len()).filter(|i| !todo[*i]);
-    visible.clone().find(|i| *i > active).or_else(|| visible.next_back()).unwrap_or(active)
+/// What a TODO entry shows: the title of the pane that was in front, its folder, and how many
+/// panes the tab had.
+fn parked_summary(snapshot: &TabSnapshot) -> (String, String, usize) {
+    let panes = super::snapshot_panes(&snapshot.layout);
+    let front = panes.get(snapshot.active_pane).or(panes.first());
+    let title = snapshot.instance.as_ref().and_then(|i| i.title.clone()).or_else(|| front.map(|p| p.title.clone())).unwrap_or_default();
+    let folder = front.map(|p| crate::ui::tilde(&p.cwd)).unwrap_or_default();
+    (title, folder, panes.len())
 }
 
 impl Workbench {
@@ -62,14 +58,21 @@ impl Workbench {
         self.activate_tab(index, window, cx);
     }
 
-    /// Sets tab `index` of the active workspace aside in TODO.
+    /// Sets tab `index` of the active workspace aside in TODO: its snapshot is kept and its panes
+    /// close, ending what ran in them.
     pub(super) fn park_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.tab_menu = None;
-        let Some(ws) = self.workspaces.get_mut(self.active_workspace) else { return };
-        let Some(tab) = ws.tabs.get_mut(index) else { return };
-        tab.todo = true;
+        let w = self.active_workspace;
+        let Some(tab) = self.workspaces.get(w).and_then(|ws| ws.tabs.get(index)) else { return };
+        let snapshot = self.snapshot_tab(tab, cx);
+        let ws = &mut self.workspaces[w];
+        let tab = ws.tabs.remove(index);
+        if index < ws.active_tab {
+            ws.active_tab -= 1;
+        }
         ws.settle_active_tab();
-        self.after_park(window, cx);
+        ws.parked.insert(0, snapshot);
+        self.end_parked_panes(tab.root.leaves(), window, cx);
     }
 
     /// Sets one pane of a split aside in TODO, as a tab of its own; a tab's only pane takes the
@@ -77,37 +80,57 @@ impl Workbench {
     pub(super) fn park_pane(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
         self.pane_menu = None;
         let Some((w, t)) = self.locate(pane) else { return };
-        let ws = &mut self.workspaces[w];
-        if ws.tabs[t].root.leaves().len() < 2 {
-            ws.tabs[t].todo = true;
-            ws.settle_active_tab();
-            return self.after_park(window, cx);
+        if self.workspaces[w].tabs[t].root.leaves().len() < 2 {
+            self.active_workspace = w;
+            return self.park_tab(t, window, cx);
         }
-        // Split off before the tab leaves the list, so a failure can never drop it and its terminals.
-        let Some(root) = ws.tabs[t].root.clone().remove(pane) else { return };
-        let tab = &mut ws.tabs[t];
-        if tab.active == *pane {
-            tab.active = root.leaves()[0].clone();
-        }
-        tab.root = root;
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None, todo: true });
-        if self.zoomed.as_ref() == Some(pane) {
-            self.zoomed = None;
-        }
-        self.after_park(window, cx);
+        let snapshot = TabSnapshot {
+            instance: None,
+            layout: NodeSnapshot::Pane(Self::snapshot_pane(pane, cx)),
+            active_pane: 0,
+            zoomed_pane: None,
+            chat: false,
+            chat_roles: None,
+            todo: false,
+        };
+        self.workspaces[w].parked.insert(0, snapshot);
+        // Out of its split the usual way: the split closes up around where it was.
+        self.remove_pane(pane, cx);
+        self.end_parked_panes(Vec::new(), window, cx);
     }
 
-    fn after_park(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Closes the panes of a tab just set aside (already out of its workspace, so closing them
+    /// neither records a closed tab nor folds the workspace), then saves.
+    fn end_parked_panes(&mut self, panes: Vec<Pane>, window: &mut Window, cx: &mut Context<Self>) {
+        for pane in panes {
+            self.remove_pane(&pane, cx);
+        }
         self.persist(cx);
         self.focus_active(window, cx);
         cx.notify();
     }
 
-    /// Brings TODO tab `index` of the active workspace back into the strip and in front.
+    /// Starts TODO entry `index` of the active workspace again as a tab, in front.
     pub(super) fn unpark_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.todo_menu = None;
-        self.activate_tab(index, window, cx);
+        let w = self.active_workspace;
+        if self.workspaces.get(w).is_none_or(|ws| index >= ws.parked.len()) {
+            return;
+        }
+        let snapshot = self.workspaces[w].parked.remove(index);
+        self.bring_back_tab(w, snapshot, window, cx);
+    }
+
+    /// Drops TODO entry `index` of the active workspace. Nothing of it was running; it goes to the
+    /// recently closed tabs, so it can still be reopened from there.
+    fn drop_parked(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.todo_menu = None;
+        let Some(ws) = self.workspaces.get_mut(self.active_workspace).filter(|ws| index < ws.parked.len()) else { return };
+        let snapshot = ws.parked.remove(index);
+        ws.closed_tabs.insert(0, snapshot);
+        ws.closed_tabs.truncate(super::CLOSED_TAB_HISTORY);
         self.persist(cx);
+        cx.notify();
     }
 
     /// The TODO button beside the start page tab, while the active workspace has TODO tabs.
@@ -115,7 +138,7 @@ impl Workbench {
         if self.page.is_some() {
             return None;
         }
-        let count = self.workspaces.get(self.active_workspace)?.todo_tabs().len();
+        let count = self.workspaces.get(self.active_workspace)?.parked.len();
         if count == 0 {
             return None;
         }
@@ -154,18 +177,10 @@ impl Workbench {
         )
     }
 
-    /// One TODO tab as a row: its title, what it is doing, and a close button.
+    /// One TODO entry as a row: its title and folder, a moon (nothing of it is running), and a
+    /// close button.
     fn render_todo_row(&self, ws: &Workspace, index: usize, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        let tab = &ws.tabs[index];
-        let view = tab.active.read(cx);
-        let leaves = tab.root.leaves();
-        let attention = leaves.iter().any(|p| p.read(cx).attention);
-        let working = leaves.iter().any(|p| p.read(cx).status.in_turn());
-        let title = match (&ws.plugin, &tab.instance) {
-            (Some(_), Some(instance)) => instance.title.clone().unwrap_or_else(|| view.display_title()),
-            _ => view.display_title(),
-        };
-        let folder = crate::ui::tilde(&view.display_cwd());
+        let (title, folder, panes) = parked_summary(&ws.parked[index]);
         div()
             .id(SharedString::from(format!("{prefix}-{index}")))
             .group("todo-row")
@@ -178,15 +193,7 @@ impl Workbench {
             .cursor_pointer()
             .hover(|s| s.bg(hex(Chrome::HOVER)))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.unpark_tab(index, window, cx)))
-            .child(div().w(px(12.)).flex().justify_center().map(|d| {
-                if working {
-                    d.child(crate::ui::dot_spinner((prefix, index), 12., hex_alpha(Chrome::BRIGHT, 0.9)))
-                } else if attention {
-                    d.child(div().size(px(7.)).rounded_full().bg(hex(Chrome::ATTENTION)))
-                } else {
-                    d.child(div().size(px(6.)).rounded_full().bg(hex(Chrome::MUTED)))
-                }
-            }))
+            .child(div().w(px(12.)).flex().justify_center().child(icon("moon", 12., hex(Chrome::MUTED))))
             .child(
                 div()
                     .flex()
@@ -196,7 +203,7 @@ impl Workbench {
                     .child(div().t_body().text_color(hex(Chrome::BRIGHT)).truncate().child(title.clone()))
                     .when(folder != title, |d| d.child(div().t_small().text_color(hex(Chrome::MUTED)).truncate().child(folder))),
             )
-            .when(leaves.len() > 1, |d| d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("⊞{}", leaves.len()))))
+            .when(panes > 1, |d| d.child(div().t_small().text_color(hex(Chrome::MUTED)).child(format!("⊞{panes}"))))
             .child(
                 div()
                     .id(SharedString::from(format!("{prefix}-close-{index}")))
@@ -210,10 +217,9 @@ impl Workbench {
                     .group_hover("todo-row", |s| s.visible())
                     .hover(|s| s.bg(hex_alpha(0xffffff, 0.1)))
                     .tooltip(crate::ui::Tooltip::text(t(cx, "todo.close"), None))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        this.todo_menu = None;
-                        this.request_close_tabs(&[index], window, cx);
+                        this.drop_parked(index, cx);
                     }))
                     .child(icon("x", IconSize::INLINE, hex(Chrome::FOREGROUND))),
             )
@@ -223,7 +229,7 @@ impl Workbench {
     pub(super) fn render_todo_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let position: Point<Pixels> = self.todo_menu?;
         let ws = self.workspaces.get(self.active_workspace)?;
-        let todo = ws.todo_tabs();
+        let todo = 0..ws.parked.len();
         if todo.is_empty() {
             return None;
         }
@@ -247,7 +253,7 @@ impl Workbench {
     pub(super) fn render_all_parked(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut list = div().w(px(420.)).max_w_full().flex().flex_col().gap_0p5();
         if let Some(ws) = self.workspaces.get(self.active_workspace) {
-            for index in ws.todo_tabs() {
+            for index in 0..ws.parked.len() {
                 list = list.child(self.render_todo_row(ws, index, "todo-page-row", cx));
             }
         }
@@ -293,14 +299,24 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::settled_tab;
+    use super::parked_summary;
+    use crate::launch::PaneKind;
+    use crate::workbench::persist::{NodeSnapshot, PaneSnapshot, TabSnapshot};
+
+    fn pane(title: &str, cwd: &str) -> NodeSnapshot {
+        NodeSnapshot::Pane(PaneSnapshot { kind: PaneKind::Shell, cwd: cwd.into(), title: title.into(), session_id: None, tool: None })
+    }
 
     #[test]
-    fn active_tab_moves_to_the_nearest_shown_tab() {
-        assert_eq!(settled_tab(&[false, true, false], 1), 2);
-        assert_eq!(settled_tab(&[false, false, true], 2), 1);
-        assert_eq!(settled_tab(&[false, true], 0), 0);
-        // Every tab in TODO: it stays, and the TODO list is shown instead.
-        assert_eq!(settled_tab(&[true, true], 0), 0);
+    fn an_entry_names_the_pane_that_was_in_front() {
+        let layout = NodeSnapshot::Split {
+            axis: crate::workbench::panes::Axis::Horizontal,
+            sizes: vec![0.5, 0.5],
+            children: vec![pane("server", "/w/api"), pane("claude", "/w/app")],
+        };
+        let tab = TabSnapshot { instance: None, layout, active_pane: 1, zoomed_pane: None, chat: false, chat_roles: None, todo: false };
+        let (title, folder, panes) = parked_summary(&tab);
+        assert_eq!((title.as_str(), panes), ("claude", 2));
+        assert!(folder.ends_with("app"), "{folder}");
     }
 }

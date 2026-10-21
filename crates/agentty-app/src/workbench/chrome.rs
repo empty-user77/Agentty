@@ -1998,7 +1998,7 @@ impl Workbench {
         } else if let Some(ws) = self.workspaces.get(self.active_workspace) {
             // While a file is shown in the editor, its tab is the active one.
             let editing = self.editor_visible(cx);
-            for (index, tab) in ws.tabs.iter().enumerate().filter(|(_, tab)| !tab.todo) {
+            for (index, tab) in ws.tabs.iter().enumerate() {
                 let view = tab.active.read(cx);
                 let active = index == ws.active_tab && !editing;
                 let leaves = tab.root.leaves();
