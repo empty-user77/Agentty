@@ -167,6 +167,7 @@ impl Workbench {
                     color: None,
                     plugin: None,
                     remote_hidden: false,
+                    marks: Default::default(),
                 });
                 self.active_workspace = self.workspaces.len() - 1;
             }

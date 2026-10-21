@@ -75,6 +75,7 @@ impl Workbench {
                     color: None,
                     plugin: None,
                     remote_hidden: source_hidden,
+                    marks: Default::default(),
                 });
                 self.workspaces.len() - 1
             }

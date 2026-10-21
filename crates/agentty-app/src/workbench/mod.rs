@@ -81,6 +81,7 @@ mod voice_input;
 #[cfg(windows)]
 mod webview_setup;
 mod windows_page;
+mod workspace_menu;
 pub mod worktrees;
 
 use crate::agent_signal::AgentSignal;
@@ -98,7 +99,7 @@ use gpui::{
     SharedString, Subscription, Window,
 };
 use panes::{Axis, PaneNode};
-use persist::{GroupSnapshot, LayoutState, NodeSnapshot, PaneSnapshot, TabSnapshot, WorkspaceSnapshot};
+use persist::{GroupSnapshot, LayoutState, NodeSnapshot, PaneSnapshot, TabSnapshot, WorkspaceMarks, WorkspaceSnapshot};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -237,6 +238,8 @@ pub struct Workspace {
     pub plugin: Option<String>,
     /// Left out of remote access (its menu): the web page neither lists it nor reaches it.
     pub remote_hidden: bool,
+    /// Pinned, marked unread, listed under a parent: set from the card's menu.
+    pub marks: WorkspaceMarks,
 }
 
 /// How many closed tabs a workspace remembers.
@@ -410,6 +413,12 @@ pub struct Workbench {
     /// Where in the window the open workspace menu was asked for, so a card near the bottom of the
     /// sidebar opens its menu upwards instead of off the edge.
     workspace_menu_at: f32,
+    /// The workspace menu's flyout (Open In, Move to Group) unfolded beside it.
+    workspace_submenu: Option<workspace_menu::Submenu>,
+    /// The apps "Open In" offers, looked up each time the workspace menu opens.
+    open_in_apps: Vec<crate::open_in::OpenApp>,
+    /// "Set Parent Worktree…": the picker, while it is open.
+    parent_picker: Option<workspace_menu::ParentPicker>,
     /// Group whose right-click menu is open.
     group_menu: Option<u64>,
     /// Whose colour menu has the full palette unfolded.
@@ -819,6 +828,9 @@ impl Workbench {
             launcher_target: LaunchTarget::NewTab,
             workspace_menu: None,
             workspace_menu_at: 0.,
+            workspace_submenu: None,
+            open_in_apps: Vec::new(),
+            parent_picker: None,
             group_menu: None,
             color_palette_open: None,
             color_picking: None,
@@ -1362,6 +1374,7 @@ impl Workbench {
                         last_activity_ms: Some(last_activity),
                         plugin: ws.plugin.clone(),
                         remote_hidden: ws.remote_hidden,
+                        marks: ws.marks.clone(),
                     });
                 }
                 None => {
@@ -1466,6 +1479,7 @@ impl Workbench {
             color: None,
             plugin: None,
             remote_hidden: false,
+            marks: WorkspaceMarks::default(),
         });
         self.activate_workspace(self.workspaces.len() - 1, window, cx);
         self.persist(cx);
@@ -1575,6 +1589,8 @@ impl Workbench {
         self.new_workspace = None;
         self.launcher_open = false;
         self.workspace_menu = None;
+        // Opened is read: a card marked unread by hand loses the mark here.
+        self.workspaces[index].marks.unread = false;
         if let Some(snapshot) = self.workspaces[index].dormant.take() {
             self.revive(index, snapshot, cx);
         }
@@ -2580,9 +2596,8 @@ impl Workbench {
     }
 
     fn move_to_group(&mut self, workspace: u64, group: Option<u64>, cx: &mut Context<Self>) {
-        if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace) {
-            ws.group = group;
-        }
+        // The workspaces listed under it go along.
+        self.group_with_children(workspace, group);
         self.workspace_menu = None;
         self.persist(cx);
         cx.notify();
@@ -2607,15 +2622,18 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Puts a workspace first (within its group), e.g. when one of its agents just finished.
+    /// Puts a workspace first (within its group), e.g. when one of its agents just finished. Pinned
+    /// workspaces stay above it unless it is pinned too.
     pub(super) fn move_workspace_to_top(&mut self, id: u64, cx: &mut Context<Self>) {
         let active_id = self.workspaces.get(self.active_workspace).map(|w| w.id);
         let Some(from) = self.workspaces.iter().position(|w| w.id == id) else { return };
-        if from == 0 {
+        let ws = self.workspaces.remove(from);
+        let to = if ws.marks.pinned { 0 } else { self.workspaces.iter().take_while(|w| w.marks.pinned).count() };
+        let unchanged = to == from;
+        self.workspaces.insert(to, ws);
+        if unchanged {
             return;
         }
-        let ws = self.workspaces.remove(from);
-        self.workspaces.insert(0, ws);
         self.restore_active(active_id);
         self.persist(cx);
         cx.notify();
@@ -2946,6 +2964,35 @@ impl Workbench {
         .detach();
     }
 
+    /// A workspace with its panes running, as it is saved: what restarting Agentty, or waking it
+    /// from sleep, brings back.
+    pub(super) fn live_snapshot(&self, ws: &Workspace, cx: &gpui::App) -> WorkspaceSnapshot {
+        let panes: Vec<Pane> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
+        WorkspaceSnapshot {
+            id: ws.id,
+            name: ws.name.clone(),
+            group: ws.group,
+            cwd: ws.cwd.clone(),
+            active_tab: ws.active_tab,
+            closed_tabs: ws.closed_tabs.clone(),
+            color: None,
+            color_value: ws.color,
+            plugin: ws.plugin.clone(),
+            remote_hidden: ws.remote_hidden,
+            marks: ws.marks.clone(),
+            tabs: ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)).collect(),
+            // What the card says while the workspace is open, so it says the same once it is
+            // folded away: the branch it is on and when it last did something.
+            branch: ws
+                .tabs
+                .get(ws.active_tab)
+                .map(|t| t.active.clone())
+                .or_else(|| panes.first().cloned())
+                .and_then(|p| p.read(cx).git_branch.clone()),
+            last_activity_ms: panes.iter().map(|p| p.read(cx).last_activity_ms).max(),
+        }
+    }
+
     fn persist(&self, cx: &gpui::App) {
         let workspaces = self
             .workspaces
@@ -2962,33 +3009,12 @@ impl Workbench {
                         color: None,
                         color_value: ws.color,
                         remote_hidden: ws.remote_hidden,
+                        marks: ws.marks.clone(),
                         tabs,
                         ..dormant.clone()
                     };
                 }
-                let panes: Vec<Pane> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
-                WorkspaceSnapshot {
-                    id: ws.id,
-                    name: ws.name.clone(),
-                    group: ws.group,
-                    cwd: ws.cwd.clone(),
-                    active_tab: ws.active_tab,
-                    closed_tabs: ws.closed_tabs.clone(),
-                    color: None,
-                    color_value: ws.color,
-                    plugin: ws.plugin.clone(),
-                    remote_hidden: ws.remote_hidden,
-                    tabs: ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)).collect(),
-                    // What the card says while the workspace is open, so it says the same once it
-                    // is folded away: the branch it is on and when it last did something.
-                    branch: ws
-                        .tabs
-                        .get(ws.active_tab)
-                        .map(|t| t.active.clone())
-                        .or_else(|| panes.first().cloned())
-                        .and_then(|p| p.read(cx).git_branch.clone()),
-                    last_activity_ms: panes.iter().map(|p| p.read(cx).last_activity_ms).max(),
-                }
+                self.live_snapshot(ws, cx)
             })
             .collect();
         let state = LayoutState {
@@ -3034,6 +3060,7 @@ impl Workbench {
                 color: stored_color(snapshot.color_value, snapshot.color),
                 plugin: snapshot.plugin.clone(),
                 remote_hidden: snapshot.remote_hidden,
+                marks: snapshot.marks.clone(),
                 dormant: Some(snapshot),
                 asleep_on_close: false,
             });
@@ -3636,6 +3663,7 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_webview_setup_dialog(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_parent_picker(cx))
             .children(self.render_remote_password_dialog(window, cx))
             .children(self.render_tree_remove_confirm(cx))
             .children(self.render_ask(cx))
