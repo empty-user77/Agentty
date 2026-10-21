@@ -41,7 +41,7 @@ Right-click a workspace, or click its **⋯**, for what can be done to it. Where
 - **⇧⌘] / ⇧⌘[** or **⌃Tab** move between tabs, **⌃1…⌃9** jump to one.
 - **⇧⌘W** closes a tab, **⌘W** closes a pane.
 - Double-click empty space in the tab strip for a new tab.
-- Right-click a tab → **Work on Later (TODO)** sets it aside: what runs in it stops, and the **TODO** button next to the start page tab lists it. Click it there to start it again; its agents continue their sessions.
+- Right-click a tab → **Work on Later** sets it aside: what runs in it stops, and the **TODO** button next to the start page tab lists it. Click it there to start it again; its agents continue their sessions.
 
 New tabs start in the workspace's folder. **Settings → General** can ask for a folder each time instead.
 

@@ -1165,7 +1165,7 @@ strings! {
     "tab.close_all" => ["Close All Tabs", "모든 탭 닫기", "すべてのタブを閉じる", "关闭所有标签页"],
     "tab.move_to" => ["MOVE TO WORKSPACE", "다른 작업공간으로 옮기기", "ワークスペースへ移動", "移动到工作区"],
     "tab.move_to_menu" => ["Move to Workspace", "다른 작업공간으로 옮기기", "ワークスペースへ移動", "移动到工作区"],
-    "todo.park" => ["Work on Later (TODO)", "나중에 작업하기(TODO)", "後で作業する（TODO）", "稍后处理（TODO）"],
+    "todo.park" => ["Work on Later", "나중에 작업하기", "後で作業する", "稍后处理"],
     "todo.tooltip" => ["TODO — tabs set aside for later", "TODO — 나중에 이어서 할 탭", "TODO — 後で続けるタブ", "TODO — 稍后继续的标签页"],
     "todo.heading" => ["TODO", "TODO", "TODO", "TODO"],
     "todo.hint" => [
