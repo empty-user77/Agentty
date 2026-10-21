@@ -126,6 +126,17 @@ button:disabled { opacity: .5; cursor: default; }
 .tabs { display: flex; gap: 2px; padding: 6px 8px 0; overflow-x: auto; flex-shrink: 0; background: var(--panel); border-bottom: 1px solid var(--border);
   scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
+
+/* Dev servers the workspace runs, under its tabs */
+.ports { display: flex; align-items: center; gap: 6px; padding: 5px 10px; overflow-x: auto; flex-shrink: 0; border-bottom: 1px solid var(--border);
+  scrollbar-width: none; }
+.ports[hidden] { display: none; }
+.ports::-webkit-scrollbar { display: none; }
+.ports-title { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.port { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); background: transparent;
+  white-space: nowrap; flex-shrink: 0; font-family: inherit; }
+.port.failed { border-color: var(--error); color: var(--error); }
+.port:disabled { opacity: 0.6; }
 .tab { flex-shrink: 0; max-width: 60vw; display: flex; align-items: center; gap: 6px; padding: 7px 11px; border: 0; border-radius: 8px 8px 0 0;
   background: transparent; color: var(--muted); font-size: 13px; border-bottom: 2px solid transparent; }
 .tab.active { color: var(--text); background: var(--bg); border-bottom-color: var(--accent); }

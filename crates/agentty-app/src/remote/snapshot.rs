@@ -24,6 +24,18 @@ pub struct WorkspaceInfo {
     pub sleeping: bool,
     pub active_tab: usize,
     pub tabs: Vec<TabInfo>,
+    /// Local servers its terminals run (`npm run dev`, …), as the sidebar's port chips.
+    pub ports: Vec<PortInfo>,
+}
+
+/// A local server a workspace's terminal runs, and where the page can open it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PortInfo {
+    pub port: u16,
+    /// Its address on the tailnet once it is shown there (asked for from the page).
+    pub url: Option<String>,
+    /// Why it could not be shown, when it could not.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

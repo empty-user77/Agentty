@@ -35,6 +35,8 @@ const STRINGS = {
     pstate: { running: "Running", starting: "Starting", stopped: "Stopped", failed: "Stopped with an error", consent: "Waiting for your OK", off: "Off" },
     astate: { working: "Working", idle: "Idle", error: "Error" },
     chat: "Chat", chatHint: "Message the lead agent…", chatEmpty: "Write to the lead agent. It plans the work and starts workers on the Mac; their terminals are in the pane list.", leadWaits: "The lead is waiting for you in its terminal.",
+    devServers: "Dev servers", portOpen: "Open the server on port {port}", portOpening: "Opening…", portSlow: "The server didn't open in time. Try again.", portGone: "This server isn't running any more.", portFailed: "Couldn't open this server. Try again.",
+    portErrors: { taken: "Tailscale already serves port {port} for something else.", funnel: "Port {port} is shared publicly with Tailscale Funnel, so Agentty won't open it.", enable: "Turn on HTTPS for your tailnet in the Tailscale admin console first.", failed: "Couldn't open this server. Try again." },
   },
   ko: {
     toLatest: "최신 ↓",
@@ -59,6 +61,8 @@ const STRINGS = {
     pstate: { running: "실행 중", starting: "시작하는 중", stopped: "멈춤", failed: "오류로 멈춤", consent: "허용 대기", off: "꺼짐" },
     astate: { working: "작업 중", idle: "대기", error: "오류" },
     chat: "채팅", chatHint: "리드 에이전트에게 메시지…", chatEmpty: "리드 에이전트에게 말해 보세요. 작업을 계획하고 Mac에서 워커를 띄웁니다. 워커 터미널은 분할창 목록에 있습니다.", leadWaits: "리드가 터미널에서 응답을 기다립니다.",
+    devServers: "개발 서버", portOpen: "{port} 포트 서버 열기", portOpening: "여는 중…", portSlow: "서버가 제때 열리지 않았습니다. 다시 시도해 주세요.", portGone: "이 서버는 더 이상 실행 중이 아닙니다.", portFailed: "이 서버를 열지 못했습니다. 다시 시도해 주세요.",
+    portErrors: { taken: "Tailscale이 {port} 포트를 이미 다른 용도로 쓰고 있습니다.", funnel: "{port} 포트가 Tailscale Funnel로 공개되어 있어 Agentty가 열지 않습니다.", enable: "먼저 Tailscale 관리 콘솔에서 tailnet의 HTTPS를 켜 주세요.", failed: "이 서버를 열지 못했습니다. 다시 시도해 주세요." },
   },
   ja: {
     toLatest: "最新へ ↓",
@@ -83,6 +87,8 @@ const STRINGS = {
     pstate: { running: "実行中", starting: "起動中", stopped: "停止", failed: "エラーで停止", consent: "許可待ち", off: "オフ" },
     astate: { working: "作業中", idle: "待機", error: "エラー" },
     chat: "チャット", chatHint: "リードエージェントにメッセージ…", chatEmpty: "リードエージェントに書いてください。作業を計画し、Mac でワーカーを起動します。ワーカーのターミナルはペイン一覧にあります。", leadWaits: "リードがターミナルで返答を待っています。",
+    devServers: "開発サーバー", portOpen: "ポート {port} のサーバーを開く", portOpening: "開いています…", portSlow: "サーバーが時間内に開きませんでした。もう一度お試しください。", portGone: "このサーバーはもう動いていません。", portFailed: "このサーバーを開けませんでした。もう一度お試しください。",
+    portErrors: { taken: "Tailscale はポート {port} を既に別の用途で使っています。", funnel: "ポート {port} は Tailscale Funnel で公開されているため、Agentty は開きません。", enable: "先に Tailscale の管理コンソールで tailnet の HTTPS をオンにしてください。", failed: "このサーバーを開けませんでした。もう一度お試しください。" },
   },
   zh: {
     toLatest: "最新 ↓",
@@ -107,6 +113,8 @@ const STRINGS = {
     pstate: { running: "运行中", starting: "正在启动", stopped: "已停止", failed: "因错误停止", consent: "等待你的允许", off: "已关闭" },
     astate: { working: "工作中", idle: "空闲", error: "错误" },
     chat: "聊天", chatHint: "给主控智能体发消息…", chatEmpty: "给主控智能体写消息。它会规划工作并在 Mac 上启动工作智能体，它们的终端在窗格列表中。", leadWaits: "主控智能体正在终端中等你回应。",
+    devServers: "开发服务器", portOpen: "打开端口 {port} 上的服务器", portOpening: "正在打开…", portSlow: "服务器未能及时打开，请重试。", portGone: "这个服务器已不再运行。", portFailed: "无法打开这个服务器，请重试。",
+    portErrors: { taken: "Tailscale 已将端口 {port} 用于其他用途。", funnel: "端口 {port} 已通过 Tailscale Funnel 公开，Agentty 不会打开它。", enable: "请先在 Tailscale 管理控制台中为 tailnet 开启 HTTPS。", failed: "无法打开这个服务器，请重试。" },
   },
 };
 const lang = (navigator.language || "en").slice(0, 2);
@@ -435,6 +443,7 @@ function onOverview(data) {
   // If a recording is running and its terminal just closed, or voice was turned off, stop the mic
   // — its button is about to be hidden, which would otherwise leave no way to stop it.
   if (recorder && (!state.voice || !sessions.some((s) => s.pane === state.pane))) stopRecording();
+  watchPort();
   if (!state.started) {
     state.started = true;
     return pickStart();
@@ -577,6 +586,7 @@ function render() {
   redraw("workspaces", [state.workspaces, marks, state.workspace], renderWorkspaces);
   redraw("header", [ws, shown(session(state.pane)), state.tab], renderHeader);
   redraw("tabs", [ws && ws.tabs, state.tab, marks], renderTabs);
+  redraw("ports", [ws && !ws.sleeping && ws.ports, state.opening && state.opening.port], renderPorts);
   redraw("panes", [tab, tab && tab.panes.map((p) => [shown(session(p)), session(p)?.elapsed]), state.pane], renderPanes);
   redraw("body", [state.workspace, state.workspaces.length, ws && ws.sleeping, state.waking, shown(session(state.pane)), state.ctrl, state.size, inChat(), !!currentChat(), state.voice], renderBody);
   redraw("chat", [inChat() && currentChat()], renderChat);
@@ -692,6 +702,96 @@ function renderTabs() {
   add.setAttribute("aria-label", T.newTab);
   add.addEventListener("click", () => openNewSheet(ws.id));
   nav.append(add);
+}
+
+// ---- Dev servers the workspace's terminals run, opened through Agentty on the tailnet ----
+
+function renderPorts() {
+  const box = $("ports");
+  box.replaceChildren();
+  const ws = workspace(state.workspace);
+  const ports = (ws && !ws.sleeping && ws.ports) || [];
+  box.hidden = !ports.length;
+  if (!ports.length) return;
+  box.append(el("span", "ports-title", T.devServers));
+  for (const p of ports) {
+    const opening = state.opening && state.opening.port === p.port;
+    const b = el("button", "port" + (p.error ? " failed" : ""), opening ? T.portOpening : `↗ localhost:${p.port}`);
+    b.type = "button";
+    b.disabled = opening;
+    b.title = T.portOpen.replace("{port}", p.port);
+    b.addEventListener("click", () => openPort(p.port));
+    box.append(b);
+  }
+}
+
+function portInfo(port) {
+  for (const w of state.workspaces) for (const p of w.ports || []) if (p.port === port) return p;
+  return null;
+}
+
+/// Only the addresses Agentty hands out: its tailnet name over https, or 127.0.0.1 in a dev build.
+function portUrl(p) {
+  try {
+    const url = new URL(p.url);
+    return url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "127.0.0.1") ? url.href : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function openPort(port) {
+  const known = portInfo(port);
+  const ready = known && known.url && portUrl(known);
+  if (ready) {
+    window.open(ready, "_blank", "noopener");
+    return;
+  }
+  if (state.opening) return;
+  // Opened while the tap still counts as the user's: a window opened after the wait is blocked.
+  const win = window.open("", "_blank");
+  // A failure from before this tap stays in the overview until the Mac takes the new try.
+  state.opening = { port, win, cleared: !(known && known.error), timer: setTimeout(() => settlePort(T.portSlow), 30000) };
+  render();
+  try {
+    const { status } = await api("/api/devserver", { port });
+    if (status === 401) {
+      settlePort(null);
+      showLogin();
+    } else if (status === 404) settlePort(T.portGone);
+    else if (status !== 200) settlePort(status === 429 ? T.busy : T.portFailed);
+  } catch (_) {
+    settlePort(T.portFailed);
+  }
+}
+
+function watchPort() {
+  const o = state.opening;
+  if (!o) return;
+  const p = portInfo(o.port);
+  if (!p) return settlePort(T.portGone);
+  if (!o.cleared) {
+    o.cleared = !p.error;
+    return;
+  }
+  const url = p.url && portUrl(p);
+  if (url) settlePort(null, url);
+  else if (p.error) settlePort(T.portErrors[p.error] || T.portFailed);
+}
+
+function settlePort(message, url) {
+  const o = state.opening;
+  if (!o) return;
+  clearTimeout(o.timer);
+  state.opening = null;
+  if (o.win && !o.win.closed) {
+    if (url) {
+      o.win.opener = null;
+      o.win.location.replace(url);
+    } else o.win.close();
+  } else if (url) window.open(url, "_blank", "noopener");
+  if (message) alert(message.replace("{port}", o.port));
+  render();
 }
 
 const TOOL_MARK = { claude: "✳", codex: "◎", gemini: "✦", shell: "$" };

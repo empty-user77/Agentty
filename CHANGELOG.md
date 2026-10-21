@@ -18,6 +18,9 @@ All notable changes to this project are documented here. The format follows
   Worktree**.
 - The tab menu (right-click a tab) gets the same look: icons, and **Move to Workspace ›** as a submenu with a new
   workspace first and the others under their groups' names.
+- Remote access shows the dev servers a workspace's terminals run (`npm run dev` and the like) under its tabs. Tapping
+  one opens it in a new tab at the Mac's tailnet address with the server's port, for you only: Agentty passes requests
+  on only from your Tailscale account and a device signed in with the web password, hot reload included.
 
 ### Changed
 - A tab set aside with **Work on Later** now stops, like a sleeping workspace: what ran in it ends and only

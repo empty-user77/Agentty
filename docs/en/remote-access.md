@@ -95,6 +95,14 @@ The audio is transcribed **on your Mac** by a local model — nothing is sent to
 
 Your browser asks for microphone permission the first time, and the page must be served over HTTPS — it is, through Tailscale.
 
+## Dev servers
+
+When a terminal in a workspace runs a local server — `npm run dev`, `rails s`, a preview of a static site — its port shows under the workspace's tabs on the page, for example **↗ localhost:3000**. Tap it and the server opens in a new browser tab at `https://<machine>.<tailnet>.ts.net:3000/`, the same address name as the page with the server's port. The first time takes a few seconds while Tailscale sets the port up.
+
+Only you get in, the same as on the page: Agentty answers that address itself and passes a request on to the server only from your Tailscale account and a device signed in with the web password (sign in on the page first). The server sees the request as coming to `localhost:<port>`, and never gets your Agentty sign-in. It works like the server on the Mac would in a browser there, hot reload included.
+
+The address goes away when the server stops, when remote access is turned off and when Agentty quits. Agentty doesn't open a port that Tailscale already serves for something else, or one shared publicly with Funnel; the page tells you why instead.
+
 ## Hiding the feature
 
 Don't use remote access at all? Turn off **Settings → General → Remote access feature** (on by default), or press **Disable remote access** on the Remote access page. Its icon leaves the side menu and remote access turns off. Turn the setting back on to bring it back.
