@@ -16,6 +16,11 @@ All notable changes to this project are documented here. The format follows
 - The tab menu (right-click a tab) gets the same look: icons, and **Move to Workspace ›** as a submenu with a new
   workspace first and the others under their groups' names.
 
+### Changed
+- A tab set aside with **Work on Later (TODO)** now stops, like a sleeping workspace: what ran in it ends and only
+  its layout is kept. Bringing it back from the TODO list starts it again, its agents continuing their sessions. TODO
+  tabs saved by earlier versions come back the same way.
+
 ## [0.2.22] - 2026-10-19
 
 ### Added

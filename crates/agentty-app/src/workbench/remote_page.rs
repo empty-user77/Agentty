@@ -225,7 +225,7 @@ impl Workbench {
         let pane = self.spawn_pane(crate::launch::LaunchSpec::new(kind, cwd), cx);
         let shown = index == self.active_workspace;
         let ws = &mut self.workspaces[index];
-        ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
+        ws.tabs.push(super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None });
         if !shown {
             ws.active_tab = ws.tabs.len() - 1;
         }
@@ -248,7 +248,7 @@ impl Workbench {
             name: None,
             group: None,
             cwd: folder,
-            tabs: vec![super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false }],
+            tabs: vec![super::Tab { root: super::PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
             active_tab: 0,
             dormant: None,
             asleep_on_close: false,
@@ -257,6 +257,7 @@ impl Workbench {
             plugin: None,
             remote_hidden: false,
             marks: Default::default(),
+            parked: Vec::new(),
         });
         // With nothing open before, the desktop shows it: there is nothing else to show.
         if self.workspaces.len() == 1 {

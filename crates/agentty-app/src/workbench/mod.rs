@@ -211,9 +211,6 @@ pub struct Tab {
     /// In a plugin's workspace, the automation this tab is: its panel, its browser pages and
     /// these terminals go together, and each tab runs on its own.
     pub instance: Option<persist::TabInstance>,
-    /// Set aside for later (TODO): left out of the tab strip, its terminals still running, until it
-    /// is brought back from the workspace's TODO button.
-    pub todo: bool,
 }
 
 pub struct Workspace {
@@ -231,6 +228,10 @@ pub struct Workspace {
     /// Tabs closed here, newest first, with their splits: a workspace keeps its tab history until
     /// the workspace itself is removed.
     pub closed_tabs: Vec<TabSnapshot>,
+    /// Tabs set aside for later (TODO), newest first. Their processes ended when they were set
+    /// aside, as a sleeping workspace's do; bringing one back starts it again and continues its
+    /// agent sessions.
+    pub parked: Vec<TabSnapshot>,
     /// Colour the card is filled with.
     pub color: Option<u32>,
     /// The plugin this workspace belongs to (`mode: "workspace"`): its panel and the browser come
@@ -1277,15 +1278,13 @@ impl Workbench {
 
     pub fn active_pane(&self) -> Option<Pane> {
         let ws = self.workspaces.get(self.active_workspace)?;
-        ws.tabs.get(ws.active_tab).filter(|tab| !tab.todo).map(|tab| tab.active.clone())
+        ws.tabs.get(ws.active_tab).map(|tab| tab.active.clone())
     }
 
     fn mark_active(&mut self, pane: &Pane, cx: &mut Context<Self>) {
         if let Some((w, t)) = self.locate(pane) {
             let ws = &mut self.workspaces[w];
-            if ws.tabs[t].active != *pane || ws.active_tab != t || ws.tabs[t].todo {
-                // A pane made active is one the user went to: its tab comes out of TODO.
-                ws.tabs[t].todo = false;
+            if ws.tabs[t].active != *pane || ws.active_tab != t {
                 ws.tabs[t].active = pane.clone();
                 ws.active_tab = t;
                 self.persist_soon(cx);
@@ -1340,7 +1339,7 @@ impl Workbench {
         match tab.root.remove(pane) {
             Some(root) => {
                 let active = if tab.active == *pane { root.leaves()[0].clone() } else { tab.active };
-                ws.tabs.insert(t, Tab { root, active, instance: tab.instance, todo: tab.todo });
+                ws.tabs.insert(t, Tab { root, active, instance: tab.instance });
             }
             None => {
                 if ws.active_tab >= ws.tabs.len() {
@@ -1353,7 +1352,8 @@ impl Workbench {
         }
         // Closing the last tab is not deleting the workspace: it goes dormant on the tab that just
         // closed, so opening it again brings that tab back. Removing it is an explicit menu action.
-        if ws.tabs.is_empty() && ws.dormant.is_none() {
+        // With tabs in TODO it stays as it is: those are what it holds now.
+        if ws.tabs.is_empty() && ws.dormant.is_none() && ws.parked.is_empty() {
             let closed = ws.closed_tabs.first().cloned();
             let removing = self.removing_workspace == Some(ws.id);
             match closed.filter(|_| !removing) {
@@ -1375,6 +1375,7 @@ impl Workbench {
                         plugin: ws.plugin.clone(),
                         remote_hidden: ws.remote_hidden,
                         marks: ws.marks.clone(),
+                        parked: ws.parked.clone(),
                     });
                 }
                 None => {
@@ -1471,7 +1472,7 @@ impl Workbench {
             name,
             group,
             cwd,
-            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false }],
+            tabs: vec![Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None }],
             active_tab: 0,
             dormant: None,
             asleep_on_close: false,
@@ -1480,6 +1481,7 @@ impl Workbench {
             plugin: None,
             remote_hidden: false,
             marks: WorkspaceMarks::default(),
+            parked: Vec::new(),
         });
         self.activate_workspace(self.workspaces.len() - 1, window, cx);
         self.persist(cx);
@@ -1519,7 +1521,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
         ws.active_tab = ws.tabs.len() - 1;
         self.page = None;
         self.session_viewer = None;
@@ -1543,7 +1545,7 @@ impl Workbench {
         self.wake_for_new_tab(self.active_workspace, cx);
         let pane = self.spawn_pane(spec, cx);
         let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None, todo: false });
+        ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane.clone(), instance: None });
         ws.active_tab = ws.tabs.len() - 1;
         self.persist(cx);
         cx.notify();
@@ -1662,7 +1664,6 @@ impl Workbench {
         let Some(ws) = self.workspaces.get_mut(self.active_workspace) else { return };
         if index < ws.tabs.len() {
             ws.active_tab = index;
-            ws.tabs[index].todo = false;
             self.page = None;
             self.session_viewer = None;
             self.hide_editor();
@@ -2438,6 +2439,12 @@ impl Workbench {
         }
         self.wake_for_new_tab(w, cx);
         let snapshot = self.workspaces[w].closed_tabs.remove(index);
+        self.bring_back_tab(w, snapshot, window, cx);
+    }
+
+    /// Starts `snapshot` again as a tab of workspace `w`, in front: its splits as they were, its
+    /// agents continuing their sessions (a recently closed tab, or one set aside in TODO).
+    pub(super) fn bring_back_tab(&mut self, w: usize, snapshot: TabSnapshot, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tree) = snapshot.layout.to_tree() else { return };
         let mut claimed = self.running_sessions(cx);
         let chat = snapshot.chat;
@@ -2448,7 +2455,7 @@ impl Workbench {
             self.register_chat(&leaves[0], snapshot.chat_roles.unwrap_or_default(), cx);
         }
         let ws = &mut self.workspaces[w];
-        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone(), todo: false });
+        ws.tabs.push(Tab { root, active, instance: snapshot.instance.clone() });
         ws.active_tab = ws.tabs.len() - 1;
         self.split_shared_instances(w);
         self.active_workspace = w;
@@ -2888,7 +2895,7 @@ impl Workbench {
             zoomed_pane: self.zoomed.as_ref().and_then(|zoomed| tab.root.leaves().iter().position(|p| p == zoomed)),
             chat: lead.is_some(),
             chat_roles: lead.as_ref().and_then(|lead| self.chat_roles(lead)),
-            todo: tab.todo,
+            todo: false,
         }
     }
 
@@ -2980,6 +2987,7 @@ impl Workbench {
             plugin: ws.plugin.clone(),
             remote_hidden: ws.remote_hidden,
             marks: ws.marks.clone(),
+            parked: ws.parked.clone(),
             tabs: ws.tabs.iter().map(|tab| self.snapshot_tab(tab, cx)).collect(),
             // What the card says while the workspace is open, so it says the same once it is
             // folded away: the branch it is on and when it last did something.
@@ -3010,6 +3018,7 @@ impl Workbench {
                         color_value: ws.color,
                         remote_hidden: ws.remote_hidden,
                         marks: ws.marks.clone(),
+                        parked: ws.parked.clone(),
                         tabs,
                         ..dormant.clone()
                     };
@@ -3047,8 +3056,12 @@ impl Workbench {
             .collect();
         self.ungrouped_collapsed = state.ungrouped_collapsed;
         self.plugins_grouped = state.plugins_grouped;
-        for snapshot in state.workspaces {
+        for mut snapshot in state.workspaces {
             self.next_id = self.next_id.max(snapshot.id + 1);
+            // Layouts saved while TODO tabs kept running have them among the tabs: they come back
+            // set aside, as the snapshots TODO keeps now, and their processes start only when
+            // brought back.
+            let parked = persist::take_old_todo_tabs(&mut snapshot);
             self.workspaces.push(Workspace {
                 id: snapshot.id,
                 name: snapshot.name.clone(),
@@ -3061,6 +3074,7 @@ impl Workbench {
                 plugin: snapshot.plugin.clone(),
                 remote_hidden: snapshot.remote_hidden,
                 marks: snapshot.marks.clone(),
+                parked,
                 dormant: Some(snapshot),
                 asleep_on_close: false,
             });
@@ -3099,7 +3113,7 @@ impl Workbench {
             if tab.chat {
                 self.register_chat(&leaves[0], tab.chat_roles.unwrap_or_default(), cx);
             }
-            tabs.push(Tab { root, active, instance: tab.instance.clone(), todo: tab.todo });
+            tabs.push(Tab { root, active, instance: tab.instance.clone() });
         }
         let ws = &mut self.workspaces[index];
         ws.active_tab = snapshot.active_tab.min(tabs.len().saturating_sub(1));
@@ -3107,10 +3121,11 @@ impl Workbench {
         // Tabs that are already live stay, after the ones brought back.
         tabs.append(&mut ws.tabs);
         ws.tabs = tabs;
-        if ws.tabs.is_empty() {
+        // Nothing to bring back: a fresh shell, unless every tab is in TODO (the list shows then).
+        if ws.tabs.is_empty() && ws.parked.is_empty() {
             let pane = self.spawn_pane(LaunchSpec::new(PaneKind::Shell, snapshot.cwd.clone()), cx);
             let ws = &mut self.workspaces[index];
-            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None, todo: false });
+            ws.tabs.push(Tab { root: PaneNode::Leaf(pane.clone()), active: pane, instance: None });
         }
         self.split_shared_instances(index);
     }
@@ -3325,8 +3340,18 @@ impl Render for Workbench {
                 match (self.render_session_viewer(cx), self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)))
                 {
                     (Some(viewer), _) => viewer,
-                    (None, Some(tab)) if self.new_workspace.is_none() && !self.welcome && tab.todo => self.render_all_parked(cx),
                     (None, Some(tab)) if self.new_workspace.is_none() && !self.welcome => self.render_tab(tab, cx),
+                    // Every tab set aside: the TODO list fills the terminal area.
+                    (None, None)
+                        if self.new_workspace.is_none()
+                            && !self.welcome
+                            && self
+                                .workspaces
+                                .get(self.active_workspace)
+                                .is_some_and(|ws| ws.dormant.is_none() && !ws.parked.is_empty()) =>
+                    {
+                        self.render_all_parked(cx)
+                    }
                     (None, _) => self.render_welcome(cx).into_any_element(),
                 }
             }
@@ -4920,8 +4945,7 @@ impl Workbench {
             "layout" => {
                 for ws in &self.workspaces {
                     let panes: Vec<usize> = ws.tabs.iter().map(|t| t.root.leaves().len()).collect();
-                    let todo: Vec<bool> = ws.tabs.iter().map(|t| t.todo).collect();
-                    eprintln!("layout: ws={} tabs={panes:?} todo={todo:?} active_tab={}", ws.id, ws.active_tab);
+                    eprintln!("layout: ws={} tabs={panes:?} parked={} active_tab={}", ws.id, ws.parked.len(), ws.active_tab);
                 }
                 eprintln!("layout: confirm={}", self.close_confirm.is_some());
             }

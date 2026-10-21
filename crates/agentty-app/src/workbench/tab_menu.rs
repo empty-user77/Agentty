@@ -63,7 +63,8 @@ impl Workbench {
         let source_id = self.workspaces[source].id;
         // A tab taken out of a workspace hidden from remote access stays hidden in a new one.
         let source_hidden = self.workspaces[source].remote_hidden;
-        if self.workspaces[source].tabs.is_empty() && self.workspaces[source].dormant.is_none() {
+        if self.workspaces[source].tabs.is_empty() && self.workspaces[source].dormant.is_none() && self.workspaces[source].parked.is_empty()
+        {
             self.workspaces.remove(source);
         }
         let target_index = match target.and_then(|id| self.workspaces.iter().position(|w| w.id == id)) {
@@ -91,6 +92,7 @@ impl Workbench {
                     plugin: None,
                     remote_hidden: source_hidden,
                     marks: Default::default(),
+                    parked: Vec::new(),
                 });
                 self.workspaces.len() - 1
             }

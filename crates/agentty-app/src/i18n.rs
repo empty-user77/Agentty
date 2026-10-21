@@ -1168,7 +1168,12 @@ strings! {
     "todo.park" => ["Work on Later (TODO)", "나중에 작업하기(TODO)", "後で作業する（TODO）", "稍后处理（TODO）"],
     "todo.tooltip" => ["TODO — tabs set aside for later", "TODO — 나중에 이어서 할 탭", "TODO — 後で続けるタブ", "TODO — 稍后继续的标签页"],
     "todo.heading" => ["TODO", "TODO", "TODO", "TODO"],
-    "todo.hint" => ["Still running in the background. Click one to bring it back.", "백그라운드에서 계속 실행 중입니다. 클릭하면 다시 탭으로 돌아옵니다.", "バックグラウンドで実行中です。クリックするとタブに戻ります。", "仍在后台运行。点击即可恢复为标签页。"],
+    "todo.hint" => [
+        "Stopped until you need them. Click one to start it again; its agents continue where they left off.",
+        "필요할 때까지 멈춰 둡니다. 클릭하면 다시 시작하고, 에이전트는 하던 대화를 이어 갑니다.",
+        "必要になるまで止めています。クリックすると再開し、エージェントは続きから作業します。",
+        "已停止，需要时再继续。点击即可重新启动，代理会接着之前的会话继续。"
+    ],
     "todo.close" => ["Close", "닫기", "閉じる", "关闭"],
     "todo.all_parked" => ["Every tab here is in TODO", "이 작업공간의 탭이 모두 TODO에 있습니다", "このワークスペースのタブはすべて TODO にあります", "此工作区的标签页都在 TODO 中"],
     "todo.all_parked_hint" => ["Pick one to continue, or open a new tab with +.", "이어서 할 탭을 고르거나 + 로 새 탭을 여세요.", "続けるタブを選ぶか、+ で新しいタブを開いてください。", "选择一个继续，或点击 + 打开新标签页。"],
