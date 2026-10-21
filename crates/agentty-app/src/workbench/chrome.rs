@@ -187,7 +187,7 @@ impl Workbench {
                         .gap_1()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(self.render_sync_button(cx))
-                        .child(self.render_notices_button(cx)),
+                        .when(!self.notices_in_sidebar(cx), |d| d.child(self.render_notices_button(cx))),
                 )
             })
             .when(!unified, |bar| bar.child(if title.is_empty() { "Agentty".to_string() } else { format!("{title} — Agentty") }))
@@ -205,7 +205,7 @@ impl Workbench {
                         // The bell must not start a window move.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(self.render_sync_button(cx))
-                        .child(self.render_notices_button(cx)),
+                        .when(!self.notices_in_sidebar(cx), |d| d.child(self.render_notices_button(cx))),
                 )
             })
             .when(client_side, |bar| {
@@ -422,25 +422,12 @@ impl Workbench {
         .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.hide_sidebar"), Some("⌘B")));
         // With the unified header the sidebar button lives in the title bar, by the traffic lights.
         let collapse = (!self.unified_header(cx)).then_some(collapse);
+        let bell = self.notices_in_sidebar(cx).then(|| self.render_notices_button(cx));
         let actions = match self.panel {
             SidePanel::Workspaces => div()
                 .flex()
                 .gap_0p5()
-                // How the cards are drawn, where they are: the start page has its own tab now, so
-                // this is the one thing the list's own header should carry.
-                .child({
-                    let compact = settings(cx).compact_workspaces;
-                    icon_only(
-                        "sidebar-density",
-                        // `rows-2` reads as the roomy card list, `list` as the thin one: the icon
-                        // shows what a click would switch to.
-                        if compact { "rows-2" } else { "list" },
-                        cx.listener(|_, _: &ClickEvent, _, cx| {
-                            crate::settings::update_settings(cx, |s| s.compact_workspaces = !s.compact_workspaces);
-                        }),
-                    )
-                    .tooltip(crate::ui::Tooltip::text(t(cx, if compact { "workspaces.as_cards" } else { "workspaces.as_list" }), None))
-                })
+                .children(bell)
                 .child(
                     icon_only(
                         "sidebar-new-group",
@@ -465,6 +452,7 @@ impl Workbench {
             SidePanel::Sessions => div()
                 .flex()
                 .gap_0p5()
+                .children(bell)
                 .child(if self.sessions_loading {
                     div()
                         .size(px(crate::ui::ICON_BUTTON))

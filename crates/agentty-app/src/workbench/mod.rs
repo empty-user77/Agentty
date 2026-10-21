@@ -3668,13 +3668,16 @@ impl Render for Workbench {
                                         .child(gpui::deferred(self.render_sync_popover(cx)).with_priority(3)),
                                 )
                             })
-                            // Opens under the bell, at the right end of the title bar.
+                            // Opens under the bell: at the right end of the title bar, or beside the
+                            // sidebar when the bell is in its header.
                             .when(self.notices_open, |d| {
+                                let in_sidebar = self.notices_in_sidebar(cx);
                                 d.child(
                                     div()
                                         .absolute()
                                         .top(px(4.))
-                                        .right(px(8.))
+                                        .when(in_sidebar, |d| d.left(px(4.)))
+                                        .when(!in_sidebar, |d| d.right(px(8.)))
                                         .child(gpui::deferred(self.render_notices(cx)).with_priority(3)),
                                 )
                             }),

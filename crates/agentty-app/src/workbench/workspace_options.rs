@@ -73,6 +73,12 @@ impl Workbench {
         cfg!(target_os = "macos") && settings(cx).unified_header
     }
 
+    /// With the unified header the bell sits in the sidebar's own header while the sidebar shows,
+    /// leaving the title bar to the tabs; it goes back to the title bar when the sidebar is hidden.
+    pub(super) fn notices_in_sidebar(&self, cx: &gpui::App) -> bool {
+        self.unified_header(cx) && self.sidebar_open && self.page.is_none_or(Self::page_keeps_sidebar)
+    }
+
     /// The branch a workspace's card shows, for the default-branch filter.
     fn card_branch(&self, ws: &super::Workspace, cx: &gpui::App) -> Option<String> {
         let folder = self.workspace_folder(ws, cx);

@@ -1094,8 +1094,6 @@ strings! {
     "tray.ram" => ["RAM", "RAM", "RAM", "RAM"],
     "tray.waiting" => ["{n} waiting", "{n}개 대기 중", "{n} 件待機中", "{n} 个等待中"],
     "settings.notify_when_focused" => ["Notify even while Agentty is in front", "Agentty 창이 앞에 있어도 알림 표시", "Agentty が前面にあるときも通知", "Agentty 在前台时也通知"],
-    "workspaces.as_list" => ["Show as a thin list", "간략한 목록으로 보기", "コンパクトな一覧で表示", "以紧凑列表显示"],
-    "workspaces.as_cards" => ["Show as cards", "카드로 보기", "カードで表示", "以卡片显示"],
     "settings.group.basics" => ["Basics", "기본", "基本", "基本"],
     "settings.group.agents" => ["AI sessions", "AI 세션", "AI セッション", "AI 会话"],
     "settings.group.workspaces" => ["Workspaces", "작업공간", "ワークスペース", "工作区"],
