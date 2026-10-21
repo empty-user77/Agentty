@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Remote access: file paths in a terminal's output or a chat are links; tapping one opens the file in a viewer over
+  the page, one tab per file — pictures, Markdown (rendered), text and code, PDFs in a tab of their own. Only files in
+  that terminal's project folder open, nothing hidden and no key files.
 - The workspace menu (right-click a workspace, or its **⋯**) is reorganised with icons and gains: **Open In ›** an
   editor or IDE found on the computer (VS Code, Cursor, Zed, the JetBrains IDEs, Xcode …) or Finder, **Copy Path**,
   **Copy Worktree Name** / **Copy Branch Name**, **Pin** (kept at the top of its group, whatever is dragged above it),
@@ -25,6 +28,13 @@ All notable changes to this project are documented here. The format follows
   tabs saved by earlier versions come back the same way.
 - The subagent window lists running subagents first, then the most recently active, in the timeline and in the list
   alike.
+
+### Fixed
+- Linking two Claude Code sessions is reliable: a restored, resumed or `/clear`ed tab is found under the session it is
+  in now (it used to drop to a one-way handover without a word), a line drawn in Session Flow makes the same direct
+  link as a terminal's link button, a session that has just started is waited for a few seconds, and the first
+  session is told plainly to hand the other session's work over to it instead of doing it itself. A message for a
+  session showing a permission prompt or a question waits instead of answering it.
 
 ## [0.2.22] - 2026-10-19
 

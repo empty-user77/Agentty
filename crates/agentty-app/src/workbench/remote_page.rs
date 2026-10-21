@@ -109,6 +109,16 @@ impl Workbench {
                         AgentStatus::Permission(Some(what)) | AgentStatus::Question(Some(what)) => Some(what.chars().take(300).collect()),
                         _ => None,
                     };
+                    // Files the page may open from this terminal's output: in the working tree it
+                    // is in, or its workspace's folder (and that folder's tree).
+                    let dir = view.current_dir();
+                    let mut roots: Vec<std::path::PathBuf> = [Some(&dir), Some(&ws.cwd)]
+                        .into_iter()
+                        .flatten()
+                        .map(|d| agentty_bridge::worktree::tree_root(d).unwrap_or_else(|| d.clone()))
+                        .collect();
+                    roots.sort();
+                    roots.dedup();
                     sessions.push(SessionInfo {
                         pane: view.pane_id,
                         workspace: name.clone(),
@@ -124,6 +134,8 @@ impl Workbench {
                         elapsed: view.working_since.map(|t| t.elapsed().as_secs()),
                         last_activity_ms: view.last_activity_ms,
                         asks,
+                        dir,
+                        roots,
                     });
                 }
             }

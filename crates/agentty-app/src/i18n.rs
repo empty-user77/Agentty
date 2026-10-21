@@ -1605,6 +1605,12 @@ strings! {
     "flow.shared" => ["Shared {n} turns", "대화 {n}개 공유됨", "{n} 件共有済み", "已共享 {n} 轮"],
     "flow.failed" => ["Failed", "실패", "失敗", "失败"],
     "flow.direct_connected" => ["Linked with {name}; the sessions talk to each other now", "{name}와 연결했습니다. 이제 두 세션이 서로 대화합니다", "{name} と連携しました。以後はセッション同士でやり取りします", "已与 {name} 连接，两个会话将直接对话"],
+    "flow.one_way" => [
+        "These sessions can't message each other yet, so only the conversation was handed over, one way. Try linking again once both have answered a prompt.",
+        "두 세션이 아직 서로 메시지를 보낼 수 없어서 대화 내용만 한쪽으로 넘겼습니다. 둘 다 프롬프트에 한 번 답한 뒤 다시 연결해 보세요.",
+        "まだセッション同士でメッセージを送れないため、会話の内容だけを一方向に渡しました。両方がプロンプトに一度答えてから、もう一度連携してください。",
+        "这两个会话还不能互相发消息，所以只单向传递了对话内容。等两个会话都回复过一次提示后再试一次连接。"
+    ],
     "flow.resync" => ["Share again", "다시 공유", "再共有", "再次共享"],
     "flow.remove" => ["Disconnect", "연결 해제", "切断", "断开"],
     "flow.no_transcript" => ["This session has no transcript yet — send it a message first.", "아직 대화 기록이 없습니다 — 먼저 메시지를 보내세요.", "まだ会話記録がありません — 先にメッセージを送ってください。", "该会话还没有记录 — 请先发送一条消息。"],

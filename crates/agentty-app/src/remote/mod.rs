@@ -21,6 +21,7 @@
 pub mod auth;
 pub mod conn;
 pub mod devproxy;
+pub mod files;
 pub mod folders;
 pub mod http;
 pub mod server;

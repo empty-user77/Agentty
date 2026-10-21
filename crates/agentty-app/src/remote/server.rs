@@ -20,7 +20,7 @@
 
 use super::auth::{self, Lockout, Sessions};
 use super::conn::{Conn, Endpoint, Listener};
-use super::http::{self, HttpError, Request, Response};
+use super::http::{self, percent_encode, HttpError, Request, Response};
 use super::snapshot::{screen_update, PluginInfo, Screen, SessionInfo, WorkspaceInfo};
 use crate::launch::PaneKind;
 use serde::Deserialize;
@@ -70,6 +70,10 @@ const APP_JS: &str = include_str!("../../assets/remote/app.js");
 const APP_CSS: &str = include_str!("../../assets/remote/app.css");
 const ICON_SVG: &str = include_str!("../../assets/remote/icon.svg");
 const MANIFEST: &str = include_str!("../../assets/remote/manifest.webmanifest");
+/// The file editor's Markdown renderer and sanitizer, for the viewer: loaded by the page only when
+/// a Markdown file is opened.
+const MARKDOWN_JS: &str = include_str!("../../assets/markdown-preview/markdown-it.min.js");
+const PURIFY_JS: &str = include_str!("../../assets/markdown-preview/purify.min.js");
 
 /// Who and where requests may come from.
 #[derive(Debug, Clone, PartialEq)]
@@ -714,6 +718,13 @@ impl Hub {
             (true, "/manifest.webmanifest") => {
                 return Routed::Response(Response::fixed(200, "application/manifest+json", MANIFEST.as_bytes()));
             }
+            (true, "/md/markdown-it.js" | "/md/purify.js") => {
+                let script = if path == "/md/markdown-it.js" { MARKDOWN_JS } else { PURIFY_JS };
+                return Routed::Response(
+                    Response::fixed(200, "text/javascript; charset=utf-8", script.as_bytes())
+                        .with("Cache-Control", "private, max-age=604800"),
+                );
+            }
             // The app's own terminal fonts, so the page draws text as the app does; the Nerd Font
             // symbols only load when a prompt uses them (`unicode-range` in app.css). They never
             // change within a version, so the browser may keep them.
@@ -767,13 +778,16 @@ impl Hub {
         if !self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.check(&token, &login, now) {
             return Routed::Response(Response::json(401, &json!({ "error": "signed out" })));
         }
-        match (method, path) {
+        // A file is answered to HEAD as to GET (its body left out when sent): the viewer asks it of
+        // a picture before showing it, to know it is there. Nothing else streams or changes on HEAD.
+        match (if method == "HEAD" && path == "/api/file" { "GET" } else { method }, path) {
             ("POST", "/api/logout") => {
                 self.auth.lock().unwrap_or_else(|e| e.into_inner()).sessions.remove(&token);
                 self.record("remote.log.signed_out", &login, request.header("user-agent").unwrap_or(""));
                 Routed::Response(Response::json(200, &json!({ "ok": true })).with("Set-Cookie", expired_cookie(&config)))
             }
             ("GET", "/api/folders") => Routed::Response(self.folders(request, &config)),
+            ("GET", "/api/file") => Routed::Response(self.file(request)),
             ("GET", "/api/sessions") => {
                 let voice = self.voice_available();
                 let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
@@ -827,6 +841,49 @@ impl Hub {
         }
         cache.insert(ip, (Instant::now(), device.clone()));
         device
+    }
+
+    /// A file named in a terminal's output, for the page's viewer (see `files`): `pane` is the
+    /// terminal it was named in, `path` as written there. A picture or a PDF goes out as itself;
+    /// text as plain text, cut at `files::MAX_TEXT` (`X-Agentty-Cut: 1`). Opened on its own (not
+    /// in the viewer), the answer is sandboxed: an SVG's script or a page's never runs.
+    fn file(&self, request: &Request) -> Response {
+        use super::files::{self, FileError, Kind};
+        let refused = |status: u16, error: &str| Response::json(status, &json!({ "error": error }));
+        let (Some(pane), Some(path)) = (request.query_param("pane").and_then(|p| p.parse::<u64>().ok()), request.query_param("path"))
+        else {
+            return refused(400, "bad request");
+        };
+        let found = {
+            let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+            view.sessions.iter().find(|s| s.pane == pane).map(|s| (s.dir.clone(), s.roots.clone()))
+        };
+        let Some((dir, roots)) = found else { return refused(404, "no such session") };
+        let (real, kind) = match files::resolve(&path, &dir, &roots, &agentty_bridge::fsutil::home()) {
+            Ok(found) => found,
+            Err(FileError::Refused) => return refused(403, "refused"),
+            Err(FileError::NotFound) => return refused(404, "not found"),
+            Err(FileError::Unsupported) => return refused(415, "unsupported"),
+            Err(FileError::TooLarge) => return refused(413, "too large"),
+        };
+        let Ok((bytes, cut)) = files::read(&real, kind) else { return refused(404, "not found") };
+        let name = real.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let shown_as = match kind {
+            Kind::Image(_) => "image",
+            Kind::Pdf => "pdf",
+            Kind::Text { markdown: true } => "markdown",
+            Kind::Text { markdown: false } => "text",
+        };
+        let response = Response::new(200, kind.media_type(), bytes)
+            .with("Content-Disposition", format!("inline; filename*=UTF-8''{}", percent_encode(&name)))
+            .with("X-Agentty-Kind", shown_as)
+            .with("X-Agentty-Cut", if cut { "1" } else { "0" });
+        // A PDF viewer is a plugin a sandbox turns off; it runs no script of the file's own anyway.
+        if kind == Kind::Pdf {
+            response
+        } else {
+            response.with("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'")
+        }
     }
 
     fn is_session(&self, pane: u64) -> bool {
@@ -1543,6 +1600,8 @@ mod tests {
             elapsed: Some(3),
             last_activity_ms: 0,
             asks: None,
+            dir: std::path::PathBuf::new(),
+            roots: Vec::new(),
         }
     }
 
@@ -1944,6 +2003,45 @@ mod tests {
         );
         let anonymous = send(&hub, &Req::get("/api/folders").raw()).0;
         assert_eq!(anonymous, 401, "needs a session");
+        hub.shutdown();
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A file a terminal's output names: only for a signed-in page, only from that terminal's
+    /// folders, as its own kind, and sandboxed when opened on its own.
+    #[test]
+    fn files_named_in_a_terminal_open_for_a_signed_in_page() {
+        let base = std::env::temp_dir().join(format!("agentty-remote-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("project/shots")).unwrap();
+        std::fs::create_dir_all(base.join("other")).unwrap();
+        std::fs::write(base.join("project/shots/a b.png"), b"PNG").unwrap();
+        std::fs::write(base.join("project/notes.md"), "# Notes").unwrap();
+        std::fs::write(base.join("other/secret.txt"), "not yours").unwrap();
+        let project = base.canonicalize().unwrap().join("project");
+        let hub = hub("secret-password");
+        let mine = SessionInfo { dir: project.clone(), roots: vec![project.clone()], ..session(7) };
+        let other = SessionInfo { dir: base.join("other"), roots: vec![base.join("other")], ..session(8) };
+        hub.publish(Vec::new(), vec![mine, other], Vec::new());
+        let file = |pane: u64, path: &str| format!("/api/file?pane={pane}&path={}", percent_encode(path));
+        assert_eq!(send(&hub, &Req::get(&file(7, "notes.md")).raw()).0, 401, "needs a session");
+        let cookie = sign_in(&hub, "secret-password");
+        let get = |path: String| send(&hub, &Req { cookie: Some(cookie.clone()), ..Req::get(&path) }.raw());
+        let (status, head, body) = get(file(7, "notes.md"));
+        assert_eq!(status, 200);
+        assert!(head.contains("Content-Type: text/plain; charset=utf-8") && head.contains("X-Agentty-Kind: markdown"), "{head}");
+        assert!(head.contains("sandbox"), "{head}");
+        assert_eq!(body, "# Notes");
+        let (status, head, _) = get(file(7, "shots/a b.png"));
+        assert_eq!(status, 200);
+        assert!(head.contains("Content-Type: image/png") && head.contains("filename*=UTF-8''a%20b.png"), "{head}");
+        assert_eq!(get(file(7, "../other/secret.txt")).0, 404, "another terminal's folder");
+        assert_eq!(get(file(9, "notes.md")).0, 404, "no such terminal");
+        assert_eq!(get("/api/file?pane=7".into()).0, 400);
+        let (status, head, body) =
+            send(&hub, &Req { method: "HEAD", cookie: Some(cookie.clone()), ..Req::get(&file(7, "shots/a b.png")) }.raw());
+        assert_eq!((status, body.as_str()), (200, ""), "HEAD: the answer without the file");
+        assert!(head.contains("X-Agentty-Kind: image"), "{head}");
         hub.shutdown();
         let _ = std::fs::remove_dir_all(base);
     }

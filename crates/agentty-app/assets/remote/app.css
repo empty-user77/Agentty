@@ -337,3 +337,33 @@ button:disabled { opacity: .5; cursor: default; }
 .msg.lead .step { color: var(--muted); font-size: 12px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .msg.report { background: var(--panel); border-left: 3px solid var(--success); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--muted); max-height: 9.5em; overflow: hidden; }
 .chat-toggle { flex-shrink: 0; font-size: 13px; }
+
+/* File paths in a terminal's output and in chat messages: tapped, they open in the viewer. */
+.file-link { text-decoration: underline; text-decoration-color: rgba(232, 145, 45, .6); text-underline-offset: 2px; cursor: pointer; }
+.file-link:hover { text-decoration-color: var(--accent); }
+/* The viewer: files opened from the output, one tab each, over the page. */
+.viewer { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; padding-top: var(--safe-top); }
+.viewer-bar { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); background: var(--panel); min-height: 44px; }
+.viewer-tabs { flex: 1; min-width: 0; display: flex; overflow-x: auto; scrollbar-width: none; }
+.viewer-tabs::-webkit-scrollbar { display: none; }
+.viewer-tab { display: flex; align-items: center; gap: 6px; max-width: 220px; flex-shrink: 0; border: 0; border-right: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--muted); padding: 10px 8px 10px 12px; }
+.viewer-tab.active { color: var(--text); background: var(--bg); box-shadow: inset 0 -2px 0 var(--accent); }
+.viewer-tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.viewer-tab .x { color: var(--muted); font-size: 13px; padding: 0 4px; }
+.viewer-close { font-size: 18px; padding: 8px 14px; }
+.viewer-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px calc(16px + var(--safe-bottom)); }
+.viewer-body img { display: block; max-width: 100%; height: auto; margin: 0 auto; background: repeating-conic-gradient(#2a2a2a 0% 25%, #222 0% 50%) 50% / 16px 16px; }
+.viewer-body pre { margin: 0; font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.viewer-path { color: var(--muted); font-size: 12px; margin-bottom: 8px; word-break: break-all; }
+.viewer-note { color: var(--muted); font-size: 13px; margin: 8px 0; }
+.viewer-error { color: var(--muted); padding: 24px 0; text-align: center; }
+.markdown { max-width: 860px; margin: 0 auto; line-height: 1.6; word-wrap: break-word; }
+.markdown h1, .markdown h2 { border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+.markdown pre { background: var(--panel); padding: 12px; border-radius: 6px; overflow-x: auto; white-space: pre; }
+.markdown code { font-family: var(--mono); font-size: 13px; background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
+.markdown pre code { background: transparent; padding: 0; }
+.markdown a { color: var(--accent); }
+.markdown table { border-collapse: collapse; display: block; overflow-x: auto; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 4px 10px; }
+.markdown blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--muted); }
+.markdown img { max-width: 100%; }
