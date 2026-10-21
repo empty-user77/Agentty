@@ -131,7 +131,7 @@ impl Workbench {
             return None;
         }
         let ws = self.workspaces.get(self.active_workspace)?;
-        let tab = ws.tabs.get(ws.active_tab).filter(|tab| !tab.todo)?;
+        let tab = ws.tabs.get(ws.active_tab)?;
         matches!(tab.root, super::panes::PaneNode::Leaf(_)).then(|| tab.active.clone())
     }
 
