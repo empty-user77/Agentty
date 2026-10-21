@@ -28,6 +28,8 @@ pub struct CloseConfirm {
     pub synced: bool,
     /// "Also delete sync data" (off unless ticked).
     pub delete_sync: bool,
+    /// Asked from "Delete Worktree": the tree is what goes, the workspace with it.
+    pub deleting_tree: bool,
 }
 
 impl Workbench {
@@ -75,8 +77,16 @@ impl Workbench {
             return self.perform_close(target, window, cx);
         }
         let removes_workspace = !matches!(target, CloseTarget::Workspace(_)) && self.empties_workspace(&target);
-        self.close_confirm =
-            Some(CloseConfirm { target, dont_ask: false, removes_workspace, trees, remove_trees: false, synced, delete_sync: false });
+        self.close_confirm = Some(CloseConfirm {
+            target,
+            dont_ask: false,
+            removes_workspace,
+            trees,
+            remove_trees: false,
+            synced,
+            delete_sync: false,
+            deleting_tree: false,
+        });
         // The dialog takes the keyboard from the terminal behind it.
         window.focus(&self.focus_handle);
         cx.notify();
@@ -210,6 +220,20 @@ impl Workbench {
     pub(super) fn render_close_confirm(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let confirm = self.close_confirm.as_ref()?;
         let (title, body) = match &confirm.target {
+            CloseTarget::Workspace(id) if confirm.deleting_tree => (
+                t(cx, "confirm.delete_tree"),
+                tf(
+                    cx,
+                    "confirm.delete_tree_body",
+                    &[
+                        ("name", &self.workspaces.iter().find(|w| w.id == *id).map(|w| self.workspace_label(w, cx)).unwrap_or_default()),
+                        (
+                            "tree",
+                            &confirm.trees.first().and_then(|t| t.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                        ),
+                    ],
+                ),
+            ),
             _ if confirm.removes_workspace => (t(cx, "confirm.close_last_tab"), t(cx, "confirm.close_last_tab_body").to_string()),
             CloseTarget::Pane(_) => (t(cx, "confirm.close_pane"), t(cx, "confirm.close_pane_body").to_string()),
             CloseTarget::Tabs(panes) => (t(cx, "confirm.close_tab"), tf(cx, "confirm.close_tab_body", &[("n", &panes.len().to_string())])),
@@ -357,7 +381,7 @@ impl Workbench {
                             )
                         })
                         // Asked only because the workspace is synced: there is no question to silence.
-                        .when(settings(cx).confirm_close || !confirm.trees.is_empty(), |d| {
+                        .when(!confirm.deleting_tree && (settings(cx).confirm_close || !confirm.trees.is_empty()), |d| {
                             d.child(
                                 div()
                                     .id("close-confirm-dont-ask")
@@ -399,8 +423,12 @@ impl Workbench {
                                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.cancel_close(window, cx))),
                                 )
                                 .child(
-                                    button("close-confirm-ok", t(cx, "confirm.close"), true)
-                                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.confirm_close(window, cx))),
+                                    button(
+                                        "close-confirm-ok",
+                                        t(cx, if confirm.deleting_tree { "confirm.delete" } else { "confirm.close" }),
+                                        true,
+                                    )
+                                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.confirm_close(window, cx))),
                                 ),
                         ),
                 ),

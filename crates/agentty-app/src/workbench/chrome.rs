@@ -39,6 +39,10 @@ const SESSION_ROW_HEIGHT: f32 = 96.;
 const WELCOME_WIDTH: f32 = 920.;
 const WELCOME_CARD_MIN_WIDTH: f32 = 190.;
 const WELCOME_RECENT: usize = 6;
+/// How far a workspace listed under a parent is moved in, per level.
+const NEST_INDENT: f32 = 14.;
+/// A sleeping workspace's card: faded enough to read as not running, still legible.
+const SLEEPING_OPACITY: f32 = 0.45;
 
 /// What a colour swatch row colours.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -647,8 +651,10 @@ impl Workbench {
         if grouping != crate::settings::WorkspaceGrouping::Groups {
             let all = self.list_order((0..self.workspaces.len()).filter(|i| !linked.followers.contains(i)).collect(), cx);
             if grouping == crate::settings::WorkspaceGrouping::None {
-                for index in all {
-                    list = list.child(self.render_workspace_entry(index, &linked, window, cx));
+                // Pinned first and children under their parents, as in the groups.
+                for (index, depth) in self.nested_order(&all) {
+                    list =
+                        list.child(div().pl(px(NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)));
                 }
                 return list;
             }
@@ -667,8 +673,10 @@ impl Workbench {
                         .child(div().flex_1().min_w_0().truncate().t_body().font_weight(crate::theme::EMPHASIS).child(project))
                         .child(members.len().to_string()),
                 );
-                for index in members {
-                    list = list.child(div().pl_3().child(self.render_workspace_entry(index, &linked, window, cx)));
+                for (index, depth) in self.nested_order(&members) {
+                    list = list.child(
+                        div().pl(px(12. + NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)),
+                    );
                 }
             }
             return list;
@@ -697,8 +705,9 @@ impl Workbench {
             list = list.child(self.render_group_header(None, label, self.ungrouped_collapsed, ungrouped.len(), window, cx).mt_1p5());
         }
         if ungrouped_open {
-            for index in ungrouped {
-                list = list.child(self.render_workspace_entry(index, &linked, window, cx));
+            // A workspace given a parent is listed under it, indented a step per level.
+            for (index, depth) in self.nested_order(&ungrouped) {
+                list = list.child(div().pl(px(NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)));
             }
         }
         for group in &self.groups {
@@ -745,8 +754,9 @@ impl Workbench {
                         ),
                 );
             }
-            for index in members {
-                block = block.child(div().pl_3().child(self.render_workspace_entry(index, &linked, window, cx)));
+            for (index, depth) in self.nested_order(&members) {
+                block = block
+                    .child(div().pl(px(12. + NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)));
             }
             list = list.child(block);
         }
@@ -1155,8 +1165,14 @@ impl Workbench {
         // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
         // waiting for the user. A card that already carries a colour would only clash with it, so
         // there the mark sits next to the name instead.
-        let attention_bar = (summary.attention > 0 && ws.color.is_none()).then_some(Chrome::ATTENTION);
-        let attention_dot = summary.attention > 0 && ws.color.is_some();
+        // Marked unread from the menu shows the same mark, until the workspace is opened.
+        let attention = summary.attention > 0 || ws.marks.unread;
+        let attention_bar = (attention && ws.color.is_none()).then_some(Chrome::ATTENTION);
+        let attention_dot = attention && ws.color.is_some();
+        let pinned = ws.marks.pinned;
+        // Put to sleep from the menu: the whole card fades, a coloured one included, and a moon
+        // beside the name says why. Hovering brings it back to full strength to show it can wake.
+        let asleep = ws.marks.asleep && ws.tabs.is_empty();
         // Opaque, never a wash: a translucent fill over the dark chrome comes out muddy. The
         // selected card is the same colour a shade lighter, with a rim. (`fill` is already the
         // lightened tone when the card is selected.)
@@ -1169,6 +1185,7 @@ impl Workbench {
             .id(("workspace", id as usize))
             .group("workspace-row")
             .relative()
+            .when(asleep, |d| d.opacity(SLEEPING_OPACITY))
             .pl(px(10.))
             .pr_2p5()
             .map(|d| if compact { d.py_0p5() } else { d.py_1p5() })
@@ -1186,11 +1203,17 @@ impl Workbench {
             // Hover lightens rather than washes out: a translucent fill would darken a pale
             // colour back towards the chrome, and the ink was chosen for the opaque tone.
             .when(!active, |d| {
-                d.hover(|s| {
-                    s.bg(match fill {
+                d.hover(move |s| {
+                    let s = s.bg(match fill {
                         Some(color) => crate::theme::lighten(color, 0.10),
                         None => hex(Chrome::HOVER),
-                    })
+                    });
+                    // A sleeping card comes back to nearly full strength under the pointer.
+                    if asleep {
+                        s.opacity(0.85)
+                    } else {
+                        s
+                    }
                 })
             })
             .on_drag(DraggedWorkspace { id, title: title.clone().into() }, |dragged, _, _, cx| {
@@ -1278,6 +1301,8 @@ impl Workbench {
                             )
                             .child(title)
                     })
+                    .when(asleep, |d| d.child(icon("moon", 11., sub_color)))
+                    .when(pinned, |d| d.child(icon("pin", 11., sub_color)))
                     // The list view drops the branch/path line below the title to fit more
                     // workspaces on screen; the branch is still worth a glance without opening
                     // the card, so a short form of it rides along the title row instead.
@@ -1321,8 +1346,11 @@ impl Workbench {
                                             if this.just_dismissed("workspace-menu") {
                                                 return;
                                             }
-                                            this.workspace_menu_at = f32::from(event.position().y);
-                                            this.workspace_menu = if this.workspace_menu == Some(id) { None } else { Some(id) };
+                                            if this.workspace_menu == Some(id) {
+                                                this.workspace_menu = None;
+                                            } else {
+                                                this.open_workspace_menu(id, f32::from(event.position().y));
+                                            }
                                             cx.notify();
                                         }),
                                     )),
@@ -1387,7 +1415,8 @@ impl Workbench {
         let menu_open = self.workspace_menu == Some(id);
         // A card near the bottom of the sidebar would have its menu cut off by the window edge, so
         // there the menu grows upwards from the card instead of downwards.
-        let upwards = menu_open && self.workspace_menu_at + self.workspace_menu_height(cx) > f32::from(window.viewport_size().height) - 8.;
+        let upwards =
+            menu_open && self.workspace_menu_at + self.workspace_menu_height(id, cx) > f32::from(window.viewport_size().height) - 8.;
         // Deferred so the menu paints above the rows below it (e.g. the selected workspace).
         div()
             .relative()
@@ -1397,8 +1426,7 @@ impl Workbench {
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    this.workspace_menu_at = f32::from(event.position.y);
-                    this.workspace_menu = Some(id);
+                    this.open_workspace_menu(id, f32::from(event.position.y));
                     cx.notify();
                 }),
             )
@@ -1409,7 +1437,7 @@ impl Workbench {
                         .absolute()
                         .map(|d| if upwards { d.bottom(px(28.)) } else { d.top(px(28.)) })
                         .right(px(4.))
-                        .child(gpui::deferred(self.render_workspace_menu(id, window, cx)).with_priority(3)),
+                        .child(gpui::deferred(self.render_workspace_menu(id, cx)).with_priority(3)),
                 )
             })
     }
@@ -1495,7 +1523,13 @@ impl Workbench {
 
     /// Colour swatches for a workspace or a group: the eight quick ones, "none", and a palette of
     /// every shade behind "more", so a long sidebar can still give each workspace its own colour.
-    fn render_color_row(&self, prefix: &'static str, target: ColorTarget, current: Option<u32>, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn render_color_row(
+        &self,
+        prefix: &'static str,
+        target: ColorTarget,
+        current: Option<u32>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let swatch = |key: &str, color: Option<u32>, size: f32, cx: &mut Context<Self>| {
             let selected = current == color;
             div()
@@ -1567,91 +1601,6 @@ impl Workbench {
             .child(div().px_3().pt_2().pb_0p5().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "color.label")))
             .child(row)
             .when(open, |d| d.child(palette))
-    }
-
-    /// Roughly how tall the workspace menu comes out, to decide which way it opens. Measured from
-    /// what it is built of below: rows, the colour block, and the palette when it is unfolded.
-    fn workspace_menu_height(&self, cx: &gpui::App) -> f32 {
-        const ROW: f32 = 28.;
-        const COLOUR_BLOCK: f32 = 52.;
-        const PALETTE: f32 = 116.;
-        let groups = self.groups.len() as f32;
-        let palette = if matches!(self.color_palette_open, Some(ColorTarget::Workspace(_))) { PALETTE } else { 0. };
-        let group_section = if groups > 0. { 24. + groups * ROW } else { 0. };
-        let remote = if crate::settings::settings(cx).remote.feature { ROW } else { 0. };
-        // rename + colour + remote + groups + "new group" + ungroup + rule + close, inside the
-        // popover's padding.
-        12. + ROW + COLOUR_BLOCK + palette + remote + group_section + ROW * 2. + 9. + ROW
-    }
-
-    fn render_workspace_menu(&self, id: u64, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let current_group = self.workspaces.iter().find(|w| w.id == id).and_then(|w| w.group);
-        let mut menu = popover()
-            .id("workspace-menu")
-            .w(px(220.))
-            .occlude()
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                if this.workspace_menu.take().is_some() {
-                    this.note_dismissed("workspace-menu");
-                }
-                cx.notify();
-            }))
-            .child(menu_item(
-                "wm-rename",
-                t(cx, "rename"),
-                cx.listener(move |this, _: &ClickEvent, window, cx| this.start_rename(RenameTarget::Workspace(id), window, cx)),
-            ))
-            .child(self.render_color_row(
-                "wm",
-                ColorTarget::Workspace(id),
-                self.workspaces.iter().find(|w| w.id == id).and_then(|w| w.color),
-                cx,
-            ));
-        if crate::settings::settings(cx).remote.feature {
-            let hidden = self.workspaces.iter().find(|w| w.id == id).is_some_and(|w| w.remote_hidden);
-            let label = t(cx, "remote.hide_workspace");
-            menu = menu.child(menu_item(
-                "wm-remote-hidden",
-                if hidden { format!("✓ {label}") } else { label.to_string() },
-                cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_remote_hidden(id, cx)),
-            ));
-        }
-        if !self.groups.is_empty() {
-            menu = menu.child(div().px_3().pt_2().pb_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "move.to.group")));
-            for group in &self.groups {
-                let gid = group.id;
-                let label = if current_group == Some(gid) { format!("✓ {}", group.name) } else { group.name.clone() };
-                menu = menu.child(menu_item(
-                    SharedString::from(format!("wm-group-{gid}")),
-                    label,
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.move_to_group(id, Some(gid), cx)),
-                ));
-            }
-        }
-        menu.child(menu_item(
-            "wm-new-group",
-            format!("+ {}", t(cx, "new.group")),
-            cx.listener(move |this, _: &ClickEvent, window, cx| {
-                let gid = this.create_group(window, cx);
-                this.move_to_group(id, Some(gid), cx);
-            }),
-        ))
-        .when(current_group.is_some(), |d| {
-            d.child(menu_item(
-                "wm-ungroup",
-                t(cx, "remove.from.group"),
-                cx.listener(move |this, _: &ClickEvent, _, cx| this.move_to_group(id, None, cx)),
-            ))
-        })
-        .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
-        .child(menu_item(
-            "wm-close",
-            t(cx, "close.workspace"),
-            cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.workspace_menu = None;
-                this.request_close(super::confirm::CloseTarget::Workspace(id), window, cx)
-            }),
-        ))
     }
 
     /// Sessions visible under the current filter, favorites first.

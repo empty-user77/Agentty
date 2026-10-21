@@ -43,6 +43,7 @@ mod metrics;
 mod native;
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/notifications.rs")]
 mod notifications;
+mod open_in;
 mod platform;
 mod plugins;
 mod plugins_mcp;

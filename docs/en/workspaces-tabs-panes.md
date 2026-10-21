@@ -21,6 +21,22 @@ On macOS the tabs sit in the title bar next to the window buttons, with the side
 
 A workspace row shows the status of its agents, so you can see which project needs you without opening it.
 
+### The workspace menu
+
+Right-click a workspace, or click its **⋯**, for what can be done to it. Where an item works on a folder, it is the folder of the pane selected in that workspace.
+
+| Item | What it does |
+|---|---|
+| Open In › | Opens the folder in an editor or IDE found on this computer (VS Code, Cursor, Zed, the JetBrains IDEs, Xcode …) or in Finder |
+| Copy Path | Copies the folder's path |
+| Copy Worktree Name / Copy Branch Name | In a worktree of its own, its name; otherwise the branch |
+| Pin | Keeps the workspace at the top of its group |
+| Mark as Unread | Shows the attention mark on the card until you open it |
+| New Group, Move to Group ›, Remove from Group | Files the workspace in a group |
+| Set Parent Worktree… | Lists the workspace under another one you pick, indented; it moves between groups with it |
+| Sleep | Ends every program in the workspace and keeps it as it was; its card is drawn faded with a moon. Opening it again starts its tabs and continues their agent sessions |
+| Delete Worktree | Closes the workspace and removes its worktree and branch. Uncommitted changes and commits found nowhere else are kept |
+
 ## Tabs
 
 **⌘T** opens a terminal tab, **⌥⌘C** Claude Code, **⌥⌘X** Codex. The **+** menu has the same, plus the models and any other agent CLI found on your machine.
