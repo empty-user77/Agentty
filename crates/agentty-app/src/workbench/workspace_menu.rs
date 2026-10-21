@@ -197,6 +197,8 @@ impl Workbench {
         if self.workspaces[index].tabs.is_empty() {
             return;
         }
+        // Drawn faded until it wakes, and still after a restart (the mark is saved with it).
+        self.workspaces[index].marks.asleep = true;
         let snapshot = self.live_snapshot(&self.workspaces[index], cx);
         let name = self.workspace_label(&self.workspaces[index], cx);
         let ws = &mut self.workspaces[index];
@@ -258,8 +260,12 @@ impl Workbench {
     }
 
     /// The order a list of workspaces is drawn in, parents before the workspaces under them.
+    /// Pinned workspaces come first in their group whatever order the list has them in (a drag can
+    /// put another above them), each followed by the workspaces listed under it.
     pub(super) fn nested_order(&self, members: &[usize]) -> Vec<(usize, usize)> {
-        nest(members, |i| {
+        let mut members = members.to_vec();
+        members.sort_by_key(|i| !self.workspaces[*i].marks.pinned);
+        nest(&members, |i| {
             let parent = self.workspaces[i].marks.parent?;
             self.workspaces.iter().position(|w| w.id == parent)
         })

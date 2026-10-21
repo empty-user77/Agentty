@@ -3080,6 +3080,8 @@ impl Workbench {
     }
 
     fn revive(&mut self, index: usize, snapshot: WorkspaceSnapshot, cx: &mut Context<Self>) {
+        // Awake again: the card stops being drawn faded.
+        self.workspaces[index].marks.asleep = false;
         let mut tabs = Vec::new();
         let mut claimed = self.running_sessions(cx);
         let plugin_data = agentty_bridge::fsutil::data_dir().join("plugin-data");

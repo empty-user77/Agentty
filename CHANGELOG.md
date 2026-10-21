@@ -8,10 +8,11 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - The workspace menu (right-click a workspace, or its **⋯**) is reorganised with icons and gains: **Open In ›** an
   editor or IDE found on the computer (VS Code, Cursor, Zed, the JetBrains IDEs, Xcode …) or Finder, **Copy Path**,
-  **Copy Worktree Name** / **Copy Branch Name**, **Pin** (kept at the top of its group), **Mark as Unread**, **Move to
-  Group ›** as a submenu, **Set Parent Worktree…** (the workspace is listed indented under the one you pick, with a
-  search over the others), **Sleep** (ends its programs and keeps the workspace as it was; opening it starts its tabs
-  and continues their agent sessions) and **Delete Worktree**.
+  **Copy Worktree Name** / **Copy Branch Name**, **Pin** (kept at the top of its group, whatever is dragged above it),
+  **Mark as Unread**, **Move to Group ›** as a submenu, **Set Parent Worktree…** (the workspace is listed indented
+  under the one you pick, with a search over the others), **Sleep** (ends its programs and keeps the workspace as it
+  was, its card faded with a moon; opening it starts its tabs and continues their agent sessions) and **Delete
+  Worktree**.
 
 ## [0.2.22] - 2026-10-19
 

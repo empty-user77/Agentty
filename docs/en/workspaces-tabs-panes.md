@@ -31,7 +31,7 @@ Right-click a workspace, or click its **⋯**, for what can be done to it. Where
 | Mark as Unread | Shows the attention mark on the card until you open it |
 | New Group, Move to Group ›, Remove from Group | Files the workspace in a group |
 | Set Parent Worktree… | Lists the workspace under another one you pick, indented; it moves between groups with it |
-| Sleep | Ends every program in the workspace and keeps it as it was. Opening it again starts its tabs and continues their agent sessions |
+| Sleep | Ends every program in the workspace and keeps it as it was; its card is drawn faded with a moon. Opening it again starts its tabs and continues their agent sessions |
 | Delete Worktree | Closes the workspace and removes its worktree and branch. Uncommitted changes and commits found nowhere else are kept |
 
 ## Tabs

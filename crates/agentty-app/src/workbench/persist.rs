@@ -136,6 +136,9 @@ pub struct WorkspaceMarks {
     /// Marked unread by hand: the card shows the attention mark until the workspace is opened.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unread: bool,
+    /// Put to sleep from the menu: the card is drawn faded until the workspace is opened again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asleep: bool,
     /// The workspace this one is listed under (its parent working tree, as the user set it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<u64>,
@@ -685,9 +688,9 @@ mod tests {
         assert_eq!(plain.marks, WorkspaceMarks::default());
         let written = serde_json::to_string(&plain).unwrap();
         assert!(!written.contains("pinned") && !written.contains("parent"), "{written}");
-        let marked = WorkspaceSnapshot { marks: WorkspaceMarks { pinned: true, unread: true, parent: Some(7) }, ..plain };
+        let marked = WorkspaceSnapshot { marks: WorkspaceMarks { pinned: true, unread: true, asleep: true, parent: Some(7) }, ..plain };
         let back: WorkspaceSnapshot = serde_json::from_str(&serde_json::to_string(&marked).unwrap()).unwrap();
-        assert_eq!(back.marks, WorkspaceMarks { pinned: true, unread: true, parent: Some(7) });
+        assert_eq!(back.marks, WorkspaceMarks { pinned: true, unread: true, asleep: true, parent: Some(7) });
     }
 
     #[test]

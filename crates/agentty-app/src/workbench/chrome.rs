@@ -41,6 +41,8 @@ const WELCOME_CARD_MIN_WIDTH: f32 = 190.;
 const WELCOME_RECENT: usize = 6;
 /// How far a workspace listed under a parent is moved in, per level.
 const NEST_INDENT: f32 = 14.;
+/// A sleeping workspace's card: faded enough to read as not running, still legible.
+const SLEEPING_OPACITY: f32 = 0.45;
 
 /// What a colour swatch row colours.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1105,6 +1107,9 @@ impl Workbench {
         let attention_bar = (attention && ws.color.is_none()).then_some(Chrome::ATTENTION);
         let attention_dot = attention && ws.color.is_some();
         let pinned = ws.marks.pinned;
+        // Put to sleep from the menu: the whole card fades, a coloured one included, and a moon
+        // beside the name says why. Hovering brings it back to full strength to show it can wake.
+        let asleep = ws.marks.asleep && ws.tabs.is_empty();
         // Opaque, never a wash: a translucent fill over the dark chrome comes out muddy. The
         // selected card is the same colour a shade lighter, with a rim. (`fill` is already the
         // lightened tone when the card is selected.)
@@ -1117,6 +1122,7 @@ impl Workbench {
             .id(("workspace", id as usize))
             .group("workspace-row")
             .relative()
+            .when(asleep, |d| d.opacity(SLEEPING_OPACITY))
             .pl(px(10.))
             .pr_2p5()
             .map(|d| if compact { d.py_0p5() } else { d.py_1p5() })
@@ -1134,11 +1140,17 @@ impl Workbench {
             // Hover lightens rather than washes out: a translucent fill would darken a pale
             // colour back towards the chrome, and the ink was chosen for the opaque tone.
             .when(!active, |d| {
-                d.hover(|s| {
-                    s.bg(match fill {
+                d.hover(move |s| {
+                    let s = s.bg(match fill {
                         Some(color) => crate::theme::lighten(color, 0.10),
                         None => hex(Chrome::HOVER),
-                    })
+                    });
+                    // A sleeping card comes back to nearly full strength under the pointer.
+                    if asleep {
+                        s.opacity(0.85)
+                    } else {
+                        s
+                    }
                 })
             })
             .on_drag(DraggedWorkspace { id, title: title.clone().into() }, |dragged, _, _, cx| {
@@ -1226,6 +1238,7 @@ impl Workbench {
                             )
                             .child(title)
                     })
+                    .when(asleep, |d| d.child(icon("moon", 11., sub_color)))
                     .when(pinned, |d| d.child(icon("pin", 11., sub_color)))
                     // The list view drops the branch/path line below the title to fit more
                     // workspaces on screen; the branch is still worth a glance without opening
