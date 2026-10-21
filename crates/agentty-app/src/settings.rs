@@ -91,6 +91,46 @@ pub enum LinkOpener {
     InApp,
 }
 
+/// How the workspace list in the sidebar groups its workspaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceGrouping {
+    /// The groups the user made (the default).
+    #[default]
+    Groups,
+    /// One heading per project: the repository's main folder, so its worktrees sit together.
+    Project,
+    /// One flat list.
+    None,
+}
+
+/// The order of the workspaces within each part of the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceSort {
+    /// The order the user dragged them into (the default).
+    #[default]
+    Manual,
+    /// The one something last happened in first.
+    Activity,
+    /// By name.
+    Name,
+}
+
+/// The sidebar's options menu: how the workspace list is grouped, ordered and filtered.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkspaceListOptions {
+    pub grouping: WorkspaceGrouping,
+    pub sort: WorkspaceSort,
+    /// Leaves out workspaces with nothing running (asleep, or not opened since Agentty started).
+    pub hide_sleeping: bool,
+    /// Leaves out workspaces on the repository's main branch (`main` / `master`).
+    pub hide_default_branch: bool,
+    /// Leaves out the workspaces plugins made.
+    pub hide_plugin_workspaces: bool,
+}
+
 /// Where the file editor's "Open in editor" button sends a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -355,6 +395,14 @@ pub struct Settings {
     /// (and stops filtering, whatever was typed before).
     #[serde(default = "yes")]
     pub workspace_search_bar: bool,
+    /// How the workspace list is put together: grouping, order and what is left out (the
+    /// sidebar's options menu).
+    #[serde(default)]
+    pub workspace_list: WorkspaceListOptions,
+    /// Tabs sit in the title bar beside the traffic lights, with the sidebar button, instead of in
+    /// a row of their own (macOS). On by default; off brings the separate tab row back.
+    #[serde(default = "yes")]
+    pub unified_header: bool,
     /// Keep the machine awake (display and system sleep) while Agentty runs. Off by default:
     /// it costs energy, so the user turns it on for a long unattended run.
     #[serde(default)]
@@ -875,6 +923,8 @@ impl Default for Settings {
             compact_workspaces: false,
             sort_finished_to_top: false,
             workspace_search_bar: true,
+            workspace_list: WorkspaceListOptions::default(),
+            unified_header: true,
             prevent_sleep: false,
             prevent_sleep_hours: 0,
             prevent_sleep_until: 0,

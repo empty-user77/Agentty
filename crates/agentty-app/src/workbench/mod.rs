@@ -81,6 +81,7 @@ mod voice_input;
 #[cfg(windows)]
 mod webview_setup;
 mod windows_page;
+mod workspace_options;
 pub mod worktrees;
 
 use crate::agent_signal::AgentSignal;
@@ -410,6 +411,8 @@ pub struct Workbench {
     /// Where in the window the open workspace menu was asked for, so a card near the bottom of the
     /// sidebar opens its menu upwards instead of off the edge.
     workspace_menu_at: f32,
+    /// The workspace list's options menu (the settings button in its header) is open.
+    workspace_options_open: bool,
     /// Group whose right-click menu is open.
     group_menu: Option<u64>,
     /// Whose colour menu has the full palette unfolded.
@@ -819,6 +822,7 @@ impl Workbench {
             launcher_target: LaunchTarget::NewTab,
             workspace_menu: None,
             workspace_menu_at: 0.,
+            workspace_options_open: false,
             group_menu: None,
             color_palette_open: None,
             color_picking: None,
@@ -3554,7 +3558,8 @@ impl Render for Workbench {
                             .flex()
                             .flex_col()
                             // A plugin's workspace has a layout of its own (its tabs sit with its terminals).
-                            .when(plugin_workspace.is_none(), |d| d.child(self.render_tab_strip(cx)))
+                            // With the unified header the tabs are in the title bar instead.
+                            .when(plugin_workspace.is_none() && !self.unified_header(cx), |d| d.child(self.render_tab_strip(cx)))
                             .children(self.render_service_banner(cx))
                             .when_some(plugin_workspace.clone(), |d, plugin| {
                                 d.child(self.render_plugin_workspace(&plugin, main.take(), cx))

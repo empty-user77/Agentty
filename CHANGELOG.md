@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- macOS: the tabs sit in the title bar next to the window buttons, with the sidebar button beside them, so the
+  terminals get the row the tab strip took. **Tabs in the title bar** in Workspace Options turns it off.
+- Workspace Options (the **⚙** in the workspace list's header): card layout, grouping (none, your groups, or by
+  project with a repository's worktrees together), order (manual, recent activity, name) and filters for sleeping
+  workspaces, workspaces on `main` / `master` and plugin workspaces.
+
 ## [0.2.22] - 2026-10-19
 
 ### Added
