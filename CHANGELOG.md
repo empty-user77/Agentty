@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The subagent window lists running subagents first, then the most recently active, in the timeline and in the list
+  alike.
+
 ## [0.2.22] - 2026-10-19
 
 ### Added

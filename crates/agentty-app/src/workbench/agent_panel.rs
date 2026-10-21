@@ -510,7 +510,10 @@ impl Workbench {
                 return crate::ui::hint(t(cx, "collab.no_agents")).into_any_element();
             }
             let mut list = div().flex().flex_col().gap_0p5().p_1().w_full();
-            for (index, run) in runs.iter().enumerate().rev() {
+            // The order the timeline uses: running first, then the one that started last.
+            let mut order: Vec<usize> = (0..runs.len()).collect();
+            order.sort_by_key(|&i| (runs[i].finished.is_some(), std::cmp::Reverse(runs[i].started)));
+            for (index, run) in order.into_iter().map(|i| (i, &runs[i])) {
                 let seconds = run.finished.unwrap_or_else(std::time::Instant::now).duration_since(run.started).as_secs();
                 list = list.child(
                     div()
