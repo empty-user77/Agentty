@@ -56,6 +56,7 @@ Before every commit and push: stage the change in its own command, run the `secu
 - After opening or updating a pull request, and after anything lands on main (merges included), check the CI run
   (`gh run list` / `gh run watch`) and fix it if it fails.
 - Every user-facing string goes through `i18n.rs` in all four languages (en / ko / ja / zh).
+- Avoid unnecessary helper labels and descriptions in the UI. Let the layout do the explaining.
 - Every panel docked beside the terminals (files, browser, plugin, Docker, and any new one) is resizable by dragging
   its edge from the first version: a readable minimum width, the width kept in the settings, and room always left for
   the terminals. Reuse `workbench/side_panels.rs` (or the files panel's splitter) instead of a fixed width.
