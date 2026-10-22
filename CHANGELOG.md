@@ -15,6 +15,8 @@ All notable changes to this project are documented here. The format follows
 - A search box above the settings menu finds any setting by its name or description, inside closed cards too, and
   goes to it with the row marked.
 - The status bar has **Prevent sleep** with three modes: **On**, **Agents** (only while an agent works) and **Off**.
+- Settings → Agents → **Available to install**: an **Install** button runs the agent's official install command in
+  a new terminal tab, and a link opens its official page.
 
 ### Changed
 - Settings are grouped in the menu (General, AI, Work, Connections & data, System), each page says what it is for, and
@@ -23,6 +25,7 @@ All notable changes to this project are documented here. The format follows
   it on.
 - The status bar lines up in two groups: where you are on the left, tools and menus on the right.
 - A pane's own bar no longer shows its folder: the status bar under the panes already has the path.
+- Unread notifications show as a small count on the bell's corner instead of a tinted box around the bell and number.
 
 ## [0.2.24] - 2026-10-22
 

@@ -37,7 +37,7 @@ What Agentty adds to agent sessions:
 
 ## Agents
 
-The agent CLIs on this computer. **Agent permissions** sets whether Claude Code and Codex tabs start in Bypass / Full Access mode. **Installed** lists every agent found, with its version and command; turn one **Off** and it leaves the launcher, the start page and the command palette (it stays installed). **Refresh** looks again after you install one; **Available to install** lists the agents Agentty can start once their CLI is there.
+The agent CLIs on this computer. **Agent permissions** sets whether Claude Code and Codex tabs start in YOLO (Bypass) mode. **Installed** lists every agent found, with its version and command; turn one **Off** and it leaves the launcher, the start page and the command palette (it stays installed). **Refresh** looks again after you install one; **Available to install** lists the agents Agentty can start once their CLI is there: **Install** runs the vendor's own install command in a new terminal tab, and the link opens its official page (for an agent without a documented command, the page only).
 
 Open **Claude Code** for its own features, saved in Claude Code's user settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`): **Agent teams** (a lead session that starts and coordinates teammate sessions; experimental), **Always think** and **Automatic updates**. Only the key a switch stands for is written; the rest of the file stays as it is, and a file that is not valid JSON is left alone. New Claude Code sessions pick the change up. **Codex** links to its `~/.codex/config.toml`.
 

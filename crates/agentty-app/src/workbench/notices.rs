@@ -195,22 +195,21 @@ impl Workbench {
     /// Notification bell at the far right of the status bar, with the unread count.
     pub(super) fn render_notices_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let unread = self.unread_count();
-        // Gold when something is waiting: the blue sat too close to the chrome to notice, and a
-        // tinted plate behind it does what a heavier glyph would (Lucide strokes are fixed).
+        // Gold when something is waiting: the blue sat too close to the chrome to notice. The count
+        // is a badge on the bell's corner, so the button keeps the size of its neighbours.
         let color = if unread > 0 { Chrome::FAVORITE } else { Chrome::MUTED };
         div()
             .id("status-notices")
             // The same box as the other header icons, so the row reads as one set.
             .size(px(crate::ui::ICON_BUTTON))
+            .relative()
             .flex()
             .items_center()
             .justify_center()
-            .gap_0p5()
             .rounded_md()
             .flex_shrink_0()
             .cursor_pointer()
             .text_color(hex(color))
-            .when(unread > 0, |d| d.bg(hex_alpha(Chrome::FAVORITE, 0.18)))
             .when(self.notices_open, |d| d.bg(hex(Chrome::SELECTED)))
             .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
             .tooltip(crate::ui::Tooltip::text(t(cx, "tooltip.notices"), Some("⇧⌘U")))
@@ -222,8 +221,27 @@ impl Workbench {
                 this.launcher_open = false;
                 cx.notify();
             }))
-            .child(crate::ui::icon(if unread > 0 { "bell-dot" } else { "bell" }, crate::ui::IconSize::BUTTON, hex(color)))
-            .when(unread > 0, |d| d.child(div().t_caption().font_weight(crate::theme::EMPHASIS).child(unread.to_string())))
+            .child(crate::ui::icon("bell", crate::ui::IconSize::BUTTON, hex(color)))
+            .when(unread > 0, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top(px(1.))
+                        .right(px(0.))
+                        .min_w(px(13.))
+                        .h(px(13.))
+                        .px(px(3.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(hex(Chrome::FAVORITE))
+                        .text_color(hex(Chrome::ACTIVITY_BAR))
+                        .text_size(px(9.))
+                        .font_weight(crate::theme::EMPHASIS)
+                        .child(if unread > 9 { "9+".to_string() } else { unread.to_string() }),
+                )
+            })
     }
 
     pub(super) fn render_notices(&self, cx: &mut Context<Self>) -> impl IntoElement {

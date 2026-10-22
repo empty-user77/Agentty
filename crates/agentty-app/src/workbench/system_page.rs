@@ -87,7 +87,7 @@ impl Workbench {
     }
 
     /// The pane an install command of this tool is still running in, if its tab is still open.
-    fn install_tab(&self, id: &str) -> Option<crate::workbench::Pane> {
+    pub(super) fn install_tab(&self, id: &str) -> Option<crate::workbench::Pane> {
         let entity = self.system_installs.iter().find(|(tool, _)| *tool == id).map(|(_, entity)| *entity)?;
         self.all_panes().into_iter().find(|pane| pane.entity_id() == entity)
     }
@@ -97,13 +97,19 @@ impl Workbench {
     /// back to Settings → System check for each one. A second click goes to the tab already
     /// installing that tool instead of starting it over.
     fn install_tool(&mut self, tool: &Tool, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(pane) = self.install_tab(tool.id) {
+        let Some(command) = tool.install.clone() else { return };
+        self.run_install(tool.id, tool.name, command, window, cx);
+    }
+
+    /// Runs `command` in a new terminal tab titled "Install <name>", or goes to the tab already
+    /// installing `id`. Settings → Agents installs agent CLIs the same way.
+    pub(super) fn run_install(&mut self, id: &'static str, name: &str, command: String, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pane) = self.install_tab(id) {
             return self.reveal_pane(&pane, window, cx);
         }
-        let Some(command) = tool.install.clone() else { return };
-        let spec = LaunchSpec::shell_command(command, format!("Install {}", tool.name), setup_check::install_dir());
+        let spec = LaunchSpec::shell_command(command, format!("Install {name}"), setup_check::install_dir());
         if let Some(pane) = self.open_tab_behind(spec, window, cx) {
-            self.system_installs.push((tool.id, pane.entity_id()));
+            self.system_installs.push((id, pane.entity_id()));
         }
     }
 
