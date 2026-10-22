@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.25] - 2026-10-22
+
 ### Added
 - Settings → **Agents**: every agent CLI on this computer with its version, an on/off switch that takes it out of the
   launcher, the start page and the command palette, a **Refresh** button, and the agents available to install. Open
@@ -26,6 +28,7 @@ All notable changes to this project are documented here. The format follows
 - The status bar lines up in two groups: where you are on the left, tools and menus on the right.
 - A pane's own bar no longer shows its folder: the status bar under the panes already has the path.
 - Unread notifications show as a small count on the bell's corner instead of a tinted box around the bell and number.
+- The option to always start Claude Code and Codex without permission prompts is now called **YOLO (Bypass) mode**.
 
 ## [0.2.24] - 2026-10-22
 
