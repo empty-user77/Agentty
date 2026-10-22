@@ -129,6 +129,30 @@ pub fn app_is_active() -> bool {
 }
 
 /// Shows the window above others without activating Agentty (keyboard focus stays where it is).
+/// Whether AppKit moves the window when its title bar area is dragged. Off while Agentty's tabs
+/// sit there, so dragging a tab moves the tab; `perform_window_drag` moves it from the bar's empty
+/// space instead.
+pub fn set_movable(window: Id, movable: bool) {
+    unsafe {
+        let current: bool = msg_send![window, isMovable];
+        if current != movable {
+            let () = msg_send![window, setMovable: if movable { YES } else { NO }];
+        }
+    }
+}
+
+/// Moves the window with the pointer until the button is let go, as dragging a title bar does,
+/// starting from the mouse event being handled.
+pub fn perform_window_drag(window: Id) {
+    unsafe {
+        let app: Id = msg_send![objc::class!(NSApplication), sharedApplication];
+        let event: Id = msg_send![app, currentEvent];
+        if !event.is_null() {
+            let () = msg_send![window, performWindowDragWithEvent: event];
+        }
+    }
+}
+
 pub fn order_front_regardless(window: Id) {
     unsafe {
         let () = msg_send![window, orderFrontRegardless];

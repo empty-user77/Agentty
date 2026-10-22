@@ -403,6 +403,8 @@ pub struct Workbench {
     pub groups: Vec<Group>,
     /// The "ungrouped" section folds away like any group does.
     pub ungrouped_collapsed: bool,
+    /// See `LayoutState::collapsed_projects`.
+    pub collapsed_projects: Vec<String>,
     /// See `LayoutState::plugins_grouped`.
     plugins_grouped: bool,
     panel: SidePanel,
@@ -667,6 +669,9 @@ pub struct Workbench {
     _workspace_search_subscription: Subscription,
     notices: Vec<notices::Notice>,
     notices_open: bool,
+    /// Where a press on the title bar's empty space began, while the unified header is up: moving
+    /// a few points from there moves the window (a press on a tab is the tab's).
+    title_drag_from: Option<gpui::Point<gpui::Pixels>>,
     window_active: bool,
     /// This workbench's window, for the background loops to ask whether it is on screen.
     window_handle: gpui::AnyWindowHandle,
@@ -824,6 +829,7 @@ impl Workbench {
             active_workspace: 0,
             groups: Vec::new(),
             ungrouped_collapsed: false,
+            collapsed_projects: Vec::new(),
             plugins_grouped: false,
             panel: SidePanel::Workspaces,
             sidebar_open: true,
@@ -990,6 +996,7 @@ impl Workbench {
             _workspace_search_subscription: workspace_search_subscription,
             notices: Vec::new(),
             notices_open: false,
+            title_drag_from: None,
             window_active: true,
             window_handle: window.window_handle(),
             alias_form: None,
@@ -3039,6 +3046,7 @@ impl Workbench {
             workspaces,
             active_workspace: self.active_workspace,
             ungrouped_collapsed: self.ungrouped_collapsed,
+            collapsed_projects: self.collapsed_projects.clone(),
             plugins_grouped: self.plugins_grouped,
             window: self.window_state,
             panels: self.panel_state(),
@@ -3059,6 +3067,7 @@ impl Workbench {
             .map(|g| Group { id: g.id, name: g.name.clone(), collapsed: g.collapsed, color: stored_color(g.color_value, g.color) })
             .collect();
         self.ungrouped_collapsed = state.ungrouped_collapsed;
+        self.collapsed_projects = state.collapsed_projects;
         self.plugins_grouped = state.plugins_grouped;
         for mut snapshot in state.workspaces {
             self.next_id = self.next_id.max(snapshot.id + 1);

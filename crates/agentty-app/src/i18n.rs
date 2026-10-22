@@ -328,6 +328,13 @@ strings! {
     "welcome.group_label" => ["Group", "그룹", "グループ", "分组"],
     "drop.here" => ["Drop a workspace here", "작업공간을 여기로 끌어다 놓으세요", "ここにワークスペースをドロップ", "将工作区拖放到此处"],
     "group.delete" => ["Delete group", "그룹 삭제", "グループを削除", "删除分组"],
+    "group.sleep" => ["Put all to sleep", "모두 잠자기", "すべてスリープ", "全部休眠"],
+    "group.slept" => [
+        "{n} workspaces in {name} are asleep: opening one starts its tabs and sessions again",
+        "{name}에 있는 작업공간 {n}개를 재웠어요. 다시 열면 탭과 세션을 이어서 시작해요",
+        "{name} のワークスペース {n} 個をスリープしました。開くとタブとセッションが再開します",
+        "{name} 中的 {n} 个工作区已休眠：再次打开时会重新启动它们的标签页和会话"
+    ],
     "group.default" => ["Group {n}", "그룹 {n}", "グループ {n}", "分组 {n}"],
     "group.plugins" => ["Plugins", "플러그인", "プラグイン", "插件"],
     "ungrouped" => ["Ungrouped", "그룹 없음", "グループなし", "未分组"],

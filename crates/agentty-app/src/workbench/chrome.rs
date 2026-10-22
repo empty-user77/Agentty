@@ -148,6 +148,11 @@ impl Workbench {
         // The unified header: the tabs move up here, next to the sidebar button, and the bar stops
         // being a row of its own. A plugin's workspace keeps its tabs with its own layout.
         let unified = self.unified_header(cx) && self.front_plugin_workspace(cx).filter(|_| self.page.is_none()).is_none();
+        // With the tabs up here AppKit must not move the window on a drag: that drag is the tab's.
+        // The bar's empty space moves the window itself (below).
+        if let Some(ns) = crate::native::ns_window(window).filter(|_| !client_side) {
+            crate::native::set_movable(ns, !unified);
+        }
         div()
             .id("title-bar")
             .h(px(TITLE_BAR_HEIGHT))
@@ -161,16 +166,40 @@ impl Workbench {
             .border_color(hex(Chrome::BORDER))
             .t_small()
             .text_color(hex(Chrome::MUTED))
-            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, _| {
-                if event.click_count == 2 {
-                    // macOS only; Agentty's own frame maximises like a system title bar.
-                    window.titlebar_double_click();
-                    if client_side {
-                        window.zoom_window();
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, _| {
+                    if event.click_count == 2 {
+                        this.title_drag_from = None;
+                        // macOS only; Agentty's own frame maximises like a system title bar.
+                        window.titlebar_double_click();
+                        if client_side {
+                            window.zoom_window();
+                        }
+                    } else if client_side {
+                        window.start_window_move();
+                    } else if unified {
+                        // Not at once: a press on a button here is a click, not a move.
+                        this.title_drag_from = Some(event.position);
                     }
-                } else if client_side {
-                    window.start_window_move();
-                }
+                }),
+            )
+            .when(unified && !client_side, |bar| {
+                bar.on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, window, _| {
+                    let Some(from) = this.title_drag_from else { return };
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        this.title_drag_from = None;
+                        return;
+                    }
+                    let moved = event.position - from;
+                    if moved.x.abs() + moved.y.abs() > px(4.) {
+                        this.title_drag_from = None;
+                        if let Some(ns) = crate::native::ns_window(window) {
+                            crate::native::perform_window_drag(ns);
+                        }
+                    }
+                }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &gpui::MouseUpEvent, _, _| this.title_drag_from = None))
             })
             .when(client_side, |bar| {
                 bar.on_mouse_down(MouseButton::Right, |event: &MouseDownEvent, window, _| window.show_window_menu(event.position))
@@ -633,8 +662,8 @@ impl Workbench {
         // wherever they are in the list; unlinking puts them straight back. A workspace whose
         // leader is folded away is listed in its own place instead: it must never go missing.
         let mut linked = self.linked_workspaces(cx);
-        // Grouped another way than by the user's groups (the options menu): nothing folds, so every
-        // linked leader is on screen with its followers.
+        // Grouped another way than by the user's groups (the options menu): with no grouping
+        // nothing folds; projects fold like groups do.
         let grouping = settings(cx).workspace_list.grouping;
         if grouping != crate::settings::WorkspaceGrouping::Groups {
             let all = self.list_order((0..self.workspaces.len()).filter(|i| !linked.followers.contains(i)).collect(), cx);
@@ -646,21 +675,50 @@ impl Workbench {
                 }
                 return list;
             }
+            // A folded project hides its workspaces; one linked to a leader folded away is listed
+            // in its own project instead, as with groups.
+            let folded: Vec<usize> =
+                linked.members.keys().copied().filter(|leader| self.collapsed_projects.contains(&self.project_of(*leader, cx))).collect();
+            for leader in folded {
+                for follower in linked.members.remove(&leader).unwrap_or_default() {
+                    linked.followers.remove(&follower);
+                }
+            }
+            let all = self.list_order((0..self.workspaces.len()).filter(|i| !linked.followers.contains(i)).collect(), cx);
             for (project, members) in self.by_project(&all, cx) {
+                let collapsed = self.collapsed_projects.contains(&project);
+                let key = project.clone();
                 list = list.child(
                     div()
+                        .id(SharedString::from(format!("project-header-{project}")))
                         .mt_1p5()
                         .px_2()
                         .py_0p5()
                         .flex()
                         .items_center()
                         .gap_1p5()
+                        .rounded_md()
                         .t_small()
                         .text_color(hex(Chrome::MUTED))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            match this.collapsed_projects.iter().position(|p| *p == key) {
+                                Some(at) => {
+                                    this.collapsed_projects.remove(at);
+                                }
+                                None => this.collapsed_projects.push(key.clone()),
+                            }
+                            this.persist(cx);
+                            cx.notify();
+                        }))
+                        .child(if collapsed { "▸" } else { "▾" })
                         .child(icon("folder", IconSize::INLINE, hex(Chrome::MUTED)))
                         .child(div().flex_1().min_w_0().truncate().t_body().font_weight(crate::theme::EMPHASIS).child(project))
                         .child(members.len().to_string()),
                 );
+                if collapsed {
+                    continue;
+                }
                 for (index, depth) in self.nested_order(&members) {
                     list = list.child(
                         div().pl(px(12. + NEST_INDENT * depth as f32)).child(self.render_workspace_entry(index, &linked, window, cx)),
@@ -1001,9 +1059,10 @@ impl Workbench {
             }))
     }
 
-    /// Right-click menu of a group: rename it, colour it, remove it.
+    /// Right-click menu of a group: rename it, colour it, put its workspaces to sleep, remove it.
     fn render_group_menu(&self, gid: u64, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.groups.iter().find(|g| g.id == gid).and_then(|g| g.color);
+        let awake = self.workspaces.iter().any(|w| w.group == Some(gid) && !w.tabs.is_empty());
         popover()
             .id("group-menu")
             .w(px(220.))
@@ -1022,6 +1081,13 @@ impl Workbench {
             ))
             .child(self.render_color_row("gm", ColorTarget::Group(gid), current, cx))
             .child(div().my_1().h(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+            .when(awake, |d| {
+                d.child(menu_item(
+                    "gm-sleep",
+                    t(cx, "group.sleep"),
+                    cx.listener(move |this, _: &ClickEvent, window, cx| this.sleep_group(gid, window, cx)),
+                ))
+            })
             .child(menu_item(
                 "gm-delete",
                 t(cx, "group.delete"),
@@ -1160,7 +1226,9 @@ impl Workbench {
         let pinned = ws.marks.pinned;
         // Put to sleep from the menu: the whole card fades, a coloured one included, and a moon
         // beside the name says why. Hovering brings it back to full strength to show it can wake.
-        let asleep = ws.marks.asleep && ws.tabs.is_empty();
+        // Nothing running is asleep, whether put to sleep or not opened since Agentty started (the one
+        // in front is never drawn faded, even with every tab set aside in TODO).
+        let asleep = ws.tabs.is_empty() && index != self.active_workspace;
         // Opaque, never a wash: a translucent fill over the dark chrome comes out muddy. The
         // selected card is the same colour a shade lighter, with a rim. (`fill` is already the
         // lightened tone when the card is selected.)

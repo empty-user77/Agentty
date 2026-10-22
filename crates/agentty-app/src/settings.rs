@@ -293,6 +293,9 @@ pub struct Settings {
     /// Commands the user added to the run button, by project folder.
     #[serde(default)]
     pub run_configs: std::collections::BTreeMap<String, Vec<agentty_bridge::run_configs::CustomRun>>,
+    /// Run configurations started last, newest first, by project folder: the run menu lists them first.
+    #[serde(default)]
+    pub run_recent: std::collections::BTreeMap<String, Vec<String>>,
     /// Height of the run log docked under the terminals.
     pub run_log_height: f32,
     /// Height of its working-tree list once the user dragged it (0: as tall as its rows, up to a few).
@@ -881,6 +884,7 @@ impl Default for Settings {
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
             db_panel_width: crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH,
             run_configs: std::collections::BTreeMap::new(),
+            run_recent: std::collections::BTreeMap::new(),
             run_log_height: crate::workbench::log_panel::DEFAULT_HEIGHT,
             files_panel_trees_height: 0.0,
             ask_directory: true,
