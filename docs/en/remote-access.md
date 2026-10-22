@@ -33,7 +33,7 @@ You can type into the terminal directly using an on-screen key bar with Esc, Tab
 
 While you look at a terminal on the page, it takes the page's size: as many columns and lines as fit your screen, so nothing wraps or scrolls sideways. **A−** and **A+** change the text size (kept on that device). When no page shows the terminal any more, it goes back to its size in the app. The page can be added to your home screen as an app.
 
-With Slack, Discord or Telegram notifications set up (Settings → Notifications), each message also carries **Open now: <address>** while remote access is on. The address opens the page at that very terminal (after Tailscale and the web password, as always). It is sent only with **Include what the agent asks** on, since the address names your Mac and your tailnet.
+With Slack, Discord or Telegram notifications set up (Settings → Integrations), each message also carries **Open now: <address>** while remote access is on. The address opens the page at that very terminal (after Tailscale and the web password, as always). It is sent only with **Include what the agent asks** on, since the address names your Mac and your tailnet.
 
 ## Requirements
 

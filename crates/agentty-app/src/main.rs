@@ -782,6 +782,20 @@ fn main() {
             }
         })
         .detach();
+        // "Prevent sleep: while agents work": counts working agents across windows every 2 s while
+        // that mode is chosen, and holds the sleep lock while any does.
+        cx.spawn(async move |cx| loop {
+            let running = cx.update(|cx| {
+                let working = settings::settings(cx).prevent_sleep_agents
+                    && workbenches(cx).into_iter().any(|window| window.read(cx).is_ok_and(|wb| wb.tray_state(cx).working > 0));
+                settings::set_agents_working(working, cx);
+            });
+            if running.is_err() {
+                break;
+            }
+            cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+        })
+        .detach();
         cx.spawn(async move |cx| {
             let mut tray: Option<status_item::StatusItem> = None;
             loop {

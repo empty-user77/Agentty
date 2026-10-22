@@ -36,6 +36,12 @@ const THEMES_PER_ROW: usize = 4;
 pub enum SettingsSection {
     #[default]
     General,
+    /// AI features of Agentty itself: the advisor, the agent bar, guides and tasks for agents.
+    Ai,
+    /// The agent CLIs on this machine: which show in the launcher, permissions, Claude Code's features.
+    Agents,
+    /// Outside services: GitHub, chat services for notifications, Jira.
+    Integrations,
     Project,
     /// The development board: on or off, how tickets run, Jira.
     Board,
@@ -61,35 +67,37 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 15] = [
-        Self::General,
-        Self::Project,
-        Self::Board,
-        Self::Voice,
-        Self::Windows,
-        Self::Accounts,
-        Self::Notifications,
-        Self::Sync,
-        Self::Backup,
-        Self::Appearance,
-        Self::Browser,
-        Self::Aliases,
-        Self::Shortcuts,
-        Self::System,
-        Self::About,
+    /// The sidebar's groups, in order: (title, sections).
+    pub const GROUPS: [(&'static str, &'static [SettingsSection]); 5] = [
+        ("settings.nav.general", &[Self::General, Self::Appearance, Self::Shortcuts, Self::Aliases, Self::Windows]),
+        ("settings.nav.ai", &[Self::Ai, Self::Agents, Self::Accounts, Self::Voice]),
+        ("settings.nav.work", &[Self::Project, Self::Board, Self::Browser]),
+        ("settings.nav.connect", &[Self::Integrations, Self::Notifications, Self::Sync, Self::Backup]),
+        ("settings.nav.system", &[Self::System, Self::About]),
     ];
+
+    pub fn all() -> impl Iterator<Item = SettingsSection> {
+        Self::GROUPS.into_iter().flat_map(|(_, sections)| sections.iter().copied())
+    }
+
+    fn shown(self) -> bool {
+        match self {
+            Self::Browser => crate::platform::HAS_WEBVIEW,
+            _ => true,
+        }
+    }
 
     /// Sections shown on this platform (the browser settings need the macOS web view).
     fn visible() -> impl Iterator<Item = SettingsSection> {
-        Self::ALL.into_iter().filter(|s| match s {
-            Self::Browser => crate::platform::HAS_WEBVIEW,
-            _ => true,
-        })
+        Self::all().filter(|s| s.shown())
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::General => "settings.general",
+            Self::Ai => "settings.ai",
+            Self::Agents => "settings.agents",
+            Self::Integrations => "settings.integrations",
             Self::Project => "settings.project",
             Self::Board => "settings.board",
             Self::Voice => "settings.voice",
@@ -110,6 +118,9 @@ impl SettingsSection {
     fn icon(self) -> &'static str {
         match self {
             Self::General => "settings",
+            Self::Ai => "sparkles",
+            Self::Agents => "bot",
+            Self::Integrations => "plug",
             Self::Project => "folder-open",
             Self::Board => "square-kanban",
             Self::Voice => "mic",
@@ -123,7 +134,31 @@ impl SettingsSection {
             Self::Sync => "cloud",
             Self::Backup => "history",
             Self::System => "wrench",
-            Self::About => "sparkles",
+            Self::About => "info",
+        }
+    }
+
+    /// The line under the page's title: what the page is for.
+    fn description(self) -> &'static str {
+        match self {
+            Self::General => "settings.desc.general",
+            Self::Ai => "settings.desc.ai",
+            Self::Agents => "settings.desc.agents",
+            Self::Integrations => "settings.desc.integrations",
+            Self::Project => "settings.desc.project",
+            Self::Board => "settings.desc.board",
+            Self::Voice => "settings.desc.voice",
+            Self::Accounts => "settings.desc.accounts",
+            Self::Appearance => "settings.desc.appearance",
+            Self::Browser => "settings.desc.browser",
+            Self::Aliases => "settings.desc.aliases",
+            Self::Shortcuts => "settings.desc.shortcuts",
+            Self::Notifications => "settings.desc.notifications",
+            Self::Windows => "settings.desc.windows",
+            Self::Sync => "settings.desc.sync",
+            Self::Backup => "settings.desc.backup",
+            Self::System => "settings.desc.system",
+            Self::About => "settings.desc.about",
         }
     }
 }
@@ -394,17 +429,124 @@ fn build_info_section(cx: &mut Context<Workbench>) -> Div {
         )))
 }
 
+/// A group of settings: a rounded card with its title on top and its rows below, each row parted
+/// from the one before by a thin rule.
 pub(super) fn section(title: &str) -> Div {
-    div().flex().flex_col().gap_3().pb_6().child(
-        div()
-            .t_title()
-            .font_weight(crate::theme::EMPHASIS)
-            .text_color(hex(Chrome::BRIGHT))
-            .pb_1()
-            .border_b_1()
-            .border_color(hex(Chrome::BORDER))
-            .child(title.to_string()),
+    note_for_search(title, "");
+    let heading = div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title.to_string());
+    section_card().child(highlighted(title, heading))
+}
+
+/// [`section`] with a muted line under its title.
+pub(super) fn section_with_hint(title: &str, hint: &str) -> Div {
+    note_for_search(title, hint);
+    let heading = div()
+        .flex()
+        .flex_col()
+        .gap_0p5()
+        .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(title.to_string()))
+        .child(div().t_small().text_color(hex(Chrome::MUTED)).child(hint.to_string()));
+    section_card().child(highlighted(title, heading))
+}
+
+pub(super) fn section_card() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .mb_5()
+        .px_5()
+        .pt_4()
+        .pb_4()
+        .rounded_xl()
+        .border_1()
+        .border_color(hex(Chrome::BORDER))
+        .bg(hex(Chrome::PANEL))
+}
+
+/// Rows recorded for the search index: label, hint, and the card they sit in.
+type Collected = Vec<(String, String, Option<&'static str>)>;
+
+thread_local! {
+    /// While the search index is built: every row's label and hint, as the pages are put together.
+    static COLLECT: std::cell::RefCell<Option<Collected>> = const { std::cell::RefCell::new(None) };
+    /// The card (an agent's row, an integration) whose rows are being put together, so a result
+    /// found inside it opens it.
+    static CARD: Cell<Option<&'static str>> = const { Cell::new(None) };
+    /// The label of the setting a search result pointed to: that row is marked and scrolled to.
+    static HIGHLIGHT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// Frames left in which the marked row scrolls itself into view (the first one may still see
+    /// the previous page's height).
+    static SCROLL_FRAMES: Cell<u8> = const { Cell::new(0) };
+    static SCROLL: std::cell::RefCell<Option<gpui::ScrollHandle>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Records a row for the search index while it is being built; nothing otherwise.
+pub(super) fn note_for_search(label: &str, hint: &str) {
+    COLLECT.with(|collect| {
+        if let Some(rows) = collect.borrow_mut().as_mut() {
+            if !label.is_empty() || !hint.is_empty() {
+                rows.push((label.to_string(), hint.to_string(), CARD.with(Cell::get)));
+            }
+        }
+    });
+}
+
+/// Whether the search index is being built: cards then put their closed contents together too.
+pub(super) fn collecting() -> bool {
+    COLLECT.with(|c| c.borrow().is_some())
+}
+
+/// Builds the contents of card `id`; rows recorded meanwhile open that card when found.
+pub(super) fn in_card<R>(id: &'static str, build: impl FnOnce() -> R) -> R {
+    let outer = CARD.with(|c| c.replace(Some(id)));
+    let built = build();
+    CARD.with(|c| c.set(outer));
+    built
+}
+
+/// `element`, marked (and scrolled to) when `label` is what the search result pointed to.
+pub(super) fn highlighted(label: &str, element: impl IntoElement) -> gpui::AnyElement {
+    let marked = HIGHLIGHT.with(|h| h.borrow().as_deref() == Some(label));
+    if !marked {
+        return element.into_any_element();
+    }
+    let scroll = gpui::canvas(
+        |bounds, window, _| {
+            let frames = SCROLL_FRAMES.with(Cell::get);
+            if frames == 0 {
+                return;
+            }
+            SCROLL_FRAMES.with(|f| f.set(frames - 1));
+            let Some(handle) = SCROLL.with(|s| s.borrow().clone()) else { return };
+            let viewport = handle.bounds();
+            let offset = handle.offset();
+            let mut target = offset.y - (bounds.origin.y - viewport.origin.y) + px(140.);
+            let max = handle.max_offset().height;
+            if max > px(0.) {
+                target = target.max(-max);
+            }
+            handle.set_offset(gpui::point(offset.x, target.min(px(0.))));
+            window.refresh();
+        },
+        |_, _, _, _| {},
     )
+    .absolute()
+    .size_full();
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .mx(px(-8.))
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(hex_alpha(Chrome::ACCENT, 0.16))
+        .border_1()
+        .border_color(hex_alpha(Chrome::ACCENT, 0.5))
+        .child(element)
+        .child(scroll)
+        .into_any_element()
 }
 
 /// "Always" or a number of hours (1 to 72) for "Prevent sleep".
@@ -428,6 +570,22 @@ fn prevent_sleep_duration(hours: u32, cx: &mut Context<Workbench>) -> Div {
                 )))
                 .child(action_button("prevent-sleep-inc", "+", set(hours + 1)))
         })
+}
+
+/// On, while agents work, off: the same three as the status bar's menu.
+fn sleep_modes(mode: crate::settings::SleepMode, cx: &mut Context<Workbench>) -> Div {
+    let mut chips = chip_row();
+    for choice in crate::settings::SleepMode::ALL {
+        chips = chips.child(chip(
+            SharedString::from(format!("sleep-mode-{choice:?}")),
+            t(cx, choice.label_key()),
+            mode == choice,
+            move |_: &ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+                update_settings(cx, move |s| s.set_sleep_mode(choice, crate::settings::unix_now()))
+            },
+        ));
+    }
+    chips
 }
 
 /// `2시간 13분` / `2 h 13 min`; whole hours or, under an hour, minutes alone.
@@ -481,7 +639,7 @@ fn narrow() -> bool {
 }
 
 /// A row of chips. In the narrow layout it wraps onto more lines (it then sits in a column of its own width).
-fn chip_row() -> Div {
+pub(super) fn chip_row() -> Div {
     div().flex().gap_1().when(narrow(), |d| d.flex_wrap().justify_end())
 }
 
@@ -490,21 +648,33 @@ fn stacked_row(label: impl IntoElement, control: impl IntoElement) -> Div {
     div().flex().flex_col().gap_1p5().child(label).child(div().flex().justify_end().child(control))
 }
 
-fn row(label: &str, control: impl IntoElement) -> Div {
-    let label = div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string());
+/// The rule above a row and the room around it, so the rows of a card read as a list.
+fn row_frame(label: &str, row: Div) -> Div {
+    div().flex().flex_col().pt_3().border_t_1().border_color(hex(Chrome::BORDER)).child(highlighted(label, row))
+}
+
+pub(super) fn row(label: &str, control: impl IntoElement) -> Div {
+    note_for_search(label, "");
+    let text = div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string());
     if narrow() {
-        return stacked_row(label, control);
+        return row_frame(label, stacked_row(text, control));
     }
-    div().flex().items_center().justify_between().gap_4().child(label).child(control)
+    row_frame(label, div().flex().items_center().justify_between().gap_4().child(text).child(control))
 }
 
 /// A row whose label has a second, muted line explaining it.
 pub(super) fn row_with_hint(label: &str, hint: &str, control: impl IntoElement) -> Div {
-    row_with_hint_element(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string()), hint, control)
+    note_for_search(label, hint);
+    hinted_row(label, div().t_body().text_color(hex(Chrome::FOREGROUND)).child(label.to_string()), hint, control)
 }
 
 /// [`row_with_hint`] whose label is an element of its own (a link, say).
 pub(super) fn row_with_hint_element(label: impl IntoElement, hint: &str, control: impl IntoElement) -> Div {
+    note_for_search("", hint);
+    hinted_row("", label, hint, control)
+}
+
+fn hinted_row(key: &str, label: impl IntoElement, hint: &str, control: impl IntoElement) -> Div {
     let text = div()
         .flex_1()
         .min_w_0()
@@ -514,16 +684,19 @@ pub(super) fn row_with_hint_element(label: impl IntoElement, hint: &str, control
         .child(label)
         .child(div().t_small().text_color(hex(Chrome::MUTED)).child(hint.to_string()));
     if narrow() {
-        return stacked_row(text, control);
+        return row_frame(key, stacked_row(text, control));
     }
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_4()
-        // A long hint wraps inside its column: the control stays in line with those of the other rows.
-        .child(text)
-        .child(div().flex_shrink_0().child(control))
+    row_frame(
+        key,
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_4()
+            // A long hint wraps inside its column: the control stays in line with those of the other rows.
+            .child(text)
+            .child(div().flex_shrink_0().child(control)),
+    )
 }
 
 fn stepper(
@@ -1231,8 +1404,86 @@ impl Workbench {
         .detach();
     }
 
-    pub(super) fn render_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        start_settings_frame();
+    /// AI settings: what Agentty itself adds to agent sessions — the advisor, the agent bar, the
+    /// guide it gives agents, and the tasks agents may start.
+    fn render_ai_settings(&mut self, cx: &mut Context<Self>) -> Div {
+        let prefs = settings(cx).clone();
+        let mut advisors = chip_row();
+        for choice in crate::settings::AdvisorChoice::ALL {
+            advisors = advisors.child(chip(
+                SharedString::from(format!("advisor-{choice:?}")),
+                t(cx, choice.label_key()),
+                prefs.advisor == choice,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.advisor = choice)),
+            ));
+        }
+        let mut bar_positions = chip_row();
+        for (position, key) in
+            [(crate::hud::HudPosition::Top, "settings.position_top"), (crate::hud::HudPosition::Bottom, "settings.position_bottom")]
+        {
+            bar_positions = bar_positions.child(chip(
+                SharedString::from(format!("bar-position-{position:?}")),
+                t(cx, key),
+                prefs.agent_bar_position == position,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.agent_bar_position = position)),
+            ));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                section_with_hint(t(cx, "ai.advisor"), t(cx, "ai.advisor_hint"))
+                    .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
+                    .child(row_with_hint(
+                        t(cx, "ai.advisor_status"),
+                        t(cx, "ai.advisor_status_hint"),
+                        toggle("advisor-status", prefs.advisor_status, |s| s.advisor_status = !s.advisor_status, cx),
+                    )),
+            )
+            .child(
+                section_with_hint(t(cx, "settings.group.agents"), t(cx, "ai.sessions_hint"))
+                    .child(row_with_hint(
+                        t(cx, "settings.agent_bar"),
+                        t(cx, "settings.agent_bar_hint"),
+                        toggle("agent-bar", prefs.agent_bar, |s| s.agent_bar = !s.agent_bar, cx),
+                    ))
+                    .child(row_with_hint(t(cx, "settings.agent_bar_position"), t(cx, "settings.agent_bar_position_hint"), bar_positions))
+                    .child(row_with_hint(
+                        t(cx, "settings.agent_guide"),
+                        t(cx, "settings.agent_guide_hint"),
+                        toggle("agent-guide", prefs.agent_guide, |s| s.agent_guide = !s.agent_guide, cx),
+                    ))
+                    .child(row_with_hint(
+                        t(cx, "settings.agent_tasks"),
+                        t(cx, "settings.agent_tasks_hint"),
+                        toggle("agent-tasks", prefs.agent_tasks, |s| s.agent_tasks = !s.agent_tasks, cx),
+                    )),
+            )
+            .child(
+                section_with_hint(t(cx, "ai.more"), t(cx, "ai.more_hint"))
+                    .child(self.settings_link_row("ai-link-agents", SettingsSection::Agents, "ai.link_agents_hint", cx))
+                    .child(self.settings_link_row("ai-link-accounts", SettingsSection::Accounts, "ai.link_accounts_hint", cx))
+                    .child(self.settings_link_row("ai-link-voice", SettingsSection::Voice, "ai.link_voice_hint", cx)),
+            )
+    }
+
+    /// A row that opens another section of the settings.
+    fn settings_link_row(&self, id: &'static str, section: SettingsSection, hint: &'static str, cx: &mut Context<Self>) -> Div {
+        row_with_hint(
+            t(cx, section.label()),
+            t(cx, hint),
+            crate::ui::action_button_with_icon(
+                id,
+                section.icon(),
+                t(cx, "settings.open"),
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.open_settings_section(section, cx)),
+            ),
+        )
+    }
+
+    /// The page of one section (its rows, without the title). Also called for every section while
+    /// the search index is built, with [`COLLECT`] set to gather the rows.
+    fn settings_content(&mut self, section_id: SettingsSection, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let aliases = self.render_aliases(window, cx);
         let prefs = settings(cx).clone();
         let themes = cx.global::<SettingsStore>().themes.clone();
@@ -1364,28 +1615,6 @@ impl Workbench {
             list
         });
 
-        let mut advisors = chip_row();
-        for choice in crate::settings::AdvisorChoice::ALL {
-            advisors = advisors.child(chip(
-                SharedString::from(format!("advisor-{choice:?}")),
-                t(cx, choice.label_key()),
-                prefs.advisor == choice,
-                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.advisor = choice)),
-            ));
-        }
-
-        let mut bar_positions = chip_row();
-        for (position, key) in
-            [(crate::hud::HudPosition::Top, "settings.position_top"), (crate::hud::HudPosition::Bottom, "settings.position_bottom")]
-        {
-            bar_positions = bar_positions.child(chip(
-                SharedString::from(format!("bar-position-{position:?}")),
-                t(cx, key),
-                prefs.agent_bar_position == position,
-                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.agent_bar_position = position)),
-            ));
-        }
-
         let mut cursors = chip_row();
         for (shape, key) in [
             (CursorShapeSetting::Block, "settings.cursor.block"),
@@ -1402,8 +1631,7 @@ impl Workbench {
             ));
         }
 
-        let section_id = self.settings_section;
-        let content: gpui::AnyElement = match section_id {
+        match section_id {
             // Grouped, not one long column: the sections say what each switch is about, and every
             // hint is one line so a row stays scannable.
             SettingsSection::General => div()
@@ -1429,35 +1657,6 @@ impl Workbench {
                                 let on = !crate::settings::settings(cx).remote.feature;
                                 crate::remote::set_feature(on, cx);
                             }),
-                        )),
-                )
-                .child(
-                    section(t(cx, "settings.group.agents"))
-                        .child(row_with_hint(t(cx, "advisor.setting"), t(cx, "advisor.setting_hint"), advisors))
-                        .child(row_with_hint(
-                            t(cx, "settings.agent_bar"),
-                            t(cx, "settings.agent_bar_hint"),
-                            toggle("agent-bar", prefs.agent_bar, |s| s.agent_bar = !s.agent_bar, cx),
-                        ))
-                        .child(row_with_hint(
-                            t(cx, "settings.agent_bar_position"),
-                            t(cx, "settings.agent_bar_position_hint"),
-                            bar_positions,
-                        ))
-                        .child(row_with_hint(
-                            t(cx, "settings.agent_guide"),
-                            t(cx, "settings.agent_guide_hint"),
-                            toggle("agent-guide", prefs.agent_guide, |s| s.agent_guide = !s.agent_guide, cx),
-                        ))
-                        .child(row_with_hint(
-                            t(cx, "settings.agent_tasks"),
-                            t(cx, "settings.agent_tasks_hint"),
-                            toggle("agent-tasks", prefs.agent_tasks, |s| s.agent_tasks = !s.agent_tasks, cx),
-                        ))
-                        .child(row_with_hint(
-                            t(cx, "settings.always_bypass"),
-                            t(cx, "settings.always_bypass_hint"),
-                            toggle("always-bypass", prefs.always_bypass, |s| s.always_bypass = !s.always_bypass, cx),
                         )),
                 )
                 .child(
@@ -1507,19 +1706,13 @@ impl Workbench {
                             } else if let Some(left) = prefs.prevent_sleep_left(crate::settings::unix_now()) {
                                 tf(cx, "settings.prevent_sleep_left", &[("time", &hours_minutes(left, cx))])
                             } else {
-                                t(cx, "settings.prevent_sleep_hint").to_string()
+                                t(cx, prefs.sleep_mode().hint_key()).to_string()
                             },
-                            toggle(
-                                "prevent-sleep",
-                                prefs.prevent_sleep,
-                                |s| {
-                                    let on = !s.prevent_sleep;
-                                    s.set_prevent_sleep(on, crate::settings::unix_now())
-                                },
-                                cx,
-                            ),
+                            sleep_modes(prefs.sleep_mode(), cx),
                         ))
-                        .child(row(t(cx, "settings.prevent_sleep_for"), prevent_sleep_duration(prefs.prevent_sleep_hours, cx)))
+                        .when(prefs.prevent_sleep, |d| {
+                            d.child(row(t(cx, "settings.prevent_sleep_for"), prevent_sleep_duration(prefs.prevent_sleep_hours, cx)))
+                        })
                         .child(row_with_hint(
                             t(cx, "settings.analytics"),
                             t(cx, "settings.analytics_hint"),
@@ -1685,72 +1878,330 @@ impl Workbench {
             SettingsSection::System => self.render_system_check(cx).into_any_element(),
             SettingsSection::Browser => self.render_browser_settings(window, cx).into_any_element(),
             SettingsSection::About => self.render_about(cx).into_any_element(),
-        };
-
-        let mut nav = div()
-            .w(px(210.))
-            .flex_shrink_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .gap_0p5()
-            .p_3()
-            .border_r_1()
-            .border_color(hex(Chrome::BORDER))
-            .bg(hex(Chrome::SIDE_BAR));
-        for section in SettingsSection::visible() {
-            let active = section == section_id;
-            nav = nav.child(
-                div()
-                    .id(SharedString::from(format!("settings-nav-{section:?}")))
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .t_body()
-                    .cursor_pointer()
-                    .when(active, |d| d.bg(hex(Chrome::SELECTED)).text_color(hex(Chrome::BRIGHT)))
-                    .when(!active, |d| d.text_color(hex(Chrome::FOREGROUND)).hover(|s| s.bg(hex(Chrome::HOVER))))
-                    .child(crate::ui::icon(
-                        section.icon(),
-                        crate::ui::IconSize::INLINE,
-                        hex(if active { Chrome::BRIGHT } else { Chrome::MUTED }),
-                    ))
-                    .child(div().flex_1().min_w_0().truncate().child(t(cx, section.label())))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.settings_section = section;
-                        this.settings_scroll = gpui::ScrollHandle::new();
-                        cx.notify();
-                    })),
-            );
+            SettingsSection::Ai => self.render_ai_settings(cx).into_any_element(),
+            SettingsSection::Agents => self.render_agents_settings(cx).into_any_element(),
+            SettingsSection::Integrations => self.render_integrations(window, cx).into_any_element(),
         }
+    }
 
+    pub(super) fn render_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        start_settings_frame();
+        let section_id = self.settings_section;
+        SCROLL.with(|s| *s.borrow_mut() = Some(self.settings_scroll.clone()));
+        HIGHLIGHT.with(|h| *h.borrow_mut() = self.settings_ui.highlight.clone());
+        let content = self.settings_content(section_id, window, cx);
+        let nav = self.render_settings_nav(section_id, window, cx);
         let scroll = self.settings_scroll.clone();
         div().size_full().flex().bg(hex(Chrome::EDITOR)).child(nav).child(
             div().relative().group(crate::ui::SCROLL_GROUP).flex_1().min_w_0().h_full().child(crate::ui::scrollbar(scroll.clone())).child(
                 div().id("settings-page").size_full().overflow_y_scroll().track_scroll(&scroll).child(
                     div()
                         .relative()
-                        .max_w(px(820.))
+                        .max_w(px(860.))
                         .px_8()
-                        .py_6()
+                        .pt_8()
+                        .pb_10()
                         .flex()
                         .flex_col()
                         .child(measure_settings_column())
                         .child(
                             div()
-                                .t_heading()
-                                .font_weight(crate::theme::EMPHASIS)
-                                .text_color(hex(Chrome::BRIGHT))
+                                .flex()
+                                .flex_col()
+                                .gap_1()
                                 .pb_5()
-                                .child(t(cx, section_id.label())),
+                                .mb_6()
+                                .border_b_1()
+                                .border_color(hex(Chrome::BORDER))
+                                .child(
+                                    div()
+                                        .t_heading()
+                                        .font_weight(crate::theme::EMPHASIS)
+                                        .text_color(hex(Chrome::BRIGHT))
+                                        .child(t(cx, section_id.label())),
+                                )
+                                .child(div().t_body().text_color(hex(Chrome::MUTED)).child(t(cx, section_id.description()))),
                         )
                         .child(content),
                 ),
             ),
         )
+    }
+
+    /// Opens a section from outside the page (a link on another page, a notice).
+    pub(super) fn open_settings_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        self.page = Some(super::Page::Settings);
+        self.settings_section = section;
+        self.settings_scroll = gpui::ScrollHandle::new();
+        self.settings_ui.highlight = None;
+        cx.notify();
+    }
+
+    fn settings_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextInput> {
+        if let Some(input) = &self.settings_ui.search {
+            return input.clone();
+        }
+        let input = cx.new(|cx| TextInput::localized("", "settings.search_placeholder", window, cx));
+        let subscription = cx.subscribe(&input, |this, input, event: &TextInputEvent, cx| match event {
+            TextInputEvent::Changed => {
+                this.settings_ui.query = input.read(cx).text().trim().to_string();
+                cx.notify();
+            }
+            TextInputEvent::Cancelled => {
+                input.update(cx, |input, cx| input.set_text("", cx));
+                this.settings_ui.query.clear();
+                cx.notify();
+            }
+            _ => {}
+        });
+        self.settings_ui.search = Some(input.clone());
+        self.settings_ui.search_subscription = Some(subscription);
+        input
+    }
+
+    /// Every row of every page, with its section, for the current language: built by putting each
+    /// page together once with the rows recorded, the first time something is searched for.
+    fn settings_index(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<SearchHit> {
+        let language = settings(cx).language;
+        if let Some((built_for, hits)) = &self.settings_ui.index {
+            if *built_for == language {
+                return hits.clone();
+            }
+        }
+        let mut hits = Vec::new();
+        for section in SettingsSection::visible() {
+            hits.push(SearchHit {
+                section,
+                label: t(cx, section.label()).to_string(),
+                hint: t(cx, section.description()).to_string(),
+                card: None,
+            });
+            COLLECT.with(|c| *c.borrow_mut() = Some(Vec::new()));
+            let _ = self.settings_content(section, window, cx);
+            let rows = COLLECT.with(|c| c.borrow_mut().take()).unwrap_or_default();
+            let mut seen = std::collections::HashSet::new();
+            for (label, hint, card) in rows {
+                if seen.insert((label.clone(), hint.clone())) {
+                    hits.push(SearchHit { section, label, hint, card });
+                }
+            }
+        }
+        self.settings_ui.index = Some((language, hits.clone()));
+        hits
+    }
+
+    fn render_settings_nav(&mut self, section_id: SettingsSection, window: &mut Window, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let input = self.settings_search_input(window, cx);
+        let query = self.settings_ui.query.clone();
+        let search = self.render_search_box("settings-search", &input, false, cx);
+        let mut nav = div()
+            .id("settings-nav")
+            .w(px(228.))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .px_3()
+            .pt_4()
+            .pb_3()
+            .overflow_y_scroll()
+            .border_r_1()
+            .border_color(hex(Chrome::BORDER))
+            .bg(hex(Chrome::SIDE_BAR))
+            .child(search.w(px(204.)).pb_2());
+        let item = |id: SharedString, glyph: &'static str, label: String, sub: Option<String>, active: bool| {
+            div()
+                .id(id)
+                .px_2p5()
+                .py_1p5()
+                .rounded_md()
+                .flex()
+                .items_center()
+                .gap_2()
+                .t_body()
+                .cursor_pointer()
+                .when(active, |d| d.bg(hex(Chrome::SELECTED)).text_color(hex(Chrome::BRIGHT)))
+                .when(!active, |d| d.text_color(hex(Chrome::FOREGROUND)).hover(|s| s.bg(hex(Chrome::HOVER))))
+                .child(crate::ui::icon(glyph, crate::ui::IconSize::INLINE, hex(if active { Chrome::BRIGHT } else { Chrome::MUTED })))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().truncate().child(label))
+                        .children(sub.map(|sub| div().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(sub))),
+                )
+        };
+        if !query.is_empty() {
+            let words: Vec<String> = query.to_lowercase().split_whitespace().map(str::to_string).collect();
+            let hits: Vec<SearchHit> = self
+                .settings_index(window, cx)
+                .into_iter()
+                .filter(|hit| {
+                    let text = format!("{} {} {}", hit.label, hit.hint, t(cx, hit.section.label())).to_lowercase();
+                    words.iter().all(|word| text.contains(word.as_str()))
+                })
+                .take(60)
+                .collect();
+            nav = nav.child(div().px_2p5().pt_1().pb_1().t_caption().text_color(hex(Chrome::MUTED)).child(tf(
+                cx,
+                "settings.search_results",
+                &[("n", &hits.len().to_string())],
+            )));
+            if hits.is_empty() {
+                nav = nav.child(div().px_2p5().py_2().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "settings.search_none")));
+            }
+            for (index, hit) in hits.into_iter().enumerate() {
+                let is_page = hit.label == t(cx, hit.section.label());
+                let label = if hit.label.is_empty() { hit.hint.clone() } else { hit.label.clone() };
+                let target = (!is_page && !hit.label.is_empty()).then(|| hit.label.clone());
+                let (section, card) = (hit.section, hit.card);
+                let active = section == section_id && self.settings_ui.highlight == target;
+                nav = nav.child(
+                    item(
+                        SharedString::from(format!("settings-hit-{index}")),
+                        section.icon(),
+                        label,
+                        Some(t(cx, section.label()).to_string()),
+                        active,
+                    )
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_search_hit(section, card, target.clone(), cx))),
+                );
+            }
+            return nav;
+        }
+        for (group, sections) in SettingsSection::GROUPS {
+            let shown: Vec<SettingsSection> = sections.iter().copied().filter(|s| s.shown()).collect();
+            if shown.is_empty() {
+                continue;
+            }
+            nav = nav.child(
+                div()
+                    .px_2p5()
+                    .pt_3()
+                    .pb_1()
+                    .t_caption()
+                    .font_weight(crate::theme::EMPHASIS)
+                    .text_color(hex(Chrome::MUTED))
+                    .child(t(cx, group)),
+            );
+            for section in shown {
+                let active = section == section_id;
+                nav = nav.child(
+                    item(
+                        SharedString::from(format!("settings-nav-{section:?}")),
+                        section.icon(),
+                        t(cx, section.label()).to_string(),
+                        None,
+                        active,
+                    )
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_settings_section(section, cx))),
+                );
+            }
+        }
+        nav
+    }
+
+    /// Goes to a search result: its page, and the row it names marked and scrolled into view.
+    pub(super) fn open_search_hit(
+        &mut self,
+        section: SettingsSection,
+        card: Option<&'static str>,
+        target: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(card) = card {
+            match section {
+                SettingsSection::Integrations => self.settings_ui.integrations_open.insert(card),
+                _ => self.settings_ui.agents_open.insert(card),
+            };
+        }
+        if self.settings_section != section {
+            self.settings_section = section;
+            self.settings_scroll = gpui::ScrollHandle::new();
+        }
+        if target.is_none() {
+            self.settings_scroll.set_offset(gpui::point(px(0.), px(0.)));
+        }
+        SCROLL_FRAMES.with(|f| f.set(if target.is_some() { 3 } else { 0 }));
+        self.settings_ui.highlight = target;
+        cx.notify();
+    }
+
+    /// Debug driver: `settings-search <query>` types into the search box; `settings-search-open <n>`
+    /// opens the n-th result.
+    pub(super) fn debug_settings_search(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = Some(super::Page::Settings);
+        let input = self.settings_search_input(window, cx);
+        let text = query.to_string();
+        input.update(cx, |input, cx| input.set_text(text, cx));
+        self.settings_ui.query = query.trim().to_string();
+        let words: Vec<String> = self.settings_ui.query.to_lowercase().split_whitespace().map(str::to_string).collect();
+        let hits: Vec<SearchHit> = self
+            .settings_index(window, cx)
+            .into_iter()
+            .filter(|hit| {
+                let text = format!("{} {} {}", hit.label, hit.hint, t(cx, hit.section.label())).to_lowercase();
+                words.iter().all(|word| text.contains(word.as_str()))
+            })
+            .collect();
+        eprintln!(
+            "settings-search: {} hits: {:?}",
+            hits.len(),
+            hits.iter().take(12).map(|h| format!("{:?}/{}", h.section, h.label)).collect::<Vec<_>>()
+        );
+        self.settings_ui.last_hits = hits.into_iter().map(|h| (h.section, h.card, h.label)).collect();
+        cx.notify();
+    }
+
+    pub(super) fn debug_settings_search_open(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some((section, card, label)) = self.settings_ui.last_hits.get(index).cloned() {
+            let target = (label != t(cx, section.label())).then_some(label);
+            self.open_search_hit(section, card, target, cx);
+        }
+    }
+}
+
+/// One search result: a page, or a row on it.
+#[derive(Clone)]
+struct SearchHit {
+    section: SettingsSection,
+    label: String,
+    hint: String,
+    /// The card it sits in, opened when the result is chosen.
+    card: Option<&'static str>,
+}
+
+/// The settings page's own state: the search box, its index and the row a result pointed to, and
+/// what the agents and integrations pages have read or opened.
+#[derive(Default)]
+pub struct SettingsUi {
+    search: Option<Entity<TextInput>>,
+    search_subscription: Option<Subscription>,
+    query: String,
+    index: Option<(Language, Vec<SearchHit>)>,
+    /// The label of the row a search result pointed to.
+    highlight: Option<String>,
+    /// The debug driver's last results.
+    last_hits: Vec<(SettingsSection, Option<&'static str>, String)>,
+    /// Claude Code's features as last read from its settings file, or why that failed.
+    pub(super) claude_features: Option<Result<Vec<(agentty_bridge::claude_features::ClaudeFeature, bool)>, String>>,
+    pub(super) claude_features_busy: bool,
+    /// The agent rows opened to show their details.
+    pub(super) agents_open: std::collections::HashSet<&'static str>,
+    /// The integration cards opened to show their setup.
+    pub(super) integrations_open: std::collections::HashSet<&'static str>,
+    /// What `gh` said; `None` until it has been asked.
+    pub(super) github: Option<agentty_bridge::clone::GhStatus>,
+    pub(super) github_checking: bool,
+}
+
+impl SettingsUi {
+    /// Forgets the search index (the pages changed: an agent was installed, a service connected).
+    pub(super) fn reindex(&mut self) {
+        self.index = None;
     }
 }
 

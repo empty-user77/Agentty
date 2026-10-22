@@ -63,7 +63,7 @@ Agentty stores its files in `~/.agentty/`. Most settings are available in **Sett
 | `browser.autoOpenServers` | A local server started in a tab opens in the in-app browser once it answers with a page (only while links open in-app) |
 | `fontFamily` | The font terminals, diffs and the editor use. Empty (the default) until one is picked: then, on macOS, D2Coding for someone using Agentty in Korean who has it installed, otherwise the bundled JetBrains Mono (always on Windows and Linux). Settings → Terminal Style → Font, where "Default" goes back to empty |
 | `agentBarPosition` | `top` (default) or `bottom`: the AI CLI status bar, and the header of a split pane, above the terminal or under it |
-| `hud` | Items of the AI CLI status bar in order: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `worktree`, `branch`, `folder`. `model`, `context`, `status`, `branch` and `spacer` cannot be hidden. Easier in Settings → Appearance → Status bar |
+| `hud` | Items of the AI CLI status bar in order: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `worktree`, `branch`. `model`, `context`, `status`, `branch` and `spacer` cannot be hidden. Easier in Settings → Appearance → Status bar |
 | `harnessDetect` | Offer to start work through a project's agent harness (see below) |
 | `harnessPatterns` | Extra harness patterns, relative to the project (`*` within a name, `**` any folders) |
 | `harnessSubmit` | Send the harness prompt right away (`false`: only type it in) |

@@ -65,7 +65,7 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 | `agentBarPosition` | `top` 또는 `bottom` |
 | `workspaceSearchBar` | 작업공간 목록 위 검색창. 이름과 그 안에서 나눈 대화를 검색(기본 켬) |
 | `sortFinishedToTop` | 에이전트가 끝낸 작업공간을 맨 위로 올림(기본 끔. 끄면 직접 정리한 순서 유지) |
-| `hud` | 상태 바 항목 순서: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `worktree`, `branch`, `folder` |
+| `hud` | 상태 바 항목 순서: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `worktree`, `branch` |
 | `browser.autoOpenServers` | 개발 서버가 응답하면 인앱 브라우저에서 열기 |
 | `linkOpener` | ⌘-클릭이 인앱 브라우저를 쓸지 기본 브라우저를 쓸지 |
 | `externalEditor` | `auto`, `vsCode`, `cursor`, `system` |
@@ -75,6 +75,9 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 | `chatNotify.slackChannel`, `chatNotify.discordChannel` | 봇이 쓸 채널. Slack은 `#general`·`general`·채널 ID, Discord는 채널 ID |
 | `analytics` | 익명 사용 통계 동의. `false`이거나 `DO_NOT_TRACK=1`이면 아무것도 보내지 않음 |
 | `menuBar` | 메뉴 바 아이콘(macOS) |
+| `advisorStatus` | Claude 탭 상태바의 Advisor 표시(기본 꺼짐) |
+| `hiddenAgents` | 설정 → 에이전트에서 비활성으로 둔 에이전트 id(`claude`, `codex`, `gemini` 등). 실행 메뉴, 시작 화면, 팔레트에서 빠짐 |
+| `preventSleep`, `preventSleepAgents` | 기기를 항상, 또는 에이전트가 작업하는 동안만 깨워 둠 |
 
 ## 사용자 명령
 

@@ -5,6 +5,8 @@ description: What each page of Settings (⌘,) does.
 
 **⌘,** opens Settings. Changes apply immediately and are saved to `~/.agentty/settings.json`.
 
+The sidebar groups the pages: **General**, **AI**, **Work**, **Connections & data** and **System**. The search box above it finds any setting by its name or its description, on every page — choose a result to go to that page with the setting marked.
+
 ## General
 
 Language (English, 한국어, 日本語, 中文), **Appearance** (System, Dark or Light — System follows macOS as it switches; terminals keep the theme from Terminal Style either way), and the behavior of the things you meet daily:
@@ -12,17 +14,40 @@ Language (English, 한국어, 日本語, 中文), **Appearance** (System, Dark o
 | Setting | What it does |
 |---|---|
 | Build my idea | Offers the idea page on the start screen and in the + menu |
-| Agent status bar | The bar above AI panes, and whether it sits above or below the terminal |
 | Confirm close | Ask before closing a pane, tab or workspace that was used |
 | Own worktree per session | A second session in a busy project gets its own git worktree |
 | Search box above the workspace list | Searches workspace names and the conversations held in them |
 | Move a finished workspace to the top | Off keeps the order you arranged yourself |
-| Parallel tasks | Agents may ask to start tasks in split panes; you confirm each request |
-| Tell agents what Agentty offers | Agents started here get a short guide to Agentty's commands, passed on the command line |
 | Stop servers on close | Closing a pane stops the local servers started in it |
 | Share anonymous usage statistics | See [Telemetry](/docs/telemetry) |
 | Menu bar icon | Keeps Agentty running after you close the window (macOS) |
-| Prevent sleep | Keeps the machine awake so a long unattended run is not cut short — always, or for a set 1 to 72 hours. Uses more power |
+| Prevent sleep | **On** keeps the machine awake (always, or for a set 1 to 72 hours), **Agents** only while an agent is working, **Off** lets it sleep as usual. Also in the status bar: click the cup |
+
+## AI settings
+
+What Agentty adds to agent sessions:
+
+| Setting | What it does |
+|---|---|
+| Claude advisor | The [advisor](/docs/advisor) new Claude tabs start with |
+| Show the advisor in the status bar | Off by default. On, the status bar of a Claude tab shows its advisor and lets you change it for that tab |
+| AI CLI status bar | The bar above AI panes, and whether it sits above or below the terminal |
+| Tell agents what Agentty offers | Agents started here get a short guide to Agentty's commands, passed on the command line |
+| Parallel tasks | Agents may ask to start tasks in split panes; you confirm each request |
+
+## Agents
+
+The agent CLIs on this computer. **Agent permissions** sets whether Claude Code and Codex tabs start in Bypass / Full Access mode. **Installed** lists every agent found, with its version and command; turn one **Off** and it leaves the launcher, the start page and the command palette (it stays installed). **Refresh** looks again after you install one; **Available to install** lists the agents Agentty can start once their CLI is there.
+
+Open **Claude Code** for its own features, saved in Claude Code's user settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`): **Agent teams** (a lead session that starts and coordinates teammate sessions; experimental), **Always think** and **Automatic updates**. Only the key a switch stands for is written; the rest of the file stays as it is, and a file that is not valid JSON is left alone. New Claude Code sessions pick the change up. **Codex** links to its `~/.codex/config.toml`.
+
+## Integrations
+
+The outside services Agentty works with, one card each with whether it is connected; open a card to set it up.
+
+- **GitHub** — pull requests, cloning and sync go through the GitHub CLI (`gh`) and its own sign-in; nothing is stored in Agentty. **Sign in in a terminal** runs `gh auth login` in a new tab.
+- **Slack, Discord, Telegram** — where notifications are sent. A webhook URL or a bot token goes into the system credential store; **Send notifications here** turns one service on or off. What is sent is set in Notifications.
+- **Jira** — the site, email and API token the development board imports tickets with.
 
 ## Project
 
@@ -46,7 +71,7 @@ The full list, in your platform's notation. See [Keyboard shortcuts](/docs/keybo
 
 ## Notifications
 
-System notifications, whether to notify while Agentty is in front, and chat notifications to Slack, Discord or Telegram. See [Agent status](/docs/agent-status).
+System notifications, whether to notify while Agentty is in front, and what goes to chat services: finished turns too, the request's details, sessions on screen. The services themselves — Slack, Discord, Telegram — are connected in **Integrations**. See [Agent status](/docs/agent-status).
 
 ## Sync
 

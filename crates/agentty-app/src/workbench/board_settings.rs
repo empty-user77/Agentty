@@ -8,7 +8,7 @@ use crate::settings::{update_settings, BoardAgent, BoardCleanup, BoardRunMode, B
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, Chrome};
 use crate::ui::{action_button, chip, TypeScale};
-use gpui::{div, prelude::*, px, AppContext, ClickEvent, Context, Entity, Focusable, Subscription, Window};
+use gpui::{div, prelude::*, px, AppContext, ClickEvent, Context, Div, Entity, Focusable, Subscription, Window};
 
 /// The Jira fields of the settings page, kept across renders.
 pub struct JiraFields {
@@ -161,7 +161,7 @@ impl Workbench {
     }
 
     /// Looks up once, in the background, whether a token is saved.
-    fn check_jira_token_saved(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn check_jira_token_saved(&mut self, cx: &mut Context<Self>) {
         if self.board_jira.token_saved.is_some() || self.board_jira.token_checking {
             return;
         }
@@ -197,7 +197,7 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(super) fn render_board_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_board_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let prefs = crate::settings::settings(cx).board.clone();
         let set = |change: fn(&mut crate::settings::BoardSettings)| {
             move |_: &ClickEvent, _: &mut Window, cx: &mut gpui::App| update_settings(cx, move |s| change(&mut s.board))
@@ -297,12 +297,43 @@ impl Workbench {
                 )),
         );
 
-        let mut jira = section("Jira").child(row_with_hint(
+        // Jira is connected in Settings → Integrations; the board only says whether it is.
+        let jira_state = match self.jira_connected(cx) {
+            Some(true) if prefs.jira.enabled => t(cx, "board.jira_in_use").to_string(),
+            Some(true) => t(cx, "board.jira_connected_off").to_string(),
+            _ => t(cx, "board.jira_not_connected").to_string(),
+        };
+        let jira = section("Jira").child(row_with_hint(
+            t(cx, "board.jira_enable"),
+            &jira_state,
+            action_button(
+                "board-open-integrations",
+                t(cx, "chat.open_integrations"),
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.settings_ui.integrations_open.insert("jira");
+                    this.open_settings_section(super::settings_page::SettingsSection::Integrations, cx)
+                }),
+            ),
+        ));
+        page.child(jira)
+    }
+
+    /// Whether a Jira site and its token are saved; `None` until the credential store answered.
+    pub(super) fn jira_connected(&mut self, cx: &mut Context<Self>) -> Option<bool> {
+        self.check_jira_token_saved(cx);
+        let site = !crate::settings::settings(cx).board.jira.site.trim().is_empty();
+        self.board_jira.token_saved.map(|saved| saved && site)
+    }
+
+    /// Jira's site, email and token with Save and Check: the body of its card in Settings → Integrations.
+    pub(super) fn render_jira_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let prefs = crate::settings::settings(cx).board.clone();
+        let mut jira = div().flex().flex_col().gap_3().child(row_with_hint(
             t(cx, "board.jira_enable"),
             t(cx, "board.jira_enable_hint"),
             toggle("board-jira", prefs.jira.enabled, |s| s.board.jira.enabled = !s.board.jira.enabled, cx),
         ));
-        if prefs.jira.enabled {
+        {
             self.check_jira_token_saved(cx);
             let (site, email, token) = {
                 let fields = self.jira_fields(window, cx);
@@ -365,6 +396,6 @@ impl Workbench {
                 .child(div().w(px(1.)).h(px(1.)))
                 .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "board.jira_token_how")));
         }
-        page.child(jira)
+        jira
     }
 }

@@ -18,7 +18,7 @@ Agentty does not run the advisor itself. When it starts a Claude Code pane it ad
 
 ## Choosing a model
 
-**Settings → General → Claude advisor** applies to **new** Claude tabs:
+**Settings → AI settings → Claude advisor** applies to **new** Claude tabs:
 
 | Choice | Effect |
 |---|---|
@@ -27,7 +27,7 @@ Agentty does not run the advisor itself. When it starts a Claude Code pane it ad
 | Opus | Consults Opus |
 | Fable | Consults Fable |
 
-A pane that is already running can be changed from its status bar, without restarting the session.
+A pane that is already running can be changed from its status bar, without restarting the session, once **Settings → AI settings → Show the advisor in the status bar** is on (off by default).
 
 ## When it is worth it
 

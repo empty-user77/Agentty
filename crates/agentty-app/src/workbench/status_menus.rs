@@ -4,7 +4,7 @@
 use super::{Page, Workbench};
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
-use crate::settings::AdvisorChoice;
+use crate::settings::{AdvisorChoice, SleepMode};
 use crate::theme::{hex, Chrome};
 use crate::ui::{icon, popover, IconSize, TypeScale};
 use agentty_bridge::context::ContextSnapshot;
@@ -23,6 +23,8 @@ pub enum StatusMenu {
     Agents,
     Mcp,
     Advisor,
+    /// "Prevent sleep": on, while agents work, off.
+    Sleep,
 }
 
 type Key = (Agent, PathBuf);
@@ -34,6 +36,7 @@ fn status_menu_key(menu: StatusMenu) -> &'static str {
         StatusMenu::Agents => "status-agents",
         StatusMenu::Mcp => "status-mcp",
         StatusMenu::Advisor => "status-advisor",
+        StatusMenu::Sleep => "status-sleep",
     }
 }
 /// Result of `mcp list`: `None` while it runs.
@@ -121,7 +124,7 @@ impl Workbench {
             return cx.notify();
         }
         self.status_menu = Some(menu);
-        if menu == StatusMenu::Advisor {
+        if matches!(menu, StatusMenu::Advisor | StatusMenu::Sleep) {
             return cx.notify();
         }
         if menu == StatusMenu::Context {
@@ -176,6 +179,7 @@ impl Workbench {
                 StatusMenu::Agents => t(cx, "status.agents"),
                 StatusMenu::Mcp => t(cx, "status.mcp"),
                 StatusMenu::Advisor => t(cx, "advisor.title"),
+                StatusMenu::Sleep => t(cx, "sleep.title"),
             };
             div()
                 .id(id)
@@ -193,7 +197,7 @@ impl Workbench {
         // Advisor has its own place, and Context now opens from the pane's Context meter.
         let menu = self
             .status_menu
-            .filter(|m| !matches!(m, StatusMenu::Advisor | StatusMenu::Context))
+            .filter(|m| !matches!(m, StatusMenu::Advisor | StatusMenu::Context | StatusMenu::Sleep))
             .map(|menu| self.render_status_menu(menu, &key, cx));
         Some(
             div()
@@ -216,7 +220,7 @@ impl Workbench {
     fn render_status_menu(&self, menu: StatusMenu, key: &Key, cx: &mut Context<Self>) -> AnyElement {
         let agent = key.0;
         let title = match menu {
-            StatusMenu::Context | StatusMenu::Advisor => t(cx, "context.title"),
+            StatusMenu::Context | StatusMenu::Advisor | StatusMenu::Sleep => t(cx, "context.title"),
             StatusMenu::Skills => t(cx, "status.skills"),
             StatusMenu::Agents => t(cx, "status.agents"),
             StatusMenu::Mcp => t(cx, "status.mcp"),
@@ -240,7 +244,7 @@ impl Workbench {
                 .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(meta))
         };
         match menu {
-            StatusMenu::Context | StatusMenu::Advisor => {}
+            StatusMenu::Context | StatusMenu::Advisor | StatusMenu::Sleep => {}
             StatusMenu::Skills | StatusMenu::Agents => {
                 let kind = if menu == StatusMenu::Skills { ExtensionKind::Skill } else { ExtensionKind::Agent };
                 match items {
@@ -393,8 +397,12 @@ impl Workbench {
         cx.notify();
     }
 
-    /// "Advisor: Opus" in the status bar for a Claude tab; opens a menu to switch it.
+    /// "Advisor: Opus" in the status bar for a Claude tab; opens a menu to switch it. Only when
+    /// turned on in AI settings.
     pub(super) fn render_advisor_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !crate::settings::settings(cx).advisor_status {
+            return None;
+        }
         let current = self.active_pane()?.read(cx).advisor()?;
         let open = self.status_menu == Some(StatusMenu::Advisor);
         let active = current.model().is_some();
@@ -454,4 +462,113 @@ impl Workbench {
         });
         Some(div().relative().h_full().flex().items_center().child(chip).children(menu).into_any_element())
     }
+
+    /// "Prevent sleep" in the status bar: a cup with the mode and a dot that is green while the
+    /// lock is held; opens a menu with the three modes.
+    pub(super) fn render_sleep_chip(&self, cx: &mut Context<Self>) -> AnyElement {
+        let prefs = crate::settings::settings(cx);
+        let mode = prefs.sleep_mode();
+        let held = crate::platform::wakelock::active();
+        let open = self.status_menu == Some(StatusMenu::Sleep);
+        let state = |cx: &gpui::App| format!("{} · {}", t(cx, mode.label_key()), t(cx, if held { "sleep.held" } else { "sleep.not_held" }));
+        let chip = status_chip("status-sleep", open)
+            .tooltip(crate::ui::Tooltip::text(format!("{} — {}", t(cx, "sleep.title"), state(cx)), None))
+            .child(icon("coffee", 13., hex(if mode == SleepMode::Off { Chrome::MUTED } else { Chrome::FOREGROUND })))
+            .child(t(cx, mode.label_key()))
+            .child(div().size(px(6.)).rounded_full().bg(hex(if held { Chrome::SUCCESS } else { Chrome::MUTED })).opacity(if held {
+                1.
+            } else {
+                0.6
+            }))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_status_menu(StatusMenu::Sleep, cx)));
+        let menu = open.then(|| {
+            let mut list = div().flex().flex_col().gap_0p5();
+            for choice in SleepMode::ALL {
+                let selected = choice == mode;
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("sleep-mode-{choice:?}")))
+                        .px_2()
+                        .py_1p5()
+                        .rounded_md()
+                        .flex()
+                        .items_start()
+                        .gap_2()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hex(Chrome::HOVER)))
+                        .child(
+                            div()
+                                .w(px(14.))
+                                .pt(px(5.))
+                                .flex_shrink_0()
+                                .flex()
+                                .justify_center()
+                                .when(selected, |d| d.child(div().size(px(7.)).rounded_full().bg(hex(Chrome::BRIGHT)))),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .t_small()
+                                        .font_weight(crate::theme::EMPHASIS)
+                                        .text_color(hex(Chrome::BRIGHT))
+                                        .child(t(cx, choice.label_key())),
+                                )
+                                .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, choice.hint_key()))),
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.status_menu = None;
+                            crate::settings::update_settings(cx, move |s| s.set_sleep_mode(choice, crate::settings::unix_now()));
+                            cx.notify();
+                        })),
+                );
+            }
+            let panel = popover()
+                .w(px(320.))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    if this.status_menu == Some(StatusMenu::Sleep) {
+                        this.status_menu = None;
+                        this.note_dismissed(status_menu_key(StatusMenu::Sleep));
+                    }
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .px_2()
+                        .pt_1()
+                        .pb_1p5()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .t_caption()
+                        .text_color(hex(Chrome::MUTED))
+                        .child(div().flex_1().child(t(cx, "sleep.title")))
+                        .child(state(cx)),
+                )
+                .child(div().h(px(1.)).mb_1().bg(hex(Chrome::OVERLAY_BORDER)))
+                .child(list);
+            div().absolute().bottom(px(24.)).right_0().child(gpui::deferred(crate::ui::fade_in("sleep-menu-fade", panel)).with_priority(3))
+        });
+        div().relative().h_full().flex().items_center().child(chip).children(menu).into_any_element()
+    }
+}
+
+/// One item of the status bar: full height, icon and text side by side, highlighted while its
+/// menu is open. Every chip uses it, so they line up and space out alike.
+pub(super) fn status_chip(id: impl Into<gpui::ElementId>, open: bool) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h_full()
+        .flex_shrink_0()
+        .px_1p5()
+        .flex()
+        .items_center()
+        .gap_1()
+        .cursor_pointer()
+        .when(open, |d| d.bg(hex(Chrome::SELECTED)).text_color(hex(Chrome::BRIGHT)))
+        .hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT)))
 }

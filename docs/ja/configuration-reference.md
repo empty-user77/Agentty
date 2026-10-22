@@ -65,7 +65,7 @@ Agentty はすべてを `~/.agentty/` に保存します。ほとんどは**設�
 | `agentBarPosition` | `top` または `bottom` |
 | `workspaceSearchBar` | ワークスペース一覧の上の検索欄。名前と、その中の会話を検索（既定でオン） |
 | `sortFinishedToTop` | エージェントが終えたワークスペースを一番上へ（既定でオフ。オフなら自分で並べた順序のまま） |
-| `hud` | ステータスバーの項目と順序: `model`、`context`、`usage`、`status`、`elapsed`、`links`、`spacer`、`ports`、`worktree`、`branch`、`folder` |
+| `hud` | ステータスバーの項目と順序: `model`、`context`、`usage`、`status`、`elapsed`、`links`、`spacer`、`ports`、`worktree`、`branch` |
 | `browser.autoOpenServers` | 開発サーバーが応答したらアプリ内ブラウザで開く |
 | `linkOpener` | ⌘-クリックがアプリ内ブラウザか既定のブラウザか |
 | `externalEditor` | `auto`、`vsCode`、`cursor`、`system` |
@@ -75,6 +75,9 @@ Agentty はすべてを `~/.agentty/` に保存します。ほとんどは**設�
 | `chatNotify.slackChannel`、`chatNotify.discordChannel` | ボットが書き込むチャンネル。Slack は `#general`・`general`・チャンネル ID、Discord はチャンネル ID |
 | `analytics` | 匿名の利用統計への同意。`false` または `DO_NOT_TRACK=1` なら何も送らない |
 | `menuBar` | メニューバーのアイコン（macOS） |
+| `advisorStatus` | Claude タブのステータスバーの Advisor 表示（既定はオフ） |
+| `hiddenAgents` | 設定 → エージェント でオフにしたエージェント id（`claude`、`codex`、`gemini` など）。ランチャー、スタート画面、パレットから外れる |
+| `preventSleep`, `preventSleepAgents` | マシンを常に、またはエージェントの作業中だけ起こしておく |
 
 ## 独自コマンド
 

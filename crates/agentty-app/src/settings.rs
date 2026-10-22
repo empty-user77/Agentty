@@ -371,6 +371,14 @@ pub struct Settings {
     pub stop_servers_on_close: bool,
     /// Claude Code advisor for new Claude tabs.
     pub advisor: AdvisorChoice,
+    /// The advisor's chip in the status bar, to change it for one tab. Off by default: most people
+    /// set the advisor once (AI settings) and never look at it per tab.
+    #[serde(default)]
+    pub advisor_status: bool,
+    /// Agent CLIs (by id: `claude`, `codex`, `gemini`, …) turned off in Settings → Agents: installed,
+    /// but left out of the launcher, the start page and the command palette.
+    #[serde(default)]
+    pub hidden_agents: Vec<String>,
     /// Offer to start work through a project's agent harness when a terminal enters it.
     pub harness_detect: bool,
     /// Extra harness patterns (relative to the project), on top of the built-in ones.
@@ -416,6 +424,10 @@ pub struct Settings {
     /// When (Unix seconds) a timed "Prevent sleep" turns itself off; 0 while it is always on or off.
     #[serde(default)]
     pub prevent_sleep_until: u64,
+    /// Keep the machine awake only while an agent works (a turn is running in any window). Apart
+    /// from `prevent_sleep`: either one is the mode, never both.
+    #[serde(default)]
+    pub prevent_sleep_agents: bool,
     /// The first-launch system check ran (Windows / Linux).
     pub setup_check_shown: bool,
     /// The first-run onboarding was finished or skipped.
@@ -579,6 +591,34 @@ impl HarnessAgent {
             Self::Auto => harness.preferred_agent(),
             Self::Claude => agentty_bridge::model::Agent::Claude,
             Self::Codex => agentty_bridge::model::Agent::Codex,
+        }
+    }
+}
+
+/// How Agentty keeps the machine awake: always, only while an agent works, or not at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SleepMode {
+    On,
+    Agents,
+    Off,
+}
+
+impl SleepMode {
+    pub const ALL: [SleepMode; 3] = [Self::On, Self::Agents, Self::Off];
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::On => "sleep.on",
+            Self::Agents => "sleep.agents",
+            Self::Off => "sleep.off",
+        }
+    }
+
+    pub fn hint_key(self) -> &'static str {
+        match self {
+            Self::On => "sleep.on_hint",
+            Self::Agents => "sleep.agents_hint",
+            Self::Off => "sleep.off_hint",
         }
     }
 }
@@ -918,6 +958,8 @@ impl Default for Settings {
             always_bypass: false,
             stop_servers_on_close: true,
             advisor: AdvisorChoice::Inherit,
+            advisor_status: false,
+            hidden_agents: Vec::new(),
             harness_detect: true,
             harness_patterns: Vec::new(),
             harness_submit: true,
@@ -932,6 +974,7 @@ impl Default for Settings {
             prevent_sleep: false,
             prevent_sleep_hours: 0,
             prevent_sleep_until: 0,
+            prevent_sleep_agents: false,
             setup_check_shown: false,
             onboarding_done: false,
             update_later_version: String::new(),
@@ -947,6 +990,9 @@ impl Settings {
     /// Turns "Prevent sleep" on or off; a timed one counts from now.
     pub fn set_prevent_sleep(&mut self, on: bool, now: u64) {
         self.prevent_sleep = on;
+        if on {
+            self.prevent_sleep_agents = false;
+        }
         self.prevent_sleep_until = if on && self.prevent_sleep_hours > 0 { now + u64::from(self.prevent_sleep_hours) * 3600 } else { 0 };
     }
 
@@ -955,6 +1001,39 @@ impl Settings {
         self.prevent_sleep_hours = hours.min(Self::PREVENT_SLEEP_MAX_HOURS);
         let on = self.prevent_sleep;
         self.set_prevent_sleep(on, now);
+    }
+
+    /// Which of the three ways to handle sleep is chosen (the status bar's menu).
+    pub fn sleep_mode(&self) -> SleepMode {
+        if self.prevent_sleep {
+            SleepMode::On
+        } else if self.prevent_sleep_agents {
+            SleepMode::Agents
+        } else {
+            SleepMode::Off
+        }
+    }
+
+    pub fn set_sleep_mode(&mut self, mode: SleepMode, now: u64) {
+        self.set_prevent_sleep(mode == SleepMode::On, now);
+        self.prevent_sleep_agents = mode == SleepMode::Agents;
+    }
+
+    /// Whether an agent CLI (by id) shows in the launcher, the start page and the palette.
+    pub fn agent_enabled(&self, id: &str) -> bool {
+        !self.hidden_agents.iter().any(|hidden| hidden == id)
+    }
+
+    pub fn set_agent_enabled(&mut self, id: &str, on: bool) {
+        self.hidden_agents.retain(|hidden| hidden != id);
+        if !on {
+            self.hidden_agents.push(id.to_string());
+        }
+    }
+
+    /// Whether the machine should be kept awake now, given whether an agent is working.
+    pub fn keep_awake(&self, agents_working: bool) -> bool {
+        self.prevent_sleep || (self.prevent_sleep_agents && agents_working)
     }
 
     /// Seconds a timed "Prevent sleep" has left; `None` when it is off or always on.
@@ -1085,7 +1164,7 @@ impl SettingsStore {
         if let Err(err) = crate::agent_guide::write_files() {
             eprintln!("agentty: agent guide unavailable: {err:#}");
         }
-        crate::platform::wakelock::set(store.settings.prevent_sleep);
+        apply_wakelock(&store.settings);
         cx.set_global(store);
     }
 
@@ -1165,6 +1244,22 @@ pub fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// Whether an agent is working in any window, as last counted ([`set_agents_working`]).
+static AGENTS_WORKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Takes or lets go of the sleep lock as the settings and the agents' work call for.
+pub fn apply_wakelock(settings: &Settings) {
+    crate::platform::wakelock::set(settings.keep_awake(AGENTS_WORKING.load(std::sync::atomic::Ordering::Relaxed)));
+}
+
+/// Called with the count of working agents across windows; holds the lock while one works when
+/// "Prevent sleep" is set to agents.
+pub fn set_agents_working(working: bool, cx: &App) {
+    if AGENTS_WORKING.swap(working, std::sync::atomic::Ordering::Relaxed) != working {
+        apply_wakelock(settings(cx));
+    }
+}
+
 /// Turns a timed "Prevent sleep" off once its time is up — also when that happened while Agentty
 /// was closed — and keeps the time left on screen fresh. Checked every 30 seconds.
 pub fn start_prevent_sleep_timer(cx: &mut App) {
@@ -1195,7 +1290,7 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
         if (&store.settings.aliases, store.settings.always_bypass) != (&wrappers_before.0, wrappers_before.1) {
             let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
-        crate::platform::wakelock::set(store.settings.prevent_sleep);
+        apply_wakelock(&store.settings);
     });
     apply_appearance(cx);
     cx.refresh_windows();
@@ -1244,7 +1339,7 @@ pub fn replace_settings(cx: &mut App, value: serde_json::Value) -> anyhow::Resul
         if (&store.settings.aliases, store.settings.always_bypass) != (&wrappers_before.0, wrappers_before.1) {
             let _ = crate::shell_integration::write_files(&store.settings.aliases, store.settings.always_bypass);
         }
-        crate::platform::wakelock::set(store.settings.prevent_sleep);
+        apply_wakelock(&store.settings);
         agentty_bridge::voice::set_preferred_model(store.settings.voice.model.as_deref());
     });
     crate::remote::refresh_voice(cx);
@@ -1337,6 +1432,38 @@ mod browser_settings_tests {
         // A pinned list already saved is a choice, kept.
         let chosen = Settings { settings_version: 6, pinned_plugins: vec!["example".into()], ..Settings::default() };
         assert!(!chosen.migrate().pin_sidebar_plugins);
+    }
+
+    #[test]
+    fn sleep_modes_are_one_of_three() {
+        let mut s = Settings::default();
+        assert_eq!(s.sleep_mode(), SleepMode::Off);
+        assert!(!s.keep_awake(true));
+        s.set_sleep_mode(SleepMode::Agents, 100);
+        assert_eq!(s.sleep_mode(), SleepMode::Agents);
+        // Only while an agent works.
+        assert!(s.keep_awake(true) && !s.keep_awake(false));
+        s.set_sleep_mode(SleepMode::On, 100);
+        assert_eq!((s.sleep_mode(), s.prevent_sleep_agents), (SleepMode::On, false));
+        assert!(s.keep_awake(false));
+        // A timed "On" running out turns it off, not back to agents.
+        s.set_prevent_sleep(false, 200);
+        assert_eq!(s.sleep_mode(), SleepMode::Off);
+    }
+
+    #[test]
+    fn agents_turned_off_are_remembered_once() {
+        let mut s = Settings::default();
+        assert!(s.agent_enabled("codex"));
+        s.set_agent_enabled("codex", false);
+        s.set_agent_enabled("codex", false);
+        assert_eq!(s.hidden_agents, ["codex"]);
+        assert!(!s.agent_enabled("codex") && s.agent_enabled("claude"));
+        s.set_agent_enabled("codex", true);
+        assert!(s.hidden_agents.is_empty());
+        // Missing from an older settings file: every agent shows, the advisor chip and agent-only sleep are off.
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.hidden_agents.is_empty() && !old.advisor_status && !old.prevent_sleep_agents);
     }
 
     #[test]

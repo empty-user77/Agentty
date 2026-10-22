@@ -179,8 +179,12 @@ impl Workbench {
             Rc::new(move |this, window, cx| this.request_launch(kind, target, window, cx))
         };
         push(t(cx, "new.terminal"), general, Some("⌘T"), launch(PaneKind::Shell, LaunchTarget::NewTab));
-        push(t(cx, "new.claude"), general, Some("⌥⌘C"), launch(PaneKind::Claude, LaunchTarget::NewTab));
-        push(t(cx, "new.codex"), general, Some("⌥⌘X"), launch(PaneKind::Codex, LaunchTarget::NewTab));
+        if self.offers_agent("claude", cx) {
+            push(t(cx, "new.claude"), general, Some("⌥⌘C"), launch(PaneKind::Claude, LaunchTarget::NewTab));
+        }
+        if self.offers_agent("codex", cx) {
+            push(t(cx, "new.codex"), general, Some("⌥⌘X"), launch(PaneKind::Codex, LaunchTarget::NewTab));
+        }
         push(t(cx, "new.workspace"), general, Some("⌘N"), launch(PaneKind::Shell, LaunchTarget::NewWorkspace));
         push(t(cx, "split.right"), general, Some("⌘D"), Rc::new(|this, window, cx| this.split(super::Axis::Horizontal, window, cx)));
         push(t(cx, "split.down"), general, Some("⇧⌘D"), Rc::new(|this, window, cx| this.split(super::Axis::Vertical, window, cx)));

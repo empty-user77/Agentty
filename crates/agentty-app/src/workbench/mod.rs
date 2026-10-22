@@ -35,6 +35,7 @@ mod harness;
 mod hud_settings;
 mod idea;
 mod install_hint;
+mod integrations_page;
 mod layout;
 pub(crate) mod log_panel;
 pub mod mini;
@@ -65,6 +66,7 @@ mod run_panel;
 mod servers;
 mod service_status;
 mod session_viewer;
+mod settings_agents;
 mod settings_page;
 pub mod side_panels;
 mod status_menus;
@@ -646,6 +648,8 @@ pub struct Workbench {
     sidebar_scroll: gpui::ScrollHandle,
     settings_scroll: gpui::ScrollHandle,
     settings_section: settings_page::SettingsSection,
+    /// The settings page's search and what its agents and integrations pages read.
+    settings_ui: settings_page::SettingsUi,
     /// A real terminal shown in Settings → Appearance, so the font, spacing, weight and colours
     /// are judged on the thing itself rather than on a mock-up. Started when that page is opened
     /// and dropped when it is left, so it costs nothing the rest of the time.
@@ -980,6 +984,7 @@ impl Workbench {
             sidebar_scroll: gpui::ScrollHandle::new(),
             settings_scroll: gpui::ScrollHandle::new(),
             settings_section: settings_page::SettingsSection::General,
+            settings_ui: Default::default(),
             preview_terminal: None,
             session_search,
             session_content_hits: None,
@@ -1170,11 +1175,18 @@ impl Workbench {
             let _ = this.update(cx, |this, cx| {
                 if this.installed.as_ref() != Some(&installed) {
                     this.installed = Some(installed);
+                    this.settings_ui.reindex();
                     cx.notify();
                 }
             });
         })
         .detach();
+    }
+
+    /// Whether an agent (`claude`, `codex`) is installed and not turned off in Settings → Agents:
+    /// the launcher, the start page and the palette offer it.
+    pub(super) fn offers_agent(&self, id: &str, cx: &gpui::App) -> bool {
+        self.is_installed(id) && crate::settings::settings(cx).agent_enabled(id)
     }
 
     /// Whether `binary` is installed; optimistic until detection finishes.
@@ -4483,8 +4495,32 @@ impl Workbench {
                     "system" => settings_page::SettingsSection::System,
                     "notifications" => settings_page::SettingsSection::Notifications,
                     "board" => settings_page::SettingsSection::Board,
+                    "ai" => settings_page::SettingsSection::Ai,
+                    "agents" => settings_page::SettingsSection::Agents,
+                    "integrations" => settings_page::SettingsSection::Integrations,
+                    "voice" => settings_page::SettingsSection::Voice,
                     _ => settings_page::SettingsSection::General,
                 };
+                cx.notify();
+            }
+            "settings-search" => self.debug_settings_search(argument, window, cx),
+            "settings-search-open" => self.debug_settings_search_open(argument.trim().parse().unwrap_or(0), cx),
+            "status-sleep" => self.toggle_status_menu(status_menus::StatusMenu::Sleep, cx),
+            "integration-open" => {
+                let id = integrations_page::integration_id(argument);
+                if let Some(id) = id {
+                    if !self.settings_ui.integrations_open.remove(id) {
+                        self.settings_ui.integrations_open.insert(id);
+                    }
+                }
+                cx.notify();
+            }
+            "agent-open" => {
+                if let Some(id) = settings_agents::agent_row_id(argument) {
+                    if !self.settings_ui.agents_open.remove(id) {
+                        self.settings_ui.agents_open.insert(id);
+                    }
+                }
                 cx.notify();
             }
             "status-menu" => self.toggle_status_menu(

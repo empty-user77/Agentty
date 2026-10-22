@@ -19,6 +19,8 @@ pub enum HudItem {
     Spacer,
     Worktree,
     Branch,
+    /// The pane's folder. No longer shown: the app's status bar under the panes has the path. Kept so
+    /// a saved layout naming it still reads.
     Folder,
     /// Ports of local servers started in the pane.
     Ports,
@@ -26,7 +28,7 @@ pub enum HudItem {
 
 impl HudItem {
     /// The order a fresh install shows.
-    pub const DEFAULT: [HudItem; 11] = [
+    pub const DEFAULT: [HudItem; 10] = [
         Self::Model,
         Self::Context,
         Self::Usage,
@@ -37,7 +39,6 @@ impl HudItem {
         Self::Ports,
         Self::Worktree,
         Self::Branch,
-        Self::Folder,
     ];
 
     /// Required items can be moved but not hidden.
@@ -99,7 +100,7 @@ pub fn default_layout() -> Vec<HudEntry> {
 /// put where the default has them (after the item that precedes them there).
 pub fn normalized(saved: &[HudEntry]) -> Vec<HudEntry> {
     let mut layout: Vec<HudEntry> = Vec::new();
-    for entry in saved {
+    for entry in saved.iter().filter(|e| e.item != HudItem::Folder) {
         if !layout.iter().any(|e| e.item == entry.item) {
             layout.push(HudEntry { item: entry.item, visible: entry.visible || entry.item.required() });
         }
@@ -154,8 +155,8 @@ mod tests {
         let layout = default_layout();
         let hidden = toggled(&layout, HudItem::Context);
         assert_eq!(hidden, layout, "context cannot be hidden");
-        let hidden = toggled(&layout, HudItem::Folder);
-        assert!(!hidden.iter().find(|e| e.item == HudItem::Folder).unwrap().visible);
+        let hidden = toggled(&layout, HudItem::Ports);
+        assert!(!hidden.iter().find(|e| e.item == HudItem::Ports).unwrap().visible);
         // Moving works for required items too, and stops at the ends.
         let first = moved(&layout, 1, -1);
         assert_eq!(first[0].item, HudItem::Context);
@@ -196,5 +197,8 @@ mod tests {
         assert_eq!(at(HudItem::Context), at(HudItem::Model) + 1);
         assert_eq!(normalized(&[]), default_layout());
         assert_eq!(normalized(&default_layout()), default_layout());
+        // The folder left the bar (the status bar under the panes has the path): a saved one is dropped.
+        let with_folder = [HudEntry { item: HudItem::Folder, visible: true }, HudEntry { item: HudItem::Branch, visible: true }];
+        assert!(normalized(&with_folder).iter().all(|e| e.item != HudItem::Folder));
     }
 }

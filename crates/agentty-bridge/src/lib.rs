@@ -5,6 +5,7 @@ pub mod agy;
 pub mod amp;
 pub mod backup;
 pub mod claude;
+pub mod claude_features;
 pub mod claude_trust;
 pub mod clone;
 pub mod codex;
