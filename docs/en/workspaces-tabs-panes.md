@@ -9,13 +9,13 @@ Agentty has three levels. A **workspace** is a project, a **tab** is one screen 
 
 Each row in the sidebar (**⌘B**) is a workspace, with a folder it opens in. **⌘N** creates one.
 
-- Drag rows to reorder them, or drop one onto another to make a **group**. Groups collapse.
+- Drag rows to reorder them, or drop one onto another to make a **group**. Groups collapse; right-click a group's header to rename it, colour it, **Put all to sleep** or delete it.
 - The search box above the list finds workspaces by name, folder or anything said in their conversations. While you search, the list turns into results: each one says where it matched — name, folder, or a line of the conversation with the words marked, and who said it. **✕** or **Esc** clears the search and brings the whole list back.
 - Workspaces linked into one session sit together under the one the link started from. When that one is in a collapsed group, the others stay listed in their own place.
 - Double-click a name to rename it.
 - **⌥⌘↓ / ⌥⌘↑** move between workspaces, **⌘1…⌘9** jump to one.
 - Every workspace, its tabs, splits and groups come back after a restart.
-- The **⚙** in the list's header opens **Workspace Options**: card layout (detailed or compact), grouping (none, your groups, or by project — a repository and its worktrees together), order (manual, recent activity, name), filters (hide sleeping workspaces, workspaces on `main` / `master`, plugin workspaces) and whether the tabs sit in the title bar. The workspace you are in is always listed.
+- The **⚙** in the list's header opens **Workspace Options**: card layout (detailed or compact), grouping (none, your groups, or by project — a repository and its worktrees together; a project folds like a group), order (manual, recent activity, name), filters (hide sleeping workspaces, workspaces on `main` / `master`, plugin workspaces) and whether the tabs sit in the title bar. The workspace you are in is always listed.
 
 On macOS the tabs sit in the title bar next to the window buttons, with the sidebar button (**⌘B**) beside them; double-click the empty part of the bar to zoom the window. Turn **Tabs in the title bar** off in Workspace Options for a tab row of its own.
 
@@ -34,7 +34,7 @@ Right-click a workspace, or click its **⋯**, for what can be done to it. Where
 | Mark as Unread | Shows the attention mark on the card until you open it |
 | New Group, Move to Group ›, Remove from Group | Files the workspace in a group |
 | Set Parent Worktree… | Lists the workspace under another one you pick, indented; it moves between groups with it |
-| Sleep | Ends every program in the workspace and keeps it as it was; its card is drawn faded with a moon. Opening it again starts its tabs and continues their agent sessions |
+| Sleep | Ends every program in the workspace and keeps it as it was; its card is drawn faded with a moon, as is every workspace not opened since Agentty started. Opening it again starts its tabs and continues their agent sessions |
 | Delete Worktree | Closes the workspace and removes its worktree and branch. Uncommitted changes and commits found nowhere else are kept |
 
 ## Tabs

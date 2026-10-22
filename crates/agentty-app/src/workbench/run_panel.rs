@@ -28,6 +28,10 @@ use std::time::{Duration, Instant};
 const REREAD_AFTER: Duration = Duration::from_secs(15);
 /// How often the open panel looks for processes serving ports.
 const PANEL_EVERY: Duration = Duration::from_secs(5);
+/// Configurations remembered as started lately, per project.
+const RECENT_PER_PROJECT: usize = 10;
+/// Projects whose recent runs are remembered.
+const RECENT_PROJECTS: usize = 100;
 
 struct Loaded {
     read_at: Instant,
@@ -53,7 +57,7 @@ pub(super) struct RunState {
     loading: HashSet<PathBuf>,
     /// Projects whose configurations changed while they were being read: read again after.
     stale: HashSet<PathBuf>,
-    /// The configuration last started in each project: what the button starts.
+    /// The configuration picked in each project's run menu (or last started): what the button starts.
     last: HashMap<PathBuf, String>,
     /// The run button's menu: the pane it belongs to, its project, where it opens.
     menu: Option<(Option<Pane>, PathBuf, Point<Pixels>)>,
@@ -143,6 +147,39 @@ impl Workbench {
         self.runs.configs.get(root).map(|l| l.list.as_slice()).unwrap_or_default()
     }
 
+    /// `root`'s configurations as the menus list them: the ones started lately first, newest on
+    /// top, then the rest in the project's own order.
+    fn run_configs_by_recent(&self, root: &Path, cx: &gpui::App) -> Vec<&RunConfig> {
+        let recent = crate::settings::settings(cx).run_recent.get(&root.to_string_lossy().to_string()).cloned().unwrap_or_default();
+        let mut list: Vec<&RunConfig> = self.run_configs(root).iter().collect();
+        list.sort_by_key(|c| recent.iter().position(|id| *id == c.id).unwrap_or(usize::MAX));
+        list
+    }
+
+    /// Remembers that `id` was started in `root`, for the order of the menus.
+    fn note_recent_run(root: &Path, id: &str, cx: &mut gpui::App) {
+        let key = root.to_string_lossy().to_string();
+        crate::settings::update_settings(cx, |s| {
+            let list = s.run_recent.entry(key.clone()).or_default();
+            list.retain(|other| other != id);
+            list.insert(0, id.to_string());
+            list.truncate(RECENT_PER_PROJECT);
+            // Projects not opened in a long while drop out first: their keys sort, their age does
+            // not, so the oldest-started is not known here — any one beyond the limit goes.
+            while s.run_recent.len() > RECENT_PROJECTS {
+                let Some(other) = s.run_recent.keys().find(|k| **k != key).cloned() else { break };
+                s.run_recent.remove(&other);
+            }
+        });
+    }
+
+    /// Picks `id` in `root`'s run menu: the run button now stands for it, nothing starts.
+    fn select_run(&mut self, root: PathBuf, id: &str, cx: &mut Context<Self>) {
+        self.runs.last.insert(root, id.to_string());
+        self.runs.menu = None;
+        cx.notify();
+    }
+
     /// Reads the configurations of the projects shown now (the panes of the active tab) when they
     /// are not known yet or were read a while ago. Called on render.
     pub(super) fn prepare_runs(&mut self, cx: &mut Context<Self>) {
@@ -212,16 +249,19 @@ impl Workbench {
         }
     }
 
-    /// The configuration the button starts: the one last started here, else the first.
-    /// The configuration `pane`'s button stands for: the one last started in the project, else the
-    /// one of the pane's folder, else the first.
+    /// The configuration `pane`'s button stands for: the one picked in the menu or last started in
+    /// the project, else the one started most lately (before a restart), else the one of the pane's
+    /// folder, else the first.
     fn primary_config<'a>(&'a self, root: &Path, pane: Option<&Pane>, cx: &gpui::App) -> Option<&'a RunConfig> {
         let list = self.run_configs(root);
         let cwd = pane.map(|p| p.read(cx).current_dir());
+        let recent = crate::settings::settings(cx).run_recent.get(&root.to_string_lossy().to_string()).and_then(|r| r.first().cloned());
         self.runs
             .last
             .get(root)
-            .and_then(|id| list.iter().find(|c| &c.id == id))
+            .cloned()
+            .or(recent)
+            .and_then(|id| list.iter().find(|c| c.id == id))
             .or_else(|| list.iter().find(|c| Some(&c.dir) == cwd.as_ref()))
             .or_else(|| list.first())
     }
@@ -266,6 +306,7 @@ impl Workbench {
         let Some(config) = self.run_configs(&root).iter().find(|c| c.id == id).cloned() else { return };
         self.runs.last.insert(root.clone(), config.id.clone());
         self.runs.menu = None;
+        Self::note_recent_run(&root, &config.id, cx);
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "run" }));
         self.run_in_log(root, &config, window, cx);
     }
@@ -580,9 +621,11 @@ impl Workbench {
             this.note_dismissed("run-menu");
             this.menu_closed(cx);
         }));
-        for (index, config) in self.run_configs(&root).iter().enumerate() {
+        let selected = self.primary_config(&root, pane.as_ref(), cx).map(|c| c.id.clone());
+        for (index, config) in self.run_configs_by_recent(&root, cx).into_iter().enumerate() {
             let run = self.run_of(&root, &config.id).filter(|run| self.run_alive(*run));
-            let (start_root, id) = (root.clone(), config.id.clone());
+            let picked = selected.as_ref() == Some(&config.id);
+            let (pick_root, id) = (root.clone(), config.id.clone());
             list = list.child(
                 div()
                     .id(("run-menu-item", index))
@@ -594,9 +637,12 @@ impl Workbench {
                     .gap_2()
                     .cursor_pointer()
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.start_run(start_root.clone(), &id, window, cx);
+                    .when(picked, |d| d.bg(hex(Chrome::SELECTED)))
+                    // Picks what the run button starts; starting it is the button's job.
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.select_run(pick_root.clone(), &id, cx);
                     }))
+                    .child(div().flex_shrink_0().size(px(11.)).when(picked, |d| d.child(icon("check", 11., hex(Chrome::BRIGHT)))))
                     .child(icon(
                         if run.is_some() { "square" } else { "play" },
                         11.,
@@ -747,7 +793,7 @@ impl Workbench {
             let key = if self.runs.loading.contains(&root) { "run.loading" } else { "run.none" };
             body = body.child(div().px_2().py_1().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, key)));
         }
-        for (index, config) in configs.iter().enumerate() {
+        for (index, config) in self.run_configs_by_recent(&root, cx).into_iter().enumerate() {
             let ports = self.run_of(&root, &config.id).map(|run| self.ports_of_run(run)).unwrap_or_default();
             body = body.child(self.render_run_row(index, &root, config, &ports, cx));
         }

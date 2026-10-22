@@ -193,6 +193,23 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Puts every workspace of group `gid` to sleep. The one in front goes last, so handing over
+    /// to a workspace still awake never lands on one about to sleep.
+    pub(super) fn sleep_group(&mut self, gid: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.group_menu = None;
+        let front = self.workspaces.get(self.active_workspace).map(|w| w.id);
+        let mut ids: Vec<u64> = self.workspaces.iter().filter(|w| w.group == Some(gid) && !w.tabs.is_empty()).map(|w| w.id).collect();
+        ids.sort_by_key(|id| Some(*id) == front);
+        let count = ids.len();
+        for id in ids {
+            self.sleep_workspace(id, window, cx);
+        }
+        if count > 1 {
+            let name = self.groups.iter().find(|g| g.id == gid).map(|g| g.name.clone()).unwrap_or_default();
+            self.set_status(tf(cx, "group.slept", &[("name", &name), ("n", &count.to_string())]), cx);
+        }
+    }
+
     /// Ends every process of the workspace and keeps it as it was, like after a restart: opening
     /// it again starts its tabs and continues their agent sessions. The workspace in front hands
     /// over to the nearest one still awake, or to the start page.

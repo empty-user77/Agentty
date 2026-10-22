@@ -42,6 +42,10 @@ pub fn app_is_active() -> bool {
     true
 }
 
+pub fn set_movable(_window: Id, _movable: bool) {}
+
+pub fn perform_window_drag(_window: Id) {}
+
 pub fn order_front_regardless(_window: Id) {}
 
 pub fn order_back(_window: Id) {}

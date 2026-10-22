@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Right-click a group's header for **Put all to sleep**: every workspace in it stops and keeps its tabs, as Sleep does
+  for one.
+- With the workspace list grouped by project, a project's header folds and unfolds it like a group's does.
+
+### Fixed
+- macOS, with the tabs in the title bar: dragging a tab moves the tab (to another place, a split or another
+  workspace) instead of the window; dragging the bar's empty space still moves the window.
+
+### Changed
+- The run button's list puts the configurations you ran lately first, and picking one there only selects it for the
+  button; **Run** starts it.
+- A workspace not opened since Agentty started is drawn asleep (faded, with a moon) like one put to sleep: neither has
+  anything running.
+
 ## [0.2.23] - 2026-10-22
 
 ### Added
