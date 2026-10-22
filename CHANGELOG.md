@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.24] - 2026-10-22
+
 ### Added
 - Right-click a group's header for **Put all to sleep**: every workspace in it stops and keeps its tabs, as Sleep does
   for one.
