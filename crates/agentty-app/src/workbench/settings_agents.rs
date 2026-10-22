@@ -313,10 +313,15 @@ impl Workbench {
 
     fn render_agent_row(&self, row: &AgentRow, prefs: &crate::settings::Settings, cx: &mut Context<Self>) -> Div {
         let id = row.id;
-        note_for_search(row.name, "");
         let enabled = prefs.agent_enabled(id);
         let version = self.installed.as_ref().and_then(|i| i.version(row.binary)).map(str::to_string);
         let has_details = matches!(id, "claude" | "codex");
+        // A row with details opens them when a search result points at it.
+        if has_details {
+            super::settings_page::in_card(id, || note_for_search(row.name, ""));
+        } else {
+            note_for_search(row.name, "");
+        }
         let open = has_details && (self.settings_ui.agents_open.contains(id) || super::settings_page::collecting());
         let command = match (id, prefs.always_bypass) {
             ("claude", true) => "claude --dangerously-skip-permissions".to_string(), // audit: ok — shown on the page only, what the always-bypass opt-in launches

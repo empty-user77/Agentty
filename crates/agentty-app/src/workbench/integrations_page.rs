@@ -85,7 +85,8 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> Div {
         let CardHead { id, glyph, name, about, state } = head;
-        note_for_search(name, &about);
+        // Choosing this card in the search results opens it.
+        super::settings_page::in_card(id, || note_for_search(name, &about));
         let open = self.settings_ui.integrations_open.contains(id) || super::settings_page::collecting();
         let header = div()
             .id(SharedString::from(format!("integration-{id}")))

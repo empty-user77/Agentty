@@ -528,7 +528,7 @@ impl Workbench {
                 );
             }
             let panel = popover()
-                .w(px(300.))
+                .w(px(320.))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     if this.status_menu == Some(StatusMenu::Sleep) {
                         this.status_menu = None;
