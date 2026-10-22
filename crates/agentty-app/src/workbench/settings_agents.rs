@@ -6,7 +6,7 @@ use super::settings_page::{note_for_search, row_with_hint, section_card, section
 use super::Workbench;
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
-use crate::ui::{action_button, action_button_with_icon, icon, IconSize, TypeScale};
+use crate::ui::{action_button, action_button_with_icon, icon, icon_only, IconSize, TypeScale};
 use agentty_bridge::claude_features::ClaudeFeature;
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Div, SharedString};
 
@@ -16,29 +16,62 @@ struct AgentRow {
     name: &'static str,
     binary: &'static str,
     maker: &'static str,
-    /// Where to read how to install it (the start page's install hint), when Agentty knows.
-    install_url: Option<&'static str>,
 }
 
 fn agent_rows() -> Vec<AgentRow> {
     let mut rows = vec![
-        AgentRow {
-            id: "claude",
-            name: "Claude Code",
-            binary: "claude",
-            maker: "Anthropic",
-            install_url: Some(super::chrome::CLAUDE_INSTALL_URL),
-        },
-        AgentRow { id: "codex", name: "Codex", binary: "codex", maker: "OpenAI", install_url: Some(super::chrome::CODEX_INSTALL_URL) },
+        AgentRow { id: "claude", name: "Claude Code", binary: "claude", maker: "Anthropic" },
+        AgentRow { id: "codex", name: "Codex", binary: "codex", maker: "OpenAI" },
     ];
-    rows.extend(crate::agents::OTHER_AGENTS.iter().map(|a| AgentRow {
-        id: a.id,
-        name: a.name,
-        binary: a.binary,
-        maker: a.maker,
-        install_url: None,
-    }));
+    rows.extend(crate::agents::OTHER_AGENTS.iter().map(|a| AgentRow { id: a.id, name: a.name, binary: a.binary, maker: a.maker }));
     rows
+}
+
+/// How to get an agent CLI that is missing: the vendor's own install command for this system, run
+/// in a new terminal tab, and its official page. A command only where the vendor documents one;
+/// the others get the page alone.
+fn install_source(id: &str) -> (Option<&'static str>, &'static str) {
+    let windows = cfg!(windows);
+    let unix_only = |command: &'static str| (!windows).then_some(command);
+    match id {
+        "claude" => (
+            Some(if windows { "irm https://claude.ai/install.ps1 | iex" } else { "curl -fsSL https://claude.ai/install.sh | bash" }),
+            super::chrome::CLAUDE_INSTALL_URL,
+        ),
+        "codex" => (Some("npm install -g @openai/codex"), super::chrome::CODEX_INSTALL_URL),
+        "gemini" => (Some("npm install -g @google/gemini-cli"), "https://github.com/google-gemini/gemini-cli"),
+        "agy" => (None, "https://antigravity.google/docs/getting-started?tab=cli"),
+        "amp" => (unix_only("curl -fsSL https://ampcode.com/install.sh | bash"), "https://ampcode.com/manual"),
+        "copilot" => (Some("npm install -g @github/copilot"), "https://github.com/github/copilot-cli"),
+        "cursor" => (
+            Some(if windows { "irm 'https://cursor.com/install?win32=true' | iex" } else { "curl https://cursor.com/install -fsS | bash" }),
+            "https://cursor.com/docs/cli/installation",
+        ),
+        "opencode" => (
+            Some(if windows { "npm install -g opencode-ai" } else { "curl -fsSL https://opencode.ai/install | bash" }),
+            "https://opencode.ai/docs/",
+        ),
+        "qwen" => (Some("npm install -g @qwen-code/qwen-code@latest"), "https://github.com/QwenLM/qwen-code"),
+        "droid" => (None, "https://docs.factory.com/cli/getting-started/quickstart"),
+        "goose" => (
+            unix_only("curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash"),
+            "https://goose-docs.ai/docs/getting-started/installation",
+        ),
+        "crush" => (Some("npm install -g @charmland/crush"), "https://github.com/charmbracelet/crush"),
+        "aider" => (
+            Some(if windows {
+                "powershell -ExecutionPolicy ByPass -c \"irm https://aider.chat/install.ps1 | iex\""
+            } else {
+                "curl -LsSf https://aider.chat/install.sh | sh"
+            }),
+            "https://aider.chat/docs/install.html",
+        ),
+        "kimi" => (None, "https://github.com/MoonshotAI/kimi-cli"),
+        "kiro" => (None, "https://kiro.dev/cli/"),
+        "cline" => (Some("npm install -g cline"), "https://docs.cline.bot/cline-cli/overview"),
+        "grok" => (None, "https://x.ai/cli"),
+        _ => (None, ""),
+    }
 }
 
 /// The id of an agent row from the debug driver's argument.
@@ -272,7 +305,9 @@ impl Workbench {
                     .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "agents.available_hint"))),
             );
             for row in &missing {
-                let (id, name, url) = (row.id, row.name, row.install_url);
+                let (id, name) = (row.id, row.name);
+                let (command, site) = install_source(id);
+                let installing = self.install_tab(id).is_some();
                 note_for_search(name, "");
                 available = available.child(
                     div()
@@ -294,16 +329,24 @@ impl Workbench {
                                     if row.maker.is_empty() { row.binary.to_string() } else { format!("{} · {}", row.binary, row.maker) },
                                 )),
                         )
-                        .children(url.map(|url| {
+                        .children(command.map(|command| {
                             action_button(
                                 SharedString::from(format!("agent-install-{id}")),
-                                t(cx, "agents.install_guide"),
-                                cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.install_hint = Some((id, name, url));
+                                t(cx, if installing { "system.installing" } else { "system.install" }),
+                                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.run_install(id, name, command.to_string(), window, cx);
                                     cx.notify();
                                 }),
                             )
-                        })),
+                        }))
+                        .when(!site.is_empty(), |d| {
+                            d.child(
+                                icon_only(SharedString::from(format!("agent-site-{id}")), "external-link", move |_, _, cx| {
+                                    cx.open_url(site)
+                                })
+                                .tooltip(crate::ui::Tooltip::text(t(cx, "agents.website"), None)),
+                            )
+                        }),
                 );
             }
             page = page.child(available);
