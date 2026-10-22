@@ -265,7 +265,7 @@ impl Workbench {
                             }
                             this.notices_open = false;
                             this.page = Some(super::Page::Settings);
-                            this.settings_section = super::settings_page::SettingsSection::Notifications;
+                            this.settings_section = super::settings_page::SettingsSection::Integrations;
                             return cx.notify();
                         }
                         if !this.jump_to_pane_id(pane_id, window, cx) {

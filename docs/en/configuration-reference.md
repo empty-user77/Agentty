@@ -65,7 +65,7 @@ Secrets are never in these files. They live in the operating system's credential
 | `agentBarPosition` | `top` or `bottom` |
 | `workspaceSearchBar` | Search box above the workspace list, over names and the conversations held in them (on by default) |
 | `sortFinishedToTop` | Move a workspace to the top when its agent finishes (off by default; off keeps the order you arranged yourself) |
-| `hud` | Status bar items in order: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `worktree`, `branch`, `folder` |
+| `hud` | Status bar items in order: `model`, `context`, `usage`, `status`, `elapsed`, `links`, `spacer`, `ports`, `worktree`, `branch` |
 | `browser.autoOpenServers` | Open a dev server in the in-app browser once it answers |
 | `linkOpener` | Whether ⌘-click opens links in-app or in your default browser |
 | `externalEditor` | `auto`, `vsCode`, `cursor`, `system` |
@@ -75,6 +75,9 @@ Secrets are never in these files. They live in the operating system's credential
 | `chatNotify.slackChannel`, `chatNotify.discordChannel` | The channel a bot writes to — Slack takes `#general`, `general` or a channel id; Discord takes a channel id |
 | `analytics` | Consent to anonymous usage statistics. `false`, or `DO_NOT_TRACK=1`, sends nothing |
 | `menuBar` | Menu bar icon (macOS) |
+| `advisorStatus` | The advisor's chip in a Claude tab's status bar (off by default) |
+| `hiddenAgents` | Agent ids turned off in Settings → Agents (`claude`, `codex`, `gemini`, …): left out of the launcher, the start page and the palette |
+| `preventSleep`, `preventSleepAgents` | Keep the machine awake always, or only while an agent works |
 
 ## Custom commands
 

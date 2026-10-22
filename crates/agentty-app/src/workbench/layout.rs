@@ -174,8 +174,6 @@ impl Workbench {
         let mut header = split.then(|| {
             let (zoom, close) = (pane.clone(), pane.clone());
             let zoomed = self.zoomed.as_ref() == Some(pane);
-            let cwd = view.display_cwd();
-            let folder = cwd.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| crate::ui::tilde(&cwd));
             let agent_info = view.is_agent() && prefs_bar;
             div()
                 .id(("pane-header", pane.entity_id().as_u64() as usize))
@@ -298,41 +296,8 @@ impl Workbench {
                             HudItem::Ports => d.children(port_chips.take()),
                             HudItem::Worktree => d.children(tree_chip.take()),
                             HudItem::Branch => d.children(chip.take()),
-                            // Where this pane is: the folder's name; the whole path on hover, ⌘-click
-                            // shows it in the file manager.
-                            HudItem::Folder => d.child(
-                                div()
-                                    .id(("pane-folder", pane.entity_id().as_u64() as usize))
-                                    .tooltip(crate::ui::Tooltip::text(crate::ui::tilde(&cwd), Some(REVEAL_HINT)))
-                                    .on_click({
-                                        let cwd = cwd.clone();
-                                        move |event: &ClickEvent, _, cx| {
-                                            if crate::keymap::link_modifier(&event.modifiers()) {
-                                                cx.stop_propagation();
-                                                crate::platform::reveal(&cwd);
-                                            }
-                                        }
-                                    })
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .min_w_0()
-                                    .flex_shrink()
-                                    // In a narrow pane the folder name gives way (…) instead of running into the branch.
-                                    .overflow_hidden()
-                                    .child(beside_text(icon("folder", 12., hex(Chrome::MUTED))))
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_shrink()
-                                            .max_w(px(160.))
-                                            .truncate()
-                                            .text_color(hex(if active { Chrome::BRIGHT } else { Chrome::FOREGROUND }))
-                                            .child(folder.clone()),
-                                    ),
-                                // Only the folder's name: the status bar under the panes already says the
-                                // whole path (and the tooltip here), so the bar keeps its room.
-                            ),
+                            // The folder is in the app's status bar under the panes; the bar keeps its room.
+                            HudItem::Folder => d,
                         };
                     }
                     d

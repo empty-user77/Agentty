@@ -65,7 +65,7 @@ Agentty 把所有东西都放在 `~/.agentty/`。其中大部分在**设置**（
 | `agentBarPosition` | `top` 或 `bottom` |
 | `workspaceSearchBar` | 工作区列表上方的搜索框，搜索名称及其中的对话（默认开启） |
 | `sortFinishedToTop` | 智能体完成后把该工作区移到顶部（默认关闭；关闭时保留你自行排列的顺序） |
-| `hud` | 状态栏项目及顺序：`model`、`context`、`usage`、`status`、`elapsed`、`links`、`spacer`、`ports`、`worktree`、`branch`、`folder` |
+| `hud` | 状态栏项目及顺序：`model`、`context`、`usage`、`status`、`elapsed`、`links`、`spacer`、`ports`、`worktree`、`branch` |
 | `browser.autoOpenServers` | 开发服务器有响应后在内置浏览器中打开 |
 | `linkOpener` | ⌘-点击使用内置浏览器还是默认浏览器 |
 | `externalEditor` | `auto`、`vsCode`、`cursor`、`system` |
@@ -75,6 +75,9 @@ Agentty 把所有东西都放在 `~/.agentty/`。其中大部分在**设置**（
 | `chatNotify.slackChannel`、`chatNotify.discordChannel` | 机器人写入的频道 —— Slack 可用 `#general`、`general` 或频道 id；Discord 用频道 id |
 | `analytics` | 是否同意匿名使用统计。`false` 或 `DO_NOT_TRACK=1` 时不发送任何内容 |
 | `menuBar` | 菜单栏图标（macOS） |
+| `advisorStatus` | Claude 标签页状态栏中的 Advisor（默认关闭） |
+| `hiddenAgents` | 在 设置 → 智能体 中停用的智能体 id（`claude`、`codex`、`gemini` 等），不出现在启动菜单、起始页和命令面板中 |
+| `preventSleep`, `preventSleepAgents` | 让电脑始终保持唤醒，或只在智能体工作时保持 |
 
 ## 自定义命令
 

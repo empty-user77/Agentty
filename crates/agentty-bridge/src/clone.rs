@@ -193,6 +193,28 @@ fn gh(args: &[&str]) -> Option<Vec<u8>> {
     output.status.success().then_some(output.stdout)
 }
 
+/// Where the GitHub CLI stands on this machine (Settings → Integrations).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GhStatus {
+    Missing,
+    SignedOut,
+    /// Signed in, with the account's login when `gh` named it.
+    SignedIn(Option<String>),
+}
+
+/// Asks `gh` whether it is installed and signed in, and as whom (runs it: off the UI thread).
+pub fn gh_status() -> GhStatus {
+    if process::which("gh").is_none() {
+        return GhStatus::Missing;
+    }
+    if gh(&["auth", "status"]).is_none() {
+        return GhStatus::SignedOut;
+    }
+    let login =
+        gh(&["api", "user", "--jq", ".login"]).map(|out| String::from_utf8_lossy(&out).trim().to_string()).filter(|l| !l.is_empty());
+    GhStatus::SignedIn(login)
+}
+
 /// Whether `gh` is installed and signed in.
 pub fn gh_ready() -> bool {
     process::which("gh").is_some() && gh(&["auth", "status"]).is_some()

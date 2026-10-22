@@ -5,6 +5,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Settings → **Agents**: every agent CLI on this computer with its version, an on/off switch that takes it out of the
+  launcher, the start page and the command palette, a **Refresh** button, and the agents available to install. Open
+  Claude Code for its own features — **Agent teams**, **Always think** and **Automatic updates** — saved in its user
+  settings (only that key is written; a file that is not valid JSON is left alone).
+- Settings → **Integrations**: GitHub (through `gh`), Slack, Discord, Telegram and Jira as cards that say whether each
+  is connected and open to its setup.
+- A search box above the settings menu finds any setting by its name or description, inside closed cards too, and
+  goes to it with the row marked.
+- The status bar has **Prevent sleep** with three modes: **On**, **Agents** (only while an agent works) and **Off**.
+
+### Changed
+- Settings are grouped in the menu (General, AI, Work, Connections & data, System), each page says what it is for, and
+  its settings sit in cards. The AI options moved from General to their own **AI settings** page.
+- The advisor's chip in the status bar is off by default; **Show the advisor in the status bar** in AI settings turns
+  it on.
+- The status bar lines up in two groups: where you are on the left, tools and menus on the right.
+- A pane's own bar no longer shows its folder: the status bar under the panes already has the path.
+
 ## [0.2.24] - 2026-10-22
 
 ### Added

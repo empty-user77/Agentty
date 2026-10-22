@@ -29,7 +29,13 @@ fn inherit_trust_in(config_path: &Path, project: &Path, tree: &Path) -> Result<b
     let entry = projects.entry(tree.to_string_lossy().to_string()).or_insert_with(|| Value::Object(Default::default()));
     let Some(entry) = entry.as_object_mut() else { return Ok(false) };
     entry.insert("hasTrustDialogAccepted".into(), Value::Bool(true));
-    let text = serde_json::to_vec_pretty(&config)?;
+    replace_keeping_mode(config_path, &serde_json::to_vec_pretty(&config)?)?;
+    Ok(true)
+}
+
+/// Replaces `config_path` with `text` atomically, keeping its mode (capped at 0600). Also used for Claude
+/// Code's `settings.json` ([`crate::claude_features`]).
+pub(crate) fn replace_keeping_mode(config_path: &Path, text: &[u8]) -> Result<()> {
     let tmp = config_path.with_extension(format!("json.agentty-{}", std::process::id()));
     // The file holds sign-in details and MCP server arguments: the copy is private from the start
     // (0600), never readable by others between writing and renaming, then takes the original's mode.
@@ -43,7 +49,7 @@ fn inherit_trust_in(config_path: &Path, project: &Path, tree: &Path) -> Result<b
     {
         use std::io::Write;
         let mut file = options.open(&tmp)?;
-        file.write_all(&text)?;
+        file.write_all(text)?;
         file.sync_all()?;
     }
     #[cfg(unix)]
@@ -53,7 +59,7 @@ fn inherit_trust_in(config_path: &Path, project: &Path, tree: &Path) -> Result<b
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode & 0o600))?;
     }
     std::fs::rename(&tmp, config_path)?;
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]

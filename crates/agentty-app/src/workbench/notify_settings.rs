@@ -12,7 +12,7 @@ use crate::settings::{settings, update_settings};
 use crate::terminal::NoticeKind;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme::{hex, Chrome};
-use crate::ui::{action_button, chip, icon, TypeScale};
+use crate::ui::{action_button, chip, TypeScale};
 use agentty_bridge::notify::{self, Channel, Limiter, Transport};
 use gpui::{div, prelude::*, px, ClickEvent, Context, Div, Entity, SharedString, Subscription, Window};
 use std::collections::{HashMap, HashSet};
@@ -225,7 +225,7 @@ impl Workbench {
     }
 
     /// Looks up which services have a secret saved (the credential store may be slow or ask).
-    fn look_up_chat_secrets(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn look_up_chat_secrets(&mut self, cx: &mut Context<Self>) {
         if self.chat_notify.looked_up {
             return;
         }
@@ -434,13 +434,32 @@ impl Workbench {
                     cx,
                 ),
             ));
-        for channel in Channel::ALL {
-            chats = chats.child(self.render_chat_card(channel, window, cx));
-        }
+        // The services themselves are set up in Integrations; this names those ready and links there.
+        let ready: Vec<&str> = Channel::ALL.into_iter().filter(|c| self.chat_configured(*c, cx) == Some(true)).map(|c| c.label()).collect();
+        let _ = window;
+        chats = chats.child(row_with_hint(
+            t(cx, "chat.services"),
+            &if ready.is_empty() { t(cx, "chat.services_none").to_string() } else { ready.join(" · ") },
+            action_button(
+                "chat-open-integrations",
+                t(cx, "chat.open_integrations"),
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.open_settings_section(super::settings_page::SettingsSection::Integrations, cx)
+                }),
+            ),
+        ));
         div().flex().flex_col().child(desktop).child(chats)
     }
 
-    fn render_chat_card(&mut self, channel: Channel, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    /// Whether `channel` has its credential saved (for the way it is set to be reached); `None`
+    /// until the credential store answered.
+    pub(super) fn chat_configured(&self, channel: Channel, cx: &gpui::App) -> Option<bool> {
+        let transport = settings(cx).chat_notify.transport(channel);
+        self.chat_notify.configured.get(&(channel, transport)).copied()
+    }
+
+    /// How to connect `channel`, its fields and buttons: the body of its card in Settings → Integrations.
+    pub(super) fn render_chat_setup(&mut self, channel: Channel, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let prefs = settings(cx).chat_notify.clone();
         let transport = prefs.transport(channel);
         let configured = self.chat_notify.configured.get(&(channel, transport)).copied();
@@ -470,11 +489,6 @@ impl Workbench {
                 .t_body()
                 .child(input)
         };
-        let state = match configured {
-            Some(true) => (t(cx, "chat.connected"), Chrome::SUCCESS),
-            Some(false) => (t(cx, "chat.not_set_up"), Chrome::MUTED),
-            None => ("…", Chrome::MUTED),
-        };
         let enabled_toggle = match channel {
             Channel::Slack => toggle("chat-slack", prefs.slack, |s| s.chat_notify.slack = !s.chat_notify.slack, cx).into_any_element(),
             Channel::Discord => {
@@ -487,22 +501,26 @@ impl Workbench {
         let mut card = div()
             .flex()
             .flex_col()
-            .gap_2()
-            .p_3()
-            .rounded_lg()
-            .border_1()
-            .border_color(hex(Chrome::BORDER))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(icon(if channel == Channel::Telegram { "send" } else { "message-square" }, 14., hex(Chrome::FOREGROUND)))
-                    .child(div().t_body().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(channel.label()))
-                    .child(div().t_small().text_color(hex(state.1)).child(state.0.to_string()))
-                    .child(div().flex_1())
-                    .when(configured == Some(true), |d| d.child(enabled_toggle)),
-            )
+            .gap_3()
+            .when(configured == Some(true), |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_4()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "chat.send_here")))
+                                .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "chat.send_here_hint"))),
+                        )
+                        .child(enabled_toggle),
+                )
+            })
             .child(div().t_small().text_color(hex(Chrome::MUTED)).child(t(
                 cx,
                 match (channel, transport) {

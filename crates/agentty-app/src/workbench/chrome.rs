@@ -21,8 +21,8 @@ const RELEASES_URL: &str = "https://github.com/empty-user77/Agentty/releases";
 const GITHUB_URL: &str = "https://github.com/empty-user77/Agentty";
 const AUTHOR_URL: &str = "https://raylee.app";
 /// Where to read how to install the agent CLIs Agentty is built around.
-const CLAUDE_INSTALL_URL: &str = "https://code.claude.com/docs/en/quickstart";
-const CODEX_INSTALL_URL: &str = "https://learn.chatgpt.com/docs/codex/cli#getting-started";
+pub(super) const CLAUDE_INSTALL_URL: &str = "https://code.claude.com/docs/en/quickstart";
+pub(super) const CODEX_INSTALL_URL: &str = "https://learn.chatgpt.com/docs/codex/cli#getting-started";
 const COPYRIGHT_YEAR: &str = "2026";
 pub const ACTIVITY_BAR_WIDTH: f32 = 48.;
 const TAB_HEIGHT: f32 = 35.;
@@ -590,7 +590,7 @@ impl Workbench {
 
     /// A sidebar search box: a spinner while conversations are still being searched, and a ✕
     /// that empties it (as does Escape, and deleting every letter).
-    fn render_search_box(
+    pub(super) fn render_search_box(
         &self,
         id: &'static str,
         input: &gpui::Entity<crate::text_input::TextInput>,
@@ -608,6 +608,7 @@ impl Workbench {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
+                    .w_full()
                     .flex()
                     .items_center()
                     .gap_2()
@@ -2465,7 +2466,7 @@ impl Workbench {
                 Box::new(|this, w, cx| this.request_launch(PaneKind::Shell, this.launcher_target, w, cx)),
                 cx,
             ));
-        if self.is_installed("claude") {
+        if self.offers_agent("claude", cx) {
             menu = menu.child(entry(
                 "launch-claude".into(),
                 Some("claude"),
@@ -2475,7 +2476,7 @@ impl Workbench {
                 cx,
             ));
         }
-        if self.is_installed("codex") {
+        if self.offers_agent("codex", cx) {
             menu = menu.child(entry(
                 "launch-codex".into(),
                 Some("codex"),
@@ -2503,10 +2504,12 @@ impl Workbench {
                 cx,
             )
         };
-        for agent in installed.other_agents().filter(|a| a.primary) {
+        let enabled = |agent: &&crate::agents::AgentCli| crate::settings::settings(cx).agent_enabled(agent.id);
+        let primary: Vec<_> = installed.other_agents().filter(|a| a.primary).filter(enabled).collect();
+        let more: Vec<_> = installed.other_agents().filter(|a| !a.primary).filter(enabled).collect();
+        for agent in primary {
             menu = menu.child(agent_entry(agent, cx));
         }
-        let more: Vec<_> = installed.other_agents().filter(|a| !a.primary).collect();
         if !more.is_empty() || !installed.ollama_models.is_empty() {
             let open = self.launcher_more;
             menu = menu.child(
@@ -2700,25 +2703,41 @@ impl Workbench {
         let shell = crate::brand::tile("shell", 36.);
         cards =
             cards.child(card("welcome-shell".into(), shell, t(cx, "welcome.terminal").into(), terminal_body, PaneKind::Shell.into(), cx));
-        cards = cards.child(if self.is_installed("claude") {
+        // An agent turned off in Settings → Agents has no card at all, installed or not.
+        let prefs = crate::settings::settings(cx).clone();
+        if !self.is_installed("claude") && prefs.agent_enabled("claude") {
+            cards = cards.child(missing("claude", "Claude Code", CLAUDE_INSTALL_URL, cx));
+        } else if self.offers_agent("claude", cx) {
             let body = tf(cx, "welcome.maker_body", &[("maker", "Anthropic")]);
-            card("welcome-claude".into(), crate::brand::tile("claude", 36.), "Claude Code".into(), body, PaneKind::Claude.into(), cx)
-        } else {
-            missing("claude", "Claude Code", CLAUDE_INSTALL_URL, cx)
-        });
+            cards = cards.child(card(
+                "welcome-claude".into(),
+                crate::brand::tile("claude", 36.),
+                "Claude Code".into(),
+                body,
+                PaneKind::Claude.into(),
+                cx,
+            ));
+        }
         // A chat runs Claude Code as its lead, but gets its own icon and color so the two cards don't look alike.
-        if self.is_installed("claude") {
+        if self.offers_agent("claude", cx) {
             let body = t(cx, "welcome.chat_body").to_string();
             let art = glyph_tile("message-square-code", Chrome::PURPLE);
             cards = cards.child(card("welcome-chat".into(), art, t(cx, "welcome.chat").into(), body, LaunchChoice::Chat, cx));
         }
-        cards = cards.child(if self.is_installed("codex") {
+        if !self.is_installed("codex") && prefs.agent_enabled("codex") {
+            cards = cards.child(missing("codex", "Codex", CODEX_INSTALL_URL, cx));
+        } else if self.offers_agent("codex", cx) {
             let body = tf(cx, "welcome.maker_body", &[("maker", "OpenAI")]);
-            card("welcome-codex".into(), crate::brand::tile("codex", 36.), "Codex".into(), body, PaneKind::Codex.into(), cx)
-        } else {
-            missing("codex", "Codex", CODEX_INSTALL_URL, cx)
-        });
-        for agent in self.installed.iter().flat_map(|i| i.other_agents()).filter(|a| a.primary) {
+            cards = cards.child(card(
+                "welcome-codex".into(),
+                crate::brand::tile("codex", 36.),
+                "Codex".into(),
+                body,
+                PaneKind::Codex.into(),
+                cx,
+            ));
+        }
+        for agent in self.installed.iter().flat_map(|i| i.other_agents()).filter(|a| a.primary && prefs.agent_enabled(a.id)) {
             let choice = LaunchChoice::Command { title: agent.name.to_string(), command: agent.binary.to_string() };
             let body = if agent.maker.is_empty() {
                 t(cx, "welcome.agent_body").to_string()
@@ -2733,7 +2752,10 @@ impl Workbench {
         for _ in 0..3 {
             cards = cards.child(div().flex_1().min_w(px(WELCOME_CARD_MIN_WIDTH)).h_0().px(px(17.)));
         }
-        let more = self.installed.as_ref().is_some_and(|i| i.other_agents().any(|a| !a.primary) || !i.ollama_models.is_empty());
+        let more = self
+            .installed
+            .as_ref()
+            .is_some_and(|i| i.other_agents().any(|a| !a.primary && prefs.agent_enabled(a.id)) || !i.ollama_models.is_empty());
         let quiet_button = |id: &'static str, label: String| {
             div()
                 .id(id)
@@ -3086,28 +3108,57 @@ impl Workbench {
         // Where the active terminal is. It is the only place the path is shown now: the pane's own
         // bar had it too, and one of them was always cut short.
         let cwd = active.map(|v| v.display_cwd());
+        let glyph = active.map_or("shell", |v| crate::brand::kind_id(v.display_kind()));
+        // Two groups, like the window's title bar: where you are on the left (version, agent,
+        // folder), what you can do on the right (tools, the agent's menus, sleep, voice). Every
+        // item is a full-height chip of the same padding, and a thin rule parts the groups.
+        let rule = || div().flex_shrink_0().w(px(1.)).h(px(12.)).mx_1().bg(hex(Chrome::BORDER));
+        let tools: Vec<AnyElement> = self
+            .render_plugin_status_items(cx)
+            .into_iter()
+            .chain(self.render_run_chip(cx))
+            .chain(self.render_docker_chip(cx))
+            .chain(self.render_db_chip(cx))
+            .collect();
+        let agent_menus: Vec<AnyElement> = self.render_status_icons(cx).into_iter().chain(self.render_advisor_chip(cx)).collect();
+        let has_tools = !tools.is_empty();
+        let has_agent_menus = !agent_menus.is_empty();
         div()
             .h(px(STATUS_BAR_HEIGHT))
             .flex_shrink_0()
             .flex()
             .items_center()
-            .gap_4()
-            .px_3()
+            .gap_1()
+            .pl_3()
+            .pr_1p5()
             .bg(hex(Chrome::STATUS_BAR))
             .border_t_1()
             .border_color(hex(Chrome::BORDER))
             .t_small()
             .text_color(hex(Chrome::MUTED))
-            .child(self.render_version_status(cx))
-            .children(kind)
-            .children(self.render_advisor_chip(cx))
+            .child(div().flex_shrink_0().pr_1p5().child(self.render_version_status(cx)))
+            .children(kind.map(|kind| {
+                div()
+                    .flex_shrink_0()
+                    .h_full()
+                    .px_1p5()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(crate::brand::avatar_colored(glyph, 12.))
+                    .child(kind)
+            }))
             .children(cwd.map(|cwd| {
                 let reveal = cwd.clone();
                 div()
                     .id("status-folder")
                     .flex_shrink()
                     .min_w_0()
-                    .truncate()
+                    .h_full()
+                    .px_1p5()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
                     .cursor_pointer()
                     .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
                     .tooltip(crate::ui::Tooltip::text(tilde(&cwd), Some(super::layout::REVEAL_HINT)))
@@ -3116,16 +3167,17 @@ impl Workbench {
                             crate::platform::reveal(&reveal);
                         }
                     })
+                    .child(icon("folder", 12., hex(Chrome::MUTED)))
                     // Cut in the middle past 50 characters: a worktree path is mostly its ends, and
                     // the whole thing pushed everything else off the bar.
-                    .child(crate::ui::middle_ellipsis(&tilde(&cwd), 50))
+                    .child(div().min_w_0().truncate().child(crate::ui::middle_ellipsis(&tilde(&cwd), 50)))
             }))
-            .child(div().flex_1().min_w_0().truncate().children(self.status.clone()))
-            .children(self.render_plugin_status_items(cx))
-            .children(self.render_run_chip(cx))
-            .children(self.render_docker_chip(cx))
-            .children(self.render_db_chip(cx))
-            .children(self.render_status_icons(cx))
+            .child(div().flex_1().min_w_0().px_1p5().truncate().children(self.status.clone()))
+            .children(tools)
+            .when(has_tools && has_agent_menus, |d| d.child(rule()))
+            .children(agent_menus)
+            .when(has_tools || has_agent_menus, |d| d.child(rule()))
+            .child(self.render_sleep_chip(cx))
             .children(self.render_mic_button(cx))
     }
 }
