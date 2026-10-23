@@ -114,6 +114,12 @@ impl Layout {
         f32::from(position.x) < self.text_left - TEXT_PADDING / 2.
     }
 
+    /// Whether `position` is on the strip of the gutter where changes since the last commit show.
+    pub fn on_change_bar(&self, position: Point<Pixels>) -> bool {
+        let edge = self.text_left - TEXT_PADDING;
+        (edge - 12.0..=edge).contains(&f32::from(position.x))
+    }
+
     pub fn on_scrollbar(&self, position: Point<Pixels>) -> bool {
         self.thumb.is_some() && f32::from(position.x) >= f32::from(self.bounds.right()) - SCROLLBAR_WIDTH - 2.
     }
@@ -550,7 +556,8 @@ impl Element for EditorElement {
             }
             // Lines changed since the last commit: a thin bar left of the agents' (green added,
             // blue changed), a red notch where lines were taken away.
-            for &(line, rows, mark) in &doc.git.marks {
+            for change in &doc.git.marks {
+                let (line, rows, mark) = (change.line, change.rows, change.mark);
                 if line + rows.max(1) < first || line > last {
                     continue;
                 }

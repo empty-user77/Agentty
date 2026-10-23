@@ -75,7 +75,7 @@ You confirm every such request; an agent cannot start panes on its own.
 
 Click a file in the files panel to open it next to your terminals: syntax colors for the common languages, brackets and quotes typed in pairs (the matching bracket boxed), **⌘/** to comment lines out, **⌥↑** / **⌥↓** to move them, undo and redo, **⌘S** to save, **⇧⌥F** to format with the formatter you have installed (Prettier, google-java-format, ktlint, rustfmt, gofmt, Black) or, without it, the language server.
 
-Pictures (PNG, JPEG, GIF, WebP) open as a preview, scaled down to fit. Files an agent changes reload by themselves. **Open in editor** hands the file to VS Code, Cursor or your system editor. Files are only ever read and written, never run. In a git repository, lines changed since the last commit are marked in the gutter: green added, blue changed, a red notch where lines were taken away. **⌘-click** a path in a terminal to open it here — at the line and column when the output gives them (`src/app.ts:42:7` from a compiler or an agent).
+Pictures (PNG, JPEG, GIF, WebP) open as a preview, scaled down to fit. Files an agent changes reload by themselves. **Open in editor** hands the file to VS Code, Cursor or your system editor. Files are only ever read and written, never run. In a git repository, lines changed since the last commit are marked in the gutter: green added, blue changed, a red notch where lines were taken away. Click a mark to see the lines as committed, and **Revert** to put them back. **⌘-click** a path in a terminal to open it here — at the line and column when the output gives them (`src/app.ts:42:7` from a compiler or an agent).
 
 ### Finding your way around the code
 

@@ -489,6 +489,8 @@ pub struct CodeEditor {
     rename: Option<rename::RenameBox>,
     /// The type of the name under the pointer.
     type_hover: Option<hover::TypeHover>,
+    /// The change since the last commit whose window shows: (file, its first line).
+    git_peek: Option<(PathBuf, usize)>,
     /// The completion list, while open, and the number of the last request for one.
     completion: Option<complete::Completion>,
     completion_seq: u64,
@@ -605,6 +607,7 @@ impl CodeEditor {
             bulb_asking: false,
             rename: None,
             type_hover: None,
+            git_peek: None,
             completion: None,
             completion_seq: 0,
             signature: None,
@@ -1151,6 +1154,11 @@ impl CodeEditor {
             return;
         }
         let Some(pos) = self.docs.get(self.active).map(|doc| layout.position_for(event.position, &doc.buffer)) else { return };
+        // A click on a change since the last commit shows it (with Revert).
+        if layout.on_change_bar(event.position) && self.toggle_git_peek(pos.line, cx) {
+            return;
+        }
+        let Some(layout) = self.layout.as_ref() else { return };
         let in_gutter = layout.in_gutter(event.position);
         let Some(doc) = self.docs.get_mut(self.active) else { return };
         doc.buffer.unmark();
@@ -1975,6 +1983,11 @@ impl CodeEditor {
             "replace" => self.debug_replace(argument, false, window, cx),
             // "Fix with AI" on the problem at the cursor.
             "fix-all-ai" => self.fix_all_with_ai(cx),
+            // A click on the change mark of `line` (from 1), and Revert.
+            "git-peek" => {
+                self.toggle_git_peek(argument.parse::<usize>().unwrap_or(1).saturating_sub(1), cx);
+            }
+            "git-revert" => self.revert_git_change(cx),
             "organize-imports" => self.organize_imports(window, cx),
             "fix-ai" => {
                 let cursor = self.docs.get(self.active).map(|d| d.buffer.cursor());
@@ -2317,6 +2330,7 @@ impl Render for CodeEditor {
         let type_hover = self.render_type_hover(cx);
         let completion = self.render_completion(cx);
         let signature = self.render_signature(cx);
+        let git_peek = self.render_git_peek(cx);
         let presence_labels =
             if self.docs.get(self.active).is_some_and(|d| !d.previewing()) { self.render_presence_labels(cx) } else { Vec::new() };
         let Some(doc) = self.docs.get(self.active) else {
@@ -2563,6 +2577,7 @@ impl Render for CodeEditor {
             .children(quick_fix)
             .children(rename_box)
             .children(signature)
+            .children(git_peek)
             .children(completion)
             .children(flash)
     }

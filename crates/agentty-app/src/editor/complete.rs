@@ -372,6 +372,7 @@ impl CodeEditor {
     /// Esc: the list and the windows over the text close.
     pub(super) fn dismiss(&mut self, cx: &mut Context<Self>) {
         self.completion = None;
+        self.git_peek = None;
         self.signature = None;
         self.problem_hover = None;
         self.type_hover = None;
