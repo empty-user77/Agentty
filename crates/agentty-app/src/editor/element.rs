@@ -548,6 +548,21 @@ impl Element for EditorElement {
                     }
                 }
             }
+            // Lines changed since the last commit: a thin bar left of the agents' (green added,
+            // blue changed), a red notch where lines were taken away.
+            for &(line, rows, mark) in &doc.git.marks {
+                if line + rows.max(1) < first || line > last {
+                    continue;
+                }
+                let x = f32::from(bounds.left()) + gutter_width - 9.;
+                let (top, height, color) = match mark {
+                    super::gitmarks::Mark::Added => (row_top(line), rows as f32 * line_height, Chrome::SUCCESS),
+                    super::gitmarks::Mark::Modified => (row_top(line), rows as f32 * line_height, Chrome::BLUE),
+                    super::gitmarks::Mark::Deleted => (row_top(line) - 2., 4., Chrome::ERROR),
+                };
+                let width = if mark == super::gitmarks::Mark::Deleted { 6. } else { 2. };
+                gutter_marks.push(fill(Bounds::new(point(px(x), px(top)), size(px(width), px(height))), hex_alpha(color, 0.8)));
+            }
             // Agents' changes waiting for review: a bar in the gutter, in the agent's color.
             let changes = editor
                 .changes

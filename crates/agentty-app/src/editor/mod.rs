@@ -12,6 +12,7 @@ pub mod external;
 pub mod file;
 mod find;
 pub mod format;
+mod gitmarks;
 pub mod highlight;
 mod hover;
 pub mod language;
@@ -304,6 +305,8 @@ pub(crate) struct Document {
     outline: std::cell::RefCell<Option<(u64, std::sync::Arc<Vec<symbols::Symbol>>)>>,
     /// What its language server reports in it.
     checks: problems::Checks,
+    /// Its lines against the last commit.
+    git: gitmarks::GitMarks,
 }
 
 impl Document {
@@ -531,6 +534,7 @@ impl CodeEditor {
                 .update(cx, |this, cx| {
                     this.problems_tick(cx);
                     this.bulb_tick(cx);
+                    this.git_tick(cx);
                 })
                 .is_err()
             {
@@ -1923,6 +1927,7 @@ impl CodeEditor {
             "typeHover": self.debug_type_hover(),
             "completion": self.debug_completion(),
             "signature": self.debug_signature(),
+            "gitMarks": self.debug_git_marks(),
             "cursorLine": self.docs.get(self.active).map(|d| d.buffer.line(d.buffer.cursor().line).to_string()),
             "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),
             "changes": self.debug_changes(),
@@ -2148,6 +2153,7 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
         base: String::new(),
         outline: Default::default(),
         checks: Default::default(),
+        git: Default::default(),
     };
     match opened {
         Opened::Text(file) => {

@@ -46,6 +46,17 @@ pub fn project_files(dir: &Path) -> Option<Vec<String>> {
     Some(out.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect())
 }
 
+/// The text of the file at `path` as last committed (`HEAD`); `None` outside a repository or for
+/// a file not committed yet.
+pub fn committed_text(path: &Path) -> Option<String> {
+    let repo = repo_root(path.parent()?)?;
+    // The repository's own spelling of the path (a link or a case difference must not miss it).
+    let real = std::fs::canonicalize(path).ok()?;
+    let root = std::fs::canonicalize(&repo).ok()?;
+    let rel = real.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/");
+    git(&repo, &["show", &format!("HEAD:{rel}")]).ok()
+}
+
 /// Whether the repository at `dir` tracks anything under `path` (relative to `dir`). `None`
 /// outside a repository.
 pub fn tracks(dir: &Path, path: &str) -> Option<bool> {
