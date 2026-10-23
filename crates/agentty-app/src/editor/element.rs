@@ -17,6 +17,8 @@ const SHAPE_LIMIT: usize = super::file::LONG_LINE;
 /// Time spent highlighting per frame; the rest follows on the next frames.
 const HIGHLIGHT_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
 const SCROLLBAR_WIDTH: f32 = 10.;
+/// Characters of a problem's message written at the end of its line at most.
+const INLINE_PROBLEM_CHARS: usize = 160;
 /// Characters looked through for the bracket matching the one at the cursor.
 const BRACKET_SCAN: usize = 50_000;
 const TEXT_PADDING: f32 = 8.;
@@ -272,6 +274,11 @@ fn runs_for(display: &DisplayLine, spans: Option<&[Span]>, marks: &[(usize, usiz
         }
     }
     out
+}
+
+/// The problem written at the end of line `index`: the worst error or warning starting there.
+fn inline_problem<'a>(problems: &[&'a Problem], index: usize) -> Option<&'a Problem> {
+    problems.iter().filter(|p| p.start.line == index && p.severity <= Severity::Warning).min_by_key(|p| p.severity).copied()
 }
 
 /// The display ranges of `line` (its text `text`) that `problems` cover, as wavy lines in their
@@ -662,7 +669,26 @@ impl Element for EditorElement {
                 Bounds::new(point(bounds.right() - px(SCROLLBAR_WIDTH), px(top)), size(px(SCROLLBAR_WIDTH - 2.), px(thumb_height)))
             });
 
-            let lines = laid.iter().map(|l| (origin(l.index), l.shaped.clone())).collect();
+            let mut lines: Vec<(Point<Pixels>, ShapedLine)> = laid.iter().map(|l| (origin(l.index), l.shaped.clone())).collect();
+            // Each line's worst error or warning, written after its text (Error Lens).
+            if crate::settings::settings(cx).editor_inline_problems {
+                for line in &laid {
+                    let Some(problem) = inline_problem(&in_view, line.index) else { continue };
+                    let text: String = problem.message.lines().next().unwrap_or("").chars().take(INLINE_PROBLEM_CHARS).collect();
+                    let text = format!("■ {text}");
+                    let run = TextRun {
+                        len: text.len(),
+                        font: gpui::Font { style: FontStyle::Italic, ..font.clone() },
+                        color: hex_alpha(super::problems::color(problem.severity), 0.75),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    };
+                    let shaped = shape(text, &[run]);
+                    let at = point(px(text_left - scroll.x + f32::from(line.shaped.width) + char_width * 3.), px(row_top(line.index)));
+                    lines.push((at, shaped));
+                }
+            }
             editor.layout = Some(Layout {
                 bounds,
                 text_left,
@@ -760,6 +786,22 @@ mod tests {
         assert_eq!(runs.iter().map(|r| r.len).sum::<usize>(), 5);
         assert_eq!(runs.iter().filter(|r| r.underline.is_some()).map(|r| r.len).sum::<usize>(), 1);
         assert_eq!(runs_for(&DisplayLine::new(""), None, &[], &font).len(), 0);
+    }
+
+    #[test]
+    fn the_worst_problem_starting_on_a_line_is_written_after_it() {
+        let problem = |line: usize, severity| Problem {
+            start: Pos::new(line, 0),
+            end: Pos::new(line, 1),
+            severity,
+            message: String::new(),
+            origin: None,
+        };
+        let (warning, error, note) = (problem(2, Severity::Warning), problem(2, Severity::Error), problem(3, Severity::Information));
+        let all = [&warning, &error, &note];
+        assert_eq!(inline_problem(&all, 2).map(|p| p.severity), Some(Severity::Error));
+        assert!(inline_problem(&all, 3).is_none(), "notes stay under the line only");
+        assert!(inline_problem(&all, 1).is_none());
     }
 
     #[test]

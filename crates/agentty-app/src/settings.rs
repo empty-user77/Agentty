@@ -341,6 +341,9 @@ pub struct Settings {
     pub appearance: Appearance,
     /// App the file editor's "Open in editor" button uses.
     pub external_editor: ExternalEditor,
+    /// The file editor writes each error's and warning's message at the end of its line.
+    #[serde(default = "yes")]
+    pub editor_inline_problems: bool,
     pub browser: BrowserSettings,
     /// Offer earlier AI sessions when a terminal enters their folder.
     pub resume_bar: bool,
@@ -949,6 +952,7 @@ impl Default for Settings {
             link_opener: LinkOpener::InApp,
             appearance: Appearance::Dark,
             external_editor: ExternalEditor::Auto,
+            editor_inline_problems: true,
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
             pinned_plugins: Vec::new(),

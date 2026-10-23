@@ -1223,11 +1223,19 @@ impl Workbench {
                         toggle("ask-dir-tabs", prefs.ask_directory_for_tabs, |s| s.ask_directory_for_tabs = !s.ask_directory_for_tabs, cx),
                     )),
             )
-            .child(section(t(cx, "editor.settings_section")).child(row_with_hint(
-                t(cx, "editor.settings_external"),
-                t(cx, "editor.settings_external_hint"),
-                editors,
-            )))
+            .child(
+                section(t(cx, "editor.settings_section"))
+                    .child(row_with_hint(t(cx, "editor.settings_external"), t(cx, "editor.settings_external_hint"), editors))
+                    .child(row(
+                        t(cx, "editor.settings_inline_problems"),
+                        toggle(
+                            "editor-inline-problems",
+                            prefs.editor_inline_problems,
+                            |s| s.editor_inline_problems = !s.editor_inline_problems,
+                            cx,
+                        ),
+                    )),
+            )
             .child(self.render_language_servers(cx))
             .child(
                 section(t(cx, "settings.project_harness"))

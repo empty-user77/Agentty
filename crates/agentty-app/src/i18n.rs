@@ -2718,6 +2718,12 @@ strings! {
     "editor.shortcut_duplicate_lines" => ["Duplicate lines", "줄 복제", "行を複製", "复制行"],
     "editor.shortcut_delete_lines" => ["Delete lines", "줄 삭제", "行を削除", "删除行"],
     "editor.settings_section" => ["File editor", "파일 편집기", "ファイルエディタ", "文件编辑器"],
+    "editor.settings_inline_problems" => [
+        "Show errors and warnings at the end of their line",
+        "오류와 경고를 그 줄 끝에 표시",
+        "エラーと警告を行末に表示",
+        "在行尾显示错误和警告"
+    ],
     "editor.fix_with_ai" => ["Fix with AI", "AI로 고치기", "AI で修正", "用 AI 修复"],
     "editor.quick_fix" => ["Quick fix", "빠른 수정", "クイックフィックス", "快速修复"],
     "editor.finding_fixes" => ["Finding fixes…", "수정 방법 찾는 중…", "修正を検索中…", "正在查找修复…"],
