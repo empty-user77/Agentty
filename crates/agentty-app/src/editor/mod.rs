@@ -4,6 +4,7 @@
 //!
 //! Files are only read and written here — never run (see `file.rs`, `format.rs`, `external.rs`).
 
+pub mod agent;
 pub mod buffer;
 mod element;
 pub mod external;
@@ -11,8 +12,17 @@ pub mod file;
 mod find;
 pub mod format;
 pub mod highlight;
+mod hover;
 pub mod language;
+mod lsp;
+pub mod navigate;
 mod preview;
+mod problems;
+pub mod project_index;
+mod quickfix;
+mod rename;
+pub mod review;
+pub mod symbols;
 
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -73,6 +83,7 @@ actions!(
         Format,
         CloseFile,
         TogglePreview,
+        AskAgent,
     ]
 );
 
@@ -120,8 +131,16 @@ pub fn bind_keys(cx: &mut App) {
         key("shift-alt-f", Format, c),
         // VS Code's "Open Preview".
         key("cmd-shift-v", TogglePreview, c),
+        // Cursor's and Kiro's "edit with AI".
+        key("cmd-k", AskAgent, c),
     ]);
     find::bind_keys(cx);
+    navigate::bind_keys(cx);
+    agent::bind_keys(cx);
+    review::bind_keys(cx);
+    problems::bind_keys(cx);
+    quickfix::bind_keys(cx);
+    rename::bind_keys(cx);
     // Moving by word and to the ends of lines and of the file: macOS and PC conventions differ.
     if cfg!(target_os = "macos") {
         cx.bind_keys([
@@ -172,6 +191,12 @@ pub enum EditorEvent {
     OpenFile(PathBuf, PathBuf),
     /// An HTML file to see as a page, in the in-app browser.
     ShowInBrowser(PathBuf),
+    /// An instruction about some lines, for the linked session (the prompt as it is sent).
+    AskAgent(String),
+    /// Show or hide the linked session beside the editor (or pick one when none is linked).
+    ToggleSession,
+    /// Install the language server of an LSP language id (the status bar's "Install …").
+    InstallLanguageServer(&'static str),
 }
 
 /// What waits for "discard unsaved changes?".
@@ -187,6 +212,8 @@ pub struct TabInfo {
     pub path: PathBuf,
     pub dirty: bool,
     pub active: bool,
+    /// The color of the agent whose changes in this file wait for review.
+    pub review: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -248,11 +275,37 @@ pub(crate) struct Document {
     checking: bool,
     /// Markdown shown rendered instead of as text.
     preview: bool,
+    /// Bring the cursor to the upper third of the view on the next paint (after a jump).
+    center: bool,
+    /// Scroll this line into view on the next paint, the cursor staying where it is.
+    scroll_to_line: Option<usize>,
+    /// The text as it is on disk (when read or saved last), what unsaved edits are made against:
+    /// an agent's write to the file merges with them when they touch different lines.
+    base: String,
+    /// The file's symbols as of a text revision (the breadcrumb reads them on every paint).
+    outline: std::cell::RefCell<Option<(u64, std::sync::Arc<Vec<symbols::Symbol>>)>>,
+    /// What its language server reports in it.
+    checks: problems::Checks,
 }
 
 impl Document {
     fn name(&self) -> String {
         self.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.path.display().to_string())
+    }
+
+    /// The file's symbols, read again only when its text changed.
+    fn outline(&self) -> std::sync::Arc<Vec<symbols::Symbol>> {
+        let revision = self.buffer.revision();
+        if let Some((_, list)) = self.outline.borrow().as_ref().filter(|(at, _)| *at == revision) {
+            return list.clone();
+        }
+        let list = std::sync::Arc::new(if symbols::supported(self.language) {
+            symbols::symbols(self.language, &self.buffer.text())
+        } else {
+            Vec::new()
+        });
+        *self.outline.borrow_mut() = Some((revision, list.clone()));
+        list
     }
 
     fn editable(&self) -> bool {
@@ -288,6 +341,7 @@ impl Document {
                 self.content = Content::Text;
                 self.buffer.set_text(&file.text);
                 self.buffer.mark_saved();
+                self.base = self.buffer.text();
                 self.sync_highlights();
                 self.format = file.format;
                 self.stamp = file.stamp;
@@ -346,6 +400,64 @@ pub struct CodeEditor {
     blink: crate::caret_blink::CaretBlink,
     /// The find bar (⌘F), while open.
     find: Option<find::FindBar>,
+    /// The go-to box (⌘P and the lists of definitions and usages), while open.
+    picker: Option<navigate::Picker>,
+    history: navigate::History,
+    /// A place to show once its file is open: (path, position, bytes to select).
+    pending_goto: Option<(PathBuf, Pos, usize, Option<String>)>,
+    /// A short note under the cursor ("no definition found"), and since when.
+    flash: Option<(String, std::time::Instant)>,
+    /// Files shown lately, newest first (⌘P lists them first).
+    recent: Vec<PathBuf>,
+    /// Where the pointer was last over the text (⌘ pressed without moving still finds the link).
+    pointer: Option<Point<Pixels>>,
+    /// Agents' changes waiting to be kept or undone.
+    changes: Vec<review::AgentChange>,
+    next_change: u64,
+    /// When the user last typed here: following an agent waits until they pause.
+    last_typed: Option<std::time::Instant>,
+    /// The name under the pointer while ⌘ is held, underlined as a link.
+    link: Option<(Pos, Pos)>,
+    /// Where that name is defined, once found: (the name, the code there).
+    link_peek: Option<(String, Option<navigate::Preview>)>,
+    /// The session the editor is linked to.
+    linked: Option<agent::LinkedAgent>,
+    /// Agents at work in open files.
+    presence: Vec<agent::Presence>,
+    /// Edits agents reported, waiting for the change to show on disk: (file, agent, when).
+    expected_edits: Vec<(PathBuf, agent::LinkedAgent, std::time::Instant)>,
+    presence_ticking: bool,
+    /// Show the file and place the agent changes, as it changes them.
+    follow_agent: bool,
+    /// Changes read from disk that no agent claimed yet: (file, its text before, when).
+    unclaimed: Vec<(PathBuf, String, std::time::Instant)>,
+    /// Agents that announced edits here (their names and colors).
+    agents_seen: Vec<agent::LinkedAgent>,
+    /// A file opened to follow an agent: it does not take the keyboard.
+    quiet_open: Option<PathBuf>,
+    /// The instruction box for the selected lines, while open.
+    ask: Option<agent::AskBox>,
+    /// The last instruction sent, until the agent changes those lines.
+    asked: Option<agent::Asked>,
+    /// The change under review is shown as it was and as it is.
+    review_diff: bool,
+    /// The servers' reports as of this [`lsp::generation`].
+    problems_generation: u64,
+    /// The file that was in front at the last problems tick.
+    problems_front: Option<PathBuf>,
+    /// The problem under the pointer, and whether its message shows yet.
+    problem_hover: Option<(lsp::Problem, bool)>,
+    /// The fixes of that problem, once the server said.
+    hover_fixes: Option<(lsp::Problem, Vec<lsp::Action>)>,
+    /// The ⌘. list, while open.
+    fixes: Option<quickfix::FixMenu>,
+    /// Whether the cursor's line has fixes (the light bulb), and whether that is being asked.
+    bulb: Option<quickfix::Bulb>,
+    bulb_asking: bool,
+    /// The F2 box, while open.
+    rename: Option<rename::RenameBox>,
+    /// The type of the name under the pointer.
+    type_hover: Option<hover::TypeHover>,
 }
 
 impl EventEmitter<EditorEvent> for CodeEditor {}
@@ -380,6 +492,19 @@ impl CodeEditor {
         })
         .detach();
         cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(problems::TICK).await;
+            if this
+                .update(cx, |this, cx| {
+                    this.problems_tick(cx);
+                    this.bulb_tick(cx);
+                })
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(PREVIEW_TICK).await;
             if this.update(cx, |this, cx| this.preview_tick(cx)).is_err() {
                 break;
@@ -409,6 +534,37 @@ impl CodeEditor {
             preview_next: None,
             preview_replies,
             find: None,
+            picker: None,
+            history: Default::default(),
+            pending_goto: None,
+            flash: None,
+            recent: Vec::new(),
+            pointer: None,
+            changes: Vec::new(),
+            next_change: 0,
+            last_typed: None,
+            link: None,
+            link_peek: None,
+            linked: None,
+            presence: Vec::new(),
+            expected_edits: Vec::new(),
+            presence_ticking: false,
+            follow_agent: false,
+            unclaimed: Vec::new(),
+            agents_seen: Vec::new(),
+            quiet_open: None,
+            ask: None,
+            asked: None,
+            review_diff: false,
+            problems_generation: 0,
+            problems_front: None,
+            problem_hover: None,
+            hover_fixes: None,
+            fixes: None,
+            bulb: None,
+            bulb_asking: false,
+            rename: None,
+            type_hover: None,
         }
     }
 
@@ -418,13 +574,19 @@ impl CodeEditor {
     /// read on a background thread: a click in the files panel must not stop the window — the file
     /// can be on a network volume, an undownloaded cloud placeholder, or simply large.
     pub fn open(&mut self, path: &Path, project: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        // Opened to follow an agent: shown, but the keyboard stays where the user is typing.
+        let quiet = self.quiet_open.as_deref() == Some(path);
         if let Some(index) = self.docs.iter().position(|d| d.path == path) {
+            self.quiet_open = None;
             self.active = index;
             if self.preview_next.take().as_deref() == Some(path) {
                 self.docs[index].preview = true;
             }
-            window.focus(&self.focus_handle);
+            if !quiet {
+                window.focus(&self.focus_handle);
+            }
             self.tabs_changed(cx);
+            self.apply_pending_goto(cx);
             return cx.notify();
         }
         let (path, project) = (path.to_path_buf(), project.to_path_buf());
@@ -445,8 +607,12 @@ impl CodeEditor {
                     if this.preview_next.take().as_deref() == Some(path.as_path()) {
                         this.docs[this.active].preview = true;
                     }
-                    window.focus(&this.focus_handle);
+                    if this.quiet_open.take().as_deref() != Some(path.as_path()) {
+                        window.focus(&this.focus_handle);
+                    }
+                    this.resolve_presence(&path);
                     this.tabs_changed(cx);
+                    this.apply_pending_goto(cx);
                     cx.notify();
                 });
             });
@@ -475,12 +641,23 @@ impl CodeEditor {
         self.docs
             .iter()
             .enumerate()
-            .map(|(index, doc)| TabInfo { name: doc.name(), path: doc.path.clone(), dirty: doc.is_dirty(), active: index == self.active })
+            .map(|(index, doc)| TabInfo {
+                name: doc.name(),
+                path: doc.path.clone(),
+                dirty: doc.is_dirty(),
+                active: index == self.active,
+                review: self.review_color(&doc.path),
+            })
             .collect()
     }
 
     pub fn is_empty(&self) -> bool {
         self.docs.is_empty()
+    }
+
+    /// The project of the file in front.
+    pub fn active_project(&self) -> Option<&Path> {
+        self.docs.get(self.active).map(|d| d.project.as_path())
     }
 
     pub fn active_path(&self) -> Option<&Path> {
@@ -498,6 +675,8 @@ impl CodeEditor {
                 doc.buffer.unmark();
             }
             self.active = index;
+            // The instruction box belongs to lines of the file it was opened on.
+            self.ask = None;
             window.focus(&self.focus_handle);
             self.tabs_changed(cx);
             cx.notify();
@@ -524,7 +703,11 @@ impl CodeEditor {
         if index >= self.docs.len() {
             return;
         }
-        self.docs.remove(index);
+        let closed = self.docs.remove(index);
+        let (project, language, path) = (closed.project.clone(), closed.language, closed.path.clone());
+        cx.background_spawn(async move { lsp::close(&project, language, &path) }).detach();
+        self.changes.retain(|c| c.path != closed.path);
+        self.presence.retain(|p| p.path != closed.path || p.pending);
         if self.active > index || self.active >= self.docs.len() {
             self.active = self.active.saturating_sub(1);
         }
@@ -551,6 +734,18 @@ impl CodeEditor {
     }
 
     fn tabs_changed(&mut self, cx: &mut Context<Self>) {
+        // The language server for the file in front starts now, to have read the project by
+        // the time it is asked something.
+        if let Some(doc) = self.docs.get(self.active) {
+            lsp::warm(&doc.project, doc.language);
+        }
+        if let Some(path) = self.docs.get(self.active).map(|d| d.path.clone()) {
+            if self.recent.first() != Some(&path) {
+                self.recent.retain(|p| *p != path);
+                self.recent.insert(0, path);
+                self.recent.truncate(50);
+            }
+        }
         let tabs: Vec<(PathBuf, bool)> = self.docs.iter().map(|d| (d.path.clone(), d.is_dirty())).collect();
         if tabs != self.shown_tabs {
             self.shown_tabs = tabs;
@@ -574,6 +769,8 @@ impl CodeEditor {
         let was_dirty = doc.is_dirty();
         f(&mut doc.buffer);
         doc.sync_highlights();
+        self.last_typed = Some(std::time::Instant::now());
+        let Some(doc) = self.docs.get_mut(self.active) else { return };
         doc.autoscroll = true;
         if doc.is_dirty() != was_dirty {
             self.tabs_changed(cx);
@@ -621,6 +818,7 @@ impl CodeEditor {
         match file::save_atomic(&doc.target, &bytes) {
             Ok(()) => {
                 doc.buffer.mark_saved();
+                doc.base = doc.buffer.text();
                 doc.stamp = Stamp::of(&doc.target);
                 doc.disk_changed = false;
                 doc.notice = None;
@@ -806,8 +1004,29 @@ impl CodeEditor {
                             doc.set_notice(deleted, Tone::Warning);
                         }
                         Some(opened) if !doc.is_dirty() && !doc.disk_changed => {
+                            let (before, selection) = (doc.buffer.text(), doc.buffer.selection);
                             doc.reload(opened);
                             doc.stamp = stamp;
+                            let path = doc.path.clone();
+                            this.note_disk_change(&path, &before, selection, cx);
+                        }
+                        // Unsaved edits here and a write there (an agent's): both kept when they
+                        // touch different lines, as one step ⌘Z can take back.
+                        Some(Opened::Text(file))
+                            if !doc.disk_changed
+                                && review::merge(&doc.base, &doc.buffer.text(), &Buffer::new(&file.text).text()).is_some() =>
+                        {
+                            let theirs = Buffer::new(&file.text).text();
+                            let merged = review::merge(&doc.base, &doc.buffer.text(), &theirs).unwrap_or_default();
+                            let (before, selection) = (doc.buffer.text(), doc.buffer.selection);
+                            doc.buffer.set_text(&merged);
+                            doc.sync_highlights();
+                            doc.base = theirs;
+                            doc.stamp = stamp;
+                            let path = doc.path.clone();
+                            this.note_disk_change(&path, &before, selection, cx);
+                            let note = t(cx, "editor.merged").to_string();
+                            this.flash(note, cx);
                         }
                         Some(_) => {
                             if !doc.disk_changed {
@@ -861,6 +1080,7 @@ impl CodeEditor {
     // -- mouse ------------------------------------------------------------------------------
 
     fn mouse_down(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_quick_fix(window, cx);
         window.focus(&self.focus_handle);
         let Some(layout) = self.layout.as_ref() else { return };
         if layout.on_scrollbar(event.position) {
@@ -877,6 +1097,15 @@ impl CodeEditor {
             (_, 2) => DragUnit::Word,
             _ => DragUnit::Char,
         };
+        // ⌘-click: to the definition of what was clicked (or the file an import names).
+        if event.modifiers.secondary() && !event.modifiers.shift && !in_gutter && event.click_count == 1 {
+            doc.buffer.move_to(pos, false);
+            self.link = None;
+            self.ask = None;
+            return self.go_to_definition(window, cx);
+        }
+        self.ask = None;
+        let Some(doc) = self.docs.get_mut(self.active) else { return };
         let (start, end) = unit_range(&doc.buffer, unit, pos);
         if event.modifiers.shift {
             doc.buffer.move_to(if pos < doc.buffer.selection.anchor { start } else { end }, true);
@@ -895,7 +1124,13 @@ impl CodeEditor {
         if event.pressed_button != Some(gpui::MouseButton::Left) {
             self.drag = None;
             self.scrollbar_drag = None;
-            return;
+            self.pointer = Some(event.position);
+            let over = self.text_position(event.position);
+            let hovered = over.filter(|_| event.modifiers.secondary());
+            let plain = over.filter(|_| !event.modifiers.secondary() && !event.modifiers.alt && !event.modifiers.shift);
+            self.hover_problem(plain, cx);
+            self.hover_type(plain, cx);
+            return self.hover_link(hovered, cx);
         }
         let Some(layout) = self.layout.as_ref() else { return };
         if let Some((start_y, start_scroll)) = self.scrollbar_drag {
@@ -918,9 +1153,22 @@ impl CodeEditor {
         cx.notify();
     }
 
-    fn mouse_up(&mut self, _: &gpui::MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
-        self.drag = None;
+    fn mouse_up(&mut self, _: &gpui::MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        // The selection bar shows once the drag is over.
+        if self.drag.take().is_some() {
+            cx.notify();
+        }
         self.scrollbar_drag = None;
+    }
+
+    /// The text position under a point in the text (not in the gutter or on the scrollbar).
+    fn text_position(&self, position: Point<Pixels>) -> Option<Pos> {
+        let layout = self.layout.as_ref()?;
+        if layout.in_gutter(position) || layout.on_scrollbar(position) {
+            return None;
+        }
+        let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text))?;
+        Some(layout.position_for(position, &doc.buffer))
     }
 
     fn scroll_wheel(&mut self, event: &gpui::ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1071,7 +1319,10 @@ impl CodeEditor {
         let relative = doc.path.strip_prefix(&doc.project).map(Path::to_path_buf).unwrap_or_else(|_| doc.path.clone());
         let folder = relative.parent().map(|p| p.display().to_string()).filter(|p| !p.is_empty());
         let can_format = doc.editable() && !doc.formatting;
-        let button = |id: &'static str, glyph: &'static str, label: String, enabled: bool| {
+        // A narrow editor (the session beside it, a small window) keeps the buttons' icons only:
+        // the file's name and where the cursor is matter more. Their tooltips say the rest.
+        let narrow = self.layout.as_ref().is_some_and(|l| l.width() < 760.);
+        let button = move |id: &'static str, glyph: &'static str, label: String, enabled: bool| {
             div()
                 .id(id)
                 .flex_shrink_0()
@@ -1085,7 +1336,7 @@ impl CodeEditor {
                 .text_color(hex(if enabled { Chrome::FOREGROUND } else { Chrome::MUTED }))
                 .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(hex(Chrome::HOVER)).text_color(hex(Chrome::BRIGHT))))
                 .child(icon(glyph, IconSize::INLINE, hex(if enabled { Chrome::FOREGROUND } else { Chrome::MUTED })))
-                .child(label)
+                .when(!narrow, |d| d.child(label))
         };
         div()
             .h(px(34.))
@@ -1113,6 +1364,7 @@ impl CodeEditor {
                         d.child(div().flex_shrink().min_w_0().truncate().text_color(hex(Chrome::MUTED)).child(format!("{folder}/")))
                     })
                     .child(div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).font_weight(FontWeight::MEDIUM).child(doc.name()))
+                    .children(self.render_breadcrumb(doc, cx))
                     .when(doc.is_dirty(), |d| d.child(div().flex_shrink_0().size(px(7.)).rounded_full().bg(hex(Chrome::BRIGHT))))
                     .when(!doc.editable() && matches!(doc.content, Content::Text), |d| {
                         d.child(
@@ -1178,6 +1430,17 @@ impl CodeEditor {
                         }),
                 )
             })
+            .child(
+                crate::ui::icon_only(
+                    "editor-goto",
+                    "search",
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.open_picker("", None, window, cx)),
+                )
+                .tooltip(Tooltip::text(with_shortcut(t(cx, "nav.go_to_file").to_string(), "⌘P"), None)),
+            )
+            .children(self.render_changes_button(cx))
+            .children(self.render_agents_at_work(cx))
+            .child(self.render_session_chip(cx))
             // An HTML file is read as a page, not as its markup: the browser beside the terminals shows it.
             .when(doc.language == Language::Html, |d| {
                 let path = doc.path.clone();
@@ -1361,6 +1624,48 @@ impl CodeEditor {
             ))
     }
 
+    /// The language server of the file in front, in the status bar: its name while it runs, and
+    /// "Install …" while it is not installed or could not start (looked for again every so often,
+    /// so one installed meanwhile takes over by itself).
+    fn render_language_server(&self, doc: &Document, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let id = lsp::id(doc.language)?;
+        let name = agentty_bridge::lsp::spec_for(id)?.program();
+        if doc.project.as_os_str().is_empty() || !matches!(doc.content, Content::Text) {
+            return None;
+        }
+        let shown = |text: String, tip: String| {
+            div().id("editor-lsp").flex_shrink_0().child(text).tooltip(Tooltip::text(tip, None)).into_any_element()
+        };
+        Some(match lsp::status(&doc.project, doc.language) {
+            "ready" => shown(name.to_string(), t(cx, "lsp.ready_tip").to_string()),
+            "starting" | "indexing" => shown(format!("{name} …"), t(cx, "lsp.indexing_tip").to_string()),
+            "skipped" => div()
+                .id("editor-lsp")
+                .flex_shrink_0()
+                .opacity(0.55)
+                .child(name)
+                .tooltip(Tooltip::text(t(cx, "lsp.skipped_tip"), None))
+                .into_any_element(),
+            _ => {
+                lsp::warm(&doc.project, doc.language);
+                div()
+                    .id("editor-lsp")
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .cursor_pointer()
+                    .text_color(hex(Chrome::ATTENTION))
+                    .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                    .child(icon("download", 11., hex(Chrome::ATTENTION)))
+                    .child(tf(cx, "lsp.install", &[("name", name)]))
+                    .tooltip(Tooltip::text(t(cx, "lsp.install_tip"), None))
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(EditorEvent::InstallLanguageServer(id))))
+                    .into_any_element()
+            }
+        })
+    }
+
     fn render_status(&self, doc: &Document, cx: &mut Context<Self>) -> impl IntoElement {
         let cursor = doc.buffer.cursor();
         let column = buffer::display_column(doc.buffer.line(cursor.line), cursor.col) + 1;
@@ -1398,6 +1703,8 @@ impl CodeEditor {
                 d.child(item(indent))
                     .child(item(if doc.format.bom { "UTF-8 BOM".into() } else { "UTF-8".into() }))
                     .child(item(if doc.format.crlf { "CRLF".into() } else { "LF".into() }))
+                    .children(self.render_problem_counts(cx))
+                    .children(self.render_language_server(doc, cx))
                     .child(div().min_w_0().truncate().child(language))
             })
     }
@@ -1538,6 +1845,19 @@ impl CodeEditor {
             "active": self.active,
             "confirm": self.confirm.is_some(),
             "find": self.find_matches().map(|(matches, current)| serde_json::json!({ "matches": matches.len(), "current": current })),
+            "picker": self.debug_picker(),
+            "linked": self.linked.as_ref().map(|l| l.label.clone()),
+            "presence": self.presence.iter().map(|p| serde_json::json!({ "label": p.label, "path": p.path, "at": [p.at.line, p.at.col], "lines": p.lines, "pending": p.pending })).collect::<Vec<_>>(),
+            "ask": self.ask.is_some(),
+            "link": self.link.map(|(s, e)| [s.line, s.col, e.col]),
+            "peek": self.debug_peek(),
+            "lsp": self.docs.get(self.active).map(|d| lsp::status(&d.project, d.language)),
+            "problems": self.debug_problems(),
+            "quickFix": self.debug_quick_fix(),
+            "typeHover": self.debug_type_hover(),
+            "changes": self.debug_changes(),
+            "allChanges": self.changes.iter().map(|c| format!("{}:{}", c.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), c.hunk.start)).collect::<Vec<_>>(),
+            "unclaimed": self.unclaimed.len(),
             "preview": {
                 "view": self.preview.view.borrow().is_some(),
                 "covered": self.preview.covered,
@@ -1591,6 +1911,80 @@ impl CodeEditor {
                 b.undo();
             }),
             "close" => self.request_close(self.active, cx),
+            // Code navigation: the go-to box with a query, a row of it, definition, usages, back.
+            "goto-box" => {
+                self.open_picker(argument, None, window, cx);
+            }
+            "pick" => self.debug_pick(argument.parse().unwrap_or(0), window, cx),
+            "close-box" => self.close_picker(window, cx),
+            // As if ⌘ were held over line:column.
+            "hover" => {
+                let mut parts = argument.split(':').map(|p| p.parse::<usize>().unwrap_or(1).saturating_sub(1));
+                let pos = Pos::new(parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+                self.hover_link(Some(pos), cx);
+            }
+            // F8 / ⇧F8, and the pointer resting on line:column (its problem's message).
+            "next-problem" => self.step_problem(argument != "back", cx),
+            "quick-fix" => self.open_quick_fix(window, cx),
+            "pick-fix" => self.debug_pick_fix(argument.parse().unwrap_or(0), window, cx),
+            "rename" => self.debug_rename(argument, window, cx),
+            "rename-box" => self.open_rename(window, cx),
+            "problems" => self.show_problems(window, cx),
+            "rest" => {
+                let mut parts = argument.split(':').map(|p| p.parse::<usize>().unwrap_or(1).saturating_sub(1));
+                let pos = Pos::new(parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+                self.hover_type(Some(pos), cx);
+            }
+            "point" => {
+                let mut parts = argument.split(':').map(|p| p.parse::<usize>().unwrap_or(1).saturating_sub(1));
+                let pos = Pos::new(parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+                self.hover_problem(Some(pos), cx);
+            }
+            "definition" => self.go_to_definition(window, cx),
+            "usages" => self.find_usages(window, cx),
+            "back" => self.navigate(true, window, cx),
+            "forward" => self.navigate(false, window, cx),
+            // `select 3:1-5:10`, lines and columns from 1.
+            "select" => {
+                let parse = |p: &str| {
+                    let mut parts = p.split(':').map(|n| n.trim().parse::<usize>().unwrap_or(1).saturating_sub(1));
+                    Pos::new(parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+                };
+                let (from, to) = argument.split_once('-').unwrap_or((argument, argument));
+                let (from, to) = (parse(from), parse(to));
+                self.motion(cx, |b| {
+                    b.move_to(from, false);
+                    b.move_to(to, true);
+                });
+            }
+            "ask" => {
+                self.open_ask(window, cx);
+                if let Some(input) = self.ask.as_ref().map(|a| a.input.clone()) {
+                    input.update(cx, |input, cx| input.set_text(argument.to_string(), cx));
+                }
+                if !argument.is_empty() {
+                    self.debug_send_ask(window, cx);
+                }
+            }
+            "follow" => self.toggle_follow(cx),
+            "session" => cx.emit(EditorEvent::ToggleSession),
+            // A window out of sight is not painted, so the workbench never says the editor is on
+            // screen: tests of what depends on it say so here.
+            "on-screen" => self.preview.covered = false,
+            // Review: `undo <n>` / `keep <n>` the n-th change of the file in front (from 0), `next`.
+            "review" => {
+                let (action, index) = argument.split_once(' ').unwrap_or((argument, "0"));
+                let id = self.changes_here().get(index.parse::<usize>().unwrap_or(0)).map(|(c, _)| c.id);
+                match (action, id) {
+                    ("undo", Some(id)) => self.undo_change(id, cx),
+                    ("keep", Some(id)) => self.keep_change(id, cx),
+                    ("keep-all", _) => self.keep_all_changes(cx),
+                    ("next", _) => self.review_step(true, cx),
+                    ("diff", _) => self.review_diff = !self.review_diff,
+                    ("all", _) => self.show_all_changes(window, cx),
+                    _ => {}
+                }
+            }
             // What an input method sends: `mark:ㅎ`, `commit:한`, `unmark`.
             "ime" => {
                 use gpui::EntityInputHandler;
@@ -1651,10 +2045,16 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
         disk_changed: false,
         checking: false,
         preview: false,
+        center: false,
+        scroll_to_line: None,
+        base: String::new(),
+        outline: Default::default(),
+        checks: Default::default(),
     };
     match opened {
         Opened::Text(file) => {
             doc.buffer = Buffer::new(&file.text);
+            doc.base = doc.buffer.text();
             // Big files stay uncolored: coloring them would cost more than it helps.
             if file.read_only != Some(ReadOnly::Large) {
                 doc.highlights = highlights_for(language, path, doc.buffer.line(0));
@@ -1781,8 +2181,27 @@ impl Render for CodeEditor {
             self.preview.asking = false;
         }
         let find_bar = self.render_find_bar(cx);
+        let picker = self.render_picker(cx);
+        let selection_tools = self.render_selection_tools(cx);
+        let flash = self.render_flash();
+        let review_bar = self.render_review_bar(cx);
+        let change_diff = self.render_change_diff(cx);
+        let link_peek = self.render_link_peek(cx);
+        let problem_hover = self.render_problem_hover(cx);
+        let quick_fix = self.render_quick_fix(cx);
+        let bulb = self.render_bulb(cx);
+        let rename_box = self.render_rename(cx);
+        let type_hover = self.render_type_hover(cx);
+        let presence_labels =
+            if self.docs.get(self.active).is_some_and(|d| !d.previewing()) { self.render_presence_labels(cx) } else { Vec::new() };
         let Some(doc) = self.docs.get(self.active) else {
-            return div().id("code-editor-root").size_full().child(div().id("code-editor").size_full().bg(hex(Chrome::EDITOR)));
+            // Nothing open yet: only the go-to box (⌘P from the terminals).
+            return div()
+                .id("code-editor-root")
+                .size_full()
+                .relative()
+                .child(div().id("code-editor").size_full().bg(hex(Chrome::EDITOR)))
+                .children(picker);
         };
         let body = if previewing {
             // The native page is laid over this element once its place is known. A question
@@ -1817,7 +2236,7 @@ impl Render for CodeEditor {
                 .flex_1()
                 .min_h_0()
                 .relative()
-                .cursor(gpui::CursorStyle::IBeam)
+                .cursor(if self.link.is_some() { gpui::CursorStyle::PointingHand } else { gpui::CursorStyle::IBeam })
                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(Self::mouse_down))
                 .on_mouse_move(cx.listener(Self::mouse_move))
                 .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
@@ -1844,6 +2263,12 @@ impl Render for CodeEditor {
             .id("code-editor")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            // The pointer left the editor: what it rested on goes too.
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered {
+                    this.clear_hovers(cx);
+                }
+            }))
             .size_full()
             .relative()
             .flex()
@@ -1931,13 +2356,49 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &Format, _, cx| this.format(cx)))
             .on_action(cx.listener(|this, _: &CloseFile, _, cx| this.request_close(this.active, cx)))
             .on_action(cx.listener(|this, _: &TogglePreview, window, cx| this.toggle_preview(window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::GoToFile, window, cx| this.open_picker("", None, window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::GoToFileSymbol, window, cx| this.open_picker("@", None, window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::GoToSymbol, window, cx| this.open_picker("#", None, window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::GoToLine, window, cx| this.open_picker(":", None, window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::GoToDefinition, window, cx| this.go_to_definition(window, cx)))
+            .on_action(cx.listener(|this, _: &problems::NextProblem, _, cx| this.step_problem(true, cx)))
+            .on_action(cx.listener(|this, _: &quickfix::QuickFix, window, cx| this.open_quick_fix(window, cx)))
+            .on_action(cx.listener(|this, _: &rename::Rename, window, cx| this.open_rename(window, cx)))
+            .on_action(cx.listener(|this, _: &problems::PreviousProblem, _, cx| this.step_problem(false, cx)))
+            .on_action(cx.listener(|this, _: &navigate::FindUsages, window, cx| this.find_usages(window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::NavigateBack, window, cx| this.navigate(true, window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::NavigateForward, window, cx| this.navigate(false, window, cx)))
+            .on_action(cx.listener(|this, _: &AskAgent, window, cx| this.open_ask(window, cx)))
+            .on_action(cx.listener(|this, _: &review::NextChange, _, cx| this.review_step(true, cx)))
+            .on_action(cx.listener(|this, _: &review::PreviousChange, _, cx| this.review_step(false, cx)))
+            .on_modifiers_changed(cx.listener(|this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                let hovered = event.modifiers.secondary().then(|| this.pointer.and_then(|p| this.text_position(p))).flatten();
+                this.hover_link(hovered, cx);
+            }))
             .child(self.render_toolbar(doc, cx))
             .children(self.render_notice(doc, cx))
             .child(body)
             .child(self.render_status(doc, cx))
             .children(self.render_confirm(cx));
         // The find bar beside the editor's key context, not in it: what is typed there stays there.
-        div().id("code-editor-root").size_full().relative().child(editor).children(find_bar)
+        div()
+            .id("code-editor-root")
+            .size_full()
+            .relative()
+            .child(editor)
+            .children(find_bar)
+            .children(picker)
+            .children(selection_tools)
+            .children(presence_labels)
+            .children(review_bar)
+            .children(change_diff)
+            .children(link_peek)
+            .children(problem_hover)
+            .children(bulb)
+            .children(type_hover)
+            .children(quick_fix)
+            .children(rename_box)
+            .children(flash)
     }
 }
 

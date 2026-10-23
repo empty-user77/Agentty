@@ -39,6 +39,20 @@ pub fn repo_root(path: &Path) -> Option<PathBuf> {
     git(path, &["rev-parse", "--show-toplevel"]).ok().map(|s| PathBuf::from(s.trim())).filter(|p| p.is_dir())
 }
 
+/// The files of the project at `dir` as git sees them: tracked ones and new ones not ignored by
+/// `.gitignore`, relative to `dir`. `None` outside a repository.
+pub fn project_files(dir: &Path) -> Option<Vec<String>> {
+    let out = git(dir, &["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"]).ok()?;
+    Some(out.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect())
+}
+
+/// Whether the repository at `dir` tracks anything under `path` (relative to `dir`). `None`
+/// outside a repository.
+pub fn tracks(dir: &Path, path: &str) -> Option<bool> {
+    let out = git(dir, &["ls-files", "-z", "--", path]).ok()?;
+    Some(!out.is_empty())
+}
+
 /// The branch checked out (`None` when detached) and the commit at `HEAD`.
 pub fn head(repo: &Path) -> Option<(Option<String>, String)> {
     let commit = git(repo, &["rev-parse", "--verify", "-q", "HEAD"]).ok()?.trim().to_string();

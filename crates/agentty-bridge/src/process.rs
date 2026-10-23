@@ -146,7 +146,7 @@ pub fn tool_dirs() -> Vec<PathBuf> {
         dirs.extend(var("LOCALAPPDATA").map(|d| d.join("Microsoft").join("WindowsApps")));
     } else {
         if let Some(home) = &home {
-            for sub in [".claude/local", ".npm-global/bin", ".volta/bin", ".bun/bin", ".cargo/bin"] {
+            for sub in [".claude/local", ".npm-global/bin", ".volta/bin", ".bun/bin", ".cargo/bin", "go/bin"] {
                 dirs.push(home.join(sub));
             }
         }

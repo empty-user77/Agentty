@@ -5,6 +5,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- File editor: code navigation for Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included), Rust
+  and Go. **⌘P** goes to a file (`@` symbols of the file, `#` symbols of the project, `:` a line), **F12** or
+  ⌘-click to a definition (an import's path opens that file), **⇧F12** lists the usages, **⌃-** / **⌃⇧-** go back
+  and forward. Nothing to install: definitions are found by name in the project's files.
+- File editor: when a language server is installed (rust-analyzer, gopls, TypeScript 7's `tsc` or
+  typescript-language-server, pyright, jdtls, kotlin-language-server), definitions and usages come from it, so a
+  name defined in several places goes straight to the right one, and holding **⌘** over a name also shows its type
+  or signature. Without one, or while it is still reading the project, the editor finds names as before. A missing server can be installed
+  from the editor's status bar or **Settings → Project → Language servers** (its official install command runs
+  in a new terminal tab).
+- File editor: problems from the language server as you type — red wavy lines under errors, yellow under warnings,
+  the message when the pointer rests on one, colored line numbers and scrollbar ticks, the counts in the status bar,
+  and **F8** / **⇧F8** to step through them.
+- File editor: quick fixes from the language server (**Add import …** and the like). A light bulb in the gutter
+  shows when the cursor's line has one, the problem's message lists them, and **⌘.** lists every fix and refactoring
+  at the cursor. A fix is one undo step.
+- File editor: **F2** renames a name everywhere it is used, through the language server (in this file only
+  without one). Resting the pointer on a name shows its type or signature, and the status bar's error count lists
+  every problem in the open files.
+- File editor: **Connect session** shows an agent's terminal beside the code. Select code for **Ask AI** (or **⌘K**)
+  to send an instruction about those lines to it, plus Copy, Definition and Usages.
+- File editor: agents are seen at work. Changed lines light up with the agent's name (`Claude-3f9a`) at its caret;
+  Claude Code shows the spot before it writes. Several sessions at once each get a caret and a chip that jumps to
+  where they edit; **Follow** brings the file being changed to the front.
+- File editor: agents' changes stay marked in the gutter and on the file's tab until reviewed; a bar steps through
+  them with **Undo** (back to the text before the agent, saved) and **Keep**. An agent's write to a file with unsaved
+  edits on other lines is merged instead of asking, and the cursor stays on its code when lines are added above.
+- File editor: a breadcrumb shows where the cursor is (`ApiClient › save`), lists of definitions and usages show the
+  code around the selected place, the name under the cursor is marked wherever it appears, and ⌘P lists recent
+  files first.
+- File editor: **Compare** shows an agent's change as it was and as it is, **⌥F5** / **⇧⌥F5** step through changes,
+  holding **⌘** over a name shows its definition, the session chip says when the agent waits for you, and
+  **N changes** lists every change to review across open files.
+
 ## [0.2.25] - 2026-10-22
 
 ### Added

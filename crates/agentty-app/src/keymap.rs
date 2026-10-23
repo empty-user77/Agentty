@@ -306,6 +306,7 @@ mod tests {
         ("ctrl-cmd-m", None),
         ("cmd-shift-b", None),
         ("cmd-alt-b", None),
+        ("cmd-p", None),
         ("cmd-f", None),
         ("cmd-=", None),
         ("cmd-+", None),

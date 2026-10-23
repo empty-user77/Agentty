@@ -25,6 +25,7 @@ mod disk_page;
 mod docker_panel;
 mod drop_split;
 mod editor_host;
+pub mod editor_session;
 mod file_diff;
 mod files_panel;
 mod find;
@@ -67,6 +68,7 @@ mod servers;
 mod service_status;
 mod session_viewer;
 mod settings_agents;
+mod settings_lsp;
 mod settings_page;
 pub mod side_panels;
 mod status_menus;
@@ -138,6 +140,7 @@ actions!(
         ToggleBrowser,
         HardReloadBrowser,
         ToggleFiles,
+        GoToFile,
         FindInTerminal,
         ZoomIn,
         ZoomOut,
@@ -566,6 +569,16 @@ pub struct Workbench {
     /// What changed about a file, shown where the editor is (the files panel's "changes" tab).
     file_diff: Option<file_diff::FileDiff>,
     editor_subscription: Option<Subscription>,
+    /// The session picked to show beside the editor (by pane id); otherwise one is chosen.
+    editor_link: Option<u64>,
+    /// The linked session is shown beside the editor.
+    editor_session_open: bool,
+    /// The column lists the sessions to pick from instead of showing one.
+    editor_session_picking: bool,
+    /// Dragging the column's edge: (pointer x, width) at the start.
+    editor_session_drag: Option<(f32, f32)>,
+    /// Width of the editor's area (editor and session together), as last laid out.
+    editor_area_width: f32,
     /// The user already answered "unsaved files — quit / close anyway?".
     discard_confirmed: bool,
     /// File ⌘-clicked in a terminal, opened in the editor on the next frame (which has a window).
@@ -689,6 +702,11 @@ pub struct Workbench {
     /// would keep it alive after its tab was closed, and dropping the pane is what ends what runs
     /// in it (`terminal::backend`'s `Drop` signals the process group).
     system_installs: Vec<(&'static str, gpui::EntityId)>,
+    /// Settings → Project → Language servers, whether a lookup is running, and the servers whose
+    /// install tab was open at the last look (one that closed means: look again).
+    lsp_servers: Option<Vec<agentty_bridge::lsp::Installable>>,
+    lsp_checking: bool,
+    lsp_installs_seen: Vec<&'static str>,
     harness_pattern_form: Option<settings_page::HarnessPatternForm>,
     /// Plugin whose panel is docked right of the terminals.
     plugin_panel: Option<String>,
@@ -935,6 +953,11 @@ impl Workbench {
             editor_shown: false,
             file_diff: None,
             editor_subscription: None,
+            editor_link: None,
+            editor_session_open: false,
+            editor_session_picking: false,
+            editor_session_drag: None,
+            editor_area_width: 1200.,
             discard_confirmed: false,
             pending_editor_open: None,
             ask: None,
@@ -1009,6 +1032,9 @@ impl Workbench {
             system_check: None,
             system_checking: false,
             system_installs: Vec::new(),
+            lsp_servers: None,
+            lsp_checking: false,
+            lsp_installs_seen: Vec::new(),
             harness_pattern_form: None,
             plugin_panel: None,
             plugin_mode_menu: false,
@@ -1448,6 +1474,7 @@ impl Workbench {
     }
 
     pub fn apply_signal(&mut self, signal: AgentSignal, cx: &mut Context<Self>) {
+        self.editor_signal(&signal, cx);
         if let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == signal.pane_id) {
             pane.update(cx, |view, cx| view.apply_signal(signal, cx));
         }
@@ -3184,6 +3211,7 @@ impl Workbench {
                 || self.browser_net_drag.is_some()
                 || self.split_drag.is_some()
                 || self.plugin_ws_drag.is_some()
+                || self.editor_session_drag.is_some()
                 || self.flow.is_dragging()
             {
                 self.end_drags(cx);
@@ -3224,6 +3252,8 @@ impl Workbench {
                 store.settings.files_panel_width = width
             });
             cx.notify();
+        } else if self.editor_session_drag.is_some() {
+            self.drag_editor_session(f32::from(event.position.x), cx);
         } else if let Some(panel) = self.side_resizing {
             let viewport = f32::from(window.viewport_size().width);
             self.drag_side_panel(panel, f32::from(event.position.x), viewport, window, cx);
@@ -3256,9 +3286,11 @@ impl Workbench {
             || self.files_trees_drag.is_some()
             || self.browser_net_drag.is_some()
             || self.plugin_ws_drag.is_some()
+            || self.editor_session_drag.is_some()
         {
             self.runs.log.drag = None;
             self.plugin_ws_drag = None;
+            self.editor_session_drag = None;
             self.sidebar_resizing = false;
             self.browser_resizing = false;
             self.files_resizing = false;
@@ -3360,7 +3392,16 @@ impl Render for Workbench {
             Some(Page::Idea) => {
                 gpui::AnyView::from(self.idea_view(window, cx)).cached(gpui::StyleRefinement::default().size_full()).into_any_element()
             }
-            None if self.editor_visible(cx) => self.render_editor(cx).expect("editor is visible"),
+            None if self.editor_visible(cx) => {
+                self.sync_editor_link(cx);
+                let editor = self.render_editor(cx).expect("editor is visible");
+                // A diff takes the editor's place: no session beside it.
+                if self.file_diff.is_some() {
+                    editor
+                } else {
+                    self.render_editor_with_session(editor, cx)
+                }
+            }
             None => {
                 match (self.render_session_viewer(cx), self.workspaces.get(self.active_workspace).and_then(|ws| ws.tabs.get(ws.active_tab)))
                 {
@@ -3505,6 +3546,7 @@ impl Render for Workbench {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleFiles, _, cx| this.toggle_files_panel(cx)))
+            .on_action(cx.listener(|this, _: &GoToFile, window, cx| this.go_to_file(window, cx)))
             .on_action(cx.listener(|this, _: &FindInTerminal, window, cx| {
                 // The terminal behind the editor is not on screen to search: the file in front is.
                 if !this.editor_visible(cx) {
@@ -3602,6 +3644,7 @@ impl Render for Workbench {
                         || this.browser_net_drag.is_some()
                         || this.split_drag.is_some()
                         || this.plugin_ws_drag.is_some()
+                        || this.editor_session_drag.is_some()
                     {
                         this.end_drags(cx);
                     }
@@ -4189,6 +4232,10 @@ impl Workbench {
                         "browserTabs": self.browser.as_ref().map(|b| b.debug_state()),
                         "files": self.files_panel.as_ref().map(|p| p.debug_state()),
                         "editor": self.editor_debug_state(cx),
+                        "lspServers": self.lsp_servers.as_ref().map(|servers| servers
+                            .iter()
+                            .map(|s| serde_json::json!({ "name": s.name, "installed": s.installed, "install": s.install, "needs": s.needs }))
+                            .collect::<Vec<_>>()),
                         "docker": self.docker.debug_state(),
                         "run": self.runs.debug_state(),
                         "db": self.db.debug_state(),
@@ -5066,7 +5113,7 @@ impl Workbench {
                     let pane_id = pane.read(cx).pane_id;
                     let (kind, payload) = argument.split_once(' ').unwrap_or((argument, ""));
                     if let Some(signal) = crate::agent_signal::parse_line(&format!("{pane_id}\t{kind}\t{payload}")) {
-                        pane.update(cx, |view, cx| view.apply_signal(signal, cx));
+                        self.apply_signal(signal, cx);
                     }
                 }
             }

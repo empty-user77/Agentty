@@ -460,6 +460,7 @@ fn bind_keys(cx: &mut App) {
         key("cmd-shift-b", ToggleBrowser, None),
         key("cmd-shift-r", HardReloadBrowser, None),
         key("cmd-alt-b", ToggleFiles, None),
+        key("cmd-p", GoToFile, None),
         key("cmd-f", FindInTerminal, None),
         key("cmd-=", ZoomIn, None),
         key("cmd-+", ZoomIn, None),
@@ -708,6 +709,8 @@ fn main() {
         cx.on_app_quit(|_| async { agentty_bridge::voice::unload() }).detach();
         // Servers started in the run log have process groups of their own: no hangup ends them.
         cx.on_app_quit(|_| async { run_log::stop_all() }).detach();
+        // The code editor's language servers also stop once their input closes; this ends them now.
+        cx.on_app_quit(|_| async { agentty_bridge::lsp::shutdown_all() }).detach();
         remote::init(cx);
         cx.spawn(async move |cx| {
             while let Some(envelope) = plugin_events.next().await {

@@ -290,6 +290,9 @@ pub struct Settings {
     /// Width of the database panel docked right of the terminals.
     #[serde(default = "default_db_panel_width")]
     pub db_panel_width: f32,
+    /// Width of the session shown beside the file editor.
+    #[serde(default = "default_editor_session_width")]
+    pub editor_session_width: f32,
     /// Commands the user added to the run button, by project folder.
     #[serde(default)]
     pub run_configs: std::collections::BTreeMap<String, Vec<agentty_bridge::run_configs::CustomRun>>,
@@ -891,6 +894,10 @@ fn default_db_panel_width() -> f32 {
     crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH
 }
 
+fn default_editor_session_width() -> f32 {
+    crate::workbench::editor_session::DEFAULT_WIDTH
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -923,6 +930,7 @@ impl Default for Settings {
             plugin_workspace_terminal_height: 280.,
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
             db_panel_width: crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH,
+            editor_session_width: crate::workbench::editor_session::DEFAULT_WIDTH,
             run_configs: std::collections::BTreeMap::new(),
             run_recent: std::collections::BTreeMap::new(),
             run_log_height: crate::workbench::log_panel::DEFAULT_HEIGHT,

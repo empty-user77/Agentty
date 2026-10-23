@@ -1218,6 +1218,7 @@ impl Workbench {
                 t(cx, "editor.settings_external_hint"),
                 editors,
             )))
+            .child(self.render_language_servers(cx))
             .child(
                 section(t(cx, "settings.project_harness"))
                     .child(row_with_hint(
