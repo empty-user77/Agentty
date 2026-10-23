@@ -86,6 +86,7 @@ impl CodeEditor {
         }
         let Some(doc) = self.docs.iter().find(|d| d.path == path) else { return };
         let (project, language, text) = (doc.project.clone(), doc.language, lsp::Snapshot::of(&doc.buffer));
+        let since = (path.clone(), text.revision);
         let ask = (new.clone(), path.clone());
         cx.spawn(async move |this, cx| {
             let (wanted, file) = ask;
@@ -94,7 +95,7 @@ impl CodeEditor {
                 Some(Ok(edits)) if !edits.is_empty() => {
                     let files = edits.len();
                     let places: usize = edits.iter().map(lsp::edit_count).sum();
-                    let ok = CodeEditor::apply_edits(&this, edits, cx).await;
+                    let Some(ok) = CodeEditor::apply_edits(&this, edits, since, cx).await else { return };
                     let _ = this.update(cx, |this, cx| {
                         let note = if ok {
                             tf(cx, "editor.renamed", &[("n", &places.to_string()), ("files", &files.to_string())])

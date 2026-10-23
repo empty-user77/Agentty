@@ -480,7 +480,7 @@ pub struct CodeEditor {
     /// The problem under the pointer, and whether its message shows yet.
     problem_hover: Option<(lsp::Problem, bool)>,
     /// The fixes of that problem, once the server said.
-    hover_fixes: Option<(lsp::Problem, Vec<lsp::Action>)>,
+    hover_fixes: Option<(lsp::Problem, u64, Vec<lsp::Action>)>,
     /// The ⌘. list, while open.
     fixes: Option<quickfix::FixMenu>,
     /// Whether the cursor's line has fixes (the light bulb), and whether that is being asked.
@@ -674,6 +674,8 @@ impl CodeEditor {
         if let Some((line, column)) = place {
             self.pending_column = Some(column.saturating_sub(1));
             self.pending_goto = Some((path.to_path_buf(), Pos::new(line.saturating_sub(1), 0), 0, None));
+        } else {
+            self.pending_column = None;
         }
         self.open(path, project, window, cx);
     }
@@ -835,6 +837,14 @@ impl CodeEditor {
             self.tabs_changed(cx);
         }
         cx.notify();
+    }
+
+    /// An edit that is not typing (moving lines): the completion list and the parameter hint,
+    /// placed by the text as it was, close first.
+    fn dismiss_and_edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Buffer)) {
+        self.completion = None;
+        self.signature = None;
+        self.edit(cx, f);
     }
 
     /// Moves the cursor (works in read-only files too).
@@ -2475,11 +2485,11 @@ impl Render for CodeEditor {
                     this.edit(cx, |b| b.toggle_comment(open, close));
                 }
             }))
-            .on_action(cx.listener(|this, _: &MoveLinesUp, _, cx| this.edit(cx, |b| b.move_lines(false))))
-            .on_action(cx.listener(|this, _: &MoveLinesDown, _, cx| this.edit(cx, |b| b.move_lines(true))))
-            .on_action(cx.listener(|this, _: &DuplicateLinesUp, _, cx| this.edit(cx, |b| b.duplicate_lines(false))))
-            .on_action(cx.listener(|this, _: &DuplicateLinesDown, _, cx| this.edit(cx, |b| b.duplicate_lines(true))))
-            .on_action(cx.listener(|this, _: &DeleteLines, _, cx| this.edit(cx, |b| b.delete_lines())))
+            .on_action(cx.listener(|this, _: &MoveLinesUp, _, cx| this.dismiss_and_edit(cx, |b| b.move_lines(false))))
+            .on_action(cx.listener(|this, _: &MoveLinesDown, _, cx| this.dismiss_and_edit(cx, |b| b.move_lines(true))))
+            .on_action(cx.listener(|this, _: &DuplicateLinesUp, _, cx| this.dismiss_and_edit(cx, |b| b.duplicate_lines(false))))
+            .on_action(cx.listener(|this, _: &DuplicateLinesDown, _, cx| this.dismiss_and_edit(cx, |b| b.duplicate_lines(true))))
+            .on_action(cx.listener(|this, _: &DeleteLines, _, cx| this.dismiss_and_edit(cx, |b| b.delete_lines())))
             .on_action(cx.listener(|this, _: &Delete, _, cx| this.edit(cx, |b| b.delete_forward())))
             .on_action(cx.listener(|this, _: &DeleteWordBack, _, cx| this.edit(cx, |b| b.delete_word_back())))
             .on_action(cx.listener(|this, _: &Newline, _, cx| {
@@ -2496,11 +2506,15 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &complete::Dismiss, _, cx| this.dismiss(cx)))
             .on_action(cx.listener(|this, _: &Outdent, _, cx| this.edit(cx, |b| b.outdent())))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
+                this.completion = None;
+                this.signature = None;
                 this.edit(cx, |b| {
                     b.undo();
                 })
             }))
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
+                this.completion = None;
+                this.signature = None;
                 this.edit(cx, |b| {
                     b.redo();
                 })

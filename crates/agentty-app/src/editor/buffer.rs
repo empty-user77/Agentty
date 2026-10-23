@@ -123,7 +123,7 @@ impl Buffer {
             next_id: 1,
             saved_at: 0,
             changed_from: None,
-            revision: 0,
+            revision: next_revision(),
             indent,
             composition: None,
         }
@@ -173,6 +173,9 @@ impl Buffer {
     }
 
     /// Goes up with every change to the text.
+    /// The text's revision: it changes with every edit, and is never the same for two texts of the
+    /// app (every buffer counts on from one counter), so a language server handed a text by its
+    /// revision never takes an older text for a newer one.
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -280,7 +283,7 @@ impl Buffer {
         new_lines[last].push_str(&tail);
         self.lines.splice(start.line..=end.line, new_lines);
         self.changed_from = Some(self.changed_from.map_or(start.line, |line| line.min(start.line)));
-        self.revision += 1;
+        self.revision = next_revision();
         end_pos
     }
 
@@ -497,7 +500,7 @@ impl Buffer {
                     return line.to_string();
                 }
                 let indent = line.len() - line.trim_start().len();
-                let mut body = &line[indent + open.len()..];
+                let Some(mut body) = line.get(indent + open.len()..) else { return line.to_string() };
                 body = body.strip_prefix(' ').unwrap_or(body);
                 if !close.is_empty() {
                     body = body.trim_end();
@@ -507,7 +510,8 @@ impl Buffer {
                 format!("{}{body}", &line[..indent])
             });
         } else {
-            let column = filled.iter().map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+            let indent = |l: &str| l.len() - l.trim_start_matches([' ', '\t']).len();
+            let column = filled.iter().map(|l| indent(l)).min().unwrap_or(0);
             let (open, close) = (open.to_string(), close.to_string());
             self.map_lines(first, last, |line| {
                 if line.trim().is_empty() {
@@ -737,7 +741,7 @@ impl Buffer {
             edit.sealed = true;
         }
         self.changed_from = Some(0);
-        self.revision += 1;
+        self.revision = next_revision();
     }
 
     // -- input methods ----------------------------------------------------------------------
@@ -976,6 +980,12 @@ impl Buffer {
     }
 }
 
+/// The next text revision of the app (see [`Buffer::revision`]).
+fn next_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Words, punctuation and blanks: moving by word stops where one kind turns into another.
 fn char_class(c: char) -> u8 {
     if c.is_alphanumeric() || c == '_' {
@@ -1133,6 +1143,25 @@ mod tests {
         assert_eq!(b.text(), "// a\nb\nc");
         b.undo();
         assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn comments_lines_indented_with_other_spaces() {
+        let mut b = Buffer::new(" x\n\u{a0}y\n\u{3000}z");
+        b.selection = Selection { anchor: Pos::new(0, 0), head: Pos::new(2, 1) };
+        b.toggle_comment("//", "");
+        // A no-break space is text, not indentation: the marks go at the start of every line.
+        assert_eq!(b.text(), "//  x\n// \u{a0}y\n// \u{3000}z");
+        b.toggle_comment("//", "");
+        assert_eq!(b.text(), " x\n\u{a0}y\n\u{3000}z");
+    }
+
+    #[test]
+    fn revisions_never_repeat_across_buffers() {
+        let (mut a, b) = (Buffer::new("a"), Buffer::new("b"));
+        let before = b.revision();
+        a.insert("x");
+        assert!(a.revision() > before && b.revision() != a.revision());
     }
 
     #[test]

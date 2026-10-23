@@ -33,6 +33,8 @@ pub(super) struct FixMenu {
     actions: Option<Vec<Action>>,
     /// The problem at the cursor, which the last row hands to the linked agent.
     problem: Option<super::lsp::Problem>,
+    /// The revision of the text the actions were offered for.
+    revision: u64,
     selected: usize,
     focus: FocusHandle,
 }
@@ -96,7 +98,8 @@ impl CodeEditor {
         window.focus(&focus);
         self.problem_hover = None;
         let has_problem = problem.is_some();
-        self.fixes = Some(FixMenu { path: doc.path.clone(), at: start, actions: None, problem, selected: 0, focus });
+        let revision = doc.buffer.revision();
+        self.fixes = Some(FixMenu { path: doc.path.clone(), at: start, actions: None, problem, revision, selected: 0, focus });
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         let asked = path.clone();
         cx.spawn_in(window, async move |this, cx| {
@@ -129,18 +132,20 @@ impl CodeEditor {
 
     /// Runs `action` of the file in front: its changes go into the open files (one undo step
     /// each) and onto disk for the others.
-    pub(super) fn apply_fix(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+    /// `since` is the revision of the text the server offered the action for.
+    pub(super) fn apply_fix(&mut self, action: Action, since: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.close_quick_fix(window, cx);
         self.problem_hover = None;
         let Some(doc) = self.docs.get(self.active) else { return };
         let (project, language, path) = (doc.project.clone(), doc.language, doc.path.clone());
+        let file = path.clone();
         cx.spawn(async move |this, cx| {
             let edits = cx.background_spawn(async move { lsp::apply(&project, language, &path, &action) }).await;
             let Some(edits) = edits else {
                 let _ = this.update(cx, |this, cx| this.flash(t(cx, "editor.fix_failed").to_string(), cx));
                 return;
             };
-            if !CodeEditor::apply_edits(&this, edits, cx).await {
+            if CodeEditor::apply_edits(&this, edits, (file, since), cx).await == Some(false) {
                 let _ = this.update(cx, |this, cx| this.flash(t(cx, "editor.fix_failed").to_string(), cx));
             }
         })
@@ -154,10 +159,11 @@ impl CodeEditor {
             return self.flash(t(cx, "editor.organize_needs_server").to_string(), cx);
         }
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
+        let since = text.revision;
         cx.spawn_in(window, async move |this, cx| {
             let action = cx.background_spawn(async move { lsp::organize_imports(&project, language, &path, &text) }).await;
             let _ = this.update_in(cx, |this, window, cx| match action {
-                Some(action) => this.apply_fix(action, window, cx),
+                Some(action) => this.apply_fix(action, since, window, cx),
                 None => this.flash(t(cx, "editor.organize_none").to_string(), cx),
             });
         })
@@ -165,8 +171,27 @@ impl CodeEditor {
     }
 
     /// Makes `edits` (a fix's, a rename's): into the open files, one undo step each, and on disk
-    /// for the others. False when some file could not be changed.
-    pub(super) async fn apply_edits(this: &gpui::WeakEntity<Self>, edits: Vec<lsp::FileEdit>, cx: &mut gpui::AsyncApp) -> bool {
+    /// for the others. `since` is the file the server was asked about and the revision of its text
+    /// then: when it changed meanwhile the server's places no longer hold, nothing is changed and
+    /// a note says so (`None`). `Some(false)` when some file could not be changed.
+    pub(super) async fn apply_edits(
+        this: &gpui::WeakEntity<Self>,
+        edits: Vec<lsp::FileEdit>,
+        since: (PathBuf, u64),
+        cx: &mut gpui::AsyncApp,
+    ) -> Option<bool> {
+        let changed = this
+            .update(cx, |this, cx| {
+                let changed = this.docs.iter().any(|d| d.path == since.0 && d.buffer.revision() != since.1);
+                if changed {
+                    this.flash(t(cx, "editor.changed_meanwhile").to_string(), cx);
+                }
+                changed
+            })
+            .unwrap_or(true);
+        if changed {
+            return None;
+        }
         let (open, project): (Vec<PathBuf>, Option<PathBuf>) = this
             .update(cx, |this, _| {
                 (this.docs.iter().map(|d| d.path.clone()).collect(), this.docs.get(this.active).map(|d| d.project.clone()))
@@ -195,7 +220,7 @@ impl CodeEditor {
             cx.notify();
             ok
         })
-        .unwrap_or(false)
+        .ok()
     }
 
     /// Makes the text of open file `index` `new` as one undo step, the cursor staying on the code
@@ -322,8 +347,9 @@ impl CodeEditor {
                     "down" if count > 0 => menu.selected = (menu.selected + 1) % count,
                     "enter" => {
                         let listed = menu.actions.as_ref().map_or(0, Vec::len);
+                        let since = menu.revision;
                         if let Some(action) = menu.actions.as_ref().and_then(|a| a.get(menu.selected)).cloned() {
-                            this.apply_fix(action, window, cx);
+                            this.apply_fix(action, since, window, cx);
                         } else if let Some(problem) = menu.problem.clone().filter(|_| menu.selected == listed) {
                             this.close_quick_fix(window, cx);
                             this.fix_with_ai(&problem, cx);
@@ -350,6 +376,7 @@ impl CodeEditor {
                 list = list.child(div().px_2().py_1().text_color(hex(Chrome::MUTED)).child(t(cx, "editor.finding_fixes")));
             }
             Some(actions) => {
+                let since = menu.revision;
                 for (i, action) in actions.iter().enumerate() {
                     let glyph = if action.fixes { "lightbulb" } else { "wrench" };
                     let chosen = action.clone();
@@ -369,7 +396,9 @@ impl CodeEditor {
                             .hover(|s| s.bg(hex(Chrome::HOVER)))
                             .child(icon(glyph, 12., hex(if action.fixes { Chrome::WARNING } else { Chrome::MUTED })))
                             .child(div().min_w_0().truncate().child(action.title.clone()))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.apply_fix(chosen.clone(), window, cx))),
+                            .on_click(
+                                cx.listener(move |this, _: &ClickEvent, window, cx| this.apply_fix(chosen.clone(), since, window, cx)),
+                            ),
                     );
                 }
                 if let Some(problem) = menu.problem.clone() {
@@ -417,8 +446,8 @@ impl CodeEditor {
 
     /// Debug driver: applies the menu's row `index`.
     pub(super) fn debug_pick_fix(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(action) = self.fixes.as_ref().and_then(|m| m.actions.as_ref()?.get(index).cloned()) {
-            self.apply_fix(action, window, cx);
+        if let Some((action, since)) = self.fixes.as_ref().and_then(|m| Some((m.actions.as_ref()?.get(index).cloned()?, m.revision))) {
+            self.apply_fix(action, since, window, cx);
         }
     }
 }

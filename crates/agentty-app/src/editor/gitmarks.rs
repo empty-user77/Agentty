@@ -163,12 +163,21 @@ impl CodeEditor {
         doc.git.marks.iter().find(|c| c.line == *line)
     }
 
-    /// Puts the change in the window back as committed (one undo step).
+    /// Puts the change in the window back as committed (one undo step). The changes are worked
+    /// out again from the text as it is: typed since the marks were, the lines may have moved,
+    /// and a change no longer there is left alone.
     pub(super) fn revert_git_change(&mut self, cx: &mut Context<Self>) {
         let Some(change) = self.peeked_change().cloned() else { return };
         self.git_peek = None;
-        let new = reverted(&self.docs[self.active].buffer.text(), &change);
-        self.replace_text(self.active, &new, cx);
+        let doc = &self.docs[self.active];
+        let Some(base) = doc.git.base.clone() else { return cx.notify() };
+        let text = doc.buffer.text();
+        let now = marks(&base, &text);
+        let found = now.iter().find(|c| *c == &change).or_else(|| now.iter().find(|c| c.old == change.old && c.mark == change.mark));
+        if let Some(found) = found {
+            let new = reverted(&text, found);
+            self.replace_text(self.active, &new, cx);
+        }
         cx.notify();
     }
 

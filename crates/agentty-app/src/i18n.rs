@@ -2770,6 +2770,12 @@ strings! {
         "表示中のクラス・関数の先頭行を上部に固定",
         "将所在类或函数的首行固定在顶部"
     ],
+    "editor.changed_meanwhile" => [
+        "The file changed while the language server answered: try again",
+        "언어 서버가 답하는 동안 파일이 바뀌었습니다. 다시 시도해 주세요",
+        "言語サーバーの応答中にファイルが変わりました。もう一度お試しください",
+        "语言服务器响应期间文件已更改，请重试"
+    ],
     "editor.fix_with_ai" => ["Fix with AI", "AI로 고치기", "AI で修正", "用 AI 修复"],
     "editor.quick_fix" => ["Quick fix", "빠른 수정", "クイックフィックス", "快速修复"],
     "editor.finding_fixes" => ["Finding fixes…", "수정 방법 찾는 중…", "修正を検索中…", "正在查找修复…"],

@@ -184,19 +184,25 @@ pub fn set_disabled(names: &[String]) {
     }
     let slots: Vec<((PathBuf, &'static str), Arc<Slot>)> =
         registry().lock().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+    let mut stopping = Vec::new();
     for ((_, name), slot) in slots {
         let off = names.iter().any(|n| n == name);
         let Ok(mut state) = slot.state.lock() else { continue };
         match (&*state, off) {
             (State::Ready(client), true) => {
-                client.stop();
+                stopping.push(client.clone());
                 *state = State::Off;
             }
             (State::Off, false) => *state = State::Idle,
+            // One starting now is stopped once it is up (see `Slot::start`).
             (State::Starting, _) => {}
             (_, true) => *state = State::Off,
             _ => {}
         }
+    }
+    // Stopping waits for the server to answer: not on the caller's (the UI's) thread.
+    if !stopping.is_empty() {
+        let _ = std::thread::Builder::new().name("lsp-stop".into()).spawn(move || stopping.iter().for_each(|client| client.stop()));
     }
     // What a stopped server reported goes with it: editors read the problems again.
     GENERATION.fetch_add(1, Ordering::SeqCst);
@@ -1059,6 +1065,11 @@ impl Slot {
 
     fn start(&self, root: &Path, spec: &'static Spec) {
         let next = match Client::start(root, spec) {
+            // Turned off while it was starting: stopped as soon as it is up.
+            Ok(client) if is_disabled(spec) => {
+                client.stop();
+                State::Off
+            }
             Ok(client) => State::Ready(client),
             Err(StartError::Missing) => State::Missing(Instant::now()),
             Err(StartError::Skipped) => State::Skipped,

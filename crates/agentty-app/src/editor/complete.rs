@@ -265,7 +265,12 @@ impl CodeEditor {
             self.completion = None;
             return cx.notify();
         }
-        let query = doc.buffer.line(cursor.line)[open.start.col..cursor.col].to_string();
+        // The word since where the list opened (gone when the text changed under it: undo, a
+        // line moved).
+        let Some(query) = doc.buffer.line(cursor.line).get(open.start.col..cursor.col).map(str::to_string) else {
+            self.completion = None;
+            return cx.notify();
+        };
         if typed && !open.complete {
             return self.request_completion(None, cx);
         }

@@ -421,6 +421,7 @@ impl CodeEditor {
             None => {
                 let project = self.project_root().unwrap_or_default();
                 self.pending_goto = Some((path.to_path_buf(), pos, len, None));
+                self.pending_column = None;
                 cx.emit(EditorEvent::OpenFile(path.to_path_buf(), project));
             }
         }

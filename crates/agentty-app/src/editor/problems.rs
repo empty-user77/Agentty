@@ -196,19 +196,20 @@ impl CodeEditor {
     /// The fixes of the problem whose message shows, listed under it.
     fn find_hover_fixes(&mut self, cx: &mut Context<Self>) {
         let Some((problem, true)) = self.problem_hover.clone() else { return };
-        if self.hover_fixes.as_ref().is_some_and(|(p, _)| *p == problem) {
+        if self.hover_fixes.as_ref().is_some_and(|(p, _, _)| *p == problem) {
             return;
         }
         self.hover_fixes = None;
         let Some(doc) = self.docs.get(self.active).filter(|d| d.editable()) else { return };
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
+        let since = text.revision;
         let (start, end) = (problem.start, problem.end);
         cx.spawn(async move |this, cx| {
             let found = cx.background_spawn(async move { lsp::actions(&project, language, &path, &text, start, end) }).await;
             let _ = this.update(cx, |this, cx| {
                 if this.problem_hover.as_ref().is_some_and(|(p, _)| *p == problem) {
                     let fixes: Vec<lsp::Action> = found.unwrap_or_default().into_iter().filter(|a| a.fixes).take(4).collect();
-                    this.hover_fixes = Some((problem, fixes));
+                    this.hover_fixes = Some((problem, since, fixes));
                     cx.notify();
                 }
             });
@@ -359,7 +360,8 @@ impl CodeEditor {
             Severity::Warning => "triangle-alert",
             _ => "info",
         };
-        let fixes = self.hover_fixes.as_ref().filter(|(p, _)| p == problem).map(|(_, f)| f.clone()).unwrap_or_default();
+        let (since, fixes) =
+            self.hover_fixes.as_ref().filter(|(p, _, _)| p == problem).map(|(_, since, f)| (*since, f.clone())).unwrap_or_default();
         let ask_ai = {
             let problem = problem.clone();
             div()
@@ -386,7 +388,7 @@ impl CodeEditor {
                 .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
                 .child(icon("lightbulb", 11., hex(Chrome::WARNING)))
                 .child(div().min_w_0().truncate().child(title))
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.apply_fix(action.clone(), window, cx)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.apply_fix(action.clone(), since, window, cx)))
         });
         let panel = div()
             .id("editor-problem")
