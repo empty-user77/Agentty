@@ -33,6 +33,8 @@ All notable changes to this project are documented here. The format follows
   them and **⇧⌘K** to delete them.
 - File editor: replace in the find bar (**⌥⌘F**): one at a time or all as one undo step, with match case (**Aa**)
   and whole word (**ab**).
+- File editor: **Fix with AI** under a problem's message and in the **⌘.** list sends the problem, where it is and
+  what the language server said, to the connected session.
 - File editor: **Connect session** shows an agent's terminal beside the code. Select code for **Ask AI** (or **⌘K**)
   to send an instruction about those lines to it, plus Copy, Definition and Usages.
 - File editor: agents are seen at work. Changed lines light up with the agent's name (`Claude-3f9a`) at its caret;

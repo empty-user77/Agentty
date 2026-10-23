@@ -195,6 +195,17 @@ impl CodeEditor {
         .detach();
     }
 
+    /// "Fix with AI": the problem, where it is and what the server said, to the linked session.
+    pub(super) fn fix_with_ai(&mut self, problem: &Problem, cx: &mut Context<Self>) {
+        let Some(doc) = self.docs.get(self.active) else { return };
+        let rel = doc.path.strip_prefix(&doc.project).unwrap_or(&doc.path).to_string_lossy().replace('\\', "/");
+        let path = doc.path.clone();
+        let prompt = super::agent::ask_prompt(&rel, (problem.start.line, problem.end.line), &fix_instruction(problem));
+        self.problem_hover = None;
+        self.send_instruction(path, (problem.start.line, problem.end.line), prompt, true, cx);
+        cx.notify();
+    }
+
     /// Every problem in the open files, the file in front first, as a list to pick from (with the
     /// code beside it).
     pub(super) fn show_problems(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
@@ -289,6 +300,20 @@ impl CodeEditor {
             _ => "info",
         };
         let fixes = self.hover_fixes.as_ref().filter(|(p, _)| p == problem).map(|(_, f)| f.clone()).unwrap_or_default();
+        let ask_ai = {
+            let problem = problem.clone();
+            div()
+                .id("editor-problem-ai")
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .cursor_pointer()
+                .text_color(hex(Chrome::ATTENTION))
+                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                .child(icon("sparkles", 11., hex(Chrome::ACCENT)))
+                .child(crate::i18n::t(cx, "editor.fix_with_ai"))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.fix_with_ai(&problem, cx)))
+        };
         let fix_rows = fixes.into_iter().enumerate().map(|(i, action)| {
             let title = action.title.clone();
             div()
@@ -332,7 +357,8 @@ impl CodeEditor {
                             div().t_caption().font_family(crate::settings::terminal_font(cx)).text_color(hex(Chrome::MUTED)).child(origin),
                         )
                     })
-                    .children(fix_rows),
+                    .children(fix_rows)
+                    .child(ask_ai),
             );
         Some(
             gpui::deferred(gpui::anchored().anchor(corner).position(at).snap_to_window_with_margin(px(8.)).child(panel))
@@ -355,9 +381,39 @@ impl CodeEditor {
     }
 }
 
+/// What the agent is asked to do about `problem` (in English, as every prompt is).
+fn fix_instruction(problem: &Problem) -> String {
+    let kind = match problem.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+        _ => "problem",
+    };
+    // One line, and no control characters: it is typed into the agent's terminal, where a line
+    // break would send it early and Ctrl characters would act as keys.
+    let message = problem.message.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+    let message: String = message.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    match &problem.origin {
+        Some(origin) => format!("fix this {kind} the language server reports ({origin}): {message}"),
+        None => format!("fix this {kind} the language server reports: {message}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asks_the_agent_to_fix_what_the_server_said() {
+        let mut problem = problem((3, 6), (3, 10));
+        problem.message = "Cannot find name 'totl'.\n  Did you mean 'total'?".into();
+        problem.origin = Some("ts(2552)".into());
+        assert_eq!(
+            fix_instruction(&problem),
+            "fix this error the language server reports (ts(2552)): Cannot find name 'totl'. Did you mean 'total'?"
+        );
+        problem.message = "bad \u{3}\u{1b}[2J string".into();
+        assert!(!fix_instruction(&problem).chars().any(char::is_control));
+    }
 
     fn problem(start: (usize, usize), end: (usize, usize)) -> Problem {
         Problem {

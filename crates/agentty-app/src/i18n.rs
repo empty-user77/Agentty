@@ -2718,6 +2718,7 @@ strings! {
     "editor.shortcut_duplicate_lines" => ["Duplicate lines", "줄 복제", "行を複製", "复制行"],
     "editor.shortcut_delete_lines" => ["Delete lines", "줄 삭제", "行を削除", "删除行"],
     "editor.settings_section" => ["File editor", "파일 편집기", "ファイルエディタ", "文件编辑器"],
+    "editor.fix_with_ai" => ["Fix with AI", "AI로 고치기", "AI で修正", "用 AI 修复"],
     "editor.quick_fix" => ["Quick fix", "빠른 수정", "クイックフィックス", "快速修复"],
     "editor.finding_fixes" => ["Finding fixes…", "수정 방법 찾는 중…", "修正を検索中…", "正在查找修复…"],
     "editor.no_fixes" => ["No fixes here", "여기에는 수정 방법이 없습니다", "ここには修正がありません", "此处没有可用的修复"],

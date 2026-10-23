@@ -1938,6 +1938,15 @@ impl CodeEditor {
             }
             "find-next" => self.find_step(argument != "back", cx),
             "replace" => self.debug_replace(argument, false, window, cx),
+            // "Fix with AI" on the problem at the cursor.
+            "fix-ai" => {
+                let cursor = self.docs.get(self.active).map(|d| d.buffer.cursor());
+                let problem = cursor
+                    .and_then(|at| self.docs.get(self.active)?.checks.problems.iter().find(|p| p.start <= at && at <= p.end).cloned());
+                if let Some(problem) = problem {
+                    self.fix_with_ai(&problem, cx);
+                }
+            }
             "replace-all" => self.debug_replace(argument, true, window, cx),
             "find-option" => self.debug_find_option(argument, cx),
             "goto" => {

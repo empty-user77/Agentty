@@ -29,6 +29,8 @@ pub(super) struct FixMenu {
     at: Pos,
     /// `None` while the server is asked.
     actions: Option<Vec<Action>>,
+    /// The problem at the cursor, which the last row hands to the linked agent.
+    problem: Option<super::lsp::Problem>,
     selected: usize,
     focus: FocusHandle,
 }
@@ -83,21 +85,23 @@ impl CodeEditor {
             return self.flash(t(cx, "editor.no_fixes").to_string(), cx);
         }
         let cursor = doc.buffer.cursor();
+        let problem = doc.checks.problems.iter().find(|p| p.start <= cursor && cursor <= p.end).cloned();
         let (start, end) = match doc.buffer.selection.range() {
             (start, end) if start != end => (start, end),
-            _ => doc.checks.problems.iter().find(|p| p.start <= cursor && cursor <= p.end).map_or((cursor, cursor), |p| (p.start, p.end)),
+            _ => problem.as_ref().map_or((cursor, cursor), |p| (p.start, p.end)),
         };
         let focus = cx.focus_handle();
         window.focus(&focus);
         self.problem_hover = None;
-        self.fixes = Some(FixMenu { path: doc.path.clone(), at: start, actions: None, selected: 0, focus });
+        let has_problem = problem.is_some();
+        self.fixes = Some(FixMenu { path: doc.path.clone(), at: start, actions: None, problem, selected: 0, focus });
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         let asked = path.clone();
         cx.spawn_in(window, async move |this, cx| {
             let found = cx.background_spawn(async move { lsp::actions(&project, language, &path, &text, start, end) }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 let Some(menu) = this.fixes.as_mut().filter(|m| m.path == asked && m.actions.is_none()) else { return };
-                match found.filter(|f| !f.is_empty()) {
+                match found.filter(|f| !f.is_empty() || has_problem) {
                     Some(mut found) => {
                         found.truncate(MAX_ACTIONS);
                         menu.actions = Some(found);
@@ -293,13 +297,17 @@ impl CodeEditor {
             .key_context("EditorQuickFix")
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 let Some(menu) = this.fixes.as_mut() else { return };
-                let count = menu.actions.as_ref().map_or(0, Vec::len);
+                let count = menu.actions.as_ref().map_or(0, Vec::len) + usize::from(menu.problem.is_some() && menu.actions.is_some());
                 match event.keystroke.key.as_str() {
                     "up" if count > 0 => menu.selected = (menu.selected + count - 1) % count,
                     "down" if count > 0 => menu.selected = (menu.selected + 1) % count,
                     "enter" => {
+                        let listed = menu.actions.as_ref().map_or(0, Vec::len);
                         if let Some(action) = menu.actions.as_ref().and_then(|a| a.get(menu.selected)).cloned() {
                             this.apply_fix(action, window, cx);
+                        } else if let Some(problem) = menu.problem.clone().filter(|_| menu.selected == listed) {
+                            this.close_quick_fix(window, cx);
+                            this.fix_with_ai(&problem, cx);
                         }
                     }
                     "escape" => this.close_quick_fix(window, cx),
@@ -343,6 +351,30 @@ impl CodeEditor {
                             .child(icon(glyph, 12., hex(if action.fixes { Chrome::WARNING } else { Chrome::MUTED })))
                             .child(div().min_w_0().truncate().child(action.title.clone()))
                             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.apply_fix(chosen.clone(), window, cx))),
+                    );
+                }
+                if let Some(problem) = menu.problem.clone() {
+                    let row = actions.len();
+                    list = list.child(
+                        div()
+                            .id("editor-fix-ai")
+                            .mx_1()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .cursor_pointer()
+                            .text_color(hex(Chrome::FOREGROUND))
+                            .when(row == menu.selected, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.35)).text_color(hex(Chrome::BRIGHT)))
+                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                            .child(icon("sparkles", 12., hex(Chrome::ACCENT)))
+                            .child(div().min_w_0().truncate().child(t(cx, "editor.fix_with_ai")))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.close_quick_fix(window, cx);
+                                this.fix_with_ai(&problem, cx);
+                            })),
                     );
                 }
             }

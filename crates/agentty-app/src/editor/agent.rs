@@ -668,11 +668,20 @@ impl CodeEditor {
         let mut prompt = ask_prompt(&rel, ask.lines, &instruction);
         if only_answer {
             prompt.push_str(" (Just answer; do not change any files.)");
-        } else {
+        }
+        let (path, lines) = (ask.path.clone(), ask.lines);
+        self.send_instruction(path, lines, prompt, !only_answer, cx);
+        self.close_ask(window, cx);
+    }
+
+    /// Sends `prompt`, about `lines` of `path`, to the linked session (or lets the user pick one),
+    /// marking the lines until the agent changes them when it is asked to (`mark`).
+    pub(super) fn send_instruction(&mut self, path: PathBuf, lines: (usize, usize), prompt: String, mark: bool, cx: &mut Context<Self>) {
+        if mark {
             let linked = self.linked.clone();
             self.asked = Some(Asked {
-                path: ask.path.clone(),
-                lines: ask.lines,
+                path,
+                lines,
                 pane_id: linked.as_ref().map(|l| l.pane_id),
                 label: linked.as_ref().map(|l| l.label.clone()).unwrap_or_default(),
                 color: linked.as_ref().map_or(Chrome::ACCENT, |l| l.color),
@@ -686,7 +695,6 @@ impl CodeEditor {
             doc.buffer.move_to(cursor, false);
         }
         cx.emit(EditorEvent::AskAgent(prompt));
-        self.close_ask(window, cx);
     }
 
     /// The bar over a selection, or the instruction box, placed under the selection's last line.
