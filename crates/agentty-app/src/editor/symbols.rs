@@ -309,8 +309,9 @@ fn rules(language: Language) -> &'static [Rule] {
                 shallow(r"^\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)", Kind::Variable, 0),
                 // `export const x`, anywhere (inside a `declare module` too).
                 rule(r"^\s*export\s+(?:declare\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)", Kind::Variable),
-                // Methods in classes and object literals: `name(…) {`, `async name(…): T {`.
-                rule(&format!(r"^\s+{TS_MODIFIERS}*\*?([A-Za-z_$][\w$]*)\s*(?:<[^>()]*>)?\s*\([^)]*\)?\s*(?::\s*[^{{=;]+)?\s*\{{\s*$"), Kind::Method),
+                // Methods in classes and object literals: `name(…) {`, `async name(…): T {`, and
+                // ones written on one line (`area() { return 4; }`).
+                rule(&format!(r"^\s+{TS_MODIFIERS}*\*?([A-Za-z_$][\w$]*)\s*(?:<[^>()]*>)?\s*\([^)]*\)?\s*(?::\s*[^{{=;]+)?\s*\{{(?:\s*$|.*\}}\s*;?\s*$)"), Kind::Method),
                 // Class fields with an arrow function: `name = (…) =>`.
                 rule(&format!(r"^\s+{TS_MODIFIERS}*([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?=>"), Kind::Method),
             ]
@@ -725,6 +726,20 @@ mod tests {
                 ("load".into(), Kind::Method, 6),
                 ("onClick".into(), Kind::Method, 10),
                 ("Color".into(), Kind::Enum, 12),
+            ]
+        );
+    }
+
+    #[test]
+    fn typescript_methods_on_one_line() {
+        let text = "export class Square implements Shape {\n  area() { return 4; }\n  get side(): number { return 2; }\n  if (x) { y(); }\n  call(a) { b(a) }\n}";
+        assert_eq!(
+            names(Language::TypeScript, text),
+            vec![
+                ("Square".into(), Kind::Class, 0),
+                ("area".into(), Kind::Method, 1),
+                ("side".into(), Kind::Method, 2),
+                ("call".into(), Kind::Method, 4),
             ]
         );
     }
