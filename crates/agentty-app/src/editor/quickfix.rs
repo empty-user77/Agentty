@@ -221,6 +221,10 @@ impl CodeEditor {
         let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable()) else { return };
         let line = doc.buffer.cursor().line;
         let revision = doc.buffer.revision();
+        // Asked once typing pauses, not on every key.
+        if !doc.checks.paused(revision) {
+            return;
+        }
         let Some(problem) = doc.checks.problems.iter().find(|p| p.start.line <= line && line <= p.end.line) else {
             return;
         };

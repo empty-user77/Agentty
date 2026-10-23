@@ -55,6 +55,13 @@ fn covers(problem: &Problem, pos: Pos) -> bool {
     problem.start <= pos && pos <= problem.end
 }
 
+impl Checks {
+    /// Typing in the file has paused (for as long as the server is left alone).
+    pub(super) fn paused(&self, revision: u64) -> bool {
+        self.seen.is_some_and(|(seen, since)| seen == revision && since.elapsed() >= QUIET)
+    }
+}
+
 impl CodeEditor {
     pub(super) fn problems_tick(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;

@@ -149,9 +149,15 @@ impl Language {
         })
     }
 
+    /// Code rather than prose or plain text: completions open as it is typed, brackets come in
+    /// pairs.
+    pub fn is_code(self) -> bool {
+        !matches!(self, Self::Markdown | Self::Other)
+    }
+
     /// Whether brackets are typed in pairs: in code, not in prose and plain text.
     pub fn pairs_brackets(self) -> bool {
-        !matches!(self, Self::Markdown | Self::Other)
+        self.is_code()
     }
 
     /// Whether quotes are typed in pairs (not in Rust, where `'` starts a lifetime, nor in prose).

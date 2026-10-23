@@ -130,7 +130,9 @@ fn offset_of(text: &str, pos: Pos) -> usize {
 impl CodeEditor {
     /// After text was typed at the cursor: open, filter or close the list.
     pub(super) fn completion_typed(&mut self, typed: &str, cx: &mut Context<Self>) {
-        let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable()) else { return };
+        // Prose and plain text are written, not completed (⌃Space still asks).
+        let code = |d: &&super::Document| matches!(d.content, Content::Text) && d.editable() && d.language.is_code();
+        let Some(doc) = self.docs.get(self.active).filter(code) else { return };
         let cursor = doc.buffer.cursor();
         let line = doc.buffer.line(cursor.line);
         let mut chars = typed.chars();
@@ -301,6 +303,20 @@ impl CodeEditor {
             cx.notify();
             return false;
         };
+        // A keyword or word already typed in full (`return`↩): the key does what it does without a
+        // list. A name may still bring its import, so it is put in.
+        let typed = self.docs.get(self.active).map(|d| {
+            let cursor = d.buffer.cursor();
+            d.buffer.line(cursor.line).get(open.start.col..cursor.col).unwrap_or("").to_string()
+        });
+        let plain = match &entry.source {
+            Source::Word => true,
+            Source::Server(item) => item.kind == Some(14),
+        };
+        if plain && typed.as_deref() == Some(entry.label.as_str()) {
+            cx.notify();
+            return false;
+        }
         self.accept_entry(entry, open.start, cx);
         true
     }
@@ -454,6 +470,12 @@ mod tests {
         assert_eq!(matches("AuthenticatorAttestationResponse", "tot"), None);
         assert_eq!(matches("total", "xyz"), None);
         assert_eq!(matches("anything", ""), Some(0));
+    }
+
+    #[test]
+    fn prose_is_not_code() {
+        assert!(Language::TypeScript.is_code() && Language::Css.is_code());
+        assert!(!Language::Markdown.is_code() && !Language::Other.is_code());
     }
 
     #[test]
