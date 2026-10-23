@@ -227,7 +227,16 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ),
     (
         EDITOR_SHORTCUTS,
-        &[("editor.save", "⌘S"), ("editor.format", "⇧⌥F"), ("editor.shortcut_undo_redo", "⌘Z  /  ⇧⌘Z"), ("editor.close_file", "⌘W")],
+        &[
+            ("editor.save", "⌘S"),
+            ("editor.format", "⇧⌥F"),
+            ("editor.shortcut_undo_redo", "⌘Z  /  ⇧⌘Z"),
+            ("editor.shortcut_comment", "⌘/"),
+            ("editor.shortcut_move_lines", "⌥↑  /  ⌥↓"),
+            ("editor.shortcut_duplicate_lines", "⇧⌥↑  /  ⇧⌥↓"),
+            ("editor.shortcut_delete_lines", "⇧⌘K"),
+            ("editor.close_file", "⌘W"),
+        ],
     ),
 ];
 

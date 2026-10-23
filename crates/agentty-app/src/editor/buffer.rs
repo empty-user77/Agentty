@@ -466,6 +466,261 @@ impl Buffer {
         }
     }
 
+    // -- whole lines (⌘/, ⌥↑↓, ⇧⌥↑↓, ⇧⌘K) ----------------------------------------------------
+
+    /// The lines the selection covers: a selection ending at the start of a line leaves that
+    /// line out (as editors do).
+    fn selected_lines(&self) -> (usize, usize) {
+        let (start, end) = self.selection.range();
+        let last = if end.line > start.line && end.col == 0 { end.line - 1 } else { end.line };
+        (start.line, last)
+    }
+
+    /// ⌘/: comments the selected lines out with `open` (and `close` for block comments), or back
+    /// in when they all are. The marks go at the shallowest indentation, so the code stays
+    /// aligned; blank lines are left alone.
+    pub fn toggle_comment(&mut self, open: &str, close: &str) {
+        let (first, last) = self.selected_lines();
+        let lines = &self.lines[first..=last];
+        let filled: Vec<&String> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
+        if filled.is_empty() {
+            return;
+        }
+        let commented = |line: &str| {
+            let body = line.trim();
+            body.starts_with(open) && (close.is_empty() || body.ends_with(close))
+        };
+        if filled.iter().all(|l| commented(l)) {
+            let (open, close) = (open.to_string(), close.to_string());
+            self.map_lines(first, last, |line| {
+                if line.trim().is_empty() {
+                    return line.to_string();
+                }
+                let indent = line.len() - line.trim_start().len();
+                let mut body = &line[indent + open.len()..];
+                body = body.strip_prefix(' ').unwrap_or(body);
+                if !close.is_empty() {
+                    body = body.trim_end();
+                    body = body.strip_suffix(close.as_str()).unwrap_or(body);
+                    body = body.strip_suffix(' ').unwrap_or(body);
+                }
+                format!("{}{body}", &line[..indent])
+            });
+        } else {
+            let column = filled.iter().map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+            let (open, close) = (open.to_string(), close.to_string());
+            self.map_lines(first, last, |line| {
+                if line.trim().is_empty() {
+                    return line.to_string();
+                }
+                let tail = if close.is_empty() { String::new() } else { format!(" {close}") };
+                format!("{}{open} {}{tail}", &line[..column], &line[column..])
+            });
+        }
+    }
+
+    /// ⌥↑ / ⌥↓: the selected lines swap places with the line above or below, selection and all.
+    pub fn move_lines(&mut self, down: bool) {
+        let (first, last) = self.selected_lines();
+        if (down && last + 1 >= self.lines.len()) || (!down && first == 0) {
+            return;
+        }
+        let (from, to) = if down { (first, last + 1) } else { (first - 1, last) };
+        let mut block: Vec<String> = self.lines[from..=to].to_vec();
+        if down {
+            block.rotate_right(1);
+        } else {
+            block.rotate_left(1);
+        }
+        let selection = self.selection;
+        let end = Pos::new(to, self.lines[to].len());
+        self.replace(Pos::new(from, 0), end, &block.join("\n"), EditKind::Other);
+        let shift = |pos: Pos| Pos::new(if down { pos.line + 1 } else { pos.line - 1 }, pos.col);
+        self.selection = Selection { anchor: self.clamp(shift(selection.anchor)), head: self.clamp(shift(selection.head)) };
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
+    /// ⇧⌥↓ / ⇧⌥↑: a copy of the selected lines below them (the selection moves onto the copy)
+    /// or above them (it stays on the lines it was on, now the lower ones).
+    pub fn duplicate_lines(&mut self, down: bool) {
+        let (first, last) = self.selected_lines();
+        let block = self.lines[first..=last].join("\n");
+        let selection = self.selection;
+        let end = Pos::new(last, self.lines[last].len());
+        self.replace(end, end, &format!("\n{block}"), EditKind::Other);
+        let count = last - first + 1;
+        let shift = |pos: Pos| if down { Pos::new(pos.line + count, pos.col) } else { pos };
+        self.selection = Selection { anchor: self.clamp(shift(selection.anchor)), head: self.clamp(shift(selection.head)) };
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
+    /// ⇧⌘K: the selected lines go, the cursor staying in its column on the line that follows.
+    pub fn delete_lines(&mut self) {
+        let (first, last) = self.selected_lines();
+        let column = self.cursor().col;
+        let (start, end) = if last + 1 < self.lines.len() {
+            (Pos::new(first, 0), Pos::new(last + 1, 0))
+        } else if first > 0 {
+            (Pos::new(first - 1, self.lines[first - 1].len()), Pos::new(last, self.lines[last].len()))
+        } else {
+            (Pos::new(0, 0), Pos::new(last, self.lines[last].len()))
+        };
+        self.replace(start, end, "", EditKind::Other);
+        let line = first.min(self.lines.len() - 1);
+        let at = self.clamp(Pos::new(line, column.min(self.lines[line].len())));
+        self.selection = Selection::cursor(at);
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
+    // -- brackets and quotes typed in pairs ----------------------------------------------------
+
+    /// Typing `c` at the cursor with its pair: an opening bracket or quote gets its closing one
+    /// (around the selection when there is one), a closing one typed over the same character
+    /// steps past it. False when `c` is typed as it is (`quotes`: whether quotes pair here).
+    pub fn type_paired(&mut self, c: char, quotes: bool) -> bool {
+        let close = match c {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '"' | '`' if quotes => c,
+            '\'' if quotes => c,
+            ')' | ']' | '}' => return self.step_over(c),
+            _ => return false,
+        };
+        let (start, end) = self.selection.range();
+        if start != end {
+            // Around the selection (on one line: across lines it would rather replace it).
+            if start.line != end.line {
+                return false;
+            }
+            let inner = self.slice(start, end);
+            self.replace(start, end, &format!("{c}{inner}{close}"), EditKind::Other);
+            self.selection =
+                Selection { anchor: Pos::new(start.line, start.col + c.len_utf8()), head: Pos::new(end.line, end.col + c.len_utf8()) };
+            return true;
+        }
+        let line = self.line(start.line);
+        let next = line[start.col..].chars().next();
+        let prev = line[..start.col].chars().next_back();
+        if c == close {
+            if next == Some(c) {
+                return self.step_over(c);
+            }
+            // A quote right after a letter is an apostrophe (`don't`), not a string.
+            if prev.is_some_and(|p| p.is_alphanumeric() || p == c) {
+                return false;
+            }
+        }
+        // Only where nothing would end up inside by surprise: before a blank, a closer or the end.
+        if !next.is_none_or(|n| n.is_whitespace() || matches!(n, ')' | ']' | '}' | ',' | ';' | ':')) {
+            return false;
+        }
+        self.replace(start, start, &format!("{c}{close}"), EditKind::Typing);
+        self.selection = Selection::cursor(Pos::new(start.line, start.col + c.len_utf8()));
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+        true
+    }
+
+    /// The cursor steps over the `c` right after it instead of typing another.
+    fn step_over(&mut self, c: char) -> bool {
+        let cursor = self.cursor();
+        if !self.selection.is_empty() || !self.line(cursor.line)[cursor.col..].starts_with(c) {
+            return false;
+        }
+        self.selection = Selection::cursor(Pos::new(cursor.line, cursor.col + c.len_utf8()));
+        true
+    }
+
+    /// Backspace between an empty pair (`(|)`, `"|"`): both go.
+    pub fn backspace_pair(&mut self) -> bool {
+        let cursor = self.cursor();
+        if !self.selection.is_empty() || cursor.col == 0 {
+            return false;
+        }
+        let line = self.line(cursor.line);
+        let (Some(before), Some(after)) = (line[..cursor.col].chars().next_back(), line[cursor.col..].chars().next()) else {
+            return false;
+        };
+        if !matches!((before, after), ('(', ')') | ('[', ']') | ('{', '}') | ('"', '"') | ('\'', '\'') | ('`', '`')) {
+            return false;
+        }
+        let start = Pos::new(cursor.line, cursor.col - 1);
+        self.replace(start, Pos::new(cursor.line, cursor.col + 1), "", EditKind::Deleting);
+        true
+    }
+
+    /// The bracket matching the one just before or at the cursor: (that one, its match). Looks
+    /// `limit` characters at most.
+    pub fn matching_bracket(&self, limit: usize) -> Option<(Pos, Pos)> {
+        let cursor = self.cursor();
+        let line = self.line(cursor.line);
+        let at = |col: usize| line.get(col..).and_then(|s| s.chars().next());
+        let before = line[..cursor.col].char_indices().next_back();
+        let here = [before, at(cursor.col).map(|c| (cursor.col, c))]
+            .into_iter()
+            .flatten()
+            .find(|(_, c)| matches!(c, '(' | ')' | '[' | ']' | '{' | '}'))?;
+        let (col, c) = here;
+        let (open, close, forward) = match c {
+            '(' => ('(', ')', true),
+            '[' => ('[', ']', true),
+            '{' => ('{', '}', true),
+            ')' => ('(', ')', false),
+            ']' => ('[', ']', false),
+            _ => ('{', '}', false),
+        };
+        let mut depth = 0usize;
+        let mut seen = 0usize;
+        if forward {
+            for row in cursor.line..self.lines.len() {
+                let text = self.line(row);
+                let from = if row == cursor.line { col } else { 0 };
+                for (i, ch) in text[from..].char_indices() {
+                    seen += 1;
+                    if seen > limit {
+                        return None;
+                    }
+                    if ch == open {
+                        depth += 1;
+                    } else if ch == close {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some((Pos::new(cursor.line, col), Pos::new(row, from + i)));
+                        }
+                    }
+                }
+            }
+        } else {
+            for row in (0..=cursor.line).rev() {
+                let text = self.line(row);
+                let to = if row == cursor.line { col + 1 } else { text.len() };
+                for (i, ch) in text[..to].char_indices().rev() {
+                    seen += 1;
+                    if seen > limit {
+                        return None;
+                    }
+                    if ch == close {
+                        depth += 1;
+                    } else if ch == open {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some((Pos::new(cursor.line, col), Pos::new(row, i)));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Replaces the whole text (formatting, reloading from disk) as one undo step, keeping the
     /// cursor on the same line and column where it still exists.
     pub fn set_text(&mut self, text: &str) {
@@ -848,6 +1103,107 @@ fn detect_indent(lines: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(buffer: &mut Buffer, line: usize, col: usize) {
+        buffer.selection = Selection::cursor(Pos::new(line, col));
+    }
+
+    #[test]
+    fn comments_lines_in_and_out() {
+        let mut b = Buffer::new("fn a() {\n    one();\n\n    two();\n}");
+        b.selection = Selection { anchor: Pos::new(1, 2), head: Pos::new(3, 2) };
+        b.toggle_comment("//", "");
+        assert_eq!(b.text(), "fn a() {\n    // one();\n\n    // two();\n}");
+        b.toggle_comment("//", "");
+        assert_eq!(b.text(), "fn a() {\n    one();\n\n    two();\n}");
+        // Mixed lines are commented, at the shallowest indentation.
+        let mut b = Buffer::new("  a\n    // b");
+        b.selection = Selection { anchor: Pos::new(0, 0), head: Pos::new(1, 3) };
+        b.toggle_comment("#", "");
+        assert_eq!(b.text(), "  # a\n  #   // b");
+        let mut html = Buffer::new("<p>x</p>");
+        html.toggle_comment("<!--", "-->");
+        assert_eq!(html.text(), "<!-- <p>x</p> -->");
+        html.toggle_comment("<!--", "-->");
+        assert_eq!(html.text(), "<p>x</p>");
+        // A selection ending at a line's start leaves that line alone; one undo takes it back.
+        let mut b = Buffer::new("a\nb\nc");
+        b.selection = Selection { anchor: Pos::new(0, 0), head: Pos::new(1, 0) };
+        b.toggle_comment("//", "");
+        assert_eq!(b.text(), "// a\nb\nc");
+        b.undo();
+        assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn moves_duplicates_and_deletes_lines() {
+        let mut b = Buffer::new("one\ntwo\nthree");
+        at(&mut b, 0, 1);
+        b.move_lines(true);
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\nthree", Pos::new(1, 1)));
+        b.move_lines(true);
+        b.move_lines(true);
+        assert_eq!(b.text(), "two\nthree\none", "the last line stays last");
+        b.move_lines(false);
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\nthree", Pos::new(1, 1)));
+        b.duplicate_lines(true);
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\none\nthree", Pos::new(2, 1)));
+        b.duplicate_lines(false);
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\none\none\nthree", Pos::new(2, 1)));
+        b.delete_lines();
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\none\nthree", Pos::new(2, 1)));
+        at(&mut b, 3, 2);
+        b.delete_lines();
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\none", Pos::new(2, 2)));
+        let mut single = Buffer::new("only");
+        single.delete_lines();
+        assert_eq!(single.text(), "");
+    }
+
+    #[test]
+    fn brackets_and_quotes_come_in_pairs() {
+        let mut b = Buffer::new("f");
+        at(&mut b, 0, 1);
+        assert!(b.type_paired('(', true));
+        assert_eq!((b.text().as_str(), b.cursor()), ("f()", Pos::new(0, 2)));
+        assert!(b.type_paired('"', true));
+        assert_eq!(b.text(), "f(\"\")");
+        assert!(b.type_paired('"', true), "typed over the closing quote");
+        assert_eq!((b.text().as_str(), b.cursor()), ("f(\"\")", Pos::new(0, 4)));
+        assert!(b.type_paired(')', true));
+        assert_eq!(b.cursor(), Pos::new(0, 5));
+        // Before a word nothing is added; an apostrophe stays one.
+        let mut w = Buffer::new("word");
+        at(&mut w, 0, 0);
+        assert!(!w.type_paired('(', true));
+        let mut d = Buffer::new("don");
+        at(&mut d, 0, 3);
+        assert!(!d.type_paired('\'', true));
+        assert!(!d.type_paired('\'', false));
+        // Around a selection.
+        let mut s = Buffer::new("a total b");
+        s.selection = Selection { anchor: Pos::new(0, 2), head: Pos::new(0, 7) };
+        assert!(s.type_paired('[', true));
+        assert_eq!(s.text(), "a [total] b");
+        // Backspace in an empty pair takes both.
+        let mut p = Buffer::new("x()");
+        at(&mut p, 0, 2);
+        assert!(p.backspace_pair());
+        assert_eq!(p.text(), "x");
+    }
+
+    #[test]
+    fn finds_the_matching_bracket() {
+        let mut b = Buffer::new("fn a() {\n    if (x[0]) { y(); }\n}");
+        at(&mut b, 0, 8);
+        assert_eq!(b.matching_bracket(10_000), Some((Pos::new(0, 7), Pos::new(2, 0))));
+        at(&mut b, 1, 13);
+        assert_eq!(b.matching_bracket(10_000), Some((Pos::new(1, 12), Pos::new(1, 7))));
+        at(&mut b, 1, 1);
+        assert_eq!(b.matching_bracket(10_000), None);
+        at(&mut b, 0, 8);
+        assert_eq!(b.matching_bracket(5), None, "gives up past the limit");
+    }
 
     fn typed(buffer: &mut Buffer, text: &str) {
         for c in text.chars() {

@@ -135,6 +135,30 @@ impl Language {
         }
     }
 
+    /// How a line is commented out: a line comment (`//`, `#`, `--`) and no end, or a block
+    /// comment's start and end (`<!--` `-->`, `/*` `*/`). `None` for JSON and plain text.
+    pub fn comment(self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Self::Java | Self::Kotlin | Self::JavaScript | Self::Jsx | Self::TypeScript | Self::Tsx | Self::Rust | Self::Go => ("//", ""),
+            Self::Scss | Self::Less => ("//", ""),
+            Self::Python | Self::Shell | Self::Yaml | Self::Toml | Self::Dockerfile => ("#", ""),
+            Self::Sql => ("--", ""),
+            Self::Css => ("/*", "*/"),
+            Self::Html | Self::Xml | Self::Markdown => ("<!--", "-->"),
+            Self::Json | Self::Other => return None,
+        })
+    }
+
+    /// Whether brackets are typed in pairs: in code, not in prose and plain text.
+    pub fn pairs_brackets(self) -> bool {
+        !matches!(self, Self::Markdown | Self::Other)
+    }
+
+    /// Whether quotes are typed in pairs (not in Rust, where `'` starts a lifetime, nor in prose).
+    pub fn pairs_quotes(self) -> bool {
+        !matches!(self, Self::Rust | Self::Markdown | Self::Other)
+    }
+
     pub fn formatter(self) -> Option<Formatter> {
         match self {
             Self::JavaScript

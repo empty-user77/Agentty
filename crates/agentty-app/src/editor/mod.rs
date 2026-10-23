@@ -86,6 +86,12 @@ actions!(
         CloseFile,
         TogglePreview,
         AskAgent,
+        ToggleComment,
+        MoveLinesUp,
+        MoveLinesDown,
+        DuplicateLinesUp,
+        DuplicateLinesDown,
+        DeleteLines,
     ]
 );
 
@@ -135,6 +141,13 @@ pub fn bind_keys(cx: &mut App) {
         key("cmd-shift-v", TogglePreview, c),
         // Cursor's and Kiro's "edit with AI".
         key("cmd-k", AskAgent, c),
+        // VS Code's line keys.
+        key("cmd-/", ToggleComment, c),
+        key("alt-up", MoveLinesUp, c),
+        key("alt-down", MoveLinesDown, c),
+        key("shift-alt-up", DuplicateLinesUp, c),
+        key("shift-alt-down", DuplicateLinesDown, c),
+        key("cmd-shift-k", DeleteLines, c),
     ]);
     find::bind_keys(cx);
     navigate::bind_keys(cx);
@@ -292,6 +305,12 @@ pub(crate) struct Document {
 }
 
 impl Document {
+    /// The selection in UTF-16 units of the whole text, as the input method counts.
+    fn selection_utf16(&self) -> std::ops::Range<usize> {
+        let (start, end) = self.buffer.selection.range();
+        self.buffer.utf16_offset(start)..self.buffer.utf16_offset(end)
+    }
+
     fn name(&self) -> String {
         self.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.path.display().to_string())
     }
@@ -1893,8 +1912,16 @@ impl CodeEditor {
             // Typed key by key, `\n` as Enter (auto-indent and all).
             "type" => {
                 let text = argument.replace("\\n", "\n");
+                let (brackets, quotes) =
+                    self.docs.get(self.active).map_or((false, false), |d| (d.language.pairs_brackets(), d.language.pairs_quotes()));
                 for c in text.chars() {
-                    self.edit(cx, |b| if c == '\n' { b.newline() } else { b.insert(&c.to_string()) });
+                    self.edit(cx, |b| {
+                        if c == '\n' {
+                            b.newline()
+                        } else if !(brackets && b.type_paired(c, quotes)) {
+                            b.insert(&c.to_string())
+                        }
+                    });
                     if c != '\n' {
                         self.completion_typed(&c.to_string(), cx);
                         self.signature_typed(&c.to_string(), cx);
@@ -2133,6 +2160,21 @@ impl gpui::EntityInputHandler for CodeEditor {
     }
 
     fn replace_text_in_range(&mut self, range: Option<std::ops::Range<usize>>, text: &str, _: &mut Window, cx: &mut Context<Self>) {
+        // A bracket or quote typed over the selection or at the cursor comes with its pair.
+        if let Some(c) = typed_char(text) {
+            let doc = self.docs.get(self.active);
+            let plain = doc.is_some_and(|d| d.buffer.marked().is_none() && range.as_ref().is_none_or(|r| d.selection_utf16() == *r));
+            let (brackets, quotes) = doc.map_or((false, false), |d| (d.language.pairs_brackets(), d.language.pairs_quotes()));
+            if plain && brackets {
+                let mut paired = false;
+                self.edit(cx, |b| paired = b.type_paired(c, quotes));
+                if paired {
+                    self.completion_typed(text, cx);
+                    self.signature_typed(text, cx);
+                    return;
+                }
+            }
+        }
         self.edit(cx, |buffer| {
             let (start, end) = match range {
                 Some(range) => (buffer.pos_at_utf16(range.start), buffer.pos_at_utf16(range.end)),
@@ -2352,9 +2394,24 @@ impl Render for CodeEditor {
             }))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.motion(cx, |b| b.select_all())))
             .on_action(cx.listener(|this, _: &Backspace, _, cx| {
-                this.edit(cx, |b| b.backspace());
+                let pairs = this.docs.get(this.active).is_some_and(|d| d.language.pairs_brackets());
+                this.edit(cx, |b| {
+                    if !(pairs && b.backspace_pair()) {
+                        b.backspace()
+                    }
+                });
                 this.completion_erased(cx);
             }))
+            .on_action(cx.listener(|this, _: &ToggleComment, _, cx| {
+                if let Some((open, close)) = this.docs.get(this.active).and_then(|d| d.language.comment()) {
+                    this.edit(cx, |b| b.toggle_comment(open, close));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &MoveLinesUp, _, cx| this.edit(cx, |b| b.move_lines(false))))
+            .on_action(cx.listener(|this, _: &MoveLinesDown, _, cx| this.edit(cx, |b| b.move_lines(true))))
+            .on_action(cx.listener(|this, _: &DuplicateLinesUp, _, cx| this.edit(cx, |b| b.duplicate_lines(false))))
+            .on_action(cx.listener(|this, _: &DuplicateLinesDown, _, cx| this.edit(cx, |b| b.duplicate_lines(true))))
+            .on_action(cx.listener(|this, _: &DeleteLines, _, cx| this.edit(cx, |b| b.delete_lines())))
             .on_action(cx.listener(|this, _: &Delete, _, cx| this.edit(cx, |b| b.delete_forward())))
             .on_action(cx.listener(|this, _: &DeleteWordBack, _, cx| this.edit(cx, |b| b.delete_word_back())))
             .on_action(cx.listener(|this, _: &Newline, _, cx| {
@@ -2454,6 +2511,15 @@ impl Render for CodeEditor {
             .children(signature)
             .children(completion)
             .children(flash)
+    }
+}
+
+/// The one character `text` is, when it is one.
+fn typed_char(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
     }
 }
 

@@ -51,6 +51,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Quick fix (file editor) | ⌘. |
 | Rename everywhere (file editor) | F2 |
 | Completions (file editor) | ⌃Space |
+| Comment out lines / move them / duplicate them / delete them (file editor) | ⌘/ / ⌥↑ ⌥↓ / ⇧⌥↑ ⇧⌥↓ / ⇧⌘K |
 | Mini mode | ⌃⌘M |
 
 ## Terminal and editor

@@ -17,6 +17,8 @@ const SHAPE_LIMIT: usize = super::file::LONG_LINE;
 /// Time spent highlighting per frame; the rest follows on the next frames.
 const HIGHLIGHT_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
 const SCROLLBAR_WIDTH: f32 = 10.;
+/// Characters looked through for the bracket matching the one at the cursor.
+const BRACKET_SCAN: usize = 50_000;
 const TEXT_PADDING: f32 = 8.;
 
 /// A line as shown: tabs expanded to spaces, with the way back to buffer offsets.
@@ -579,6 +581,25 @@ impl Element for EditorElement {
                     Bounds::new(point(bounds.left(), px(row_top(cursor.line))), size(bounds.size.width, px(line_height))),
                     hex_alpha(0xffffff, 0.04),
                 ));
+                // The bracket at the cursor and its match, boxed.
+                if let Some((here, there)) = doc.buffer.matching_bracket(BRACKET_SCAN) {
+                    for pos in [here, there] {
+                        let Some(line) = laid.iter().find(|l| l.index == pos.line) else { continue };
+                        let x0 = f32::from(line.shaped.x_for_index(line.display.to_display(pos.col)));
+                        let x1 = f32::from(line.shaped.x_for_index(line.display.to_display(pos.col + 1)));
+                        backgrounds.push(
+                            fill(
+                                Bounds::new(
+                                    point(px(text_left - scroll.x + x0), px(row_top(pos.line) + 1.)),
+                                    size(px((x1 - x0).max(2.)), px(line_height - 2.)),
+                                ),
+                                hex_alpha(0xffffff, 0.10),
+                            )
+                            .border_widths(px(1.))
+                            .border_color(hex_alpha(0xffffff, 0.35)),
+                        );
+                    }
+                }
             }
             for line in &laid {
                 if selection.is_empty() || line.index < sel_start.line || line.index > sel_end.line {
