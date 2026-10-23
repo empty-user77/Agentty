@@ -795,7 +795,7 @@ impl CodeEditor {
         // The language server for the file in front starts now, to have read the project by
         // the time it is asked something.
         if let Some(doc) = self.docs.get(self.active) {
-            lsp::warm(&doc.project, doc.language);
+            lsp::warm(&doc.project, doc.language, &doc.path);
         }
         if let Some(path) = self.docs.get(self.active).map(|d| d.path.clone()) {
             if self.recent.first() != Some(&path) {
@@ -1706,7 +1706,7 @@ impl CodeEditor {
         let shown = |text: String, tip: String| {
             div().id("editor-lsp").flex_shrink_0().child(text).tooltip(Tooltip::text(tip, None)).into_any_element()
         };
-        Some(match lsp::status(&doc.project, doc.language) {
+        Some(match lsp::status(&doc.project, doc.language, &doc.path) {
             "ready" => shown(name.to_string(), t(cx, "lsp.ready_tip").to_string()),
             "starting" | "indexing" => shown(format!("{name} …"), t(cx, "lsp.indexing_tip").to_string()),
             "off" => div()
@@ -1724,7 +1724,7 @@ impl CodeEditor {
                 .tooltip(Tooltip::text(t(cx, "lsp.skipped_tip"), None))
                 .into_any_element(),
             _ => {
-                lsp::warm(&doc.project, doc.language);
+                lsp::warm(&doc.project, doc.language, &doc.path);
                 div()
                     .id("editor-lsp")
                     .flex_shrink_0()
@@ -1929,7 +1929,7 @@ impl CodeEditor {
             "ask": self.ask.is_some(),
             "link": self.link.map(|(s, e)| [s.line, s.col, e.col]),
             "peek": self.debug_peek(),
-            "lsp": self.docs.get(self.active).map(|d| lsp::status(&d.project, d.language)),
+            "lsp": self.docs.get(self.active).map(|d| lsp::status(&d.project, d.language, &d.path)),
             "problems": self.debug_problems(),
             "quickFix": self.debug_quick_fix(),
             "typeHover": self.debug_type_hover(),

@@ -74,7 +74,7 @@ impl CodeEditor {
                 doc.checks.checked = None;
             }
             if let Some(doc) = self.docs.get(self.active) {
-                lsp::warm(&doc.project, doc.language);
+                lsp::warm(&doc.project, doc.language, &doc.path);
             }
             cx.notify();
         }

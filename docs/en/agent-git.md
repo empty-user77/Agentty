@@ -97,7 +97,7 @@ For Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included),
 
 Definitions are found by name in the project's files (`.gitignore` is respected; dependency and build folders are left out), so nothing has to be installed. When a name is defined in more than one place, the list shows them all, closest first.
 
-When the language's server is installed, the editor asks it instead and goes straight to the right definition, lists only the real usages, and shows the type or signature when you hold **⌘** over a name. It starts by itself when you open a file of that language:
+When the language's server is installed, the editor asks it instead and goes straight to the right definition, lists only the real usages, and shows the type or signature when you hold **⌘** over a name. It starts by itself when you open a file of that language, from the folder of the file's project (`Cargo.toml`, `go.mod`, `package.json`, `pyproject.toml`, a Gradle or Maven build) — so a project in a folder of a larger repository gets its own:
 
 | Language | Server (on your `PATH`) |
 |---|---|

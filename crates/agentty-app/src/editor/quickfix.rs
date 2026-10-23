@@ -133,9 +133,9 @@ impl CodeEditor {
         self.close_quick_fix(window, cx);
         self.problem_hover = None;
         let Some(doc) = self.docs.get(self.active) else { return };
-        let (project, language) = (doc.project.clone(), doc.language);
+        let (project, language, path) = (doc.project.clone(), doc.language, doc.path.clone());
         cx.spawn(async move |this, cx| {
-            let edits = cx.background_spawn(async move { lsp::apply(&project, language, &action) }).await;
+            let edits = cx.background_spawn(async move { lsp::apply(&project, language, &path, &action) }).await;
             let Some(edits) = edits else {
                 let _ = this.update(cx, |this, cx| this.flash(t(cx, "editor.fix_failed").to_string(), cx));
                 return;
@@ -150,7 +150,7 @@ impl CodeEditor {
     /// ⇧⌥O: the language server sorts the file's imports and takes out the unused ones.
     pub(super) fn organize_imports(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable()) else { return };
-        if lsp::id(doc.language).is_none() || lsp::status(&doc.project, doc.language) != "ready" {
+        if lsp::id(doc.language).is_none() || lsp::status(&doc.project, doc.language, &doc.path) != "ready" {
             return self.flash(t(cx, "editor.organize_needs_server").to_string(), cx);
         }
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));

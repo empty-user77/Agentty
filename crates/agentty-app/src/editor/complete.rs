@@ -189,7 +189,7 @@ impl CodeEditor {
         self.completion_seq += 1;
         let asking = self.completion_seq;
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
-        let server = lsp::id(language).is_some() && lsp::status(&project, language) == "ready";
+        let server = lsp::id(language).is_some() && lsp::status(&project, language, &path) == "ready";
         match self.completion.as_mut() {
             Some(open) => open.asking = asking,
             None => {
@@ -336,8 +336,10 @@ impl CodeEditor {
             }
             Source::Server(item) => {
                 // Its import comes when asked for; the name goes in once it is here.
+                let file = path.clone();
                 cx.spawn(async move |this, cx| {
-                    let item = cx.background_spawn(async move { lsp::resolve_completion(&project, language, &item, RESOLVE_WAIT) }).await;
+                    let item =
+                        cx.background_spawn(async move { lsp::resolve_completion(&project, language, &file, &item, RESOLVE_WAIT) }).await;
                     let _ = this.update(cx, |this, cx| {
                         let Some(doc) = this.docs.iter().find(|d| d.path == path) else { return };
                         let cursor = doc.buffer.cursor();

@@ -28,7 +28,7 @@ impl CodeEditor {
         let pos = pos.filter(|_| crate::settings::settings(cx).editor_hover_types);
         let target = pos.and_then(|pos| {
             let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && !d.previewing())?;
-            if lsp::status(&doc.project, doc.language) != "ready" {
+            if lsp::status(&doc.project, doc.language, &doc.path) != "ready" {
                 return None;
             }
             let line = doc.buffer.line(pos.line);

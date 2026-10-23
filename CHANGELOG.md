@@ -13,7 +13,8 @@ All notable changes to this project are documented here. The format follows
 - File editor: when a language server is installed (rust-analyzer, gopls, TypeScript 7's `tsc` or
   typescript-language-server, pyright, jdtls, kotlin-language-server), definitions and usages come from it, so a
   name defined in several places goes straight to the right one, and holding **⌘** over a name also shows its type
-  or signature. Without one, or while it is still reading the project, the editor finds names as before. A missing server can be installed
+  or signature. Without one, or while it is still reading the project, the editor finds names as before. A server
+  works from the folder of the file's project (`backend/Cargo.toml` in a larger repository). A missing server can be installed
   from the editor's status bar or **Settings → Project → Language servers** (its official install command runs
   in a new terminal tab).
 - File editor: problems from the language server as you type — red wavy lines under errors, yellow under warnings,

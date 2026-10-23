@@ -39,7 +39,7 @@ impl CodeEditor {
 
     fn request_signature(&mut self, trigger: Option<char>, cx: &mut Context<Self>) {
         let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable()) else { return };
-        if lsp::id(doc.language).is_none() || lsp::status(&doc.project, doc.language) != "ready" {
+        if lsp::id(doc.language).is_none() || lsp::status(&doc.project, doc.language, &doc.path) != "ready" {
             return;
         }
         self.signature_seq += 1;

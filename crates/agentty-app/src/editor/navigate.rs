@@ -564,7 +564,7 @@ impl CodeEditor {
     pub fn go_to_implementation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((name, language, at)) = self.name_here() else { return };
         let Some(doc) = self.docs.get(self.active) else { return };
-        if lsp::id(language).is_none() || lsp::status(&doc.project, language) != "ready" {
+        if lsp::id(language).is_none() || lsp::status(&doc.project, language, &doc.path) != "ready" {
             return self.flash(t(cx, "nav.implementation_needs_server").to_string(), cx);
         }
         let (project, path, text) = (doc.project.clone(), doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
