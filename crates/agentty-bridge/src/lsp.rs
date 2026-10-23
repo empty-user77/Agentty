@@ -585,6 +585,72 @@ fn plain_snippet(snippet: &str) -> String {
     out
 }
 
+/// The call being typed, as the server describes it (`textDocument/signatureHelp`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Signature {
+    /// `total(prices: number[]): number`
+    pub label: String,
+    /// The parameter being typed: a byte range of `label`.
+    pub active: Option<(usize, usize)>,
+    /// The first line of its documentation, when there is one.
+    pub doc: Option<String>,
+}
+
+/// The signature of the call at `line`/`col` (bytes) of `path`; `None` when there is no call
+/// there (or no server answered). `trigger` is the character just typed (`(`, `,`).
+#[allow(clippy::too_many_arguments)]
+pub fn signature_help(
+    root: &Path,
+    language: &str,
+    path: &Path,
+    text: Text,
+    line: usize,
+    col: usize,
+    trigger: Option<char>,
+    wait: Duration,
+) -> Option<Signature> {
+    let spec = spec_for(language)?;
+    let client = ready_client(root, spec)?;
+    client.sync(path, language, text);
+    let uri = file_uri(path)?;
+    let character = client.encode_col(text.text.split('\n').nth(line).unwrap_or(""), col);
+    let context = match trigger {
+        Some(c) => json!({ "triggerKind": 2, "triggerCharacter": c.to_string(), "isRetrigger": false }),
+        None => json!({ "triggerKind": 1, "isRetrigger": false }),
+    };
+    let params = json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character }, "context": context });
+    signature(&client.request("textDocument/signatureHelp", params, wait)?)
+}
+
+/// The active signature of a `SignatureHelp`.
+fn signature(help: &Value) -> Option<Signature> {
+    let signatures = help.get("signatures")?.as_array()?;
+    let index = help.get("activeSignature").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let chosen = signatures.get(index).or_else(|| signatures.first())?;
+    let label = chosen.get("label")?.as_str()?.to_string();
+    let parameter = chosen
+        .get("activeParameter")
+        .or_else(|| help.get("activeParameter"))
+        .and_then(Value::as_u64)
+        .and_then(|i| chosen.get("parameters")?.as_array()?.get(i as usize).cloned());
+    let active = parameter.and_then(|p| match p.get("label")? {
+        // A substring of the signature's label…
+        Value::String(name) => label.find(name.as_str()).map(|start| (start, start + name.len())),
+        // …or where it is in it, in UTF-16 units.
+        Value::Array(range) => {
+            let units = |v: &Value| v.as_u64().map(|u| byte_col(&label, u as usize));
+            Some((units(range.first()?)?, units(range.get(1)?)?))
+        }
+        _ => None,
+    });
+    let doc = chosen.get("documentation").map(|d| match d {
+        Value::String(s) => s.clone(),
+        other => other.get("value").and_then(Value::as_str).unwrap_or("").to_string(),
+    });
+    let doc = doc.and_then(|d| d.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.chars().take(200).collect()));
+    Some(Signature { label, active, doc })
+}
+
 /// `text` with the changes of `edit` made (overlapping ones after the first are skipped).
 pub fn edited(text: &str, edit: &FileEdit) -> String {
     edited_at(text, edit, 0).0
@@ -1365,6 +1431,14 @@ fn initialize_params(root: &Path, options: Value) -> Value {
                 "publishDiagnostics": { "versionSupport": true },
                 "diagnostic": { "dynamicRegistration": false },
                 "rename": { "prepareSupport": false },
+                "signatureHelp": {
+                    "signatureInformation": {
+                        "documentationFormat": ["plaintext", "markdown"],
+                        "parameterInformation": { "labelOffsetSupport": true },
+                        "activeParameterSupport": true,
+                    },
+                    "contextSupport": true,
+                },
                 "completion": {
                     "completionItem": {
                         "snippetSupport": false,
@@ -1793,6 +1867,27 @@ mod tests {
         assert_eq!(edited("x = tot", &completion_edit(Path::new("/p/a"), "x = tot", &early, ((0, 4), (0, 7)))), "x = total");
         assert_eq!(plain_snippet("fn ${1:name}(${2}) {\n\t$0\n}"), "fn name() {\n\t\n}");
         assert_eq!(plain_snippet("a\\$b"), "a$b");
+    }
+
+    #[test]
+    fn reads_signatures() {
+        let help = json!({
+            "signatures": [{
+                "label": "total(prices: number[], tax: number): number",
+                "documentation": { "kind": "markdown", "value": "\nSums the prices.\n\nMore." },
+                "parameters": [{ "label": [6, 22] }, { "label": "tax: number" }],
+            }],
+            "activeSignature": 0,
+            "activeParameter": 1,
+        });
+        let found = signature(&help).unwrap();
+        assert_eq!(&found.label[found.active.unwrap().0..found.active.unwrap().1], "tax: number");
+        assert_eq!(found.doc.as_deref(), Some("Sums the prices."));
+        let first =
+            signature(&json!({ "signatures": [{ "label": "f(é: number)", "parameters": [{ "label": [2, 11] }], "activeParameter": 0 }] }))
+                .unwrap();
+        assert_eq!(&first.label[first.active.unwrap().0..first.active.unwrap().1], "é: number");
+        assert!(signature(&json!({ "signatures": [] })).is_none());
     }
 
     #[test]

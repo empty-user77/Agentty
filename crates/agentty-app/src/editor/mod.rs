@@ -23,6 +23,7 @@ pub mod project_index;
 mod quickfix;
 mod rename;
 pub mod review;
+mod signature;
 pub mod symbols;
 
 use crate::i18n::{t, tf};
@@ -463,6 +464,9 @@ pub struct CodeEditor {
     /// The completion list, while open, and the number of the last request for one.
     completion: Option<complete::Completion>,
     completion_seq: u64,
+    /// The signature of the call being typed, and the number of the last request for one.
+    signature: Option<signature::SignatureHint>,
+    signature_seq: u64,
 }
 
 impl EventEmitter<EditorEvent> for CodeEditor {}
@@ -572,6 +576,8 @@ impl CodeEditor {
             type_hover: None,
             completion: None,
             completion_seq: 0,
+            signature: None,
+            signature_seq: 0,
         }
     }
 
@@ -788,6 +794,7 @@ impl CodeEditor {
     /// Moves the cursor (works in read-only files too).
     fn motion(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Buffer)) {
         self.completion = None;
+        self.signature = None;
         let Some(doc) = self.doc() else { return };
         doc.buffer.unmark();
         f(&mut doc.buffer);
@@ -1090,6 +1097,7 @@ impl CodeEditor {
     fn mouse_down(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.close_quick_fix(window, cx);
         self.completion = None;
+        self.signature = None;
         window.focus(&self.focus_handle);
         let Some(layout) = self.layout.as_ref() else { return };
         if layout.on_scrollbar(event.position) {
@@ -1865,6 +1873,7 @@ impl CodeEditor {
             "quickFix": self.debug_quick_fix(),
             "typeHover": self.debug_type_hover(),
             "completion": self.debug_completion(),
+            "signature": self.debug_signature(),
             "cursorLine": self.docs.get(self.active).map(|d| d.buffer.line(d.buffer.cursor().line).to_string()),
             "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),
             "changes": self.debug_changes(),
@@ -1888,6 +1897,7 @@ impl CodeEditor {
                     self.edit(cx, |b| if c == '\n' { b.newline() } else { b.insert(&c.to_string()) });
                     if c != '\n' {
                         self.completion_typed(&c.to_string(), cx);
+                        self.signature_typed(&c.to_string(), cx);
                     }
                 }
             }
@@ -2132,6 +2142,7 @@ impl gpui::EntityInputHandler for CodeEditor {
         });
         if self.docs.get(self.active).is_some_and(|d| d.buffer.marked().is_none()) {
             self.completion_typed(text, cx);
+            self.signature_typed(text, cx);
         }
     }
 
@@ -2212,6 +2223,7 @@ impl Render for CodeEditor {
         let rename_box = self.render_rename(cx);
         let type_hover = self.render_type_hover(cx);
         let completion = self.render_completion(cx);
+        let signature = self.render_signature(cx);
         let presence_labels =
             if self.docs.get(self.active).is_some_and(|d| !d.previewing()) { self.render_presence_labels(cx) } else { Vec::new() };
         let Some(doc) = self.docs.get(self.active) else {
@@ -2439,6 +2451,7 @@ impl Render for CodeEditor {
             .children(type_hover)
             .children(quick_fix)
             .children(rename_box)
+            .children(signature)
             .children(completion)
             .children(flash)
     }

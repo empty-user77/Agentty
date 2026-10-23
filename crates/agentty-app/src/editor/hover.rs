@@ -75,7 +75,7 @@ impl CodeEditor {
 
     pub(super) fn render_type_hover(&self, cx: &gpui::App) -> Option<AnyElement> {
         let busy = self.picker.is_some() || self.confirm.is_some() || self.preview.covered || self.link.is_some();
-        let covered = self.fixes.is_some() || self.rename.is_some() || self.completion.is_some();
+        let covered = self.fixes.is_some() || self.rename.is_some() || self.completion.is_some() || self.signature.is_some();
         if busy || covered || self.problem_hover.as_ref().is_some_and(|(_, shown)| *shown) {
             return None;
         }

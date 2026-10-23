@@ -8,7 +8,7 @@ use super::language::Language;
 use super::project_index::{Location, Usage};
 use super::symbols::{self, Kind};
 use agentty_bridge::lsp::{self, Place, Status};
-pub use agentty_bridge::lsp::{Action, CompletionItem, FileEdit, Severity};
+pub use agentty_bridge::lsp::{Action, CompletionItem, FileEdit, Severity, Signature};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -209,6 +209,19 @@ pub fn completions(
     wait: Duration,
 ) -> Option<(Vec<CompletionItem>, bool)> {
     lsp::completions(project, id(language)?, path, text.lsp(), line, col, trigger, wait)
+}
+
+/// The signature of the call at `at` (`None`: no call there, or no server answered).
+pub fn signature_help(
+    project: &Path,
+    language: Language,
+    path: &Path,
+    text: &Snapshot,
+    at: Pos,
+    trigger: Option<char>,
+    wait: Duration,
+) -> Option<Signature> {
+    lsp::signature_help(project, id(language)?, path, text.lsp(), at.line, at.col, trigger, wait)
 }
 
 /// `item` with its import, when the server adds it on request.
