@@ -2977,6 +2977,14 @@ mod session_claims {
     mod tests {
         use super::{release, resolve};
 
+        /// The claims are one list for the whole app, and these tests use the same session names:
+        /// run in parallel, one test's panes would take another's sessions.
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        fn serial() -> std::sync::MutexGuard<'static, ()> {
+            SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
         /// Two panes in one folder, both seeing the same two transcripts, newest first.
         fn newest_free(taken: &dyn Fn(&str) -> bool) -> Option<String> {
             ["session-b", "session-a"].into_iter().find(|id| !taken(id)).map(str::to_string)
@@ -2984,6 +2992,7 @@ mod session_claims {
 
         #[test]
         fn two_panes_in_one_folder_follow_two_sessions() {
+            let _serial = serial();
             let (first, second) = (9_000_001, 9_000_002);
             assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
             assert_eq!(resolve(second, newest_free).as_deref(), Some("session-a"));
@@ -2996,6 +3005,7 @@ mod session_claims {
 
         #[test]
         fn what_the_agent_says_wins_and_the_other_pane_moves_off() {
+            let _serial = serial();
             let (first, second) = (9_000_011, 9_000_012);
             assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
             // The second pane's agent names session-b as its own (a hook event): that is the truth.
@@ -3008,6 +3018,7 @@ mod session_claims {
 
         #[test]
         fn a_closed_pane_frees_its_session() {
+            let _serial = serial();
             let (first, second) = (9_000_021, 9_000_022);
             assert_eq!(resolve(first, |_| Some("session-z".into())).as_deref(), Some("session-z"));
             release(first);
