@@ -24,7 +24,19 @@ use std::sync::Arc;
 
 actions!(
     code_editor,
-    [GoToFile, GoToSymbol, GoToFileSymbol, GoToLine, GoToDefinition, FindUsages, NavigateBack, NavigateForward, PickerNext, PickerPrevious]
+    [
+        GoToFile,
+        GoToSymbol,
+        GoToFileSymbol,
+        GoToLine,
+        GoToDefinition,
+        GoToImplementation,
+        FindUsages,
+        NavigateBack,
+        NavigateForward,
+        PickerNext,
+        PickerPrevious
+    ]
 );
 
 /// The picker's own key context (outside the editor's, like the find bar).
@@ -45,6 +57,7 @@ pub fn bind_keys(cx: &mut gpui::App) {
         key("cmd-alt-o", GoToSymbol, c),
         key("ctrl-g", GoToLine, c),
         key("f12", GoToDefinition, c),
+        key("cmd-f12", GoToImplementation, c),
         key("shift-f12", FindUsages, c),
         key("alt-f7", FindUsages, c),
         key("ctrl--", NavigateBack, c),
@@ -527,6 +540,33 @@ impl CodeEditor {
                     });
                     found.splice(0..0, here);
                     this.show_definitions(&name, found, window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// ⌘F12: where the name under the cursor is implemented (the classes implementing an
+    /// interface, the methods overriding one). The language server knows; without one, nothing.
+    pub fn go_to_implementation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((name, language, at)) = self.name_here() else { return };
+        let Some(doc) = self.docs.get(self.active) else { return };
+        if lsp::id(language).is_none() || lsp::status(&doc.project, language) != "ready" {
+            return self.flash(t(cx, "nav.implementation_needs_server").to_string(), cx);
+        }
+        let (project, path, text) = (doc.project.clone(), doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_spawn(async move { lsp::implementations(&project, language, &path, &text, at) }).await;
+            let _ = cx.update_window(handle, |_, window, cx| {
+                let _ = this.update(cx, |this, cx| match found {
+                    Some(found) if found.len() > 1 => {
+                        let title = tf(cx, "nav.implementations", &[("name", &name), ("n", &found.len().to_string())]);
+                        let rows = found.iter().map(location_row).collect();
+                        this.open_found(title, rows, window, cx);
+                    }
+                    Some(found) => this.show_definitions(&name, found, window, cx),
+                    None => this.flash(tf(cx, "nav.no_implementation", &[("name", &name)]), cx),
                 });
             });
         })

@@ -47,6 +47,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Search local sessions | ⇧⌘O |
 | Go to a file or symbol / Ask AI about the selection (file editor) | ⌘P / ⌘K |
 | Go to definition / Find usages / Back (file editor) | F12, ⌘-click / ⇧F12 / ⌃- |
+| Go to implementation (file editor) | ⌘F12 |
 | Next / previous problem (file editor) | F8 / ⇧F8 |
 | Quick fix (file editor) | ⌘. |
 | Rename everywhere (file editor) | F2 |

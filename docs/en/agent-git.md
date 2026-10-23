@@ -86,6 +86,7 @@ For Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included),
 | **⌘P** | Go to a file by name. Type `@` for the symbols of this file, `#` for the symbols of the project, `:` for a line |
 | **F12** or **⌘-click** | Go to where the name under the cursor is defined (hold **⌘** over a name to see its definition without leaving). On an import's path, open that file. On a definition itself, list its usages |
 | **⇧F12** or **⌥F7** | Every place the name is used in the project |
+| **⌘F12** | Its implementations: the classes implementing an interface, the methods overriding one (with a language server) |
 | **F8** / **⇧F8** | Next / previous problem in the file, with its message |
 | **⌃Space** | Completions (they also open as you type a name or after `.`; ↩ or ⇥ puts one in, Esc closes) |
 | **F2** | Rename the name under the cursor everywhere it is used (with a language server; in this file only without one) |

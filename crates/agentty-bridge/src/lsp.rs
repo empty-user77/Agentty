@@ -200,6 +200,13 @@ pub fn definition(root: &Path, language: &str, path: &Path, text: Text, line: us
     Some(places(&value, path, text.text, utf8))
 }
 
+/// Where the name at `line`/`col` of `path` is implemented: the classes implementing an
+/// interface, the methods overriding an abstract one (`textDocument/implementation`).
+pub fn implementation(root: &Path, language: &str, path: &Path, text: Text, line: usize, col: usize, wait: Duration) -> Answer<Vec<Place>> {
+    let (value, utf8) = ask(root, language, path, text, line, col, "textDocument/implementation", json!({}), wait)?;
+    Some(places(&value, path, text.text, utf8))
+}
+
 /// Every place the name at `line`/`col` of `path` is used, its definition included.
 pub fn references(root: &Path, language: &str, path: &Path, text: Text, line: usize, col: usize, wait: Duration) -> Answer<Vec<Place>> {
     let extra = json!({ "context": { "includeDeclaration": true } });
@@ -1448,6 +1455,7 @@ fn initialize_params(root: &Path, options: Value) -> Value {
             "textDocument": {
                 "synchronization": { "didSave": false },
                 "definition": { "linkSupport": true },
+                "implementation": { "linkSupport": true },
                 "references": {},
                 "hover": { "contentFormat": ["plaintext", "markdown"] },
                 "publishDiagnostics": { "versionSupport": true },

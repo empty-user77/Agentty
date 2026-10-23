@@ -111,6 +111,16 @@ pub fn definitions(project: &Path, language: Language, path: &Path, text: &Snaps
     (!found.is_empty()).then_some(found)
 }
 
+/// Where the name at `at` of `path` is implemented, as the server says (`None`: no server
+/// answered, or it found nothing).
+pub fn implementations(project: &Path, language: Language, path: &Path, text: &Snapshot, at: Pos) -> Option<Vec<Location>> {
+    let id = id(language)?;
+    let places = lsp::implementation(project, id, path, text.lsp(), at.line, at.col, patience(project, id))?;
+    let mut files = Files::new(path, text);
+    let found: Vec<Location> = places.iter().filter_map(|p| files.location(project, p)).collect();
+    (!found.is_empty()).then_some(found)
+}
+
 /// Every place the name at `at` of `path` is used, as the server says.
 pub fn usages(project: &Path, language: Language, path: &Path, text: &Snapshot, at: Pos) -> Option<Vec<Usage>> {
     let id = id(language)?;

@@ -2724,6 +2724,14 @@ strings! {
         "エラーと警告を行末に表示",
         "在行尾显示错误和警告"
     ],
+    "nav.implementations" => ["Implementations of {name} ({n})", "{name} 구현 ({n})", "{name} の実装 ({n})", "{name} 的实现（{n}）"],
+    "nav.no_implementation" => ["No implementation of {name} found", "{name}의 구현을 찾지 못했습니다", "{name} の実装が見つかりません", "未找到 {name} 的实现"],
+    "nav.implementation_needs_server" => [
+        "Going to implementations needs the language server",
+        "구현으로 이동하려면 언어 서버가 필요합니다",
+        "実装への移動には言語サーバーが必要です",
+        "转到实现需要语言服务器"
+    ],
     "editor.fix_with_ai" => ["Fix with AI", "AI로 고치기", "AI で修正", "用 AI 修复"],
     "editor.quick_fix" => ["Quick fix", "빠른 수정", "クイックフィックス", "快速修复"],
     "editor.finding_fixes" => ["Finding fixes…", "수정 방법 찾는 중…", "修正を検索中…", "正在查找修复…"],

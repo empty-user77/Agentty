@@ -2013,6 +2013,7 @@ impl CodeEditor {
                 self.hover_problem(Some(pos), cx);
             }
             "definition" => self.go_to_definition(window, cx),
+            "implementation" => self.go_to_implementation(window, cx),
             "usages" => self.find_usages(window, cx),
             "back" => self.navigate(true, window, cx),
             "forward" => self.navigate(false, window, cx),
@@ -2490,6 +2491,7 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &navigate::GoToSymbol, window, cx| this.open_picker("#", None, window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToLine, window, cx| this.open_picker(":", None, window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToDefinition, window, cx| this.go_to_definition(window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::GoToImplementation, window, cx| this.go_to_implementation(window, cx)))
             .on_action(cx.listener(|this, _: &problems::NextProblem, _, cx| this.step_problem(true, cx)))
             .on_action(cx.listener(|this, _: &quickfix::QuickFix, window, cx| this.open_quick_fix(window, cx)))
             .on_action(cx.listener(|this, _: &rename::Rename, window, cx| this.open_rename(window, cx)))
