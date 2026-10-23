@@ -429,6 +429,8 @@ pub struct CodeEditor {
     history: navigate::History,
     /// A place to show once its file is open: (path, position, bytes to select).
     pending_goto: Option<(PathBuf, Pos, usize, Option<String>)>,
+    /// The column (in characters) the next `pending_goto` lands on, for places given that way.
+    pending_column: Option<usize>,
     /// A short note under the cursor ("no definition found"), and since when.
     flash: Option<(String, std::time::Instant)>,
     /// Files shown lately, newest first (⌘P lists them first).
@@ -567,6 +569,7 @@ impl CodeEditor {
             picker: None,
             history: Default::default(),
             pending_goto: None,
+            pending_column: None,
             flash: None,
             recent: Vec::new(),
             pointer: None,
@@ -652,6 +655,16 @@ impl CodeEditor {
             });
         })
         .detach();
+    }
+
+    /// [`Self::open`] with the cursor at `line:column` (from 1, the column counted in characters)
+    /// once the file is there: a place clicked in a terminal (`src/app.ts:42:7`).
+    pub fn open_at(&mut self, path: &Path, project: &Path, place: Option<(usize, usize)>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((line, column)) = place {
+            self.pending_column = Some(column.saturating_sub(1));
+            self.pending_goto = Some((path.to_path_buf(), Pos::new(line.saturating_sub(1), 0), 0, None));
+        }
+        self.open(path, project, window, cx);
     }
 
     /// Replaces the text of the document being edited. For a host that drives the editor as an

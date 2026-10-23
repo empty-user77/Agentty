@@ -582,7 +582,7 @@ pub struct Workbench {
     /// The user already answered "unsaved files — quit / close anyway?".
     discard_confirmed: bool,
     /// File ⌘-clicked in a terminal, opened in the editor on the next frame (which has a window).
-    pending_editor_open: Option<PathBuf>,
+    pending_editor_open: Option<(PathBuf, Option<(usize, usize)>)>,
     /// A short question waiting for an answer (migrate, delete, compact before resuming).
     ask: Option<ask::Ask>,
     /// Help → Diagnose problems, while open.
@@ -1291,11 +1291,11 @@ impl Workbench {
                 this.open_link_for_terminal(pane_id, url.clone(), terminal_browser::Opener::User, cx);
             }
             // A file the agent named: open it right here. Folders still go to the file manager.
-            TerminalEvent::RevealPath(path) => {
+            TerminalEvent::RevealPath(path, place) => {
                 if path.is_dir() {
                     crate::platform::reveal(path);
                 } else {
-                    this.pending_editor_open = Some(path.clone());
+                    this.pending_editor_open = Some((path.clone(), *place));
                     cx.notify();
                 }
             }

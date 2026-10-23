@@ -14,9 +14,21 @@ use std::path::{Path, PathBuf};
 impl Workbench {
     /// Opens `path` (in the folder `project`) in the editor and shows it.
     pub(super) fn open_in_editor(&mut self, path: &Path, project: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_in_editor_at(path, project, None, window, cx);
+    }
+
+    /// [`Self::open_in_editor`] with the cursor at `line:column` (from 1).
+    fn open_in_editor_at(
+        &mut self,
+        path: &Path,
+        project: &Path,
+        place: Option<(usize, usize)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "file_editor" }));
         let editor = self.editor_entity(window, cx);
-        editor.update(cx, |editor, cx| editor.open(path, project, window, cx));
+        editor.update(cx, |editor, cx| editor.open_at(path, project, place, window, cx));
         self.file_diff = None;
         self.page = None;
         self.session_viewer = None;
@@ -59,7 +71,7 @@ impl Workbench {
 
     /// Opens the file a terminal ⌘-click asked for (the event carrying it has no window).
     pub(super) fn open_pending_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.pending_editor_open.take() else { return };
+        let Some((path, place)) = self.pending_editor_open.take() else { return };
         if !path.is_file() {
             return;
         }
@@ -71,7 +83,7 @@ impl Workbench {
             .or_else(|| agentty_bridge::git::repo_root(path.parent().unwrap_or(&path)))
             .or_else(|| path.parent().map(Path::to_path_buf))
             .unwrap_or_default();
-        self.open_in_editor(&path, &project, window, cx);
+        self.open_in_editor_at(&path, &project, place, window, cx);
     }
 
     fn editor_entity(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<CodeEditor> {
@@ -310,6 +322,15 @@ impl Workbench {
                 .or_else(|| path.parent().map(Path::to_path_buf))
                 .unwrap_or_default();
             return self.open_in_editor(&path, &project, window, cx);
+        }
+        // As a terminal ⌘-click on `path:line:column` would (the text must name an existing file).
+        if command == "open-at" {
+            let text: Vec<char> = argument.chars().collect();
+            if let Some((path, place)) = crate::terminal::path_and_place_at(&text, 0, Path::new("/")) {
+                self.pending_editor_open = Some((path, place));
+                return self.open_pending_file(window, cx);
+            }
+            return;
         }
         if let Some(editor) = self.editor.clone() {
             editor.update(cx, |editor, cx| editor.debug(command, argument, window, cx));

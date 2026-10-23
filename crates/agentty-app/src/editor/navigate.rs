@@ -443,9 +443,18 @@ impl CodeEditor {
     /// A file opened for `go_to` is there now: its place is shown.
     pub(super) fn apply_pending_goto(&mut self, cx: &mut Context<Self>) {
         let Some((path, pos, len, anchor)) = self.pending_goto.take() else { return };
+        let column = self.pending_column.take();
         let Some(doc) = self.docs.get(self.active).filter(|d| d.path == path) else { return };
         // A place known by a line of its text (an agent's edit in a file that was not open).
         let pos = anchor.and_then(|anchor| super::agent::find_anchor(&doc.buffer, &anchor)).unwrap_or(pos);
+        // A column counted in characters (a terminal's `file:line:column`): its byte offset.
+        let pos = match column {
+            Some(chars) if pos.line < doc.buffer.line_count() => {
+                let line = doc.buffer.line(pos.line);
+                Pos::new(pos.line, line.char_indices().nth(chars).map_or(line.len(), |(i, _)| i))
+            }
+            _ => pos,
+        };
         self.place_cursor(pos, len, cx);
     }
 

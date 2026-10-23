@@ -39,6 +39,7 @@ All notable changes to this project are documented here. The format follows
   and a file's tab takes the color of its worst one.
 - File editor: **⇧⌥F** formats with the language server when the formatter is not installed.
 - File editor: **⌘F12** goes to the implementations of an interface or method (with a language server).
+- ⌘-click on `file:line:column` in a terminal (compiler or agent output) opens the file at that place.
 - File editor: **Connect session** shows an agent's terminal beside the code. Select code for **Ask AI** (or **⌘K**)
   to send an instruction about those lines to it, plus Copy, Definition and Usages.
 - File editor: agents are seen at work. Changed lines light up with the agent's name (`Claude-3f9a`) at its caret;
