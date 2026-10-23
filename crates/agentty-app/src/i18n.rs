@@ -2806,6 +2806,14 @@ strings! {
         "未インストールのため、今は名前で検索しています。クリックでインストールします。",
         "未安装，目前按名称查找。点击即可安装。"
     ],
+    "lsp.off_tip" => [
+        "Turned off in Settings → Project → Language servers: names are found by search",
+        "설정 → 프로젝트 → 언어 서버에서 꺼 두었습니다. 이름으로 찾습니다",
+        "設定 → プロジェクト → 言語サーバー でオフにしています。名前で検索します",
+        "已在 设置 → 项目 → 语言服务器 中关闭，改为按名称查找"
+    ],
+    "lsp.turn_off" => ["Turn this language server off", "이 언어 서버 끄기", "この言語サーバーをオフ", "关闭此语言服务器"],
+    "lsp.turn_on" => ["Turn this language server on", "이 언어 서버 켜기", "この言語サーバーをオン", "开启此语言服务器"],
     "lsp.skipped_tip" => [
         "Not started for this project: it would run the project's Gradle or Maven build to read it. Names are found by search.",
         "이 프로젝트에서는 켜지 않았습니다. 읽으려면 프로젝트의 Gradle·Maven 빌드를 실행해야 하기 때문입니다. 이름으로 찾습니다.",

@@ -108,6 +108,8 @@ pub enum Status {
     Failed,
     /// Not started for this project: the server would run the project's build to read it.
     Skipped,
+    /// Turned off by the user (Settings).
+    Off,
 }
 
 /// What an answer looked like: `None` when no server could be asked in time.
@@ -164,11 +166,55 @@ pub fn generation() -> u64 {
     GENERATION.load(Ordering::SeqCst)
 }
 
+/// The servers the user turned off (Settings), by name.
+fn disabled() -> &'static Mutex<std::collections::HashSet<String>> {
+    static DISABLED: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    DISABLED.get_or_init(Default::default)
+}
+
+fn is_disabled(spec: &Spec) -> bool {
+    disabled().lock().is_ok_and(|d| d.contains(spec.name))
+}
+
+/// Which servers are turned off (`names` of [`Spec`]s): running ones stop now, ones turned back on
+/// start at the next file of their language.
+pub fn set_disabled(names: &[String]) {
+    if let Ok(mut set) = disabled().lock() {
+        *set = names.iter().cloned().collect();
+    }
+    let slots: Vec<((PathBuf, &'static str), Arc<Slot>)> =
+        registry().lock().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+    for ((_, name), slot) in slots {
+        let off = names.iter().any(|n| n == name);
+        let Ok(mut state) = slot.state.lock() else { continue };
+        match (&*state, off) {
+            (State::Ready(client), true) => {
+                client.stop();
+                *state = State::Off;
+            }
+            (State::Off, false) => *state = State::Idle,
+            (State::Starting, _) => {}
+            (_, true) => *state = State::Off,
+            _ => {}
+        }
+    }
+    // What a stopped server reported goes with it: editors read the problems again.
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
 /// Starts the server for `root` and `language` in the background, so it has read the project by
 /// the time it is asked something.
 pub fn warm(root: &Path, language: &str) {
     let Some(spec) = spec_for(language) else { return };
     let slot = slot(root, spec);
+    if is_disabled(spec) {
+        if let Ok(mut state) = slot.state.lock() {
+            if !matches!(*state, State::Starting) {
+                *state = State::Off;
+            }
+        }
+        return;
+    }
     if slot.needs_start() {
         let (root, slot) = (root.to_path_buf(), slot.clone());
         let _ = std::thread::Builder::new().name("lsp-start".into()).spawn(move || slot.start(&root, spec));
@@ -189,6 +235,7 @@ pub fn status(root: &Path, language: &str) -> Status {
         Ok(State::Starting) | Ok(State::Idle) => Status::Starting,
         Ok(State::Missing(_)) => Status::Missing,
         Ok(State::Skipped) => Status::Skipped,
+        Ok(State::Off) => Status::Off,
         Ok(State::Failed(_)) | Err(_) => Status::Failed,
     }
 }
@@ -825,6 +872,8 @@ pub fn shutdown_all() {
 #[derive(Clone)]
 pub struct Installable {
     pub name: &'static str,
+    /// Not turned off by the user.
+    pub enabled: bool,
     /// What gets installed, as the user sees it: the server, or the package that has it built in
     /// (`typescript`, whose TypeScript 7 serves it as `tsc --lsp`).
     pub program: &'static str,
@@ -849,6 +898,7 @@ pub fn servers() -> Vec<Installable> {
             let (install, needs) = install_command(spec, &path);
             Installable {
                 name: spec.name,
+                enabled: !is_disabled(spec),
                 program: spec.program(),
                 languages: shown_languages(spec),
                 installed: installed(spec, &path),
@@ -980,6 +1030,8 @@ enum State {
     Ready(Arc<Client>),
     Missing(Instant),
     Skipped,
+    /// Turned off by the user.
+    Off,
     Failed(Instant),
 }
 
@@ -997,7 +1049,7 @@ impl Slot {
             State::Starting => false,
             State::Ready(client) => !client.alive() && client.started.elapsed() > RETRY_AFTER,
             State::Missing(at) | State::Failed(at) => at.elapsed() > RETRY_AFTER,
-            State::Skipped => false,
+            State::Skipped | State::Off => false,
         };
         if start {
             *state = State::Starting;
@@ -1815,6 +1867,17 @@ mod tests {
         assert!(runs_the_build(&root, kotlin));
         assert!(!runs_the_build(&root, spec_for("java").unwrap()));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn servers_turned_off_do_not_start() {
+        let root = std::env::temp_dir().join(format!("agentty-lsp-off-{}", std::process::id()));
+        set_disabled(&["gopls".to_string()]);
+        warm(&root, "go");
+        assert_eq!(status(&root, "go"), Status::Off);
+        assert!(!servers().iter().find(|s| s.name == "gopls").unwrap().enabled);
+        set_disabled(&[]);
+        assert_ne!(status(&root, "go"), Status::Off);
     }
 
     #[test]

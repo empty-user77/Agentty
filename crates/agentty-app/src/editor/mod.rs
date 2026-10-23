@@ -471,6 +471,8 @@ pub struct CodeEditor {
     problems_generation: u64,
     /// The file that was in front at the last problems tick.
     problems_front: Option<PathBuf>,
+    /// The servers turned off in Settings, as last handed to `agentty_bridge::lsp`.
+    lsp_disabled: Option<Vec<String>>,
     /// The problem under the pointer, and whether its message shows yet.
     problem_hover: Option<(lsp::Problem, bool)>,
     /// The fixes of that problem, once the server said.
@@ -591,6 +593,7 @@ impl CodeEditor {
             review_diff: false,
             problems_generation: 0,
             problems_front: None,
+            lsp_disabled: None,
             problem_hover: None,
             hover_fixes: None,
             fixes: None,
@@ -1694,6 +1697,13 @@ impl CodeEditor {
         Some(match lsp::status(&doc.project, doc.language) {
             "ready" => shown(name.to_string(), t(cx, "lsp.ready_tip").to_string()),
             "starting" | "indexing" => shown(format!("{name} …"), t(cx, "lsp.indexing_tip").to_string()),
+            "off" => div()
+                .id("editor-lsp")
+                .flex_shrink_0()
+                .opacity(0.55)
+                .child(name)
+                .tooltip(Tooltip::text(t(cx, "lsp.off_tip"), None))
+                .into_any_element(),
             "skipped" => div()
                 .id("editor-lsp")
                 .flex_shrink_0()

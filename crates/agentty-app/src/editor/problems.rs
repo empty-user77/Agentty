@@ -64,6 +64,20 @@ impl Checks {
 
 impl CodeEditor {
     pub(super) fn problems_tick(&mut self, cx: &mut Context<Self>) {
+        // Servers turned off or on in Settings: stopped now, or started at the next file.
+        let disabled = &crate::settings::settings(cx).lsp_disabled;
+        if self.lsp_disabled.as_ref() != Some(disabled) {
+            agentty_bridge::lsp::set_disabled(disabled);
+            self.lsp_disabled = Some(disabled.clone());
+            // A server back on knows nothing of the open files: each is handed over again.
+            for doc in &mut self.docs {
+                doc.checks.checked = None;
+            }
+            if let Some(doc) = self.docs.get(self.active) {
+                lsp::warm(&doc.project, doc.language);
+            }
+            cx.notify();
+        }
         let mut changed = false;
         let generation = lsp::generation();
         if generation != self.problems_generation {

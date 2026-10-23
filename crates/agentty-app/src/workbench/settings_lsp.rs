@@ -3,7 +3,6 @@
 //! way Settings → Agents installs agent CLIs. The editor's status bar offers the same for the file
 //! in front.
 
-use super::settings_agents::pill;
 use super::settings_page::{note_for_search, section_card};
 use super::Workbench;
 use crate::i18n::{t, tf};
@@ -61,7 +60,13 @@ impl Workbench {
             self.lsp_servers.iter().flatten().map(|s| s.name).filter(|name| self.install_tab(name).is_some()).collect();
         let finished = self.lsp_installs_seen.iter().any(|name| !installing.contains(name));
         self.lsp_installs_seen = installing.clone();
-        if (self.lsp_servers.is_none() || finished) && !self.lsp_checking {
+        let disabled = &crate::settings::settings(cx).lsp_disabled;
+        let stale =
+            self.lsp_servers.as_ref().is_some_and(|servers| servers.iter().any(|s| s.enabled == disabled.iter().any(|n| n == s.name)));
+        if stale {
+            agentty_bridge::lsp::set_disabled(disabled);
+        }
+        if (self.lsp_servers.is_none() || finished || stale) && !self.lsp_checking {
             self.check_language_servers(cx);
         }
 
@@ -90,7 +95,21 @@ impl Workbench {
             let (name, program, site) = (server.name, server.program, server.site);
             note_for_search(server.program, server.languages);
             let action = if server.installed {
-                pill(t(cx, "agents.installed"), Chrome::SUCCESS).into_any_element()
+                // Installed: on or off (a running one stops at once).
+                super::settings_page::toggle(
+                    name,
+                    server.enabled,
+                    move |s| {
+                        if s.lsp_disabled.iter().any(|n| n == name) {
+                            s.lsp_disabled.retain(|n| n != name);
+                        } else {
+                            s.lsp_disabled.push(name.to_string());
+                        }
+                    },
+                    cx,
+                )
+                .tooltip(crate::ui::Tooltip::text(t(cx, if server.enabled { "lsp.turn_off" } else { "lsp.turn_on" }), None))
+                .into_any_element()
             } else if let Some(command) = server.install.clone() {
                 let busy = installing.contains(&name);
                 action_button(

@@ -98,6 +98,7 @@ pub fn status(project: &Path, language: Language) -> &'static str {
         Some(Status::Ready) => "ready",
         Some(Status::Failed) => "failed",
         Some(Status::Skipped) => "skipped",
+        Some(Status::Off) => "off",
     }
 }
 
