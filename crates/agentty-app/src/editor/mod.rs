@@ -1959,6 +1959,7 @@ impl CodeEditor {
             "find-next" => self.find_step(argument != "back", cx),
             "replace" => self.debug_replace(argument, false, window, cx),
             // "Fix with AI" on the problem at the cursor.
+            "fix-all-ai" => self.fix_all_with_ai(cx),
             "fix-ai" => {
                 let cursor = self.docs.get(self.active).map(|d| d.buffer.cursor());
                 let problem = cursor

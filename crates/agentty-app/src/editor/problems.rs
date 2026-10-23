@@ -213,6 +213,24 @@ impl CodeEditor {
         cx.notify();
     }
 
+    /// "Fix all with AI": the errors of every open file (the file in front first), where each is
+    /// and what the server said, to the linked session in one instruction.
+    pub(super) fn fix_all_with_ai(&mut self, cx: &mut Context<Self>) {
+        let mut order: Vec<usize> = (0..self.docs.len()).collect();
+        order.sort_by_key(|&i| i != self.active);
+        let mut errors: Vec<(String, &Problem)> = Vec::new();
+        for doc in order.iter().map(|&i| &self.docs[i]) {
+            let rel = doc.path.strip_prefix(&doc.project).unwrap_or(&doc.path).to_string_lossy().replace('\\', "/");
+            errors.extend(doc.checks.problems.iter().filter(|p| p.severity == Severity::Error).map(|p| (rel.clone(), p)));
+        }
+        errors.truncate(MAX_FIX_ALL);
+        let Some(doc) = self.docs.get(self.active).filter(|_| !errors.is_empty()) else { return };
+        let (path, line) = (doc.path.clone(), doc.buffer.cursor().line);
+        let prompt = fix_all_instruction(&errors);
+        self.send_instruction(path, (line, line), prompt, false, cx);
+        cx.notify();
+    }
+
     /// Every problem in the open files, the file in front first, as a list to pick from (with the
     /// code beside it).
     pub(super) fn show_problems(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
@@ -263,25 +281,46 @@ impl CodeEditor {
         let part = |glyph: &'static str, n: usize, color: u32| {
             div().flex().items_center().gap_1().child(icon(glyph, 11., hex(color))).child(n.to_string())
         };
+        let all_errors: usize = self.docs.iter().map(|d| d.checks.problems.iter().filter(|p| p.severity == Severity::Error).count()).sum();
+        let fix_all = (all_errors > 0).then(|| {
+            div()
+                .id("editor-problems-ai")
+                .flex_shrink_0()
+                .cursor_pointer()
+                .hover(|s| s.opacity(0.7))
+                .child(icon("sparkles", 11., hex(Chrome::ACCENT)))
+                .tooltip(crate::ui::Tooltip::text(
+                    tf(cx, "editor.fix_all_with_ai", &[("n", &all_errors.min(MAX_FIX_ALL).to_string())]),
+                    None,
+                ))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.fix_all_with_ai(cx)))
+        });
         Some(
             div()
-                .id("editor-problems")
-                .flex_shrink_0()
                 .flex()
                 .items_center()
                 .gap_2()
-                .cursor_pointer()
-                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
-                .when(errors > 0, |d| d.child(part("circle-x", errors, Chrome::ERROR)))
-                .when(warnings > 0, |d| d.child(part("triangle-alert", warnings, Chrome::WARNING)))
-                .tooltip(crate::ui::Tooltip::text(
-                    super::with_shortcut(
-                        tf(cx, "editor.problems_tip", &[("errors", &errors.to_string()), ("warnings", &warnings.to_string())]),
-                        "F8",
-                    ),
-                    None,
-                ))
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.show_problems(window, cx)))
+                .children(fix_all)
+                .child(
+                    div()
+                        .id("editor-problems")
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                        .when(errors > 0, |d| d.child(part("circle-x", errors, Chrome::ERROR)))
+                        .when(warnings > 0, |d| d.child(part("triangle-alert", warnings, Chrome::WARNING)))
+                        .tooltip(crate::ui::Tooltip::text(
+                            super::with_shortcut(
+                                tf(cx, "editor.problems_tip", &[("errors", &errors.to_string()), ("warnings", &warnings.to_string())]),
+                                "F8",
+                            ),
+                            None,
+                        ))
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.show_problems(window, cx))),
+                )
                 .into_any_element(),
         )
     }
@@ -388,6 +427,27 @@ impl CodeEditor {
     }
 }
 
+/// Errors handed to the agent at once at most ("Fix all with AI").
+const MAX_FIX_ALL: usize = 30;
+
+/// A problem's message as one line without control characters: it is typed into the agent's
+/// terminal, where a line break would send it early and Ctrl characters would act as keys.
+fn one_line(message: &str) -> String {
+    let message = message.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+    message.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
+/// What the agent is asked to do about the errors listed: (file, problem) (in English, as every
+/// prompt is).
+fn fix_all_instruction(errors: &[(String, &Problem)]) -> String {
+    let mut prompt = String::from("Fix these errors the language server reports:");
+    for (rel, problem) in errors {
+        let origin = problem.origin.as_ref().map(|o| format!(" ({o})")).unwrap_or_default();
+        prompt.push_str(&format!("\n- {rel}:{}:{} {}{origin}", problem.start.line + 1, problem.start.col + 1, one_line(&problem.message)));
+    }
+    prompt
+}
+
 /// What the agent is asked to do about `problem` (in English, as every prompt is).
 fn fix_instruction(problem: &Problem) -> String {
     let kind = match problem.severity {
@@ -395,10 +455,7 @@ fn fix_instruction(problem: &Problem) -> String {
         Severity::Warning => "warning",
         _ => "problem",
     };
-    // One line, and no control characters: it is typed into the agent's terminal, where a line
-    // break would send it early and Ctrl characters would act as keys.
-    let message = problem.message.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
-    let message: String = message.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let message = one_line(&problem.message);
     match &problem.origin {
         Some(origin) => format!("fix this {kind} the language server reports ({origin}): {message}"),
         None => format!("fix this {kind} the language server reports: {message}"),
@@ -408,6 +465,20 @@ fn fix_instruction(problem: &Problem) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_every_error_for_the_agent() {
+        let mut first = problem((5, 12), (5, 16));
+        first.message = "Cannot find name 'totl'.".into();
+        first.origin = Some("ts(2552)".into());
+        let mut second = problem((3, 6), (3, 10));
+        second.message = "\"totl\" is not defined\n".into();
+        let prompt = fix_all_instruction(&[("src/bad.ts".into(), &first), ("py/bad.py".into(), &second)]);
+        assert_eq!(
+            prompt,
+            "Fix these errors the language server reports:\n- src/bad.ts:6:13 Cannot find name 'totl'. (ts(2552))\n- py/bad.py:4:7 \"totl\" is not defined"
+        );
+    }
 
     #[test]
     fn asks_the_agent_to_fix_what_the_server_said() {

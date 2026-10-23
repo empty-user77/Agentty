@@ -34,7 +34,8 @@ All notable changes to this project are documented here. The format follows
 - File editor: replace in the find bar (**⌥⌘F**): one at a time or all as one undo step, with match case (**Aa**)
   and whole word (**ab**).
 - File editor: **Fix with AI** under a problem's message and in the **⌘.** list sends the problem, where it is and
-  what the language server said, to the connected session.
+  what the language server said, to the connected session; the sparkle beside the status bar's error count sends
+  every error of the open files at once.
 - File editor: errors and warnings write their message at the end of their line (Settings → Project → File editor),
   and a file's tab takes the color of its worst one.
 - File editor: **⇧⌥F** formats with the language server when the formatter is not installed.

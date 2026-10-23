@@ -2732,6 +2732,12 @@ strings! {
         "実装への移動には言語サーバーが必要です",
         "转到实现需要语言服务器"
     ],
+    "editor.fix_all_with_ai" => [
+        "Fix the errors of the open files with AI ({n})",
+        "열린 파일의 오류를 AI로 고치기 ({n})",
+        "開いているファイルのエラーを AI で修正 ({n})",
+        "用 AI 修复打开文件中的错误（{n}）"
+    ],
     "editor.fix_with_ai" => ["Fix with AI", "AI로 고치기", "AI で修正", "用 AI 修复"],
     "editor.quick_fix" => ["Quick fix", "빠른 수정", "クイックフィックス", "快速修复"],
     "editor.finding_fixes" => ["Finding fixes…", "수정 방법 찾는 중…", "修正を検索中…", "正在查找修复…"],
