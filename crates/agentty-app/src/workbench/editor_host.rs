@@ -242,7 +242,12 @@ impl Workbench {
                     .bg(if active { hex(Chrome::EDITOR) } else { hex(Chrome::TAB_INACTIVE) })
                     .when(active, |d| d.border_t_1().border_color(hex(Chrome::ACCENT)))
                     .t_body()
-                    .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::MUTED) })
+                    // A file with errors (warnings) has its name in their color, as in VS Code.
+                    .text_color(match tab.problem {
+                        Some(color) => hex(color),
+                        None if active => hex(Chrome::BRIGHT),
+                        None => hex(Chrome::MUTED),
+                    })
                     .tooltip(crate::ui::Tooltip::text(tooltip, None))
                     .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| this.close_file_tab(index, window, cx)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show_file_tab(index, window, cx)))

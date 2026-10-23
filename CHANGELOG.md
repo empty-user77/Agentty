@@ -35,7 +35,8 @@ All notable changes to this project are documented here. The format follows
   and whole word (**ab**).
 - File editor: **Fix with AI** under a problem's message and in the **⌘.** list sends the problem, where it is and
   what the language server said, to the connected session.
-- File editor: errors and warnings write their message at the end of their line (Settings → Project → File editor).
+- File editor: errors and warnings write their message at the end of their line (Settings → Project → File editor),
+  and a file's tab takes the color of its worst one.
 - File editor: **⇧⌥F** formats with the language server when the formatter is not installed.
 - File editor: **Connect session** shows an agent's terminal beside the code. Select code for **Ask AI** (or **⌘K**)
   to send an instruction about those lines to it, plus Copy, Definition and Usages.

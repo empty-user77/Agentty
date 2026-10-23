@@ -68,12 +68,19 @@ impl CodeEditor {
         let generation = lsp::generation();
         if generation != self.problems_generation {
             self.problems_generation = generation;
+            let mut worst_changed = false;
             for doc in self.docs.iter_mut().filter(|d| matches!(d.content, Content::Text)) {
                 let found = lsp::problems(&doc.project, doc.language, &doc.path, &doc.buffer);
                 if found != doc.checks.problems {
+                    let worst = |list: &[Problem]| list.iter().map(|p| p.severity).min();
+                    worst_changed |= worst(&found) != worst(&doc.checks.problems);
                     doc.checks.problems = found;
                     changed = true;
                 }
+            }
+            // The tabs show the worst one in their color.
+            if worst_changed {
+                cx.emit(super::EditorEvent::TabsChanged);
             }
         }
         let Some(doc) = self.docs.get_mut(self.active) else { return };

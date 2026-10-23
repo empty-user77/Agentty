@@ -230,6 +230,8 @@ pub struct TabInfo {
     pub active: bool,
     /// The color of the agent whose changes in this file wait for review.
     pub review: Option<u32>,
+    /// The color of the worst error or warning its language server reports in it.
+    pub problem: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -679,6 +681,7 @@ impl CodeEditor {
                 dirty: doc.is_dirty(),
                 active: index == self.active,
                 review: self.review_color(&doc.path),
+                problem: doc.checks.problems.iter().map(|p| p.severity).filter(|s| *s <= lsp::Severity::Warning).min().map(problems::color),
             })
             .collect()
     }
@@ -1881,6 +1884,7 @@ impl CodeEditor {
                 "notice": d.notice.as_ref().map(|n| n.text.clone()),
                 "preview": d.previewing(),
             })).collect::<Vec<_>>(),
+            "tabProblems": self.tabs().iter().map(|t| t.problem.map(|c| format!("{c:06x}"))).collect::<Vec<_>>(),
             "active": self.active,
             "confirm": self.confirm.is_some(),
             "find": self.find_matches().map(|(matches, current)| serde_json::json!({ "matches": matches.len(), "current": current })),
