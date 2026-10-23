@@ -23,6 +23,8 @@ pub enum Kind {
     Field,
     Selector,
     Id,
+    /// A Rust `impl` block, named after the type it is for.
+    Impl,
 }
 
 impl Kind {
@@ -31,6 +33,7 @@ impl Kind {
         match self {
             Self::Function => "fn",
             Self::Method => "method",
+            Self::Impl => "impl",
             Self::Class => "class",
             Self::Interface => "interface",
             Self::Struct => "struct",
@@ -272,6 +275,8 @@ fn rules(language: Language) -> &'static [Rule] {
                 rule(&format!(r"^\s*{vis}(?:unsafe\s+)?(?:auto\s+)?trait\s+([A-Za-z_]\w*)"), Kind::Interface),
                 rule(&format!(r"^\s*{vis}type\s+([A-Za-z_]\w*)"), Kind::Type),
                 rule(&format!(r"^\s*{vis}mod\s+([A-Za-z_]\w*)"), Kind::Module),
+                // `impl Square {`, `impl<T> Shape for Square<T> {`: the type it is for.
+                rule(r"^\s*(?:unsafe\s+)?impl(?:\s*<[^>]*>)?\s+(?:[\w:]+(?:<[^>]*>)?\s+for\s+)?([A-Za-z_]\w*)", Kind::Impl),
                 rule(&format!(r"^\s*{vis}(?:const|static)\s+(?:mut\s+)?([A-Za-z_]\w*)\s*:"), Kind::Constant),
                 rule(r"^\s*(?:#\[macro_export\]\s*)?macro_rules!\s*([A-Za-z_]\w*)", Kind::Function),
             ]
@@ -449,7 +454,10 @@ fn css_selectors(line: &str, index: usize, found: &mut Vec<Symbol>) {
 
 /// Kinds that hold others (what a breadcrumb names).
 fn is_container(kind: Kind) -> bool {
-    matches!(kind, Kind::Class | Kind::Interface | Kind::Struct | Kind::Enum | Kind::Module | Kind::Function | Kind::Method | Kind::Type)
+    matches!(
+        kind,
+        Kind::Class | Kind::Interface | Kind::Struct | Kind::Enum | Kind::Module | Kind::Function | Kind::Method | Kind::Type | Kind::Impl
+    )
 }
 
 /// The definitions the cursor's line sits in, outermost first, judged by indentation: a definition
@@ -671,6 +679,7 @@ mod tests {
             vec![
                 ("load".into(), Kind::Function, 0),
                 ("Point".into(), Kind::Struct, 1),
+                ("Point".into(), Kind::Impl, 2),
                 ("new".into(), Kind::Function, 3),
                 ("Tone".into(), Kind::Enum, 5),
                 ("Draw".into(), Kind::Interface, 6),
@@ -728,6 +737,16 @@ mod tests {
                 ("Color".into(), Kind::Enum, 12),
             ]
         );
+    }
+
+    #[test]
+    fn rust_impl_blocks_are_named_after_their_type() {
+        let text = "impl Square {\n    fn new() -> Self {}\n}\nimpl<T: Clone> Shape for Circle<T> {\n}\nunsafe impl Send for Raw {}";
+        let found: Vec<(String, Kind, usize)> = names(Language::Rust, text);
+        assert!(found.contains(&("Square".into(), Kind::Impl, 0)));
+        assert!(found.contains(&("new".into(), Kind::Function, 1)));
+        assert!(found.contains(&("Circle".into(), Kind::Impl, 3)));
+        assert!(found.contains(&("Raw".into(), Kind::Impl, 5)));
     }
 
     #[test]

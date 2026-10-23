@@ -184,8 +184,11 @@ fn all_symbols(root: &Path) -> Vec<(String, Arc<Vec<Symbol>>)> {
 /// Where `name` is defined in the project, best first for a reader in `from` (relative path).
 pub fn definitions(root: &Path, name: &str, from: &str) -> Vec<Location> {
     let all = all_symbols(root);
-    let mut found: Vec<(&str, &Symbol)> =
-        all.iter().flat_map(|(rel, list)| list.iter().filter(|s| s.name == name).map(move |s| (rel.as_str(), s))).collect();
+    // An `impl` names a type, it does not define it.
+    let mut found: Vec<(&str, &Symbol)> = all
+        .iter()
+        .flat_map(|(rel, list)| list.iter().filter(|s| s.name == name && s.kind != Kind::Impl).map(move |s| (rel.as_str(), s)))
+        .collect();
     symbols::rank(&mut found, from);
     found.into_iter().map(|(rel, s)| location(root, rel, s)).collect()
 }
@@ -195,7 +198,7 @@ pub fn search_symbols(root: &Path, query: &str, limit: usize) -> Vec<Location> {
     let all = all_symbols(root);
     let mut scored: Vec<(i64, &str, &Symbol)> = all
         .iter()
-        .flat_map(|(rel, list)| list.iter().map(move |s| (rel.as_str(), s)))
+        .flat_map(|(rel, list)| list.iter().filter(|s| s.kind != Kind::Impl).map(move |s| (rel.as_str(), s)))
         .filter_map(|(rel, s)| symbols::fuzzy_score(&s.name, query).map(|score| (score, rel, s)))
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.name.len().cmp(&b.2.name.len())).then_with(|| a.1.cmp(b.1)));

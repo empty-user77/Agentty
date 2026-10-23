@@ -316,7 +316,14 @@ impl Files {
             .texts
             .get(&place.path)
             .and_then(|t| t.as_deref())
-            .and_then(|text| symbols::symbols(language, text).into_iter().find(|s| s.line == place.line && s.col == place.col))
+            .and_then(|text| {
+                // The symbol starting there, or on that line by that name (a server may point
+                // at a type's name inside its `impl` line).
+                let found = symbols::symbols(language, text);
+                let at = found.iter().position(|s| s.line == place.line && s.col == place.col);
+                let named = || found.iter().position(|s| s.line == place.line && s.name == name);
+                at.or_else(named).map(|i| found[i].clone())
+            })
             .map_or(Kind::Variable, |s| s.kind);
         Some(Location { path: place.path.clone(), rel: relative(project, &place.path), line: place.line, col: place.col, name, kind })
     }

@@ -508,7 +508,11 @@ impl CodeEditor {
             return;
         }
         let Some((name, _, at)) = self.name_here() else { return };
-        let local = symbols::symbols(language, &self.docs[self.active].buffer.text());
+        // An `impl` names a type, it does not define it.
+        let local: Vec<symbols::Symbol> = symbols::symbols(language, &self.docs[self.active].buffer.text())
+            .into_iter()
+            .filter(|s| s.kind != symbols::Kind::Impl)
+            .collect();
         if local.iter().any(|s| s.name == name && s.line == at.line && s.col == at.col) {
             return self.find_usages(window, cx);
         }

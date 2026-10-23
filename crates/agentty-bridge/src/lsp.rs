@@ -1756,7 +1756,12 @@ fn hover_text(value: &Value) -> String {
         }
     }
     let raw = value.get("contents").map(part).unwrap_or_default();
-    let lines: Vec<&str> = raw.lines().filter(|l| !l.trim_start().starts_with("```")).collect();
+    // Code fences and Markdown rules (rust-analyzer's `---` between the signature and the rest).
+    let rule = |l: &str| {
+        let l = l.trim();
+        l.len() >= 3 && (l.chars().all(|c| c == '-') || l.chars().all(|c| c == '*') || l.chars().all(|c| c == '_'))
+    };
+    let lines: Vec<&str> = raw.lines().filter(|l| !l.trim_start().starts_with("```") && !rule(l)).collect();
     let mut text = lines.join("\n");
     while text.contains("\n\n\n") {
         text = text.replace("\n\n\n", "\n\n");
@@ -1822,6 +1827,9 @@ mod tests {
     fn hover_text_is_plain() {
         let markup = json!({ "contents": { "kind": "markdown", "value": "```rust\nfn save(&self)\n```\n\n\n\nSaves it." } });
         assert_eq!(hover_text(&markup), "fn save(&self)\n\nSaves it.");
+        let rust =
+            json!({ "contents": { "kind": "markdown", "value": "```rust\nlet square: Square\n```\n\n---\n\nsize = 8, align = 0x8" } });
+        assert_eq!(hover_text(&rust), "let square: Square\n\nsize = 8, align = 0x8");
         let marked = json!({ "contents": [{ "language": "python", "value": "def f() -> int" }, "Docs"] });
         assert_eq!(hover_text(&marked), "def f() -> int\n\nDocs");
         assert_eq!(hover_text(&Value::Null), "");
