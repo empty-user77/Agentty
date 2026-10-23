@@ -1356,6 +1356,12 @@ strings! {
 
     "find.placeholder" => ["Find", "찾기", "検索", "查找"],
     "find.none" => ["No results", "결과 없음", "結果なし", "无结果"],
+    "find.replace" => ["Replace", "바꾸기", "置換", "替换"],
+    "find.replace_all" => ["Replace all", "모두 바꾸기", "すべて置換", "全部替换"],
+    "find.replace_placeholder" => ["Replace with", "바꿀 내용", "置換後の文字列", "替换为"],
+    "find.match_case" => ["Match case", "대소문자 구분", "大文字と小文字を区別", "区分大小写"],
+    "find.whole_word" => ["Whole word", "단어 단위", "単語単位", "全字匹配"],
+    "find.replaced" => ["Replaced {n}", "{n}개 바꿈", "{n} 件を置換", "已替换 {n} 处"],
     "shortcuts.browser" => ["In-app browser", "인앱 브라우저", "アプリ内ブラウザ", "内置浏览器"],
     "shortcuts.find" => ["Find in terminal", "터미널에서 찾기", "ターミナル内を検索", "在终端中查找"],
     "shortcuts.zoom" => ["Font size bigger / smaller / reset", "글꼴 크게 / 작게 / 기본", "文字を大きく / 小さく / リセット", "字体放大 / 缩小 / 重置"],

@@ -231,6 +231,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("editor.save", "⌘S"),
             ("editor.format", "⇧⌥F"),
             ("editor.shortcut_undo_redo", "⌘Z  /  ⇧⌘Z"),
+            ("find.replace", "⌥⌘F"),
             ("editor.shortcut_comment", "⌘/"),
             ("editor.shortcut_move_lines", "⌥↑  /  ⌥↓"),
             ("editor.shortcut_duplicate_lines", "⇧⌥↑  /  ⇧⌥↓"),

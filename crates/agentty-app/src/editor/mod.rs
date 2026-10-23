@@ -1937,6 +1937,9 @@ impl CodeEditor {
                 }
             }
             "find-next" => self.find_step(argument != "back", cx),
+            "replace" => self.debug_replace(argument, false, window, cx),
+            "replace-all" => self.debug_replace(argument, true, window, cx),
+            "find-option" => self.debug_find_option(argument, cx),
             "goto" => {
                 let mut parts = argument.split(':').map(|p| p.parse::<usize>().unwrap_or(1));
                 let (line, column) = (parts.next().unwrap_or(1), parts.next().unwrap_or(1));
@@ -2474,6 +2477,7 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &problems::NextProblem, _, cx| this.step_problem(true, cx)))
             .on_action(cx.listener(|this, _: &quickfix::QuickFix, window, cx| this.open_quick_fix(window, cx)))
             .on_action(cx.listener(|this, _: &rename::Rename, window, cx| this.open_rename(window, cx)))
+            .on_action(cx.listener(|this, _: &find::FindReplace, window, cx| this.open_replace(window, cx)))
             .on_action(cx.listener(|this, _: &problems::PreviousProblem, _, cx| this.step_problem(false, cx)))
             .on_action(cx.listener(|this, _: &navigate::FindUsages, window, cx| this.find_usages(window, cx)))
             .on_action(cx.listener(|this, _: &navigate::NavigateBack, window, cx| this.navigate(true, window, cx)))
