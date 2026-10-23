@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod buffer;
+mod complete;
 mod element;
 pub mod external;
 pub mod file;
@@ -141,6 +142,7 @@ pub fn bind_keys(cx: &mut App) {
     problems::bind_keys(cx);
     quickfix::bind_keys(cx);
     rename::bind_keys(cx);
+    complete::bind_keys(cx);
     // Moving by word and to the ends of lines and of the file: macOS and PC conventions differ.
     if cfg!(target_os = "macos") {
         cx.bind_keys([
@@ -458,6 +460,9 @@ pub struct CodeEditor {
     rename: Option<rename::RenameBox>,
     /// The type of the name under the pointer.
     type_hover: Option<hover::TypeHover>,
+    /// The completion list, while open, and the number of the last request for one.
+    completion: Option<complete::Completion>,
+    completion_seq: u64,
 }
 
 impl EventEmitter<EditorEvent> for CodeEditor {}
@@ -565,6 +570,8 @@ impl CodeEditor {
             bulb_asking: false,
             rename: None,
             type_hover: None,
+            completion: None,
+            completion_seq: 0,
         }
     }
 
@@ -780,6 +787,7 @@ impl CodeEditor {
 
     /// Moves the cursor (works in read-only files too).
     fn motion(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Buffer)) {
+        self.completion = None;
         let Some(doc) = self.doc() else { return };
         doc.buffer.unmark();
         f(&mut doc.buffer);
@@ -1081,6 +1089,7 @@ impl CodeEditor {
 
     fn mouse_down(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.close_quick_fix(window, cx);
+        self.completion = None;
         window.focus(&self.focus_handle);
         let Some(layout) = self.layout.as_ref() else { return };
         if layout.on_scrollbar(event.position) {
@@ -1855,6 +1864,9 @@ impl CodeEditor {
             "problems": self.debug_problems(),
             "quickFix": self.debug_quick_fix(),
             "typeHover": self.debug_type_hover(),
+            "completion": self.debug_completion(),
+            "cursorLine": self.docs.get(self.active).map(|d| d.buffer.line(d.buffer.cursor().line).to_string()),
+            "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),
             "changes": self.debug_changes(),
             "allChanges": self.changes.iter().map(|c| format!("{}:{}", c.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), c.hunk.start)).collect::<Vec<_>>(),
             "unclaimed": self.unclaimed.len(),
@@ -1872,15 +1884,12 @@ impl CodeEditor {
             // Typed key by key, `\n` as Enter (auto-indent and all).
             "type" => {
                 let text = argument.replace("\\n", "\n");
-                self.edit(cx, |b| {
-                    for c in text.chars() {
-                        if c == '\n' {
-                            b.newline();
-                        } else {
-                            b.insert(&c.to_string());
-                        }
+                for c in text.chars() {
+                    self.edit(cx, |b| if c == '\n' { b.newline() } else { b.insert(&c.to_string()) });
+                    if c != '\n' {
+                        self.completion_typed(&c.to_string(), cx);
                     }
-                });
+                }
             }
             // The find bar opened with a query, as typed into it.
             "find" => {
@@ -1929,6 +1938,13 @@ impl CodeEditor {
             "pick-fix" => self.debug_pick_fix(argument.parse().unwrap_or(0), window, cx),
             "rename" => self.debug_rename(argument, window, cx),
             "rename-box" => self.open_rename(window, cx),
+            "complete" => self.trigger_completion(cx),
+            "accept" => {
+                self.completion_accept(cx);
+            }
+            "down" => {
+                self.completion_step(true, cx);
+            }
             "problems" => self.show_problems(window, cx),
             "rest" => {
                 let mut parts = argument.split(':').map(|p| p.parse::<usize>().unwrap_or(1).saturating_sub(1));
@@ -2114,6 +2130,9 @@ impl gpui::EntityInputHandler for CodeEditor {
             };
             buffer.commit(start, end, text);
         });
+        if self.docs.get(self.active).is_some_and(|d| d.buffer.marked().is_none()) {
+            self.completion_typed(text, cx);
+        }
     }
 
     fn replace_and_mark_text_in_range(
@@ -2192,6 +2211,7 @@ impl Render for CodeEditor {
         let bulb = self.render_bulb(cx);
         let rename_box = self.render_rename(cx);
         let type_hover = self.render_type_hover(cx);
+        let completion = self.render_completion(cx);
         let presence_labels =
             if self.docs.get(self.active).is_some_and(|d| !d.previewing()) { self.render_presence_labels(cx) } else { Vec::new() };
         let Some(doc) = self.docs.get(self.active) else {
@@ -2276,8 +2296,16 @@ impl Render for CodeEditor {
             .bg(hex(Chrome::EDITOR))
             .on_action(cx.listener(|this, _: &MoveLeft, _, cx| this.motion(cx, |b| b.left(false, false))))
             .on_action(cx.listener(|this, _: &MoveRight, _, cx| this.motion(cx, |b| b.right(false, false))))
-            .on_action(cx.listener(|this, _: &MoveUp, _, cx| this.motion(cx, |b| b.vertical(-1, false))))
-            .on_action(cx.listener(|this, _: &MoveDown, _, cx| this.motion(cx, |b| b.vertical(1, false))))
+            .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
+                if !this.completion_step(false, cx) {
+                    this.motion(cx, |b| b.vertical(-1, false))
+                }
+            }))
+            .on_action(cx.listener(|this, _: &MoveDown, _, cx| {
+                if !this.completion_step(true, cx) {
+                    this.motion(cx, |b| b.vertical(1, false))
+                }
+            }))
             .on_action(cx.listener(|this, _: &SelectLeft, _, cx| this.motion(cx, |b| b.left(true, false))))
             .on_action(cx.listener(|this, _: &SelectRight, _, cx| this.motion(cx, |b| b.right(true, false))))
             .on_action(cx.listener(|this, _: &SelectUp, _, cx| this.motion(cx, |b| b.vertical(-1, true))))
@@ -2311,11 +2339,24 @@ impl Render for CodeEditor {
                 this.motion(cx, |b| b.vertical(lines, true))
             }))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.motion(cx, |b| b.select_all())))
-            .on_action(cx.listener(|this, _: &Backspace, _, cx| this.edit(cx, |b| b.backspace())))
+            .on_action(cx.listener(|this, _: &Backspace, _, cx| {
+                this.edit(cx, |b| b.backspace());
+                this.completion_erased(cx);
+            }))
             .on_action(cx.listener(|this, _: &Delete, _, cx| this.edit(cx, |b| b.delete_forward())))
             .on_action(cx.listener(|this, _: &DeleteWordBack, _, cx| this.edit(cx, |b| b.delete_word_back())))
-            .on_action(cx.listener(|this, _: &Newline, _, cx| this.edit(cx, |b| b.newline())))
-            .on_action(cx.listener(|this, _: &Indent, _, cx| this.edit(cx, |b| b.indent())))
+            .on_action(cx.listener(|this, _: &Newline, _, cx| {
+                if !this.completion_accept(cx) {
+                    this.edit(cx, |b| b.newline())
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Indent, _, cx| {
+                if !this.completion_accept(cx) {
+                    this.edit(cx, |b| b.indent())
+                }
+            }))
+            .on_action(cx.listener(|this, _: &complete::TriggerCompletion, _, cx| this.trigger_completion(cx)))
+            .on_action(cx.listener(|this, _: &complete::Dismiss, _, cx| this.dismiss(cx)))
             .on_action(cx.listener(|this, _: &Outdent, _, cx| this.edit(cx, |b| b.outdent())))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
                 this.edit(cx, |b| {
@@ -2398,6 +2439,7 @@ impl Render for CodeEditor {
             .children(type_hover)
             .children(quick_fix)
             .children(rename_box)
+            .children(completion)
             .children(flash)
     }
 }

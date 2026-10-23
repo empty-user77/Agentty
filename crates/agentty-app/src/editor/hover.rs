@@ -54,7 +54,7 @@ impl CodeEditor {
             let asked = this
                 .update(cx, |this, _| {
                     let doc = this.docs.iter().find(|d| d.path == path).filter(|_| still(this))?;
-                    Some((doc.project.clone(), doc.language, doc.buffer.text()))
+                    Some((doc.project.clone(), doc.language, lsp::Snapshot::of(&doc.buffer)))
                 })
                 .ok()
                 .flatten();
@@ -75,7 +75,8 @@ impl CodeEditor {
 
     pub(super) fn render_type_hover(&self, cx: &gpui::App) -> Option<AnyElement> {
         let busy = self.picker.is_some() || self.confirm.is_some() || self.preview.covered || self.link.is_some();
-        if busy || self.fixes.is_some() || self.rename.is_some() || self.problem_hover.as_ref().is_some_and(|(_, shown)| *shown) {
+        let covered = self.fixes.is_some() || self.rename.is_some() || self.completion.is_some();
+        if busy || covered || self.problem_hover.as_ref().is_some_and(|(_, shown)| *shown) {
             return None;
         }
         let hover = self.type_hover.as_ref()?;

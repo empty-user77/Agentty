@@ -989,25 +989,22 @@ mod tests {
 
     #[test]
     fn edits_name_the_file_and_where() {
-        let edit = parse_line(&format!(
-            "2\tworking\t{}",
-            r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"/p/src/app.ts","old_string":"\n  const total = 1;\n  return total;","new_string":"x"}}"#
-        ))
-        .unwrap();
-        assert_eq!(edit.detail.edit, Some(FileEdit { path: "/p/src/app.ts".into(), anchor: Some("const total = 1;".into()) }));
-        let multi = parse_line(&format!(
-            "2\tworking\t{}",
-            r#"{"tool_name":"MultiEdit","tool_input":{"file_path":"/p/a.rs","edits":[{"old_string":"fn a()","new_string":"fn b()"}]}}"#
-        ))
-        .unwrap();
+        // An absolute path on this system (Windows wants a drive), as JSON writes it.
+        let root = if cfg!(windows) { "C:/p" } else { "/p" };
+        let line = |input: String| parse_line(&format!("2\tworking\t{input}")).unwrap();
+        let edit = line(format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{{"file_path":"{root}/src/app.ts","old_string":"\n  const total = 1;\n  return total;","new_string":"x"}}}}"#
+        ));
+        assert_eq!(edit.detail.edit, Some(FileEdit { path: format!("{root}/src/app.ts").into(), anchor: Some("const total = 1;".into()) }));
+        let multi = line(format!(
+            r#"{{"tool_name":"MultiEdit","tool_input":{{"file_path":"{root}/a.rs","edits":[{{"old_string":"fn a()","new_string":"fn b()"}}]}}}}"#
+        ));
         assert_eq!(multi.detail.edit.and_then(|e| e.anchor).as_deref(), Some("fn a()"));
-        let write = parse_line(&format!("2\tworking\t{}", r#"{"tool_name":"Write","tool_input":{"file_path":"/p/new.py","content":"x"}}"#))
-            .unwrap();
-        assert_eq!(write.detail.edit, Some(FileEdit { path: "/p/new.py".into(), anchor: None }));
-        let relative =
-            parse_line(&format!("2\tworking\t{}", r#"{"tool_name":"Edit","tool_input":{"file_path":"a.rs","old_string":"x"}}"#)).unwrap();
+        let write = line(format!(r#"{{"tool_name":"Write","tool_input":{{"file_path":"{root}/new.py","content":"x"}}}}"#));
+        assert_eq!(write.detail.edit, Some(FileEdit { path: format!("{root}/new.py").into(), anchor: None }));
+        let relative = line(r#"{"tool_name":"Edit","tool_input":{"file_path":"a.rs","old_string":"x"}}"#.to_string());
         assert_eq!(relative.detail.edit, None);
-        let read = parse_line(&format!("2\tworking\t{}", r#"{"tool_name":"Read","tool_input":{"file_path":"/p/a.rs"}}"#)).unwrap();
+        let read = line(format!(r#"{{"tool_name":"Read","tool_input":{{"file_path":"{root}/a.rs"}}}}"#));
         assert_eq!(read.detail.edit, None);
     }
 

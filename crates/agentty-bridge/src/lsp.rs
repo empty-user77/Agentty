@@ -36,6 +36,8 @@ const RETRY_AFTER: Duration = Duration::from_secs(30);
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 /// Places kept from one answer at most.
 const MAX_PLACES: usize = 2_000;
+/// Completions kept from one answer at most.
+const MAX_COMPLETIONS: usize = 5_000;
 /// Problems kept for one file at most.
 const MAX_DIAGNOSTICS: usize = 1_000;
 /// How long a server that is asked for a file's problems (`textDocument/diagnostic`) gets.
@@ -111,6 +113,15 @@ pub enum Status {
 /// What an answer looked like: `None` when no server could be asked in time.
 pub type Answer<T> = Option<T>;
 
+/// A file's text as the editor has it (unsaved edits included), and its revision there: a server
+/// is never handed an older text than one it already has, whatever order the threads asking
+/// about the file run in.
+#[derive(Clone, Copy, Debug)]
+pub struct Text<'a> {
+    pub text: &'a str,
+    pub revision: u64,
+}
+
 /// How bad a problem is, worst first (LSP's numbering).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Severity {
@@ -184,21 +195,21 @@ pub fn status(root: &Path, language: &str) -> Status {
 
 /// Where the name at `line`/`col` (bytes) of `path` is defined. `text` is the file as the editor
 /// has it, unsaved edits included.
-pub fn definition(root: &Path, language: &str, path: &Path, text: &str, line: usize, col: usize, wait: Duration) -> Answer<Vec<Place>> {
+pub fn definition(root: &Path, language: &str, path: &Path, text: Text, line: usize, col: usize, wait: Duration) -> Answer<Vec<Place>> {
     let (value, utf8) = ask(root, language, path, text, line, col, "textDocument/definition", json!({}), wait)?;
-    Some(places(&value, path, text, utf8))
+    Some(places(&value, path, text.text, utf8))
 }
 
 /// Every place the name at `line`/`col` of `path` is used, its definition included.
-pub fn references(root: &Path, language: &str, path: &Path, text: &str, line: usize, col: usize, wait: Duration) -> Answer<Vec<Place>> {
+pub fn references(root: &Path, language: &str, path: &Path, text: Text, line: usize, col: usize, wait: Duration) -> Answer<Vec<Place>> {
     let extra = json!({ "context": { "includeDeclaration": true } });
     let (value, utf8) = ask(root, language, path, text, line, col, "textDocument/references", extra, wait)?;
-    Some(places(&value, path, text, utf8))
+    Some(places(&value, path, text.text, utf8))
 }
 
 /// The server's hover text for the name at `line`/`col` of `path` (its type or signature, then
 /// its documentation), as plain text.
-pub fn hover(root: &Path, language: &str, path: &Path, text: &str, line: usize, col: usize, wait: Duration) -> Answer<String> {
+pub fn hover(root: &Path, language: &str, path: &Path, text: Text, line: usize, col: usize, wait: Duration) -> Answer<String> {
     let (value, _) = ask(root, language, path, text, line, col, "textDocument/hover", json!({}), wait)?;
     Some(hover_text(&value))
 }
@@ -206,7 +217,7 @@ pub fn hover(root: &Path, language: &str, path: &Path, text: &str, line: usize, 
 /// Hands the server the editor's text of `path` and, from a server that is asked rather than
 /// telling by itself, its problems. Waits up to `wait` for a server still starting. The problems
 /// are read with [`diagnostics`] once [`generation`] moves.
-pub fn check(root: &Path, language: &str, path: &Path, text: &str, wait: Duration) {
+pub fn check(root: &Path, language: &str, path: &Path, text: Text, wait: Duration) {
     let Some(spec) = spec_for(language) else { return };
     warm(root, language);
     let Some(client) = slot(root, spec).wait_ready(Instant::now() + wait) else { return };
@@ -288,7 +299,7 @@ pub fn actions(
     root: &Path,
     language: &str,
     path: &Path,
-    text: &str,
+    text: Text,
     start: (usize, usize),
     end: (usize, usize),
     wait: Duration,
@@ -298,7 +309,7 @@ pub fn actions(
     let client = slot(root, spec).wait_ready(Instant::now() + wait)?;
     client.sync(path, language, text);
     let uri = file_uri(path)?;
-    let line = |n: usize| text.split('\n').nth(n).unwrap_or("");
+    let line = |n: usize| text.text.split('\n').nth(n).unwrap_or("");
     let at = |(row, col): (usize, usize)| (row, client.encode_col(line(row), col));
     let (from, to) = (at(start), at(end));
     let problems: Vec<Value> = client
@@ -361,7 +372,7 @@ pub fn rename(
     root: &Path,
     language: &str,
     path: &Path,
-    text: &str,
+    text: Text,
     line: usize,
     col: usize,
     new_name: &str,
@@ -372,7 +383,7 @@ pub fn rename(
     let client = slot(root, spec).wait_ready(Instant::now() + wait)?;
     client.sync(path, language, text);
     let uri = file_uri(path)?;
-    let character = client.encode_col(text.split('\n').nth(line).unwrap_or(""), col);
+    let character = client.encode_col(text.text.split('\n').nth(line).unwrap_or(""), col);
     let params = json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character }, "newName": new_name });
     Some(match client.ask("textDocument/rename", params, wait)? {
         Err(message) => Err(message),
@@ -386,8 +397,202 @@ pub fn edit_count(edit: &FileEdit) -> usize {
     edit.edits.len()
 }
 
+/// A completion a server offers at the cursor (`textDocument/completion`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompletionItem {
+    pub label: String,
+    /// LSP's `CompletionItemKind` (2 method, 3 function, 6 variable, 7 class, …).
+    pub kind: Option<u64>,
+    /// The type or where it comes from (`function total(prices: number[]): number`, `./bad`).
+    pub detail: Option<String>,
+    /// What typing filters on and what the list is ordered by.
+    pub filter: String,
+    pub sort: String,
+    pub preferred: bool,
+    /// The text put in (snippet placeholders already taken out).
+    pub insert: String,
+    /// The text it replaces, as the server says (its units); `None`: the word at the cursor.
+    range: Option<((usize, usize), (usize, usize))>,
+    /// Other changes it brings (an import at the top), once resolved.
+    extra: Vec<TextEdit>,
+    utf8: bool,
+    value: Value,
+}
+
+/// What the server offers at `line`/`col` (bytes) of `path`, and whether the list is complete
+/// (`false`: ask again as the word grows). `trigger` is the character just typed when it is one
+/// that opens a list by itself (`.`).
+#[allow(clippy::too_many_arguments)]
+pub fn completions(
+    root: &Path,
+    language: &str,
+    path: &Path,
+    text: Text,
+    line: usize,
+    col: usize,
+    trigger: Option<char>,
+    wait: Duration,
+) -> Answer<(Vec<CompletionItem>, bool)> {
+    let spec = spec_for(language)?;
+    let client = ready_client(root, spec)?;
+    client.sync(path, language, text);
+    let uri = file_uri(path)?;
+    let character = client.encode_col(text.text.split('\n').nth(line).unwrap_or(""), col);
+    let context = match trigger {
+        Some(c) => json!({ "triggerKind": 2, "triggerCharacter": c.to_string() }),
+        None => json!({ "triggerKind": 1 }),
+    };
+    let params = json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character }, "context": context });
+    let value = client.request("textDocument/completion", params, wait)?;
+    let utf8 = client.utf8.load(Ordering::SeqCst);
+    let (items, complete) = match &value {
+        Value::Array(items) => (items.as_slice(), true),
+        Value::Object(list) => (
+            list.get("items").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default(),
+            !list.get("isIncomplete").and_then(Value::as_bool).unwrap_or(false),
+        ),
+        _ => (&[][..], true),
+    };
+    Some((items.iter().take(MAX_COMPLETIONS).filter_map(|item| completion(item, utf8)).collect(), complete))
+}
+
+/// `item` with what the server adds when asked (`completionItem/resolve`): its import, its
+/// documentation. As it was when the server does not resolve or does not answer in time.
+pub fn resolve_completion(root: &Path, language: &str, item: &CompletionItem, wait: Duration) -> CompletionItem {
+    let resolved = spec_for(language)
+        .and_then(|spec| ready_client(root, spec))
+        .filter(|client| client.resolve_completion.load(Ordering::SeqCst) && item.extra.is_empty())
+        .and_then(|client| client.request("completionItem/resolve", item.value.clone(), wait))
+        .and_then(|value| completion(&value, item.utf8));
+    match resolved {
+        Some(resolved) => CompletionItem { range: item.range, insert: item.insert.clone(), ..resolved },
+        None => item.clone(),
+    }
+}
+
+/// The change accepting `item` makes to `path`: its text over its range (or over `word`, the
+/// word typed so far, from its start to the cursor, in bytes of `text`), and its other changes.
+pub fn completion_edit(path: &Path, text: &str, item: &CompletionItem, word: ((usize, usize), (usize, usize))) -> FileEdit {
+    let line = |n: usize| text.split('\n').nth(n).unwrap_or("");
+    let units = |(row, col): (usize, usize)| (row, if item.utf8 { col } else { utf16_col(line(row), col) });
+    // The server's range is the word as it was when it was asked: what was typed since (the
+    // list only filtered) goes too.
+    let (start, end) = match item.range {
+        Some((start, end)) if end.0 == word.1 .0 => (start, end.max(units(word.1))),
+        Some(range) => range,
+        None => (units(word.0), units(word.1)),
+    };
+    let mut edits = vec![TextEdit { start, end, text: item.insert.clone() }];
+    edits.extend(item.extra.iter().cloned());
+    FileEdit { path: path.to_path_buf(), edits, utf8: item.utf8 }
+}
+
+/// A plain change of `path`, in bytes (a word the editor completes by itself).
+pub fn byte_edit(path: &Path, start: (usize, usize), end: (usize, usize), text: &str) -> FileEdit {
+    FileEdit { path: path.to_path_buf(), edits: vec![TextEdit { start, end, text: text.to_string() }], utf8: true }
+}
+
+fn completion(item: &Value, utf8: bool) -> Option<CompletionItem> {
+    let label = item.get("label")?.as_str()?.to_string();
+    let text = |key: &str| item.get(key).and_then(Value::as_str).map(str::to_string);
+    let snippet = item.get("insertTextFormat").and_then(Value::as_u64) == Some(2);
+    let range = |edit: &Value| {
+        // A plain `TextEdit`, or an `InsertReplaceEdit` (its `replace` range).
+        let range = edit.get("range").or_else(|| edit.get("replace"))?;
+        let at = |key: &str| {
+            Some((
+                range.pointer(&format!("/{key}/line"))?.as_u64()? as usize,
+                range.pointer(&format!("/{key}/character"))?.as_u64()? as usize,
+            ))
+        };
+        Some((at("start")?, at("end")?))
+    };
+    let edit = item.get("textEdit");
+    let insert = edit
+        .and_then(|e| e.get("newText"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| text("insertText"))
+        .unwrap_or_else(|| label.clone());
+    let extra = item
+        .get("additionalTextEdits")
+        .and_then(Value::as_array)
+        .map(|edits| {
+            edits
+                .iter()
+                .filter_map(|e| {
+                    let (start, end) = range(e)?;
+                    Some(TextEdit { start, end, text: e.get("newText")?.as_str()?.to_string() })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(CompletionItem {
+        kind: item.get("kind").and_then(Value::as_u64),
+        detail: text("detail").or_else(|| item.pointer("/labelDetails/description").and_then(Value::as_str).map(str::to_string)),
+        filter: text("filterText").unwrap_or_else(|| label.clone()),
+        sort: text("sortText").unwrap_or_else(|| label.clone()),
+        preferred: item.get("preselect").and_then(Value::as_bool).unwrap_or(false),
+        insert: if snippet { plain_snippet(&insert) } else { insert },
+        range: edit.and_then(range),
+        extra,
+        utf8,
+        value: item.clone(),
+        label,
+    })
+}
+
+/// A snippet's text without its tab stops: `${1:name}` → `name`, `$0` → nothing.
+fn plain_snippet(snippet: &str) -> String {
+    let mut out = String::with_capacity(snippet.len());
+    let mut chars = snippet.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.extend(chars.next()),
+            '$' if chars.peek() == Some(&'{') => {
+                chars.next();
+                while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    chars.next();
+                }
+                if chars.peek() == Some(&':') {
+                    chars.next();
+                }
+                let mut depth = 1;
+                for c in chars.by_ref() {
+                    match c {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    if depth > 0 {
+                        out.push(c);
+                    }
+                }
+            }
+            '$' if chars.peek().is_some_and(|c| c.is_ascii_digit()) => {
+                while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    chars.next();
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// `text` with the changes of `edit` made (overlapping ones after the first are skipped).
 pub fn edited(text: &str, edit: &FileEdit) -> String {
+    edited_at(text, edit, 0).0
+}
+
+/// [`edited`], and where byte `mark` of `text` is in the result (inside a replaced range: at
+/// the end of its new text).
+pub fn edited_at(text: &str, edit: &FileEdit, mark: usize) -> (String, usize) {
     let starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
     let offset = |(line, units): (usize, usize)| match starts.get(line) {
         Some(&start) => {
@@ -401,16 +606,25 @@ pub fn edited(text: &str, edit: &FileEdit) -> String {
     changes.sort_by_key(|c| (c.0, c.1));
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
+    let mut moved = None;
     for (start, end, new) in changes {
         if start < at || end < start {
             continue;
         }
+        if moved.is_none() && mark < start {
+            moved = Some(out.len() + mark - at);
+        }
         out.push_str(&text[at..start]);
         out.push_str(new);
+        if moved.is_none() && mark <= end {
+            moved = Some(out.len());
+        }
         at = end;
     }
+    let moved = moved.unwrap_or(out.len() + mark.saturating_sub(at));
     out.push_str(&text[at..]);
-    out
+    let moved = moved.min(out.len());
+    (out, moved)
 }
 
 /// An action from a `codeAction` answer (a `CodeAction` or a bare `Command`).
@@ -619,7 +833,7 @@ fn ask(
     root: &Path,
     language: &str,
     path: &Path,
-    text: &str,
+    text: Text,
     line: usize,
     col: usize,
     method: &str,
@@ -632,7 +846,7 @@ fn ask(
     let client = slot(root, spec).wait_ready(deadline)?;
     client.sync(path, language, text);
     let uri = file_uri(path)?;
-    let character = client.encode_col(text.lines().nth(line).unwrap_or(""), col);
+    let character = client.encode_col(text.text.lines().nth(line).unwrap_or(""), col);
     let mut params = json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character } });
     if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
         params.extend(extra.clone());
@@ -742,13 +956,24 @@ enum StartError {
 
 type Reply = Result<Value, String>;
 
+/// A file the server was handed: the version it was told, a hash of the text, and the editor's
+/// revision of that text.
+#[derive(Clone, Copy)]
+struct Opened {
+    version: i64,
+    hash: u64,
+    revision: u64,
+}
+
 struct Client {
     child: Mutex<Child>,
     stdin: Mutex<ChildStdin>,
     pending: Mutex<HashMap<i64, mpsc::Sender<Reply>>>,
     next_id: AtomicI64,
     /// Open documents: their version and a hash of the text the server has.
-    open: Mutex<HashMap<String, (i64, u64)>>,
+    open: Mutex<HashMap<String, Opened>>,
+    /// Held while a text is handed over, so they reach the server in the order they were chosen.
+    syncing: Mutex<()>,
     alive: AtomicBool,
     /// Work the server reported as begun and not yet ended (`$/progress`).
     busy: AtomicU64,
@@ -763,6 +988,8 @@ struct Client {
     pull: AtomicBool,
     /// The server fills in an action's edit only when asked (`codeAction/resolve`).
     resolve: AtomicBool,
+    /// The server adds a completion's import only when asked (`completionItem/resolve`).
+    resolve_completion: AtomicBool,
     /// Edits the server applied while running a command (`workspace/applyEdit`).
     applied: Mutex<Vec<Value>>,
 }
@@ -795,6 +1022,7 @@ impl Client {
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
             open: Mutex::new(HashMap::new()),
+            syncing: Mutex::new(()),
             alive: AtomicBool::new(true),
             busy: AtomicU64::new(0),
             utf8: AtomicBool::new(false),
@@ -803,6 +1031,7 @@ impl Client {
             diagnostics: Mutex::new(HashMap::new()),
             pull: AtomicBool::new(false),
             resolve: AtomicBool::new(false),
+            resolve_completion: AtomicBool::new(false),
             applied: Mutex::new(Vec::new()),
         });
         let reader = Arc::downgrade(&client);
@@ -826,6 +1055,8 @@ impl Client {
         client.pull.store(result.pointer("/capabilities/diagnosticProvider").is_some_and(|p| !p.is_null()), Ordering::SeqCst);
         let resolve = result.pointer("/capabilities/codeActionProvider/resolveProvider").and_then(Value::as_bool);
         client.resolve.store(resolve == Some(true), Ordering::SeqCst);
+        let resolve = result.pointer("/capabilities/completionProvider/resolveProvider").and_then(Value::as_bool);
+        client.resolve_completion.store(resolve == Some(true), Ordering::SeqCst);
         client.notify("initialized", json!({}));
         Some(client)
     }
@@ -950,26 +1181,31 @@ impl Client {
     }
 
     /// Hands the server the editor's text of `path` when it differs from what it has.
-    fn sync(&self, path: &Path, language: &str, text: &str) {
+    fn sync(&self, path: &Path, language: &str, text: Text) {
         let Some(uri) = file_uri(path) else { return };
-        let hash = text_hash(text);
+        let hash = text_hash(text.text);
+        // Not the `open` lock: the reader thread takes that one, and must never wait for a write.
+        let Ok(_order) = self.syncing.lock() else { return };
         let Ok(mut open) = self.open.lock() else { return };
+        let revision = text.revision;
         match open.get(&uri).copied() {
-            Some((_, h)) if h == hash => {}
-            Some((version, _)) => {
-                open.insert(uri.clone(), (version + 1, hash));
+            // The same text, or an older one than the server has: nothing to hand over.
+            Some(had) if had.hash == hash || revision < had.revision => {}
+            Some(had) => {
+                let version = had.version + 1;
+                open.insert(uri.clone(), Opened { version, hash, revision });
                 drop(open);
                 self.notify(
                     "textDocument/didChange",
-                    json!({ "textDocument": { "uri": uri, "version": version + 1 }, "contentChanges": [{ "text": text }] }),
+                    json!({ "textDocument": { "uri": uri, "version": version }, "contentChanges": [{ "text": text.text }] }),
                 );
             }
             None => {
-                open.insert(uri.clone(), (1, hash));
+                open.insert(uri.clone(), Opened { version: 1, hash, revision });
                 drop(open);
                 self.notify(
                     "textDocument/didOpen",
-                    json!({ "textDocument": { "uri": uri, "languageId": language, "version": 1, "text": text } }),
+                    json!({ "textDocument": { "uri": uri, "languageId": language, "version": 1, "text": text.text } }),
                 );
             }
         }
@@ -990,7 +1226,7 @@ impl Client {
     fn version_of(&self, path: &Path) -> Option<i64> {
         let key = diagnostics_key(path);
         let open = self.open.lock().ok()?;
-        open.iter().find(|(uri, _)| uri_path(uri).is_some_and(|p| diagnostics_key(&p) == key)).map(|(_, (version, _))| *version)
+        open.iter().find(|(uri, _)| uri_path(uri).is_some_and(|p| diagnostics_key(&p) == key)).map(|(_, opened)| opened.version)
     }
 
     fn report(&self, path: &Path, items: Vec<Reported>) {
@@ -1129,6 +1365,16 @@ fn initialize_params(root: &Path, options: Value) -> Value {
                 "publishDiagnostics": { "versionSupport": true },
                 "diagnostic": { "dynamicRegistration": false },
                 "rename": { "prepareSupport": false },
+                "completion": {
+                    "completionItem": {
+                        "snippetSupport": false,
+                        "preselectSupport": true,
+                        "labelDetailsSupport": true,
+                        "insertReplaceSupport": true,
+                        "resolveSupport": { "properties": ["additionalTextEdits", "detail", "documentation"] },
+                    },
+                    "contextSupport": true,
+                },
                 "codeAction": {
                     "codeActionLiteralSupport": {
                         "codeActionKind": { "valueSet": ["", "quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports"] },
@@ -1477,10 +1723,16 @@ mod tests {
 
     #[test]
     fn reads_actions_and_applies_their_edits() {
+        // A file URI and path of this system (Windows wants a drive).
+        let (uses_uri, uses_path) = if cfg!(windows) {
+            ("file:///C:/p/src/uses.ts", PathBuf::from(r"C:\p\src\uses.ts"))
+        } else {
+            ("file:///p/src/uses.ts", PathBuf::from("/p/src/uses.ts"))
+        };
         let answer = json!([
             { "title": "Extract function", "kind": "refactor.extract", "edit": { "changes": {} } },
             { "title": "Add import from \"./bad\"", "kind": "quickfix", "isPreferred": true, "diagnostics": [{}],
-              "edit": { "changes": { "file:///p/src/uses.ts": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "newText": "import { total } from \"./bad\";\n" }] } } },
+              "edit": { "changes": { uses_uri: [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "newText": "import { total } from \"./bad\";\n" }] } } },
             { "title": "Disabled", "disabled": { "reason": "no" } },
             { "title": "Move to a new file", "edit": { "documentChanges": [{ "kind": "create", "uri": "file:///p/new.ts" }] } },
             { "title": "Run it", "command": "do.it", "arguments": [1] },
@@ -1489,7 +1741,7 @@ mod tests {
         found.sort_by_key(|a| (!a.fixes, !a.preferred));
         assert_eq!(found.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Add import from \"./bad\"", "Extract function", "Run it"]);
         let edits = file_edits(found[0].value.get("edit").unwrap(), false).unwrap();
-        assert_eq!(edits[0].path, PathBuf::from("/p/src/uses.ts"));
+        assert_eq!(edits[0].path, uses_path);
         assert_eq!(edited("const a = total();\n", &edits[0]), "import { total } from \"./bad\";\nconst a = total();\n");
         assert!(file_edits(&json!({ "documentChanges": [{ "kind": "delete", "uri": "file:///p/a" }] }), false).is_none());
     }
@@ -1516,6 +1768,39 @@ mod tests {
             utf8: false,
         };
         assert_eq!(edited("a\nb", &two), "A\nB");
+    }
+
+    #[test]
+    fn reads_completions() {
+        let item = json!({
+            "label": "total", "kind": 3, "detail": "function total(prices: number[]): number", "sortText": "0",
+            "insertTextFormat": 2, "insertText": "total(${1:prices})$0",
+            "additionalTextEdits": [{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "newText": "import { total } from \"./bad\";\n" }],
+        });
+        let found = completion(&item, false).unwrap();
+        assert_eq!((found.label.as_str(), found.kind, found.insert.as_str()), ("total", Some(3), "total(prices)"));
+        // The word typed so far ("tot" on line 1) becomes the name, with its import above.
+        let text = "\nconst a = tot";
+        let edit = completion_edit(Path::new("/p/a.ts"), text, &found, ((1, 10), (1, 13)));
+        let (new, cursor) = edited_at(text, &edit, text.len());
+        assert_eq!(new, "import { total } from \"./bad\";\n\nconst a = total(prices)");
+        assert_eq!(cursor, new.len());
+        // A server's own range wins over the word.
+        let ranged = completion(&json!({ "label": "x", "textEdit": { "newText": "xy", "range": { "start": { "line": 0, "character": 1 }, "end": { "line": 0, "character": 2 } } } }), true).unwrap();
+        assert_eq!(edited("ab", &completion_edit(Path::new("/p/a"), "ab", &ranged, ((0, 0), (0, 0)))), "axy");
+        // Asked after "t", accepted after "tot": the whole word goes.
+        let early = completion(&json!({ "label": "total", "textEdit": { "newText": "total", "replace": { "start": { "line": 0, "character": 4 }, "end": { "line": 0, "character": 5 } } } }), true).unwrap();
+        assert_eq!(edited("x = tot", &completion_edit(Path::new("/p/a"), "x = tot", &early, ((0, 4), (0, 7)))), "x = total");
+        assert_eq!(plain_snippet("fn ${1:name}(${2}) {\n\t$0\n}"), "fn name() {\n\t\n}");
+        assert_eq!(plain_snippet("a\\$b"), "a$b");
+    }
+
+    #[test]
+    fn offsets_follow_edits() {
+        let edit = byte_edit(Path::new("/p/a"), (0, 2), (0, 4), "XYZ");
+        assert_eq!(edited_at("abcdef", &edit, 1), ("abXYZef".to_string(), 1));
+        assert_eq!(edited_at("abcdef", &edit, 3), ("abXYZef".to_string(), 5));
+        assert_eq!(edited_at("abcdef", &edit, 5), ("abXYZef".to_string(), 6));
     }
 
     #[test]

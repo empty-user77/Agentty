@@ -97,7 +97,7 @@ impl CodeEditor {
         if quiet && !doc.checks.running && doc.checks.checked != Some(revision) {
             doc.checks.running = true;
             doc.checks.checked = Some(revision);
-            let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), doc.buffer.text());
+            let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
             let checked = path.clone();
             let task = cx.background_spawn(async move { lsp::check(&project, language, &path, &text) });
             cx.spawn(async move |this, cx| {
@@ -173,7 +173,7 @@ impl CodeEditor {
         }
         self.hover_fixes = None;
         let Some(doc) = self.docs.get(self.active).filter(|d| d.editable()) else { return };
-        let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), doc.buffer.text());
+        let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         let (start, end) = (problem.start, problem.end);
         cx.spawn(async move |this, cx| {
             let found = cx.background_spawn(async move { lsp::actions(&project, language, &path, &text, start, end) }).await;
@@ -263,7 +263,7 @@ impl CodeEditor {
 
     /// The message of the problem under the pointer (or stepped to), under its start.
     pub(super) fn render_problem_hover(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.picker.is_some() || self.confirm.is_some() || self.preview.covered || self.link.is_some() {
+        if self.picker.is_some() || self.confirm.is_some() || self.preview.covered || self.link.is_some() || self.completion.is_some() {
             return None;
         }
         let (problem, true) = self.problem_hover.as_ref()? else { return None };

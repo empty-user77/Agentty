@@ -91,7 +91,7 @@ impl CodeEditor {
         window.focus(&focus);
         self.problem_hover = None;
         self.fixes = Some(FixMenu { path: doc.path.clone(), at: start, actions: None, selected: 0, focus });
-        let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), doc.buffer.text());
+        let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         let asked = path.clone();
         cx.spawn_in(window, async move |this, cx| {
             let found = cx.background_spawn(async move { lsp::actions(&project, language, &path, &text, start, end) }).await;
@@ -229,7 +229,7 @@ impl CodeEditor {
         }
         self.bulb_asking = true;
         let (start, end) = (problem.start, problem.end);
-        let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), doc.buffer.text());
+        let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         cx.spawn(async move |this, cx| {
             let asked = path.clone();
             let found = cx.background_spawn(async move { lsp::actions(&project, language, &path, &text, start, end) }).await;

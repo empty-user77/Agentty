@@ -8,10 +8,35 @@ use super::language::Language;
 use super::project_index::{Location, Usage};
 use super::symbols::{self, Kind};
 use agentty_bridge::lsp::{self, Place, Status};
-pub use agentty_bridge::lsp::{Action, FileEdit, Severity};
+pub use agentty_bridge::lsp::{Action, CompletionItem, FileEdit, Severity};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// A file's text as the editor had it when a question about it was asked, with its revision (see
+/// [`lsp::Text`]). Reads as the text itself.
+#[derive(Clone, Debug)]
+pub struct Snapshot {
+    pub text: String,
+    pub revision: u64,
+}
+
+impl Snapshot {
+    pub fn of(buffer: &Buffer) -> Self {
+        Self { text: buffer.text(), revision: buffer.revision() }
+    }
+
+    fn lsp(&self) -> lsp::Text<'_> {
+        lsp::Text { text: &self.text, revision: self.revision }
+    }
+}
+
+impl std::ops::Deref for Snapshot {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
 
 /// The LSP language id of `language`, when a server is known for it.
 pub fn id(language: Language) -> Option<&'static str> {
@@ -75,18 +100,18 @@ pub fn status(project: &Path, language: Language) -> &'static str {
 
 /// Where the name at `at` of `path` is defined, as the server says (`None`: no server answered,
 /// or it found nothing).
-pub fn definitions(project: &Path, language: Language, path: &Path, text: &str, at: Pos) -> Option<Vec<Location>> {
+pub fn definitions(project: &Path, language: Language, path: &Path, text: &Snapshot, at: Pos) -> Option<Vec<Location>> {
     let id = id(language)?;
-    let places = lsp::definition(project, id, path, text, at.line, at.col, patience(project, id))?;
+    let places = lsp::definition(project, id, path, text.lsp(), at.line, at.col, patience(project, id))?;
     let mut files = Files::new(path, text);
     let found: Vec<Location> = places.iter().filter_map(|p| files.location(project, p)).collect();
     (!found.is_empty()).then_some(found)
 }
 
 /// Every place the name at `at` of `path` is used, as the server says.
-pub fn usages(project: &Path, language: Language, path: &Path, text: &str, at: Pos) -> Option<Vec<Usage>> {
+pub fn usages(project: &Path, language: Language, path: &Path, text: &Snapshot, at: Pos) -> Option<Vec<Usage>> {
     let id = id(language)?;
-    let places = lsp::references(project, id, path, text, at.line, at.col, patience(project, id))?;
+    let places = lsp::references(project, id, path, text.lsp(), at.line, at.col, patience(project, id))?;
     let mut files = Files::new(path, text);
     let mut found: Vec<Usage> = places.iter().filter_map(|p| files.usage(project, p)).collect();
     found.sort_by(|a, b| (&a.rel, a.line, a.col).cmp(&(&b.rel, b.line, b.col)));
@@ -94,9 +119,9 @@ pub fn usages(project: &Path, language: Language, path: &Path, text: &str, at: P
 }
 
 /// The server's text for the name at `at` (its type or signature first), when it has one.
-pub fn hover(project: &Path, language: Language, path: &Path, text: &str, at: Pos) -> Option<String> {
+pub fn hover(project: &Path, language: Language, path: &Path, text: &Snapshot, at: Pos) -> Option<String> {
     let id = id(language)?;
-    let text = lsp::hover(project, id, path, text, at.line, at.col, patience(project, id))?;
+    let text = lsp::hover(project, id, path, text.lsp(), at.line, at.col, patience(project, id))?;
     (!text.is_empty()).then_some(text)
 }
 
@@ -113,9 +138,9 @@ pub struct Problem {
 
 /// Hands the editor's text of `path` to its server, which reports the problems in it (waits for a
 /// server still starting).
-pub fn check(project: &Path, language: Language, path: &Path, text: &str) {
+pub fn check(project: &Path, language: Language, path: &Path, text: &Snapshot) {
     if let Some(id) = id(language) {
-        lsp::check(project, id, path, text, CHECK_WAIT);
+        lsp::check(project, id, path, text.lsp(), CHECK_WAIT);
     }
 }
 
@@ -141,9 +166,9 @@ pub fn problems(project: &Path, language: Language, path: &Path, buffer: &Buffer
 }
 
 /// What the server offers for `start..end` of `path`: fixes first.
-pub fn actions(project: &Path, language: Language, path: &Path, text: &str, start: Pos, end: Pos) -> Option<Vec<Action>> {
+pub fn actions(project: &Path, language: Language, path: &Path, text: &Snapshot, start: Pos, end: Pos) -> Option<Vec<Action>> {
     let id = id(language)?;
-    lsp::actions(project, id, path, text, (start.line, start.col), (end.line, end.col), patience(project, id))
+    lsp::actions(project, id, path, text.lsp(), (start.line, start.col), (end.line, end.col), patience(project, id))
 }
 
 /// The changes `action` makes (`None`: the server did not say in time, or asked for more than
@@ -158,17 +183,55 @@ pub fn rename(
     project: &Path,
     language: Language,
     path: &Path,
-    text: &str,
+    text: &Snapshot,
     at: Pos,
     new_name: &str,
 ) -> Option<Result<Vec<FileEdit>, String>> {
     let id = id(language)?;
-    lsp::rename(project, id, path, text, at.line, at.col, new_name, APPLY_WAIT)
+    lsp::rename(project, id, path, text.lsp(), at.line, at.col, new_name, APPLY_WAIT)
 }
 
 /// The number of changes in `edit`.
 pub fn edit_count(edit: &FileEdit) -> usize {
     lsp::edit_count(edit)
+}
+
+/// What the server offers at `line`/`col` of `path` (`None`: no server answered).
+#[allow(clippy::too_many_arguments)]
+pub fn completions(
+    project: &Path,
+    language: Language,
+    path: &Path,
+    text: &Snapshot,
+    line: usize,
+    col: usize,
+    trigger: Option<char>,
+    wait: Duration,
+) -> Option<(Vec<CompletionItem>, bool)> {
+    lsp::completions(project, id(language)?, path, text.lsp(), line, col, trigger, wait)
+}
+
+/// `item` with its import, when the server adds it on request.
+pub fn resolve_completion(project: &Path, language: Language, item: &CompletionItem, wait: Duration) -> CompletionItem {
+    match id(language) {
+        Some(id) => lsp::resolve_completion(project, id, item, wait),
+        None => item.clone(),
+    }
+}
+
+/// The change accepting `item` makes over `word` (bytes of `text`).
+pub fn completion_edit(path: &Path, text: &str, item: &CompletionItem, word: ((usize, usize), (usize, usize))) -> FileEdit {
+    lsp::completion_edit(path, text, item, word)
+}
+
+/// A plain change, in bytes.
+pub fn byte_edit(path: &Path, start: (usize, usize), end: (usize, usize), text: &str) -> FileEdit {
+    lsp::byte_edit(path, start, end, text)
+}
+
+/// `text` with `edit` made, and where byte `mark` of it went.
+pub fn edited_at(text: &str, edit: &FileEdit, mark: usize) -> (String, usize) {
+    lsp::edited_at(text, edit, mark)
 }
 
 /// `text` with `edit` made.

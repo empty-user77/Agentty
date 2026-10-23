@@ -50,6 +50,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Next / previous problem (file editor) | F8 / ⇧F8 |
 | Quick fix (file editor) | ⌘. |
 | Rename everywhere (file editor) | F2 |
+| Completions (file editor) | ⌃Space |
 | Mini mode | ⌃⌘M |
 
 ## Terminal and editor

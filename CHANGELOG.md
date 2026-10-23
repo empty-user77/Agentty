@@ -25,6 +25,8 @@ All notable changes to this project are documented here. The format follows
 - File editor: **F2** renames a name everywhere it is used, through the language server (in this file only
   without one). Resting the pointer on a name shows its type or signature, and the status bar's error count lists
   every problem in the open files.
+- File editor: completions as you type (and with **⌃Space**): the language server's, with the import a name from
+  another file needs, or the words of the file without one.
 - File editor: **Connect session** shows an agent's terminal beside the code. Select code for **Ask AI** (or **⌘K**)
   to send an instruction about those lines to it, plus Copy, Definition and Usages.
 - File editor: agents are seen at work. Changed lines light up with the agent's name (`Claude-3f9a`) at its caret;

@@ -85,7 +85,7 @@ impl CodeEditor {
             return;
         }
         let Some(doc) = self.docs.iter().find(|d| d.path == path) else { return };
-        let (project, language, text) = (doc.project.clone(), doc.language, doc.buffer.text());
+        let (project, language, text) = (doc.project.clone(), doc.language, lsp::Snapshot::of(&doc.buffer));
         let ask = (new.clone(), path.clone());
         cx.spawn(async move |this, cx| {
             let (wanted, file) = ask;

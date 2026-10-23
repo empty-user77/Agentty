@@ -493,7 +493,7 @@ impl CodeEditor {
         let rel = relative(&project, &path);
         let handle = window.window_handle();
         let wanted = name.clone();
-        let text = self.docs[self.active].buffer.text();
+        let text = lsp::Snapshot::of(&self.docs[self.active].buffer);
         cx.spawn(async move |this, cx| {
             let (root, file) = (project.clone(), path.clone());
             let (exact, found) = cx
@@ -557,7 +557,7 @@ impl CodeEditor {
             return;
         }
         let Some(doc) = self.docs.get(self.active) else { return };
-        let (path, text) = (doc.path.clone(), doc.buffer.text());
+        let (path, text) = (doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let (root, wanted) = (project.clone(), name.clone());
@@ -699,14 +699,14 @@ impl CodeEditor {
         }
         let (project, path, language) = (doc.project.clone(), doc.path.clone(), doc.language);
         let local = doc.outline().iter().find(|s| s.name == name && s.line != start.line).map(|s| s.line);
-        let text = doc.buffer.text();
+        let text = lsp::Snapshot::of(&doc.buffer);
         cx.spawn(async move |this, cx| {
             let wanted = name.clone();
             let found = cx
                 .background_spawn(async move {
                     // The language server's answer, with its type or signature, when one runs.
                     if let Some(place) = lsp::definitions(&project, language, &path, &text, start).and_then(|f| f.into_iter().next()) {
-                        let source = if place.path == path { Some(text.clone()) } else { std::fs::read_to_string(&place.path).ok() };
+                        let source = if place.path == path { Some(text.text.clone()) } else { std::fs::read_to_string(&place.path).ok() };
                         if let Some(source) = source {
                             let mut preview = preview_of(&place.path, place.line, source.lines().map(str::to_string));
                             preview.note = lsp::hover(&project, language, &path, &text, start);
