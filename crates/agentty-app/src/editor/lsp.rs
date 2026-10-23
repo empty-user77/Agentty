@@ -184,6 +184,11 @@ pub fn actions(project: &Path, language: Language, path: &Path, text: &Snapshot,
     lsp::actions(project, id, path, text.lsp(), (start.line, start.col), (end.line, end.col), patience(project, id))
 }
 
+/// The server's "organize imports" for `path` (`None`: no server offers it).
+pub fn organize_imports(project: &Path, language: Language, path: &Path, text: &Snapshot) -> Option<Action> {
+    lsp::organize_imports(project, id(language)?, path, text.lsp(), APPLY_WAIT)
+}
+
 /// The changes `action` makes (`None`: the server did not say in time, or asked for more than
 /// text changes).
 pub fn apply(project: &Path, language: Language, action: &Action) -> Option<Vec<FileEdit>> {

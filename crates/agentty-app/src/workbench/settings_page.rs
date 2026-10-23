@@ -232,6 +232,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("editor.format", "⇧⌥F"),
             ("editor.shortcut_undo_redo", "⌘Z  /  ⇧⌘Z"),
             ("find.replace", "⌥⌘F"),
+            ("editor.shortcut_organize_imports", "⇧⌥O"),
             ("editor.shortcut_comment", "⌘/"),
             ("editor.shortcut_move_lines", "⌥↑  /  ⌥↓"),
             ("editor.shortcut_duplicate_lines", "⇧⌥↑  /  ⇧⌥↓"),
@@ -1234,6 +1235,19 @@ impl Workbench {
                             |s| s.editor_inline_problems = !s.editor_inline_problems,
                             cx,
                         ),
+                    ))
+                    .child(row(
+                        t(cx, "editor.settings_complete_while_typing"),
+                        toggle(
+                            "editor-complete-while-typing",
+                            prefs.editor_complete_while_typing,
+                            |s| s.editor_complete_while_typing = !s.editor_complete_while_typing,
+                            cx,
+                        ),
+                    ))
+                    .child(row(
+                        t(cx, "editor.settings_hover_types"),
+                        toggle("editor-hover-types", prefs.editor_hover_types, |s| s.editor_hover_types = !s.editor_hover_types, cx),
                     )),
             )
             .child(self.render_language_servers(cx))

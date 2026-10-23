@@ -133,6 +133,10 @@ impl CodeEditor {
         // Prose and plain text are written, not completed (⌃Space still asks).
         let code = |d: &&super::Document| matches!(d.content, Content::Text) && d.editable() && d.language.is_code();
         let Some(doc) = self.docs.get(self.active).filter(code) else { return };
+        // Off in Settings: only ⌃Space opens the list (an open one still filters as typed).
+        if !crate::settings::settings(cx).editor_complete_while_typing && self.completion.is_none() {
+            return;
+        }
         let cursor = doc.buffer.cursor();
         let line = doc.buffer.line(cursor.line);
         let mut chars = typed.chars();

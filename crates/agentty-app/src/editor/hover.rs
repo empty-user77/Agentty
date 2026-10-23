@@ -25,6 +25,7 @@ pub(super) struct TypeHover {
 impl CodeEditor {
     /// The pointer over the text (`None`: off it, a key held, or busy elsewhere).
     pub(super) fn hover_type(&mut self, pos: Option<Pos>, cx: &mut Context<Self>) {
+        let pos = pos.filter(|_| crate::settings::settings(cx).editor_hover_types);
         let target = pos.and_then(|pos| {
             let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && !d.previewing())?;
             if lsp::status(&doc.project, doc.language) != "ready" {

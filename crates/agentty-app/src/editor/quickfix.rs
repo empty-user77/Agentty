@@ -13,11 +13,13 @@ use crate::ui::{icon, TypeScale};
 use gpui::{actions, div, prelude::*, px, AnyElement, ClickEvent, Context, FocusHandle, Window};
 use std::path::{Path, PathBuf};
 
-actions!(code_editor, [QuickFix]);
+actions!(code_editor, [QuickFix, OrganizeImports]);
 
 pub fn bind_keys(cx: &mut gpui::App) {
     use crate::key;
-    cx.bind_keys([key("cmd-.", QuickFix, Some(super::CONTEXT))]);
+    let c = Some(super::CONTEXT);
+    // VS Code's keys.
+    cx.bind_keys([key("cmd-.", QuickFix, c), key("shift-alt-o", OrganizeImports, c)]);
 }
 
 /// Actions a list shows at most.
@@ -141,6 +143,23 @@ impl CodeEditor {
             if !CodeEditor::apply_edits(&this, edits, cx).await {
                 let _ = this.update(cx, |this, cx| this.flash(t(cx, "editor.fix_failed").to_string(), cx));
             }
+        })
+        .detach();
+    }
+
+    /// ⇧⌥O: the language server sorts the file's imports and takes out the unused ones.
+    pub(super) fn organize_imports(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable()) else { return };
+        if lsp::id(doc.language).is_none() || lsp::status(&doc.project, doc.language) != "ready" {
+            return self.flash(t(cx, "editor.organize_needs_server").to_string(), cx);
+        }
+        let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
+        cx.spawn_in(window, async move |this, cx| {
+            let action = cx.background_spawn(async move { lsp::organize_imports(&project, language, &path, &text) }).await;
+            let _ = this.update_in(cx, |this, window, cx| match action {
+                Some(action) => this.apply_fix(action, window, cx),
+                None => this.flash(t(cx, "editor.organize_none").to_string(), cx),
+            });
         })
         .detach();
     }

@@ -1960,6 +1960,7 @@ impl CodeEditor {
             "replace" => self.debug_replace(argument, false, window, cx),
             // "Fix with AI" on the problem at the cursor.
             "fix-all-ai" => self.fix_all_with_ai(cx),
+            "organize-imports" => self.organize_imports(window, cx),
             "fix-ai" => {
                 let cursor = self.docs.get(self.active).map(|d| d.buffer.cursor());
                 let problem = cursor
@@ -2508,6 +2509,7 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &navigate::GoToImplementation, window, cx| this.go_to_implementation(window, cx)))
             .on_action(cx.listener(|this, _: &problems::NextProblem, _, cx| this.step_problem(true, cx)))
             .on_action(cx.listener(|this, _: &quickfix::QuickFix, window, cx| this.open_quick_fix(window, cx)))
+            .on_action(cx.listener(|this, _: &quickfix::OrganizeImports, window, cx| this.organize_imports(window, cx)))
             .on_action(cx.listener(|this, _: &rename::Rename, window, cx| this.open_rename(window, cx)))
             .on_action(cx.listener(|this, _: &find::FindReplace, window, cx| this.open_replace(window, cx)))
             .on_action(cx.listener(|this, _: &problems::PreviousProblem, _, cx| this.step_problem(false, cx)))

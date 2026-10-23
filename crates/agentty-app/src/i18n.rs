@@ -2713,6 +2713,7 @@ strings! {
     "editor.external_vscode" => ["VS Code", "VS Code", "VS Code", "VS Code"],
     "editor.external_cursor" => ["Cursor", "Cursor", "Cursor", "Cursor"],
     "editor.external_system" => ["System default", "시스템 기본", "システムの既定", "系统默认"],
+    "editor.shortcut_organize_imports" => ["Organize imports", "import 정리", "import を整理", "整理 import"],
     "editor.shortcut_comment" => ["Comment out lines", "줄 주석 처리", "行をコメントアウト", "注释行"],
     "editor.shortcut_move_lines" => ["Move lines up / down", "줄 위 / 아래로 이동", "行を上 / 下へ移動", "上移 / 下移行"],
     "editor.shortcut_duplicate_lines" => ["Duplicate lines", "줄 복제", "行を複製", "复制行"],
@@ -2732,11 +2733,35 @@ strings! {
         "実装への移動には言語サーバーが必要です",
         "转到实现需要语言服务器"
     ],
+    "editor.organize_needs_server" => [
+        "Organizing imports needs the language server",
+        "import 정리에는 언어 서버가 필요합니다",
+        "import の整理には言語サーバーが必要です",
+        "整理 import 需要语言服务器"
+    ],
+    "editor.organize_none" => [
+        "The language server has nothing to organize here",
+        "언어 서버가 정리할 import가 없습니다",
+        "言語サーバーが整理できる import はありません",
+        "语言服务器没有可整理的 import"
+    ],
     "editor.fix_all_with_ai" => [
         "Fix the errors of the open files with AI ({n})",
         "열린 파일의 오류를 AI로 고치기 ({n})",
         "開いているファイルのエラーを AI で修正 ({n})",
         "用 AI 修复打开文件中的错误（{n}）"
+    ],
+    "editor.settings_complete_while_typing" => [
+        "Suggest completions while typing (⌃Space always does)",
+        "입력하는 동안 자동 완성 제안(⌃Space는 항상 가능)",
+        "入力中に補完候補を表示（⌃Space はいつでも可）",
+        "输入时提示补全（⌃Space 始终可用）"
+    ],
+    "editor.settings_hover_types" => [
+        "Show the type of the name under the pointer",
+        "마우스 아래 이름의 타입 표시",
+        "ポインタの下の名前の型を表示",
+        "显示指针下名称的类型"
     ],
     "editor.fix_with_ai" => ["Fix with AI", "AI로 고치기", "AI で修正", "用 AI 修复"],
     "editor.quick_fix" => ["Quick fix", "빠른 수정", "クイックフィックス", "快速修复"],

@@ -341,6 +341,23 @@ pub fn actions(
     Some(found)
 }
 
+/// The server's "organize imports" for the whole of `path` (`source.organizeImports`): sorted,
+/// merged, the unused ones taken out. `None` when no server offers it.
+pub fn organize_imports(root: &Path, language: &str, path: &Path, text: Text, wait: Duration) -> Answer<Action> {
+    let client = ready_client(root, spec_for(language)?)?;
+    client.sync(path, language, text);
+    let uri = file_uri(path)?;
+    let lines = text.text.split('\n').count();
+    let end = json!({ "line": lines.saturating_sub(1), "character": text.text.split('\n').next_back().map_or(0, |l| client.encode_col(l, l.len())) });
+    let params = json!({
+        "textDocument": { "uri": uri },
+        "range": { "start": { "line": 0, "character": 0 }, "end": end },
+        "context": { "diagnostics": [], "only": ["source.organizeImports"], "triggerKind": 1 },
+    });
+    let value = client.request("textDocument/codeAction", params, wait)?;
+    value.as_array()?.iter().filter_map(action).find(|a| a.kind.as_deref().is_some_and(|k| k.starts_with("source.organizeImports")))
+}
+
 /// The changes `action` makes: its own edit (asked for when the server sends it on request),
 /// and those the server applies while running its command (`workspace/applyEdit`). `None` when
 /// the server could not be asked or answered with something this editor cannot apply.

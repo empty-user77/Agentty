@@ -90,6 +90,7 @@ For Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included),
 | **F8** / **⇧F8** | Next / previous problem in the file, with its message |
 | **⌃Space** | Completions (they also open as you type a name or after `.`; ↩ or ⇥ puts one in, Esc closes) |
 | **F2** | Rename the name under the cursor everywhere it is used (with a language server; in this file only without one) |
+| **⇧⌥O** | Organize imports: sorted, the unused ones taken out (with a language server) |
 | **⌘.** | Quick fixes and refactorings the language server offers here (a light bulb in the gutter says the line has some) |
 | **⇧⌘O** / **⌥⌘O** / **⌃G** | Symbols of this file / of the project / a line |
 | **⌃-** / **⌃⇧-** | Back and forward through the places you jumped to |

@@ -344,6 +344,12 @@ pub struct Settings {
     /// The file editor writes each error's and warning's message at the end of its line.
     #[serde(default = "yes")]
     pub editor_inline_problems: bool,
+    /// The file editor's completion list opens by itself as a name is typed (⌃Space always does).
+    #[serde(default = "yes")]
+    pub editor_complete_while_typing: bool,
+    /// The type or signature of the name the pointer rests on shows in the file editor.
+    #[serde(default = "yes")]
+    pub editor_hover_types: bool,
     pub browser: BrowserSettings,
     /// Offer earlier AI sessions when a terminal enters their folder.
     pub resume_bar: bool,
@@ -953,6 +959,8 @@ impl Default for Settings {
             appearance: Appearance::Dark,
             external_editor: ExternalEditor::Auto,
             editor_inline_problems: true,
+            editor_complete_while_typing: true,
+            editor_hover_types: true,
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
             pinned_plugins: Vec::new(),
