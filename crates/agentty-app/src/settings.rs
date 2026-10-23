@@ -350,6 +350,9 @@ pub struct Settings {
     /// The type or signature of the name the pointer rests on shows in the file editor.
     #[serde(default = "yes")]
     pub editor_hover_types: bool,
+    /// The file editor pins the first lines of the definitions the top of the view is in.
+    #[serde(default = "yes")]
+    pub editor_sticky_scroll: bool,
     /// Language servers the user turned off, by name (`rust-analyzer`, `jdtls`).
     #[serde(default)]
     pub lsp_disabled: Vec<String>,
@@ -964,6 +967,7 @@ impl Default for Settings {
             editor_inline_problems: true,
             editor_complete_while_typing: true,
             editor_hover_types: true,
+            editor_sticky_scroll: true,
             lsp_disabled: Vec::new(),
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),

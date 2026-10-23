@@ -2764,6 +2764,12 @@ strings! {
         "显示指针下名称的类型"
     ],
     "editor.git_revert" => ["Revert", "되돌리기", "元に戻す", "还原"],
+    "editor.settings_sticky_scroll" => [
+        "Keep the line of the class or function you are in at the top",
+        "보고 있는 클래스·함수의 첫 줄을 위에 고정",
+        "表示中のクラス・関数の先頭行を上部に固定",
+        "将所在类或函数的首行固定在顶部"
+    ],
     "editor.fix_with_ai" => ["Fix with AI", "AI로 고치기", "AI で修正", "用 AI 修复"],
     "editor.quick_fix" => ["Quick fix", "빠른 수정", "クイックフィックス", "快速修复"],
     "editor.finding_fixes" => ["Finding fixes…", "수정 방법 찾는 중…", "修正を検索中…", "正在查找修复…"],

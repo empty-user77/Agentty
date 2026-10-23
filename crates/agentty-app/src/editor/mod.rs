@@ -25,6 +25,7 @@ mod quickfix;
 mod rename;
 pub mod review;
 mod signature;
+mod sticky;
 pub mod symbols;
 
 use crate::i18n::{t, tf};
@@ -1936,6 +1937,7 @@ impl CodeEditor {
             "completion": self.debug_completion(),
             "signature": self.debug_signature(),
             "gitMarks": self.debug_git_marks(),
+            "sticky": self.debug_sticky(),
             "cursorLine": self.docs.get(self.active).map(|d| d.buffer.line(d.buffer.cursor().line).to_string()),
             "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),
             "changes": self.debug_changes(),
@@ -2331,6 +2333,7 @@ impl Render for CodeEditor {
         let completion = self.render_completion(cx);
         let signature = self.render_signature(cx);
         let git_peek = self.render_git_peek(cx);
+        let sticky = self.render_sticky(cx);
         let presence_labels =
             if self.docs.get(self.active).is_some_and(|d| !d.previewing()) { self.render_presence_labels(cx) } else { Vec::new() };
         let Some(doc) = self.docs.get(self.active) else {
@@ -2576,6 +2579,7 @@ impl Render for CodeEditor {
             .children(type_hover)
             .children(quick_fix)
             .children(rename_box)
+            .children(sticky)
             .children(signature)
             .children(git_peek)
             .children(completion)

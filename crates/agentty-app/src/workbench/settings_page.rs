@@ -1248,6 +1248,15 @@ impl Workbench {
                     .child(row(
                         t(cx, "editor.settings_hover_types"),
                         toggle("editor-hover-types", prefs.editor_hover_types, |s| s.editor_hover_types = !s.editor_hover_types, cx),
+                    ))
+                    .child(row(
+                        t(cx, "editor.settings_sticky_scroll"),
+                        toggle(
+                            "editor-sticky-scroll",
+                            prefs.editor_sticky_scroll,
+                            |s| s.editor_sticky_scroll = !s.editor_sticky_scroll,
+                            cx,
+                        ),
                     )),
             )
             .child(self.render_language_servers(cx))

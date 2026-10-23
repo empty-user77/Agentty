@@ -44,6 +44,7 @@ All notable changes to this project are documented here. The format follows
 - ⌘-click on `file:line:column` in a terminal (compiler or agent output) opens the file at that place.
 - File editor: lines changed since the last commit are marked in the gutter (added, changed, taken away); a click
   shows the lines as committed, with **Revert**.
+- File editor: sticky scroll — deep in a long class or function, its first line stays pinned at the top.
 - File editor: **⇧⌥O** organizes imports through the language server; Settings → Project → File editor turns
   completions while typing and the type under the pointer off, and Settings → Project → Language servers turns each
   installed server off or on.

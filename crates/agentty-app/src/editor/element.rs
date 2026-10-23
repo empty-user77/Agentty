@@ -114,6 +114,16 @@ impl Layout {
         f32::from(position.x) < self.text_left - TEXT_PADDING / 2.
     }
 
+    /// The window point at the top left of the editor's text area (gutter included).
+    pub fn top_left(&self) -> Point<Pixels> {
+        self.bounds.origin
+    }
+
+    /// The width of the gutter (line numbers and marks).
+    pub fn gutter(&self) -> f32 {
+        self.text_left - TEXT_PADDING - f32::from(self.bounds.left())
+    }
+
     /// Whether `position` is on the strip of the gutter where changes since the last commit show.
     pub fn on_change_bar(&self, position: Point<Pixels>) -> bool {
         let edge = self.text_left - TEXT_PADDING;
@@ -408,10 +418,12 @@ impl Element for EditorElement {
                     doc.scroll.y = top - height / 3.;
                 }
             }
+            // Above the cursor, room for the lines sticky scroll pins at the top too.
+            let top_margin = if crate::settings::settings(cx).editor_sticky_scroll { (line_height * 4.).min(height / 2.) } else { margin };
             if doc.autoscroll {
                 let top = cursor.line as f32 * line_height;
-                if top < doc.scroll.y + margin {
-                    doc.scroll.y = top - margin;
+                if top < doc.scroll.y + top_margin {
+                    doc.scroll.y = top - top_margin;
                 } else if top + line_height > doc.scroll.y + height - margin {
                     doc.scroll.y = top + line_height - height + margin;
                 }
