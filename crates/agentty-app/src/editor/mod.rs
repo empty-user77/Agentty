@@ -905,28 +905,31 @@ impl CodeEditor {
         };
         doc.formatting = true;
         doc.notice = None;
-        let (path, project, text) = (doc.path.clone(), doc.project.clone(), doc.buffer.text());
+        let (path, project, language) = (doc.path.clone(), doc.project.clone(), doc.language);
+        let snapshot = lsp::Snapshot::of(&doc.buffer);
+        let indent = doc.buffer.indent_unit().to_string();
         let task = cx.background_spawn(async move {
+            let text = snapshot.text.clone();
             let result = format::format(formatter, &path, &project, &text);
-            (path, text, result)
+            // The formatter is not installed: the language server formats instead, when one runs.
+            if let Err(format::FormatError::Missing { .. }) = &result {
+                if let (Some(formatted), Some(server)) =
+                    (lsp::format(&project, language, &path, &snapshot, &indent), lsp::server_name(language))
+                {
+                    return (path, text, server.to_string(), Ok(formatted));
+                }
+            }
+            (path, text, formatter.program().to_string(), result)
         });
         cx.spawn(async move |this, cx| {
-            let (path, before, result) = task.await;
-            let _ = this.update(cx, |this, cx| this.formatted(&path, &before, formatter, result, cx));
+            let (path, before, tool, result) = task.await;
+            let _ = this.update(cx, |this, cx| this.formatted(&path, &before, &tool, result, cx));
         })
         .detach();
         cx.notify();
     }
 
-    fn formatted(
-        &mut self,
-        path: &Path,
-        before: &str,
-        formatter: Formatter,
-        result: Result<String, format::FormatError>,
-        cx: &mut Context<Self>,
-    ) {
-        let program = formatter.program();
+    fn formatted(&mut self, path: &Path, before: &str, program: &str, result: Result<String, format::FormatError>, cx: &mut Context<Self>) {
         let messages = (
             tf(cx, "editor.formatted", &[("tool", program)]),
             tf(cx, "editor.already_formatted", &[("tool", program)]),

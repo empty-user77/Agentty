@@ -74,6 +74,9 @@ pub fn close(project: &Path, language: Language, path: &Path) {
 /// a while on a cold start).
 const CHECK_WAIT: Duration = Duration::from_secs(90);
 
+/// How long a server gets to format a file.
+const FORMAT_WAIT: Duration = Duration::from_secs(10);
+
 /// How long a chosen fix may take (a server running a command first).
 const APPLY_WAIT: Duration = Duration::from_secs(10);
 
@@ -245,6 +248,22 @@ pub fn byte_edit(path: &Path, start: (usize, usize), end: (usize, usize), text: 
 /// `text` with `edit` made, and where byte `mark` of it went.
 pub fn edited_at(text: &str, edit: &FileEdit, mark: usize) -> (String, usize) {
     lsp::edited_at(text, edit, mark)
+}
+
+/// The running server's formatting of the text, indented with `indent` (`None`: no server, it
+/// does not format, or it did not answer).
+pub fn format(project: &Path, language: Language, path: &Path, text: &Snapshot, indent: &str) -> Option<String> {
+    let (tab, spaces) = if indent == "\t" { (4, false) } else { (indent.len().max(1), true) };
+    let edit = lsp::format(project, id(language)?, path, text.lsp(), tab, spaces, FORMAT_WAIT)?;
+    Some(match edit {
+        Some(edit) => lsp::edited(text, &edit),
+        None => text.text.clone(),
+    })
+}
+
+/// The program a language's server runs as, for notes ("gopls", "rust-analyzer").
+pub fn server_name(language: Language) -> Option<&'static str> {
+    lsp::spec_for(id(language)?).map(|spec| spec.program())
 }
 
 /// `text` with `edit` made.

@@ -651,6 +651,22 @@ fn signature(help: &Value) -> Option<Signature> {
     Some(Signature { label, active, doc })
 }
 
+/// The running server's formatting of `path` (`textDocument/formatting`), indented with `tab`
+/// columns of spaces or with tabs: `None` when no server is running for it or it does not
+/// format, `Some(None)` when it leaves the text as it is.
+pub fn format(root: &Path, language: &str, path: &Path, text: Text, tab: usize, spaces: bool, wait: Duration) -> Answer<Option<FileEdit>> {
+    let client = ready_client(root, spec_for(language)?)?;
+    if !client.formats.load(Ordering::SeqCst) {
+        return None;
+    }
+    client.sync(path, language, text);
+    let uri = file_uri(path)?;
+    let params = json!({ "textDocument": { "uri": uri }, "options": { "tabSize": tab, "insertSpaces": spaces } });
+    let value = client.request("textDocument/formatting", params, wait)?;
+    let edits = file_edits(&json!({ "changes": { uri: value } }), client.utf8.load(Ordering::SeqCst))?;
+    Some(edits.into_iter().next().filter(|edit| !edit.edits.is_empty()))
+}
+
 /// `text` with the changes of `edit` made (overlapping ones after the first are skipped).
 pub fn edited(text: &str, edit: &FileEdit) -> String {
     edited_at(text, edit, 0).0
@@ -1058,6 +1074,8 @@ struct Client {
     resolve_completion: AtomicBool,
     /// Edits the server applied while running a command (`workspace/applyEdit`).
     applied: Mutex<Vec<Value>>,
+    /// The server formats whole files (`textDocument/formatting`).
+    formats: AtomicBool,
 }
 
 impl Client {
@@ -1099,6 +1117,7 @@ impl Client {
             resolve: AtomicBool::new(false),
             resolve_completion: AtomicBool::new(false),
             applied: Mutex::new(Vec::new()),
+            formats: AtomicBool::new(false),
         });
         let reader = Arc::downgrade(&client);
         let _ = std::thread::Builder::new().name("lsp-read".into()).spawn(move || {
@@ -1121,6 +1140,9 @@ impl Client {
         client.pull.store(result.pointer("/capabilities/diagnosticProvider").is_some_and(|p| !p.is_null()), Ordering::SeqCst);
         let resolve = result.pointer("/capabilities/codeActionProvider/resolveProvider").and_then(Value::as_bool);
         client.resolve.store(resolve == Some(true), Ordering::SeqCst);
+        let formats =
+            result.pointer("/capabilities/documentFormattingProvider").is_some_and(|p| p.as_bool() != Some(false) && !p.is_null());
+        client.formats.store(formats, Ordering::SeqCst);
         let resolve = result.pointer("/capabilities/completionProvider/resolveProvider").and_then(Value::as_bool);
         client.resolve_completion.store(resolve == Some(true), Ordering::SeqCst);
         client.notify("initialized", json!({}));
@@ -1431,6 +1453,7 @@ fn initialize_params(root: &Path, options: Value) -> Value {
                 "publishDiagnostics": { "versionSupport": true },
                 "diagnostic": { "dynamicRegistration": false },
                 "rename": { "prepareSupport": false },
+                "formatting": { "dynamicRegistration": false },
                 "signatureHelp": {
                     "signatureInformation": {
                         "documentationFormat": ["plaintext", "markdown"],
