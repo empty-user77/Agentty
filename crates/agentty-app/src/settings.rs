@@ -290,6 +290,9 @@ pub struct Settings {
     /// Width of the database panel docked right of the terminals.
     #[serde(default = "default_db_panel_width")]
     pub db_panel_width: f32,
+    /// Width of the session shown beside the file editor.
+    #[serde(default = "default_editor_session_width")]
+    pub editor_session_width: f32,
     /// Commands the user added to the run button, by project folder.
     #[serde(default)]
     pub run_configs: std::collections::BTreeMap<String, Vec<agentty_bridge::run_configs::CustomRun>>,
@@ -338,6 +341,21 @@ pub struct Settings {
     pub appearance: Appearance,
     /// App the file editor's "Open in editor" button uses.
     pub external_editor: ExternalEditor,
+    /// The file editor writes each error's and warning's message at the end of its line.
+    #[serde(default = "yes")]
+    pub editor_inline_problems: bool,
+    /// The file editor's completion list opens by itself as a name is typed (⌃Space always does).
+    #[serde(default = "yes")]
+    pub editor_complete_while_typing: bool,
+    /// The type or signature of the name the pointer rests on shows in the file editor.
+    #[serde(default = "yes")]
+    pub editor_hover_types: bool,
+    /// The file editor pins the first lines of the definitions the top of the view is in.
+    #[serde(default = "yes")]
+    pub editor_sticky_scroll: bool,
+    /// Language servers the user turned off, by name (`rust-analyzer`, `jdtls`).
+    #[serde(default)]
+    pub lsp_disabled: Vec<String>,
     pub browser: BrowserSettings,
     /// Offer earlier AI sessions when a terminal enters their folder.
     pub resume_bar: bool,
@@ -891,6 +909,10 @@ fn default_db_panel_width() -> f32 {
     crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH
 }
 
+fn default_editor_session_width() -> f32 {
+    crate::workbench::editor_session::DEFAULT_WIDTH
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -923,6 +945,7 @@ impl Default for Settings {
             plugin_workspace_terminal_height: 280.,
             docker_panel_width: crate::workbench::side_panels::DEFAULT_DOCKER_WIDTH,
             db_panel_width: crate::workbench::side_panels::DEFAULT_DATABASE_WIDTH,
+            editor_session_width: crate::workbench::editor_session::DEFAULT_WIDTH,
             run_configs: std::collections::BTreeMap::new(),
             run_recent: std::collections::BTreeMap::new(),
             run_log_height: crate::workbench::log_panel::DEFAULT_HEIGHT,
@@ -941,6 +964,11 @@ impl Default for Settings {
             link_opener: LinkOpener::InApp,
             appearance: Appearance::Dark,
             external_editor: ExternalEditor::Auto,
+            editor_inline_problems: true,
+            editor_complete_while_typing: true,
+            editor_hover_types: true,
+            editor_sticky_scroll: true,
+            lsp_disabled: Vec::new(),
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
             pinned_plugins: Vec::new(),

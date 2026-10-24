@@ -227,7 +227,25 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ),
     (
         EDITOR_SHORTCUTS,
-        &[("editor.save", "⌘S"), ("editor.format", "⇧⌥F"), ("editor.shortcut_undo_redo", "⌘Z  /  ⇧⌘Z"), ("editor.close_file", "⌘W")],
+        &[
+            ("editor.save", "⌘S"),
+            ("editor.format", "⇧⌥F"),
+            ("editor.shortcut_undo_redo", "⌘Z  /  ⇧⌘Z"),
+            ("find.replace", "⌥⌘F"),
+            ("editor.shortcut_organize_imports", "⇧⌥O"),
+            ("editor.shortcut_comment", "⌘/"),
+            ("editor.shortcut_move_lines", "⌥↑  /  ⌥↓"),
+            ("editor.shortcut_duplicate_lines", "⇧⌥↑  /  ⇧⌥↓"),
+            ("editor.shortcut_delete_lines", "⇧⌘K"),
+            ("editor.shortcut_select_line", "⌘L"),
+            ("editor.shortcut_next_occurrence", "⌘D  /  ⇧⌘L"),
+            ("editor.shortcut_add_cursor", "⌥ Click"),
+            ("editor.shortcut_indent_lines", "⌘]  /  ⌘["),
+            ("editor.shortcut_insert_line", "⌘↩  /  ⇧⌘↩"),
+            ("editor.shortcut_delete_to_start", "⌘⌫"),
+            ("editor.shortcut_delete_word", "⌥⌫  /  ⌥⌦"),
+            ("editor.close_file", "⌘W"),
+        ],
     ),
 ];
 
@@ -1213,11 +1231,42 @@ impl Workbench {
                         toggle("ask-dir-tabs", prefs.ask_directory_for_tabs, |s| s.ask_directory_for_tabs = !s.ask_directory_for_tabs, cx),
                     )),
             )
-            .child(section(t(cx, "editor.settings_section")).child(row_with_hint(
-                t(cx, "editor.settings_external"),
-                t(cx, "editor.settings_external_hint"),
-                editors,
-            )))
+            .child(
+                section(t(cx, "editor.settings_section"))
+                    .child(row_with_hint(t(cx, "editor.settings_external"), t(cx, "editor.settings_external_hint"), editors))
+                    .child(row(
+                        t(cx, "editor.settings_inline_problems"),
+                        toggle(
+                            "editor-inline-problems",
+                            prefs.editor_inline_problems,
+                            |s| s.editor_inline_problems = !s.editor_inline_problems,
+                            cx,
+                        ),
+                    ))
+                    .child(row(
+                        t(cx, "editor.settings_complete_while_typing"),
+                        toggle(
+                            "editor-complete-while-typing",
+                            prefs.editor_complete_while_typing,
+                            |s| s.editor_complete_while_typing = !s.editor_complete_while_typing,
+                            cx,
+                        ),
+                    ))
+                    .child(row(
+                        t(cx, "editor.settings_hover_types"),
+                        toggle("editor-hover-types", prefs.editor_hover_types, |s| s.editor_hover_types = !s.editor_hover_types, cx),
+                    ))
+                    .child(row(
+                        t(cx, "editor.settings_sticky_scroll"),
+                        toggle(
+                            "editor-sticky-scroll",
+                            prefs.editor_sticky_scroll,
+                            |s| s.editor_sticky_scroll = !s.editor_sticky_scroll,
+                            cx,
+                        ),
+                    )),
+            )
+            .child(self.render_language_servers(cx))
             .child(
                 section(t(cx, "settings.project_harness"))
                     .child(row_with_hint(

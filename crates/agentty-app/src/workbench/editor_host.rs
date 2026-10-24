@@ -14,9 +14,21 @@ use std::path::{Path, PathBuf};
 impl Workbench {
     /// Opens `path` (in the folder `project`) in the editor and shows it.
     pub(super) fn open_in_editor(&mut self, path: &Path, project: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_in_editor_at(path, project, None, window, cx);
+    }
+
+    /// [`Self::open_in_editor`] with the cursor at `line:column` (from 1).
+    fn open_in_editor_at(
+        &mut self,
+        path: &Path,
+        project: &Path,
+        place: Option<(usize, usize)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "file_editor" }));
         let editor = self.editor_entity(window, cx);
-        editor.update(cx, |editor, cx| editor.open(path, project, window, cx));
+        editor.update(cx, |editor, cx| editor.open_at(path, project, place, window, cx));
         self.file_diff = None;
         self.page = None;
         self.session_viewer = None;
@@ -28,9 +40,38 @@ impl Workbench {
         cx.notify();
     }
 
+    /// ⌘P anywhere: the go-to-file box over the editor, for the project of the file in front or of
+    /// the active terminal (its repository, else its folder).
+    pub(super) fn go_to_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor_visible(cx) && self.file_diff.is_none() {
+            if let Some(editor) = self.editor.clone() {
+                if !editor.read(cx).is_empty() {
+                    return editor.update(cx, |editor, cx| editor.open_picker("", None, window, cx));
+                }
+            }
+        }
+        let project = self.files_panel.as_ref().map(|p| p.root().to_path_buf()).or_else(|| {
+            let pane = self.active_pane()?;
+            let view = pane.read(cx);
+            let cwd = view.live_cwd.clone().unwrap_or_else(|| view.spec.cwd.clone());
+            Some(agentty_bridge::git::repo_root(&cwd).unwrap_or(cwd))
+        });
+        let Some(project) = project.filter(|p| p.is_dir() && Some(p.as_path()) != dirs::home_dir().as_deref()) else {
+            return self.show_toast(t(cx, "nav.no_project"), cx);
+        };
+        let editor = self.editor_entity(window, cx);
+        editor.update(cx, |editor, cx| editor.open_picker("", Some(project), window, cx));
+        self.file_diff = None;
+        self.page = None;
+        self.session_viewer = None;
+        self.launcher_open = false;
+        self.editor_shown = true;
+        cx.notify();
+    }
+
     /// Opens the file a terminal ⌘-click asked for (the event carrying it has no window).
     pub(super) fn open_pending_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.pending_editor_open.take() else { return };
+        let Some((path, place)) = self.pending_editor_open.take() else { return };
         if !path.is_file() {
             return;
         }
@@ -42,7 +83,7 @@ impl Workbench {
             .or_else(|| agentty_bridge::git::repo_root(path.parent().unwrap_or(&path)))
             .or_else(|| path.parent().map(Path::to_path_buf))
             .unwrap_or_default();
-        self.open_in_editor(&path, &project, window, cx);
+        self.open_in_editor_at(&path, &project, place, window, cx);
     }
 
     fn editor_entity(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<CodeEditor> {
@@ -55,6 +96,9 @@ impl Workbench {
             EditorEvent::OpenUrl(url) => this.open_link(url.clone(), cx),
             EditorEvent::OpenFile(path, project) => this.open_in_editor(path, project, window, cx),
             EditorEvent::ShowInBrowser(path) => this.show_file_in_browser(path, cx),
+            EditorEvent::AskAgent(prompt) => this.ask_linked_session(prompt, window, cx),
+            EditorEvent::ToggleSession => this.toggle_editor_session(cx),
+            EditorEvent::InstallLanguageServer(language) => this.install_language_server(language, window, cx),
             EditorEvent::Empty => {
                 this.editor_shown = false;
                 this.focus_active(window, cx);
@@ -85,7 +129,7 @@ impl Workbench {
         self.editor_shown
             && self.page.is_none()
             && self.session_viewer.is_none()
-            && (self.file_diff.is_some() || self.editor.as_ref().is_some_and(|e| !e.read(cx).is_empty()))
+            && (self.file_diff.is_some() || self.editor.as_ref().is_some_and(|e| !e.read(cx).is_empty() || e.read(cx).picker_open()))
     }
 
     /// The markdown preview is a native view over the editor: out of sight whenever the editor is
@@ -210,11 +254,18 @@ impl Workbench {
                     .bg(if active { hex(Chrome::EDITOR) } else { hex(Chrome::TAB_INACTIVE) })
                     .when(active, |d| d.border_t_1().border_color(hex(Chrome::ACCENT)))
                     .t_body()
-                    .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::MUTED) })
+                    // A file with errors (warnings) has its name in their color, as in VS Code.
+                    .text_color(match tab.problem {
+                        Some(color) => hex(color),
+                        None if active => hex(Chrome::BRIGHT),
+                        None => hex(Chrome::MUTED),
+                    })
                     .tooltip(crate::ui::Tooltip::text(tooltip, None))
                     .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| this.close_file_tab(index, window, cx)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show_file_tab(index, window, cx)))
                     .child(icon("file-text", IconSize::INLINE, hex(if active { Chrome::BLUE } else { Chrome::MUTED })))
+                    // An agent's changes here wait for review.
+                    .children(tab.review.map(|color| div().size(px(6.)).rounded_full().flex_shrink_0().bg(hex(color))))
                     .child(div().truncate().child(SharedString::from(tab.name)))
                     .child(
                         div()
@@ -271,6 +322,15 @@ impl Workbench {
                 .or_else(|| path.parent().map(Path::to_path_buf))
                 .unwrap_or_default();
             return self.open_in_editor(&path, &project, window, cx);
+        }
+        // As a terminal ⌘-click on `path:line:column` would (the text must name an existing file).
+        if command == "open-at" {
+            let text: Vec<char> = argument.chars().collect();
+            if let Some((path, place)) = crate::terminal::path_and_place_at(&text, 0, Path::new("/")) {
+                self.pending_editor_open = Some((path, place));
+                return self.open_pending_file(window, cx);
+            }
+            return;
         }
         if let Some(editor) = self.editor.clone() {
             editor.update(cx, |editor, cx| editor.debug(command, argument, window, cx));

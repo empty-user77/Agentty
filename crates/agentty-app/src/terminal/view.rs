@@ -68,7 +68,9 @@ pub enum TerminalEvent {
     /// Clicked a link (URL in the text or an OSC 8 hyperlink).
     OpenLink(String),
     /// Clicked a file or folder path printed in the terminal: show it in Finder.
-    RevealPath(PathBuf),
+    /// A file or folder clicked in the text; for a file, the `line:column` written after it
+    /// (from 1), when one was.
+    RevealPath(PathBuf, Option<(usize, usize)>),
     /// The pane moved to another folder (a `cd`), and no longer works where it was started.
     DirectoryChanged,
     /// An agent started or quit in the pane, or moved to another session (`/clear`, `/resume`):
@@ -2002,13 +2004,13 @@ impl TerminalView {
         if let Some(url) = url_at(&text, point.column.0) {
             return Some(LinkTarget::Url(url));
         }
-        path_at(&text, point.column.0, &self.display_cwd()).map(LinkTarget::Path)
+        path_and_place_at(&text, point.column.0, &self.display_cwd()).map(|(path, place)| LinkTarget::Path(path, place))
     }
 
     fn open_target(&mut self, target: LinkTarget, cx: &mut Context<Self>) {
         match target {
             LinkTarget::Url(url) => cx.emit(TerminalEvent::OpenLink(url)),
-            LinkTarget::Path(path) => cx.emit(TerminalEvent::RevealPath(path)),
+            LinkTarget::Path(path, place) => cx.emit(TerminalEvent::RevealPath(path, place)),
         }
     }
 
@@ -2077,7 +2079,7 @@ impl TerminalView {
             let target = self.link_at(point)?;
             let range = match &target {
                 LinkTarget::Url(_) => self.url_range(point).or_else(|| self.word_range(point)),
-                LinkTarget::Path(_) => self.word_range(point),
+                LinkTarget::Path(..) => self.word_range(point),
             }?;
             Some((range, target))
         });
@@ -2285,8 +2287,8 @@ impl TerminalView {
         let y = if below + px(24.) > layout.bounds_height { below - layout.line_height - px(26.) } else { below };
         let label = match target {
             LinkTarget::Url(_) => crate::i18n::t(cx, "terminal.open_link"),
-            LinkTarget::Path(path) if path.is_dir() => crate::i18n::t(cx, "terminal.open_folder"),
-            LinkTarget::Path(_) => crate::i18n::t(cx, "terminal.open_file"),
+            LinkTarget::Path(path, _) if path.is_dir() => crate::i18n::t(cx, "terminal.open_folder"),
+            LinkTarget::Path(..) => crate::i18n::t(cx, "terminal.open_file"),
         };
         // Kept inside the pane when the link sits near its right edge (a narrow split, a long translation).
         let width = px(label.chars().map(|c| if c.is_ascii() { 6.5 } else { 12. }).sum::<f32>() + 20.);
@@ -2977,6 +2979,14 @@ mod session_claims {
     mod tests {
         use super::{release, resolve};
 
+        /// The claims are one list for the whole app, and these tests use the same session names:
+        /// run in parallel, one test's panes would take another's sessions.
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        fn serial() -> std::sync::MutexGuard<'static, ()> {
+            SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
         /// Two panes in one folder, both seeing the same two transcripts, newest first.
         fn newest_free(taken: &dyn Fn(&str) -> bool) -> Option<String> {
             ["session-b", "session-a"].into_iter().find(|id| !taken(id)).map(str::to_string)
@@ -2984,6 +2994,7 @@ mod session_claims {
 
         #[test]
         fn two_panes_in_one_folder_follow_two_sessions() {
+            let _serial = serial();
             let (first, second) = (9_000_001, 9_000_002);
             assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
             assert_eq!(resolve(second, newest_free).as_deref(), Some("session-a"));
@@ -2996,6 +3007,7 @@ mod session_claims {
 
         #[test]
         fn what_the_agent_says_wins_and_the_other_pane_moves_off() {
+            let _serial = serial();
             let (first, second) = (9_000_011, 9_000_012);
             assert_eq!(resolve(first, newest_free).as_deref(), Some("session-b"));
             // The second pane's agent names session-b as its own (a hook event): that is the truth.
@@ -3008,6 +3020,7 @@ mod session_claims {
 
         #[test]
         fn a_closed_pane_frees_its_session() {
+            let _serial = serial();
             let (first, second) = (9_000_021, 9_000_022);
             assert_eq!(resolve(first, |_| Some("session-z".into())).as_deref(), Some("session-z"));
             release(first);
@@ -3340,7 +3353,8 @@ mod mouse_tests {
 #[derive(Debug, Clone, PartialEq)]
 pub enum LinkTarget {
     Url(String),
-    Path(PathBuf),
+    /// A path, and the `line:column` after it (from 1) in compiler and grep output.
+    Path(PathBuf, Option<(usize, usize)>),
 }
 
 /// Column ranges (start inclusive, end exclusive) of URLs in a line, for highlighting.
@@ -3363,9 +3377,16 @@ pub fn url_ranges(line: &[char]) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// A path-like word covering `column`: `/abs/file`, `~/dir`, `./x`, `src/main.rs:12:4`. It is
-/// resolved against `cwd` and must exist.
+/// [`path_and_place_at`] without the place.
+#[cfg(test)]
 pub fn path_at(line: &[char], column: usize, cwd: &std::path::Path) -> Option<PathBuf> {
+    path_and_place_at(line, column, cwd).map(|(path, _)| path)
+}
+
+/// A path-like word covering `column`: `/abs/file`, `~/dir`, `./x`, `src/main.rs:12:4`. It is
+/// resolved against `cwd` and must exist. With it, the `:line[:column]` written after the path
+/// (from 1; column 1 when only a line is given).
+pub fn path_and_place_at(line: &[char], column: usize, cwd: &std::path::Path) -> Option<(PathBuf, Option<(usize, usize)>)> {
     let is_break = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '<' | '>' | '|' | ',');
     if column >= line.len() || is_break(line[column]) {
         return None;
@@ -3383,15 +3404,23 @@ pub fn path_at(line: &[char], column: usize, cwd: &std::path::Path) -> Option<Pa
     if word.contains("://") {
         return None;
     }
-    // Drop `:line[:col]` suffixes from compiler / grep output.
+    // Drop `:line[:col]` suffixes from compiler / grep output, keeping the numbers.
     let mut candidate = word;
+    let mut numbers = Vec::new();
     for _ in 0..2 {
         if let Some((head, tail)) = candidate.rsplit_once(':') {
-            if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(number) = tail.parse::<usize>() {
                 candidate = head;
+                numbers.insert(0, number);
             }
         }
     }
+    let place = match numbers.as_slice() {
+        [line] => Some((*line, 1)),
+        [line, column] => Some((*line, *column)),
+        _ => None,
+    }
+    .filter(|(line, column)| *line > 0 && *column > 0);
     if candidate.is_empty() || !(candidate.contains('/') || candidate.contains('.')) || candidate.chars().all(|c| c == '.' || c == '/') {
         return None;
     }
@@ -3401,7 +3430,7 @@ pub fn path_at(line: &[char], column: usize, cwd: &std::path::Path) -> Option<Pa
         None if candidate.starts_with('/') => PathBuf::from(candidate),
         None => cwd.join(candidate),
     };
-    expanded.exists().then_some(expanded)
+    expanded.exists().then_some((expanded, place))
 }
 
 /// `http(s)://` and `mailto:` targets, the only schemes opened from OSC 8 hyperlinks.
@@ -3464,7 +3493,7 @@ pub fn url_at(line: &[char], column: usize) -> Option<String> {
 
 #[cfg(test)]
 mod link_tests {
-    use super::{path_at, url_at, url_ranges};
+    use super::{path_and_place_at, path_at, url_at, url_ranges};
 
     #[test]
     fn agent_marks_leave_the_title_alone() {
@@ -3501,6 +3530,9 @@ mod link_tests {
         std::fs::write(dir.join("src/main.rs"), "").unwrap();
         let out: Vec<char> = "error: src/main.rs:12:4 mismatched".chars().collect();
         assert_eq!(path_at(&out, 10, &dir), Some(dir.join("src/main.rs")));
+        assert_eq!(path_and_place_at(&out, 10, &dir), Some((dir.join("src/main.rs"), Some((12, 4)))));
+        let only_line: Vec<char> = "src/main.rs:7".chars().collect();
+        assert_eq!(path_and_place_at(&only_line, 2, &dir).and_then(|(_, place)| place), Some((7, 1)));
         assert_eq!(path_at(&out, 2, &dir), None);
         let missing: Vec<char> = "nope/nothing.txt".chars().collect();
         assert_eq!(path_at(&missing, 3, &dir), None);

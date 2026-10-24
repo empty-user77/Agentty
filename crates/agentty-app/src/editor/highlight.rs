@@ -1,9 +1,11 @@
 //! Syntax colors: Sublime Text grammars (bat's curated set, through `two-face`) run by `syntect`
 //! on its pure-Rust regex engine, with a Dark+-like palette that matches the app.
 //!
-//! Lines are highlighted top-down and cached with the parser state after each one, so an edit
-//! only re-reads the lines from the change down to what is on screen.
+//! Lines are highlighted top-down and cached with the parser state after each one. An edit keeps
+//! the colors of the lines it moved, shown until they are read again: from the change down, and
+//! only until the parser is back in the state it had there before (usually the edited line).
 
+use super::buffer::Splice;
 use super::language::Language;
 use std::path::Path;
 use std::str::FromStr;
@@ -62,11 +64,17 @@ pub struct Highlights {
     syntax: Option<&'static SyntaxReference>,
     /// Spans of each highlighted line, and the parser state after it.
     lines: Vec<(Vec<Span>, ParseState, HighlightState)>,
+    /// Lines before this one are up to date; the rest are from before an edit (moved with it),
+    /// shown until they are read again.
+    valid: usize,
+    /// The last line an edit changed: from there on, a line ending in the state it had before
+    /// means the rest are up to date as well.
+    dirty_to: Option<usize>,
 }
 
 impl Highlights {
     pub fn new(syntax: Option<&'static SyntaxReference>) -> Self {
-        Self { syntax, lines: Vec::new() }
+        Self { syntax, lines: Vec::new(), valid: 0, dirty_to: None }
     }
 
     pub fn grammar_name(&self) -> Option<&'static str> {
@@ -76,6 +84,31 @@ impl Highlights {
     /// Forgets lines from `line` on (they changed).
     pub fn invalidate_from(&mut self, line: usize) {
         self.lines.truncate(line);
+        self.valid = self.valid.min(line);
+        self.dirty_to = None;
+    }
+
+    /// Follows a change to the text: the lines after it keep their colors, moved with it, until
+    /// they are read again.
+    pub fn apply(&mut self, splice: Splice) {
+        let Splice { from, to, delta } = splice;
+        if from < self.lines.len() {
+            if delta > 0 {
+                let copy = self.lines[from].clone();
+                self.lines.splice(from..from, std::iter::repeat_n(copy, delta as usize));
+            } else if delta < 0 {
+                let end = (from + delta.unsigned_abs()).min(self.lines.len());
+                self.lines.drain(from..end);
+            }
+        }
+        let old_to = (to as isize - delta).max(0) as usize;
+        let moved = self.dirty_to.map(|d| match d {
+            d if d > old_to => (d as isize + delta) as usize,
+            d if d >= from => to,
+            d => d,
+        });
+        self.dirty_to = Some(moved.map_or(to, |d| d.max(to)));
+        self.valid = self.valid.min(from);
     }
 
     /// Highlights on until line `upto` (exclusive), stopping early at `deadline` so a frame is
@@ -85,13 +118,13 @@ impl Highlights {
         let (Some(syntax), Some(set)) = (self.syntax, syntaxes()) else { return true };
         let highlighter = Highlighter::new(theme());
         let mut done = 0usize;
-        while self.lines.len() < upto {
+        while self.valid < upto {
             // The clock is read every few lines only.
             if done % 16 == 15 && Instant::now() >= deadline {
                 return false;
             }
-            let index = self.lines.len();
-            let (mut parse, mut state) = match self.lines.last() {
+            let index = self.valid;
+            let (mut parse, mut state) = match index.checked_sub(1).and_then(|i| self.lines.get(i)) {
                 Some((_, parse, state)) => (parse.clone(), state.clone()),
                 None => (ParseState::new(syntax), HighlightState::new(&highlighter, ScopeStack::new())),
             };
@@ -124,12 +157,25 @@ impl Highlights {
                     // A grammar that fails on a line leaves the rest of the file uncolored.
                     Err(_) => {
                         self.syntax = None;
+                        self.lines.truncate(index);
                         return true;
                     }
                 }
             };
-            self.lines.push((spans, parse, state));
             done += 1;
+            self.valid += 1;
+            let Some(old) = self.lines.get_mut(index) else {
+                self.lines.push((spans, parse, state));
+                continue;
+            };
+            // Past the change and in the state the old text had here: the lines below read as
+            // they did.
+            let same = self.dirty_to.is_some_and(|d| index >= d) && old.1 == parse && old.2 == state;
+            *old = (spans, parse, state);
+            if same {
+                self.valid = self.lines.len();
+                self.dirty_to = None;
+            }
         }
         true
     }
@@ -298,6 +344,60 @@ mod tests {
         highlights.invalidate_from(0);
         assert!(highlights.advance(4, far(), |i| edited[i]));
         assert_ne!(highlights.spans(1).unwrap()[0].color, 0x6a9955);
+    }
+
+    /// Colors of every line, read from the top.
+    fn fresh(syntax: Option<&'static SyntaxReference>, lines: &[&str]) -> Vec<Vec<Span>> {
+        let mut h = Highlights::new(syntax);
+        assert!(h.advance(lines.len(), far(), |i| lines[i]));
+        (0..lines.len()).map(|i| h.spans(i).unwrap().to_vec()).collect()
+    }
+
+    #[test]
+    fn an_edit_keeps_the_colors_below_it_until_they_are_read_again() {
+        let set = load();
+        let syntax = grammar_for(set, Language::Rust, Path::new("a.rs"), "");
+        let before: Vec<String> = (0..300).map(|i| format!("let x{i} = \"{i}\";")).collect();
+        let mut h = Highlights::new(syntax);
+        assert!(h.advance(300, far(), |i| before[i].as_str()));
+        // A line typed in at 10: every line after it still has colors, and they are the moved ones.
+        let mut after = before.clone();
+        after.insert(10, "let y = 1;".to_string());
+        h.apply(Splice { from: 10, to: 11, delta: 1 });
+        assert_eq!(h.spans(200), Some(fresh(syntax, &[before[199].as_str()])[0].as_slice()));
+        // Read again, the parser settles right after the change: one frame, however little time.
+        assert!(h.advance(301, Instant::now(), |i| after[i].as_str()));
+        let all: Vec<&str> = after.iter().map(String::as_str).collect();
+        let want = fresh(syntax, &all);
+        assert!((0..301).all(|i| h.spans(i) == Some(want[i].as_slice())));
+    }
+
+    #[test]
+    fn colors_after_edits_match_reading_the_text_from_the_top() {
+        let set = load();
+        let syntax = grammar_for(set, Language::Rust, Path::new("a.rs"), "");
+        let start = ["fn a() {", "    let s = \"x\";", "}", "/* note", "still", "end */", "fn b() {}", "// done"];
+        let mut text: Vec<String> = start.iter().map(|s| s.to_string()).collect();
+        let mut h = Highlights::new(syntax);
+        assert!(h.advance(text.len(), far(), |i| text[i].as_str()));
+        // Opening a comment changes every line below; closing it, joining and splitting lines.
+        let edits: [(usize, usize, &[&str]); 5] = [
+            (1, 1, &["    /* let s = \"x\";"]),
+            (2, 2, &["} */ fn c() {", "}"]),
+            (4, 5, &["merged"]),
+            (0, 0, &[]),
+            (5, 5, &["a", "b", "c"]),
+        ];
+        for (from, last, new) in edits {
+            let lines: Vec<String> = if new.is_empty() { vec![String::new()] } else { new.iter().map(|s| s.to_string()).collect() };
+            let added = lines.len();
+            text.splice(from..=last, lines);
+            h.apply(Splice { from, to: from + added - 1, delta: added as isize - (last - from + 1) as isize });
+            assert!(h.advance(text.len(), far(), |i| text[i].as_str()));
+            let all: Vec<&str> = text.iter().map(String::as_str).collect();
+            let want = fresh(syntax, &all);
+            assert!((0..text.len()).all(|i| h.spans(i) == Some(want[i].as_slice())), "after {from}..={last}: {text:?}");
+        }
     }
 }
 
