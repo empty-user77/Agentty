@@ -25,6 +25,9 @@ pub fn bind_keys(cx: &mut gpui::App) {
 pub(super) const TICK: Duration = Duration::from_millis(250);
 /// A pause this long in typing hands the text to the server.
 const QUIET: Duration = Duration::from_millis(400);
+/// The message at the end of the line being typed on waits this long after the last key: a
+/// message about half-typed code coming and going at every pause is only noise.
+const SETTLE: Duration = Duration::from_millis(1500);
 /// The pointer rests this long on a problem before its message shows.
 const HOVER_DELAY: Duration = Duration::from_millis(350);
 
@@ -37,6 +40,10 @@ pub(super) struct Checks {
     /// The revision seen at the last tick, and since when (typing has paused once it holds).
     seen: Option<(u64, Instant)>,
     running: bool,
+    /// The message on the cursor's line was held back at the last paint (shown once typing settles).
+    pub held: bool,
+    /// When the text was last edited.
+    pub edited_at: Option<Instant>,
 }
 
 pub(super) fn color(severity: Severity) -> u32 {
@@ -56,6 +63,11 @@ fn covers(problem: &Problem, pos: Pos) -> bool {
 }
 
 impl Checks {
+    /// The text changed a moment ago (the message on the line being typed on waits).
+    pub(super) fn settling(&self) -> bool {
+        self.edited_at.is_some_and(|at| at.elapsed() < SETTLE)
+    }
+
     /// Typing in the file has paused (for as long as the server is left alone).
     pub(super) fn paused(&self, revision: u64) -> bool {
         self.seen.is_some_and(|(seen, since)| seen == revision && since.elapsed() >= QUIET)
@@ -121,6 +133,10 @@ impl CodeEditor {
                 doc.checks.seen = Some((revision, Instant::now()));
             }
         }
+        if doc.checks.held && !doc.checks.settling() {
+            doc.checks.held = false;
+            changed = true;
+        }
         let quiet = doc.checks.seen.is_some_and(|(_, since)| since.elapsed() >= QUIET);
         if quiet && !doc.checks.running && doc.checks.checked != Some(revision) {
             doc.checks.running = true;
@@ -146,15 +162,16 @@ impl CodeEditor {
     /// The pointer over the text (`None`: off it, or ⌘ held for a link): the message of the
     /// problem there shows after a moment.
     pub(super) fn hover_problem(&mut self, pos: Option<Pos>, cx: &mut Context<Self>) {
-        let found = pos.and_then(|pos| self.docs.get(self.active)?.checks.problems.iter().find(|p| covers(p, pos)).cloned());
+        let found = self.problem_at(pos);
         if found.as_ref() == self.problem_hover.as_ref().map(|(p, _)| p) {
             return;
         }
-        let shown = self.problem_hover.as_ref().is_some_and(|(_, shown)| *shown);
-        self.problem_hover = found.clone().map(|p| (p, false));
-        if shown {
-            cx.notify();
+        // A message that shows stays a moment: the pointer may be on its way to it.
+        if self.problem_hover.as_ref().is_some_and(|(_, shown)| *shown) {
+            return self.leave_hovers(cx);
         }
+        self.problem_hover = found.clone().map(|p| (p, false));
+        self.popup_over = false;
         let Some(problem) = found else { return };
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(HOVER_DELAY).await;
@@ -340,6 +357,10 @@ impl CodeEditor {
         )
     }
 
+    pub(super) fn problem_at(&self, pos: Option<Pos>) -> Option<Problem> {
+        pos.and_then(|pos| self.docs.get(self.active)?.checks.problems.iter().find(|p| covers(p, pos)).cloned())
+    }
+
     /// The message of the problem under the pointer (or stepped to), under its start.
     pub(super) fn render_problem_hover(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.picker.is_some() || self.confirm.is_some() || self.preview.covered || self.link.is_some() || self.completion.is_some() {
@@ -401,6 +422,7 @@ impl CodeEditor {
             .border_color(hex(Chrome::OVERLAY_BORDER))
             .shadow_lg()
             .occlude()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.over_popup(*hovered, cx)))
             .flex()
             .items_start()
             .gap_2()
@@ -432,6 +454,7 @@ impl CodeEditor {
     pub(super) fn debug_problems(&self) -> serde_json::Value {
         let Some(doc) = self.docs.get(self.active) else { return serde_json::Value::Null };
         serde_json::json!({
+            "held": doc.checks.held,
             "list": doc.checks.problems.iter().map(|p| serde_json::json!({
                 "at": [p.start.line, p.start.col, p.end.line, p.end.col],
                 "severity": format!("{:?}", p.severity),

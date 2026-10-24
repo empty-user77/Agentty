@@ -62,6 +62,19 @@ All notable changes to this project are documented here. The format follows
 - File editor: **Compare** shows an agent's change as it was and as it is, **⌥F5** / **⇧⌥F5** step through changes,
   holding **⌘** over a name shows its definition, the session chip says when the agent waits for you, and
   **N changes** lists every change to review across open files.
+- File editor: several cursors as in VS Code — **⌘D** adds one at the next match of the selection, **⇧⌘L** at every
+  match, **⌥-click** where you click; typing (input methods included), deleting, Enter, Tab and pasting happen at
+  each, and **Esc** goes back to one.
+- File editor: **⌘L** selects the line, **⌘↩** / **⇧⌘↩** start a new line below / above, **⌘]** / **⌘[** indent and
+  outdent lines, **⌘⌫** deletes to the line's start, **⌥⌦** deletes the next word, and a closing bracket typed on an
+  indented line lines up with its opening line. While the editor has focus, ⌘D, ⌘] / ⌘[ and ⇧⌘↩ work on the text
+  instead of splitting, switching or zooming panes.
+
+### Fixed
+- File editor: typing no longer makes the code below flicker uncolored for a moment, and problem underlines and
+  change marks move with their lines while the server catches up.
+- File editor: a problem's or a type's message stays open while the pointer moves onto it, so its fixes can be
+  clicked.
 
 ## [0.2.25] - 2026-10-22
 

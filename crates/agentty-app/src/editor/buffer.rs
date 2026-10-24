@@ -76,11 +76,21 @@ struct Edit {
     at: Instant,
     /// Closed to joining (saved since, or the cursor moved away).
     sealed: bool,
+    /// Typed or deleted at several cursors at once (such edits are undone a run at a time).
+    multi: bool,
+    /// Undone together with the edit before it (typing on at several cursors).
+    chain: bool,
 }
 
 pub struct Buffer {
     lines: Vec<String>,
     pub selection: Selection,
+    /// More cursors besides `selection` (⌘D, ⌥-click), in no particular order. Typing, deleting,
+    /// Enter, Tab and pasting happen at every one; moving moves every one; anything else first
+    /// leaves the main cursor alone.
+    pub extra: Vec<Selection>,
+    /// A change for every cursor is being made (its edit must not drop the other cursors).
+    multi: bool,
     /// Display column kept while moving up and down through shorter lines.
     goal_column: Option<usize>,
     undo: Vec<Edit>,
@@ -88,8 +98,9 @@ pub struct Buffer {
     next_id: u64,
     /// Id of the edit the text was saved at (0: as loaded).
     saved_at: u64,
-    /// First line changed since [`Buffer::take_changed_from`] was last asked.
-    changed_from: Option<usize>,
+    /// The changes to the text since [`Buffer::take_changes`] was last asked, in order (`None`:
+    /// too many to follow, take everything as changed).
+    changes: Option<Vec<Splice>>,
     /// Counts every change to the text, for views that redraw from it (the markdown preview).
     revision: u64,
     /// One indentation step: a tab or some spaces, guessed from the file.
@@ -122,7 +133,9 @@ impl Buffer {
             redo: Vec::new(),
             next_id: 1,
             saved_at: 0,
-            changed_from: None,
+            changes: Some(Vec::new()),
+            extra: Vec::new(),
+            multi: false,
             revision: next_revision(),
             indent,
             composition: None,
@@ -167,9 +180,20 @@ impl Buffer {
         }
     }
 
-    /// The first line whose text changed since the last call (for the highlighter's cache).
-    pub fn take_changed_from(&mut self) -> Option<usize> {
-        self.changed_from.take()
+    /// The changes to the text since the last call, in order (for the views that keep something
+    /// per line: syntax colors). `None`: too many to follow, everything may have changed.
+    pub fn take_changes(&mut self) -> Option<Vec<Splice>> {
+        self.changes.replace(Vec::new())
+    }
+
+    fn note_change(&mut self, splice: Splice) {
+        if let Some(changes) = self.changes.as_mut() {
+            if changes.len() < MAX_CHANGES {
+                changes.push(splice);
+            } else {
+                self.changes = None;
+            }
+        }
     }
 
     /// Goes up with every change to the text.
@@ -184,9 +208,242 @@ impl Buffer {
         self.selection.head
     }
 
+    /// The selected text; with several cursors, each one's in order, a line each.
     pub fn selected_text(&self) -> String {
+        if !self.extra.is_empty() {
+            let mut all = self.selections();
+            all.sort_by_key(|s| s.range().0);
+            return all.iter().map(|s| self.slice(s.range().0, s.range().1)).collect::<Vec<_>>().join("\n");
+        }
         let (start, end) = self.selection.range();
         self.slice(start, end)
+    }
+
+    /// Every cursor, the main one first.
+    pub fn selections(&self) -> Vec<Selection> {
+        std::iter::once(self.selection).chain(self.extra.iter().copied()).collect()
+    }
+
+    /// Makes `f`'s change (what replaces which range) at every cursor as one edit, each cursor
+    /// after its new text. False, doing nothing, with one cursor only.
+    /// `typing`: one character typed or deleted at each (a run of them is undone at once).
+    fn edit_all(&mut self, typing: bool, f: impl Fn(&Self, Selection) -> (Pos, Pos, String)) -> bool {
+        if self.extra.is_empty() {
+            return false;
+        }
+        self.unmark();
+        let main = self.selection;
+        let mut changes: Vec<(bool, Pos, Pos, String)> = self
+            .selections()
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let (start, end, text) = f(self, s);
+                (i == 0, start.min(end), start.max(end), text)
+            })
+            .collect();
+        changes.sort_by_key(|c| (c.1, c.2));
+        // Ranges that came to overlap (two cursors deleting into each other): the first wins.
+        let mut kept: Vec<(bool, Pos, Pos, String)> = Vec::with_capacity(changes.len());
+        for change in changes {
+            match kept.last_mut() {
+                Some(last) if change.1 < last.2 || (change.1 == last.2 && change.1 == change.2 && last.1 == last.2) => {
+                    last.0 |= change.0;
+                    last.2 = last.2.max(change.2);
+                }
+                _ => kept.push(change),
+            }
+        }
+        let first = kept[0].1;
+        let mut text = String::new();
+        let mut at = first;
+        let mut from = first;
+        let mut after = Vec::with_capacity(kept.len());
+        for (is_main, start, end, piece) in &kept {
+            let gap = self.slice(from, *start);
+            at = end_of(at, &gap);
+            text.push_str(&gap);
+            at = end_of(at, piece);
+            text.push_str(piece);
+            after.push((*is_main, at));
+            from = *end;
+        }
+        self.multi = true;
+        self.replace(first, from, &text, EditKind::Other);
+        self.multi = false;
+        let main_at = after.iter().find(|(m, _)| *m).map_or(after[0].1, |(_, p)| *p);
+        self.selection = Selection::cursor(main_at);
+        self.extra = after.iter().filter(|(m, _)| !*m).map(|(_, p)| Selection::cursor(*p)).collect();
+        let joins = typing
+            && self.undo.len() >= 2
+            && self.undo[self.undo.len() - 2].multi
+            && !self.undo[self.undo.len() - 2].sealed
+            && self.undo[self.undo.len() - 2].at.elapsed() < TYPING_GROUP;
+        if let Some(edit) = self.undo.last_mut() {
+            edit.before = main;
+            edit.after = self.selection;
+            edit.multi = typing;
+            edit.chain = joins;
+        }
+        true
+    }
+
+    /// Runs a move for every cursor (one cursor: just for it); cursors that meet become one.
+    pub fn each(&mut self, f: impl Fn(&mut Self)) {
+        if self.extra.is_empty() {
+            return f(self);
+        }
+        let extra = std::mem::take(&mut self.extra);
+        f(self);
+        let (main, goal) = (self.selection, self.goal_column);
+        let mut moved = Vec::with_capacity(extra.len());
+        for selection in extra {
+            self.selection = selection;
+            self.goal_column = None;
+            f(self);
+            moved.push(self.selection);
+        }
+        self.selection = main;
+        self.goal_column = goal;
+        self.extra = moved;
+        self.merge_cursors();
+    }
+
+    /// Cursors on the same place, or selections that overlap, become one.
+    fn merge_cursors(&mut self) {
+        let main = self.selection;
+        let mut all: Vec<(bool, Selection)> = std::iter::once((true, main)).chain(self.extra.iter().map(|s| (false, *s))).collect();
+        all.sort_by_key(|(_, s)| s.range());
+        let mut merged: Vec<(bool, Selection)> = Vec::with_capacity(all.len());
+        for (is_main, s) in all {
+            if let Some((last_main, last)) = merged.last_mut() {
+                let (ls, le) = last.range();
+                let (s0, s1) = s.range();
+                if s0 < le || (s0 == le && (s.is_empty() || last.is_empty())) || (s0 == ls && s1 == le) {
+                    let end = le.max(s1);
+                    *last =
+                        if last.anchor <= last.head { Selection { anchor: ls, head: end } } else { Selection { anchor: end, head: ls } };
+                    if is_main {
+                        *last_main = true;
+                    }
+                    continue;
+                }
+            }
+            merged.push((is_main, s));
+        }
+        self.selection = merged.iter().find(|(m, _)| *m).map_or(main, |(_, s)| *s);
+        self.extra = merged.into_iter().filter(|(m, _)| !*m).map(|(_, s)| s).collect();
+    }
+
+    /// One cursor again (Esc).
+    pub fn single_cursor(&mut self) -> bool {
+        let had = !self.extra.is_empty();
+        self.extra.clear();
+        had
+    }
+
+    /// ⌥-click: one more cursor at `pos` (or, on a cursor already there, that one goes).
+    pub fn toggle_cursor(&mut self, pos: Pos) {
+        let pos = self.clamp(pos);
+        if let Some(i) = self.extra.iter().position(|s| s.is_empty() && s.head == pos) {
+            self.extra.remove(i);
+            return;
+        }
+        if self.selection.is_empty() && self.selection.head == pos {
+            if let Some(next) = self.extra.pop() {
+                self.selection = next;
+            }
+            return;
+        }
+        self.extra.push(self.selection);
+        self.selection = Selection::cursor(pos);
+        self.goal_column = None;
+        self.seal();
+        self.merge_cursors();
+    }
+
+    /// ⌘D: the word at the cursor, then again the next place with the selected text gets a
+    /// cursor of its own (round the end of the file). False when there is no other place.
+    pub fn add_next_occurrence(&mut self) -> bool {
+        if self.selection.is_empty() {
+            let cursor = self.cursor();
+            let line = self.line(cursor.line);
+            let word = |c: char| c.is_alphanumeric() || c == '_';
+            let start = line[..cursor.col].char_indices().rev().take_while(|(_, c)| word(*c)).last().map_or(cursor.col, |(i, _)| i);
+            let end = cursor.col
+                + line[cursor.col..].char_indices().take_while(|(_, c)| word(*c)).map(|(i, c)| i + c.len_utf8()).last().unwrap_or(0);
+            if start == end {
+                return false;
+            }
+            self.selection = Selection { anchor: Pos::new(cursor.line, start), head: Pos::new(cursor.line, end) };
+            self.seal();
+            return true;
+        }
+        let (start, end) = self.selection.range();
+        let needle = self.slice(start, end);
+        let text = self.text();
+        let taken: Vec<usize> = self.selections().iter().map(|s| self.offset_of(s.range().0)).collect();
+        let after = self.offset_of(end);
+        let found = text[after..]
+            .match_indices(needle.as_str())
+            .map(|(i, _)| after + i)
+            .chain(text[..after].match_indices(needle.as_str()).map(|(i, _)| i))
+            .find(|i| !taken.contains(i));
+        let Some(at) = found else { return false };
+        let (from, to) = (self.pos_of(at), self.pos_of(at + needle.len()));
+        self.extra.push(self.selection);
+        self.selection = Selection { anchor: from, head: to };
+        self.goal_column = None;
+        self.seal();
+        true
+    }
+
+    /// ⇧⌘L: a cursor on every place with the selected text (the word at the cursor first), the
+    /// first [`MAX_CURSORS`] of them.
+    pub fn select_all_occurrences(&mut self) {
+        if self.selection.is_empty() && !self.add_next_occurrence() {
+            return;
+        }
+        let (start, end) = self.selection.range();
+        let needle = self.slice(start, end);
+        if needle.is_empty() {
+            return;
+        }
+        let main = self.offset_of(start);
+        let text = self.text();
+        let mut cursors = Vec::new();
+        // Positions found in order: offsets turn into lines as the scan goes, not from the top each time.
+        let (mut line, mut line_start) = (0usize, 0usize);
+        for (at, _) in text.match_indices(needle.as_str()).take(MAX_CURSORS) {
+            while line + 1 < self.lines.len() && line_start + self.lines[line].len() < at {
+                line_start += self.lines[line].len() + 1;
+                line += 1;
+            }
+            let from = Pos::new(line, at - line_start);
+            let to = end_of(from, &needle);
+            if at != main {
+                cursors.push(Selection { anchor: from, head: to });
+            }
+        }
+        self.extra = cursors;
+        self.goal_column = None;
+        self.seal();
+    }
+
+    /// Byte offset of `pos` in the whole text.
+    fn offset_of(&self, pos: Pos) -> usize {
+        self.lines[..pos.line].iter().map(|l| l.len() + 1).sum::<usize>() + pos.col
+    }
+
+    /// The position at byte offset `offset` of the whole text.
+    fn pos_of(&self, mut offset: usize) -> Pos {
+        for (i, line) in self.lines.iter().enumerate() {
+            if offset <= line.len() {
+                return Pos::new(i, offset);
+            }
+            offset -= line.len() + 1;
+        }
+        self.end()
     }
 
     pub fn slice(&self, start: Pos, end: Pos) -> String {
@@ -252,6 +509,9 @@ impl Buffer {
         if self.composition.is_some() {
             self.unmark();
         }
+        if !self.multi {
+            self.extra.clear();
+        }
         let text = normalize_newlines(text);
         let before = self.selection;
         let removed = self.slice(start, end);
@@ -269,6 +529,8 @@ impl Buffer {
             kind,
             at: Instant::now(),
             sealed: false,
+            multi: false,
+            chain: false,
         });
         after_pos
     }
@@ -281,8 +543,9 @@ impl Buffer {
         let end_pos = Pos::new(start.line + last, if last == 0 { head.len() } else { 0 } + new_lines[last].len());
         new_lines[0].insert_str(0, &head);
         new_lines[last].push_str(&tail);
+        let delta = new_lines.len() as isize - (end.line - start.line + 1) as isize;
         self.lines.splice(start.line..=end.line, new_lines);
-        self.changed_from = Some(self.changed_from.map_or(start.line, |line| line.min(start.line)));
+        self.note_change(Splice { from: start.line, to: end_pos.line, delta });
         self.revision = next_revision();
         end_pos
     }
@@ -322,6 +585,12 @@ impl Buffer {
 
     /// Types `text` over the selection.
     pub fn insert(&mut self, text: &str) {
+        if self.edit_all(text.chars().count() == 1 && text != "\n", |_, s| {
+            let (start, end) = s.range();
+            (start, end, text.to_string())
+        }) {
+            return;
+        }
         let (start, end) = self.selection.range();
         let kind = if text.contains('\n') || text.chars().count() > 1 { EditKind::Other } else { EditKind::Typing };
         self.replace(start, end, text, kind);
@@ -329,11 +598,34 @@ impl Buffer {
 
     /// Pastes (never joined with typing).
     pub fn paste(&mut self, text: &str) {
+        // As many lines as cursors: a line for each (what copying them gave), else all for each.
+        let count = self.extra.len() + 1;
+        let lines: Vec<&str> = text.trim_end_matches('\n').split('\n').collect();
+        if count > 1 {
+            let mut order: Vec<Selection> = self.selections();
+            order.sort_by_key(|s| s.range().0);
+            let piece = |s: Selection| match order.iter().position(|o| *o == s) {
+                Some(i) if lines.len() == count => lines[i].to_string(),
+                _ => text.to_string(),
+            };
+            if self.edit_all(false, |_, s| {
+                let (start, end) = s.range();
+                (start, end, piece(s))
+            }) {
+                return;
+            }
+        }
         let (start, end) = self.selection.range();
         self.replace(start, end, text, EditKind::Other);
     }
 
     pub fn delete_selection(&mut self) -> bool {
+        if !self.extra.is_empty() && self.selections().iter().any(|s| !s.is_empty()) {
+            return self.edit_all(false, |_, s| {
+                let (start, end) = s.range();
+                (start, end, String::new())
+            });
+        }
         let (start, end) = self.selection.range();
         if start == end {
             return false;
@@ -344,6 +636,9 @@ impl Buffer {
 
     pub fn backspace(&mut self) {
         if self.delete_selection() {
+            return;
+        }
+        if self.edit_all(true, |b, s| (b.previous(s.head, false), s.head, String::new())) {
             return;
         }
         let cursor = self.cursor();
@@ -366,6 +661,9 @@ impl Buffer {
         if self.delete_selection() {
             return;
         }
+        if self.edit_all(true, |b, s| (s.head, b.next(s.head, false), String::new())) {
+            return;
+        }
         let cursor = self.cursor();
         let end = self.next(cursor, false);
         if end != cursor {
@@ -374,9 +672,96 @@ impl Buffer {
         }
     }
 
+    /// Deletes to the end of the word after the cursor (⌥⌦).
+    pub fn delete_word_forward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        if self.edit_all(false, |b, s| (s.head, b.next(s.head, true), String::new())) {
+            return;
+        }
+        let cursor = self.cursor();
+        let end = self.next(cursor, true);
+        if end != cursor {
+            self.replace(cursor, end, "", EditKind::Other);
+            self.selection = Selection::cursor(cursor);
+        }
+    }
+
+    /// Deletes back to where the line's text starts, then to the start of the line, then the line
+    /// break before it (⌘⌫).
+    pub fn delete_to_line_start(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        let cursor = self.cursor();
+        let line = self.line(cursor.line);
+        let first = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let start = match cursor.col {
+            0 if cursor.line > 0 => Pos::new(cursor.line - 1, self.line(cursor.line - 1).len()),
+            0 => return,
+            col if col > first => Pos::new(cursor.line, first),
+            _ => Pos::new(cursor.line, 0),
+        };
+        self.replace(start, cursor, "", EditKind::Other);
+    }
+
+    /// Selects the cursor's line, break included; again, the next line too (⌘L).
+    pub fn select_line(&mut self) {
+        let (start, end) = self.selection.range();
+        // Whole lines selected already end at the start of the next one: that one comes next.
+        let to = end.line + 1;
+        let from = start.line;
+        let head = if to < self.line_count() { Pos::new(to, 0) } else { Pos::new(to - 1, self.line(to - 1).len()) };
+        self.selection = Selection { anchor: Pos::new(from, 0), head };
+        self.goal_column = None;
+        self.seal();
+    }
+
+    /// ⌘]: one step of indentation more on every line of the selection (empty lines stay empty).
+    pub fn indent_lines(&mut self) {
+        let (start, end) = self.selection.range();
+        let unit = self.indent.clone();
+        self.map_lines(start.line, end.line, |line| if line.is_empty() { line.to_string() } else { format!("{unit}{line}") });
+    }
+
+    /// A new line above the cursor's, indented like it, the cursor on it (⇧⌘↩).
+    pub fn insert_line_above(&mut self) {
+        let line = self.cursor().line;
+        let indent: String = self.line(line).chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+        self.replace(Pos::new(line, 0), Pos::new(line, 0), &format!("{indent}\n"), EditKind::Other);
+        self.selection = Selection::cursor(Pos::new(line, indent.len()));
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
+    /// A new line under the cursor's, indented like it, the cursor on it (⌘↩).
+    pub fn insert_line_below(&mut self) {
+        let line = self.cursor().line;
+        self.move_to(Pos::new(line, self.line(line).len()), false);
+        self.newline();
+    }
+
+    /// Typing a closing bracket on a line that is only indentation so far takes one step of
+    /// indentation away (the bracket lines up with the line that opened it).
+    fn outdent_closing(&mut self) {
+        let cursor = self.cursor();
+        let before = &self.line(cursor.line)[..cursor.col];
+        if before.is_empty() || !before.chars().all(|c| c == ' ' || c == '\t') {
+            return;
+        }
+        let remove = if before.ends_with('\t') { 1 } else { before.len().min(self.indent.len().max(1)) };
+        let start = Pos::new(cursor.line, cursor.col - remove);
+        self.replace(start, cursor, "", EditKind::Typing);
+    }
+
     /// Deletes to the start of the word before the cursor (⌥⌫).
     pub fn delete_word_back(&mut self) {
         if self.delete_selection() {
+            return;
+        }
+        if self.edit_all(false, |b, s| (b.previous(s.head, true), s.head, String::new())) {
             return;
         }
         let cursor = self.cursor();
@@ -388,6 +773,13 @@ impl Buffer {
 
     /// Enter: a new line indented like this one, one level deeper after an opening bracket.
     pub fn newline(&mut self) {
+        if self.edit_all(false, |b, s| {
+            let (start, end) = s.range();
+            let indent: String = b.line(start.line).chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+            (start, end, format!("\n{indent}"))
+        }) {
+            return;
+        }
         let (start, end) = self.selection.range();
         let line = self.line(start.line);
         let indent: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
@@ -415,6 +807,15 @@ impl Buffer {
 
     /// Tab: indents the selected lines, or inserts one indentation step at the cursor.
     pub fn indent(&mut self) {
+        let unit = self.indent.clone();
+        if self.selections().iter().all(|s| s.range().0.line == s.range().1.line)
+            && self.edit_all(false, |_, s| {
+                let (start, end) = s.range();
+                (start, end, unit.clone())
+            })
+        {
+            return;
+        }
         let (start, end) = self.selection.range();
         if start.line == end.line {
             let unit = if self.indent == "\t" {
@@ -588,13 +989,25 @@ impl Buffer {
     /// (around the selection when there is one), a closing one typed over the same character
     /// steps past it. False when `c` is typed as it is (`quotes`: whether quotes pair here).
     pub fn type_paired(&mut self, c: char, quotes: bool) -> bool {
+        // Several cursors: the character as typed at each.
+        if !self.extra.is_empty() {
+            return false;
+        }
         let close = match c {
             '(' => ')',
             '[' => ']',
             '{' => '}',
             '"' | '`' if quotes => c,
             '\'' if quotes => c,
-            ')' | ']' | '}' => return self.step_over(c),
+            ')' | ']' | '}' => {
+                if self.step_over(c) {
+                    return true;
+                }
+                if self.selection.is_empty() {
+                    self.outdent_closing();
+                }
+                return false;
+            }
             _ => return false,
         };
         let (start, end) = self.selection.range();
@@ -645,6 +1058,9 @@ impl Buffer {
 
     /// Backspace between an empty pair (`(|)`, `"|"`): both go.
     pub fn backspace_pair(&mut self) -> bool {
+        if !self.extra.is_empty() {
+            return false;
+        }
         let cursor = self.cursor();
         if !self.selection.is_empty() || cursor.col == 0 {
             return false;
@@ -734,13 +1150,19 @@ impl Buffer {
         }
         let selection = self.selection;
         let end = self.end();
+        // The lines that really changed (a file an agent edited keeps most of its lines): the
+        // whole-text splice below is noted as just those.
+        let changed = splice_between(&self.lines, &text);
         self.replace(Pos::default(), end, &text, EditKind::Other);
+        if let Some(changes) = self.changes.as_mut() {
+            changes.pop();
+            changes.push(changed);
+        }
         self.selection = Selection { anchor: self.clamp(selection.anchor), head: self.clamp(selection.head) };
         if let Some(edit) = self.undo.last_mut() {
             edit.after = self.selection;
             edit.sealed = true;
         }
-        self.changed_from = Some(0);
         self.revision = next_revision();
     }
 
@@ -763,6 +1185,7 @@ impl Buffer {
             None => Composition { start, removed: self.slice(start, end), before: self.selection, marked: (start, end) },
         };
         let marked_end = self.splice(start, end, &text);
+        self.shift_extra(end, marked_end);
         let cursor = |offset: usize| end_of(start, &text[..offset.min(text.len())]);
         self.selection =
             match selected.filter(|r| text.is_char_boundary(r.start.min(text.len())) && text.is_char_boundary(r.end.min(text.len()))) {
@@ -784,9 +1207,13 @@ impl Buffer {
         match self.composition.take() {
             Some(composition) if composition.marked == (start, end) => {
                 let text = normalize_newlines(text);
-                let end = self.splice(start, end, &text);
-                self.selection = Selection::cursor(end);
-                self.finish(composition, end);
+                let new_end = self.splice(start, end, &text);
+                self.shift_extra(end, new_end);
+                self.selection = Selection::cursor(new_end);
+                let typed = self.slice(composition.start, new_end);
+                self.finish(composition, new_end);
+                // Composed at the main cursor only: the others get the finished text now.
+                self.mirror(&typed);
             }
             Some(composition) => {
                 let marked_end = composition.marked.1;
@@ -794,9 +1221,50 @@ impl Buffer {
                 let (start, end) = (self.clamp(start), self.clamp(end));
                 self.replace(start, end, text, if text.chars().count() == 1 { EditKind::Typing } else { EditKind::Other });
             }
+            None if !self.extra.is_empty() && self.selection.range() == (start, end) => self.insert(text),
             None => {
                 self.replace(start, end, text, if text.chars().count() == 1 && text != "\n" { EditKind::Typing } else { EditKind::Other });
             }
+        }
+    }
+
+    /// The other cursors after `old_end` on its line follow text there that now ends at `new_end`
+    /// (composing text at the main cursor grew or shrank).
+    fn shift_extra(&mut self, old_end: Pos, new_end: Pos) {
+        let shift =
+            |p: Pos| if p.line == old_end.line && p >= old_end { Pos::new(new_end.line, p.col - old_end.col + new_end.col) } else { p };
+        for s in &mut self.extra {
+            *s = Selection { anchor: shift(s.anchor), head: shift(s.head) };
+        }
+    }
+
+    /// Types `text` at every cursor but the main one (where it already is).
+    fn mirror(&mut self, text: &str) {
+        let main = self.selection;
+        if text.is_empty() {
+            return;
+        }
+        if !self.edit_all(true, |_, s| {
+            if s == main {
+                (s.head, s.head, String::new())
+            } else {
+                let (start, end) = s.range();
+                (start, end, text.to_string())
+            }
+        }) {
+            return;
+        }
+        // The main cursor's composed text and this are one keystroke, and they go on a run of
+        // typing at every cursor.
+        let n = self.undo.len();
+        if n >= 2 {
+            let joins = n >= 3 && {
+                let before = &self.undo[n - 3];
+                before.multi && !before.sealed && before.at.elapsed() < TYPING_GROUP
+            };
+            self.undo[n - 2].multi = true;
+            self.undo[n - 2].chain = joins;
+            self.undo[n - 1].chain = true;
         }
     }
 
@@ -825,29 +1293,40 @@ impl Buffer {
             kind,
             at: Instant::now(),
             sealed: false,
+            multi: false,
+            chain: false,
         });
     }
 
     pub fn undo(&mut self) -> bool {
         self.unmark();
         let Some(edit) = self.undo.pop() else { return false };
+        self.extra.clear();
         let end = end_of(edit.start, &edit.inserted);
         self.splice(edit.start, end, &edit.removed);
         self.selection = edit.before;
         self.goal_column = None;
+        let chain = edit.chain;
         self.redo.push(edit);
+        if chain {
+            self.undo();
+        }
         true
     }
 
     pub fn redo(&mut self) -> bool {
         self.unmark();
         let Some(mut edit) = self.redo.pop() else { return false };
+        self.extra.clear();
         let end = end_of(edit.start, &edit.removed);
         self.splice(edit.start, end, &edit.inserted);
         self.selection = edit.after;
         self.goal_column = None;
         edit.sealed = true;
         self.undo.push(edit);
+        if self.redo.last().is_some_and(|next| next.chain) {
+            self.redo();
+        }
         true
     }
 
@@ -855,6 +1334,7 @@ impl Buffer {
 
     /// Moves the cursor to `pos`, extending the selection when `select`.
     pub fn move_to(&mut self, pos: Pos, select: bool) {
+        self.extra.clear();
         let pos = self.clamp(pos);
         self.selection = if select { Selection { anchor: self.selection.anchor, head: pos } } else { Selection::cursor(pos) };
         self.goal_column = None;
@@ -978,6 +1458,48 @@ impl Buffer {
         }
         Pos::new(pos.line, col)
     }
+}
+
+/// Cursors ⇧⌘L makes at most.
+const MAX_CURSORS: usize = 1_000;
+
+/// Changes kept for [`Buffer::take_changes`] at most (a replace-all of thousands is everything).
+const MAX_CHANGES: usize = 256;
+
+/// One change to the text, by lines: the lines `from..=to` (as they are after it) replace the
+/// ones that were there, and the lines after them moved by `delta`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Splice {
+    pub from: usize,
+    pub to: usize,
+    pub delta: isize,
+}
+
+impl Splice {
+    /// Where `line` of the text before the change is after it: moved with the lines around it,
+    /// or (a line the change rewrote) the nearest line the change left.
+    pub fn line_after(&self, line: usize) -> usize {
+        let old_to = (self.to as isize - self.delta).max(self.from as isize) as usize;
+        if line < self.from {
+            line
+        } else if line > old_to {
+            (line as isize + self.delta) as usize
+        } else {
+            line.min(self.to)
+        }
+    }
+}
+
+/// The change from `old` (lines) to `new`: the lines between their common start and end.
+fn splice_between(old: &[String], new: &str) -> Splice {
+    let new: Vec<&str> = new.split('\n').collect();
+    let shorter = old.len().min(new.len());
+    let prefix = old.iter().zip(&new).take_while(|(a, b)| a.as_str() == **b).count().min(shorter);
+    let suffix = old.iter().rev().zip(new.iter().rev()).take_while(|(a, b)| a.as_str() == **b).count().min(shorter - prefix);
+    let delta = new.len() as isize - old.len() as isize;
+    // At least the lines added are in the change (`to >= from + delta`).
+    let to = (new.len() - suffix).saturating_sub(1).max(prefix + delta.max(0) as usize).min(new.len() - 1);
+    Splice { from: prefix.min(new.len() - 1), to, delta }
 }
 
 /// The next text revision of the app (see [`Buffer::revision`]).
@@ -1154,6 +1676,189 @@ mod tests {
         assert_eq!(b.text(), "//  x\n// \u{a0}y\n// \u{3000}z");
         b.toggle_comment("//", "");
         assert_eq!(b.text(), " x\n\u{a0}y\n\u{3000}z");
+    }
+
+    #[test]
+    fn next_occurrence_gets_a_cursor_and_typing_goes_to_every_one() {
+        let mut b = Buffer::new("let count = 1;\ncount += 1;\nprint(count, recount);");
+        at(&mut b, 0, 6);
+        assert!(b.add_next_occurrence());
+        assert_eq!(b.selected_text(), "count");
+        assert!(b.add_next_occurrence());
+        assert!(b.add_next_occurrence());
+        assert!(b.add_next_occurrence(), "inside 'recount' too, as VS Code without whole-word");
+        assert!(!b.add_next_occurrence());
+        assert_eq!(b.extra.len(), 3);
+        b.insert("n");
+        assert_eq!(b.text(), "let n = 1;\nn += 1;\nprint(n, ren);");
+        b.insert("um");
+        assert_eq!(b.text(), "let num = 1;\nnum += 1;\nprint(num, renum);");
+        b.backspace();
+        assert_eq!(b.text(), "let nu = 1;\nnu += 1;\nprint(nu, renu);");
+        // One undo step per change, and back to one cursor.
+        assert!(b.undo());
+        assert_eq!(b.text(), "let num = 1;\nnum += 1;\nprint(num, renum);");
+        assert!(b.extra.is_empty());
+    }
+
+    #[test]
+    fn every_match_gets_a_cursor_at_once() {
+        let mut b = Buffer::new("ab x ab\nab\n\nab ab");
+        at(&mut b, 2, 0);
+        b.selection = Selection { anchor: Pos::new(1, 0), head: Pos::new(1, 2) };
+        b.select_all_occurrences();
+        let mut all: Vec<(Pos, Pos)> = b.selections().iter().map(|s| s.range()).collect();
+        all.sort();
+        let want = [(0, 0), (0, 5), (1, 0), (3, 0), (3, 3)].map(|(l, c)| (Pos::new(l, c), Pos::new(l, c + 2)));
+        assert_eq!(all, want);
+        assert_eq!(b.selection.range(), (Pos::new(1, 0), Pos::new(1, 2)), "the main cursor stays where it was");
+        // A file full of matches: no more than the limit.
+        let mut b = Buffer::new(&"a ".repeat(5_000));
+        at(&mut b, 0, 0);
+        b.select_all_occurrences();
+        assert_eq!(b.extra.len() + 1, MAX_CURSORS);
+    }
+
+    #[test]
+    fn every_cursor_moves_and_cursors_that_meet_become_one() {
+        let mut b = Buffer::new("ab\ncd\nef");
+        at(&mut b, 0, 1);
+        b.toggle_cursor(Pos::new(1, 1));
+        b.toggle_cursor(Pos::new(2, 1));
+        b.each(|b| b.line_end(false));
+        assert_eq!(b.selections().iter().map(|s| s.head).collect::<Vec<_>>(), [Pos::new(2, 2), Pos::new(0, 2), Pos::new(1, 2)]);
+        b.insert(";");
+        assert_eq!(b.text(), "ab;\ncd;\nef;");
+        b.newline();
+        assert_eq!(b.text(), "ab;\n\ncd;\n\nef;\n");
+        b.each(|b| b.doc_start(false));
+        assert!(b.extra.is_empty(), "all at the start: one cursor");
+        // Pasting as many lines as cursors: one each.
+        let mut b = Buffer::new("x\ny");
+        at(&mut b, 0, 1);
+        b.toggle_cursor(Pos::new(1, 1));
+        b.paste("1\n2");
+        assert_eq!(b.text(), "x1\ny2");
+        // Any other edit leaves the main cursor alone.
+        b.toggle_comment("//", "");
+        assert!(b.extra.is_empty());
+    }
+
+    #[test]
+    fn composed_text_reaches_every_cursor() {
+        let mut b = Buffer::new("a\nb");
+        at(&mut b, 0, 1);
+        b.toggle_cursor(Pos::new(1, 1));
+        // An input method composes at the main cursor (line 1), then commits.
+        b.compose(Pos::new(1, 1), Pos::new(1, 1), "ㅎ", None);
+        b.compose(Pos::new(1, 1), Pos::new(1, 4), "하", None);
+        b.commit(Pos::new(1, 1), Pos::new(1, 4), "한");
+        assert_eq!(b.text(), "a한\nb한");
+        assert_eq!(b.extra.len(), 1);
+        // Plain typing through the input path too.
+        let (s, e) = b.selection.range();
+        b.commit(s, e, "!");
+        assert_eq!(b.text(), "a한!\nb한!");
+        // Undone step by step back to the start.
+        while b.undo() {}
+        assert_eq!(b.text(), "a\nb");
+    }
+
+    #[test]
+    fn undo_after_several_cursors_gives_the_text_back() {
+        let original = "items x\nitems y\nitems z";
+        let mut b = Buffer::new(original);
+        at(&mut b, 0, 2);
+        for _ in 0..3 {
+            b.add_next_occurrence();
+        }
+        b.insert("list");
+        b.backspace();
+        let at_main = b.cursor();
+        b.compose(at_main, at_main, "ㅎ", None);
+        b.compose(at_main, Pos::new(at_main.line, at_main.col + 3), "하", None);
+        b.commit(at_main, Pos::new(at_main.line, at_main.col + 3), "한");
+        assert_eq!(b.text(), "lis한 x\nlis한 y\nlis한 z");
+        // Typed at every cursor in a run: one undo step back to before the run.
+        assert!(b.undo());
+        assert_eq!(b.text(), "list x\nlist y\nlist z");
+        assert!(b.undo());
+        assert_eq!(b.text(), original);
+        assert!(b.redo());
+        assert_eq!(b.text(), "list x\nlist y\nlist z");
+    }
+
+    #[test]
+    fn bracket_keys_indent_and_a_line_goes_above() {
+        let mut b = Buffer::new("a\n\nb");
+        b.selection = Selection { anchor: Pos::new(0, 0), head: Pos::new(2, 1) };
+        b.indent_lines();
+        assert_eq!(b.text(), "    a\n\n    b");
+        b.outdent();
+        assert_eq!(b.text(), "a\n\nb");
+        let mut b = Buffer::new("  x");
+        at(&mut b, 0, 3);
+        b.insert_line_above();
+        assert_eq!(b.text(), "  \n  x");
+        assert_eq!(b.cursor(), Pos::new(0, 2));
+    }
+
+    #[test]
+    fn line_keys_select_insert_and_delete() {
+        let mut b = Buffer::new("fn a() {\n    let x = 1;\n}");
+        let at = |b: &mut Buffer, line, col| b.selection = Selection { anchor: Pos::new(line, col), head: Pos::new(line, col) };
+        at(&mut b, 1, 6);
+        b.select_line();
+        assert_eq!(b.selection.range(), (Pos::new(1, 0), Pos::new(2, 0)));
+        b.select_line();
+        assert_eq!(b.selection.range(), (Pos::new(1, 0), Pos::new(2, 1)), "the last line has no break");
+        // ⌘↩ from the middle of a line: a line under it, indented alike.
+        at(&mut b, 1, 6);
+        b.insert_line_below();
+        assert_eq!(b.text(), "fn a() {\n    let x = 1;\n    \n}");
+        assert_eq!(b.cursor(), Pos::new(2, 4));
+        // A closing bracket typed on the indentation goes one step left.
+        assert!(!b.type_paired('}', true));
+        b.insert("}");
+        assert_eq!(b.line(2), "}");
+        // ⌘⌫: to the text's start, to the line's start, then the break before.
+        let mut b = Buffer::new("a\n    foo bar");
+        at(&mut b, 1, 11);
+        b.delete_to_line_start();
+        assert_eq!(b.text(), "a\n    ");
+        b.delete_to_line_start();
+        assert_eq!(b.text(), "a\n");
+        b.delete_to_line_start();
+        assert_eq!(b.text(), "a");
+        // ⌥⌦: the word after the cursor.
+        let mut b = Buffer::new("foo bar baz");
+        at(&mut b, 0, 3);
+        b.delete_word_forward();
+        assert_eq!(b.text(), "foo baz");
+    }
+
+    #[test]
+    fn notes_the_lines_each_change_touched() {
+        let mut b = Buffer::new("a\nb\nc\nd");
+        b.selection = Selection { anchor: Pos::new(1, 1), head: Pos::new(1, 1) };
+        b.insert("\nx");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 2, delta: 1 }]));
+        b.selection = Selection { anchor: Pos::new(1, 1), head: Pos::new(3, 0) };
+        b.insert("");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 1, delta: -2 }]));
+        // A whole new text keeps the lines that stayed out of the change.
+        b.set_text("a\nB\nB2\nd");
+        assert_eq!(b.text(), "a\nB\nB2\nd");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 2, delta: 1 }]));
+        b.set_text("a\nd");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 1, delta: -2 }]));
+        b.set_text("a\nnew\nd");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 2, delta: 1 }]));
+        assert_eq!(b.take_changes(), Some(vec![]));
+        let enter = Splice { from: 1, to: 2, delta: 1 };
+        assert_eq!([0, 1, 2, 5].map(|l| enter.line_after(l)), [0, 1, 3, 6]);
+        let joined = Splice { from: 1, to: 1, delta: -2 };
+        assert_eq!([0, 1, 2, 3, 4].map(|l| joined.line_after(l)), [0, 1, 1, 1, 2]);
     }
 
     #[test]

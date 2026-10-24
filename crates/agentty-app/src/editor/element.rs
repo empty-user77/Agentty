@@ -260,7 +260,11 @@ fn runs_for(display: &DisplayLine, spans: Option<&[Span]>, marks: &[(usize, usiz
     let mut shown = 0;
     let mut byte = 0;
     for span in spans.unwrap_or_default() {
-        let end = display.to_display(byte + span.len).min(total);
+        let mut end = display.to_display(byte + span.len).min(total);
+        // Colors kept from before an edit may end inside a character of the new text.
+        while !display.text.is_char_boundary(end) {
+            end += 1;
+        }
         if end > shown {
             runs.push(run(end - shown, span.color, span.bold, span.italic));
             shown = end;
@@ -642,25 +646,43 @@ impl Element for EditorElement {
                     }
                 }
             }
-            for line in &laid {
-                if selection.is_empty() || line.index < sel_start.line || line.index > sel_end.line {
-                    continue;
-                }
-                let from = if line.index == sel_start.line { sel_start.col } else { 0 };
-                let to = if line.index == sel_end.line { sel_end.col } else { doc.buffer.line(line.index).len() };
-                let x0 = f32::from(line.shaped.x_for_index(line.display.to_display(from)));
-                let mut x1 = f32::from(line.shaped.x_for_index(line.display.to_display(to)));
-                if line.index != sel_end.line {
-                    x1 += char_width * 0.6; // the line break is selected too
-                }
-                if x1 > x0 {
-                    backgrounds.push(fill(
-                        Bounds::new(point(px(text_left - scroll.x + x0), px(row_top(line.index))), size(px(x1 - x0), px(line_height))),
-                        hex_alpha(Chrome::ACCENT, 0.40),
-                    ));
+            // Every cursor's selection (the main one and those ⌘D or ⌥-click added).
+            for each in doc.buffer.selections() {
+                let (sel_start, sel_end) = each.range();
+                for line in &laid {
+                    if each.is_empty() || line.index < sel_start.line || line.index > sel_end.line {
+                        continue;
+                    }
+                    let from = if line.index == sel_start.line { sel_start.col } else { 0 };
+                    let to = if line.index == sel_end.line { sel_end.col } else { doc.buffer.line(line.index).len() };
+                    let x0 = f32::from(line.shaped.x_for_index(line.display.to_display(from)));
+                    let mut x1 = f32::from(line.shaped.x_for_index(line.display.to_display(to)));
+                    if line.index != sel_end.line {
+                        x1 += char_width * 0.6; // the line break is selected too
+                    }
+                    if x1 > x0 {
+                        backgrounds.push(fill(
+                            Bounds::new(point(px(text_left - scroll.x + x0), px(row_top(line.index))), size(px(x1 - x0), px(line_height))),
+                            hex_alpha(Chrome::ACCENT, 0.40),
+                        ));
+                    }
                 }
             }
             let caret = editor.blink.update(focused, caret_key, cx, |e: &mut CodeEditor| &mut e.blink);
+            // The other cursors' carets blink with the main one.
+            if caret {
+                for each in &doc.buffer.extra {
+                    let Some(line) = laid.iter().find(|l| l.index == each.head.line) else { continue };
+                    let x = f32::from(line.shaped.x_for_index(line.display.to_display(each.head.col)));
+                    backgrounds.push(fill(
+                        Bounds::new(
+                            point(px(text_left - scroll.x + x), px(row_top(each.head.line) + 2.)),
+                            size(px(2.), px(line_height - 4.)),
+                        ),
+                        hex(0xaeafad),
+                    ));
+                }
+            }
             let cursor_quad = cursor_x.filter(|_| caret).map(|x| {
                 fill(
                     Bounds::new(point(px(text_left - scroll.x + x), px(row_top(cursor.line) + 2.)), size(px(2.), px(line_height - 4.))),
@@ -706,8 +728,14 @@ impl Element for EditorElement {
             let mut lines: Vec<(Point<Pixels>, ShapedLine)> = laid.iter().map(|l| (origin(l.index), l.shaped.clone())).collect();
             // Each line's worst error or warning, written after its text (Error Lens).
             if crate::settings::settings(cx).editor_inline_problems {
+                let settling = doc.checks.settling();
+                doc.checks.held = false;
                 for line in &laid {
                     let Some(problem) = inline_problem(&in_view, line.index) else { continue };
+                    if line.index == cursor.line && settling {
+                        doc.checks.held = true;
+                        continue;
+                    }
                     let text: String = problem.message.lines().next().unwrap_or("").chars().take(INLINE_PROBLEM_CHARS).collect();
                     let text = format!("■ {text}");
                     let run = TextRun {

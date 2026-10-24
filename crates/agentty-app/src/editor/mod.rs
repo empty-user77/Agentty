@@ -42,7 +42,7 @@ use highlight::Highlights;
 use language::{Formatter, Language};
 use preview::{PageReply, Preview};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 actions!(
     code_editor,
@@ -94,6 +94,15 @@ actions!(
         DuplicateLinesUp,
         DuplicateLinesDown,
         DeleteLines,
+        DeleteWordForward,
+        DeleteToLineStart,
+        SelectLine,
+        InsertLineBelow,
+        InsertLineAbove,
+        IndentLines,
+        OutdentLines,
+        SelectNextOccurrence,
+        SelectAllOccurrences,
     ]
 );
 
@@ -150,6 +159,14 @@ pub fn bind_keys(cx: &mut App) {
         key("shift-alt-up", DuplicateLinesUp, c),
         key("shift-alt-down", DuplicateLinesDown, c),
         key("cmd-shift-k", DeleteLines, c),
+        key("cmd-l", SelectLine, c),
+        key("cmd-enter", InsertLineBelow, c),
+        // As in VS Code: in the editor these win over the app's split, pane and zoom keys.
+        key("cmd-shift-enter", InsertLineAbove, c),
+        key("cmd-]", IndentLines, c),
+        key("cmd-[", OutdentLines, c),
+        key("cmd-d", SelectNextOccurrence, c),
+        key("cmd-shift-l", SelectAllOccurrences, c),
     ]);
     find::bind_keys(cx);
     navigate::bind_keys(cx);
@@ -175,6 +192,8 @@ pub fn bind_keys(cx: &mut App) {
             key("cmd-shift-up", SelectDocStart, c),
             key("cmd-shift-down", SelectDocEnd, c),
             key("alt-backspace", DeleteWordBack, c),
+            key("alt-delete", DeleteWordForward, c),
+            key("cmd-backspace", DeleteToLineStart, c),
             key("ctrl-a", LineStart, c),
             key("ctrl-e", LineEnd, c),
         ]);
@@ -189,6 +208,7 @@ pub fn bind_keys(cx: &mut App) {
             gpui::KeyBinding::new("ctrl-shift-home", SelectDocStart, c),
             gpui::KeyBinding::new("ctrl-shift-end", SelectDocEnd, c),
             gpui::KeyBinding::new("ctrl-backspace", DeleteWordBack, c),
+            gpui::KeyBinding::new("ctrl-delete", DeleteWordForward, c),
             gpui::KeyBinding::new("ctrl-y", Redo, c),
         ]);
     }
@@ -354,10 +374,28 @@ impl Document {
         self.preview && self.can_preview()
     }
 
-    /// Keeps the highlighter's cache in step with edits.
+    /// Keeps what is kept by line in step with edits: syntax colors, and the problems and change
+    /// marks (worked out again once typing pauses) move with their lines meanwhile instead of
+    /// marking whatever line came to be there.
     fn sync_highlights(&mut self) {
-        if let Some(line) = self.buffer.take_changed_from() {
-            self.highlights.invalidate_from(line);
+        let Some(changes) = self.buffer.take_changes() else {
+            self.highlights.invalidate_from(0);
+            return;
+        };
+        if !changes.is_empty() {
+            self.checks.edited_at = Some(Instant::now());
+        }
+        for splice in changes {
+            self.highlights.apply(splice);
+            if splice.delta != 0 {
+                for problem in &mut self.checks.problems {
+                    problem.start.line = splice.line_after(problem.start.line);
+                    problem.end.line = splice.line_after(problem.end.line);
+                }
+                for change in &mut self.git.marks {
+                    change.line = splice.line_after(change.line);
+                }
+            }
         }
     }
 
@@ -490,6 +528,11 @@ pub struct CodeEditor {
     rename: Option<rename::RenameBox>,
     /// The type of the name under the pointer.
     type_hover: Option<hover::TypeHover>,
+    /// The pointer is on the problem's or the type's window (it stays open there).
+    popup_over: bool,
+    /// Counts the pointer leaving what a window is about: a window closes a moment later only if
+    /// the pointer did not come back or go onto the window meanwhile.
+    hover_leaves: u64,
     /// The change since the last commit whose window shows: (file, its first line).
     git_peek: Option<(PathBuf, usize)>,
     /// The completion list, while open, and the number of the last request for one.
@@ -608,6 +651,8 @@ impl CodeEditor {
             bulb_asking: false,
             rename: None,
             type_hover: None,
+            popup_over: false,
+            hover_leaves: 0,
             git_peek: None,
             completion: None,
             completion_seq: 0,
@@ -839,6 +884,21 @@ impl CodeEditor {
         cx.notify();
     }
 
+    /// ⌘D (the next place with the selected text) or ⇧⌘L (every place) gets a cursor.
+    fn add_cursors(&mut self, all: bool, cx: &mut Context<Self>) {
+        self.completion = None;
+        self.signature = None;
+        let Some(doc) = self.doc() else { return };
+        doc.buffer.unmark();
+        if all {
+            doc.buffer.select_all_occurrences();
+        } else {
+            doc.buffer.add_next_occurrence();
+        }
+        doc.autoscroll = true;
+        cx.notify();
+    }
+
     /// An edit that is not typing (moving lines): the completion list and the parameter hint,
     /// placed by the text as it was, close first.
     fn dismiss_and_edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Buffer)) {
@@ -848,12 +908,12 @@ impl CodeEditor {
     }
 
     /// Moves the cursor (works in read-only files too).
-    fn motion(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Buffer)) {
+    fn motion(&mut self, cx: &mut Context<Self>, f: impl Fn(&mut Buffer)) {
         self.completion = None;
         self.signature = None;
         let Some(doc) = self.doc() else { return };
         doc.buffer.unmark();
-        f(&mut doc.buffer);
+        doc.buffer.each(f);
         doc.sync_highlights();
         doc.autoscroll = true;
         cx.notify();
@@ -1179,6 +1239,14 @@ impl CodeEditor {
             _ => DragUnit::Char,
         };
         // ⌘-click: to the definition of what was clicked (or the file an import names).
+        // ⌥-click: one more cursor there.
+        if event.modifiers.alt && !event.modifiers.shift && !event.modifiers.secondary() && !in_gutter && event.click_count == 1 {
+            doc.buffer.unmark();
+            doc.buffer.toggle_cursor(pos);
+            self.link = None;
+            self.drag = None;
+            return cx.notify();
+        }
         if event.modifiers.secondary() && !event.modifiers.shift && !in_gutter && event.click_count == 1 {
             doc.buffer.move_to(pos, false);
             self.link = None;
@@ -1949,6 +2017,8 @@ impl CodeEditor {
             "gitMarks": self.debug_git_marks(),
             "sticky": self.debug_sticky(),
             "cursorLine": self.docs.get(self.active).map(|d| d.buffer.line(d.buffer.cursor().line).to_string()),
+            "selected": self.docs.get(self.active).map(|d| d.buffer.selected_text()),
+            "scrollY": self.docs.get(self.active).map(|d| d.scroll.y),
             "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),
             "changes": self.debug_changes(),
             "allChanges": self.changes.iter().map(|c| format!("{}:{}", c.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), c.hunk.start)).collect::<Vec<_>>(),
@@ -2415,10 +2485,12 @@ impl Render for CodeEditor {
             .id("code-editor")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            // The pointer left the editor: what it rested on goes too.
+            // The pointer left the editor (or went onto a window over it): what it rested on goes
+            // too, unless it is on that window a moment later.
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered {
-                    this.clear_hovers(cx);
+                    this.pointer = None;
+                    this.leave_hovers(cx);
                 }
             }))
             .size_full()
@@ -2491,7 +2563,16 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &DuplicateLinesDown, _, cx| this.dismiss_and_edit(cx, |b| b.duplicate_lines(true))))
             .on_action(cx.listener(|this, _: &DeleteLines, _, cx| this.dismiss_and_edit(cx, |b| b.delete_lines())))
             .on_action(cx.listener(|this, _: &Delete, _, cx| this.edit(cx, |b| b.delete_forward())))
-            .on_action(cx.listener(|this, _: &DeleteWordBack, _, cx| this.edit(cx, |b| b.delete_word_back())))
+            .on_action(cx.listener(|this, _: &DeleteWordBack, _, cx| this.dismiss_and_edit(cx, |b| b.delete_word_back())))
+            .on_action(cx.listener(|this, _: &DeleteWordForward, _, cx| this.dismiss_and_edit(cx, |b| b.delete_word_forward())))
+            .on_action(cx.listener(|this, _: &DeleteToLineStart, _, cx| this.dismiss_and_edit(cx, |b| b.delete_to_line_start())))
+            .on_action(cx.listener(|this, _: &SelectLine, _, cx| this.motion(cx, |b| b.select_line())))
+            .on_action(cx.listener(|this, _: &InsertLineBelow, _, cx| this.dismiss_and_edit(cx, |b| b.insert_line_below())))
+            .on_action(cx.listener(|this, _: &InsertLineAbove, _, cx| this.dismiss_and_edit(cx, |b| b.insert_line_above())))
+            .on_action(cx.listener(|this, _: &IndentLines, _, cx| this.dismiss_and_edit(cx, |b| b.indent_lines())))
+            .on_action(cx.listener(|this, _: &OutdentLines, _, cx| this.dismiss_and_edit(cx, |b| b.outdent())))
+            .on_action(cx.listener(|this, _: &SelectNextOccurrence, _, cx| this.add_cursors(false, cx)))
+            .on_action(cx.listener(|this, _: &SelectAllOccurrences, _, cx| this.add_cursors(true, cx)))
             .on_action(cx.listener(|this, _: &Newline, _, cx| {
                 if !this.completion_accept(cx) {
                     this.edit(cx, |b| b.newline())

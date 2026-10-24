@@ -2715,6 +2715,18 @@ strings! {
     "editor.external_system" => ["System default", "시스템 기본", "システムの既定", "系统默认"],
     "editor.shortcut_organize_imports" => ["Organize imports", "import 정리", "import を整理", "整理 import"],
     "editor.shortcut_comment" => ["Comment out lines", "줄 주석 처리", "行をコメントアウト", "注释行"],
+    "editor.shortcut_select_line" => ["Select line", "줄 선택", "行を選択", "选择行"],
+    "editor.shortcut_insert_line" => ["New line below / above", "아래 / 위에 새 줄", "下 / 上に新しい行", "在下方 / 上方插入新行"],
+    "editor.shortcut_next_occurrence" => [
+        "Add a cursor at the next match / at every match",
+        "다음 같은 단어에 / 모든 같은 단어에 커서 추가",
+        "次の一致箇所 / すべての一致箇所にカーソルを追加",
+        "在下一个 / 所有相同内容处添加光标"
+    ],
+    "editor.shortcut_add_cursor" => ["Add a cursor", "커서 추가", "カーソルを追加", "添加光标"],
+    "editor.shortcut_indent_lines" => ["Indent / outdent lines", "줄 들여쓰기 / 내어쓰기", "行のインデント / インデント解除", "缩进 / 取消缩进行"],
+    "editor.shortcut_delete_to_start" => ["Delete to line start", "줄 처음까지 지우기", "行頭まで削除", "删除到行首"],
+    "editor.shortcut_delete_word" => ["Delete word before / after", "앞 / 뒤 단어 지우기", "前 / 後ろの単語を削除", "删除前 / 后一个词"],
     "editor.shortcut_move_lines" => ["Move lines up / down", "줄 위 / 아래로 이동", "行を上 / 下へ移動", "上移 / 下移行"],
     "editor.shortcut_duplicate_lines" => ["Duplicate lines", "줄 복제", "行を複製", "复制行"],
     "editor.shortcut_delete_lines" => ["Delete lines", "줄 삭제", "行を削除", "删除行"],

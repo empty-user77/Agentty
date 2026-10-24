@@ -13,6 +13,8 @@ use std::time::Duration;
 
 /// The pointer rests this long on a name before its type is asked for.
 const DELAY: Duration = Duration::from_millis(600);
+/// A window stays this long after the pointer left what it is about (time to reach it).
+const GRACE: Duration = Duration::from_millis(350);
 
 pub(super) struct TypeHover {
     path: PathBuf,
@@ -43,11 +45,12 @@ impl CodeEditor {
         if self.type_hover.as_ref().is_some_and(same) {
             return;
         }
-        let shown = self.type_hover.as_ref().is_some_and(|h| h.text.as_ref().is_some_and(|t| !t.is_empty()));
-        self.type_hover = target.clone().map(|(path, start, end)| TypeHover { path, start, end, text: None });
-        if shown {
-            cx.notify();
+        // A type that shows stays a moment: the pointer may be on its way to it.
+        if self.type_hover.as_ref().is_some_and(|h| h.text.as_ref().is_some_and(|t| !t.is_empty())) {
+            return self.leave_hovers(cx);
         }
+        self.type_hover = target.clone().map(|(path, start, end)| TypeHover { path, start, end, text: None });
+        self.popup_over = false;
         let Some((path, start, end)) = target else { return };
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DELAY).await;
@@ -74,7 +77,7 @@ impl CodeEditor {
         .detach();
     }
 
-    pub(super) fn render_type_hover(&self, cx: &gpui::App) -> Option<AnyElement> {
+    pub(super) fn render_type_hover(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let busy = self.picker.is_some() || self.confirm.is_some() || self.preview.covered || self.link.is_some();
         let covered = self.fixes.is_some() || self.rename.is_some() || self.completion.is_some() || self.signature.is_some();
         if busy || covered || self.problem_hover.as_ref().is_some_and(|(_, shown)| *shown) {
@@ -103,6 +106,8 @@ impl CodeEditor {
             .border_1()
             .border_color(hex(Chrome::OVERLAY_BORDER))
             .shadow_lg()
+            .occlude()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.over_popup(*hovered, cx)))
             .font_family(crate::settings::terminal_font(cx))
             .text_size(px(12.))
             .text_color(hex(Chrome::FOREGROUND))
@@ -124,10 +129,41 @@ impl CodeEditor {
         }
     }
 
-    pub(super) fn clear_hovers(&mut self, cx: &mut Context<Self>) {
-        let shown = self.type_hover.take().is_some_and(|h| h.text.is_some()) | self.problem_hover.take().is_some_and(|(_, s)| s);
-        if shown {
-            cx.notify();
+    /// The pointer left what a shown window is about: the window closes a moment later, unless
+    /// the pointer is back on it or on the window by then. Whatever is under the pointer then
+    /// is hovered as usual.
+    pub(super) fn leave_hovers(&mut self, cx: &mut Context<Self>) {
+        self.hover_leaves += 1;
+        let leave = self.hover_leaves;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(GRACE).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.hover_leaves != leave || this.popup_over {
+                    return;
+                }
+                let pos = this.pointer.and_then(|p| this.text_position(p));
+                if this.problem_hover.as_ref().is_some_and(|(p, shown)| *shown && this.problem_at(pos).as_ref() != Some(p)) {
+                    this.problem_hover = None;
+                    cx.notify();
+                }
+                let on_name = |h: &TypeHover| pos.is_some_and(|p| p.line == h.start.line && p.col >= h.start.col && p.col <= h.end.col);
+                if this.type_hover.as_ref().is_some_and(|h| h.text.is_some() && !on_name(h)) {
+                    this.type_hover = None;
+                    cx.notify();
+                }
+                this.hover_problem(pos, cx);
+                this.hover_type(pos, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// The pointer went onto a problem's or a type's window, or off it.
+    pub(super) fn over_popup(&mut self, over: bool, cx: &mut Context<Self>) {
+        self.popup_over = over;
+        if !over {
+            self.pointer = None;
+            self.leave_hovers(cx);
         }
     }
 }

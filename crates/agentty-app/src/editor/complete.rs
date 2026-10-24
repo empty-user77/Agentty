@@ -378,6 +378,12 @@ impl CodeEditor {
 
     /// Esc: the list and the windows over the text close.
     pub(super) fn dismiss(&mut self, cx: &mut Context<Self>) {
+        let shown = self.completion.is_some() || self.git_peek.is_some() || self.signature.is_some();
+        if !shown {
+            if let Some(doc) = self.docs.get_mut(self.active) {
+                doc.buffer.single_cursor();
+            }
+        }
         self.completion = None;
         self.git_peek = None;
         self.signature = None;
