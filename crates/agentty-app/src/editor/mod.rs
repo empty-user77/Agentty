@@ -11,6 +11,7 @@ mod element;
 pub mod external;
 pub mod file;
 mod find;
+mod fold;
 pub mod format;
 mod gitmarks;
 pub mod highlight;
@@ -106,6 +107,8 @@ actions!(
         AddCursorAbove,
         AddCursorBelow,
         GoToBracket,
+        Fold,
+        Unfold,
     ]
 );
 
@@ -173,6 +176,8 @@ pub fn bind_keys(cx: &mut App) {
         key("cmd-alt-up", AddCursorAbove, c),
         key("cmd-alt-down", AddCursorBelow, c),
         key("cmd-shift-\\", GoToBracket, c),
+        key("cmd-alt-[", Fold, c),
+        key("cmd-alt-]", Unfold, c),
     ]);
     find::bind_keys(cx);
     navigate::bind_keys(cx);
@@ -336,6 +341,8 @@ pub(crate) struct Document {
     checks: problems::Checks,
     /// Its lines against the last commit.
     git: gitmarks::GitMarks,
+    /// Regions folded away.
+    folds: fold::Folds,
 }
 
 impl Document {
@@ -395,6 +402,7 @@ impl Document {
         }
         for splice in changes {
             self.highlights.apply(splice);
+            self.folds.apply(splice);
             if splice.delta != 0 {
                 for problem in &mut self.checks.problems {
                     problem.start.line = splice.line_after(problem.start.line);
@@ -490,6 +498,8 @@ pub struct CodeEditor {
     recent: Vec<PathBuf>,
     /// Where the pointer was last over the text (⌘ pressed without moving still finds the link).
     pointer: Option<Point<Pixels>>,
+    /// The pointer is over the gutter (where the fold arrows show).
+    gutter_hover: bool,
     /// Agents' changes waiting to be kept or undone.
     changes: Vec<review::AgentChange>,
     next_change: u64,
@@ -637,6 +647,7 @@ impl CodeEditor {
             flash: None,
             recent: Vec::new(),
             pointer: None,
+            gutter_hover: false,
             changes: Vec::new(),
             next_change: 0,
             last_typed: None,
@@ -912,6 +923,54 @@ impl CodeEditor {
         }
         doc.autoscroll = true;
         cx.notify();
+    }
+
+    /// ↑ / ↓ (or a page) at every cursor, over the folded lines.
+    fn vertical(&mut self, rows: isize, select: bool, cx: &mut Context<Self>) {
+        let hidden = self.docs.get(self.active).map(|d| d.folds.hidden().to_vec()).unwrap_or_default();
+        self.motion(cx, move |b| b.vertical_in(rows, select, &hidden));
+    }
+
+    /// ⌥⌘[: folds the innermost region the cursor is in (one not folded yet); ⌥⌘]: unfolds it.
+    fn fold_at_cursor(&mut self, fold: bool, cx: &mut Context<Self>) {
+        let Some(doc) = self.doc() else { return };
+        let cursor = doc.buffer.cursor();
+        if !fold {
+            if doc.folds.unfold_around(cursor.line) {
+                cx.notify();
+            }
+            return;
+        }
+        let count = doc.buffer.line_count();
+        let folded = doc.folds.ranges().to_vec();
+        let found = fold::enclosing(|i| doc.buffer.line(i), cursor.line, count, |region| folded.contains(&region));
+        let Some((start, end)) = found else { return };
+        doc.folds.fold(start, end);
+        // The cursor goes onto the line left in view.
+        doc.buffer.single_cursor();
+        if cursor.line != start {
+            doc.buffer.move_to(doc.buffer.clamp(Pos::new(start, cursor.col)), false);
+        }
+        doc.autoscroll = true;
+        cx.notify();
+    }
+
+    /// A click on a fold arrow: the region starting at `line` folds or unfolds. False when none
+    /// starts there.
+    fn toggle_fold(&mut self, line: usize, cx: &mut Context<Self>) -> bool {
+        let Some(doc) = self.doc() else { return false };
+        if !doc.folds.unfold(line) {
+            let Some(end) = fold::region_end(&|i| doc.buffer.line(i), line, doc.buffer.line_count()) else { return false };
+            doc.folds.fold(line, end);
+            // Cursors in the lines folded away go to its first line.
+            let hidden = |pos: Pos| pos.line > line && pos.line <= end;
+            if doc.buffer.selections().iter().any(|s| hidden(s.head) || hidden(s.anchor)) {
+                doc.buffer.single_cursor();
+                doc.buffer.move_to(Pos::new(line, doc.buffer.line(line).len()), false);
+            }
+        }
+        cx.notify();
+        true
     }
 
     fn add_cursor_vertical(&mut self, up: bool, cx: &mut Context<Self>) {
@@ -1289,6 +1348,15 @@ impl CodeEditor {
             return;
         }
         let Some(pos) = self.docs.get(self.active).map(|doc| layout.position_for(event.position, &doc.buffer)) else { return };
+        let mark = layout.fold_mark_at(event.position);
+        if layout.on_fold_arrow(event.position) && self.toggle_fold(pos.line, cx) {
+            return;
+        }
+        if let Some(line) = mark {
+            self.toggle_fold(line, cx);
+            return;
+        }
+        let Some(layout) = self.layout.as_ref() else { return };
         // A click on a change since the last commit shows it (with Revert).
         if layout.on_change_bar(event.position) && self.toggle_git_peek(pos.line, cx) {
             return;
@@ -1338,6 +1406,11 @@ impl CodeEditor {
             self.drag = None;
             self.scrollbar_drag = None;
             self.pointer = Some(event.position);
+            let in_gutter = self.layout.as_ref().is_some_and(|l| l.in_gutter(event.position));
+            if in_gutter != self.gutter_hover {
+                self.gutter_hover = in_gutter;
+                cx.notify();
+            }
             let over = self.text_position(event.position);
             let hovered = over.filter(|_| event.modifiers.secondary());
             let plain = over.filter(|_| !event.modifiers.secondary() && !event.modifiers.alt && !event.modifiers.shift);
@@ -2083,6 +2156,8 @@ impl CodeEditor {
             "cursorLine": self.docs.get(self.active).map(|d| d.buffer.line(d.buffer.cursor().line).to_string()),
             "selected": self.docs.get(self.active).map(|d| d.buffer.selected_text()),
             "scrollY": self.docs.get(self.active).map(|d| d.scroll.y),
+            "folds": self.docs.get(self.active).map(|d| d.folds.ranges().iter().map(|(s, e)| format!("{}-{}", s + 1, e + 1)).collect::<Vec<_>>()),
+            "shownLines": self.layout.as_ref().and_then(|l| l.shown_lines()).map(|(a, b)| format!("{}-{}", a + 1, b + 1)),
             "buildError": self.docs.get(self.active).and_then(|d| d.checks.build.as_ref()).map(|e| format!("{}:{} {}", e.path.display(), e.line, e.message)),
             "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),
             "changes": self.debug_changes(),
@@ -2145,6 +2220,12 @@ impl CodeEditor {
                     .and_then(|at| self.docs.get(self.active)?.checks.problems.iter().find(|p| p.start <= at && at <= p.end).cloned());
                 if let Some(problem) = problem {
                     self.fix_with_ai(&problem, cx);
+                }
+            }
+            // A click on the fold arrow of a line (1-based).
+            "fold-arrow" => {
+                if let Ok(line) = argument.trim().parse::<usize>() {
+                    self.toggle_fold(line.saturating_sub(1), cx);
                 }
             }
             // The build error row's button.
@@ -2325,6 +2406,7 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
         outline: Default::default(),
         checks: Default::default(),
         git: Default::default(),
+        folds: Default::default(),
     };
     match opened {
         Opened::Text(file) => {
@@ -2569,6 +2651,9 @@ impl Render for CodeEditor {
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered {
                     this.pointer = None;
+                    if std::mem::take(&mut this.gutter_hover) {
+                        cx.notify();
+                    }
                     this.leave_hovers(cx);
                 }
             }))
@@ -2581,18 +2666,18 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &MoveRight, _, cx| this.motion(cx, |b| b.right(false, false))))
             .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
                 if !this.completion_step(false, cx) {
-                    this.motion(cx, |b| b.vertical(-1, false))
+                    this.vertical(-1, false, cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &MoveDown, _, cx| {
                 if !this.completion_step(true, cx) {
-                    this.motion(cx, |b| b.vertical(1, false))
+                    this.vertical(1, false, cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &SelectLeft, _, cx| this.motion(cx, |b| b.left(true, false))))
             .on_action(cx.listener(|this, _: &SelectRight, _, cx| this.motion(cx, |b| b.right(true, false))))
-            .on_action(cx.listener(|this, _: &SelectUp, _, cx| this.motion(cx, |b| b.vertical(-1, true))))
-            .on_action(cx.listener(|this, _: &SelectDown, _, cx| this.motion(cx, |b| b.vertical(1, true))))
+            .on_action(cx.listener(|this, _: &SelectUp, _, cx| this.vertical(-1, true, cx)))
+            .on_action(cx.listener(|this, _: &SelectDown, _, cx| this.vertical(1, true, cx)))
             .on_action(cx.listener(|this, _: &WordLeft, _, cx| this.motion(cx, |b| b.left(false, true))))
             .on_action(cx.listener(|this, _: &WordRight, _, cx| this.motion(cx, |b| b.right(false, true))))
             .on_action(cx.listener(|this, _: &SelectWordLeft, _, cx| this.motion(cx, |b| b.left(true, true))))
@@ -2607,19 +2692,19 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &SelectDocEnd, _, cx| this.motion(cx, |b| b.doc_end(true))))
             .on_action(cx.listener(|this, _: &PageUp, _, cx| {
                 let lines = this.page_lines();
-                this.motion(cx, |b| b.vertical(-lines, false))
+                this.vertical(-lines, false, cx)
             }))
             .on_action(cx.listener(|this, _: &PageDown, _, cx| {
                 let lines = this.page_lines();
-                this.motion(cx, |b| b.vertical(lines, false))
+                this.vertical(lines, false, cx)
             }))
             .on_action(cx.listener(|this, _: &SelectPageUp, _, cx| {
                 let lines = this.page_lines();
-                this.motion(cx, |b| b.vertical(-lines, true))
+                this.vertical(-lines, true, cx)
             }))
             .on_action(cx.listener(|this, _: &SelectPageDown, _, cx| {
                 let lines = this.page_lines();
-                this.motion(cx, |b| b.vertical(lines, true))
+                this.vertical(lines, true, cx)
             }))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.motion(cx, |b| b.select_all())))
             .on_action(cx.listener(|this, _: &Backspace, _, cx| {
@@ -2652,6 +2737,8 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &OutdentLines, _, cx| this.dismiss_and_edit(cx, |b| b.outdent())))
             .on_action(cx.listener(|this, _: &SelectNextOccurrence, _, cx| this.add_cursors(false, cx)))
             .on_action(cx.listener(|this, _: &SelectAllOccurrences, _, cx| this.add_cursors(true, cx)))
+            .on_action(cx.listener(|this, _: &Fold, _, cx| this.fold_at_cursor(true, cx)))
+            .on_action(cx.listener(|this, _: &Unfold, _, cx| this.fold_at_cursor(false, cx)))
             .on_action(cx.listener(|this, _: &AddCursorAbove, _, cx| this.add_cursor_vertical(true, cx)))
             .on_action(cx.listener(|this, _: &AddCursorBelow, _, cx| this.add_cursor_vertical(false, cx)))
             .on_action(cx.listener(|this, _: &GoToBracket, _, cx| {

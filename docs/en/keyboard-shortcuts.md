@@ -59,6 +59,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Indent / outdent lines (file editor) | ⌘] / ⌘[ |
 | Add a cursor at the next match / at every match / where you click / on the line above or below (file editor; Esc goes back to one) | ⌘D / ⇧⌘L / ⌥-click / ⌥⌘↑ ⌥⌘↓ |
 | Go to the matching bracket (file editor) | ⇧⌘\ |
+| Fold / unfold the region at the cursor (file editor; or click the arrow beside a line number, or the `⋯` of a folded line) | ⌥⌘[ / ⌥⌘] |
 | Mini mode | ⌃⌘M |
 
 While the file editor has focus, ⌘D, ⌘] / ⌘[, ⇧⌘↩ and ⌥⌘↑ / ⌥⌘↓ work on the text as in VS Code; click a terminal to split, switch or zoom panes or switch workspaces with them.

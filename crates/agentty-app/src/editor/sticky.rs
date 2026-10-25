@@ -67,8 +67,15 @@ impl CodeEditor {
                     .items_center()
                     .cursor_pointer()
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
-                    .child(div().w(px(gutter - 14.)).flex_shrink_0().text_right().text_color(hex(0x6e7681)).child((line + 1).to_string()))
-                    .child(div().w(px(22.)).flex_shrink_0())
+                    .child(
+                        div()
+                            .w(px(gutter - super::element::NUMBER_END))
+                            .flex_shrink_0()
+                            .text_right()
+                            .text_color(hex(0x6e7681))
+                            .child((line + 1).to_string()),
+                    )
+                    .child(div().w(px(super::element::NUMBER_END + 8.)).flex_shrink_0())
                     .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(text))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         if let Some(path) = this.docs.get(this.active).map(|d| d.path.clone()) {

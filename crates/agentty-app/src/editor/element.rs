@@ -22,6 +22,9 @@ const INLINE_PROBLEM_CHARS: usize = 160;
 /// Characters looked through for the bracket matching the one at the cursor.
 pub(super) const BRACKET_SCAN: usize = 50_000;
 const TEXT_PADDING: f32 = 8.;
+/// From the right edge of the gutter to where the line numbers end (the fold arrows and the
+/// change bars are in between).
+pub(super) const NUMBER_END: f32 = 30.;
 
 /// A line as shown: tabs expanded to spaces, with the way back to buffer offsets.
 pub struct DisplayLine {
@@ -102,12 +105,30 @@ pub struct Layout {
     pub max_scroll_x: f32,
     pub max_scroll_y: f32,
     thumb: Option<Bounds<Pixels>>,
+    folds: super::fold::Folds,
+    /// Where each folded line's `⋯` is (a click on it unfolds).
+    fold_marks: Vec<(usize, Bounds<Pixels>)>,
 }
 
 impl Layout {
     fn laid(&self, line: usize) -> Option<&LaidLine> {
-        let first = self.lines.first()?.index;
-        self.lines.get(line.checked_sub(first)?)
+        self.lines.binary_search_by_key(&line, |l| l.index).ok().map(|i| &self.lines[i])
+    }
+
+    /// The top of `line`'s row, from the top of the text.
+    fn top_of(&self, line: usize) -> f32 {
+        self.folds.row_of(line) as f32 * self.line_height
+    }
+
+    /// The folded line whose `⋯` is under `position`.
+    pub fn fold_mark_at(&self, position: Point<Pixels>) -> Option<usize> {
+        self.fold_marks.iter().find(|(_, bounds)| bounds.contains(&position)).map(|(line, _)| *line)
+    }
+
+    /// Whether `position` is on the strip of the gutter where the fold arrows are.
+    pub fn on_fold_arrow(&self, position: Point<Pixels>) -> bool {
+        let edge = self.text_left - TEXT_PADDING;
+        (edge - NUMBER_END..edge - 12.).contains(&f32::from(position.x))
     }
 
     pub fn in_gutter(&self, position: Point<Pixels>) -> bool {
@@ -148,7 +169,7 @@ impl Layout {
     pub fn position_for(&self, position: Point<Pixels>, buffer: &Buffer) -> Pos {
         let y = f32::from(position.y) - f32::from(self.bounds.top()) + self.scroll.y;
         let row = (y / self.line_height).floor().max(0.) as usize;
-        let row = row.min(buffer.line_count() - 1);
+        let row = self.folds.line_of(row).min(buffer.line_count() - 1);
         let x = (f32::from(position.x) - self.text_left + self.scroll.x).max(0.);
         let col = match self.laid(row) {
             Some(line) => line.display.to_buffer(line.shaped.closest_index_for_x(px(x))),
@@ -160,7 +181,7 @@ impl Layout {
     /// The window point just under the text at `pos` (where a bar about it goes), while that line
     /// is on screen.
     pub fn point_below(&self, pos: Pos) -> Option<Point<Pixels>> {
-        let top = f32::from(self.bounds.top()) + pos.line as f32 * self.line_height - self.scroll.y;
+        let top = f32::from(self.bounds.top()) + self.top_of(pos.line) - self.scroll.y;
         if top < f32::from(self.bounds.top()) - self.line_height || top > f32::from(self.bounds.bottom()) - self.line_height {
             return None;
         }
@@ -203,7 +224,7 @@ impl Layout {
     pub fn bounds_for(&self, start: Pos, end: Pos, _: &Buffer) -> Option<Bounds<Pixels>> {
         let line = self.laid(start.line)?;
         let x = |col: usize| self.text_left - self.scroll.x + f32::from(line.shaped.x_for_index(line.display.to_display(col)));
-        let top = f32::from(self.bounds.top()) + start.line as f32 * self.line_height - self.scroll.y;
+        let top = f32::from(self.bounds.top()) + self.top_of(start.line) - self.scroll.y;
         let right = if end.line == start.line { x(end.col) } else { x(start.col) + self.char_width };
         Some(Bounds::from_corners(point(px(x(start.col)), px(top)), point(px(right.max(x(start.col) + 1.)), px(top + self.line_height))))
     }
@@ -230,6 +251,8 @@ pub struct Prepainted {
     gutter: PaintQuad,
     thumb: Option<PaintQuad>,
     line_height: Pixels,
+    /// Fold arrows in the gutter: (center, folded).
+    arrows: Vec<(Point<Pixels>, bool)>,
 }
 
 impl gpui::IntoElement for EditorElement {
@@ -381,9 +404,15 @@ impl Element for EditorElement {
                     gutter: fill(bounds, hex(Chrome::EDITOR)),
                     thumb: None,
                     line_height: px(line_height),
+                    arrows: Vec::new(),
                 };
             };
             doc.sync_highlights();
+            // No cursor stays in lines folded away (a jump, a find or an undo went there).
+            for each in doc.buffer.selections() {
+                doc.folds.reveal(each.head.line);
+            }
+            let folds = doc.folds.clone();
             let text_system = window.text_system().clone();
             let shape = |text: String, runs: &[TextRun]| text_system.shape_line(SharedString::from(text), font_size, runs, None);
             let plain = |text: &str, color: u32| TextRun {
@@ -397,11 +426,12 @@ impl Element for EditorElement {
             let char_width = f32::from(shape("0000000000".into(), &[plain("0000000000", FOREGROUND)]).width) / 10.;
             let line_count = doc.buffer.line_count();
             let digits = line_count.to_string().len().max(3);
-            let gutter_width = (digits as f32 * char_width + 28.).round();
+            let gutter_width = (digits as f32 * char_width + NUMBER_END + 14.).round();
             let height = f32::from(bounds.size.height);
             let text_left = f32::from(bounds.left()) + gutter_width + TEXT_PADDING;
             let text_width = (f32::from(bounds.size.width) - gutter_width - TEXT_PADDING - SCROLLBAR_WIDTH).max(char_width);
-            let max_scroll_y = ((line_count as f32 - 1.) * line_height).max(0.);
+            let shown_rows = folds.rows(line_count);
+            let max_scroll_y = ((shown_rows as f32 - 1.) * line_height).max(0.);
             let cursor = doc.buffer.cursor();
             let caret_key = (active, cursor.line, cursor.col, doc.buffer.revision());
 
@@ -410,14 +440,14 @@ impl Element for EditorElement {
             // After a jump the place reads best in the upper third, with what leads to it above.
             if doc.center {
                 doc.center = false;
-                let top = cursor.line as f32 * line_height;
+                let top = folds.row_of(cursor.line) as f32 * line_height;
                 if top < doc.scroll.y + margin || top + line_height > doc.scroll.y + height - margin {
                     doc.scroll.y = top - height / 3.;
                 }
                 doc.autoscroll = false;
             }
             if let Some(line) = doc.scroll_to_line.take() {
-                let top = line as f32 * line_height;
+                let top = folds.row_of(line) as f32 * line_height;
                 if top < doc.scroll.y + margin || top + line_height > doc.scroll.y + height - margin {
                     doc.scroll.y = top - height / 3.;
                 }
@@ -425,7 +455,7 @@ impl Element for EditorElement {
             // Above the cursor, room for the lines sticky scroll pins at the top too.
             let top_margin = if crate::settings::settings(cx).editor_sticky_scroll { (line_height * 4.).min(height / 2.) } else { margin };
             if doc.autoscroll {
-                let top = cursor.line as f32 * line_height;
+                let top = folds.row_of(cursor.line) as f32 * line_height;
                 if top < doc.scroll.y + top_margin {
                     doc.scroll.y = top - top_margin;
                 } else if top + line_height > doc.scroll.y + height - margin {
@@ -434,9 +464,12 @@ impl Element for EditorElement {
             }
             doc.scroll.y = doc.scroll.y.clamp(0., max_scroll_y);
 
-            let first = (doc.scroll.y / line_height).floor() as usize;
+            let first_row = (doc.scroll.y / line_height).floor() as usize;
             let rows = (height / line_height).ceil() as usize + 1;
-            let last = (first + rows).min(line_count);
+            // The lines on screen, those folded away left out.
+            let shown: Vec<usize> = (first_row..(first_row + rows).min(shown_rows)).map(|row| folds.line_of(row)).collect();
+            let first = shown.first().copied().unwrap_or(0);
+            let last = shown.last().map_or(first, |line| line + 1);
             let buffer = &doc.buffer;
             if !doc.highlights.advance(last, std::time::Instant::now() + HIGHLIGHT_BUDGET, |i| buffer.line(i)) {
                 window.request_animation_frame();
@@ -446,7 +479,7 @@ impl Element for EditorElement {
             let problems = &doc.checks.problems;
             let in_view: Vec<&Problem> = problems.iter().filter(|p| p.end.line >= first && p.start.line < last).collect();
             let mut laid = Vec::with_capacity(last - first);
-            for index in first..last {
+            for &index in &shown {
                 let display = DisplayLine::new(doc.buffer.line(index));
                 let mut marks = problem_marks(index, doc.buffer.line(index), &display, &in_view);
                 marks.extend(marked.filter(|(s, e)| s.line == index && e.line == index).map(|(s, e)| {
@@ -473,7 +506,9 @@ impl Element for EditorElement {
             doc.autoscroll = false;
             let scroll = doc.scroll;
 
-            let row_top = |index: usize| f32::from(bounds.top()) + index as f32 * line_height - scroll.y;
+            let row_top = |index: usize| f32::from(bounds.top()) + folds.row_of(index) as f32 * line_height - scroll.y;
+            // The height of `rows` lines from `line`, those folded away taking none.
+            let span = |line: usize, rows: usize| (folds.row_of(line + rows.max(1) - 1) + 1 - folds.row_of(line)) as f32 * line_height;
             let origin = |index: usize| point(px(text_left - scroll.x), px(row_top(index)));
             let mut backgrounds = Vec::new();
             let selection = doc.buffer.selection;
@@ -529,7 +564,7 @@ impl Element for EditorElement {
             for presence in editor.presence.iter().filter(|p| p.path == doc.path) {
                 let glow = presence.glow();
                 for &(from, to) in presence.parts.iter().filter(|_| glow > 0.) {
-                    for line in from.max(first)..=to.min(last.saturating_sub(1)) {
+                    for line in (from.max(first)..=to.min(last.saturating_sub(1))).filter(|l| !folds.is_hidden(*l)) {
                         backgrounds.push(fill(
                             Bounds::new(point(bounds.left(), px(row_top(line))), size(bounds.size.width, px(line_height))),
                             hex_alpha(presence.color, 0.22 * glow),
@@ -558,11 +593,11 @@ impl Element for EditorElement {
                     gutter_marks.push(fill(
                         Bounds::new(
                             point(px(f32::from(bounds.left()) + 2.), px(row_top(from))),
-                            size(px(2.), px((to - from + 1) as f32 * line_height)),
+                            size(px(2.), px(span(from, to - from + 1))),
                         ),
                         hex_alpha(asked.color, 0.8),
                     ));
-                    for line in from..=to {
+                    for line in (from..=to).filter(|l| !folds.is_hidden(*l)) {
                         backgrounds.push(fill(
                             Bounds::new(point(px(text_left - 4.), px(row_top(line))), size(bounds.size.width, px(line_height))),
                             hex_alpha(asked.color, 0.06),
@@ -579,8 +614,8 @@ impl Element for EditorElement {
                 }
                 let x = f32::from(bounds.left()) + gutter_width - 9.;
                 let (top, height, color) = match mark {
-                    super::gitmarks::Mark::Added => (row_top(line), rows as f32 * line_height, Chrome::SUCCESS),
-                    super::gitmarks::Mark::Modified => (row_top(line), rows as f32 * line_height, Chrome::BLUE),
+                    super::gitmarks::Mark::Added => (row_top(line), span(line, rows), Chrome::SUCCESS),
+                    super::gitmarks::Mark::Modified => (row_top(line), span(line, rows), Chrome::BLUE),
                     super::gitmarks::Mark::Deleted => (row_top(line) - 2., 4., Chrome::ERROR),
                 };
                 let width = if mark == super::gitmarks::Mark::Deleted { 6. } else { 2. };
@@ -597,7 +632,7 @@ impl Element for EditorElement {
                 let (top, height) = if rows == 0 {
                     (row_top(at) - 2., 4.) // lines taken away: a notch where they were
                 } else {
-                    (row_top(at), rows as f32 * line_height)
+                    (row_top(at), span(at, rows))
                 };
                 if at + rows.max(1) < first || at > last {
                     continue;
@@ -692,7 +727,7 @@ impl Element for EditorElement {
 
             // A line with a problem has its number in the color of the worst one there.
             let worst = |line: usize| in_view.iter().filter(|p| p.start.line <= line && line <= p.end.line).map(|p| p.severity).min();
-            let numbers = laid
+            let numbers: Vec<(Point<Pixels>, ShapedLine)> = laid
                 .iter()
                 .map(|line| {
                     let label = (line.index + 1).to_string();
@@ -702,7 +737,7 @@ impl Element for EditorElement {
                         _ => 0x6e7681,
                     };
                     let shaped = shape(label.clone(), &[plain(&label, color)]);
-                    let x = f32::from(bounds.left()) + gutter_width - 14. - f32::from(shaped.width);
+                    let x = f32::from(bounds.left()) + gutter_width - NUMBER_END - f32::from(shaped.width);
                     (point(px(x), px(row_top(line.index))), shaped)
                 })
                 .collect();
@@ -710,15 +745,15 @@ impl Element for EditorElement {
             // Errors and warnings anywhere in the file: ticks on the scrollbar's track.
             let mut ticked = std::collections::HashSet::new();
             for problem in problems.iter().filter(|p| p.severity <= Severity::Warning) {
-                if line_count > 1 && ticked.insert((problem.start.line, problem.severity)) {
-                    let y = f32::from(bounds.top()) + problem.start.line as f32 / line_count as f32 * (height - 3.);
+                if shown_rows > 1 && ticked.insert((problem.start.line, problem.severity)) {
+                    let y = f32::from(bounds.top()) + folds.row_of(problem.start.line) as f32 / shown_rows as f32 * (height - 3.);
                     gutter_marks.push(fill(
                         Bounds::new(point(bounds.right() - px(SCROLLBAR_WIDTH - 1.), px(y)), size(px(SCROLLBAR_WIDTH - 3.), px(3.))),
                         hex_alpha(super::problems::color(problem.severity), 0.9),
                     ));
                 }
             }
-            let thumb = (max_scroll_y > 0. && line_count as f32 * line_height > height).then(|| {
+            let thumb = (max_scroll_y > 0. && shown_rows as f32 * line_height > height).then(|| {
                 let content = max_scroll_y + height;
                 let thumb_height = (height * height / content).max(24.).min(height);
                 let top = f32::from(bounds.top()) + scroll.y / max_scroll_y * (height - thumb_height);
@@ -726,6 +761,28 @@ impl Element for EditorElement {
             });
 
             let mut lines: Vec<(Point<Pixels>, ShapedLine)> = laid.iter().map(|l| (origin(l.index), l.shaped.clone())).collect();
+            // Folding: an arrow in the gutter where a region starts (always on a folded one, on the
+            // others while the pointer is over the gutter), and `⋯` after a folded line.
+            let mut folded_width = std::collections::HashMap::new();
+            let mut arrows = Vec::new();
+            let mut fold_marks = Vec::new();
+            for line in &laid {
+                let folded = folds.folded_at(line.index);
+                if folded {
+                    let mark = shape(" ⋯ ".into(), &[plain(" ⋯ ", 0x9da5b4)]);
+                    let x = text_left - scroll.x + f32::from(line.shaped.width) + char_width;
+                    let bounds = Bounds::new(point(px(x), px(row_top(line.index) + 3.)), size(mark.width, px(line_height - 6.)));
+                    backgrounds.push(fill(bounds, hex_alpha(0xffffff, 0.10)).corner_radii(px(3.)));
+                    fold_marks.push((line.index, bounds));
+                    folded_width.insert(line.index, f32::from(mark.width) + char_width);
+                    lines.push((point(px(x), px(row_top(line.index))), mark));
+                }
+                if folded || (editor.gutter_hover && super::fold::foldable(|i| doc.buffer.line(i), line.index, line_count)) {
+                    let center =
+                        point(px(f32::from(bounds.left()) + gutter_width - NUMBER_END + 9.), px(row_top(line.index) + line_height / 2.));
+                    arrows.push((center, folded));
+                }
+            }
             // Each line's worst error or warning, written after its text (Error Lens).
             if crate::settings::settings(cx).editor_inline_problems {
                 let settling = doc.checks.settling();
@@ -747,7 +804,9 @@ impl Element for EditorElement {
                         strikethrough: None,
                     };
                     let shaped = shape(text, &[run]);
-                    let at = point(px(text_left - scroll.x + f32::from(line.shaped.width) + char_width * 3.), px(row_top(line.index)));
+                    let after = folded_width.get(&line.index).copied().unwrap_or(0.);
+                    let at =
+                        point(px(text_left - scroll.x + f32::from(line.shaped.width) + after + char_width * 3.), px(row_top(line.index)));
                     lines.push((at, shaped));
                 }
             }
@@ -762,6 +821,8 @@ impl Element for EditorElement {
                 max_scroll_x,
                 max_scroll_y,
                 thumb,
+                folds,
+                fold_marks,
             });
             let text_bounds = Bounds::from_corners(point(px(text_left - TEXT_PADDING / 2.), bounds.top()), bounds.bottom_right());
             Prepainted {
@@ -774,6 +835,7 @@ impl Element for EditorElement {
                 gutter: fill(Bounds::new(bounds.origin, size(px(gutter_width), bounds.size.height)), hex(Chrome::EDITOR)),
                 thumb: thumb.map(|t| fill(t, hex_alpha(0xffffff, 0.14)).corner_radii(px(3.))),
                 line_height: px(line_height),
+                arrows,
             }
         })
     }
@@ -797,6 +859,19 @@ impl Element for EditorElement {
             }
             for (origin, number) in &prepainted.numbers {
                 let _ = number.paint(*origin, prepainted.line_height, window, cx);
+            }
+            // A chevron: pointing right on a folded region, down on one that can fold.
+            for &(center, folded) in &prepainted.arrows {
+                let (x, y) = (f32::from(center.x), f32::from(center.y));
+                let corners = if folded { [(-2., -4.), (2., 0.), (-2., 4.)] } else { [(-4., -2.), (0., 2.), (4., -2.)] };
+                let mut path = gpui::PathBuilder::stroke(px(1.5));
+                path.move_to(point(px(x + corners[0].0), px(y + corners[0].1)));
+                for (dx, dy) in &corners[1..] {
+                    path.line_to(point(px(x + dx), px(y + dy)));
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, hex(if folded { 0xc6c6c6 } else { 0x8b949e }));
+                }
             }
             window.with_content_mask(Some(ContentMask { bounds: prepainted.text_bounds }), |window| {
                 for quad in prepainted.backgrounds.drain(..) {

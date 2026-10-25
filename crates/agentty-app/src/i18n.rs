@@ -2724,6 +2724,7 @@ strings! {
         "在下一个 / 所有相同内容处添加光标"
     ],
     "editor.shortcut_add_cursor" => ["Add a cursor", "커서 추가", "カーソルを追加", "添加光标"],
+    "editor.shortcut_fold" => ["Fold / unfold", "접기 / 펼치기", "折りたたむ / 展開", "折叠 / 展开"],
     "editor.shortcut_go_to_bracket" => ["Go to the matching bracket", "짝 괄호로 이동", "対応する括弧へ移動", "转到匹配的括号"],
     "editor.shortcut_indent_lines" => ["Indent / outdent lines", "줄 들여쓰기 / 내어쓰기", "行のインデント / インデント解除", "缩进 / 取消缩进行"],
     "editor.shortcut_delete_to_start" => ["Delete to line start", "줄 처음까지 지우기", "行頭まで削除", "删除到行首"],

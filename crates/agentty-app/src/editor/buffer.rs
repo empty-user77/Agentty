@@ -1498,17 +1498,19 @@ impl Buffer {
         self.move_to(pos, select);
     }
 
-    /// ↑ / ↓ by `lines` (negative: up), keeping the display column.
-    pub fn vertical(&mut self, lines: isize, select: bool) {
+    /// ↑ / ↓ by `rows` of the view (negative: up), keeping the display column; the `hidden` lines
+    /// (folded away) take none.
+    pub fn vertical_in(&mut self, rows: isize, select: bool, hidden: &[(usize, usize)]) {
         let cursor = self.cursor();
         let goal = self.goal_column.unwrap_or_else(|| display_column(self.line(cursor.line), cursor.col));
-        let target = cursor.line as isize + lines;
+        let target = super::fold::row_of(hidden, cursor.line) as isize + rows;
+        let shown = self.lines.len() - hidden.iter().map(|(from, to)| to - from + 1).sum::<usize>();
         let pos = if target < 0 {
             Pos::default()
-        } else if target as usize >= self.lines.len() {
+        } else if target as usize >= shown {
             self.end()
         } else {
-            let line = target as usize;
+            let line = super::fold::line_of(hidden, target as usize);
             Pos::new(line, column_to_byte(self.line(line), goal))
         };
         self.move_to(pos, select);
@@ -1877,6 +1879,18 @@ mod tests {
         assert!(b.undo());
         assert_eq!(b.text(), "let num = 1;\nnum += 1;\nprint(num, renum);");
         assert!(b.extra.is_empty());
+    }
+
+    #[test]
+    fn up_and_down_step_over_folded_lines() {
+        let mut b = Buffer::new("a {\n  b\n  c\n}\nd");
+        at(&mut b, 0, 1);
+        b.vertical_in(1, false, &[(1, 2)]);
+        assert_eq!(b.cursor(), Pos::new(3, 1));
+        b.vertical_in(-1, false, &[(1, 2)]);
+        assert_eq!(b.cursor(), Pos::new(0, 1));
+        b.vertical_in(10, false, &[(1, 2)]);
+        assert_eq!(b.cursor(), Pos::new(4, 1));
     }
 
     #[test]
@@ -2371,14 +2385,14 @@ mod tests {
         assert_eq!(buffer.cursor(), Pos::new(0, 0));
         // Down to a shorter line and back up keeps the column.
         buffer.move_to(Pos::new(0, 12), false);
-        buffer.vertical(1, false);
+        buffer.vertical_in(1, false, &[]);
         assert_eq!(buffer.cursor(), Pos::new(1, 1));
-        buffer.vertical(-1, false);
+        buffer.vertical_in(-1, false, &[]);
         assert_eq!(buffer.cursor(), Pos::new(0, 12));
         // Past the ends.
-        buffer.vertical(-5, false);
+        buffer.vertical_in(-5, false, &[]);
         assert_eq!(buffer.cursor(), Pos::new(0, 0));
-        buffer.vertical(5, true);
+        buffer.vertical_in(5, true, &[]);
         assert_eq!(buffer.cursor(), buffer.end());
         assert_eq!(buffer.selected_text(), "  let value = 10;\nx");
     }

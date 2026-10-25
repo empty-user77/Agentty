@@ -241,6 +241,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("editor.shortcut_next_occurrence", "⌘D  /  ⇧⌘L"),
             ("editor.shortcut_add_cursor", "⌥ Click  /  ⌥⌘↑  /  ⌥⌘↓"),
             ("editor.shortcut_go_to_bracket", "⇧⌘\\"),
+            ("editor.shortcut_fold", "⌥⌘[  /  ⌥⌘]"),
             ("editor.shortcut_indent_lines", "⌘]  /  ⌘["),
             ("editor.shortcut_insert_line", "⌘↩  /  ⇧⌘↩"),
             ("editor.shortcut_delete_to_start", "⌘⌫"),

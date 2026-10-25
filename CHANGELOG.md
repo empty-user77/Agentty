@@ -81,6 +81,9 @@ All notable changes to this project are documented here. The format follows
 - File editor: ⌥⌘↑ / ⌥⌘↓ add a cursor on the line above or below, ⇧⌘\ goes to the matching bracket, and "Format the
   file when saving" (Settings → Editor, off by default) formats before ⌘S saves. Formatting keeps the cursor by the
   character it was next to.
+- File editor: code folding. An arrow beside the line number (shown while the pointer is over the gutter, always on a
+  folded line) or ⌥⌘[ / ⌥⌘] folds and unfolds a block by its indentation, in every language; a folded line ends with
+  `⋯`, which unfolds it on a click, ↑ / ↓ step over the hidden lines, and a jump or a find into them opens them.
 
 ### Fixed
 - File editor: the first file opened with ⌘P in a new window gets its language server too; a list that would stay
