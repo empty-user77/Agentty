@@ -26,6 +26,7 @@ pub mod inventory;
 pub mod jira;
 pub mod kimi;
 pub mod limits;
+pub mod lsp;
 pub mod metrics;
 pub mod model;
 pub mod notify;

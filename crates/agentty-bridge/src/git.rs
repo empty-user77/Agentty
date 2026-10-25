@@ -39,6 +39,31 @@ pub fn repo_root(path: &Path) -> Option<PathBuf> {
     git(path, &["rev-parse", "--show-toplevel"]).ok().map(|s| PathBuf::from(s.trim())).filter(|p| p.is_dir())
 }
 
+/// The files of the project at `dir` as git sees them: tracked ones and new ones not ignored by
+/// `.gitignore`, relative to `dir`. `None` outside a repository.
+pub fn project_files(dir: &Path) -> Option<Vec<String>> {
+    let out = git(dir, &["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"]).ok()?;
+    Some(out.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect())
+}
+
+/// The text of the file at `path` as last committed (`HEAD`); `None` outside a repository or for
+/// a file not committed yet.
+pub fn committed_text(path: &Path) -> Option<String> {
+    let repo = repo_root(path.parent()?)?;
+    // The repository's own spelling of the path (a link or a case difference must not miss it).
+    let real = std::fs::canonicalize(path).ok()?;
+    let root = std::fs::canonicalize(&repo).ok()?;
+    let rel = real.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/");
+    git(&repo, &["show", &format!("HEAD:{rel}")]).ok()
+}
+
+/// Whether the repository at `dir` tracks anything under `path` (relative to `dir`). `None`
+/// outside a repository.
+pub fn tracks(dir: &Path, path: &str) -> Option<bool> {
+    let out = git(dir, &["ls-files", "-z", "--", path]).ok()?;
+    Some(!out.is_empty())
+}
+
 /// The branch checked out (`None` when detached) and the commit at `HEAD`.
 pub fn head(repo: &Path) -> Option<(Option<String>, String)> {
     let commit = git(repo, &["rev-parse", "--verify", "-q", "HEAD"]).ok()?.trim().to_string();

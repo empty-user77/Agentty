@@ -11,6 +11,8 @@ use unicode_segmentation::UnicodeSegmentation;
 pub const TAB_WIDTH: usize = 4;
 /// Edits kept for undo; the oldest go first.
 const UNDO_LIMIT: usize = 1000;
+/// Edits kept at most (one step at many cursors is many edits).
+const UNDO_EDITS: usize = 50_000;
 /// Typing within this long of the last keystroke is undone together.
 const TYPING_GROUP: Duration = Duration::from_millis(1500);
 
@@ -76,11 +78,21 @@ struct Edit {
     at: Instant,
     /// Closed to joining (saved since, or the cursor moved away).
     sealed: bool,
+    /// Typed or deleted at several cursors at once (such edits are undone a run at a time).
+    multi: bool,
+    /// Undone together with the edit before it (typing on at several cursors).
+    chain: bool,
 }
 
 pub struct Buffer {
     lines: Vec<String>,
     pub selection: Selection,
+    /// More cursors besides `selection` (⌘D, ⌥-click), in no particular order. Typing, deleting,
+    /// Enter, Tab and pasting happen at every one; moving moves every one; anything else first
+    /// leaves the main cursor alone.
+    pub extra: Vec<Selection>,
+    /// A change for every cursor is being made (its edit must not drop the other cursors).
+    multi: bool,
     /// Display column kept while moving up and down through shorter lines.
     goal_column: Option<usize>,
     undo: Vec<Edit>,
@@ -88,8 +100,9 @@ pub struct Buffer {
     next_id: u64,
     /// Id of the edit the text was saved at (0: as loaded).
     saved_at: u64,
-    /// First line changed since [`Buffer::take_changed_from`] was last asked.
-    changed_from: Option<usize>,
+    /// The changes to the text since [`Buffer::take_changes`] was last asked, in order (`None`:
+    /// too many to follow, take everything as changed).
+    changes: Option<Vec<Splice>>,
     /// Counts every change to the text, for views that redraw from it (the markdown preview).
     revision: u64,
     /// One indentation step: a tab or some spaces, guessed from the file.
@@ -113,7 +126,7 @@ struct Composition {
 impl Buffer {
     pub fn new(text: &str) -> Self {
         let lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-        let indent = detect_indent(&lines);
+        let indent = detect_indent(lines.iter().map(String::as_str)).unwrap_or_else(|| "    ".into());
         Self {
             lines,
             selection: Selection::default(),
@@ -122,8 +135,10 @@ impl Buffer {
             redo: Vec::new(),
             next_id: 1,
             saved_at: 0,
-            changed_from: None,
-            revision: 0,
+            changes: Some(Vec::new()),
+            extra: Vec::new(),
+            multi: false,
+            revision: next_revision(),
             indent,
             composition: None,
         }
@@ -143,6 +158,11 @@ impl Buffer {
 
     pub fn indent_unit(&self) -> &str {
         &self.indent
+    }
+
+    /// The indentation step to use where the text shows none of its own.
+    pub fn set_indent_unit(&mut self, unit: String) {
+        self.indent = unit;
     }
 
     /// Differs from the saved text (text an input method is still composing counts).
@@ -167,12 +187,26 @@ impl Buffer {
         }
     }
 
-    /// The first line whose text changed since the last call (for the highlighter's cache).
-    pub fn take_changed_from(&mut self) -> Option<usize> {
-        self.changed_from.take()
+    /// The changes to the text since the last call, in order (for the views that keep something
+    /// per line: syntax colors). `None`: too many to follow, everything may have changed.
+    pub fn take_changes(&mut self) -> Option<Vec<Splice>> {
+        self.changes.replace(Vec::new())
+    }
+
+    fn note_change(&mut self, splice: Splice) {
+        if let Some(changes) = self.changes.as_mut() {
+            if changes.len() < MAX_CHANGES {
+                changes.push(splice);
+            } else {
+                self.changes = None;
+            }
+        }
     }
 
     /// Goes up with every change to the text.
+    /// The text's revision: it changes with every edit, and is never the same for two texts of the
+    /// app (every buffer counts on from one counter), so a language server handed a text by its
+    /// revision never takes an older text for a newer one.
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -181,9 +215,313 @@ impl Buffer {
         self.selection.head
     }
 
+    /// The selected text; with several cursors, each one's in order, a line each.
     pub fn selected_text(&self) -> String {
+        if !self.extra.is_empty() {
+            let mut all = self.selections();
+            all.sort_by_key(|s| s.range().0);
+            return all.iter().map(|s| self.slice(s.range().0, s.range().1)).collect::<Vec<_>>().join("\n");
+        }
         let (start, end) = self.selection.range();
         self.slice(start, end)
+    }
+
+    /// Every cursor, the main one first.
+    pub fn selections(&self) -> Vec<Selection> {
+        std::iter::once(self.selection).chain(self.extra.iter().copied()).collect()
+    }
+
+    /// Makes `f`'s change (what replaces which range) at every cursor as one edit, each cursor
+    /// after its new text. False, doing nothing, with one cursor only.
+    /// `typing`: one character typed or deleted at each (a run of them is undone at once).
+    fn edit_all(&mut self, typing: bool, f: impl Fn(&Self, Selection) -> (Pos, Pos, String)) -> bool {
+        if self.extra.is_empty() {
+            return false;
+        }
+        self.unmark();
+        let main = self.selection;
+        let mut changes: Vec<(bool, Pos, Pos, String)> = self
+            .selections()
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let (start, end, text) = f(self, s);
+                (i == 0, start.min(end), start.max(end), text)
+            })
+            .collect();
+        changes.sort_by_key(|c| (c.1, c.2));
+        // Ranges that came to overlap (two cursors deleting into each other): the first wins.
+        let mut kept: Vec<(bool, Pos, Pos, String)> = Vec::with_capacity(changes.len());
+        for change in changes {
+            match kept.last_mut() {
+                Some(last) if change.1 < last.2 || (change.1 == last.2 && change.1 == change.2 && last.1 == last.2) => {
+                    last.0 |= change.0;
+                    last.2 = last.2.max(change.2);
+                }
+                _ => kept.push(change),
+            }
+        }
+        // Where each cursor ends up once every change is made.
+        let mut after = Vec::with_capacity(kept.len());
+        let (mut at, mut from) = (kept[0].1, kept[0].1);
+        for (is_main, start, end, piece) in &kept {
+            at = if start.line == from.line {
+                Pos::new(at.line, at.col + start.col - from.col)
+            } else {
+                Pos::new(at.line + start.line - from.line, start.col)
+            };
+            at = end_of(at, piece);
+            after.push((*is_main, at));
+            from = *end;
+        }
+        let joins = typing && self.undo.last().is_some_and(|last| last.multi && !last.sealed && last.at.elapsed() < TYPING_GROUP);
+        // One edit per cursor, the last first so the others keep their places: the text between
+        // cursors far apart is neither copied nor counted as changed (its folds stay). They are
+        // chained, so one undo takes back the change at every cursor.
+        self.multi = true;
+        let made = self.undo.len();
+        for (start, end, piece) in
+            kept.iter().rev().map(|(_, start, end, piece)| (start, end, piece)).filter(|(s, e, p)| s != e || !p.is_empty())
+        {
+            let first = self.undo.len() == made;
+            self.replace(*start, *end, piece, EditKind::Other);
+            if let Some(edit) = self.undo.last_mut() {
+                edit.multi = typing;
+                edit.chain = if first { joins } else { true };
+            }
+        }
+        self.multi = false;
+        let main_at = after.iter().find(|(m, _)| *m).map_or(after[0].1, |(_, p)| *p);
+        self.selection = Selection::cursor(main_at);
+        self.extra = after.iter().filter(|(m, _)| !*m).map(|(_, p)| Selection::cursor(*p)).collect();
+        let selection = self.selection;
+        let n = self.undo.len();
+        for edit in &mut self.undo[made.min(n)..] {
+            edit.before = main;
+            edit.after = selection;
+        }
+        true
+    }
+
+    /// Runs a move for every cursor (one cursor: just for it); cursors that meet become one.
+    pub fn each(&mut self, f: impl Fn(&mut Self)) {
+        if self.extra.is_empty() {
+            return f(self);
+        }
+        let extra = std::mem::take(&mut self.extra);
+        f(self);
+        let (main, goal) = (self.selection, self.goal_column);
+        let mut moved = Vec::with_capacity(extra.len());
+        for selection in extra {
+            self.selection = selection;
+            self.goal_column = None;
+            f(self);
+            moved.push(self.selection);
+        }
+        self.selection = main;
+        self.goal_column = goal;
+        self.extra = moved;
+        self.merge_cursors();
+    }
+
+    /// Cursors on the same place, or selections that overlap, become one.
+    fn merge_cursors(&mut self) {
+        let main = self.selection;
+        let mut all: Vec<(bool, Selection)> = std::iter::once((true, main)).chain(self.extra.iter().map(|s| (false, *s))).collect();
+        all.sort_by_key(|(_, s)| s.range());
+        let mut merged: Vec<(bool, Selection)> = Vec::with_capacity(all.len());
+        for (is_main, s) in all {
+            if let Some((last_main, last)) = merged.last_mut() {
+                let (ls, le) = last.range();
+                let (s0, s1) = s.range();
+                if s0 < le || (s0 == le && (s.is_empty() || last.is_empty())) || (s0 == ls && s1 == le) {
+                    let end = le.max(s1);
+                    *last =
+                        if last.anchor <= last.head { Selection { anchor: ls, head: end } } else { Selection { anchor: end, head: ls } };
+                    if is_main {
+                        *last_main = true;
+                    }
+                    continue;
+                }
+            }
+            merged.push((is_main, s));
+        }
+        self.selection = merged.iter().find(|(m, _)| *m).map_or(main, |(_, s)| *s);
+        self.extra = merged.into_iter().filter(|(m, _)| !*m).map(|(_, s)| s).collect();
+    }
+
+    pub fn has_extra_cursors(&self) -> bool {
+        !self.extra.is_empty()
+    }
+
+    /// One cursor again (Esc).
+    pub fn single_cursor(&mut self) -> bool {
+        let had = !self.extra.is_empty();
+        self.extra.clear();
+        had
+    }
+
+    /// ⌥-click: one more cursor at `pos` (or, on a cursor already there, that one goes).
+    pub fn toggle_cursor(&mut self, pos: Pos) {
+        let pos = self.clamp(pos);
+        if let Some(i) = self.extra.iter().position(|s| s.is_empty() && s.head == pos) {
+            self.extra.remove(i);
+            return;
+        }
+        if self.selection.is_empty() && self.selection.head == pos {
+            if let Some(next) = self.extra.pop() {
+                self.selection = next;
+            }
+            return;
+        }
+        self.extra.push(self.selection);
+        self.selection = Selection::cursor(pos);
+        self.goal_column = None;
+        self.seal();
+        self.merge_cursors();
+    }
+
+    /// ⌘D: the word at the cursor, then again the next place with the selected text gets a
+    /// cursor of its own (round the end of the file). False when there is no other place.
+    pub fn add_next_occurrence(&mut self) -> bool {
+        if self.selection.is_empty() {
+            let cursor = self.cursor();
+            let line = self.line(cursor.line);
+            let word = |c: char| c.is_alphanumeric() || c == '_';
+            let start = line[..cursor.col].char_indices().rev().take_while(|(_, c)| word(*c)).last().map_or(cursor.col, |(i, _)| i);
+            let end = cursor.col
+                + line[cursor.col..].char_indices().take_while(|(_, c)| word(*c)).map(|(i, c)| i + c.len_utf8()).last().unwrap_or(0);
+            if start == end {
+                return false;
+            }
+            self.selection = Selection { anchor: Pos::new(cursor.line, start), head: Pos::new(cursor.line, end) };
+            self.seal();
+            return true;
+        }
+        let (start, end) = self.selection.range();
+        let needle = self.slice(start, end);
+        let text = self.text();
+        let taken: Vec<usize> = self.selections().iter().map(|s| self.offset_of(s.range().0)).collect();
+        let after = self.offset_of(end);
+        let found = text[after..]
+            .match_indices(needle.as_str())
+            .map(|(i, _)| after + i)
+            .chain(text[..after].match_indices(needle.as_str()).map(|(i, _)| i))
+            .find(|i| !taken.contains(i));
+        let Some(at) = found else { return false };
+        let (from, to) = (self.pos_of(at), self.pos_of(at + needle.len()));
+        self.extra.push(self.selection);
+        self.selection = Selection { anchor: from, head: to };
+        self.goal_column = None;
+        self.seal();
+        true
+    }
+
+    /// ⌥⌘↑ / ⌥⌘↓: one more cursor on the line above the highest cursor (below the lowest), at the
+    /// display column the main one keeps; the new one leads. False at the first (last) line.
+    pub fn add_cursor_vertical(&mut self, up: bool) -> bool {
+        let all = self.selections();
+        let edge = if up { all.iter().map(|s| s.head).min() } else { all.iter().map(|s| s.head).max() }.unwrap_or_default();
+        let line = if up { edge.line.checked_sub(1) } else { Some(edge.line + 1).filter(|l| *l < self.lines.len()) };
+        let Some(line) = line else { return false };
+        let main = self.cursor();
+        let goal = self.goal_column.unwrap_or_else(|| display_column(self.line(main.line), main.col));
+        self.extra.push(self.selection);
+        self.selection = Selection::cursor(Pos::new(line, column_to_byte(self.line(line), goal)));
+        self.seal();
+        self.merge_cursors();
+        self.goal_column = Some(goal);
+        true
+    }
+
+    /// ⇧⌘\: to the bracket matching the one at the cursor, or else to the closing bracket of the
+    /// pair the cursor is in. Looks `limit` characters at most. False when there is none.
+    pub fn go_to_bracket(&mut self, limit: usize) -> bool {
+        if let Some((_, there)) = self.matching_bracket(limit) {
+            self.move_to(there, false);
+            return true;
+        }
+        // The opening bracket of the pair around the cursor, then its match.
+        let cursor = self.cursor();
+        let mut depth = 0usize;
+        let mut seen = 0usize;
+        for row in (0..=cursor.line).rev() {
+            let text = self.line(row);
+            let to = if row == cursor.line { cursor.col } else { text.len() };
+            for (i, ch) in text[..to].char_indices().rev() {
+                seen += 1;
+                if seen > limit {
+                    return false;
+                }
+                match ch {
+                    ')' | ']' | '}' => depth += 1,
+                    '(' | '[' | '{' if depth > 0 => depth -= 1,
+                    '(' | '[' | '{' => {
+                        self.move_to(Pos::new(row, i), false);
+                        return match self.matching_bracket(limit) {
+                            Some((_, there)) => {
+                                self.move_to(there, false);
+                                true
+                            }
+                            None => {
+                                self.move_to(cursor, false);
+                                false
+                            }
+                        };
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    /// ⇧⌘L: a cursor on every place with the selected text (the word at the cursor first), the
+    /// first [`MAX_CURSORS`] of them.
+    pub fn select_all_occurrences(&mut self) {
+        if self.selection.is_empty() && !self.add_next_occurrence() {
+            return;
+        }
+        let (start, end) = self.selection.range();
+        let needle = self.slice(start, end);
+        if needle.is_empty() {
+            return;
+        }
+        let main = self.offset_of(start);
+        let text = self.text();
+        let mut cursors = Vec::new();
+        // Positions found in order: offsets turn into lines as the scan goes, not from the top each time.
+        let (mut line, mut line_start) = (0usize, 0usize);
+        for (at, _) in text.match_indices(needle.as_str()).take(MAX_CURSORS) {
+            while line + 1 < self.lines.len() && line_start + self.lines[line].len() < at {
+                line_start += self.lines[line].len() + 1;
+                line += 1;
+            }
+            let from = Pos::new(line, at - line_start);
+            let to = end_of(from, &needle);
+            if at != main {
+                cursors.push(Selection { anchor: from, head: to });
+            }
+        }
+        self.extra = cursors;
+        self.goal_column = None;
+        self.seal();
+    }
+
+    /// Byte offset of `pos` in the whole text.
+    fn offset_of(&self, pos: Pos) -> usize {
+        self.lines[..pos.line].iter().map(|l| l.len() + 1).sum::<usize>() + pos.col
+    }
+
+    /// The position at byte offset `offset` of the whole text.
+    fn pos_of(&self, mut offset: usize) -> Pos {
+        for (i, line) in self.lines.iter().enumerate() {
+            if offset <= line.len() {
+                return Pos::new(i, offset);
+            }
+            offset -= line.len() + 1;
+        }
+        self.end()
     }
 
     pub fn slice(&self, start: Pos, end: Pos) -> String {
@@ -249,6 +587,9 @@ impl Buffer {
         if self.composition.is_some() {
             self.unmark();
         }
+        if !self.multi {
+            self.extra.clear();
+        }
         let text = normalize_newlines(text);
         let before = self.selection;
         let removed = self.slice(start, end);
@@ -266,6 +607,8 @@ impl Buffer {
             kind,
             at: Instant::now(),
             sealed: false,
+            multi: false,
+            chain: false,
         });
         after_pos
     }
@@ -278,9 +621,10 @@ impl Buffer {
         let end_pos = Pos::new(start.line + last, if last == 0 { head.len() } else { 0 } + new_lines[last].len());
         new_lines[0].insert_str(0, &head);
         new_lines[last].push_str(&tail);
+        let delta = new_lines.len() as isize - (end.line - start.line + 1) as isize;
         self.lines.splice(start.line..=end.line, new_lines);
-        self.changed_from = Some(self.changed_from.map_or(start.line, |line| line.min(start.line)));
-        self.revision += 1;
+        self.note_change(Splice { from: start.line, to: end_pos.line, delta });
+        self.revision = next_revision();
         end_pos
     }
 
@@ -308,17 +652,31 @@ impl Buffer {
         self.next_id += 1;
         edit.id = self.next_id;
         self.undo.push(edit);
-        if self.undo.len() > UNDO_LIMIT {
+        // The oldest steps go, each with the edits chained to it.
+        while self.undo.len() > UNDO_LIMIT && (self.undo.len() > UNDO_EDITS || self.undo.iter().filter(|e| !e.chain).count() > UNDO_LIMIT) {
             let dropped = self.undo.remove(0);
+            let mut ids = vec![dropped.id];
+            while self.undo.first().is_some_and(|next| next.chain) {
+                ids.push(self.undo.remove(0).id);
+            }
             // The saved text can't be reached by undoing any more: it never counts as clean again.
-            if self.saved_at == 0 || self.saved_at == dropped.id {
+            if self.saved_at == 0 || ids.contains(&self.saved_at) {
                 self.saved_at = u64::MAX;
+            }
+            if self.undo.is_empty() {
+                break;
             }
         }
     }
 
     /// Types `text` over the selection.
     pub fn insert(&mut self, text: &str) {
+        if self.edit_all(text.chars().count() == 1 && text != "\n", |_, s| {
+            let (start, end) = s.range();
+            (start, end, text.to_string())
+        }) {
+            return;
+        }
         let (start, end) = self.selection.range();
         let kind = if text.contains('\n') || text.chars().count() > 1 { EditKind::Other } else { EditKind::Typing };
         self.replace(start, end, text, kind);
@@ -326,11 +684,34 @@ impl Buffer {
 
     /// Pastes (never joined with typing).
     pub fn paste(&mut self, text: &str) {
+        // As many lines as cursors: a line for each (what copying them gave), else all for each.
+        let count = self.extra.len() + 1;
+        let lines: Vec<&str> = text.trim_end_matches('\n').split('\n').collect();
+        if count > 1 {
+            let mut order: Vec<Selection> = self.selections();
+            order.sort_by_key(|s| s.range().0);
+            let piece = |s: Selection| match order.iter().position(|o| *o == s) {
+                Some(i) if lines.len() == count => lines[i].to_string(),
+                _ => text.to_string(),
+            };
+            if self.edit_all(false, |_, s| {
+                let (start, end) = s.range();
+                (start, end, piece(s))
+            }) {
+                return;
+            }
+        }
         let (start, end) = self.selection.range();
         self.replace(start, end, text, EditKind::Other);
     }
 
     pub fn delete_selection(&mut self) -> bool {
+        if !self.extra.is_empty() && self.selections().iter().any(|s| !s.is_empty()) {
+            return self.edit_all(false, |_, s| {
+                let (start, end) = s.range();
+                (start, end, String::new())
+            });
+        }
         let (start, end) = self.selection.range();
         if start == end {
             return false;
@@ -341,6 +722,9 @@ impl Buffer {
 
     pub fn backspace(&mut self) {
         if self.delete_selection() {
+            return;
+        }
+        if self.edit_all(true, |b, s| (b.previous(s.head, false), s.head, String::new())) {
             return;
         }
         let cursor = self.cursor();
@@ -363,6 +747,9 @@ impl Buffer {
         if self.delete_selection() {
             return;
         }
+        if self.edit_all(true, |b, s| (s.head, b.next(s.head, false), String::new())) {
+            return;
+        }
         let cursor = self.cursor();
         let end = self.next(cursor, false);
         if end != cursor {
@@ -371,9 +758,134 @@ impl Buffer {
         }
     }
 
+    /// Deletes to the end of the word after the cursor (⌥⌦).
+    pub fn delete_word_forward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        if self.edit_all(false, |b, s| (s.head, b.next(s.head, true), String::new())) {
+            return;
+        }
+        let cursor = self.cursor();
+        let end = self.next(cursor, true);
+        if end != cursor {
+            self.replace(cursor, end, "", EditKind::Other);
+            self.selection = Selection::cursor(cursor);
+        }
+    }
+
+    /// Deletes back to where the line's text starts, then to the start of the line, then the line
+    /// break before it (⌘⌫).
+    pub fn delete_to_line_start(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        let cursor = self.cursor();
+        let line = self.line(cursor.line);
+        let first = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let start = match cursor.col {
+            0 if cursor.line > 0 => Pos::new(cursor.line - 1, self.line(cursor.line - 1).len()),
+            0 => return,
+            col if col > first => Pos::new(cursor.line, first),
+            _ => Pos::new(cursor.line, 0),
+        };
+        self.replace(start, cursor, "", EditKind::Other);
+    }
+
+    /// Selects the cursor's line, break included; again, the next line too (⌘L).
+    pub fn select_line(&mut self) {
+        let (start, end) = self.selection.range();
+        // Whole lines selected already end at the start of the next one: that one comes next.
+        let to = end.line + 1;
+        let from = start.line;
+        let head = if to < self.line_count() { Pos::new(to, 0) } else { Pos::new(to - 1, self.line(to - 1).len()) };
+        self.selection = Selection { anchor: Pos::new(from, 0), head };
+        self.goal_column = None;
+        self.seal();
+    }
+
+    /// ⌘]: one step of indentation more on every line of the selection (empty lines stay empty).
+    pub fn indent_lines(&mut self) {
+        let (start, end) = self.selection.range();
+        let unit = self.indent.clone();
+        self.map_lines(start.line, end.line, |line| if line.is_empty() { line.to_string() } else { format!("{unit}{line}") });
+    }
+
+    /// A new line above the cursor's, indented like it, the cursor on it (⇧⌘↩).
+    pub fn insert_line_above(&mut self) {
+        let line = self.cursor().line;
+        let indent = self.indent_from(line);
+        self.replace(Pos::new(line, 0), Pos::new(line, 0), &format!("{indent}\n"), EditKind::Other);
+        self.selection = Selection::cursor(Pos::new(line, indent.len()));
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
+    /// A new line under the cursor's, indented like it, the cursor on it (⌘↩).
+    pub fn insert_line_below(&mut self) {
+        let line = self.cursor().line;
+        self.move_to(Pos::new(line, self.line(line).len()), false);
+        self.newline();
+    }
+
+    /// After the `>` of an opening tag just typed (`<section className="cart">`), its closing tag
+    /// goes after the cursor, as editors do for markup and JSX. Not after a self-closing tag, a
+    /// generic (`useState<T>`), an arrow (`=>`) or a comparison, nor for the void elements of HTML
+    /// (`html`: `<br>`, `<img>`, …). True when it was put in.
+    pub fn close_tag(&mut self, html: bool) -> bool {
+        if !self.extra.is_empty() || !self.selection.is_empty() {
+            return false;
+        }
+        let cursor = self.cursor();
+        let line = self.line(cursor.line);
+        if !line[..cursor.col].ends_with('>') {
+            return false;
+        }
+        // The opening tag may start a few lines up (attributes on lines of their own).
+        let first = cursor.line.saturating_sub(TAG_LINES);
+        let mut text = String::new();
+        for i in first..cursor.line {
+            text.push_str(self.line(i));
+            text.push('\n');
+        }
+        text.push_str(&line[..cursor.col]);
+        let Some(name) = opened_tag(&text) else { return false };
+        const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
+        if html && VOID.contains(&name.to_ascii_lowercase().as_str()) {
+            return false;
+        }
+        let closing = format!("</{name}>");
+        if line[cursor.col..].starts_with(&closing) {
+            return false;
+        }
+        self.replace(cursor, cursor, &closing, EditKind::Other);
+        self.selection = Selection::cursor(cursor);
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+        true
+    }
+
+    /// Typing a closing bracket on a line that is only indentation so far takes one step of
+    /// indentation away (the bracket lines up with the line that opened it).
+    fn outdent_closing(&mut self) {
+        let cursor = self.cursor();
+        let before = &self.line(cursor.line)[..cursor.col];
+        if before.is_empty() || !before.chars().all(|c| c == ' ' || c == '\t') {
+            return;
+        }
+        let remove = if before.ends_with('\t') { 1 } else { before.len().min(self.indent.len().max(1)) };
+        let start = Pos::new(cursor.line, cursor.col - remove);
+        self.replace(start, cursor, "", EditKind::Typing);
+    }
+
     /// Deletes to the start of the word before the cursor (⌥⌫).
     pub fn delete_word_back(&mut self) {
         if self.delete_selection() {
+            return;
+        }
+        if self.edit_all(false, |b, s| (b.previous(s.head, true), s.head, String::new())) {
             return;
         }
         let cursor = self.cursor();
@@ -384,15 +896,47 @@ impl Buffer {
     }
 
     /// Enter: a new line indented like this one, one level deeper after an opening bracket.
+    /// The indentation a line under `line` starts from: its own, or for an empty line the one of
+    /// the nearest line with text above (a step more after an opening bracket), as VS Code does.
+    fn indent_from(&self, line: usize) -> String {
+        let own = |text: &str| text.chars().take_while(|c| *c == ' ' || *c == '\t').collect::<String>();
+        let text = self.line(line);
+        if !text.is_empty() {
+            return own(text);
+        }
+        let Some(above) = (line.saturating_sub(1000)..line).rev().map(|i| self.line(i)).find(|l| !l.trim().is_empty()) else {
+            return String::new();
+        };
+        let mut indent = own(above);
+        if above.trim_end().ends_with(['{', '[', '(']) {
+            indent.push_str(&self.indent);
+        }
+        indent
+    }
+
     pub fn newline(&mut self) {
+        if self.edit_all(false, |b, s| {
+            let (start, end) = s.range();
+            (start, end, format!("\n{}", b.indent_from(start.line)))
+        }) {
+            return;
+        }
         let (start, end) = self.selection.range();
         let line = self.line(start.line);
-        let indent: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+        let indent = self.indent_from(start.line);
+        // A line of indentation only, left by Enter: the new line takes it and this one is left
+        // empty, with no spaces at its end (VS Code's `trimAutoWhitespace`).
+        if start == end && !line.is_empty() && line.trim().is_empty() && start.col == line.len() {
+            self.replace(Pos::new(start.line, 0), start, &format!("\n{indent}"), EditKind::Other);
+            return;
+        }
         let before = line[..start.col].trim_end();
         let after = self.line(end.line)[end.col..].trim_start();
         let opens = before.ends_with(['{', '[', '(']) || (before.ends_with(':') && self.indent != "\t" && !before.contains("//"));
         let opens = opens && !before.ends_with("::");
-        let closes = after.starts_with(['}', ']', ')']);
+        // `<div>|</div>`: the tags open and close like brackets.
+        let tags = before.ends_with('>') && !before.ends_with("/>") && after.starts_with("</");
+        let (opens, closes) = (opens || tags, after.starts_with(['}', ']', ')']) || tags);
         if opens && closes {
             let inner = format!("\n{indent}{}", self.indent);
             let text = format!("{inner}\n{indent}");
@@ -412,6 +956,15 @@ impl Buffer {
 
     /// Tab: indents the selected lines, or inserts one indentation step at the cursor.
     pub fn indent(&mut self) {
+        let unit = self.indent.clone();
+        if self.selections().iter().all(|s| s.range().0.line == s.range().1.line)
+            && self.edit_all(false, |_, s| {
+                let (start, end) = s.range();
+                (start, end, unit.clone())
+            })
+        {
+            return;
+        }
         let (start, end) = self.selection.range();
         if start.line == end.line {
             let unit = if self.indent == "\t" {
@@ -466,6 +1019,309 @@ impl Buffer {
         }
     }
 
+    // -- whole lines (⌘/, ⌥↑↓, ⇧⌥↑↓, ⇧⌘K) ----------------------------------------------------
+
+    /// The lines the selection covers: a selection ending at the start of a line leaves that
+    /// line out (as editors do).
+    fn selected_lines(&self) -> (usize, usize) {
+        let (start, end) = self.selection.range();
+        let last = if end.line > start.line && end.col == 0 { end.line - 1 } else { end.line };
+        (start.line, last)
+    }
+
+    /// ⌘/: comments the selected lines out with `open` (and `close` for block comments), or back
+    /// in when they all are. The marks go at the shallowest indentation, so the code stays
+    /// aligned; blank lines are left alone.
+    pub fn toggle_comment(&mut self, open: &str, close: &str) {
+        let (first, last) = self.selected_lines();
+        let lines = &self.lines[first..=last];
+        let filled: Vec<&String> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
+        if filled.is_empty() {
+            return;
+        }
+        let commented = |line: &str| {
+            let body = line.trim();
+            body.starts_with(open) && (close.is_empty() || body.ends_with(close))
+        };
+        if filled.iter().all(|l| commented(l)) {
+            let (open, close) = (open.to_string(), close.to_string());
+            self.map_lines(first, last, |line| {
+                if line.trim().is_empty() {
+                    return line.to_string();
+                }
+                let indent = line.len() - line.trim_start().len();
+                let Some(mut body) = line.get(indent + open.len()..) else { return line.to_string() };
+                body = body.strip_prefix(' ').unwrap_or(body);
+                if !close.is_empty() {
+                    body = body.trim_end();
+                    body = body.strip_suffix(close.as_str()).unwrap_or(body);
+                    body = body.strip_suffix(' ').unwrap_or(body);
+                }
+                format!("{}{body}", &line[..indent])
+            });
+        } else {
+            let indent = |l: &str| l.len() - l.trim_start_matches([' ', '\t']).len();
+            let column = filled.iter().map(|l| indent(l)).min().unwrap_or(0);
+            let (open, close) = (open.to_string(), close.to_string());
+            self.map_lines(first, last, |line| {
+                if line.trim().is_empty() {
+                    return line.to_string();
+                }
+                let tail = if close.is_empty() { String::new() } else { format!(" {close}") };
+                format!("{}{open} {}{tail}", &line[..column], &line[column..])
+            });
+        }
+    }
+
+    /// The selected lines are markup of a `.tsx` / `.jsx` file, where a comment is `{/* … */}`
+    /// (`//` would show as text): the first line with text starts a tag or is such a comment, or
+    /// is text or `{…}` below a line that ends a tag, with only such lines between.
+    pub fn selection_is_jsx(&self) -> bool {
+        const CODE: &[&str] = &["const ", "let ", "var ", "return", "if ", "if(", "for ", "while ", "function ", "import ", "export "];
+        // Text between tags: not a line of code by its start or its end.
+        let text = |l: &str| {
+            !l.starts_with([')', '}', ']', ';'])
+                && !l.starts_with("//")
+                && !CODE.iter().any(|word| l.starts_with(word))
+                && !l.ends_with([';', '{', '(', '[', ',', '='])
+        };
+        let (first, last) = self.selected_lines();
+        let Some(line) = (first..=last).map(|i| self.line(i).trim()).find(|l| !l.is_empty()) else { return false };
+        if line.starts_with("{/*") || (line.starts_with('<') && !line.starts_with("<<")) {
+            return true;
+        }
+        if !text(line) {
+            return false;
+        }
+        for above in (first.saturating_sub(200)..first).rev().map(|i| self.line(i).trim()).filter(|l| !l.is_empty()) {
+            // After a tag, or the `(` markup starts in (`return (`).
+            if (above.ends_with('>') && !above.ends_with("=>")) || above.ends_with("return (") || above.ends_with("=> (") {
+                return true;
+            }
+            if !text(above) || above.starts_with('<') {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// ⌥↑ / ⌥↓: the selected lines swap places with the line above or below, selection and all.
+    pub fn move_lines(&mut self, down: bool) {
+        let (first, last) = self.selected_lines();
+        if (down && last + 1 >= self.lines.len()) || (!down && first == 0) {
+            return;
+        }
+        let (from, to) = if down { (first, last + 1) } else { (first - 1, last) };
+        let mut block: Vec<String> = self.lines[from..=to].to_vec();
+        if down {
+            block.rotate_right(1);
+        } else {
+            block.rotate_left(1);
+        }
+        let selection = self.selection;
+        let end = Pos::new(to, self.lines[to].len());
+        self.replace(Pos::new(from, 0), end, &block.join("\n"), EditKind::Other);
+        let shift = |pos: Pos| Pos::new(if down { pos.line + 1 } else { pos.line - 1 }, pos.col);
+        self.selection = Selection { anchor: self.clamp(shift(selection.anchor)), head: self.clamp(shift(selection.head)) };
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
+    /// ⇧⌥↓ / ⇧⌥↑: a copy of the selected lines below them (the selection moves onto the copy)
+    /// or above them (it stays on the lines it was on, now the lower ones).
+    pub fn duplicate_lines(&mut self, down: bool) {
+        let (first, last) = self.selected_lines();
+        let block = self.lines[first..=last].join("\n");
+        let selection = self.selection;
+        let end = Pos::new(last, self.lines[last].len());
+        self.replace(end, end, &format!("\n{block}"), EditKind::Other);
+        let count = last - first + 1;
+        let shift = |pos: Pos| if down { Pos::new(pos.line + count, pos.col) } else { pos };
+        self.selection = Selection { anchor: self.clamp(shift(selection.anchor)), head: self.clamp(shift(selection.head)) };
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
+    /// ⇧⌘K: the selected lines go, the cursor staying in its column on the line that follows.
+    pub fn delete_lines(&mut self) {
+        let (first, last) = self.selected_lines();
+        let column = self.cursor().col;
+        let (start, end) = if last + 1 < self.lines.len() {
+            (Pos::new(first, 0), Pos::new(last + 1, 0))
+        } else if first > 0 {
+            (Pos::new(first - 1, self.lines[first - 1].len()), Pos::new(last, self.lines[last].len()))
+        } else {
+            (Pos::new(0, 0), Pos::new(last, self.lines[last].len()))
+        };
+        self.replace(start, end, "", EditKind::Other);
+        let line = first.min(self.lines.len() - 1);
+        let at = self.clamp(Pos::new(line, column.min(self.lines[line].len())));
+        self.selection = Selection::cursor(at);
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
+    // -- brackets and quotes typed in pairs ----------------------------------------------------
+
+    /// Typing `c` at the cursor with its pair: an opening bracket or quote gets its closing one
+    /// (around the selection when there is one), a closing one typed over the same character
+    /// steps past it. False when `c` is typed as it is (`quotes`: whether quotes pair here).
+    pub fn type_paired(&mut self, c: char, quotes: bool) -> bool {
+        // Several cursors: the character as typed at each.
+        if !self.extra.is_empty() {
+            return false;
+        }
+        let close = match c {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '"' | '`' if quotes => c,
+            '\'' if quotes => c,
+            ')' | ']' | '}' => {
+                if self.step_over(c) {
+                    return true;
+                }
+                if self.selection.is_empty() {
+                    self.outdent_closing();
+                }
+                return false;
+            }
+            _ => return false,
+        };
+        let (start, end) = self.selection.range();
+        if start != end {
+            // Around the selection (on one line: across lines it would rather replace it).
+            if start.line != end.line {
+                return false;
+            }
+            let inner = self.slice(start, end);
+            self.replace(start, end, &format!("{c}{inner}{close}"), EditKind::Other);
+            self.selection =
+                Selection { anchor: Pos::new(start.line, start.col + c.len_utf8()), head: Pos::new(end.line, end.col + c.len_utf8()) };
+            return true;
+        }
+        let line = self.line(start.line);
+        let next = line[start.col..].chars().next();
+        let prev = line[..start.col].chars().next_back();
+        if c == close {
+            if next == Some(c) {
+                return self.step_over(c);
+            }
+            // A quote right after a letter is an apostrophe (`don't`), not a string.
+            if prev.is_some_and(|p| p.is_alphanumeric() || p == c) {
+                return false;
+            }
+        }
+        // Only where nothing would end up inside by surprise: before a blank, a closer or the end.
+        if !next.is_none_or(|n| n.is_whitespace() || matches!(n, ')' | ']' | '}' | ',' | ';' | ':')) {
+            return false;
+        }
+        self.replace(start, start, &format!("{c}{close}"), EditKind::Typing);
+        self.selection = Selection::cursor(Pos::new(start.line, start.col + c.len_utf8()));
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+        true
+    }
+
+    /// The cursor steps over the `c` right after it instead of typing another.
+    fn step_over(&mut self, c: char) -> bool {
+        let cursor = self.cursor();
+        if !self.selection.is_empty() || !self.line(cursor.line)[cursor.col..].starts_with(c) {
+            return false;
+        }
+        self.selection = Selection::cursor(Pos::new(cursor.line, cursor.col + c.len_utf8()));
+        true
+    }
+
+    /// Backspace between an empty pair (`(|)`, `"|"`): both go.
+    pub fn backspace_pair(&mut self) -> bool {
+        if !self.extra.is_empty() {
+            return false;
+        }
+        let cursor = self.cursor();
+        if !self.selection.is_empty() || cursor.col == 0 {
+            return false;
+        }
+        let line = self.line(cursor.line);
+        let (Some(before), Some(after)) = (line[..cursor.col].chars().next_back(), line[cursor.col..].chars().next()) else {
+            return false;
+        };
+        if !matches!((before, after), ('(', ')') | ('[', ']') | ('{', '}') | ('"', '"') | ('\'', '\'') | ('`', '`')) {
+            return false;
+        }
+        let start = Pos::new(cursor.line, cursor.col - 1);
+        self.replace(start, Pos::new(cursor.line, cursor.col + 1), "", EditKind::Deleting);
+        true
+    }
+
+    /// The bracket matching the one just before or at the cursor: (that one, its match). Looks
+    /// `limit` characters at most.
+    pub fn matching_bracket(&self, limit: usize) -> Option<(Pos, Pos)> {
+        let cursor = self.cursor();
+        let line = self.line(cursor.line);
+        let at = |col: usize| line.get(col..).and_then(|s| s.chars().next());
+        let before = line[..cursor.col].char_indices().next_back();
+        let here = [before, at(cursor.col).map(|c| (cursor.col, c))]
+            .into_iter()
+            .flatten()
+            .find(|(_, c)| matches!(c, '(' | ')' | '[' | ']' | '{' | '}'))?;
+        let (col, c) = here;
+        let (open, close, forward) = match c {
+            '(' => ('(', ')', true),
+            '[' => ('[', ']', true),
+            '{' => ('{', '}', true),
+            ')' => ('(', ')', false),
+            ']' => ('[', ']', false),
+            _ => ('{', '}', false),
+        };
+        let mut depth = 0usize;
+        let mut seen = 0usize;
+        if forward {
+            for row in cursor.line..self.lines.len() {
+                let text = self.line(row);
+                let from = if row == cursor.line { col } else { 0 };
+                for (i, ch) in text[from..].char_indices() {
+                    seen += 1;
+                    if seen > limit {
+                        return None;
+                    }
+                    if ch == open {
+                        depth += 1;
+                    } else if ch == close {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some((Pos::new(cursor.line, col), Pos::new(row, from + i)));
+                        }
+                    }
+                }
+            }
+        } else {
+            for row in (0..=cursor.line).rev() {
+                let text = self.line(row);
+                let to = if row == cursor.line { col + 1 } else { text.len() };
+                for (i, ch) in text[..to].char_indices().rev() {
+                    seen += 1;
+                    if seen > limit {
+                        return None;
+                    }
+                    if ch == close {
+                        depth += 1;
+                    } else if ch == open {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some((Pos::new(cursor.line, col), Pos::new(row, i)));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Replaces the whole text (formatting, reloading from disk) as one undo step, keeping the
     /// cursor on the same line and column where it still exists.
     pub fn set_text(&mut self, text: &str) {
@@ -475,14 +1331,80 @@ impl Buffer {
         }
         let selection = self.selection;
         let end = self.end();
+        // The lines that really changed (a file an agent edited keeps most of its lines): the
+        // whole-text splice below is noted as just those.
+        let changed = splice_between(&self.lines, &text);
         self.replace(Pos::default(), end, &text, EditKind::Other);
+        if let Some(changes) = self.changes.as_mut() {
+            changes.pop();
+            changes.push(changed);
+        }
         self.selection = Selection { anchor: self.clamp(selection.anchor), head: self.clamp(selection.head) };
         if let Some(edit) = self.undo.last_mut() {
             edit.after = self.selection;
             edit.sealed = true;
         }
-        self.changed_from = Some(0);
-        self.revision += 1;
+        self.revision = next_revision();
+    }
+
+    /// `text`, a formatting of this one, in its place: the cursor stays by the same character
+    /// (counted without the spaces and line breaks a formatter moves), one cursor only.
+    pub fn set_formatted(&mut self, text: &str) {
+        let solid = |line: &str, col: usize| line[..col.min(line.len())].chars().filter(|c| !c.is_whitespace()).count();
+        let count = |pos: Pos| (0..pos.line).map(|i| solid(self.line(i), usize::MAX)).sum::<usize>() + solid(self.line(pos.line), pos.col);
+        // A cursor in a line's indentation goes before that line's first character, not after the
+        // last one of the line above; one on a blank line stays after as many blank lines.
+        let at = |pos: Pos| {
+            let line_start = solid(self.line(pos.line), pos.col) == 0;
+            let blanks = if line_start { (0..pos.line).rev().take_while(|&i| solid(self.line(i), usize::MAX) == 0).count() } else { 0 };
+            (count(pos), line_start, blanks)
+        };
+        let (anchor, head) = (at(self.selection.anchor), at(self.selection.head));
+        self.extra.clear();
+        self.set_text(text);
+        let place = |(mut left, line_start, blanks): (usize, bool, usize)| {
+            if line_start {
+                // The line after the one with the `left`-th character, past `blanks` blank lines.
+                let mut row = 0;
+                if left > 0 {
+                    row = self.lines.len() - 1;
+                    let mut seen = 0;
+                    for (i, line) in self.lines.iter().enumerate() {
+                        seen += solid(line, usize::MAX);
+                        if seen >= left {
+                            row = (i + 1).min(self.lines.len() - 1);
+                            break;
+                        }
+                    }
+                }
+                let mut skipped = 0;
+                while skipped < blanks && row + 1 < self.lines.len() && solid(&self.lines[row], usize::MAX) == 0 {
+                    row += 1;
+                    skipped += 1;
+                }
+                let line = &self.lines[row];
+                return Pos::new(row, line.len() - line.trim_start().len());
+            }
+            for (row, line) in self.lines.iter().enumerate() {
+                let here = solid(line, usize::MAX);
+                if left > here {
+                    left -= here;
+                    continue;
+                }
+                // The place after the `left`-th character of the line that is not a space.
+                let col = if left == 0 {
+                    line.len() - line.trim_start().len()
+                } else {
+                    line.char_indices().filter(|(_, c)| !c.is_whitespace()).nth(left - 1).map_or(line.len(), |(i, c)| i + c.len_utf8())
+                };
+                return Pos::new(row, col);
+            }
+            self.end()
+        };
+        self.selection = Selection { anchor: place(anchor), head: place(head) };
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
     }
 
     // -- input methods ----------------------------------------------------------------------
@@ -504,6 +1426,7 @@ impl Buffer {
             None => Composition { start, removed: self.slice(start, end), before: self.selection, marked: (start, end) },
         };
         let marked_end = self.splice(start, end, &text);
+        self.shift_extra(end, marked_end);
         let cursor = |offset: usize| end_of(start, &text[..offset.min(text.len())]);
         self.selection =
             match selected.filter(|r| text.is_char_boundary(r.start.min(text.len())) && text.is_char_boundary(r.end.min(text.len()))) {
@@ -525,9 +1448,13 @@ impl Buffer {
         match self.composition.take() {
             Some(composition) if composition.marked == (start, end) => {
                 let text = normalize_newlines(text);
-                let end = self.splice(start, end, &text);
-                self.selection = Selection::cursor(end);
-                self.finish(composition, end);
+                let new_end = self.splice(start, end, &text);
+                self.shift_extra(end, new_end);
+                self.selection = Selection::cursor(new_end);
+                let typed = self.slice(composition.start, new_end);
+                self.finish(composition, new_end);
+                // Composed at the main cursor only: the others get the finished text now.
+                self.mirror(&typed);
             }
             Some(composition) => {
                 let marked_end = composition.marked.1;
@@ -535,9 +1462,50 @@ impl Buffer {
                 let (start, end) = (self.clamp(start), self.clamp(end));
                 self.replace(start, end, text, if text.chars().count() == 1 { EditKind::Typing } else { EditKind::Other });
             }
+            None if !self.extra.is_empty() && self.selection.range() == (start, end) => self.insert(text),
             None => {
                 self.replace(start, end, text, if text.chars().count() == 1 && text != "\n" { EditKind::Typing } else { EditKind::Other });
             }
+        }
+    }
+
+    /// The other cursors after `old_end` on its line follow text there that now ends at `new_end`
+    /// (composing text at the main cursor grew or shrank).
+    fn shift_extra(&mut self, old_end: Pos, new_end: Pos) {
+        let shift =
+            |p: Pos| if p.line == old_end.line && p >= old_end { Pos::new(new_end.line, p.col - old_end.col + new_end.col) } else { p };
+        for s in &mut self.extra {
+            *s = Selection { anchor: shift(s.anchor), head: shift(s.head) };
+        }
+    }
+
+    /// Types `text` at every cursor but the main one (where it already is).
+    fn mirror(&mut self, text: &str) {
+        let main = self.selection;
+        if text.is_empty() {
+            return;
+        }
+        let composed = self.undo.len();
+        if !self.edit_all(true, |_, s| {
+            if s == main {
+                (s.head, s.head, String::new())
+            } else {
+                let (start, end) = s.range();
+                (start, end, text.to_string())
+            }
+        }) {
+            return;
+        }
+        // The main cursor's composed text and this are one keystroke, and they go on a run of
+        // typing at every cursor.
+        if composed >= 1 && composed < self.undo.len() {
+            let joins = composed >= 2 && {
+                let before = &self.undo[composed - 2];
+                before.multi && !before.sealed && before.at.elapsed() < TYPING_GROUP
+            };
+            self.undo[composed - 1].multi = true;
+            self.undo[composed - 1].chain = joins;
+            self.undo[composed].chain = true;
         }
     }
 
@@ -566,29 +1534,40 @@ impl Buffer {
             kind,
             at: Instant::now(),
             sealed: false,
+            multi: false,
+            chain: false,
         });
     }
 
     pub fn undo(&mut self) -> bool {
         self.unmark();
         let Some(edit) = self.undo.pop() else { return false };
+        self.extra.clear();
         let end = end_of(edit.start, &edit.inserted);
         self.splice(edit.start, end, &edit.removed);
         self.selection = edit.before;
         self.goal_column = None;
+        let chain = edit.chain;
         self.redo.push(edit);
+        if chain {
+            self.undo();
+        }
         true
     }
 
     pub fn redo(&mut self) -> bool {
         self.unmark();
         let Some(mut edit) = self.redo.pop() else { return false };
+        self.extra.clear();
         let end = end_of(edit.start, &edit.removed);
         self.splice(edit.start, end, &edit.inserted);
         self.selection = edit.after;
         self.goal_column = None;
         edit.sealed = true;
         self.undo.push(edit);
+        if self.redo.last().is_some_and(|next| next.chain) {
+            self.redo();
+        }
         true
     }
 
@@ -596,6 +1575,7 @@ impl Buffer {
 
     /// Moves the cursor to `pos`, extending the selection when `select`.
     pub fn move_to(&mut self, pos: Pos, select: bool) {
+        self.extra.clear();
         let pos = self.clamp(pos);
         self.selection = if select { Selection { anchor: self.selection.anchor, head: pos } } else { Selection::cursor(pos) };
         self.goal_column = None;
@@ -626,17 +1606,20 @@ impl Buffer {
         self.move_to(pos, select);
     }
 
-    /// ↑ / ↓ by `lines` (negative: up), keeping the display column.
-    pub fn vertical(&mut self, lines: isize, select: bool) {
+    /// ↑ / ↓ by `rows` of the view (negative: up), keeping the display column; the `hidden` lines
+    /// (folded away) take none.
+    pub fn vertical_in(&mut self, rows: isize, select: bool, hidden: &[(usize, usize)]) {
         let cursor = self.cursor();
         let goal = self.goal_column.unwrap_or_else(|| display_column(self.line(cursor.line), cursor.col));
-        let target = cursor.line as isize + lines;
+        let target = super::fold::row_of(hidden, cursor.line) as isize + rows;
+        let shown = self.lines.len() - hidden.iter().map(|(from, to)| to - from + 1).sum::<usize>();
         let pos = if target < 0 {
             Pos::default()
-        } else if target as usize >= self.lines.len() {
-            self.end()
+        } else if target as usize >= shown {
+            let line = super::fold::line_of(hidden, shown.saturating_sub(1));
+            Pos::new(line, self.line(line).len())
         } else {
-            let line = target as usize;
+            let line = super::fold::line_of(hidden, target as usize);
             Pos::new(line, column_to_byte(self.line(line), goal))
         };
         self.move_to(pos, select);
@@ -719,6 +1702,99 @@ impl Buffer {
         }
         Pos::new(pos.line, col)
     }
+}
+
+/// Lines above the cursor looked through for the start of a tag being closed.
+const TAG_LINES: usize = 12;
+
+/// The name of the tag that `text` (up to a `>` just typed) ends opening, if it does:
+/// `<a href="x">` → `a`, `<List onPick={(p) => pick(p)}>` → `List`. `None` for `<br/>`, `</a>`,
+/// `useState<T>`, `a => b`, `x > y` and the like.
+fn opened_tag(text: &str) -> Option<String> {
+    let body = text.strip_suffix('>')?;
+    if body.ends_with('/') || body.ends_with('=') || body.ends_with('-') {
+        return None;
+    }
+    // From each `<` (the last first), the tag must run to the end at depth 0 of braces and
+    // outside quotes, with no other `>` of its own.
+    for (start, _) in body.match_indices('<').collect::<Vec<_>>().into_iter().rev() {
+        let before = body[..start].chars().next_back();
+        // `useState<T>`, `Array<string>`: a generic, not a tag.
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+            continue;
+        }
+        let rest = &body[start + 1..];
+        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || matches!(c, '.' | ':' | '-' | '_')).collect();
+        if name.is_empty() || !name.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            return None;
+        }
+        let attributes = &rest[name.len()..];
+        if !attributes.is_empty() && !attributes.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let (mut depth, mut quote) = (0i32, None::<char>);
+        for c in attributes.chars() {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), _) => {}
+                (None, '"' | '\'' | '`') => quote = Some(c),
+                (None, '{') => depth += 1,
+                (None, '}') => depth -= 1,
+                (None, '>' | '<') if depth == 0 => return None,
+                _ => {}
+            }
+        }
+        return (depth == 0 && quote.is_none()).then_some(name);
+    }
+    None
+}
+
+/// Cursors ⇧⌘L makes at most.
+const MAX_CURSORS: usize = 1_000;
+
+/// Changes kept for [`Buffer::take_changes`] at most (a replace-all of thousands is everything).
+const MAX_CHANGES: usize = 4096;
+
+/// One change to the text, by lines: the lines `from..=to` (as they are after it) replace the
+/// ones that were there, and the lines after them moved by `delta`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Splice {
+    pub from: usize,
+    pub to: usize,
+    pub delta: isize,
+}
+
+impl Splice {
+    /// Where `line` of the text before the change is after it: moved with the lines around it,
+    /// or (a line the change rewrote) the nearest line the change left.
+    pub fn line_after(&self, line: usize) -> usize {
+        let old_to = (self.to as isize - self.delta).max(self.from as isize) as usize;
+        if line < self.from {
+            line
+        } else if line > old_to {
+            (line as isize + self.delta) as usize
+        } else {
+            line.min(self.to)
+        }
+    }
+}
+
+/// The change from `old` (lines) to `new`: the lines between their common start and end.
+fn splice_between(old: &[String], new: &str) -> Splice {
+    let new: Vec<&str> = new.split('\n').collect();
+    let shorter = old.len().min(new.len());
+    let prefix = old.iter().zip(&new).take_while(|(a, b)| a.as_str() == **b).count().min(shorter);
+    let suffix = old.iter().rev().zip(new.iter().rev()).take_while(|(a, b)| a.as_str() == **b).count().min(shorter - prefix);
+    let delta = new.len() as isize - old.len() as isize;
+    // At least the lines added are in the change (`to >= from + delta`).
+    let to = (new.len() - suffix).saturating_sub(1).max(prefix + delta.max(0) as usize).min(new.len() - 1);
+    Splice { from: prefix.min(new.len() - 1), to, delta }
+}
+
+/// The next text revision of the app (see [`Buffer::revision`]).
+fn next_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Words, punctuation and blanks: moving by word stops where one kind turns into another.
@@ -814,13 +1890,13 @@ pub fn column_to_byte(line: &str, column: usize) -> usize {
     line.len()
 }
 
-/// The indentation step a file uses: a tab when most indented lines start with one, else the
-/// smallest step between space indentations (2 or 4, 4 when nothing says otherwise).
-fn detect_indent(lines: &[String]) -> String {
+/// The indentation step a text uses: a tab when most indented lines start with one, else the
+/// smallest step between space indentations. `None` when no line is indented.
+pub fn detect_indent<'a>(lines: impl Iterator<Item = &'a str>) -> Option<String> {
     let (mut tabs, mut spaced) = (0, 0);
     let mut steps = [0usize; 9];
     let mut previous = 0usize;
-    for line in lines.iter().take(5000) {
+    for line in lines.take(5000) {
         if line.trim().is_empty() {
             continue;
         }
@@ -839,15 +1915,480 @@ fn detect_indent(lines: &[String]) -> String {
         previous = spaces;
     }
     if tabs > spaced {
-        return "\t".into();
+        return Some("\t".into());
     }
-    let best = (2..=8).max_by_key(|step| (steps[*step], usize::from(*step == 4))).filter(|step| steps[*step] > 0).unwrap_or(4);
-    " ".repeat(best)
+    let best = (2..=8).max_by_key(|step| (steps[*step], usize::from(*step == 4))).filter(|step| steps[*step] > 0)?;
+    Some(" ".repeat(best))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(buffer: &mut Buffer, line: usize, col: usize) {
+        buffer.selection = Selection::cursor(Pos::new(line, col));
+    }
+
+    #[test]
+    fn comments_lines_in_and_out() {
+        let mut b = Buffer::new("fn a() {\n    one();\n\n    two();\n}");
+        b.selection = Selection { anchor: Pos::new(1, 2), head: Pos::new(3, 2) };
+        b.toggle_comment("//", "");
+        assert_eq!(b.text(), "fn a() {\n    // one();\n\n    // two();\n}");
+        b.toggle_comment("//", "");
+        assert_eq!(b.text(), "fn a() {\n    one();\n\n    two();\n}");
+        // Mixed lines are commented, at the shallowest indentation.
+        let mut b = Buffer::new("  a\n    // b");
+        b.selection = Selection { anchor: Pos::new(0, 0), head: Pos::new(1, 3) };
+        b.toggle_comment("#", "");
+        assert_eq!(b.text(), "  # a\n  #   // b");
+        let mut html = Buffer::new("<p>x</p>");
+        html.toggle_comment("<!--", "-->");
+        assert_eq!(html.text(), "<!-- <p>x</p> -->");
+        html.toggle_comment("<!--", "-->");
+        assert_eq!(html.text(), "<p>x</p>");
+        // A selection ending at a line's start leaves that line alone; one undo takes it back.
+        let mut b = Buffer::new("a\nb\nc");
+        b.selection = Selection { anchor: Pos::new(0, 0), head: Pos::new(1, 0) };
+        b.toggle_comment("//", "");
+        assert_eq!(b.text(), "// a\nb\nc");
+        b.undo();
+        assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn markup_in_jsx_is_commented_as_jsx() {
+        let mut b =
+            Buffer::new("  const a = 1;\n  return (\n    <label>\n      <input />\n      In stock\n      {count} left\n    </label>\n  );");
+        let on = |b: &mut Buffer, line: usize| {
+            b.move_to(Pos::new(line, 0), false);
+            b.selection_is_jsx()
+        };
+        assert!(!on(&mut b, 0) && !on(&mut b, 1), "code");
+        assert!(on(&mut b, 2) && on(&mut b, 3) && on(&mut b, 6), "tags");
+        assert!(on(&mut b, 4) && on(&mut b, 5), "text and an expression between tags");
+        assert!(!on(&mut b, 7), "the code after it");
+        let mut code = Buffer::new("function f() {\n  const a = 1\n  a\n}");
+        assert!(!on(&mut code, 2), "code without semicolons is not text");
+        b.move_to(Pos::new(3, 0), false);
+        b.toggle_comment("{/*", "*/}");
+        assert_eq!(b.line(3), "      {/* <input /> */}");
+        assert!(b.selection_is_jsx());
+        b.toggle_comment("{/*", "*/}");
+        assert_eq!(b.line(3), "      <input />");
+    }
+
+    #[test]
+    fn comments_lines_indented_with_other_spaces() {
+        let mut b = Buffer::new(" x\n\u{a0}y\n\u{3000}z");
+        b.selection = Selection { anchor: Pos::new(0, 0), head: Pos::new(2, 1) };
+        b.toggle_comment("//", "");
+        // A no-break space is text, not indentation: the marks go at the start of every line.
+        assert_eq!(b.text(), "//  x\n// \u{a0}y\n// \u{3000}z");
+        b.toggle_comment("//", "");
+        assert_eq!(b.text(), " x\n\u{a0}y\n\u{3000}z");
+    }
+
+    #[test]
+    fn next_occurrence_gets_a_cursor_and_typing_goes_to_every_one() {
+        let mut b = Buffer::new("let count = 1;\ncount += 1;\nprint(count, recount);");
+        at(&mut b, 0, 6);
+        assert!(b.add_next_occurrence());
+        assert_eq!(b.selected_text(), "count");
+        assert!(b.add_next_occurrence());
+        assert!(b.add_next_occurrence());
+        assert!(b.add_next_occurrence(), "inside 'recount' too, as VS Code without whole-word");
+        assert!(!b.add_next_occurrence());
+        assert_eq!(b.extra.len(), 3);
+        b.insert("n");
+        assert_eq!(b.text(), "let n = 1;\nn += 1;\nprint(n, ren);");
+        b.insert("um");
+        assert_eq!(b.text(), "let num = 1;\nnum += 1;\nprint(num, renum);");
+        b.backspace();
+        assert_eq!(b.text(), "let nu = 1;\nnu += 1;\nprint(nu, renu);");
+        // One undo step per change, and back to one cursor.
+        assert!(b.undo());
+        assert_eq!(b.text(), "let num = 1;\nnum += 1;\nprint(num, renum);");
+        assert!(b.extra.is_empty());
+    }
+
+    #[test]
+    fn up_and_down_step_over_folded_lines() {
+        let mut b = Buffer::new("a {\n  b\n  c\n}\nd");
+        at(&mut b, 0, 1);
+        b.vertical_in(1, false, &[(1, 2)]);
+        assert_eq!(b.cursor(), Pos::new(3, 1));
+        b.vertical_in(-1, false, &[(1, 2)]);
+        assert_eq!(b.cursor(), Pos::new(0, 1));
+        b.vertical_in(10, false, &[(1, 2)]);
+        assert_eq!(b.cursor(), Pos::new(4, 1));
+        // Folded to the end of the file: ↓ on its first line stays on it.
+        at(&mut b, 3, 0);
+        b.vertical_in(1, false, &[(4, 4)]);
+        assert_eq!(b.cursor(), Pos::new(3, 1));
+    }
+
+    #[test]
+    fn formatting_keeps_the_cursor_by_its_character() {
+        let mut b = Buffer::new("class A {\n            int  x = 1;\n}");
+        at(&mut b, 1, 18);
+        assert_eq!(&b.line(1)[18..], " = 1;");
+        b.set_formatted("class A {\n    int x = 1;\n}");
+        assert_eq!(b.cursor(), Pos::new(1, 9), "still after the `x`");
+        // At a line start: before its first character.
+        let mut b = Buffer::new("a\n      b");
+        at(&mut b, 1, 6);
+        b.set_formatted("a\n  b");
+        assert_eq!(b.cursor(), Pos::new(1, 2));
+        b.undo();
+        assert_eq!(b.text(), "a\n      b");
+        // On a blank line, and after one: where it was.
+        let mut b = Buffer::new("a  \n\nb");
+        at(&mut b, 1, 0);
+        b.set_formatted("a\n\nb");
+        assert_eq!(b.cursor(), Pos::new(1, 0));
+        at(&mut b, 2, 0);
+        b.set_formatted("a\n\nb\n");
+        assert_eq!(b.cursor(), Pos::new(2, 0));
+        let mut b = Buffer::new("\nx");
+        b.set_formatted("\nx");
+        assert_eq!(b.cursor(), Pos::new(0, 0), "a blank first line");
+    }
+
+    #[test]
+    fn a_new_line_from_an_empty_one_takes_the_indentation_above() {
+        let mut b = Buffer::new("function f() {\n\n  const a = 1;\n\n}");
+        at(&mut b, 1, 0);
+        b.newline();
+        assert_eq!(b.line(2), "  ", "a step in after the opening brace");
+        at(&mut b, 4, 0);
+        b.insert_line_below();
+        assert_eq!(b.line(5), "  ", "as the line with text above it");
+        // A line of spaces: the new line takes them, that one is left empty.
+        let mut b = Buffer::new("x {\n    ");
+        at(&mut b, 1, 4);
+        b.newline();
+        assert_eq!((b.line(1), b.line(2)), ("", "    "));
+        assert_eq!(b.cursor(), Pos::new(2, 4));
+        b.undo();
+        assert_eq!(b.text(), "x {\n    ");
+    }
+
+    #[test]
+    fn far_apart_cursors_change_only_their_places() {
+        let middle = "line\n".repeat(5000);
+        let mut b = Buffer::new(&format!("a\n{middle}b"));
+        at(&mut b, 0, 1);
+        b.toggle_cursor(Pos::new(5001, 1));
+        b.take_changes();
+        b.insert("!");
+        b.insert("?");
+        assert!(b.undo.iter().all(|e| e.removed.is_empty() && e.inserted.len() == 1), "no copy of the lines between");
+        assert_eq!(b.take_changes().map(|c| c.iter().all(|s| s.from == s.to && s.delta == 0)), Some(true));
+        assert_eq!((b.line(0), b.line(5001)), ("a!?", "b!?"));
+        assert_eq!(b.selections().len(), 2);
+        // One undo takes back the typing at both.
+        b.undo();
+        assert_eq!((b.line(0), b.line(5001)), ("a", "b"));
+        b.redo();
+        assert_eq!((b.line(0), b.line(5001)), ("a!?", "b!?"));
+    }
+
+    #[test]
+    fn cursors_go_on_the_lines_above_and_below() {
+        let mut b = Buffer::new("let a = 1;\nb\nlet c = 3;\nlet d = 4;");
+        at(&mut b, 2, 6);
+        assert!(b.add_cursor_vertical(false));
+        // A short line on the way keeps the column for the next one.
+        assert!(b.add_cursor_vertical(true) && b.add_cursor_vertical(true));
+        let mut heads: Vec<Pos> = b.selections().iter().map(|s| s.head).collect();
+        heads.sort();
+        assert_eq!(heads, [Pos::new(0, 6), Pos::new(1, 1), Pos::new(2, 6), Pos::new(3, 6)]);
+        assert!(!b.add_cursor_vertical(true), "nothing above the first line");
+        b.insert("x");
+        assert_eq!(b.text(), "let a x= 1;\nbx\nlet c x= 3;\nlet d x= 4;");
+    }
+
+    #[test]
+    fn goes_to_the_matching_or_enclosing_bracket() {
+        let mut b = Buffer::new("fn f() {\n    call(a, [b]);\n}");
+        at(&mut b, 0, 7);
+        assert!(b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(2, 0));
+        assert!(b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(0, 7), "and back");
+        // Inside `call(…)`, next to no bracket: to its closing parenthesis.
+        at(&mut b, 1, 10);
+        assert!(b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(1, 15));
+        at(&mut b, 1, 12);
+        assert!(b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(1, 14));
+        let mut b = Buffer::new("plain");
+        at(&mut b, 0, 2);
+        assert!(!b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(0, 2));
+    }
+
+    #[test]
+    fn an_opening_tag_gets_its_closing_tag() {
+        assert_eq!(opened_tag("      <section className=\"cart\">").as_deref(), Some("section"));
+        assert_eq!(opened_tag("<ProductList onPick={(p) => setCart([...cart, p])}>").as_deref(), Some("ProductList"));
+        assert_eq!(opened_tag("<Foo.Bar>").as_deref(), Some("Foo.Bar"));
+        assert_eq!(opened_tag("<div\n  className=\"a\"\n>").as_deref(), Some("div"));
+        for text in ["<br/>", "</div>", "useState<Product[]>", "const f = (a) =>", "if (a > b) {x >", "a < b >", "x->", "<a href=\"x>"] {
+            assert_eq!(opened_tag(text), None, "{text}");
+        }
+        let mut b = Buffer::new("  <ul>");
+        at(&mut b, 0, 6);
+        assert!(b.close_tag(false));
+        assert_eq!((b.text().as_str(), b.cursor()), ("  <ul></ul>", Pos::new(0, 6)));
+        // Enter between the tags: the cursor on a line of its own, one step (two spaces here) in.
+        b.newline();
+        assert_eq!(b.text(), "  <ul>\n    \n  </ul>");
+        let mut b = Buffer::new("<br>");
+        at(&mut b, 0, 4);
+        assert!(!b.close_tag(true), "a void element of HTML");
+        assert!(b.close_tag(false), "JSX closes every tag");
+    }
+
+    #[test]
+    fn every_match_gets_a_cursor_at_once() {
+        let mut b = Buffer::new("ab x ab\nab\n\nab ab");
+        at(&mut b, 2, 0);
+        b.selection = Selection { anchor: Pos::new(1, 0), head: Pos::new(1, 2) };
+        b.select_all_occurrences();
+        let mut all: Vec<(Pos, Pos)> = b.selections().iter().map(|s| s.range()).collect();
+        all.sort();
+        let want = [(0, 0), (0, 5), (1, 0), (3, 0), (3, 3)].map(|(l, c)| (Pos::new(l, c), Pos::new(l, c + 2)));
+        assert_eq!(all, want);
+        assert_eq!(b.selection.range(), (Pos::new(1, 0), Pos::new(1, 2)), "the main cursor stays where it was");
+        // A file full of matches: no more than the limit.
+        let mut b = Buffer::new(&"a ".repeat(5_000));
+        at(&mut b, 0, 0);
+        b.select_all_occurrences();
+        assert_eq!(b.extra.len() + 1, MAX_CURSORS);
+    }
+
+    #[test]
+    fn every_cursor_moves_and_cursors_that_meet_become_one() {
+        let mut b = Buffer::new("ab\ncd\nef");
+        at(&mut b, 0, 1);
+        b.toggle_cursor(Pos::new(1, 1));
+        b.toggle_cursor(Pos::new(2, 1));
+        b.each(|b| b.line_end(false));
+        assert_eq!(b.selections().iter().map(|s| s.head).collect::<Vec<_>>(), [Pos::new(2, 2), Pos::new(0, 2), Pos::new(1, 2)]);
+        b.insert(";");
+        assert_eq!(b.text(), "ab;\ncd;\nef;");
+        b.newline();
+        assert_eq!(b.text(), "ab;\n\ncd;\n\nef;\n");
+        b.each(|b| b.doc_start(false));
+        assert!(b.extra.is_empty(), "all at the start: one cursor");
+        // Pasting as many lines as cursors: one each.
+        let mut b = Buffer::new("x\ny");
+        at(&mut b, 0, 1);
+        b.toggle_cursor(Pos::new(1, 1));
+        b.paste("1\n2");
+        assert_eq!(b.text(), "x1\ny2");
+        // Any other edit leaves the main cursor alone.
+        b.toggle_comment("//", "");
+        assert!(b.extra.is_empty());
+    }
+
+    #[test]
+    fn composed_text_reaches_every_cursor() {
+        let mut b = Buffer::new("a\nb");
+        at(&mut b, 0, 1);
+        b.toggle_cursor(Pos::new(1, 1));
+        // An input method composes at the main cursor (line 1), then commits.
+        b.compose(Pos::new(1, 1), Pos::new(1, 1), "ㅎ", None);
+        b.compose(Pos::new(1, 1), Pos::new(1, 4), "하", None);
+        b.commit(Pos::new(1, 1), Pos::new(1, 4), "한");
+        assert_eq!(b.text(), "a한\nb한");
+        assert_eq!(b.extra.len(), 1);
+        // Plain typing through the input path too.
+        let (s, e) = b.selection.range();
+        b.commit(s, e, "!");
+        assert_eq!(b.text(), "a한!\nb한!");
+        // Undone step by step back to the start.
+        while b.undo() {}
+        assert_eq!(b.text(), "a\nb");
+    }
+
+    #[test]
+    fn undo_after_several_cursors_gives_the_text_back() {
+        let original = "items x\nitems y\nitems z";
+        let mut b = Buffer::new(original);
+        at(&mut b, 0, 2);
+        for _ in 0..3 {
+            b.add_next_occurrence();
+        }
+        b.insert("list");
+        b.backspace();
+        let at_main = b.cursor();
+        b.compose(at_main, at_main, "ㅎ", None);
+        b.compose(at_main, Pos::new(at_main.line, at_main.col + 3), "하", None);
+        b.commit(at_main, Pos::new(at_main.line, at_main.col + 3), "한");
+        assert_eq!(b.text(), "lis한 x\nlis한 y\nlis한 z");
+        // Typed at every cursor in a run: one undo step back to before the run.
+        assert!(b.undo());
+        assert_eq!(b.text(), "list x\nlist y\nlist z");
+        assert!(b.undo());
+        assert_eq!(b.text(), original);
+        assert!(b.redo());
+        assert_eq!(b.text(), "list x\nlist y\nlist z");
+    }
+
+    #[test]
+    fn bracket_keys_indent_and_a_line_goes_above() {
+        let mut b = Buffer::new("a\n\nb");
+        b.selection = Selection { anchor: Pos::new(0, 0), head: Pos::new(2, 1) };
+        b.indent_lines();
+        assert_eq!(b.text(), "    a\n\n    b");
+        b.outdent();
+        assert_eq!(b.text(), "a\n\nb");
+        let mut b = Buffer::new("  x");
+        at(&mut b, 0, 3);
+        b.insert_line_above();
+        assert_eq!(b.text(), "  \n  x");
+        assert_eq!(b.cursor(), Pos::new(0, 2));
+    }
+
+    #[test]
+    fn line_keys_select_insert_and_delete() {
+        let mut b = Buffer::new("fn a() {\n    let x = 1;\n}");
+        let at = |b: &mut Buffer, line, col| b.selection = Selection { anchor: Pos::new(line, col), head: Pos::new(line, col) };
+        at(&mut b, 1, 6);
+        b.select_line();
+        assert_eq!(b.selection.range(), (Pos::new(1, 0), Pos::new(2, 0)));
+        b.select_line();
+        assert_eq!(b.selection.range(), (Pos::new(1, 0), Pos::new(2, 1)), "the last line has no break");
+        // ⌘↩ from the middle of a line: a line under it, indented alike.
+        at(&mut b, 1, 6);
+        b.insert_line_below();
+        assert_eq!(b.text(), "fn a() {\n    let x = 1;\n    \n}");
+        assert_eq!(b.cursor(), Pos::new(2, 4));
+        // A closing bracket typed on the indentation goes one step left.
+        assert!(!b.type_paired('}', true));
+        b.insert("}");
+        assert_eq!(b.line(2), "}");
+        // ⌘⌫: to the text's start, to the line's start, then the break before.
+        let mut b = Buffer::new("a\n    foo bar");
+        at(&mut b, 1, 11);
+        b.delete_to_line_start();
+        assert_eq!(b.text(), "a\n    ");
+        b.delete_to_line_start();
+        assert_eq!(b.text(), "a\n");
+        b.delete_to_line_start();
+        assert_eq!(b.text(), "a");
+        // ⌥⌦: the word after the cursor.
+        let mut b = Buffer::new("foo bar baz");
+        at(&mut b, 0, 3);
+        b.delete_word_forward();
+        assert_eq!(b.text(), "foo baz");
+    }
+
+    #[test]
+    fn notes_the_lines_each_change_touched() {
+        let mut b = Buffer::new("a\nb\nc\nd");
+        b.selection = Selection { anchor: Pos::new(1, 1), head: Pos::new(1, 1) };
+        b.insert("\nx");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 2, delta: 1 }]));
+        b.selection = Selection { anchor: Pos::new(1, 1), head: Pos::new(3, 0) };
+        b.insert("");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 1, delta: -2 }]));
+        // A whole new text keeps the lines that stayed out of the change.
+        b.set_text("a\nB\nB2\nd");
+        assert_eq!(b.text(), "a\nB\nB2\nd");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 2, delta: 1 }]));
+        b.set_text("a\nd");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 1, delta: -2 }]));
+        b.set_text("a\nnew\nd");
+        assert_eq!(b.take_changes(), Some(vec![Splice { from: 1, to: 2, delta: 1 }]));
+        assert_eq!(b.take_changes(), Some(vec![]));
+        let enter = Splice { from: 1, to: 2, delta: 1 };
+        assert_eq!([0, 1, 2, 5].map(|l| enter.line_after(l)), [0, 1, 3, 6]);
+        let joined = Splice { from: 1, to: 1, delta: -2 };
+        assert_eq!([0, 1, 2, 3, 4].map(|l| joined.line_after(l)), [0, 1, 1, 1, 2]);
+    }
+
+    #[test]
+    fn revisions_never_repeat_across_buffers() {
+        let (mut a, b) = (Buffer::new("a"), Buffer::new("b"));
+        let before = b.revision();
+        a.insert("x");
+        assert!(a.revision() > before && b.revision() != a.revision());
+    }
+
+    #[test]
+    fn moves_duplicates_and_deletes_lines() {
+        let mut b = Buffer::new("one\ntwo\nthree");
+        at(&mut b, 0, 1);
+        b.move_lines(true);
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\nthree", Pos::new(1, 1)));
+        b.move_lines(true);
+        b.move_lines(true);
+        assert_eq!(b.text(), "two\nthree\none", "the last line stays last");
+        b.move_lines(false);
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\nthree", Pos::new(1, 1)));
+        b.duplicate_lines(true);
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\none\nthree", Pos::new(2, 1)));
+        b.duplicate_lines(false);
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\none\none\nthree", Pos::new(2, 1)));
+        b.delete_lines();
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\none\nthree", Pos::new(2, 1)));
+        at(&mut b, 3, 2);
+        b.delete_lines();
+        assert_eq!((b.text().as_str(), b.cursor()), ("two\none\none", Pos::new(2, 2)));
+        let mut single = Buffer::new("only");
+        single.delete_lines();
+        assert_eq!(single.text(), "");
+    }
+
+    #[test]
+    fn brackets_and_quotes_come_in_pairs() {
+        let mut b = Buffer::new("f");
+        at(&mut b, 0, 1);
+        assert!(b.type_paired('(', true));
+        assert_eq!((b.text().as_str(), b.cursor()), ("f()", Pos::new(0, 2)));
+        assert!(b.type_paired('"', true));
+        assert_eq!(b.text(), "f(\"\")");
+        assert!(b.type_paired('"', true), "typed over the closing quote");
+        assert_eq!((b.text().as_str(), b.cursor()), ("f(\"\")", Pos::new(0, 4)));
+        assert!(b.type_paired(')', true));
+        assert_eq!(b.cursor(), Pos::new(0, 5));
+        // Before a word nothing is added; an apostrophe stays one.
+        let mut w = Buffer::new("word");
+        at(&mut w, 0, 0);
+        assert!(!w.type_paired('(', true));
+        let mut d = Buffer::new("don");
+        at(&mut d, 0, 3);
+        assert!(!d.type_paired('\'', true));
+        assert!(!d.type_paired('\'', false));
+        // Around a selection.
+        let mut s = Buffer::new("a total b");
+        s.selection = Selection { anchor: Pos::new(0, 2), head: Pos::new(0, 7) };
+        assert!(s.type_paired('[', true));
+        assert_eq!(s.text(), "a [total] b");
+        // Backspace in an empty pair takes both.
+        let mut p = Buffer::new("x()");
+        at(&mut p, 0, 2);
+        assert!(p.backspace_pair());
+        assert_eq!(p.text(), "x");
+    }
+
+    #[test]
+    fn finds_the_matching_bracket() {
+        let mut b = Buffer::new("fn a() {\n    if (x[0]) { y(); }\n}");
+        at(&mut b, 0, 8);
+        assert_eq!(b.matching_bracket(10_000), Some((Pos::new(0, 7), Pos::new(2, 0))));
+        at(&mut b, 1, 13);
+        assert_eq!(b.matching_bracket(10_000), Some((Pos::new(1, 12), Pos::new(1, 7))));
+        at(&mut b, 1, 1);
+        assert_eq!(b.matching_bracket(10_000), None);
+        at(&mut b, 0, 8);
+        assert_eq!(b.matching_bracket(5), None, "gives up past the limit");
+    }
 
     fn typed(buffer: &mut Buffer, text: &str) {
         for c in text.chars() {
@@ -1029,14 +2570,14 @@ mod tests {
         assert_eq!(buffer.cursor(), Pos::new(0, 0));
         // Down to a shorter line and back up keeps the column.
         buffer.move_to(Pos::new(0, 12), false);
-        buffer.vertical(1, false);
+        buffer.vertical_in(1, false, &[]);
         assert_eq!(buffer.cursor(), Pos::new(1, 1));
-        buffer.vertical(-1, false);
+        buffer.vertical_in(-1, false, &[]);
         assert_eq!(buffer.cursor(), Pos::new(0, 12));
         // Past the ends.
-        buffer.vertical(-5, false);
+        buffer.vertical_in(-5, false, &[]);
         assert_eq!(buffer.cursor(), Pos::new(0, 0));
-        buffer.vertical(5, true);
+        buffer.vertical_in(5, true, &[]);
         assert_eq!(buffer.cursor(), buffer.end());
         assert_eq!(buffer.selected_text(), "  let value = 10;\nx");
     }

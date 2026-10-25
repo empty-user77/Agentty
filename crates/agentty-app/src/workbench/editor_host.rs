@@ -14,9 +14,21 @@ use std::path::{Path, PathBuf};
 impl Workbench {
     /// Opens `path` (in the folder `project`) in the editor and shows it.
     pub(super) fn open_in_editor(&mut self, path: &Path, project: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_in_editor_at(path, project, None, window, cx);
+    }
+
+    /// [`Self::open_in_editor`] with the cursor at `line:column` (from 1).
+    fn open_in_editor_at(
+        &mut self,
+        path: &Path,
+        project: &Path,
+        place: Option<(usize, usize)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "file_editor" }));
         let editor = self.editor_entity(window, cx);
-        editor.update(cx, |editor, cx| editor.open(path, project, window, cx));
+        editor.update(cx, |editor, cx| editor.open_at(path, project, place, window, cx));
         self.file_diff = None;
         self.page = None;
         self.session_viewer = None;
@@ -28,9 +40,38 @@ impl Workbench {
         cx.notify();
     }
 
+    /// ⌘P anywhere: the go-to-file box over the editor, for the project of the file in front or of
+    /// the active terminal (its repository, else its folder).
+    pub(super) fn go_to_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor_visible(cx) && self.file_diff.is_none() {
+            if let Some(editor) = self.editor.clone() {
+                if !editor.read(cx).is_empty() {
+                    return editor.update(cx, |editor, cx| editor.open_picker("", None, window, cx));
+                }
+            }
+        }
+        let project = self.files_panel.as_ref().map(|p| p.root().to_path_buf()).or_else(|| {
+            let pane = self.active_pane()?;
+            let view = pane.read(cx);
+            let cwd = view.live_cwd.clone().unwrap_or_else(|| view.spec.cwd.clone());
+            Some(agentty_bridge::git::repo_root(&cwd).unwrap_or(cwd))
+        });
+        let Some(project) = project.filter(|p| p.is_dir() && Some(p.as_path()) != dirs::home_dir().as_deref()) else {
+            return self.show_toast(t(cx, "nav.no_project"), cx);
+        };
+        let editor = self.editor_entity(window, cx);
+        editor.update(cx, |editor, cx| editor.open_picker("", Some(project), window, cx));
+        self.file_diff = None;
+        self.page = None;
+        self.session_viewer = None;
+        self.launcher_open = false;
+        self.editor_shown = true;
+        cx.notify();
+    }
+
     /// Opens the file a terminal ⌘-click asked for (the event carrying it has no window).
     pub(super) fn open_pending_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.pending_editor_open.take() else { return };
+        let Some((path, place)) = self.pending_editor_open.take() else { return };
         if !path.is_file() {
             return;
         }
@@ -42,7 +83,7 @@ impl Workbench {
             .or_else(|| agentty_bridge::git::repo_root(path.parent().unwrap_or(&path)))
             .or_else(|| path.parent().map(Path::to_path_buf))
             .unwrap_or_default();
-        self.open_in_editor(&path, &project, window, cx);
+        self.open_in_editor_at(&path, &project, place, window, cx);
     }
 
     fn editor_entity(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<CodeEditor> {
@@ -55,6 +96,9 @@ impl Workbench {
             EditorEvent::OpenUrl(url) => this.open_link(url.clone(), cx),
             EditorEvent::OpenFile(path, project) => this.open_in_editor(path, project, window, cx),
             EditorEvent::ShowInBrowser(path) => this.show_file_in_browser(path, cx),
+            EditorEvent::AskAgent(prompt) => this.ask_linked_session(prompt, window, cx),
+            EditorEvent::ToggleSession => this.toggle_editor_session(cx),
+            EditorEvent::InstallLanguageServer(language) => this.install_language_server(language, window, cx),
             EditorEvent::Empty => {
                 this.editor_shown = false;
                 this.focus_active(window, cx);
@@ -85,7 +129,7 @@ impl Workbench {
         self.editor_shown
             && self.page.is_none()
             && self.session_viewer.is_none()
-            && (self.file_diff.is_some() || self.editor.as_ref().is_some_and(|e| !e.read(cx).is_empty()))
+            && (self.file_diff.is_some() || self.editor.as_ref().is_some_and(|e| !e.read(cx).is_empty() || e.read(cx).picker_open()))
     }
 
     /// The markdown preview is a native view over the editor: out of sight whenever the editor is
@@ -183,6 +227,59 @@ impl Workbench {
         asking
     }
 
+    /// Right click on a file's tab: close it or the others, its path, its folder, another editor.
+    pub(super) fn render_file_tab_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        use super::workspace_menu::{row, rule};
+        let (index, position) = self.file_tab_menu?;
+        let editor = self.editor.clone()?;
+        let path = editor.read(cx).tabs().get(index)?.path.clone();
+        let count = editor.read(cx).tabs().len();
+        let done = |this: &mut Self, cx: &mut Context<Self>| {
+            this.file_tab_menu = None;
+            cx.notify();
+        };
+        let (copy, reveal) = (path.clone(), path.clone());
+        let list = crate::ui::popover()
+            .w(px(240.))
+            .on_mouse_down_out(cx.listener(move |this, _, _, cx| done(this, cx)))
+            .child(row("file-tab-menu-close", "x", t(cx, "editor.close_file"), false).on_click(cx.listener(
+                move |this, _: &ClickEvent, window, cx| {
+                    done(this, cx);
+                    this.close_file_tab(index, window, cx);
+                },
+            )))
+            .when(count > 1, |d| {
+                let editor = editor.clone();
+                d.child(row("file-tab-menu-others", "minus", t(cx, "editor.close_other_files"), false).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        done(this, cx);
+                        editor.update(cx, |editor, cx| editor.close_others(index, cx));
+                    },
+                )))
+            })
+            .child(rule())
+            .child(row("file-tab-menu-copy", "copy", t(cx, "files.menu.copy_path"), false).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    done(this, cx);
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.to_string_lossy().into_owned()));
+                },
+            )))
+            .child(row("file-tab-menu-reveal", "folder", t(cx, "files.reveal"), false).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    done(this, cx);
+                    crate::platform::reveal(&reveal);
+                },
+            )))
+            .child(row("file-tab-menu-external", "code", t(cx, "editor.open_external"), false).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    done(this, cx);
+                    editor.update(cx, |editor, cx| editor.open_tab_externally(index, cx));
+                },
+            )));
+        let list = crate::ui::fit_to_window(list, "file-tab-menu", window);
+        Some(gpui::deferred(gpui::anchored().position(position).snap_to_window_with_margin(px(8.)).child(list)).with_priority(1))
+    }
+
     /// Tabs of the open files, after the terminal tabs.
     pub(super) fn render_file_tabs(&self, cx: &mut Context<Self>) -> Vec<Stateful<gpui::Div>> {
         let Some(editor) = self.editor.as_ref() else { return Vec::new() };
@@ -210,11 +307,27 @@ impl Workbench {
                     .bg(if active { hex(Chrome::EDITOR) } else { hex(Chrome::TAB_INACTIVE) })
                     .when(active, |d| d.border_t_1().border_color(hex(Chrome::ACCENT)))
                     .t_body()
-                    .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::MUTED) })
-                    .tooltip(crate::ui::Tooltip::text(tooltip, None))
+                    // A file with errors (warnings) has its name in their color, as in VS Code.
+                    .text_color(match tab.problem {
+                        Some(color) => hex(color),
+                        None if active => hex(Chrome::BRIGHT),
+                        None => hex(Chrome::MUTED),
+                    })
+                    // Not over the tab's own menu.
+                    .when(self.file_tab_menu.is_none(), |d| d.tooltip(crate::ui::Tooltip::text(tooltip, None)))
                     .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| this.close_file_tab(index, window, cx)))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.file_tab_menu = Some((index, event.position));
+                            cx.notify();
+                        }),
+                    )
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show_file_tab(index, window, cx)))
                     .child(icon("file-text", IconSize::INLINE, hex(if active { Chrome::BLUE } else { Chrome::MUTED })))
+                    // An agent's changes here wait for review.
+                    .children(tab.review.map(|color| div().size(px(6.)).rounded_full().flex_shrink_0().bg(hex(color))))
                     .child(div().truncate().child(SharedString::from(tab.name)))
                     .child(
                         div()
@@ -271,6 +384,15 @@ impl Workbench {
                 .or_else(|| path.parent().map(Path::to_path_buf))
                 .unwrap_or_default();
             return self.open_in_editor(&path, &project, window, cx);
+        }
+        // As a terminal ⌘-click on `path:line:column` would (the text must name an existing file).
+        if command == "open-at" {
+            let text: Vec<char> = argument.chars().collect();
+            if let Some((path, place)) = crate::terminal::path_and_place_at(&text, 0, Path::new("/")) {
+                self.pending_editor_open = Some((path, place));
+                return self.open_pending_file(window, cx);
+            }
+            return;
         }
         if let Some(editor) = self.editor.clone() {
             editor.update(cx, |editor, cx| editor.debug(command, argument, window, cx));

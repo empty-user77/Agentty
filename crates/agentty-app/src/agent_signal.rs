@@ -224,6 +224,16 @@ pub struct SignalDetail {
     /// The session the event comes from, as the agent itself names it (Claude Code's `session_id`,
     /// Codex's `thread-id`): which transcript is this pane's, even when others share its folder.
     pub session: Option<String>,
+    /// A file the tool writes (Claude Code's Edit, MultiEdit, Write), for the editor to show where.
+    pub edit: Option<FileEdit>,
+}
+
+/// A file an agent's tool is about to change (or just changed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileEdit {
+    pub path: std::path::PathBuf,
+    /// The first line of the text being replaced, to find the spot (none for a whole new file).
+    pub anchor: Option<String>,
 }
 
 impl SignalDetail {
@@ -448,6 +458,7 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
         .map(request_text)
         .filter(|s| !s.is_empty());
     let subagent = text("agent_id").map(|id| (id, text("agent_type").unwrap_or_default()));
+    let edit = file_edit(text("tool_name").as_deref(), input);
     let detail = SignalDetail {
         notification_type: text("notification_type"),
         tool: text("tool_name"),
@@ -460,8 +471,25 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
             .iter()
             .find_map(|k| text(k))
             .filter(|id| id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')),
+        edit,
     };
     Some(AgentSignal { pane_id, kind, message, detail })
+}
+
+/// The file an editing tool works on, and a line of the text it replaces. Only an absolute path:
+/// the editor matches it against the files it has open, nothing is opened or read from it here.
+fn file_edit(tool: Option<&str>, input: &serde_json::Value) -> Option<FileEdit> {
+    if !matches!(tool?, "Edit" | "MultiEdit" | "Write") {
+        return None;
+    }
+    let path = std::path::PathBuf::from(input["file_path"].as_str()?);
+    if !path.is_absolute() {
+        return None;
+    }
+    let old = input["old_string"].as_str().or_else(|| input["edits"][0]["old_string"].as_str());
+    let anchor =
+        old.and_then(|old| old.lines().map(str::trim).find(|l| !l.is_empty())).map(|line| line.chars().take(200).collect::<String>());
+    Some(FileEdit { path, anchor })
 }
 
 /// What a request asks, to be judged without the terminal: up to 6 non-empty lines and 500
@@ -957,6 +985,27 @@ mod tests {
         ))
         .unwrap();
         assert!(!in_subagent.detail.asks_user(), "a subagent's question reaches the user through the main agent");
+    }
+
+    #[test]
+    fn edits_name_the_file_and_where() {
+        // An absolute path on this system (Windows wants a drive), as JSON writes it.
+        let root = if cfg!(windows) { "C:/p" } else { "/p" };
+        let line = |input: String| parse_line(&format!("2\tworking\t{input}")).unwrap();
+        let edit = line(format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{{"file_path":"{root}/src/app.ts","old_string":"\n  const total = 1;\n  return total;","new_string":"x"}}}}"#
+        ));
+        assert_eq!(edit.detail.edit, Some(FileEdit { path: format!("{root}/src/app.ts").into(), anchor: Some("const total = 1;".into()) }));
+        let multi = line(format!(
+            r#"{{"tool_name":"MultiEdit","tool_input":{{"file_path":"{root}/a.rs","edits":[{{"old_string":"fn a()","new_string":"fn b()"}}]}}}}"#
+        ));
+        assert_eq!(multi.detail.edit.and_then(|e| e.anchor).as_deref(), Some("fn a()"));
+        let write = line(format!(r#"{{"tool_name":"Write","tool_input":{{"file_path":"{root}/new.py","content":"x"}}}}"#));
+        assert_eq!(write.detail.edit, Some(FileEdit { path: format!("{root}/new.py").into(), anchor: None }));
+        let relative = line(r#"{"tool_name":"Edit","tool_input":{"file_path":"a.rs","old_string":"x"}}"#.to_string());
+        assert_eq!(relative.detail.edit, None);
+        let read = line(format!(r#"{{"tool_name":"Read","tool_input":{{"file_path":"{root}/a.rs"}}}}"#));
+        assert_eq!(read.detail.edit, None);
     }
 
     #[test]

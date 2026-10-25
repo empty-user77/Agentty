@@ -51,7 +51,7 @@ The outside services Agentty works with, one card each with whether it is connec
 
 ## Project
 
-Where a new tab starts, the harness patterns Agentty looks for, whether the harness prompt is sent right away, and which agent starts harness work. Also which editor **Open in editor** uses.
+Where a new tab starts, the harness patterns Agentty looks for, whether the harness prompt is sent right away, and which agent starts harness work. Also which editor **Open in editor** uses. The language servers of the file editor, with an install button for a missing one, are there too. So are the file editor's options: problems at the end of their line, completions while typing, the type under the pointer, sticky scroll.
 
 ## Windows
 
