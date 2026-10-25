@@ -1394,7 +1394,7 @@ impl CodeEditor {
         }
         self.ask = None;
         let Some(doc) = self.docs.get_mut(self.active) else { return };
-        let (start, end) = unit_range(&doc.buffer, unit, pos);
+        let (start, end) = unit_range(&doc.buffer, unit, pos, doc.folds.hidden());
         if event.modifiers.shift {
             doc.buffer.move_to(if pos < doc.buffer.selection.anchor { start } else { end }, true);
             let anchor = doc.buffer.selection.anchor;
@@ -1436,7 +1436,7 @@ impl CodeEditor {
         let Some((unit, origin_start, origin_end)) = self.drag else { return };
         let Some(pos) = self.docs.get(self.active).map(|doc| layout.position_for(event.position, &doc.buffer)) else { return };
         let Some(doc) = self.doc() else { return };
-        let (start, end) = unit_range(&doc.buffer, unit, pos);
+        let (start, end) = unit_range(&doc.buffer, unit, pos, doc.folds.hidden());
         if pos < origin_start {
             doc.buffer.selection = Selection { anchor: origin_end, head: start };
         } else {
@@ -2164,6 +2164,7 @@ impl CodeEditor {
             "selected": self.docs.get(self.active).map(|d| d.buffer.selected_text()),
             "scrollY": self.docs.get(self.active).map(|d| d.scroll.y),
             "folds": self.docs.get(self.active).map(|d| d.folds.ranges().iter().map(|(s, e)| format!("{}-{}", s + 1, e + 1)).collect::<Vec<_>>()),
+            "snippet": self.snippet.is_some(),
             "shownLines": self.layout.as_ref().and_then(|l| l.shown_lines()).map(|(a, b)| format!("{}-{}", a + 1, b + 1)),
             "buildError": self.docs.get(self.active).and_then(|d| d.checks.build.as_ref()).map(|e| format!("{}:{} {}", e.path.display(), e.line, e.message)),
             "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),
@@ -2230,6 +2231,7 @@ impl CodeEditor {
                 }
             }
             // A click on the fold arrow of a line (1-based).
+            "snippet" => self.debug_snippet(argument, cx),
             "fold-arrow" => {
                 if let Ok(line) = argument.trim().parse::<usize>() {
                     self.toggle_fold(line.saturating_sub(1), cx);
@@ -2364,16 +2366,15 @@ impl CodeEditor {
 }
 
 /// The range a click selects: the character position, the word or the whole line.
-fn unit_range(buffer: &Buffer, unit: DragUnit, pos: Pos) -> (Pos, Pos) {
+/// What a click (or a drag) at `pos` selects. A folded line taken whole takes the lines folded
+/// under it (`hidden`) too, as in VS Code: the selection never ends inside a fold.
+fn unit_range(buffer: &Buffer, unit: DragUnit, pos: Pos, hidden: &[(usize, usize)]) -> (Pos, Pos) {
     match unit {
         DragUnit::Char => (pos, pos),
         DragUnit::Word => buffer.word_at(pos),
         DragUnit::Line => {
-            let end = if pos.line + 1 < buffer.line_count() {
-                Pos::new(pos.line + 1, 0)
-            } else {
-                Pos::new(pos.line, buffer.line(pos.line).len())
-            };
+            let last = hidden.iter().find(|(from, _)| *from == pos.line + 1).map_or(pos.line, |(_, to)| *to);
+            let end = if last + 1 < buffer.line_count() { Pos::new(last + 1, 0) } else { Pos::new(last, buffer.line(last).len()) };
             (Pos::new(pos.line, 0), end)
         }
     }
@@ -2797,7 +2798,7 @@ impl Render for CodeEditor {
                 this.edit(cx, |b| {
                     if b.selection.is_empty() {
                         // Nothing selected: the whole line, like other editors.
-                        let (start, end) = unit_range(b, DragUnit::Line, b.cursor());
+                        let (start, end) = unit_range(b, DragUnit::Line, b.cursor(), &[]);
                         b.replace(start, end, "", buffer::EditKind::Other);
                     } else {
                         b.delete_selection();

@@ -330,6 +330,11 @@ pub fn completion_edit(path: &Path, text: &str, item: &CompletionItem, word: ((u
     lsp::completion_edit(path, text, item, word)
 }
 
+/// A snippet's text and tab stops (the debug driver puts one in as a server would).
+pub fn snippet_stops(snippet: &str) -> (String, Vec<(usize, usize)>) {
+    lsp::snippet_stops(snippet)
+}
+
 /// The import `item` brings, when it lies above `line`.
 pub fn completion_imports(path: &Path, item: &CompletionItem, line: usize) -> Option<FileEdit> {
     lsp::completion_imports(path, item, line)

@@ -74,15 +74,46 @@ pub(super) struct Completion {
     asking: u64,
 }
 
-/// A snippet put in by a completion with tab stops still ahead. Stops are kept counted from the
-/// end of the text (lines from the last one, bytes from the end of their line), which typing at an
-/// earlier stop leaves where they were. ⇥ outside it, Esc or a click ends it.
+/// A snippet put in by a completion with tab stops still ahead. ⇥ outside it, Esc, a click or
+/// moving out of it ends it.
 pub(super) struct Snippet {
     path: PathBuf,
     /// Where it starts.
     start: Pos,
-    /// The stops still ahead: lines below, bytes from the end of the line, length.
-    ahead: Vec<(usize, usize, usize)>,
+    /// The stops still ahead, in the order ⇥ visits them, and their placeholders' lengths.
+    ahead: Vec<(Mark, usize)>,
+}
+
+/// Where a stop is, kept so that what is typed at the stop the cursor is on moves it with its
+/// text: one before that stop by its place, one after it by where it is from the end of the text
+/// (lines below it, bytes to the end of its line).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Mark {
+    Before(Pos),
+    After { below: usize, from_end: usize },
+}
+
+impl Mark {
+    fn of(buffer: &Buffer, pos: Pos, current: Pos) -> Self {
+        if pos < current {
+            Mark::Before(pos)
+        } else {
+            Mark::After { below: buffer.line_count() - 1 - pos.line, from_end: buffer.line(pos.line).len() - pos.col }
+        }
+    }
+
+    /// Where it is now, while the text still has that place.
+    fn at(self, buffer: &Buffer) -> Option<Pos> {
+        let (line, col) = match self {
+            Mark::Before(pos) => (pos.line, pos.col),
+            Mark::After { below, from_end } => {
+                let line = buffer.line_count().checked_sub(1 + below)?;
+                (line, buffer.line(line).len().checked_sub(from_end)?)
+            }
+        };
+        let text = buffer.line(line);
+        (line < buffer.line_count() && col <= text.len() && text.is_char_boundary(col)).then_some(Pos::new(line, col))
+    }
 }
 
 fn tag(kind: Option<u64>) -> &'static str {
@@ -125,13 +156,6 @@ fn matches(name: &str, query: &str) -> Option<u8> {
     }
     let mut rest = name_l.chars();
     query_l.chars().all(|q| rest.any(|c| c == q)).then_some(2)
-}
-
-/// Where a snippet's stop is now (kept as lines below it and bytes from its line's end).
-fn stop_at(buffer: &Buffer, (below, from_end, _): (usize, usize, usize)) -> Option<Pos> {
-    let line = buffer.line_count().checked_sub(1 + below)?;
-    let col = buffer.line(line).len().checked_sub(from_end)?;
-    buffer.line(line).is_char_boundary(col).then_some(Pos::new(line, col))
 }
 
 /// A hash of the lines above `line`: an import found for them still fits while it is the same.
@@ -545,10 +569,8 @@ impl CodeEditor {
             })
             .collect();
         let start = at(0);
-        let count = buffer.line_count();
-        let ahead =
-            stops[1..].iter().map(|&(pos, len)| (count - 1 - pos.line, buffer.line(pos.line).len() - pos.col, len)).collect::<Vec<_>>();
         let (first, len) = stops[0];
+        let ahead = stops[1..].iter().map(|&(pos, len)| (Mark::of(buffer, pos, first), len)).collect::<Vec<_>>();
         doc.buffer.move_to(first, false);
         if len > 0 {
             doc.buffer.move_to(Pos::new(first.line, first.col + len), true);
@@ -594,13 +616,23 @@ impl CodeEditor {
     pub(super) fn snippet_next(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(mut snippet) = self.snippet.take() else { return false };
         let Some(doc) = self.docs.get_mut(self.active).filter(|d| d.path == snippet.path) else { return false };
-        let end = snippet.ahead.last().and_then(|&stop| stop_at(&doc.buffer, stop));
-        let (below, from_end, len) = snippet.ahead.remove(0);
+        let end = snippet.ahead.last().and_then(|(mark, _)| mark.at(&doc.buffer));
+        let (mark, len) = snippet.ahead.remove(0);
         let cursor = doc.buffer.cursor();
-        let next = stop_at(&doc.buffer, (below, from_end, len));
+        let next = mark.at(&doc.buffer);
         // Gone, or the cursor went out of the snippet: ⇥ indents as usual.
         let inside = |pos: Pos| end.is_some_and(|end| snippet.start <= pos && pos <= end);
         let Some(next) = next.filter(|next| inside(cursor) && inside(*next)) else { return false };
+        // The others, kept from the stop the cursor goes to now.
+        let Some(ahead) = snippet
+            .ahead
+            .iter()
+            .map(|&(mark, len)| Some((Mark::of(&doc.buffer, mark.at(&doc.buffer)?, next), len)))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        snippet.ahead = ahead;
         doc.buffer.move_to(next, false);
         let to = doc.buffer.clamp(Pos::new(next.line, next.col + len));
         if to > next {
@@ -616,12 +648,28 @@ impl CodeEditor {
         true
     }
 
+    /// Debug driver: `snippet` (LSP snippet syntax, `\n` and `\t` spelled out) put in at the cursor
+    /// as a chosen completion would.
+    pub(super) fn debug_snippet(&mut self, snippet: &str, cx: &mut Context<Self>) {
+        let snippet = snippet.replace("\\n", "\n").replace("\\t", "\t");
+        let (text, stops) = lsp::snippet_stops(&snippet);
+        let Some(doc) = self.docs.get(self.active) else { return };
+        let path = doc.path.clone();
+        let cursor = doc.buffer.cursor();
+        let line = doc.buffer.line(cursor.line);
+        let (text, stops) =
+            indent_snippet(&text, &stops, &line[..line.len() - line.trim_start().len()], doc.buffer.indent_unit()).unwrap_or((text, stops));
+        let edit = lsp::byte_edit(&path, (cursor.line, cursor.col), (cursor.line, cursor.col), &text);
+        self.put_completion(&path, &edit, cx);
+        self.start_snippet_text(&path, &text, &stops, cx);
+    }
+
     /// The cursor moved: a snippet it left is done.
     pub(super) fn snippet_follow(&mut self) {
         let Some(snippet) = self.snippet.as_ref() else { return };
         let left = self.docs.get(self.active).filter(|d| d.path == snippet.path).is_none_or(|doc| {
             let cursor = doc.buffer.cursor();
-            let end = snippet.ahead.last().and_then(|&stop| stop_at(&doc.buffer, stop));
+            let end = snippet.ahead.last().and_then(|(mark, _)| mark.at(&doc.buffer));
             !end.is_some_and(|end| snippet.start <= cursor && cursor <= end)
         });
         if left {
@@ -689,7 +737,13 @@ impl CodeEditor {
         doc.buffer.move_to(moved.anchor, false);
         doc.buffer.move_to(moved.head, true);
         if let Some(snippet) = self.snippet.as_mut().filter(|s| s.path == path) {
-            snippet.start.line = (snippet.start.line as isize + grown).max(0) as usize;
+            let down = |pos: &mut Pos| pos.line = (pos.line as isize + grown).max(0) as usize;
+            down(&mut snippet.start);
+            for (mark, _) in &mut snippet.ahead {
+                if let Mark::Before(pos) = mark {
+                    down(pos);
+                }
+            }
         }
         cx.notify();
     }

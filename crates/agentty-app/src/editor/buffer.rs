@@ -814,7 +814,7 @@ impl Buffer {
     /// A new line above the cursor's, indented like it, the cursor on it (⇧⌘↩).
     pub fn insert_line_above(&mut self) {
         let line = self.cursor().line;
-        let indent: String = self.line(line).chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+        let indent = self.indent_from(line);
         self.replace(Pos::new(line, 0), Pos::new(line, 0), &format!("{indent}\n"), EditKind::Other);
         self.selection = Selection::cursor(Pos::new(line, indent.len()));
         if let Some(edit) = self.undo.last_mut() {
@@ -896,17 +896,34 @@ impl Buffer {
     }
 
     /// Enter: a new line indented like this one, one level deeper after an opening bracket.
+    /// The indentation a line under `line` starts from: its own, or for an empty line the one of
+    /// the nearest line with text above (a step more after an opening bracket), as VS Code does.
+    fn indent_from(&self, line: usize) -> String {
+        let own = |text: &str| text.chars().take_while(|c| *c == ' ' || *c == '\t').collect::<String>();
+        let text = self.line(line);
+        if !text.is_empty() {
+            return own(text);
+        }
+        let Some(above) = (line.saturating_sub(1000)..line).rev().map(|i| self.line(i)).find(|l| !l.trim().is_empty()) else {
+            return String::new();
+        };
+        let mut indent = own(above);
+        if above.trim_end().ends_with(['{', '[', '(']) {
+            indent.push_str(&self.indent);
+        }
+        indent
+    }
+
     pub fn newline(&mut self) {
         if self.edit_all(false, |b, s| {
             let (start, end) = s.range();
-            let indent: String = b.line(start.line).chars().take_while(|c| *c == ' ' || *c == '\t').collect();
-            (start, end, format!("\n{indent}"))
+            (start, end, format!("\n{}", b.indent_from(start.line)))
         }) {
             return;
         }
         let (start, end) = self.selection.range();
         let line = self.line(start.line);
-        let indent: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+        let indent = self.indent_from(start.line);
         let before = line[..start.col].trim_end();
         let after = self.line(end.line)[end.col..].trim_start();
         let opens = before.ends_with(['{', '[', '(']) || (before.ends_with(':') && self.indent != "\t" && !before.contains("//"));
@@ -2030,6 +2047,22 @@ mod tests {
         let mut b = Buffer::new("\nx");
         b.set_formatted("\nx");
         assert_eq!(b.cursor(), Pos::new(0, 0), "a blank first line");
+    }
+
+    #[test]
+    fn a_new_line_from_an_empty_one_takes_the_indentation_above() {
+        let mut b = Buffer::new("function f() {\n\n  const a = 1;\n\n}");
+        at(&mut b, 1, 0);
+        b.newline();
+        assert_eq!(b.line(2), "  ", "a step in after the opening brace");
+        at(&mut b, 4, 0);
+        b.insert_line_below();
+        assert_eq!(b.line(5), "  ", "as the line with text above it");
+        // A line of spaces keeps its own.
+        let mut b = Buffer::new("x {\n    ");
+        at(&mut b, 1, 4);
+        b.newline();
+        assert_eq!(b.line(2), "    ");
     }
 
     #[test]

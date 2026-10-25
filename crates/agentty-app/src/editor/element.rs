@@ -176,7 +176,8 @@ impl Layout {
     /// The text position under a point (above or below the text: its first or last line).
     pub fn position_for(&self, position: Point<Pixels>, buffer: &Buffer) -> Pos {
         let y = f32::from(position.y) - f32::from(self.bounds.top()) + self.scroll.y;
-        let row = (y / self.line_height).floor().max(0.) as usize;
+        // Below the text: its last row shown, not a line folded away under it.
+        let row = ((y / self.line_height).floor().max(0.) as usize).min(self.rows.saturating_sub(1));
         let row = self.folds.line_of(row).min(buffer.line_count() - 1);
         let x = (f32::from(position.x) - self.text_left + self.scroll.x).max(0.);
         let col = match self.laid(row) {
@@ -418,7 +419,7 @@ impl Element for EditorElement {
             doc.sync_highlights();
             // No cursor stays in lines folded away (a jump, a find or an undo went there).
             for each in doc.buffer.selections() {
-                doc.folds.reveal(each.head.line);
+                doc.folds.reveal(each.head.line, each.range().0.line);
             }
             let folds = doc.folds.clone();
             let text_system = window.text_system().clone();

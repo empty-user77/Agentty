@@ -180,12 +180,13 @@ impl Folds {
         }
     }
 
-    /// Unfolds what hides `line` (the cursor went there).
-    pub fn reveal(&mut self, line: usize) -> bool {
+    /// Unfolds what hides `line` (the cursor went there), but a region whose first line the
+    /// selection takes in from line `from` on (a folded line selected whole) stays folded.
+    pub fn reveal(&mut self, line: usize, from: usize) -> bool {
         if !self.is_hidden(line) {
             return false;
         }
-        self.ranges.retain(|&(start, end)| !(start < line && line <= end));
+        self.ranges.retain(|&(start, end)| !(start < line && line <= end && start < from));
         self.refresh();
         true
     }
@@ -255,7 +256,9 @@ mod tests {
         assert!(!folds.folded_at(1), "hidden itself");
         assert!(folds.unfold(0));
         assert_eq!(folds.hidden(), [(2, 4)]);
-        assert!(folds.reveal(3) && folds.is_empty());
+        assert!(!folds.reveal(1, 1));
+        assert!(folds.reveal(3, 1) && !folds.is_empty(), "selected from its first line on");
+        assert!(folds.reveal(3, 3) && folds.is_empty());
     }
 
     #[test]

@@ -703,7 +703,7 @@ fn completion(item: &Value, utf8: bool) -> Option<CompletionItem> {
 /// A snippet's text and its tab stops (see [`CompletionItem::stops`]): `${1:name}` puts in
 /// `name` as the first stop, `$0` marks the end; a choice puts in its first option and a variable
 /// its default. Without `$0` the end is after the text, and only a `$0` makes no stops at all.
-fn snippet_stops(snippet: &str) -> (String, Vec<(usize, usize)>) {
+pub fn snippet_stops(snippet: &str) -> (String, Vec<(usize, usize)>) {
     let mut out = String::with_capacity(snippet.len());
     let mut found: Vec<(u32, usize, usize)> = Vec::new();
     snippet_part(&mut snippet.chars().peekable(), &mut out, &mut found, 0);
