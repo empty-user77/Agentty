@@ -60,8 +60,18 @@
 		return headingOpen ? headingOpen(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
 	};
 
+	// Each block says which line of the text it starts on, as in VS Code (`data-line`), so the
+	// page can follow the text's scrolling.
+	md.core.ruler.push('agentty_lines', (state) => {
+		for (const token of state.tokens) {
+			if (token.map && token.nesting !== -1 && token.type !== 'inline') {
+				token.attrSet('data-line', String(token.map[0] + (state.env.offset || 0)));
+			}
+		}
+	});
+
 	// VS Code hides YAML front matter in the preview by default.
-	const withoutFrontMatter = (text) => text.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '');
+	const frontMatter = (text) => (text.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/) || [''])[0];
 
 	// The page has no address of its own and reads no files: a local image is handed over by
 	// Agentty (`agenttyImages`), and a link goes to Agentty (`agenttyTakeLinks`), which opens web
@@ -71,7 +81,9 @@
 	const links = [];
 
 	window.agenttyRender = (text) => {
-		const html = md.render(withoutFrontMatter(text), { slugs: new Map() });
+		const front = frontMatter(text);
+		const offset = front ? front.split('\n').length - (front.endsWith('\n') ? 1 : 0) : 0;
+		const html = md.render(text.slice(front.length), { slugs: new Map(), offset });
 		const target = document.getElementById('agentty-markdown');
 		const scroll = document.scrollingElement.scrollTop;
 		target.innerHTML = window.DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
@@ -89,6 +101,34 @@
 		}
 		document.scrollingElement.scrollTop = scroll;
 		return JSON.stringify([...new Set(wanted)]);
+	};
+
+	// Scrolls so that `line` of the text (fractions too) is at the top: between the blocks
+	// around it, in proportion.
+	window.agenttyScrollTo = (value) => {
+		const line = parseFloat(value) || 0;
+		const top = (element) => element.getBoundingClientRect().top + window.scrollY;
+		let before = null;
+		let after = null;
+		for (const element of document.querySelectorAll('[data-line]')) {
+			const at = Number(element.dataset.line);
+			if (at <= line) {
+				if (!before || at >= before.at) before = { element, at };
+			} else if (!after || at < after.at) {
+				after = { element, at };
+				break;
+			}
+		}
+		if (!before) {
+			document.scrollingElement.scrollTop = 0;
+			return 'ok';
+		}
+		let y = top(before.element);
+		if (after && after.at > before.at) {
+			y += (top(after.element) - y) * Math.min(1, (line - before.at) / (after.at - before.at));
+		}
+		document.scrollingElement.scrollTop = Math.max(0, y - 8);
+		return 'ok';
 	};
 
 	window.agenttyImages = (json) => {

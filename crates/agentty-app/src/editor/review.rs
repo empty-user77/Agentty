@@ -371,7 +371,7 @@ impl CodeEditor {
                 .absolute()
                 .bottom(px(38.))
                 .left_0()
-                .right_0()
+                .right(px(self.beside_width()))
                 .flex()
                 .justify_center()
                 .child(
@@ -479,7 +479,7 @@ impl CodeEditor {
             .children(change.hunk.new.iter().take(DIFF_LINES).map(|l| row("+", l, Chrome::SUCCESS)))
             .children(more(change.hunk.new.len()));
         Some(
-            gpui::deferred(gpui::anchored().position(below).snap_to_window_with_margin(px(8.)).child(panel))
+            gpui::deferred(gpui::anchored().position(below).snap_to_window_with_margin(self.popup_margin()).child(panel))
                 .with_priority(2)
                 .into_any_element(),
         )

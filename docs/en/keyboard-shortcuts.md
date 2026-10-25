@@ -75,6 +75,7 @@ While the file editor has focus, ⌘D, ⌘] / ⌘[, ⇧⌘↩ and ⌥⌘↑ / �
 | File editor: find in file / next / previous | ⌘F / ↩ or ⌘G / ⇧↩ |
 | File editor: save / format / close file | ⌘S / ⇧⌥F / ⌘W |
 | File editor: Markdown preview on / off (macOS) | ⇧⌘V |
+| File editor: Markdown preview beside the text on / off (macOS) | ⌥⌘V |
 
 Double-click the title bar to zoom the window; double-click empty space in the tab strip for a new tab.
 

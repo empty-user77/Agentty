@@ -113,9 +113,11 @@ impl CodeEditor {
             )
             .when_some(signature.doc.clone(), |d, doc| d.child(div().truncate().text_color(hex(Chrome::MUTED)).child(doc)));
         Some(
-            gpui::deferred(gpui::anchored().anchor(gpui::Corner::BottomLeft).position(at).snap_to_window_with_margin(px(8.)).child(panel))
-                .with_priority(2)
-                .into_any_element(),
+            gpui::deferred(
+                gpui::anchored().anchor(gpui::Corner::BottomLeft).position(at).snap_to_window_with_margin(self.popup_margin()).child(panel),
+            )
+            .with_priority(2)
+            .into_any_element(),
         )
     }
 

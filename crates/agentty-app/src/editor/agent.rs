@@ -760,7 +760,7 @@ impl CodeEditor {
                 )
                 .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "editor.ask_keys")));
             return Some(
-                gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(panel))
+                gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(self.popup_margin()).child(panel))
                     .with_priority(2)
                     .into_any_element(),
             );
@@ -827,7 +827,9 @@ impl CodeEditor {
                 )
             });
         Some(
-            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(bar)).with_priority(2).into_any_element(),
+            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(self.popup_margin()).child(bar))
+                .with_priority(2)
+                .into_any_element(),
         )
     }
 }
