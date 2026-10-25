@@ -196,6 +196,85 @@ fn disabled() -> &'static Mutex<std::collections::HashSet<String>> {
     DISABLED.get_or_init(Default::default)
 }
 
+/// Maven projects whose build the user lets jdtls read (their folders).
+fn trusted() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
+    static TRUSTED: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+    TRUSTED.get_or_init(Default::default)
+}
+
+/// Folders looked through for a `pom.xml` below a project's, and entries at most.
+const MAVEN_DEPTH: usize = 4;
+const MAVEN_ENTRIES: usize = 5_000;
+
+/// Whether `root` holds a Maven build (its own `pom.xml` or a module's below it).
+fn has_maven(root: &Path) -> bool {
+    let mut seen = 0;
+    let mut folders = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > MAVEN_ENTRIES {
+                return true;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_file() && name == "pom.xml" {
+                return true;
+            }
+            let skipped = name.starts_with('.') || matches!(name.as_ref(), "node_modules" | "target" | "build" | "out" | "bin");
+            if kind.is_dir() && !skipped && depth < MAVEN_DEPTH {
+                folders.push((entry.path(), depth + 1));
+            }
+        }
+    }
+    false
+}
+
+/// Whether jdtls may read the project at `root` whole. Reading a Maven build runs code it names
+/// (build extensions, plugins, from repositories it lists): only a project the user trusts gets
+/// that; any other gets jdtls's syntax server, which reads the files' own text and nothing else.
+fn reads_build(root: &Path) -> bool {
+    !has_maven(root) || trusted().lock().is_ok_and(|t| t.contains(root))
+}
+
+/// The Maven projects the user lets jdtls read. A server already running the other way for one
+/// of them stops, and starts the right way at the next request.
+pub fn set_trusted_builds(roots: &[PathBuf]) {
+    if let Ok(mut set) = trusted().lock() {
+        *set = roots.iter().cloned().collect();
+    }
+    let slots: Vec<((PathBuf, &'static str), Arc<Slot>)> =
+        registry().lock().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+    let mut stopping = Vec::new();
+    for ((root, name), slot) in slots {
+        if name != "jdtls" {
+            continue;
+        }
+        let Ok(mut state) = slot.state.lock() else { continue };
+        if let State::Ready(client) = &*state {
+            if client.limited == reads_build(&root) {
+                stopping.push(client.clone());
+                *state = State::Idle;
+            }
+        }
+    }
+    if !stopping.is_empty() {
+        let _ = std::thread::Builder::new().name("lsp-stop".into()).spawn(move || stopping.iter().for_each(|client| client.stop()));
+        GENERATION.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// The server for `root` and `language` runs without reading the project's build (a Maven project
+/// not trusted yet): `true` only while it runs that way.
+pub fn build_unread(root: &Path, language: &str) -> bool {
+    let Some(spec) = spec_for(language) else { return false };
+    let Some(slot) = registry().lock().ok().and_then(|r| r.get(&key(root, spec)).cloned()) else { return false };
+    let state = slot.state.lock().map(|s| s.clone());
+    matches!(state, Ok(State::Ready(client)) if client.limited)
+}
+
 fn is_disabled(spec: &Spec) -> bool {
     disabled().lock().is_ok_and(|d| d.contains(spec.name))
 }
@@ -377,7 +456,10 @@ pub fn build_file_saved(root: &Path, path: &Path) {
         return;
     }
     let (Some(client), Some(uri)) = (spec_for("java").and_then(|spec| ready_client(root, spec)), file_uri(path)) else { return };
-    client.notify("java/projectConfigurationUpdate", json!({ "uri": uri }));
+    // Not for a build the user has not let it read.
+    if !client.limited {
+        client.notify("java/projectConfigurationUpdate", json!({ "uri": uri }));
+    }
 }
 
 /// A fix or refactoring a server offers for some text (`textDocument/codeAction`).
@@ -1298,6 +1380,8 @@ struct Client {
     utf8: AtomicBool,
     /// What the server is told when it asks for its settings (`workspace/configuration`).
     settings: Value,
+    /// Runs without reading the project's build ([`Launch::limited`]).
+    limited: bool,
     started: Instant,
     /// The problems reported per file ([`diagnostics_key`]).
     diagnostics: Mutex<HashMap<String, Vec<Reported>>>,
@@ -1349,6 +1433,7 @@ impl Client {
             importing: AtomicBool::new(false),
             utf8: AtomicBool::new(false),
             settings: launch.settings.clone(),
+            limited: launch.limited,
             started: Instant::now(),
             diagnostics: Mutex::new(HashMap::new()),
             build_files: Mutex::new(HashMap::new()),
@@ -1597,6 +1682,8 @@ struct Launch {
     args: Vec<String>,
     options: Value,
     settings: Value,
+    /// Reads the files' text only, not the project's build (see [`reads_build`]).
+    limited: bool,
 }
 
 /// The ways to run `spec` for `root`, best first, among the programs on `path`.
@@ -1616,6 +1703,7 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
                     args: strings(&["--lsp", "--stdio"]),
                     options: Value::Null,
                     settings: Value::Null,
+                    limited: false,
                 })
             };
             let own = own_typescript(root);
@@ -1628,7 +1716,7 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
                     (false, None) => None,
                 };
                 if let Some(options) = options {
-                    out.push(Launch { program, args: strings(&["--stdio"]), options, settings: Value::Null });
+                    out.push(Launch { program, args: strings(&["--stdio"]), options, settings: Value::Null, limited: false });
                 }
             }
             out.extend(native(found("tsc")));
@@ -1643,7 +1731,7 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
                 "checkOnSave": false,
                 "files": { "watcher": "server" },
             });
-            Launch { program, args: Vec::new(), options: settings.clone(), settings }
+            Launch { program, args: Vec::new(), options: settings.clone(), settings, limited: false }
         })),
         // jdtls keeps its own index of each project in a folder of its own. Importing a Gradle
         // project runs its build scripts: off, as is rebuilding when a build file changes.
@@ -1652,12 +1740,16 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
                 "import": { "gradle": { "enabled": false, "wrapper": { "enabled": false } } },
                 "configuration": { "updateBuildConfiguration": "disabled" },
             });
-            Launch {
-                program,
-                args: vec!["-data".to_string(), jdtls_workspace(root).to_string_lossy().into_owned()],
-                options: json!({ "settings": { "java": java.clone() } }),
-                settings: java,
+            // A Maven project not trusted: the syntax server, in a folder of its own.
+            let limited = !reads_build(root);
+            let mut args = Vec::new();
+            let mut workspace = jdtls_workspace(root);
+            if limited {
+                args.push("--jvm-arg=-Dsyntaxserver=true".to_string());
+                workspace.set_extension("syntax");
             }
+            args.extend(["-data".to_string(), workspace.to_string_lossy().into_owned()]);
+            Launch { program, args, options: json!({ "settings": { "java": java.clone() } }), settings: java, limited }
         })),
         // They format only when told they may and check only when their settings say so (VS Code
         // sends its defaults); HTML serves the CSS and JavaScript in `<style>` and `<script>` too.
@@ -1675,12 +1767,19 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
                     args: strings(args),
                     options: options.clone(),
                     settings: settings.clone(),
+                    limited: false,
                 }));
             }
         }
         _ => {
             for (name, args) in spec.commands {
-                out.extend(found(name).map(|program| Launch { program, args: strings(args), options: Value::Null, settings: Value::Null }));
+                out.extend(found(name).map(|program| Launch {
+                    program,
+                    args: strings(args),
+                    options: Value::Null,
+                    settings: Value::Null,
+                    limited: false,
+                }));
             }
         }
     }
@@ -2087,6 +2186,25 @@ mod tests {
         assert_eq!(spec_for("python").map(|s| s.name), Some("pyright"));
         assert!(spec_for("markdown").is_none());
         assert_eq!(status(Path::new("/nowhere"), "markdown"), Status::Missing);
+    }
+
+    #[test]
+    fn a_maven_build_is_read_only_once_trusted() {
+        let dir = std::env::temp_dir().join(format!("agentty-maven-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("plain/src")).unwrap();
+        std::fs::create_dir_all(dir.join("multi/api/src")).unwrap();
+        std::fs::create_dir_all(dir.join("deps/node_modules/x")).unwrap();
+        std::fs::write(dir.join("multi/api/pom.xml"), "<project/>").unwrap();
+        std::fs::write(dir.join("deps/node_modules/x/pom.xml"), "<project/>").unwrap();
+        assert!(reads_build(&dir.join("plain")), "nothing to run");
+        assert!(reads_build(&dir.join("deps")), "a pom in dependencies is not the project's");
+        assert!(!reads_build(&dir.join("multi")), "a module's pom below");
+        set_trusted_builds(&[dir.join("multi")]);
+        assert!(reads_build(&dir.join("multi")));
+        set_trusted_builds(&[]);
+        assert!(!reads_build(&dir.join("multi")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

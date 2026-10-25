@@ -2840,6 +2840,20 @@ strings! {
         "設定 → プロジェクト → 言語サーバー でオフにしています。名前で検索します",
         "已在 设置 → 项目 → 语言服务器 中关闭，改为按名称查找"
     ],
+    "lsp.read_build" => ["Read the build", "빌드 읽기", "ビルドを読む", "读取构建"],
+    "lsp.read_build_tip" => [
+        "Only the files' own text is read for now: syntax errors, no dependencies. Reading this Maven project's build runs the plugins and extensions its pom.xml names, so do it only for a project you trust.",
+        "지금은 파일 내용만 읽어 문법 오류만 보이고 의존성은 모릅니다. 이 Maven 프로젝트의 빌드를 읽으면 pom.xml이 지정한 플러그인과 확장이 실행되므로, 믿을 수 있는 프로젝트에서만 누르세요.",
+        "今はファイルの内容だけを読むため、構文エラーのみで依存関係は分かりません。この Maven プロジェクトのビルドを読むと pom.xml が指定するプラグインと拡張が実行されるので、信頼できるプロジェクトでだけ押してください。",
+        "目前只读取文件本身的内容：只显示语法错误，不知道依赖。读取这个 Maven 项目的构建会运行 pom.xml 指定的插件和扩展，请只对信任的项目这样做。"
+    ],
+    "lsp.trusted_builds" => [
+        "Maven builds read in {n} projects",
+        "Maven 빌드를 읽는 프로젝트 {n}개",
+        "Maven ビルドを読むプロジェクト {n} 件",
+        "读取 Maven 构建的项目 {n} 个"
+    ],
+    "lsp.forget_builds" => ["Forget them", "모두 해제", "すべて解除", "全部取消"],
     "lsp.turn_off" => ["Turn this language server off", "이 언어 서버 끄기", "この言語サーバーをオフ", "关闭此语言服务器"],
     "lsp.turn_on" => ["Turn this language server on", "이 언어 서버 켜기", "この言語サーバーをオン", "开启此语言服务器"],
     "lsp.skipped_tip" => [

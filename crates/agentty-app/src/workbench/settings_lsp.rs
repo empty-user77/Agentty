@@ -91,6 +91,7 @@ impl Workbench {
                 cx.listener(|this, _: &ClickEvent, _, cx| this.check_language_servers(cx)),
             )));
         let mut card = section_card().child(header);
+        let trusted_builds = crate::settings::settings(cx).lsp_trusted_builds.len();
         for server in self.lsp_servers.clone().unwrap_or_default() {
             let (name, program, site) = (server.name, server.program, server.site);
             note_for_search(server.program, server.languages);
@@ -146,7 +147,29 @@ impl Workbench {
                                     .font_family(crate::settings::BUNDLED_FONT)
                                     .text_color(hex(Chrome::MUTED))
                                     .child(server.program),
-                            ),
+                            )
+                            .when(name == "jdtls" && trusted_builds > 0, |d| {
+                                d.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .t_small()
+                                        .text_color(hex(Chrome::MUTED))
+                                        .child(tf(cx, "lsp.trusted_builds", &[("n", &trusted_builds.to_string())]))
+                                        .child(
+                                            div()
+                                                .id("lsp-forget-builds")
+                                                .cursor_pointer()
+                                                .text_color(hex(Chrome::ACCENT))
+                                                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                                                .child(t(cx, "lsp.forget_builds"))
+                                                .on_click(|_, _, cx| {
+                                                    crate::settings::update_settings(cx, |s| s.lsp_trusted_builds.clear())
+                                                }),
+                                        ),
+                                )
+                            }),
                     )
                     .child(div().flex_shrink_0().child(action))
                     .child(

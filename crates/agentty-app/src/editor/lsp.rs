@@ -136,6 +136,13 @@ fn patience(project: &Path, id: &str) -> Duration {
     }
 }
 
+/// The folder of the project whose build the server for `path` runs without reading (a Maven
+/// project not trusted yet), while it does.
+pub fn build_unread(project: &Path, language: Language, path: &Path) -> Option<PathBuf> {
+    let root = root(project, path, language);
+    lsp::build_unread(&root, id(language)?).then_some(root)
+}
+
 /// What the server for the file `path` of `language` is doing.
 pub fn status(project: &Path, language: Language, path: &Path) -> &'static str {
     let project = &root(project, path, language);

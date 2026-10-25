@@ -539,6 +539,7 @@ pub struct CodeEditor {
     problems_front: Option<PathBuf>,
     /// The servers turned off in Settings, as last handed to `agentty_bridge::lsp`.
     lsp_disabled: Option<Vec<String>>,
+    lsp_trusted: Option<Vec<String>>,
     /// The problem under the pointer, and whether its message shows yet.
     problem_hover: Option<(lsp::Problem, bool)>,
     /// The fixes of that problem, once the server said.
@@ -671,6 +672,7 @@ impl CodeEditor {
             problems_generation: 0,
             problems_front: None,
             lsp_disabled: None,
+            lsp_trusted: None,
             problem_hover: None,
             hover_fixes: None,
             fixes: None,
@@ -1929,6 +1931,37 @@ impl CodeEditor {
         let shown = |text: String, tip: String| {
             div().id("editor-lsp").flex_shrink_0().child(text).tooltip(Tooltip::text(tip, None)).into_any_element()
         };
+        // A Maven project not trusted yet: the files' text only, and the way to read its build.
+        if let Some(root) = lsp::build_unread(&doc.project, doc.language, &doc.path) {
+            return Some(
+                div()
+                    .id("editor-lsp")
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().opacity(0.55).child(name))
+                    .child(
+                        div()
+                            .id("editor-lsp-read-build")
+                            .cursor_pointer()
+                            .text_color(hex(Chrome::ATTENTION))
+                            .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
+                            .child(t(cx, "lsp.read_build"))
+                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                let root = root.to_string_lossy().into_owned();
+                                crate::settings::update_settings(cx, move |s| {
+                                    if !s.lsp_trusted_builds.contains(&root) {
+                                        s.lsp_trusted_builds.push(root);
+                                    }
+                                });
+                                cx.notify();
+                            })),
+                    )
+                    .tooltip(Tooltip::text(t(cx, "lsp.read_build_tip"), None))
+                    .into_any_element(),
+            );
+        }
         Some(match lsp::status(&doc.project, doc.language, &doc.path) {
             "ready" => shown(name.to_string(), t(cx, "lsp.ready_tip").to_string()),
             "starting" | "indexing" => shown(format!("{name} …"), t(cx, "lsp.indexing_tip").to_string()),
@@ -2165,6 +2198,7 @@ impl CodeEditor {
             "scrollY": self.docs.get(self.active).map(|d| d.scroll.y),
             "folds": self.docs.get(self.active).map(|d| d.folds.ranges().iter().map(|(s, e)| format!("{}-{}", s + 1, e + 1)).collect::<Vec<_>>()),
             "snippet": self.snippet.is_some(),
+            "buildUnread": self.docs.get(self.active).and_then(|d| lsp::build_unread(&d.project, d.language, &d.path)).is_some(),
             "shownLines": self.layout.as_ref().and_then(|l| l.shown_lines()).map(|(a, b)| format!("{}-{}", a + 1, b + 1)),
             "buildError": self.docs.get(self.active).and_then(|d| d.checks.build.as_ref()).map(|e| format!("{}:{} {}", e.path.display(), e.line, e.message)),
             "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),

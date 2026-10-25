@@ -94,6 +94,20 @@ impl CodeEditor {
             }
             cx.notify();
         }
+        // Maven projects the user let jdtls read (or no longer): its server starts again that way.
+        let trusted = &crate::settings::settings(cx).lsp_trusted_builds;
+        if self.lsp_trusted.as_ref() != Some(trusted) {
+            let roots: Vec<std::path::PathBuf> = trusted.iter().map(std::path::PathBuf::from).collect();
+            agentty_bridge::lsp::set_trusted_builds(&roots);
+            self.lsp_trusted = Some(trusted.clone());
+            for doc in &mut self.docs {
+                doc.checks.checked = None;
+            }
+            if let Some(doc) = self.docs.get(self.active) {
+                lsp::warm(&doc.project, doc.language, &doc.path);
+            }
+            cx.notify();
+        }
         let mut changed = false;
         let generation = lsp::generation();
         if generation != self.problems_generation {

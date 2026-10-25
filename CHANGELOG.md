@@ -92,6 +92,9 @@ All notable changes to this project are documented here. The format follows
   installed (the status bar and Settings → Project → Language servers offer it): properties, values, tags and
   attributes as you type, unknown properties and other problems underlined, formatting. Choosing a CSS property
   opens the list of its values.
+- File editor: jdtls reads a Maven project's build only after **Read the build** in the status bar is clicked for
+  that project, since reading it runs the plugins and extensions its `pom.xml` names; until then it reads the files'
+  own text and shows syntax errors. Settings → Project → Language servers forgets the projects allowed.
 - File editor: Emmet in HTML and in the markup of `.tsx` / `.jsx` files, as VS Code has it built in: an abbreviation
   such as `section.cart>h2+ul>li.item*2` is the first completion and expands to its tags (`className`, `htmlFor` and
   `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.

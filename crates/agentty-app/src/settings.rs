@@ -359,6 +359,10 @@ pub struct Settings {
     /// Language servers the user turned off, by name (`rust-analyzer`, `jdtls`).
     #[serde(default)]
     pub lsp_disabled: Vec<String>,
+    /// Maven projects (their folders) whose build jdtls may read: reading it runs the plugins and
+    /// extensions the pom names, so a project is only read once the user says so.
+    #[serde(default)]
+    pub lsp_trusted_builds: Vec<String>,
     pub browser: BrowserSettings,
     /// Offer earlier AI sessions when a terminal enters their folder.
     pub resume_bar: bool,
@@ -973,6 +977,7 @@ impl Default for Settings {
             editor_sticky_scroll: true,
             editor_format_on_save: false,
             lsp_disabled: Vec::new(),
+            lsp_trusted_builds: Vec::new(),
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),
             pinned_plugins: Vec::new(),
