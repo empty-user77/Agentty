@@ -60,6 +60,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Add a cursor at the next match / at every match / where you click / on the line above or below (file editor; Esc goes back to one) | ⌘D / ⇧⌘L / ⌥-click / ⌥⌘↑ ⌥⌘↓ |
 | Go to the matching bracket (file editor) | ⇧⌘\ |
 | Fold / unfold the region at the cursor (file editor; or click the arrow beside a line number, or the `⋯` of a folded line) | ⌥⌘[ / ⌥⌘] |
+| Fold / unfold every region of the file (file editor) | ⇧⌥⌘[ / ⇧⌥⌘] |
 | Mini mode | ⌃⌘M |
 
 While the file editor has focus, ⌘D, ⌘] / ⌘[, ⇧⌘↩ and ⌥⌘↑ / ⌥⌘↓ work on the text as in VS Code; click a terminal to split, switch or zoom panes or switch workspaces with them.
@@ -75,6 +76,7 @@ While the file editor has focus, ⌘D, ⌘] / ⌘[, ⇧⌘↩ and ⌥⌘↑ / �
 | File editor: find in file / next / previous | ⌘F / ↩ or ⌘G / ⇧↩ |
 | File editor: save / format / close file | ⌘S / ⇧⌥F / ⌘W |
 | File editor: Markdown preview on / off (macOS) | ⇧⌘V |
+| File editor: Markdown preview beside the text on / off (macOS) | ⌥⌘V |
 
 Double-click the title bar to zoom the window; double-click empty space in the tab strip for a new tab.
 

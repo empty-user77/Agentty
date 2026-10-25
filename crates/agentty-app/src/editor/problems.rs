@@ -542,7 +542,7 @@ impl CodeEditor {
                     .child(ask_ai),
             );
         Some(
-            gpui::deferred(gpui::anchored().anchor(corner).position(at).snap_to_window_with_margin(px(8.)).child(panel))
+            gpui::deferred(gpui::anchored().anchor(corner).position(at).snap_to_window_with_margin(self.popup_margin()).child(panel))
                 .with_priority(2)
                 .into_any_element(),
         )

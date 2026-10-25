@@ -91,6 +91,7 @@ actions!(
         Format,
         CloseFile,
         TogglePreview,
+        TogglePreviewBeside,
         AskAgent,
         ToggleComment,
         MoveLinesUp,
@@ -112,6 +113,8 @@ actions!(
         GoToBracket,
         Fold,
         Unfold,
+        FoldAll,
+        UnfoldAll,
     ]
 );
 
@@ -161,6 +164,8 @@ pub fn bind_keys(cx: &mut App) {
         key("shift-alt-f", Format, c),
         // VS Code's "Open Preview".
         key("cmd-shift-v", TogglePreview, c),
+        // VS Code's "Open Preview to the Side" is ⌘K V, and ⌘K is the agent's here.
+        key("cmd-alt-v", TogglePreviewBeside, c),
         // Cursor's and Kiro's "edit with AI".
         key("cmd-k", AskAgent, c),
         // VS Code's line keys.
@@ -183,6 +188,9 @@ pub fn bind_keys(cx: &mut App) {
         key("cmd-shift-\\", GoToBracket, c),
         key("cmd-alt-[", Fold, c),
         key("cmd-alt-]", Unfold, c),
+        // VS Code's are ⌘K ⌘0 and ⌘K ⌘J, and ⌘K is the agent's here: ⇧ with the keys above.
+        key("cmd-alt-shift-[", FoldAll, c),
+        key("cmd-alt-shift-]", UnfoldAll, c),
     ]);
     find::bind_keys(cx);
     navigate::bind_keys(cx);
@@ -333,6 +341,8 @@ pub(crate) struct Document {
     checking: bool,
     /// Markdown shown rendered instead of as text.
     preview: bool,
+    /// Markdown shown rendered beside the text.
+    beside: bool,
     /// Bring the cursor to the upper third of the view on the next paint (after a jump).
     center: bool,
     /// Scroll this line into view on the next paint, the cursor staying where it is.
@@ -390,8 +400,14 @@ impl Document {
         self.language == Language::Markdown && matches!(self.content, Content::Text) && crate::platform::HAS_WEBVIEW
     }
 
+    /// The text is out of sight: the page shows instead.
     fn previewing(&self) -> bool {
         self.preview && self.can_preview()
+    }
+
+    /// The page shows beside the text.
+    fn previewing_beside(&self) -> bool {
+        self.beside && !self.preview && self.can_preview()
     }
 
     /// Keeps what is kept by line in step with edits: syntax colors, and the problems and change
@@ -999,6 +1015,35 @@ impl CodeEditor {
         cx.notify();
     }
 
+    /// ⇧⌥⌘[: folds every region of the file, nested ones too; ⇧⌥⌘]: unfolds them all.
+    fn fold_all(&mut self, fold: bool, cx: &mut Context<Self>) {
+        let Some(doc) = self.doc() else { return };
+        if !fold {
+            if !doc.folds.is_empty() {
+                doc.folds.unfold_all();
+                doc.autoscroll = true;
+                cx.notify();
+            }
+            return;
+        }
+        let regions = fold::all_regions(|i| doc.buffer.line(i), doc.buffer.line_count());
+        if regions.is_empty() {
+            return;
+        }
+        doc.folds.fold_all(regions);
+        // The cursor goes onto the line left in view of the region it was in.
+        let cursor = doc.buffer.cursor();
+        if let Some(&(from, _)) = doc.folds.hidden().iter().find(|&&(from, to)| from <= cursor.line && cursor.line <= to) {
+            doc.buffer.single_cursor();
+            let line = from - 1;
+            doc.buffer.move_to(Pos::new(line, doc.buffer.line(line).len()), false);
+        } else if doc.buffer.selections().len() > 1 {
+            doc.buffer.single_cursor();
+        }
+        doc.autoscroll = true;
+        cx.notify();
+    }
+
     /// A click on a fold arrow: the region starting at `line` folds or unfolds. False when none
     /// starts there.
     fn toggle_fold(&mut self, line: usize, cx: &mut Context<Self>) -> bool {
@@ -1391,6 +1436,9 @@ impl CodeEditor {
         self.completion = None;
         self.snippet = None;
         self.signature = None;
+        if self.docs.get(self.active).is_some_and(Document::previewing_beside) {
+            crate::webview::focus_gpui_view(window);
+        }
         window.focus(&self.focus_handle);
         let Some(layout) = self.layout.as_ref() else { return };
         if layout.on_scrollbar(event.position) {
@@ -1526,6 +1574,7 @@ impl CodeEditor {
         let Some(doc) = self.docs.get_mut(self.active).filter(|d| d.can_preview()) else { return };
         doc.buffer.unmark();
         doc.preview = !doc.preview;
+        doc.beside = false;
         if doc.preview {
             crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "markdown_preview" }));
         } else {
@@ -1536,6 +1585,44 @@ impl CodeEditor {
             window.focus(&self.focus_handle);
         }
         cx.notify();
+    }
+
+    /// Shows the file in front rendered beside its text, or no longer (markdown files only).
+    fn toggle_preview_beside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(doc) = self.docs.get_mut(self.active).filter(|d| d.can_preview()) else { return };
+        doc.beside = !doc.previewing_beside();
+        if doc.beside {
+            crate::metrics::track(cx, "feature_used", serde_json::json!({ "feature": "markdown_preview_beside" }));
+        } else {
+            self.preview.hide();
+        }
+        if std::mem::take(&mut doc.preview) {
+            doc.autoscroll = true;
+        }
+        self.preview.synced = None;
+        // The page may have had the keyboard: the text takes it back.
+        crate::webview::focus_gpui_view(window);
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
+    /// Something of the editor's own covers the page: it stays out of sight meanwhile (a native
+    /// view is drawn over everything). The go-to box is wider than the text beside the page.
+    fn preview_hidden(&self) -> bool {
+        self.preview.covered
+            || self.confirm.is_some()
+            || (self.picker.is_some() && self.docs.get(self.active).is_some_and(Document::previewing_beside))
+    }
+
+    /// Where the editor's pop-ups may go: inside the window, and left of the page beside the text.
+    pub(super) fn popup_margin(&self) -> gpui::Edges<Pixels> {
+        let (right, _) = self.preview.side.get();
+        gpui::Edges { top: px(8.), bottom: px(8.), left: px(8.), right: px(8. + right) }
+    }
+
+    /// How wide the page beside the text is (0 without one): what lies over the text keeps left of it.
+    pub(super) fn beside_width(&self) -> f32 {
+        self.preview.side.get().1
     }
 
     /// The workbench says whether something of its own is drawn over the editor, or the editor is
@@ -1549,8 +1636,8 @@ impl CodeEditor {
 
     /// Brings the page up to date with the text, and picks up links clicked in it.
     fn preview_tick(&mut self, cx: &mut Context<Self>) {
-        let Some(doc) = self.docs.get(self.active).filter(|d| d.previewing()) else { return };
-        if self.preview.covered || self.confirm.is_some() {
+        let Some(doc) = self.docs.get(self.active).filter(|d| d.previewing() || d.previewing_beside()) else { return };
+        if self.preview_hidden() {
             return;
         }
         let view = self.preview.view.clone();
@@ -1565,7 +1652,7 @@ impl CodeEditor {
         if self.preview.shown.as_ref() != Some(&wanted) && !self.preview.rendering {
             self.preview.rendering = true;
             let replies = self.preview_replies.clone();
-            let (path, revision) = wanted;
+            let (path, revision) = wanted.clone();
             view.call_async(
                 "return window.agenttyRender ? window.agenttyRender(text) : null;",
                 &[("text", &doc.buffer.text())],
@@ -1579,6 +1666,23 @@ impl CodeEditor {
                     let _ = replies.unbounded_send(reply);
                 }),
             );
+        }
+        // Beside the text, the page follows the text's scrolling: the first line in sight is the
+        // first in sight there.
+        if doc.previewing_beside() && self.preview.shown.as_ref() == Some(&wanted) {
+            if let Some(layout) = self.layout.as_ref().filter(|l| l.line_height > 0.) {
+                let rows = doc.scroll.y / layout.line_height;
+                let line = doc.folds.line_of(rows.floor() as usize) as f32 + rows.fract();
+                let at = (wanted.0.clone(), wanted.1, (line * 100.).round() as i64);
+                if self.preview.synced.as_ref() != Some(&at) {
+                    self.preview.synced = Some(at);
+                    view.call_async(
+                        "return window.agenttyScrollTo ? window.agenttyScrollTo(line) : null;",
+                        &[("line", &format!("{line:.2}"))],
+                        Box::new(|_| {}),
+                    );
+                }
+            }
         }
         if !self.preview.asking {
             self.preview.asking = true;
@@ -1658,7 +1762,7 @@ impl CodeEditor {
         let can_format = doc.editable() && !doc.formatting;
         // A narrow editor (the session beside it, a small window) keeps the buttons' icons only:
         // the file's name and where the cursor is matter more. Their tooltips say the rest.
-        let narrow = self.layout.as_ref().is_some_and(|l| l.width() < 760.);
+        let narrow = self.layout.as_ref().is_some_and(|l| l.width() + self.beside_width() < 760.);
         let button = move |id: &'static str, glyph: &'static str, label: String, enabled: bool| {
             div()
                 .id(id)
@@ -1735,6 +1839,22 @@ impl CodeEditor {
                             None,
                         ))
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_preview(window, cx))),
+                )
+                .child(
+                    div()
+                        .id("editor-preview-beside")
+                        .flex_shrink_0()
+                        .size(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .when(doc.previewing_beside(), |d| d.bg(hex(Chrome::SELECTED)))
+                        .hover(|s| s.bg(hex(Chrome::HOVER)))
+                        .child(icon("columns-2", IconSize::INLINE, hex(Chrome::FOREGROUND)))
+                        .tooltip(Tooltip::text(with_shortcut(t(cx, "editor.preview_beside_tip").to_string(), "⌥⌘V"), None))
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_preview_beside(window, cx))),
                 )
             })
             .when(doc.language.formatter().is_some() && matches!(doc.content, Content::Text), |d| {
@@ -2212,6 +2332,7 @@ impl CodeEditor {
                 "cursor": [d.buffer.cursor().line, d.buffer.cursor().col],
                 "notice": d.notice.as_ref().map(|n| n.text.clone()),
                 "preview": d.previewing(),
+                "beside": d.previewing_beside(),
             })).collect::<Vec<_>>(),
             "tabProblems": self.tabs().iter().map(|t| t.problem.map(|c| format!("{c:06x}"))).collect::<Vec<_>>(),
             "active": self.active,
@@ -2247,6 +2368,8 @@ impl CodeEditor {
                 "view": self.preview.view.borrow().is_some(),
                 "covered": self.preview.covered,
                 "shownRevision": self.preview.shown.as_ref().map(|(_, r)| *r),
+                "besideWidth": self.preview.side.get().1,
+                "syncedLine": self.preview.synced.as_ref().map(|(_, _, line)| *line as f64 / 100.),
             },
         })
     }
@@ -2328,6 +2451,8 @@ impl CodeEditor {
             }
             "format" => self.format(cx),
             "preview" => self.toggle_preview(window, cx),
+            "preview-beside" => self.toggle_preview_beside(window, cx),
+            "fold-all" => self.fold_all(argument != "off", cx),
             // The HTML file's browser button.
             "browser" => {
                 if let Some(doc) = self.docs.get(self.active).filter(|doc| doc.language == Language::Html) {
@@ -2480,6 +2605,7 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
         disk_changed: false,
         checking: false,
         preview: false,
+        beside: false,
         center: false,
         scroll_to_line: None,
         base: String::new(),
@@ -2627,6 +2753,36 @@ impl gpui::EntityInputHandler for CodeEditor {
     }
 }
 
+impl CodeEditor {
+    /// The place the page's native view is laid over once it is known, and where it sits for
+    /// the pop-ups (`side`, beside the text). Something drawn over it (a question: unsaved
+    /// changes, overwrite?) keeps the page out of sight meanwhile.
+    fn render_page(&self, id: &'static str, side: Option<std::rc::Rc<std::cell::Cell<(f32, f32)>>>) -> gpui::Stateful<gpui::Div> {
+        let covered = self.preview_hidden();
+        if covered {
+            self.preview.hide();
+        }
+        let view = self.preview.view.clone();
+        div().id(id).bg(hex(Chrome::EDITOR)).child(
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    if let Some(side) = side.as_ref() {
+                        let right = f32::from(window.viewport_size().width - bounds.left());
+                        side.set((right.max(0.), f32::from(bounds.size.width)));
+                    }
+                    if !covered {
+                        if let Some(view) = view.borrow_mut().as_mut() {
+                            view.set_frame(bounds);
+                        }
+                    }
+                },
+            )
+            .size_full(),
+        )
+    }
+}
+
 impl Render for CodeEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(path) = self.docs.get(self.active).map(|d| d.path.clone()) {
@@ -2637,7 +2793,11 @@ impl Render for CodeEditor {
             }
         }
         let previewing = self.docs.get(self.active).is_some_and(Document::previewing);
-        if !previewing {
+        let beside = self.docs.get(self.active).is_some_and(Document::previewing_beside);
+        if !beside {
+            self.preview.side.set((0., 0.));
+        }
+        if !previewing && !beside {
             self.preview.hide();
         } else if self.preview.view.borrow().is_none() {
             let view = crate::webview::WebView::new(window, &preview::view_settings());
@@ -2677,36 +2837,12 @@ impl Render for CodeEditor {
                 .children(picker);
         };
         let body = if previewing {
-            // The native page is laid over this element once its place is known. A question
-            // (unsaved changes, overwrite?) is drawn over it: the page stays out of sight meanwhile.
-            let covered = self.preview.covered || self.confirm.is_some();
-            if covered {
-                self.preview.hide();
-            }
-            let view = self.preview.view.clone();
-            div()
-                .id("editor-preview")
-                .flex_1()
-                .min_h_0()
-                .bg(hex(Chrome::EDITOR))
-                .child(
-                    gpui::canvas(
-                        |_, _, _| {},
-                        move |bounds, _, _, _| {
-                            if !covered {
-                                if let Some(view) = view.borrow_mut().as_mut() {
-                                    view.set_frame(bounds);
-                                }
-                            }
-                        },
-                    )
-                    .size_full(),
-                )
-                .into_any_element()
+            self.render_page("editor-preview", None).flex_1().min_h_0().into_any_element()
         } else if matches!(doc.content, Content::Text) {
-            div()
+            let text = div()
                 .id("editor-text")
                 .flex_1()
+                .min_w_0()
                 .min_h_0()
                 .relative()
                 .cursor(if self.link.is_some() { gpui::CursorStyle::PointingHand } else { gpui::CursorStyle::IBeam })
@@ -2715,8 +2851,21 @@ impl Render for CodeEditor {
                 .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
                 .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(Self::mouse_up))
                 .on_scroll_wheel(cx.listener(Self::scroll_wheel))
-                .child(element::EditorElement::new(cx.entity()))
-                .into_any_element()
+                .child(element::EditorElement::new(cx.entity()));
+            if beside {
+                // Half and half, as VS Code opens it.
+                let side = self.preview.side.clone();
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(text)
+                    .child(div().w(px(1.)).flex_shrink_0().bg(hex(Chrome::BORDER)))
+                    .child(self.render_page("editor-preview-beside", Some(side)).flex_1().min_w_0())
+                    .into_any_element()
+            } else {
+                text.into_any_element()
+            }
         } else if let Content::Image(image) = &doc.content {
             // Scaled down to fit, never up: a small icon stays sharp at its own size.
             div()
@@ -2831,6 +2980,8 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &SelectAllOccurrences, _, cx| this.add_cursors(true, cx)))
             .on_action(cx.listener(|this, _: &Fold, _, cx| this.fold_at_cursor(true, cx)))
             .on_action(cx.listener(|this, _: &Unfold, _, cx| this.fold_at_cursor(false, cx)))
+            .on_action(cx.listener(|this, _: &FoldAll, _, cx| this.fold_all(true, cx)))
+            .on_action(cx.listener(|this, _: &UnfoldAll, _, cx| this.fold_all(false, cx)))
             .on_action(cx.listener(|this, _: &AddCursorAbove, _, cx| this.add_cursor_vertical(true, cx)))
             .on_action(cx.listener(|this, _: &AddCursorBelow, _, cx| this.add_cursor_vertical(false, cx)))
             .on_action(cx.listener(|this, _: &GoToBracket, _, cx| {
@@ -2893,6 +3044,7 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &Format, _, cx| this.format(cx)))
             .on_action(cx.listener(|this, _: &CloseFile, _, cx| this.request_close(this.active, cx)))
             .on_action(cx.listener(|this, _: &TogglePreview, window, cx| this.toggle_preview(window, cx)))
+            .on_action(cx.listener(|this, _: &TogglePreviewBeside, window, cx| this.toggle_preview_beside(window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToFile, window, cx| this.open_picker("", None, window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToFileSymbol, window, cx| this.open_picker("@", None, window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToSymbol, window, cx| this.open_picker("#", None, window, cx)))

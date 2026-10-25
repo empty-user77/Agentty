@@ -167,7 +167,7 @@ impl CodeEditor {
             )
             .child(div().px_0p5().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "editor.rename_keys")));
         Some(
-            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(panel))
+            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(self.popup_margin()).child(panel))
                 .with_priority(3)
                 .into_any_element(),
         )

@@ -672,7 +672,7 @@ impl CodeEditor {
             .text_color(hex(Chrome::FOREGROUND))
             .child(text.clone());
         Some(
-            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(note))
+            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(self.popup_margin()).child(note))
                 .with_priority(2)
                 .into_any_element(),
         )
@@ -847,7 +847,7 @@ impl CodeEditor {
                     .child(div().flex_1().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(text.clone()))
             })));
         Some(
-            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(panel))
+            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(self.popup_margin()).child(panel))
                 .with_priority(2)
                 .into_any_element(),
         )

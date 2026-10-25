@@ -433,7 +433,7 @@ impl CodeEditor {
                 .key_context(CONTEXT)
                 .absolute()
                 .top(px(41.))
-                .right(px(18.))
+                .right(px(18. + self.beside_width()))
                 .w(px(420.))
                 .max_w(gpui::relative(0.9))
                 .px_1()

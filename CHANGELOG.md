@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- File editor: the Markdown preview can show beside the text (**⌥⌘V**, or the button next to **Preview**), following
+  the text as you scroll and type.
+- File editor: **⇧⌥⌘[** folds every region of the file, nested ones too, and **⇧⌥⌘]** unfolds them all.
 - File editor: a name the language server does not know (`undefined: Totl`) offers **Change to 'Total'** for the
   names of the file and the project spelled closest to it, made at once without AI, next to the server's own fixes.
 - File editor: JSON files get VS Code's JSON server from `vscode-langservers-extracted` (syntax errors, formatting);

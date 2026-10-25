@@ -10,7 +10,7 @@
 
 use crate::webview::WebView;
 use sha2::{Digest, Sha256};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -77,14 +77,28 @@ pub struct Preview {
     pub asking: bool,
     /// Something drawn by the app is over the text area, or the editor is not on screen.
     pub covered: bool,
+    /// Shown beside the text: how far its left edge is from the window's right edge, and its width
+    /// (both 0 otherwise). The editor's pop-ups stay left of it: the page would hide them.
+    pub side: Rc<Cell<(f32, f32)>>,
+    /// The document, revision and first line (in hundredths) the page beside the text was
+    /// scrolled to.
+    pub synced: Option<(PathBuf, u64, i64)>,
 }
 
 impl Preview {
     pub fn new() -> Self {
-        Self { view: Rc::new(RefCell::new(None)), shown: None, rendering: false, asking: false, covered: true }
+        Self {
+            view: Rc::new(RefCell::new(None)),
+            shown: None,
+            rendering: false,
+            asking: false,
+            covered: true,
+            side: Rc::new(Cell::new((0., 0.))),
+            synced: None,
+        }
     }
 
-    pub fn hide(&mut self) {
+    pub fn hide(&self) {
         if let Some(view) = self.view.borrow_mut().as_mut() {
             view.hide();
         }

@@ -2694,6 +2694,7 @@ strings! {
     "editor.format" => ["Format", "포맷", "フォーマット", "格式化"],
     "editor.preview" => ["Preview", "미리보기", "プレビュー", "预览"],
     "editor.preview_tip" => ["Show the Markdown rendered, as VS Code's preview shows it", "VS Code 미리보기처럼 마크다운을 렌더링해서 보기", "VS Code のプレビューと同じようにマークダウンを表示", "像 VS Code 预览一样渲染显示 Markdown"],
+    "editor.preview_beside_tip" => ["Preview beside the text", "옆에 미리보기", "横にプレビュー", "在旁边预览"],
     "editor.edit_text" => ["Edit", "편집", "編集", "编辑"],
     "editor.edit_text_tip" => ["Back to the Markdown text", "마크다운 텍스트로 돌아가기", "マークダウンのテキストに戻る", "返回 Markdown 文本"],
     "editor.formatting" => ["Formatting…", "포맷 중…", "フォーマット中…", "正在格式化…"],

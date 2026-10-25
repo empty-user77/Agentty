@@ -245,7 +245,7 @@ impl CodeEditor {
             )
             .child(div().py_1().font_family(font).text_size(px(12.)).children(old).children(new));
         Some(
-            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(panel))
+            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(self.popup_margin()).child(panel))
                 .with_priority(2)
                 .into_any_element(),
         )

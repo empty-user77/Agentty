@@ -847,7 +847,7 @@ impl CodeEditor {
             .t_small()
             .children(rows);
         Some(
-            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(list))
+            gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(self.popup_margin()).child(list))
                 .with_priority(3)
                 .into_any_element(),
         )
