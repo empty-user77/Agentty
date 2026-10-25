@@ -92,10 +92,14 @@ All notable changes to this project are documented here. The format follows
   installed (the status bar and Settings → Project → Language servers offer it): properties, values, tags and
   attributes as you type, unknown properties and other problems underlined, formatting. Choosing a CSS property
   opens the list of its values.
+- File editor: Emmet in HTML and in the markup of `.tsx` / `.jsx` files, as VS Code has it built in: an abbreviation
+  such as `section.cart>h2+ul>li.item*2` is the first completion and expands to its tags (`className`, `htmlFor` and
+  `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.
 
 ### Fixed
 - File editor: TypeScript and JavaScript completions now offer a component's props in JSX; a server's snippet (such
-  as rust-analyzer's `arc` for `s.ar`) is listed after the names that match as well.
+  as rust-analyzer's `arc` for `s.ar`) is listed after the names that match as well; ⌘/ on markup in a `.tsx` or
+  `.jsx` file comments it as `{/* … */}` (`//` there showed on the page).
 - File editor: the first file opened with ⌘P in a new window gets its language server too; a list that would stay
   empty after `.` in a file without a server no longer blocks the next ones; go-to-definition without a server
   prefers the file's own language family (a Kotlin `Order` over a TypeScript one in the same repository); Java shows

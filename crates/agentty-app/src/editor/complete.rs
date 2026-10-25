@@ -3,9 +3,11 @@
 //! after `.` (`::`, `->`), and with **⌃Space**; ↑↓ choose, ↩ or ⇥ put it in, Esc closes it.
 //! Typing on filters the list; a server that said its list was partial is asked again. A chosen
 //! snippet (`onSearch={…}`, `setName(name)`) selects its first placeholder, and ⇥ goes on to the
-//! next one and then to its end, as in VS Code.
+//! next one and then to its end, as in VS Code. In HTML and JSX an Emmet abbreviation before
+//! the cursor (`ul>li*3`) comes first ([`super::emmet`]).
 
 use super::buffer::Pos;
+use super::emmet;
 use super::language::Language;
 use super::lsp;
 use super::project_index;
@@ -44,6 +46,7 @@ const WORD_LINES: usize = 20_000;
 enum Source {
     Server(Box<lsp::CompletionItem>),
     Word,
+    Emmet(Box<emmet::Expansion>),
 }
 
 #[derive(Clone)]
@@ -202,7 +205,7 @@ impl CodeEditor {
                 return self.completion_filter(true, cx);
             }
             let start = symbols::name_at(line, cursor.col, doc.language).map_or(cursor.col, |(s, _)| s);
-            if line[start..cursor.col].chars().next().is_some_and(|c| !c.is_ascii_digit()) {
+            if line[start..cursor.col].chars().next().is_some_and(|c| !c.is_ascii_digit()) || self.emmet_entry().is_some() {
                 self.request_completion(None, cx);
             }
             return;
@@ -215,6 +218,9 @@ impl CodeEditor {
             _ => false,
         };
         self.completion = None;
+        if !trigger && self.emmet_entry().is_some() {
+            return self.request_completion(None, cx);
+        }
         // After `.` only a server knows the members (the file's words would be any word).
         if trigger && lsp::id(doc.language).is_some() && lsp::status(&doc.project, doc.language, &doc.path) == "ready" {
             self.request_completion(Some(c), cx);
@@ -257,6 +263,10 @@ impl CodeEditor {
                     asking,
                 })
             }
+        }
+        // An abbreviation needs no server: it is offered at once.
+        if self.emmet_entry().is_some() {
+            self.completion_filter(false, cx);
         }
         cx.spawn(async move |this, cx| {
             let found = cx
@@ -308,8 +318,10 @@ impl CodeEditor {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                let emmet = this.emmet_entry();
                 let Some(open) = this.completion.as_mut().filter(|c| c.asking == asking) else { return };
                 (open.entries, open.complete) = found;
+                open.entries.extend(emmet);
                 // Nothing to offer: no list left open that typing would only filter.
                 if open.entries.is_empty() {
                     this.completion = None;
@@ -324,6 +336,7 @@ impl CodeEditor {
     /// Filters the list by the word typed so far (`typed`: a character was just added, so a
     /// partial list is asked for again).
     fn completion_filter(&mut self, typed: bool, cx: &mut Context<Self>) {
+        let emmet = self.emmet_entry();
         let Some(doc) = self.docs.get(self.active) else { return };
         let Some(open) = self.completion.as_mut() else { return };
         let cursor = doc.buffer.cursor();
@@ -340,20 +353,31 @@ impl CodeEditor {
         if typed && !open.complete {
             return self.request_completion(None, cx);
         }
-        let words_only = open.entries.iter().all(|e| matches!(e.source, Source::Word));
+        // The abbreviation as it is now, first.
+        let is_emmet = |e: &Entry| matches!(e.source, Source::Emmet(_));
+        open.entries.retain(|e| !is_emmet(e));
+        open.entries.extend(emmet);
+        let words_only = open.entries.iter().filter(|e| !is_emmet(e)).all(|e| matches!(e.source, Source::Word));
         let mut scored: Vec<(u8, usize)> = open
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| !words_only || (query.chars().count() >= WORD_MIN && e.label != query))
-            .filter_map(|(i, e)| matches(&e.filter, &query).map(|score| (score, i)))
+            .filter(|(_, e)| is_emmet(e) || !words_only || (query.chars().count() >= WORD_MIN && e.label != query))
+            .filter_map(|(i, e)| if is_emmet(e) { Some((0, i)) } else { matches(&e.filter, &query).map(|score| (score, i)) })
             .collect();
         let entries = &open.entries;
         // A server's snippet (rust-analyzer's `arc` for `s.ar`) after the names it matches as well.
         let snippet = |e: &Entry| matches!(&e.source, Source::Server(item) if item.kind == Some(15));
         scored.sort_by(|a, b| {
             let (x, y) = (&entries[a.1], &entries[b.1]);
-            (a.0, !x.preferred, snippet(x), &x.sort, &x.label).cmp(&(b.0, !y.preferred, snippet(y), &y.sort, &y.label))
+            (!is_emmet(x), a.0, !x.preferred, snippet(x), &x.sort, &x.label).cmp(&(
+                !is_emmet(y),
+                b.0,
+                !y.preferred,
+                snippet(y),
+                &y.sort,
+                &y.label,
+            ))
         });
         open.shown = scored.into_iter().take(MAX_SHOWN).map(|(_, i)| i).collect();
         open.selected = 0;
@@ -389,6 +413,7 @@ impl CodeEditor {
         let plain = match &entry.source {
             Source::Word => true,
             Source::Server(item) => item.kind == Some(14),
+            Source::Emmet(_) => false,
         };
         if plain && typed.as_deref() == Some(entry.label.as_str()) {
             cx.notify();
@@ -406,6 +431,16 @@ impl CodeEditor {
                 let cursor = doc.buffer.cursor();
                 let edit = lsp::byte_edit(&path, (start.line, start.col), (cursor.line, cursor.col), &entry.label);
                 self.put_completion(&path, &edit, cx);
+            }
+            Source::Emmet(expansion) => {
+                let cursor = doc.buffer.cursor();
+                let line = doc.buffer.line(cursor.line);
+                let indent = &line[..line.len() - line.trim_start().len()];
+                let (text, stops) = indent_snippet(&expansion.text, &expansion.stops, indent, doc.buffer.indent_unit())
+                    .unwrap_or((expansion.text.clone(), expansion.stops.clone()));
+                let edit = lsp::byte_edit(&path, (cursor.line, expansion.start), (cursor.line, cursor.col), &text);
+                self.put_completion(&path, &edit, cx);
+                self.start_snippet_text(&path, &text, &stops, cx);
             }
             Source::Server(item) => {
                 // Its import comes when asked for; the name goes in once it is here.
@@ -445,7 +480,16 @@ impl CodeEditor {
     /// Just after `item` went in (the cursor after its text): to its first tab stop, the others
     /// kept for ⇥. Plain text (a CSS value inside `display: …;`) leaves the snippet it went into.
     fn start_snippet(&mut self, path: &std::path::Path, item: &lsp::CompletionItem, cx: &mut Context<Self>) {
-        if item.stops.is_empty() {
+        self.start_snippet_text(path, &item.insert, &item.stops, cx);
+        // Into a call's parentheses: what goes there.
+        if !item.stops.is_empty() && item.insert.contains('(') {
+            self.signature_typed("(", cx);
+        }
+    }
+
+    /// [`Self::start_snippet`] for `insert` just put in, with its `stops`.
+    fn start_snippet_text(&mut self, path: &std::path::Path, insert: &str, stops: &[(usize, usize)], cx: &mut Context<Self>) {
+        if stops.is_empty() {
             return;
         }
         self.snippet = None;
@@ -457,15 +501,14 @@ impl CodeEditor {
         let buffer = &doc.buffer;
         // Where a byte of the text put in is now: the rest of its line is that text too.
         let at = |offset: usize| {
-            let tail = &item.insert[offset.min(item.insert.len())..];
+            let tail = &insert[offset.min(insert.len())..];
             let below = tail.matches('\n').count();
             let line = end.line.saturating_sub(below);
             let rest = tail.split('\n').next().unwrap_or("").len();
             let col = if below == 0 { end.col.saturating_sub(rest) } else { buffer.line(line).len().saturating_sub(rest) };
             buffer.clamp(Pos::new(line, col))
         };
-        let stops: Vec<(Pos, usize)> = item
-            .stops
+        let stops: Vec<(Pos, usize)> = stops
             .iter()
             .map(|&(from, to)| {
                 let (from, to) = (at(from), at(to));
@@ -484,10 +527,31 @@ impl CodeEditor {
         if !ahead.is_empty() {
             self.snippet = Some(Snippet { path: path.to_path_buf(), start, ahead });
         }
-        // Into a call's parentheses: what goes there.
-        if item.insert.contains('(') {
-            self.signature_typed("(", cx);
+        cx.notify();
+    }
+
+    /// An Emmet abbreviation ending at the cursor, in HTML or in a JSX file's markup.
+    fn emmet_entry(&self) -> Option<Entry> {
+        let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable())?;
+        let jsx = match doc.language {
+            Language::Html => false,
+            Language::Tsx | Language::Jsx => true,
+            _ => return None,
+        };
+        if !doc.buffer.selection.is_empty() || doc.buffer.has_extra_cursors() || (jsx && !doc.buffer.selection_is_jsx()) {
+            return None;
         }
+        let cursor = doc.buffer.cursor();
+        let expansion = emmet::expand_at(doc.buffer.line(cursor.line), cursor.col, jsx)?;
+        Some(Entry {
+            label: expansion.abbreviation.clone(),
+            detail: Some("Emmet".into()),
+            tag: "emmet",
+            filter: String::new(),
+            sort: String::new(),
+            preferred: true,
+            source: Source::Emmet(Box::new(expansion)),
+        })
     }
 
     /// ⇥ in a snippet: to its next stop (true), or nothing to do with one.

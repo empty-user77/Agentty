@@ -8,6 +8,7 @@ pub mod agent;
 pub mod buffer;
 mod complete;
 mod element;
+mod emmet;
 pub mod external;
 pub mod file;
 mod find;
@@ -2724,7 +2725,9 @@ impl Render for CodeEditor {
                 this.completion_erased(cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleComment, _, cx| {
-                if let Some((open, close)) = this.docs.get(this.active).and_then(|d| d.language.comment()) {
+                let Some(doc) = this.docs.get(this.active) else { return };
+                let jsx = matches!(doc.language, Language::Tsx | Language::Jsx) && doc.buffer.selection_is_jsx();
+                if let Some((open, close)) = if jsx { Some(("{/*", "*/}")) } else { doc.language.comment() } {
                     this.edit(cx, |b| b.toggle_comment(open, close));
                 }
             }))

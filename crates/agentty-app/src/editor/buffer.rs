@@ -1032,6 +1032,38 @@ impl Buffer {
         }
     }
 
+    /// The selected lines are markup of a `.tsx` / `.jsx` file, where a comment is `{/* … */}`
+    /// (`//` would show as text): the first line with text starts a tag or is such a comment, or
+    /// is text or `{…}` below a line that ends a tag, with only such lines between.
+    pub fn selection_is_jsx(&self) -> bool {
+        const CODE: &[&str] = &["const ", "let ", "var ", "return", "if ", "if(", "for ", "while ", "function ", "import ", "export "];
+        // Text between tags: not a line of code by its start or its end.
+        let text = |l: &str| {
+            !l.starts_with([')', '}', ']', ';'])
+                && !l.starts_with("//")
+                && !CODE.iter().any(|word| l.starts_with(word))
+                && !l.ends_with([';', '{', '(', '[', ',', '='])
+        };
+        let (first, last) = self.selected_lines();
+        let Some(line) = (first..=last).map(|i| self.line(i).trim()).find(|l| !l.is_empty()) else { return false };
+        if line.starts_with("{/*") || (line.starts_with('<') && !line.starts_with("<<")) {
+            return true;
+        }
+        if !text(line) {
+            return false;
+        }
+        for above in (first.saturating_sub(200)..first).rev().map(|i| self.line(i).trim()).filter(|l| !l.is_empty()) {
+            // After a tag, or the `(` markup starts in (`return (`).
+            if (above.ends_with('>') && !above.ends_with("=>")) || above.ends_with("return (") || above.ends_with("=> (") {
+                return true;
+            }
+            if !text(above) || above.starts_with('<') {
+                return false;
+            }
+        }
+        false
+    }
+
     /// ⌥↑ / ⌥↓: the selected lines swap places with the line above or below, selection and all.
     pub fn move_lines(&mut self, down: bool) {
         let (first, last) = self.selected_lines();
@@ -1854,6 +1886,28 @@ mod tests {
         assert_eq!(b.text(), "// a\nb\nc");
         b.undo();
         assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn markup_in_jsx_is_commented_as_jsx() {
+        let mut b =
+            Buffer::new("  const a = 1;\n  return (\n    <label>\n      <input />\n      In stock\n      {count} left\n    </label>\n  );");
+        let on = |b: &mut Buffer, line: usize| {
+            b.move_to(Pos::new(line, 0), false);
+            b.selection_is_jsx()
+        };
+        assert!(!on(&mut b, 0) && !on(&mut b, 1), "code");
+        assert!(on(&mut b, 2) && on(&mut b, 3) && on(&mut b, 6), "tags");
+        assert!(on(&mut b, 4) && on(&mut b, 5), "text and an expression between tags");
+        assert!(!on(&mut b, 7), "the code after it");
+        let mut code = Buffer::new("function f() {\n  const a = 1\n  a\n}");
+        assert!(!on(&mut code, 2), "code without semicolons is not text");
+        b.move_to(Pos::new(3, 0), false);
+        b.toggle_comment("{/*", "*/}");
+        assert_eq!(b.line(3), "      {/* <input /> */}");
+        assert!(b.selection_is_jsx());
+        b.toggle_comment("{/*", "*/}");
+        assert_eq!(b.line(3), "      <input />");
     }
 
     #[test]
