@@ -113,6 +113,8 @@ actions!(
         GoToBracket,
         Fold,
         Unfold,
+        FoldAll,
+        UnfoldAll,
     ]
 );
 
@@ -186,6 +188,9 @@ pub fn bind_keys(cx: &mut App) {
         key("cmd-shift-\\", GoToBracket, c),
         key("cmd-alt-[", Fold, c),
         key("cmd-alt-]", Unfold, c),
+        // VS Code's are ⌘K ⌘0 and ⌘K ⌘J, and ⌘K is the agent's here: ⇧ with the keys above.
+        key("cmd-alt-shift-[", FoldAll, c),
+        key("cmd-alt-shift-]", UnfoldAll, c),
     ]);
     find::bind_keys(cx);
     navigate::bind_keys(cx);
@@ -1005,6 +1010,35 @@ impl CodeEditor {
         doc.buffer.single_cursor();
         if cursor.line != start {
             doc.buffer.move_to(doc.buffer.clamp(Pos::new(start, cursor.col)), false);
+        }
+        doc.autoscroll = true;
+        cx.notify();
+    }
+
+    /// ⇧⌥⌘[: folds every region of the file, nested ones too; ⇧⌥⌘]: unfolds them all.
+    fn fold_all(&mut self, fold: bool, cx: &mut Context<Self>) {
+        let Some(doc) = self.doc() else { return };
+        if !fold {
+            if !doc.folds.is_empty() {
+                doc.folds.unfold_all();
+                doc.autoscroll = true;
+                cx.notify();
+            }
+            return;
+        }
+        let regions = fold::all_regions(|i| doc.buffer.line(i), doc.buffer.line_count());
+        if regions.is_empty() {
+            return;
+        }
+        doc.folds.fold_all(regions);
+        // The cursor goes onto the line left in view of the region it was in.
+        let cursor = doc.buffer.cursor();
+        if let Some(&(from, _)) = doc.folds.hidden().iter().find(|&&(from, to)| from <= cursor.line && cursor.line <= to) {
+            doc.buffer.single_cursor();
+            let line = from - 1;
+            doc.buffer.move_to(Pos::new(line, doc.buffer.line(line).len()), false);
+        } else if doc.buffer.selections().len() > 1 {
+            doc.buffer.single_cursor();
         }
         doc.autoscroll = true;
         cx.notify();
@@ -2418,6 +2452,7 @@ impl CodeEditor {
             "format" => self.format(cx),
             "preview" => self.toggle_preview(window, cx),
             "preview-beside" => self.toggle_preview_beside(window, cx),
+            "fold-all" => self.fold_all(argument != "off", cx),
             // The HTML file's browser button.
             "browser" => {
                 if let Some(doc) = self.docs.get(self.active).filter(|doc| doc.language == Language::Html) {
@@ -2945,6 +2980,8 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &SelectAllOccurrences, _, cx| this.add_cursors(true, cx)))
             .on_action(cx.listener(|this, _: &Fold, _, cx| this.fold_at_cursor(true, cx)))
             .on_action(cx.listener(|this, _: &Unfold, _, cx| this.fold_at_cursor(false, cx)))
+            .on_action(cx.listener(|this, _: &FoldAll, _, cx| this.fold_all(true, cx)))
+            .on_action(cx.listener(|this, _: &UnfoldAll, _, cx| this.fold_all(false, cx)))
             .on_action(cx.listener(|this, _: &AddCursorAbove, _, cx| this.add_cursor_vertical(true, cx)))
             .on_action(cx.listener(|this, _: &AddCursorBelow, _, cx| this.add_cursor_vertical(false, cx)))
             .on_action(cx.listener(|this, _: &GoToBracket, _, cx| {

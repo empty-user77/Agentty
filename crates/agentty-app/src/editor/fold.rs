@@ -47,6 +47,31 @@ pub fn region_end<'a>(line: &impl Fn(usize) -> &'a str, index: usize, count: usi
     end
 }
 
+/// Every region of the text, nested ones too, as `region_end` finds them one by one (in one
+/// pass: a line closes the regions of the lines before it indented as deep or deeper).
+pub fn all_regions<'a>(line: impl Fn(usize) -> &'a str, count: usize) -> Vec<(usize, usize)> {
+    let mut regions = Vec::new();
+    // Lines that may start a region, with their depth and the last deeper line seen after them.
+    let mut open: Vec<(usize, usize, Option<usize>)> = Vec::new();
+    for i in 0..count {
+        let Some(depth) = indent(line(i)) else { continue };
+        while let Some(&(start, base, end)) = open.last() {
+            if base < depth {
+                break;
+            }
+            open.pop();
+            regions.extend(end.map(|end| (start, end)));
+        }
+        for entry in &mut open {
+            entry.2 = Some(i);
+        }
+        open.push((i, depth, None));
+    }
+    regions.extend(open.into_iter().filter_map(|(start, _, end)| end.map(|end| (start, end))));
+    regions.sort_unstable();
+    regions
+}
+
 /// The innermost region with line `index` in it or starting there, `taken` ones (folded already)
 /// passed over for the one around them.
 pub fn enclosing<'a>(
@@ -156,6 +181,17 @@ impl Folds {
         }
     }
 
+    /// Folds all of `regions` (on top of what is folded already).
+    pub fn fold_all(&mut self, regions: impl IntoIterator<Item = (usize, usize)>) {
+        self.ranges.extend(regions.into_iter().filter(|(start, end)| end > start));
+        self.refresh();
+    }
+
+    pub fn unfold_all(&mut self) {
+        self.ranges.clear();
+        self.hidden.clear();
+    }
+
     pub fn fold(&mut self, start: usize, end: usize) {
         if end > start {
             self.ranges.push((start, end));
@@ -221,6 +257,20 @@ mod tests {
 
     fn lines() -> Vec<&'static str> {
         CODE.split('\n').collect()
+    }
+
+    #[test]
+    fn all_regions_are_the_ones_found_one_by_one() {
+        let lines = lines();
+        let one_by_one: Vec<_> = (0..lines.len()).filter_map(|i| region_end(&|i| lines[i], i, lines.len()).map(|end| (i, end))).collect();
+        assert_eq!(all_regions(|i| lines[i], lines.len()), one_by_one);
+        assert_eq!(one_by_one, vec![(0, 6), (1, 4)]);
+        let mut folds = Folds::default();
+        folds.fold_all(one_by_one);
+        assert_eq!(folds.rows(lines.len()), 3);
+        folds.unfold_all();
+        assert!(folds.is_empty());
+        assert_eq!(folds.rows(lines.len()), lines.len());
     }
 
     #[test]
