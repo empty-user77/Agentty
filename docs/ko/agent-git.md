@@ -108,6 +108,7 @@ Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS(Tailwind 포함), Rust, 
 | Python | `pyright`(`pyright-langserver`), `basedpyright` 또는 `pylsp` |
 | Java | `jdtls` |
 | Kotlin | `kotlin-language-server` |
+| CSS, SCSS, Less, HTML | `vscode-css-language-server`, `vscode-html-language-server`(`npm install -g vscode-langservers-extracted`) |
 
 큰 프로젝트를 아직 읽는 중이거나 언어 서버가 아무것도 찾지 못하면, 위처럼 이름으로 찾습니다. rust-analyzer는 빌드 스크립트와 프로시저 매크로를 끈 채 실행되므로, 프로젝트를 열어도 그 코드가 실행되지 않습니다. 언어 서버가 프로젝트 자체의 코드를 실행하는 방식으로 켜지는 일은 없습니다. 프로젝트의 TypeScript는 패키지 매니저로 직접 설치한 경우(git이 `node_modules`를 추적하지 않음)에만 쓰고, jdtls는 Gradle 가져오기를 끈 채 시작하며, kotlin-language-server는 빌드를 실행해야 프로젝트를 읽을 수 있어서 Gradle·Maven 프로젝트에서는 켜지 않습니다.
 

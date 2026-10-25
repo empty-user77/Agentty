@@ -68,6 +68,13 @@ const SPECS: &[Spec] = &[
     },
     Spec { name: "jdtls", languages: &["java"], commands: &[("jdtls", &[])] },
     Spec { name: "kotlin-language-server", languages: &["kotlin"], commands: &[("kotlin-language-server", &[])] },
+    // VS Code's own CSS and HTML servers, as the npm package `vscode-langservers-extracted` has them.
+    Spec {
+        name: "vscode-css-language-server",
+        languages: &["css", "scss", "less"],
+        commands: &[("vscode-css-language-server", &["--stdio"])],
+    },
+    Spec { name: "vscode-html-language-server", languages: &["html"], commands: &[("vscode-html-language-server", &["--stdio"])] },
 ];
 
 impl Spec {
@@ -75,6 +82,7 @@ impl Spec {
     pub fn program(&self) -> &'static str {
         match self.name {
             "typescript-language-server" => "typescript",
+            "vscode-css-language-server" | "vscode-html-language-server" => "vscode-langservers-extracted",
             name => name,
         }
     }
@@ -548,6 +556,14 @@ pub struct CompletionItem {
     extra: Vec<TextEdit>,
     utf8: bool,
     value: Value,
+}
+
+impl CompletionItem {
+    /// Choosing it should open the list again (a CSS property, for its value), as the server asks
+    /// with VS Code's `editor.action.triggerSuggest`.
+    pub fn suggests_more(&self) -> bool {
+        self.value.pointer("/command/command").and_then(Value::as_str) == Some("editor.action.triggerSuggest")
+    }
 }
 
 /// What the server offers at `line`/`col` (bytes) of `path`, and whether the list is complete
@@ -1052,6 +1068,9 @@ fn install_command(spec: &'static Spec, path: &std::ffi::OsStr) -> (Option<Strin
         "pyright" => pick(has("npm").then_some("npm install -g pyright"), "Node.js"),
         "jdtls" => pick(brew.then_some("brew install jdtls"), "Homebrew"),
         "kotlin-language-server" => pick(brew.then_some("brew install kotlin-language-server"), "Homebrew"),
+        "vscode-css-language-server" | "vscode-html-language-server" => {
+            pick(has("npm").then_some("npm install -g vscode-langservers-extracted"), "Node.js")
+        }
         _ => (None, None),
     }
 }
@@ -1064,6 +1083,8 @@ fn shown_languages(spec: &'static Spec) -> &'static str {
         "pyright" => "Python",
         "jdtls" => "Java",
         "kotlin-language-server" => "Kotlin",
+        "vscode-css-language-server" => "CSS, SCSS, Less",
+        "vscode-html-language-server" => "HTML",
         _ => "",
     }
 }
@@ -1076,6 +1097,7 @@ fn site(spec: &'static Spec) -> &'static str {
         "pyright" => "https://microsoft.github.io/pyright/#/installation",
         "jdtls" => "https://github.com/eclipse-jdtls/eclipse.jdt.ls",
         "kotlin-language-server" => "https://github.com/fwcd/kotlin-language-server",
+        "vscode-css-language-server" | "vscode-html-language-server" => "https://github.com/hrsh7th/vscode-langservers-extracted",
         _ => "",
     }
 }
@@ -1604,6 +1626,25 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
                 settings: java,
             }
         })),
+        // They format only when told they may and check only when their settings say so (VS Code
+        // sends its defaults); HTML serves the CSS and JavaScript in `<style>` and `<script>` too.
+        "vscode-css-language-server" | "vscode-html-language-server" => {
+            for (name, args) in spec.commands {
+                let (options, settings) = match spec.name {
+                    "vscode-html-language-server" => (
+                        json!({ "provideFormatter": true, "embeddedLanguages": { "css": true, "javascript": true } }),
+                        json!({ "validate": { "scripts": true, "styles": true } }),
+                    ),
+                    _ => (json!({ "provideFormatter": true }), json!({ "validate": true })),
+                };
+                out.extend(found(name).map(|program| Launch {
+                    program,
+                    args: strings(args),
+                    options: options.clone(),
+                    settings: settings.clone(),
+                }));
+            }
+        }
         _ => {
             for (name, args) in spec.commands {
                 out.extend(found(name).map(|program| Launch { program, args: strings(args), options: Value::Null, settings: Value::Null }));

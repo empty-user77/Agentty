@@ -108,6 +108,7 @@ Agentty 只会删除该目录下的工作树。你自己创建的工作树只会
 | Python | `pyright`（`pyright-langserver`）、`basedpyright` 或 `pylsp` |
 | Java | `jdtls` |
 | Kotlin | `kotlin-language-server` |
+| CSS, SCSS, Less, HTML | `vscode-css-language-server`、`vscode-html-language-server`（`npm install -g vscode-langservers-extracted`） |
 
 语言服务器仍在读取大型项目，或没有找到结果时，编辑器会像上面那样按名称查找。rust-analyzer 在关闭构建脚本和过程宏的情况下运行，因此打开项目不会运行其中的代码；语言服务器不会以运行项目自身代码的方式启动：只有当项目的 TypeScript 是你用包管理器安装的（git 不跟踪 `node_modules`）时才会使用它；jdtls 启动时关闭 Gradle 导入；kotlin-language-server 需要运行构建才能读取项目，因此不会在 Gradle 或 Maven 项目中启动。
 

@@ -108,6 +108,7 @@ Kotlin、Java、JavaScript、TypeScript、Python、HTML、CSS（Tailwind を含�
 | Python | `pyright`（`pyright-langserver`）、`basedpyright` または `pylsp` |
 | Java | `jdtls` |
 | Kotlin | `kotlin-language-server` |
+| CSS, SCSS, Less, HTML | `vscode-css-language-server`、`vscode-html-language-server`（`npm install -g vscode-langservers-extracted`） |
 
 大きなプロジェクトをまだ読み込み中のときや、何も見つからなかったときは、上と同じく名前で探します。rust-analyzer はビルドスクリプトと proc macro を無効にして起動するため、プロジェクトを開いてもそのコードは実行されません。言語サーバーがプロジェクト自身のコードを実行する形で起動することはありません。プロジェクトの TypeScript はパッケージマネージャーで自分でインストールしたもの（git が `node_modules` を追跡していない）だけを使い、jdtls は Gradle のインポートを無効にして起動し、kotlin-language-server は読み込みにビルドの実行が必要なため Gradle・Maven プロジェクトでは起動しません。
 

@@ -50,6 +50,10 @@ pub fn id(language: Language) -> Option<&'static str> {
         Language::Python => "python",
         Language::Java => "java",
         Language::Kotlin => "kotlin",
+        Language::Css => "css",
+        Language::Scss => "scss",
+        Language::Less => "less",
+        Language::Html => "html",
         _ => return None,
     })
 }

@@ -93,6 +93,7 @@ fn tag(kind: Option<u64>) -> &'static str {
         Some(8) => "iface",
         Some(9) => "mod",
         Some(10) => "prop",
+        Some(12) => "value",
         Some(13) => "enum",
         Some(14) => "kw",
         Some(15) => "snip",
@@ -430,6 +431,9 @@ impl CodeEditor {
                         this.put_completion(&path, &edit, cx);
                         this.start_snippet(&path, &item, cx);
                         this.call_parens(&path, language, &item, cx);
+                        if item.suggests_more() {
+                            this.request_completion(None, cx);
+                        }
                     });
                 })
                 .detach();
@@ -439,11 +443,14 @@ impl CodeEditor {
     }
 
     /// Just after `item` went in (the cursor after its text): to its first tab stop, the others
-    /// kept for ⇥.
+    /// kept for ⇥. Plain text (a CSS value inside `display: …;`) leaves the snippet it went into.
     fn start_snippet(&mut self, path: &std::path::Path, item: &lsp::CompletionItem, cx: &mut Context<Self>) {
+        if item.stops.is_empty() {
+            return;
+        }
         self.snippet = None;
         let Some(doc) = self.docs.iter_mut().find(|d| d.path == path) else { return };
-        if item.stops.is_empty() || doc.buffer.has_extra_cursors() {
+        if doc.buffer.has_extra_cursors() {
             return;
         }
         let end = doc.buffer.cursor();

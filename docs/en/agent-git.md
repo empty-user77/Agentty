@@ -108,6 +108,7 @@ When the language's server is installed, the editor asks it instead and goes str
 | Python | `pyright` (`pyright-langserver`), `basedpyright` or `pylsp` |
 | Java | `jdtls` |
 | Kotlin | `kotlin-language-server` |
+| CSS, SCSS, Less, HTML | `vscode-css-language-server`, `vscode-html-language-server` (`npm install -g vscode-langservers-extracted`) |
 
 While a server is still reading a large project, or when it finds nothing, the editor answers by name as above. rust-analyzer runs without build scripts and proc macros, so opening a project never runs its code; No server is started in a way that runs the project's own code: the project's TypeScript is used only when your package manager installed it (git leaves `node_modules` untracked), jdtls starts with its Gradle import off, and kotlin-language-server is not started in Gradle or Maven projects, since it runs their build to read them.
 

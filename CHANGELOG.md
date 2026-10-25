@@ -88,6 +88,10 @@ All notable changes to this project are documented here. The format follows
   cursor inside, a Java or Rust call as `reserve(id, quantity)` with its first argument selected, and `foreach` as a
   whole loop; ⇥ goes on to the next placeholder and then past the end, Esc (twice with a list open) stops. A new,
   empty file takes its indentation from `.editorconfig` or from the files of its kind beside it.
+- File editor: CSS, SCSS, Less and HTML get VS Code's own language servers when `vscode-langservers-extracted` is
+  installed (the status bar and Settings → Project → Language servers offer it): properties, values, tags and
+  attributes as you type, unknown properties and other problems underlined, formatting. Choosing a CSS property
+  opens the list of its values.
 
 ### Fixed
 - File editor: TypeScript and JavaScript completions now offer a component's props in JSX; a server's snippet (such
