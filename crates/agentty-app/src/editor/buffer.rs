@@ -124,7 +124,7 @@ struct Composition {
 impl Buffer {
     pub fn new(text: &str) -> Self {
         let lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-        let indent = detect_indent(&lines);
+        let indent = detect_indent(lines.iter().map(String::as_str)).unwrap_or_else(|| "    ".into());
         Self {
             lines,
             selection: Selection::default(),
@@ -156,6 +156,11 @@ impl Buffer {
 
     pub fn indent_unit(&self) -> &str {
         &self.indent
+    }
+
+    /// The indentation step to use where the text shows none of its own.
+    pub fn set_indent_unit(&mut self, unit: String) {
+        self.indent = unit;
     }
 
     /// Differs from the saved text (text an input method is still composing counts).
@@ -333,6 +338,10 @@ impl Buffer {
         }
         self.selection = merged.iter().find(|(m, _)| *m).map_or(main, |(_, s)| *s);
         self.extra = merged.into_iter().filter(|(m, _)| !*m).map(|(_, s)| s).collect();
+    }
+
+    pub fn has_extra_cursors(&self) -> bool {
+        !self.extra.is_empty()
     }
 
     /// One cursor again (Esc).
@@ -1781,13 +1790,13 @@ pub fn column_to_byte(line: &str, column: usize) -> usize {
     line.len()
 }
 
-/// The indentation step a file uses: a tab when most indented lines start with one, else the
-/// smallest step between space indentations (2 or 4, 4 when nothing says otherwise).
-fn detect_indent(lines: &[String]) -> String {
+/// The indentation step a text uses: a tab when most indented lines start with one, else the
+/// smallest step between space indentations. `None` when no line is indented.
+pub fn detect_indent<'a>(lines: impl Iterator<Item = &'a str>) -> Option<String> {
     let (mut tabs, mut spaced) = (0, 0);
     let mut steps = [0usize; 9];
     let mut previous = 0usize;
-    for line in lines.iter().take(5000) {
+    for line in lines.take(5000) {
         if line.trim().is_empty() {
             continue;
         }
@@ -1806,10 +1815,10 @@ fn detect_indent(lines: &[String]) -> String {
         previous = spaces;
     }
     if tabs > spaced {
-        return "\t".into();
+        return Some("\t".into());
     }
-    let best = (2..=8).max_by_key(|step| (steps[*step], usize::from(*step == 4))).filter(|step| steps[*step] > 0).unwrap_or(4);
-    " ".repeat(best)
+    let best = (2..=8).max_by_key(|step| (steps[*step], usize::from(*step == 4))).filter(|step| steps[*step] > 0)?;
+    Some(" ".repeat(best))
 }
 
 #[cfg(test)]

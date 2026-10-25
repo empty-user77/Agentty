@@ -537,8 +537,11 @@ pub struct CompletionItem {
     pub filter: String,
     pub sort: String,
     pub preferred: bool,
-    /// The text put in (snippet placeholders already taken out).
+    /// The text put in (a snippet's tab stops already taken out).
     pub insert: String,
+    /// A snippet's tab stops, as byte ranges of `insert` (a placeholder's text, or empty), in the
+    /// order Tab visits them; the last one is where the cursor ends. Empty for plain text.
+    pub stops: Vec<(usize, usize)>,
     /// The text it replaces, as the server says (its units); `None`: the word at the cursor.
     range: Option<((usize, usize), (usize, usize))>,
     /// Other changes it brings (an import at the top), once resolved.
@@ -593,7 +596,7 @@ pub fn resolve_completion(root: &Path, language: &str, item: &CompletionItem, wa
         .and_then(|client| client.request("completionItem/resolve", item.value.clone(), wait))
         .and_then(|value| completion(&value, item.utf8));
     match resolved {
-        Some(resolved) => CompletionItem { range: item.range, insert: item.insert.clone(), ..resolved },
+        Some(resolved) => CompletionItem { range: item.range, insert: item.insert.clone(), stops: item.stops.clone(), ..resolved },
         None => item.clone(),
     }
 }
@@ -655,13 +658,15 @@ fn completion(item: &Value, utf8: bool) -> Option<CompletionItem> {
                 .collect()
         })
         .unwrap_or_default();
+    let (insert, stops) = if snippet { snippet_stops(&insert) } else { (insert, Vec::new()) };
     Some(CompletionItem {
         kind: item.get("kind").and_then(Value::as_u64),
         detail: text("detail").or_else(|| item.pointer("/labelDetails/description").and_then(Value::as_str).map(str::to_string)),
         filter: text("filterText").unwrap_or_else(|| label.clone()),
         sort: text("sortText").unwrap_or_else(|| label.clone()),
         preferred: item.get("preselect").and_then(Value::as_bool).unwrap_or(false),
-        insert: if snippet { plain_snippet(&insert) } else { insert },
+        insert,
+        stops,
         range: edit.and_then(range),
         extra,
         utf8,
@@ -670,47 +675,81 @@ fn completion(item: &Value, utf8: bool) -> Option<CompletionItem> {
     })
 }
 
-/// A snippet's text without its tab stops: `${1:name}` → `name`, `$0` → nothing.
-fn plain_snippet(snippet: &str) -> String {
+/// A snippet's text and its tab stops (see [`CompletionItem::stops`]): `${1:name}` puts in
+/// `name` as the first stop, `$0` marks the end; a choice puts in its first option and a variable
+/// its default. Without `$0` the end is after the text, and only a `$0` makes no stops at all.
+fn snippet_stops(snippet: &str) -> (String, Vec<(usize, usize)>) {
     let mut out = String::with_capacity(snippet.len());
-    let mut chars = snippet.chars().peekable();
+    let mut found: Vec<(u32, usize, usize)> = Vec::new();
+    snippet_part(&mut snippet.chars().peekable(), &mut out, &mut found, false);
+    // The first place of each stop (others mirror it), in their order, the end ($0) last.
+    found.sort_by_key(|&(index, start, _)| (index == 0, index, start));
+    found.dedup_by_key(|stop| stop.0);
+    let end = match found.last() {
+        Some(&(0, start, end)) => (start, end),
+        _ => (out.len(), out.len()),
+    };
+    let mut stops: Vec<(usize, usize)> = found.iter().filter(|stop| stop.0 != 0).map(|&(_, start, end)| (start, end)).collect();
+    if stops.is_empty() && end.0 == out.len() {
+        return (out, Vec::new());
+    }
+    stops.push(end);
+    (out, stops)
+}
+
+/// Reads snippet text into `out` up to the end (or the `}` closing a placeholder, `inner`).
+fn snippet_part(chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut String, found: &mut Vec<(u32, usize, usize)>, inner: bool) {
+    let number = |chars: &mut std::iter::Peekable<std::str::Chars>| {
+        let mut digits = String::new();
+        while let Some(c) = chars.next_if(char::is_ascii_digit) {
+            digits.push(c);
+        }
+        digits.parse::<u32>().ok()
+    };
+    let name = |chars: &mut std::iter::Peekable<std::str::Chars>| {
+        let mut name = String::new();
+        while let Some(c) = chars.next_if(|c| c.is_ascii_alphanumeric() || *c == '_') {
+            name.push(c);
+        }
+        name
+    };
     while let Some(c) = chars.next() {
         match c {
             '\\' => out.extend(chars.next()),
+            '}' if inner => return,
+            '$' if chars.peek().is_some_and(char::is_ascii_digit) => {
+                let index = number(chars).unwrap_or(0);
+                found.push((index, out.len(), out.len()));
+            }
             '$' if chars.peek() == Some(&'{') => {
                 chars.next();
-                while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-                    chars.next();
-                }
-                if chars.peek() == Some(&':') {
-                    chars.next();
-                }
-                let mut depth = 1;
-                for c in chars.by_ref() {
-                    match c {
-                        '{' => depth += 1,
-                        '}' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
-                            }
+                let start = out.len();
+                if let Some(index) = number(chars) {
+                    match chars.next() {
+                        Some(':') => snippet_part(chars, out, found, true),
+                        // A choice: its first option.
+                        Some('|') => {
+                            let options: String = chars.by_ref().take_while(|c| *c != '|').collect();
+                            out.push_str(options.split(',').next().unwrap_or(""));
+                            chars.next_if_eq(&'}');
                         }
                         _ => {}
                     }
-                    if depth > 0 {
-                        out.push(c);
+                    found.push((index, start, out.len()));
+                } else {
+                    // A variable: its default, if any.
+                    name(chars);
+                    if chars.next() == Some(':') {
+                        snippet_part(chars, out, found, true);
                     }
                 }
             }
-            '$' if chars.peek().is_some_and(|c| c.is_ascii_digit()) => {
-                while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-                    chars.next();
-                }
+            '$' if chars.peek().is_some_and(|c| c.is_ascii_alphabetic() || *c == '_') => {
+                name(chars);
             }
             c => out.push(c),
         }
     }
-    out
 }
 
 /// The call being typed, as the server describes it (`textDocument/signatureHelp`).
@@ -1621,7 +1660,7 @@ fn initialize_params(root: &Path, options: Value) -> Value {
                 },
                 "completion": {
                     "completionItem": {
-                        "snippetSupport": false,
+                        "snippetSupport": true,
                         "preselectSupport": true,
                         "labelDetailsSupport": true,
                         "insertReplaceSupport": true,
@@ -2091,8 +2130,16 @@ mod tests {
         // Asked after "t", accepted after "tot": the whole word goes.
         let early = completion(&json!({ "label": "total", "textEdit": { "newText": "total", "replace": { "start": { "line": 0, "character": 4 }, "end": { "line": 0, "character": 5 } } } }), true).unwrap();
         assert_eq!(edited("x = tot", &completion_edit(Path::new("/p/a"), "x = tot", &early, ((0, 4), (0, 7)))), "x = total");
-        assert_eq!(plain_snippet("fn ${1:name}(${2}) {\n\t$0\n}"), "fn name() {\n\t\n}");
-        assert_eq!(plain_snippet("a\\$b"), "a$b");
+        assert_eq!(snippet_stops("fn ${1:name}(${2}) {\n\t$0\n}"), ("fn name() {\n\t\n}".into(), vec![(3, 7), (8, 8), (13, 13)]));
+        assert_eq!(snippet_stops("a\\$b"), ("a$b".into(), vec![]));
+        // JSX attributes and calls: one stop, then the end after the text.
+        assert_eq!(snippet_stops("onSearch={$1}"), ("onSearch={}".into(), vec![(10, 10), (11, 11)]));
+        assert_eq!(snippet_stops("setName(${1:name})"), ("setName(name)".into(), vec![(8, 12), (13, 13)]));
+        // Only an end: no stops to visit, the cursor still goes there.
+        assert_eq!(snippet_stops("f($0)"), ("f()".into(), vec![(2, 2)]));
+        assert_eq!(snippet_stops("done$0"), ("done".into(), vec![]));
+        // Nested, mirrored, chosen, a variable.
+        assert_eq!(snippet_stops("${1:a${2:b}} $1 ${3|x,y|} ${TM_FILENAME:f}"), ("ab  x f".into(), vec![(0, 2), (1, 2), (4, 5), (7, 7)]));
     }
 
     #[test]

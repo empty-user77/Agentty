@@ -89,6 +89,7 @@ For Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included),
 | **⌘F12** | Its implementations: the classes implementing an interface, the methods overriding one (with a language server) |
 | **F8** / **⇧F8** | Next / previous problem in the file, with its message |
 | **⌃Space** | Completions (they also open as you type a name or after `.`; ↩ or ⇥ puts one in, Esc closes) |
+| **⇥** after a completion | The next placeholder it left (an argument, a prop's value), then past its end |
 | **F2** | Rename the name under the cursor everywhere it is used (with a language server; in this file only without one) |
 | **⇧⌥O** | Organize imports: sorted, the unused ones taken out (with a language server) |
 | **⌘.** | Quick fixes and refactorings the language server offers here (a light bulb in the gutter says the line has some) |

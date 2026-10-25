@@ -1,7 +1,9 @@
 //! Completion as you type: the language server's list (with the import a name needs, added when
 //! it is chosen), or, without a server, the words of the file. It opens on a name being typed or
 //! after `.` (`::`, `->`), and with **⌃Space**; ↑↓ choose, ↩ or ⇥ put it in, Esc closes it.
-//! Typing on filters the list; a server that said its list was partial is asked again.
+//! Typing on filters the list; a server that said its list was partial is asked again. A chosen
+//! snippet (`onSearch={…}`, `setName(name)`) selects its first placeholder, and ⇥ goes on to the
+//! next one and then to its end, as in VS Code.
 
 use super::buffer::Pos;
 use super::language::Language;
@@ -69,6 +71,17 @@ pub(super) struct Completion {
     asking: u64,
 }
 
+/// A snippet put in by a completion with tab stops still ahead. Stops are kept counted from the
+/// end of the text (lines from the last one, bytes from the end of their line), which typing at an
+/// earlier stop leaves where they were. ⇥ outside it, Esc or a click ends it.
+pub(super) struct Snippet {
+    path: PathBuf,
+    /// Where it starts.
+    start: Pos,
+    /// The stops still ahead: lines below, bytes from the end of the line, length.
+    ahead: Vec<(usize, usize, usize)>,
+}
+
 fn tag(kind: Option<u64>) -> &'static str {
     match kind {
         Some(2) => "method",
@@ -108,6 +121,31 @@ fn matches(name: &str, query: &str) -> Option<u8> {
     }
     let mut rest = name_l.chars();
     query_l.chars().all(|q| rest.any(|c| c == q)).then_some(2)
+}
+
+/// A snippet's lines after its first take the indentation of the line it goes on, and its tabs
+/// the file's indentation step, as in VS Code; its stops move along.
+fn indent_snippet(insert: &str, stops: &[(usize, usize)], indent: &str, unit: &str) -> Option<(String, Vec<(usize, usize)>)> {
+    if stops.is_empty() || !insert.contains(['\n', '\t']) {
+        return None;
+    }
+    let mut out = String::with_capacity(insert.len() + indent.len() * 4);
+    // Where each byte of the snippet went.
+    let mut moved = Vec::with_capacity(insert.len() + 1);
+    for c in insert.chars() {
+        moved.extend(std::iter::repeat_n(out.len(), c.len_utf8()));
+        match c {
+            '\n' => {
+                out.push('\n');
+                out.push_str(indent);
+            }
+            '\t' => out.push_str(unit),
+            c => out.push(c),
+        }
+    }
+    moved.push(out.len());
+    let stops = stops.iter().map(|&(from, to)| (moved[from.min(insert.len())], moved[to.min(insert.len())])).collect();
+    Some((out, stops))
 }
 
 /// The words of `text` (names of at least [`WORD_MIN`] + 1 characters), each once.
@@ -310,9 +348,11 @@ impl CodeEditor {
             .filter_map(|(i, e)| matches(&e.filter, &query).map(|score| (score, i)))
             .collect();
         let entries = &open.entries;
+        // A server's snippet (rust-analyzer's `arc` for `s.ar`) after the names it matches as well.
+        let snippet = |e: &Entry| matches!(&e.source, Source::Server(item) if item.kind == Some(15));
         scored.sort_by(|a, b| {
             let (x, y) = (&entries[a.1], &entries[b.1]);
-            (a.0, !x.preferred, &x.sort, &x.label).cmp(&(b.0, !y.preferred, &y.sort, &y.label))
+            (a.0, !x.preferred, snippet(x), &x.sort, &x.label).cmp(&(b.0, !y.preferred, snippet(y), &y.sort, &y.label))
         });
         open.shown = scored.into_iter().take(MAX_SHOWN).map(|(_, i)| i).collect();
         open.selected = 0;
@@ -375,9 +415,20 @@ impl CodeEditor {
                     let _ = this.update(cx, |this, cx| {
                         let Some(doc) = this.docs.iter().find(|d| d.path == path) else { return };
                         let cursor = doc.buffer.cursor();
+                        let mut item = item;
+                        let line = doc.buffer.line(cursor.line);
+                        if let Some((insert, stops)) = indent_snippet(
+                            &item.insert,
+                            &item.stops,
+                            &line[..line.len() - line.trim_start().len()],
+                            doc.buffer.indent_unit(),
+                        ) {
+                            (item.insert, item.stops) = (insert, stops);
+                        }
                         let text = doc.buffer.text();
                         let edit = lsp::completion_edit(&path, &text, &item, ((start.line, start.col), (cursor.line, cursor.col)));
                         this.put_completion(&path, &edit, cx);
+                        this.start_snippet(&path, &item, cx);
                         this.call_parens(&path, language, &item, cx);
                     });
                 })
@@ -385,6 +436,79 @@ impl CodeEditor {
             }
         }
         cx.notify();
+    }
+
+    /// Just after `item` went in (the cursor after its text): to its first tab stop, the others
+    /// kept for ⇥.
+    fn start_snippet(&mut self, path: &std::path::Path, item: &lsp::CompletionItem, cx: &mut Context<Self>) {
+        self.snippet = None;
+        let Some(doc) = self.docs.iter_mut().find(|d| d.path == path) else { return };
+        if item.stops.is_empty() || doc.buffer.has_extra_cursors() {
+            return;
+        }
+        let end = doc.buffer.cursor();
+        let buffer = &doc.buffer;
+        // Where a byte of the text put in is now: the rest of its line is that text too.
+        let at = |offset: usize| {
+            let tail = &item.insert[offset.min(item.insert.len())..];
+            let below = tail.matches('\n').count();
+            let line = end.line.saturating_sub(below);
+            let rest = tail.split('\n').next().unwrap_or("").len();
+            let col = if below == 0 { end.col.saturating_sub(rest) } else { buffer.line(line).len().saturating_sub(rest) };
+            buffer.clamp(Pos::new(line, col))
+        };
+        let stops: Vec<(Pos, usize)> = item
+            .stops
+            .iter()
+            .map(|&(from, to)| {
+                let (from, to) = (at(from), at(to));
+                (from, if to.line == from.line { to.col.saturating_sub(from.col) } else { 0 })
+            })
+            .collect();
+        let start = at(0);
+        let count = buffer.line_count();
+        let ahead =
+            stops[1..].iter().map(|&(pos, len)| (count - 1 - pos.line, buffer.line(pos.line).len() - pos.col, len)).collect::<Vec<_>>();
+        let (first, len) = stops[0];
+        doc.buffer.move_to(first, false);
+        if len > 0 {
+            doc.buffer.move_to(Pos::new(first.line, first.col + len), true);
+        }
+        if !ahead.is_empty() {
+            self.snippet = Some(Snippet { path: path.to_path_buf(), start, ahead });
+        }
+        // Into a call's parentheses: what goes there.
+        if item.insert.contains('(') {
+            self.signature_typed("(", cx);
+        }
+    }
+
+    /// ⇥ in a snippet: to its next stop (true), or nothing to do with one.
+    pub(super) fn snippet_next(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(mut snippet) = self.snippet.take() else { return false };
+        let Some(doc) = self.docs.get_mut(self.active).filter(|d| d.path == snippet.path) else { return false };
+        let (below, from_end, len) = snippet.ahead.remove(0);
+        let cursor = doc.buffer.cursor();
+        let buffer = &doc.buffer;
+        let next = buffer.line_count().checked_sub(1 + below).and_then(|line| {
+            let col = buffer.line(line).len().checked_sub(from_end)?;
+            buffer.line(line).is_char_boundary(col).then_some(Pos::new(line, col))
+        });
+        // Gone, or the cursor went somewhere else: ⇥ indents as usual.
+        let Some(next) = next.filter(|next| snippet.start <= cursor && cursor <= *next) else { return false };
+        doc.buffer.move_to(next, false);
+        let to = doc.buffer.clamp(Pos::new(next.line, next.col + len));
+        if to > next {
+            doc.buffer.move_to(to, true);
+        }
+        doc.autoscroll = true;
+        if !snippet.ahead.is_empty() {
+            self.snippet = Some(snippet);
+        }
+        // The call's hint follows to the argument now chosen (or closes past it).
+        self.signature_typed("", cx);
+        cx.notify();
+        true
     }
 
     /// A method or function chosen in Java, Kotlin, Rust or Go comes with its parentheses (as VS
@@ -428,10 +552,12 @@ impl CodeEditor {
         cx.notify();
     }
 
-    /// Esc: the list and the windows over the text close.
+    /// Esc: the list and the windows over the text close; with none open, the snippet's stops and
+    /// the other cursors go.
     pub(super) fn dismiss(&mut self, cx: &mut Context<Self>) {
         let shown = self.completion.is_some() || self.git_peek.is_some() || self.signature.is_some();
         if !shown {
+            self.snippet = None;
             if let Some(doc) = self.docs.get_mut(self.active) {
                 doc.buffer.single_cursor();
             }
@@ -521,6 +647,10 @@ impl CodeEditor {
                     let e = &open.entries[i];
                     format!("{} {}{}", e.tag, e.label, e.detail.as_ref().map(|d| format!(" — {d}")).unwrap_or_default())
                 }).collect::<Vec<_>>(),
+                "order": open.shown.iter().take(8).map(|&i| {
+                    let e = &open.entries[i];
+                    format!("{}{} {}", if e.preferred { "*" } else { "" }, e.sort, e.filter)
+                }).collect::<Vec<_>>(),
             }),
             None => serde_json::Value::Null,
         }
@@ -539,6 +669,16 @@ mod tests {
         assert!(takes_arguments("push fn(&mut self, value: T)"));
         assert!(takes_arguments("Save func(ctx context.Context) error"));
         assert!(!takes_arguments("count"));
+    }
+
+    #[test]
+    fn a_snippets_lines_take_the_indentation_of_its_line() {
+        // jdtls's `foreach` on a line indented by 8, in a file indented by 4.
+        let insert = "for (T e : list) {\n\t\n}";
+        let (text, stops) = indent_snippet(insert, &[(5, 6), (20, 20)], "        ", "    ").unwrap();
+        assert_eq!(text, "for (T e : list) {\n            \n        }");
+        assert_eq!((&text[stops[0].0..stops[0].1], stops[1]), ("T", (31, 31)), "the body's stop after the new indentation");
+        assert_eq!(indent_snippet("f(x)", &[(2, 3), (4, 4)], "    ", "  "), None, "one line: as it is");
     }
 
     #[test]

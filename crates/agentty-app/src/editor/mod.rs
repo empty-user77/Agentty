@@ -16,6 +16,7 @@ pub mod format;
 mod gitmarks;
 pub mod highlight;
 mod hover;
+mod indent;
 pub mod language;
 mod lsp;
 pub mod navigate;
@@ -558,6 +559,7 @@ pub struct CodeEditor {
     git_peek: Option<(PathBuf, usize)>,
     /// The completion list, while open, and the number of the last request for one.
     completion: Option<complete::Completion>,
+    snippet: Option<complete::Snippet>,
     completion_seq: u64,
     /// The signature of the call being typed, and the number of the last request for one.
     signature: Option<signature::SignatureHint>,
@@ -678,6 +680,7 @@ impl CodeEditor {
             hover_leaves: 0,
             git_peek: None,
             completion: None,
+            snippet: None,
             completion_seq: 0,
             signature: None,
             signature_seq: 0,
@@ -1339,6 +1342,7 @@ impl CodeEditor {
     fn mouse_down(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.close_quick_fix(window, cx);
         self.completion = None;
+        self.snippet = None;
         self.signature = None;
         window.focus(&self.focus_handle);
         let Some(layout) = self.layout.as_ref() else { return };
@@ -2411,6 +2415,9 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
     match opened {
         Opened::Text(file) => {
             doc.buffer = Buffer::new(&file.text);
+            if let Some(unit) = file.indent {
+                doc.buffer.set_indent_unit(unit);
+            }
             doc.base = doc.buffer.text();
             // Big files stay uncolored: coloring them would cost more than it helps.
             if file.read_only != Some(ReadOnly::Large) {
@@ -2752,7 +2759,7 @@ impl Render for CodeEditor {
                 }
             }))
             .on_action(cx.listener(|this, _: &Indent, _, cx| {
-                if !this.completion_accept(cx) {
+                if !this.completion_accept(cx) && !this.snippet_next(cx) {
                     this.edit(cx, |b| b.indent())
                 }
             }))
@@ -2761,6 +2768,7 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &Outdent, _, cx| this.edit(cx, |b| b.outdent())))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
                 this.completion = None;
+                this.snippet = None;
                 this.signature = None;
                 this.edit(cx, |b| {
                     b.undo();

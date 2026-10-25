@@ -764,7 +764,8 @@ impl CodeEditor {
                     .into_any_element(),
             );
         }
-        if self.find.is_some() {
+        // Find's matches and a snippet's placeholders are selected to be typed over, not acted on.
+        if self.find.is_some() || self.snippet.is_some() {
             return None;
         }
         let (start, end) = doc.buffer.selection.range();

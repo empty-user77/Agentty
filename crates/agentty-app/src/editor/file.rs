@@ -66,6 +66,9 @@ pub struct TextFile {
     /// Where the bytes really are (differs from the opened path for a link).
     pub target: PathBuf,
     pub stamp: Option<Stamp>,
+    /// The indentation step for a file with no indented line yet, from `.editorconfig` or the
+    /// files beside it.
+    pub indent: Option<String>,
 }
 
 /// How the file stored its text, kept when it is written back.
@@ -153,7 +156,11 @@ pub fn open(path: &Path, project: &Path) -> Opened {
     } else {
         None
     };
-    Opened::Text(TextFile { text, format: Format { crlf, bom }, read_only, target: target.clone(), stamp: Stamp::of(&target) })
+    let indent = match super::buffer::detect_indent(text.split('\n')) {
+        Some(_) => None,
+        None => super::indent::for_file(path, project),
+    };
+    Opened::Text(TextFile { text, format: Format { crlf, bom }, read_only, target: target.clone(), stamp: Stamp::of(&target), indent })
 }
 
 /// Writes `bytes` to `target` (a real file, not a link) without ever leaving it half-written:

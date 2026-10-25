@@ -84,8 +84,14 @@ All notable changes to this project are documented here. The format follows
 - File editor: code folding. An arrow beside the line number (shown while the pointer is over the gutter, always on a
   folded line) or ⌥⌘[ / ⌥⌘] folds and unfolds a block by its indentation, in every language; a folded line ends with
   `⋯`, which unfolds it on a click, ↑ / ↓ step over the hidden lines, and a jump or a find into them opens them.
+- File editor: completions that fill in a template, as in VS Code: a JSX prop goes in as `onSearch={}` with the
+  cursor inside, a Java or Rust call as `reserve(id, quantity)` with its first argument selected, and `foreach` as a
+  whole loop; ⇥ goes on to the next placeholder and then past the end, Esc (twice with a list open) stops. A new,
+  empty file takes its indentation from `.editorconfig` or from the files of its kind beside it.
 
 ### Fixed
+- File editor: TypeScript and JavaScript completions now offer a component's props in JSX; a server's snippet (such
+  as rust-analyzer's `arc` for `s.ar`) is listed after the names that match as well.
 - File editor: the first file opened with ⌘P in a new window gets its language server too; a list that would stay
   empty after `.` in a file without a server no longer blocks the next ones; go-to-definition without a server
   prefers the file's own language family (a Kotlin `Order` over a TypeScript one in the same repository); Java shows
