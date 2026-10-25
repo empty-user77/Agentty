@@ -318,10 +318,11 @@ impl CodeEditor {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.problem_hover.as_ref().is_some_and(|(p, _)| *p == problem) {
-                    // The server's fixes, then the names the editor finds spelled close.
-                    let mut fixes: Vec<lsp::Action> = found.unwrap_or_default().into_iter().filter(|a| a.fixes).collect();
+                    // The server's fixes, with the names the editor finds spelled close after
+                    // the ones it prefers.
+                    let fixes: Vec<lsp::Action> = found.unwrap_or_default().into_iter().filter(|a| a.fixes).collect();
                     let own = super::spell::actions(&asked, spelled, &fixes, cx);
-                    fixes.extend(own);
+                    let mut fixes = super::spell::merged(fixes, own);
                     fixes.truncate(4);
                     this.hover_fixes = Some((problem, since, fixes));
                     cx.notify();

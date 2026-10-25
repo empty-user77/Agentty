@@ -112,15 +112,13 @@ impl CodeEditor {
                 })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
-                // The names the editor finds spelled close come after the server's fixes.
+                // The names the editor finds spelled close come after the fixes the server prefers.
                 let found = match (found, spelled) {
                     (found, None) => found,
                     (found, spelled) => {
-                        let mut found = found.unwrap_or_default();
+                        let found = found.unwrap_or_default();
                         let own = super::spell::actions(&asked, spelled, &found, cx);
-                        let first_other = found.iter().position(|a| !a.fixes).unwrap_or(found.len());
-                        found.splice(first_other..first_other, own);
-                        Some(found)
+                        Some(super::spell::merged(found, own))
                     }
                 };
                 let Some(menu) = this.fixes.as_mut().filter(|m| m.path == asked && m.actions.is_none()) else { return };

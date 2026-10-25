@@ -2849,20 +2849,26 @@ strings! {
         "今はファイルの内容だけを読むため、構文エラーのみで依存関係は分かりません。この Maven プロジェクトのビルドを読むと pom.xml が指定するプラグインと拡張が実行されるので、信頼できるプロジェクトでだけ押してください。",
         "目前只读取文件本身的内容：只显示语法错误，不知道依赖。读取这个 Maven 项目的构建会运行 pom.xml 指定的插件和扩展，请只对信任的项目这样做。"
     ],
+    "lsp.read_build_kotlin_tip" => [
+        "Not started yet: kotlin-lsp reads a project by running its Gradle or Maven build (the build scripts and the plugins they name), so do it only for a project you trust. Names are found by search meanwhile.",
+        "아직 켜지 않았습니다. kotlin-lsp는 프로젝트의 Gradle·Maven 빌드(빌드 스크립트와 거기서 지정한 플러그인)를 실행해서 프로젝트를 읽으므로, 믿을 수 있는 프로젝트에서만 누르세요. 그동안은 이름으로 찾습니다.",
+        "まだ起動していません。kotlin-lsp はプロジェクトの Gradle・Maven ビルド（ビルドスクリプトとそこで指定されたプラグイン）を実行して読み込むので、信頼できるプロジェクトでだけ押してください。それまでは名前で検索します。",
+        "尚未启动：kotlin-lsp 通过运行项目的 Gradle 或 Maven 构建（构建脚本及其指定的插件）来读取项目，请只对信任的项目这样做。在此之前按名称查找。"
+    ],
     "lsp.trusted_builds" => [
-        "Maven builds read in {n} projects",
-        "Maven 빌드를 읽는 프로젝트 {n}개",
-        "Maven ビルドを読むプロジェクト {n} 件",
-        "读取 Maven 构建的项目 {n} 个"
+        "Builds read in {n} projects",
+        "빌드를 읽는 프로젝트 {n}개",
+        "ビルドを読むプロジェクト {n} 件",
+        "读取构建的项目 {n} 个"
     ],
     "lsp.forget_builds" => ["Forget them", "모두 해제", "すべて解除", "全部取消"],
     "lsp.turn_off" => ["Turn this language server off", "이 언어 서버 끄기", "この言語サーバーをオフ", "关闭此语言服务器"],
     "lsp.turn_on" => ["Turn this language server on", "이 언어 서버 켜기", "この言語サーバーをオン", "开启此语言服务器"],
     "lsp.skipped_tip" => [
-        "Not started for this project: it would run the project's Gradle or Maven build to read it. Names are found by search.",
-        "이 프로젝트에서는 켜지 않았습니다. 읽으려면 프로젝트의 Gradle·Maven 빌드를 실행해야 하기 때문입니다. 이름으로 찾습니다.",
-        "このプロジェクトでは起動していません。読み込むにはプロジェクトの Gradle・Maven ビルドを実行する必要があるためです。名前で検索します。",
-        "未在此项目中启动：读取项目需要运行其 Gradle 或 Maven 构建。改为按名称查找。"
+        "Not started: kotlin-lsp reads Gradle and Maven projects only, and this folder has no build. Names are found by search.",
+        "켜지 않았습니다. kotlin-lsp는 Gradle·Maven 프로젝트만 읽는데 이 폴더에는 빌드 파일이 없습니다. 이름으로 찾습니다.",
+        "起動していません。kotlin-lsp は Gradle・Maven プロジェクトだけを読み込みますが、このフォルダにはビルドファイルがありません。名前で検索します。",
+        "未启动：kotlin-lsp 只读取 Gradle 和 Maven 项目，而此文件夹没有构建文件。改为按名称查找。"
     ],
     "lsp.ready_tip" => [
         "Definitions, usages and types come from this language server",

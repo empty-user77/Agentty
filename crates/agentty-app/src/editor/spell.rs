@@ -116,9 +116,29 @@ pub fn actions(path: &Path, found: Option<((Pos, Pos), Vec<String>)>, fixes: &[A
         .collect()
 }
 
+/// The server's actions with the editor's spelling fixes (`own`) among them: after the fixes the
+/// server prefers, before its other ones. A name typed wrong is fixed by spelling it right more
+/// often than by what a server offers next (Kotlin's "Remove invocation", say).
+pub fn merged(found: Vec<Action>, own: Vec<Action>) -> Vec<Action> {
+    in_order(found, own, |a| a.fixes && a.preferred)
+}
+
+fn in_order<T>(found: Vec<T>, own: Vec<T>, preferred: impl Fn(&T) -> bool) -> Vec<T> {
+    let (mut out, rest): (Vec<T>, Vec<T>) = found.into_iter().partition(|a| preferred(a));
+    out.extend(own);
+    out.extend(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spelling_fixes_come_after_the_preferred_ones() {
+        let order = in_order(vec![(1, false), (2, true), (3, false)], vec![(9, false)], |a| a.1);
+        assert_eq!(order.iter().map(|a| a.0).collect::<Vec<_>>(), [2, 9, 1, 3]);
+    }
 
     #[test]
     fn names_spelled_close() {

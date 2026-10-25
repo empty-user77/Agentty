@@ -1,13 +1,13 @@
 //! Language servers (LSP) for the code editor: the program each language already has for exact
 //! "go to definition", "find usages" and hover text (rust-analyzer, gopls, typescript-language-
-//! server, pyright, jdtls, kotlin-language-server). One server runs per project and language,
+//! server, pyright, jdtls, JetBrains' kotlin-lsp). One server runs per project and language,
 //! started on first use from the user's `PATH` and spoken to over stdin/stdout. A missing server
 //! just means the editor keeps its own name-based index (and offers the server's official install
 //! command), and so does a server still starting or indexing when an answer is wanted.
 //!
 //! Servers analyse code without running it where they can: rust-analyzer starts with build
-//! scripts, proc macros and `cargo check` off. jdtls and kotlin-language-server read Gradle and
-//! Maven projects the way an IDE opening the folder does.
+//! scripts, proc macros and `cargo check` off. jdtls and kotlin-lsp read a Maven or Gradle build
+//! only in a project the user trusts (see [`set_trusted_builds`]).
 //!
 //! Servers also report problems (errors, warnings) in the open files: by themselves
 //! (`publishDiagnostics`), or when asked (`textDocument/diagnostic`, TypeScript 7). [`check`]
@@ -67,7 +67,10 @@ const SPECS: &[Spec] = &[
         commands: &[("pyright-langserver", &["--stdio"]), ("basedpyright-langserver", &["--stdio"]), ("pylsp", &[])],
     },
     Spec { name: "jdtls", languages: &["java"], commands: &[("jdtls", &[])] },
-    Spec { name: "kotlin-language-server", languages: &["kotlin"], commands: &[("kotlin-language-server", &[])] },
+    // JetBrains' own server (`brew install JetBrains/utils/kotlin-lsp`), which reads current
+    // Kotlin: the older kotlin-language-server stops at Kotlin 2.1 and takes a newer project's
+    // standard library for broken.
+    Spec { name: "kotlin-lsp", languages: &["kotlin"], commands: &[("kotlin-lsp", &["--stdio"])] },
     // VS Code's own CSS and HTML servers, as the npm package `vscode-langservers-extracted` has them.
     Spec {
         name: "vscode-css-language-server",
@@ -223,7 +226,8 @@ fn disabled() -> &'static Mutex<std::collections::HashSet<String>> {
     DISABLED.get_or_init(Default::default)
 }
 
-/// Maven projects whose build the user lets jdtls read (their folders).
+/// Projects whose build the user lets a server read (their folders): jdtls a Maven build,
+/// kotlin-lsp a Gradle or Maven one.
 fn trusted() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
     static TRUSTED: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
     TRUSTED.get_or_init(Default::default)
@@ -266,8 +270,9 @@ fn reads_build(root: &Path) -> bool {
     !has_maven(root) || trusted().lock().is_ok_and(|t| t.contains(root))
 }
 
-/// The Maven projects the user lets jdtls read. A server already running the other way for one
-/// of them stops, and starts the right way at the next request.
+/// The projects whose build the user lets a server read. A server already running the other way
+/// for one of them stops, and starts the right way at the next request (kotlin-lsp, not started
+/// for an untrusted build, starts now; trust taken back, it stops).
 pub fn set_trusted_builds(roots: &[PathBuf]) {
     if let Ok(mut set) = trusted().lock() {
         *set = roots.iter().cloned().collect();
@@ -275,31 +280,45 @@ pub fn set_trusted_builds(roots: &[PathBuf]) {
     let slots: Vec<((PathBuf, &'static str), Arc<Slot>)> =
         registry().lock().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
     let mut stopping = Vec::new();
+    let mut changed = false;
     for ((root, name), slot) in slots {
-        if name != "jdtls" {
-            continue;
-        }
         let Ok(mut state) = slot.state.lock() else { continue };
-        if let State::Ready(client) = &*state {
-            if client.limited == reads_build(&root) {
+        match (name, &*state) {
+            ("jdtls", State::Ready(client)) if client.limited == reads_build(&root) => {
                 stopping.push(client.clone());
                 *state = State::Idle;
             }
+            ("kotlin-lsp", State::Skipped) if has_build(&root) && !untrusted_build(&root) => {
+                *state = State::Idle;
+                changed = true;
+            }
+            ("kotlin-lsp", State::Ready(client)) if untrusted_build(&root) => {
+                stopping.push(client.clone());
+                *state = State::Idle;
+            }
+            _ => {}
         }
+    }
+    if changed || !stopping.is_empty() {
+        GENERATION.fetch_add(1, Ordering::SeqCst);
     }
     if !stopping.is_empty() {
         let _ = std::thread::Builder::new().name("lsp-stop".into()).spawn(move || stopping.iter().for_each(|client| client.stop()));
-        GENERATION.fetch_add(1, Ordering::SeqCst);
     }
 }
 
-/// The server for `root` and `language` runs without reading the project's build (a Maven project
-/// not trusted yet): `true` only while it runs that way.
+/// The server for `root` and `language` does not read the project's build until the user trusts
+/// it: jdtls runs on the files' text only (a Maven project), kotlin-lsp is not started (a Gradle
+/// or Maven project). `true` only while that is so.
 pub fn build_unread(root: &Path, language: &str) -> bool {
     let Some(spec) = spec_for(language) else { return false };
     let Some(slot) = registry().lock().ok().and_then(|r| r.get(&key(root, spec)).cloned()) else { return false };
     let state = slot.state.lock().map(|s| s.clone());
-    matches!(state, Ok(State::Ready(client)) if client.limited)
+    match state {
+        Ok(State::Ready(client)) => client.limited,
+        Ok(State::Skipped) => untrusted_build(root),
+        _ => false,
+    }
 }
 
 fn is_disabled(spec: &Spec) -> bool {
@@ -1240,7 +1259,7 @@ fn install_command(spec: &'static Spec, path: &std::ffi::OsStr) -> (Option<Strin
         "typescript-language-server" => pick(has("npm").then_some("npm install -g typescript@latest"), "Node.js"),
         "pyright" => pick(has("npm").then_some("npm install -g pyright"), "Node.js"),
         "jdtls" => pick(brew.then_some("brew install jdtls"), "Homebrew"),
-        "kotlin-language-server" => pick(brew.then_some("brew install kotlin-language-server"), "Homebrew"),
+        "kotlin-lsp" => pick(brew.then_some("brew install JetBrains/utils/kotlin-lsp"), "Homebrew"),
         "vscode-css-language-server" | "vscode-html-language-server" | "vscode-json-language-server" => {
             pick(has("npm").then_some("npm install -g vscode-langservers-extracted"), "Node.js")
         }
@@ -1255,7 +1274,7 @@ fn shown_languages(spec: &'static Spec) -> &'static str {
         "typescript-language-server" => "TypeScript, JavaScript",
         "pyright" => "Python",
         "jdtls" => "Java",
-        "kotlin-language-server" => "Kotlin",
+        "kotlin-lsp" => "Kotlin",
         "vscode-css-language-server" => "CSS, SCSS, Less",
         "vscode-html-language-server" => "HTML",
         "vscode-json-language-server" => "JSON",
@@ -1270,7 +1289,7 @@ fn site(spec: &'static Spec) -> &'static str {
         "typescript-language-server" => "https://www.typescriptlang.org/download/",
         "pyright" => "https://microsoft.github.io/pyright/#/installation",
         "jdtls" => "https://github.com/eclipse-jdtls/eclipse.jdt.ls",
-        "kotlin-language-server" => "https://github.com/fwcd/kotlin-language-server",
+        "kotlin-lsp" => "https://github.com/Kotlin/kotlin-lsp",
         "vscode-css-language-server" | "vscode-html-language-server" | "vscode-json-language-server" => {
             "https://github.com/hrsh7th/vscode-langservers-extracted"
         }
@@ -1463,7 +1482,7 @@ struct Client {
 impl Client {
     /// The first of the ways to run `spec` here that starts and answers `initialize`.
     fn start(root: &Path, spec: &'static Spec) -> Result<Arc<Client>, StartError> {
-        if runs_the_build(root, spec) {
+        if held_back(root, spec) {
             return Err(StartError::Skipped);
         }
         let path = search_path();
@@ -1812,6 +1831,18 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
             args.extend(["-data".to_string(), workspace.to_string_lossy().into_owned()]);
             Launch { program, args, options: json!({ "settings": { "java": java.clone() } }), settings: java, limited }
         })),
+        // An IntelliJ underneath: its caches and indexes in a folder of each project's own (one
+        // folder is held by one server at a time), nothing sent to JetBrains.
+        "kotlin-lsp" => out.extend(found("kotlin-lsp").map(|program| {
+            let system = crate::fsutil::data_dir().join("lsp").join("kotlin-lsp").join(digest_of(root));
+            Launch {
+                program,
+                args: vec!["--stdio".to_string(), format!("--system-path={}", system.display()), "--data-sharing=none".to_string()],
+                options: Value::Null,
+                settings: Value::Null,
+                limited: false,
+            }
+        })),
         // They format only when told they may and check only when their settings say so (VS Code
         // sends its defaults); HTML serves the CSS and JavaScript in `<style>` and `<script>` too.
         // No schemas are named, so none is fetched from the web (a file's own `$schema` that is a
@@ -1941,17 +1972,33 @@ fn own_typescript(root: &Path) -> bool {
 }
 
 /// Servers that read a project by running its build (Gradle's and Maven's scripts and plugins)
-/// are not started where there is one: opening a file of a cloned project must not run its code.
-/// jdtls is started with its Gradle import off instead (see [`launches`]).
-fn runs_the_build(root: &Path, spec: &'static Spec) -> bool {
-    const BUILDS: &[&str] = &["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml"];
-    spec.name == "kotlin-language-server" && BUILDS.iter().any(|file| root.join(file).exists())
+/// are not started where there is one the user has not trusted: opening a file of a cloned
+/// project must not run its code. jdtls is started with its Gradle import off instead (see
+/// [`launches`]). kotlin-lsp reads nothing but a Gradle or Maven project, so it is not started
+/// for a folder without a build either.
+fn held_back(root: &Path, spec: &'static Spec) -> bool {
+    spec.name == "kotlin-lsp" && (untrusted_build(root) || !has_build(root))
+}
+
+const BUILDS: &[&str] = &["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml"];
+
+fn has_build(root: &Path) -> bool {
+    BUILDS.iter().any(|file| root.join(file).exists())
+}
+
+/// `root` has a Gradle or Maven build the user has not let a server read.
+fn untrusted_build(root: &Path) -> bool {
+    has_build(root) && !trusted().lock().is_ok_and(|t| t.contains(root))
 }
 
 fn jdtls_workspace(root: &Path) -> PathBuf {
+    crate::fsutil::data_dir().join("lsp").join("jdtls").join(digest_of(root))
+}
+
+/// A short name for the project at `root`, for the folders servers keep per project.
+fn digest_of(root: &Path) -> String {
     let digest = Sha256::digest(root.to_string_lossy().as_bytes());
-    let id: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
-    crate::fsutil::data_dir().join("lsp").join("jdtls").join(id)
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2225,14 +2272,14 @@ mod tests {
     }
 
     #[test]
-    fn kotlin_is_not_started_where_it_would_run_the_build() {
+    fn kotlin_waits_for_a_build_it_may_read() {
         let root = std::env::temp_dir().join(format!("agentty-lsp-kt-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let kotlin = spec_for("kotlin").unwrap();
-        assert!(!runs_the_build(&root, kotlin));
+        assert!(held_back(&root, kotlin), "no build: nothing it reads");
         std::fs::write(root.join("build.gradle.kts"), "").unwrap();
-        assert!(runs_the_build(&root, kotlin));
-        assert!(!runs_the_build(&root, spec_for("java").unwrap()));
+        assert!(held_back(&root, kotlin));
+        assert!(!held_back(&root, spec_for("java").unwrap()));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2268,7 +2315,7 @@ mod tests {
     }
 
     #[test]
-    fn a_maven_build_is_read_only_once_trusted() {
+    fn a_build_is_read_only_once_trusted() {
         let dir = std::env::temp_dir().join(format!("agentty-maven-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("plain/src")).unwrap();
@@ -2276,13 +2323,19 @@ mod tests {
         std::fs::create_dir_all(dir.join("deps/node_modules/x")).unwrap();
         std::fs::write(dir.join("multi/api/pom.xml"), "<project/>").unwrap();
         std::fs::write(dir.join("deps/node_modules/x/pom.xml"), "<project/>").unwrap();
+        std::fs::create_dir_all(dir.join("kt")).unwrap();
+        std::fs::write(dir.join("kt/settings.gradle.kts"), "").unwrap();
+        let kotlin = spec_for("kotlin").unwrap();
+        assert!(held_back(&dir.join("kt"), kotlin));
         assert!(reads_build(&dir.join("plain")), "nothing to run");
         assert!(reads_build(&dir.join("deps")), "a pom in dependencies is not the project's");
         assert!(!reads_build(&dir.join("multi")), "a module's pom below");
-        set_trusted_builds(&[dir.join("multi")]);
+        set_trusted_builds(&[dir.join("multi"), dir.join("kt")]);
         assert!(reads_build(&dir.join("multi")));
+        assert!(!held_back(&dir.join("kt"), kotlin), "a Gradle build the user trusts");
         set_trusted_builds(&[]);
         assert!(!reads_build(&dir.join("multi")));
+        assert!(held_back(&dir.join("kt"), kotlin));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
