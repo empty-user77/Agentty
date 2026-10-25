@@ -256,7 +256,8 @@ impl CodeEditor {
         };
         // And the view stays on the same text when the change is above it.
         if let (Some(height), true) = (line_height, index == self.active) {
-            if (old_end as f32) * height <= doc.scroll.y {
+            let end_row = doc.folds.row_of((old_end as isize + grown).max(0) as usize) as isize - grown;
+            if (end_row as f32) * height <= doc.scroll.y {
                 doc.scroll.y = (doc.scroll.y + grown as f32 * height).max(0.);
             }
         }

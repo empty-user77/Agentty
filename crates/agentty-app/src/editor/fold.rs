@@ -131,7 +131,7 @@ impl Folds {
 
     /// Rows a text of `count` lines takes.
     pub fn rows(&self, count: usize) -> usize {
-        count - self.hidden.iter().map(|(from, to)| to - from + 1).sum::<usize>()
+        count.saturating_sub(self.hidden.iter().map(|(from, to)| to - from + 1).sum::<usize>()).max(1)
     }
 
     fn refresh(&mut self) {
@@ -145,6 +145,15 @@ impl Folds {
             }
         }
         self.hidden = hidden;
+    }
+
+    /// The text changed in ways not followed (too many at once): regions that no longer fit go.
+    pub fn keep_within(&mut self, count: usize) {
+        let before = self.ranges.len();
+        self.ranges.retain(|&(_, end)| end < count);
+        if self.ranges.len() != before {
+            self.refresh();
+        }
     }
 
     pub fn fold(&mut self, start: usize, end: usize) {
@@ -189,7 +198,9 @@ impl Folds {
         }
         let old_to = (splice.to as isize - splice.delta).max(splice.from as isize) as usize;
         self.ranges.retain_mut(|(start, end)| {
-            if old_to < *start {
+            // Lines removed above it end on its first line (a splice takes in the line after what
+            // it removed): it moves up with that line.
+            if old_to < *start || (splice.delta < 0 && old_to == *start && splice.from < *start) {
                 *start = (*start as isize + splice.delta) as usize;
                 *end = (*end as isize + splice.delta) as usize;
                 true
@@ -258,6 +269,9 @@ mod tests {
         folds.apply(Splice { from: 12, to: 12, delta: 0 });
         folds.apply(Splice { from: 30, to: 31, delta: 1 });
         assert_eq!(folds.ranges(), [(12, 22)]);
+        // The line just above it deleted (⇧⌘K): it moves up.
+        folds.apply(Splice { from: 11, to: 11, delta: -1 });
+        assert_eq!(folds.ranges(), [(11, 21)]);
         // An edit inside opens it.
         folds.apply(Splice { from: 15, to: 15, delta: 0 });
         assert!(folds.is_empty());

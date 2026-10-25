@@ -372,7 +372,8 @@ fn first_build_error(paths: &HashMap<String, PathBuf>, found: &HashMap<String, V
 /// `path`, a build file of the project at `root`, was saved: jdtls reads the project again (it
 /// is started with its own rereading off, see [`launches`]), so a fixed `pom.xml` takes effect.
 pub fn build_file_saved(root: &Path, path: &Path) {
-    if !is_build_file(path) {
+    // Maven's only: jdtls's Gradle import, which would run the build scripts, stays off.
+    if path.file_name().is_none_or(|name| name != "pom.xml") {
         return;
     }
     let (Some(client), Some(uri)) = (spec_for("java").and_then(|spec| ready_client(root, spec)), file_uri(path)) else { return };
@@ -634,6 +635,13 @@ pub fn completion_edit(path: &Path, text: &str, item: &CompletionItem, word: ((u
     FileEdit { path: path.to_path_buf(), edits, utf8: item.utf8 }
 }
 
+/// The other changes `item` brings (its import), when they all lie on lines above `line`: what
+/// the editor adds once the server has resolved an item it already put in.
+pub fn completion_imports(path: &Path, item: &CompletionItem, line: usize) -> Option<FileEdit> {
+    let above = !item.extra.is_empty() && item.extra.iter().all(|edit| edit.end.0 < line);
+    above.then(|| FileEdit { path: path.to_path_buf(), edits: item.extra.clone(), utf8: item.utf8 })
+}
+
 /// A plain change of `path`, in bytes (a word the editor completes by itself).
 pub fn byte_edit(path: &Path, start: (usize, usize), end: (usize, usize), text: &str) -> FileEdit {
     FileEdit { path: path.to_path_buf(), edits: vec![TextEdit { start, end, text: text.to_string() }], utf8: true }
@@ -669,11 +677,12 @@ fn completion(item: &Value, utf8: bool) -> Option<CompletionItem> {
                 .iter()
                 .filter_map(|e| {
                     let (start, end) = range(e)?;
-                    Some(TextEdit { start, end, text: e.get("newText")?.as_str()?.to_string() })
+                    Some(TextEdit { start, end, text: e.get("newText")?.as_str()?.replace("\r\n", "\n") })
                 })
                 .collect()
         })
         .unwrap_or_default();
+    let insert = insert.replace("\r\n", "\n");
     let (insert, stops) = if snippet { snippet_stops(&insert) } else { (insert, Vec::new()) };
     Some(CompletionItem {
         kind: item.get("kind").and_then(Value::as_u64),
@@ -697,9 +706,10 @@ fn completion(item: &Value, utf8: bool) -> Option<CompletionItem> {
 fn snippet_stops(snippet: &str) -> (String, Vec<(usize, usize)>) {
     let mut out = String::with_capacity(snippet.len());
     let mut found: Vec<(u32, usize, usize)> = Vec::new();
-    snippet_part(&mut snippet.chars().peekable(), &mut out, &mut found, false);
-    // The first place of each stop (others mirror it), in their order, the end ($0) last.
-    found.sort_by_key(|&(index, start, _)| (index == 0, index, start));
+    snippet_part(&mut snippet.chars().peekable(), &mut out, &mut found, 0);
+    // One place of each stop (the others mirror it): the one with the placeholder's text, else
+    // the first; in their order, the end ($0) last.
+    found.sort_by_key(|&(index, start, end)| (index == 0, index, start == end, start));
     found.dedup_by_key(|stop| stop.0);
     let end = match found.last() {
         Some(&(0, start, end)) => (start, end),
@@ -713,14 +723,33 @@ fn snippet_stops(snippet: &str) -> (String, Vec<(usize, usize)>) {
     (out, stops)
 }
 
-/// Reads snippet text into `out` up to the end (or the `}` closing a placeholder, `inner`).
-fn snippet_part(chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut String, found: &mut Vec<(u32, usize, usize)>, inner: bool) {
+/// Placeholders inside placeholders followed at most; deeper ones are taken as their text.
+const SNIPPET_DEPTH: usize = 16;
+
+/// Reads snippet text into `out` up to the end (or the `}` closing a placeholder, `depth` > 0).
+fn snippet_part(chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut String, found: &mut Vec<(u32, usize, usize)>, depth: usize) {
+    let inner = depth > 0;
     let number = |chars: &mut std::iter::Peekable<std::str::Chars>| {
         let mut digits = String::new();
         while let Some(c) = chars.next_if(char::is_ascii_digit) {
             digits.push(c);
         }
-        digits.parse::<u32>().ok()
+        (!digits.is_empty()).then(|| digits.parse::<u32>().unwrap_or(u32::MAX))
+    };
+    // A transform (`${1/(.*)/${1:/upcase}/}`) changes what a mirror shows: left out, to its `}`.
+    let transform = |chars: &mut std::iter::Peekable<std::str::Chars>| {
+        let mut depth = 0;
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => {
+                    chars.next();
+                }
+                '{' => depth += 1,
+                '}' if depth == 0 => return,
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
     };
     let name = |chars: &mut std::iter::Peekable<std::str::Chars>| {
         let mut name = String::new();
@@ -734,29 +763,33 @@ fn snippet_part(chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut Stri
             '\\' => out.extend(chars.next()),
             '}' if inner => return,
             '$' if chars.peek().is_some_and(char::is_ascii_digit) => {
-                let index = number(chars).unwrap_or(0);
+                let index = number(chars).unwrap_or(u32::MAX);
                 found.push((index, out.len(), out.len()));
             }
+            '$' if chars.peek() == Some(&'{') && depth >= SNIPPET_DEPTH => out.push(c),
             '$' if chars.peek() == Some(&'{') => {
                 chars.next();
                 let start = out.len();
                 if let Some(index) = number(chars) {
                     match chars.next() {
-                        Some(':') => snippet_part(chars, out, found, true),
+                        Some(':') => snippet_part(chars, out, found, depth + 1),
                         // A choice: its first option.
                         Some('|') => {
                             let options: String = chars.by_ref().take_while(|c| *c != '|').collect();
                             out.push_str(options.split(',').next().unwrap_or(""));
                             chars.next_if_eq(&'}');
                         }
+                        Some('/') => transform(chars),
                         _ => {}
                     }
                     found.push((index, start, out.len()));
                 } else {
                     // A variable: its default, if any.
                     name(chars);
-                    if chars.next() == Some(':') {
-                        snippet_part(chars, out, found, true);
+                    match chars.next() {
+                        Some(':') => snippet_part(chars, out, found, depth + 1),
+                        Some('/') => transform(chars),
+                        _ => {}
                     }
                 }
             }
@@ -2181,6 +2214,13 @@ mod tests {
         assert_eq!(snippet_stops("done$0"), ("done".into(), vec![]));
         // Nested, mirrored, chosen, a variable.
         assert_eq!(snippet_stops("${1:a${2:b}} $1 ${3|x,y|} ${TM_FILENAME:f}"), ("ab  x f".into(), vec![(0, 2), (1, 2), (4, 5), (7, 7)]));
+        // Mirrors, transforms, a stop number too large to be one.
+        assert_eq!(snippet_stops("$1 = ${1:x};"), (" = x;".into(), vec![(3, 4), (5, 5)]));
+        assert_eq!(snippet_stops("${1:a} ${1/(.*)/${1:/upcase}/} ${TM_FILENAME/x/y/}!"), ("a  !".into(), vec![(0, 1), (4, 4)]));
+        assert_eq!(snippet_stops("f($99999999999)"), ("f()".into(), vec![(2, 2), (3, 3)]));
+        // A server's endless nesting: no deeper than a few levels, no crash.
+        let deep = "${1:".repeat(100_000) + &"}".repeat(100_000);
+        assert!(snippet_stops(&deep).0.len() < deep.len());
     }
 
     #[test]

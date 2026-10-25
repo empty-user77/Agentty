@@ -6,7 +6,7 @@
 //! next one and then to its end, as in VS Code. In HTML and JSX an Emmet abbreviation before
 //! the cursor (`ul>li*3`) comes first ([`super::emmet`]).
 
-use super::buffer::Pos;
+use super::buffer::{Buffer, Pos, Selection};
 use super::emmet;
 use super::language::Language;
 use super::lsp;
@@ -125,6 +125,21 @@ fn matches(name: &str, query: &str) -> Option<u8> {
     }
     let mut rest = name_l.chars();
     query_l.chars().all(|q| rest.any(|c| c == q)).then_some(2)
+}
+
+/// Where a snippet's stop is now (kept as lines below it and bytes from its line's end).
+fn stop_at(buffer: &Buffer, (below, from_end, _): (usize, usize, usize)) -> Option<Pos> {
+    let line = buffer.line_count().checked_sub(1 + below)?;
+    let col = buffer.line(line).len().checked_sub(from_end)?;
+    buffer.line(line).is_char_boundary(col).then_some(Pos::new(line, col))
+}
+
+/// A hash of the lines above `line`: an import found for them still fits while it is the same.
+fn text_above(text: &str, line: usize) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.split('\n').take(line).for_each(|l| l.hash(&mut hasher));
+    hasher.finish()
 }
 
 /// A snippet's lines after its first take the indentation of the line it goes on, and its tabs
@@ -443,31 +458,39 @@ impl CodeEditor {
                 self.start_snippet_text(&path, &text, &stops, cx);
             }
             Source::Server(item) => {
-                // Its import comes when asked for; the name goes in once it is here.
+                // The name goes in now, so what is typed next follows it; the import it needs
+                // comes when the server has resolved it, if the text above is still as it was.
+                let cursor = doc.buffer.cursor();
+                let mut item = *item;
+                let line = doc.buffer.line(cursor.line);
+                if let Some((insert, stops)) =
+                    indent_snippet(&item.insert, &item.stops, &line[..line.len() - line.trim_start().len()], doc.buffer.indent_unit())
+                {
+                    (item.insert, item.stops) = (insert, stops);
+                }
+                let text = doc.buffer.text();
+                let edit = lsp::completion_edit(&path, &text, &item, ((start.line, start.col), (cursor.line, cursor.col)));
+                let above = text_above(&text, start.line);
+                self.put_completion(&path, &edit, cx);
+                self.start_snippet(&path, &item, cx);
+                self.call_parens(&path, language, &item, cx);
+                if item.suggests_more() {
+                    self.request_completion(None, cx);
+                }
+                if lsp::completion_imports(&path, &item, start.line).is_some() {
+                    return cx.notify();
+                }
                 let file = path.clone();
                 cx.spawn(async move |this, cx| {
                     let item =
                         cx.background_spawn(async move { lsp::resolve_completion(&project, language, &file, &item, RESOLVE_WAIT) }).await;
                     let _ = this.update(cx, |this, cx| {
                         let Some(doc) = this.docs.iter().find(|d| d.path == path) else { return };
-                        let cursor = doc.buffer.cursor();
-                        let mut item = item;
-                        let line = doc.buffer.line(cursor.line);
-                        if let Some((insert, stops)) = indent_snippet(
-                            &item.insert,
-                            &item.stops,
-                            &line[..line.len() - line.trim_start().len()],
-                            doc.buffer.indent_unit(),
-                        ) {
-                            (item.insert, item.stops) = (insert, stops);
+                        if text_above(&doc.buffer.text(), start.line) != above {
+                            return;
                         }
-                        let text = doc.buffer.text();
-                        let edit = lsp::completion_edit(&path, &text, &item, ((start.line, start.col), (cursor.line, cursor.col)));
-                        this.put_completion(&path, &edit, cx);
-                        this.start_snippet(&path, &item, cx);
-                        this.call_parens(&path, language, &item, cx);
-                        if item.suggests_more() {
-                            this.request_completion(None, cx);
+                        if let Some(imports) = lsp::completion_imports(&path, &item, start.line) {
+                            this.put_imports(&path, &imports, cx);
                         }
                     });
                 })
@@ -508,9 +531,15 @@ impl CodeEditor {
             let col = if below == 0 { end.col.saturating_sub(rest) } else { buffer.line(line).len().saturating_sub(rest) };
             buffer.clamp(Pos::new(line, col))
         };
+        // A stop inside another's placeholder (`${1:a${2:b}}`) goes once that text is typed over:
+        // only the outer one is visited.
+        let inside = |stop: &(usize, usize)| stops.iter().any(|o| o != stop && o.0 < o.1 && o.0 <= stop.0 && stop.1 <= o.1);
+        let last = stops.len() - 1;
         let stops: Vec<(Pos, usize)> = stops
             .iter()
-            .map(|&(from, to)| {
+            .enumerate()
+            .filter(|(i, stop)| *i == last || !inside(stop))
+            .map(|(_, &(from, to))| {
                 let (from, to) = (at(from), at(to));
                 (from, if to.line == from.line { to.col.saturating_sub(from.col) } else { 0 })
             })
@@ -542,6 +571,13 @@ impl CodeEditor {
             return None;
         }
         let cursor = doc.buffer.cursor();
+        if !jsx {
+            let line = doc.buffer.line(cursor.line);
+            let above = (cursor.line.saturating_sub(2000)..cursor.line).rev().map(|i| doc.buffer.line(i));
+            if emmet::in_script_or_style(std::iter::once(&line[..cursor.col]).chain(above)) {
+                return None;
+            }
+        }
         let expansion = emmet::expand_at(doc.buffer.line(cursor.line), cursor.col, jsx)?;
         Some(Entry {
             label: expansion.abbreviation.clone(),
@@ -558,15 +594,13 @@ impl CodeEditor {
     pub(super) fn snippet_next(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(mut snippet) = self.snippet.take() else { return false };
         let Some(doc) = self.docs.get_mut(self.active).filter(|d| d.path == snippet.path) else { return false };
+        let end = snippet.ahead.last().and_then(|&stop| stop_at(&doc.buffer, stop));
         let (below, from_end, len) = snippet.ahead.remove(0);
         let cursor = doc.buffer.cursor();
-        let buffer = &doc.buffer;
-        let next = buffer.line_count().checked_sub(1 + below).and_then(|line| {
-            let col = buffer.line(line).len().checked_sub(from_end)?;
-            buffer.line(line).is_char_boundary(col).then_some(Pos::new(line, col))
-        });
-        // Gone, or the cursor went somewhere else: ⇥ indents as usual.
-        let Some(next) = next.filter(|next| snippet.start <= cursor && cursor <= *next) else { return false };
+        let next = stop_at(&doc.buffer, (below, from_end, len));
+        // Gone, or the cursor went out of the snippet: ⇥ indents as usual.
+        let inside = |pos: Pos| end.is_some_and(|end| snippet.start <= pos && pos <= end);
+        let Some(next) = next.filter(|next| inside(cursor) && inside(*next)) else { return false };
         doc.buffer.move_to(next, false);
         let to = doc.buffer.clamp(Pos::new(next.line, next.col + len));
         if to > next {
@@ -580,6 +614,19 @@ impl CodeEditor {
         self.signature_typed("", cx);
         cx.notify();
         true
+    }
+
+    /// The cursor moved: a snippet it left is done.
+    pub(super) fn snippet_follow(&mut self) {
+        let Some(snippet) = self.snippet.as_ref() else { return };
+        let left = self.docs.get(self.active).filter(|d| d.path == snippet.path).is_none_or(|doc| {
+            let cursor = doc.buffer.cursor();
+            let end = snippet.ahead.last().and_then(|&stop| stop_at(&doc.buffer, stop));
+            !end.is_some_and(|end| snippet.start <= cursor && cursor <= end)
+        });
+        if left {
+            self.snippet = None;
+        }
     }
 
     /// A method or function chosen in Java, Kotlin, Rust or Go comes with its parentheses (as VS
@@ -619,6 +666,30 @@ impl CodeEditor {
             let at = doc.buffer.clamp(at);
             doc.buffer.move_to(at, false);
             doc.autoscroll = true;
+        }
+        cx.notify();
+    }
+
+    /// Lines added above the cursor (an import): the selection (a placeholder) and the snippet
+    /// move down with their text.
+    fn put_imports(&mut self, path: &std::path::Path, edit: &lsp::FileEdit, cx: &mut Context<Self>) {
+        let Some(index) = self.docs.iter().position(|d| d.path == path) else { return };
+        let (text, selection, count) = {
+            let buffer = &self.docs[index].buffer;
+            (buffer.text(), buffer.selection, buffer.line_count())
+        };
+        let (new, _) = lsp::edited_at(&text, edit, 0);
+        if !self.replace_text(index, &new, cx) {
+            return;
+        }
+        let doc = &mut self.docs[index];
+        let grown = doc.buffer.line_count() as isize - count as isize;
+        let shift = |pos: Pos| doc.buffer.clamp(Pos::new((pos.line as isize + grown).max(0) as usize, pos.col));
+        let moved = Selection { anchor: shift(selection.anchor), head: shift(selection.head) };
+        doc.buffer.move_to(moved.anchor, false);
+        doc.buffer.move_to(moved.head, true);
+        if let Some(snippet) = self.snippet.as_mut().filter(|s| s.path == path) {
+            snippet.start.line = (snippet.start.line as isize + grown).max(0) as usize;
         }
         cx.notify();
     }

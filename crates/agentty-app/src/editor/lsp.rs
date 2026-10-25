@@ -330,6 +330,11 @@ pub fn completion_edit(path: &Path, text: &str, item: &CompletionItem, word: ((u
     lsp::completion_edit(path, text, item, word)
 }
 
+/// The import `item` brings, when it lies above `line`.
+pub fn completion_imports(path: &Path, item: &CompletionItem, line: usize) -> Option<FileEdit> {
+    lsp::completion_imports(path, item, line)
+}
+
 /// A plain change, in bytes.
 pub fn byte_edit(path: &Path, start: (usize, usize), end: (usize, usize), text: &str) -> FileEdit {
     lsp::byte_edit(path, start, end, text)

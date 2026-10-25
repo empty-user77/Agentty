@@ -397,6 +397,7 @@ impl Document {
     fn sync_highlights(&mut self) {
         let Some(changes) = self.buffer.take_changes() else {
             self.highlights.invalidate_from(0);
+            self.folds.keep_within(self.buffer.line_count());
             return;
         };
         if !changes.is_empty() {
@@ -1015,6 +1016,7 @@ impl CodeEditor {
         doc.buffer.each(f);
         doc.sync_highlights();
         doc.autoscroll = true;
+        self.snippet_follow();
         cx.notify();
     }
 
@@ -1354,7 +1356,7 @@ impl CodeEditor {
         }
         let Some(pos) = self.docs.get(self.active).map(|doc| layout.position_for(event.position, &doc.buffer)) else { return };
         let mark = layout.fold_mark_at(event.position);
-        if layout.on_fold_arrow(event.position) && self.toggle_fold(pos.line, cx) {
+        if layout.on_fold_arrow(event.position) && !layout.below_text(event.position) && self.toggle_fold(pos.line, cx) {
             return;
         }
         if let Some(line) = mark {

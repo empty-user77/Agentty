@@ -102,6 +102,8 @@ pub struct Layout {
     scroll: Point<f32>,
     lines: Vec<LaidLine>,
     pub visible_rows: usize,
+    /// Rows the text takes (folded lines take none).
+    rows: usize,
     pub max_scroll_x: f32,
     pub max_scroll_y: f32,
     thumb: Option<Bounds<Pixels>>,
@@ -129,6 +131,12 @@ impl Layout {
     pub fn on_fold_arrow(&self, position: Point<Pixels>) -> bool {
         let edge = self.text_left - TEXT_PADDING;
         (edge - NUMBER_END..edge - 12.).contains(&f32::from(position.x))
+    }
+
+    /// Below the last line shown.
+    pub fn below_text(&self, position: Point<Pixels>) -> bool {
+        let y = f32::from(position.y) - f32::from(self.bounds.top()) + self.scroll.y;
+        y >= self.rows as f32 * self.line_height
     }
 
     pub fn in_gutter(&self, position: Point<Pixels>) -> bool {
@@ -818,6 +826,7 @@ impl Element for EditorElement {
                 scroll,
                 lines: laid,
                 visible_rows: (height / line_height).floor() as usize,
+                rows: shown_rows,
                 max_scroll_x,
                 max_scroll_y,
                 thumb,

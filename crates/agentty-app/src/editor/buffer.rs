@@ -11,6 +11,8 @@ use unicode_segmentation::UnicodeSegmentation;
 pub const TAB_WIDTH: usize = 4;
 /// Edits kept for undo; the oldest go first.
 const UNDO_LIMIT: usize = 1000;
+/// Edits kept at most (one step at many cursors is many edits).
+const UNDO_EDITS: usize = 50_000;
 /// Typing within this long of the last keystroke is undone together.
 const TYPING_GROUP: Duration = Duration::from_millis(1500);
 
@@ -259,36 +261,44 @@ impl Buffer {
                 _ => kept.push(change),
             }
         }
-        let first = kept[0].1;
-        let mut text = String::new();
-        let mut at = first;
-        let mut from = first;
+        // Where each cursor ends up once every change is made.
         let mut after = Vec::with_capacity(kept.len());
+        let (mut at, mut from) = (kept[0].1, kept[0].1);
         for (is_main, start, end, piece) in &kept {
-            let gap = self.slice(from, *start);
-            at = end_of(at, &gap);
-            text.push_str(&gap);
+            at = if start.line == from.line {
+                Pos::new(at.line, at.col + start.col - from.col)
+            } else {
+                Pos::new(at.line + start.line - from.line, start.col)
+            };
             at = end_of(at, piece);
-            text.push_str(piece);
             after.push((*is_main, at));
             from = *end;
         }
+        let joins = typing && self.undo.last().is_some_and(|last| last.multi && !last.sealed && last.at.elapsed() < TYPING_GROUP);
+        // One edit per cursor, the last first so the others keep their places: the text between
+        // cursors far apart is neither copied nor counted as changed (its folds stay). They are
+        // chained, so one undo takes back the change at every cursor.
         self.multi = true;
-        self.replace(first, from, &text, EditKind::Other);
+        let made = self.undo.len();
+        for (start, end, piece) in
+            kept.iter().rev().map(|(_, start, end, piece)| (start, end, piece)).filter(|(s, e, p)| s != e || !p.is_empty())
+        {
+            let first = self.undo.len() == made;
+            self.replace(*start, *end, piece, EditKind::Other);
+            if let Some(edit) = self.undo.last_mut() {
+                edit.multi = typing;
+                edit.chain = if first { joins } else { true };
+            }
+        }
         self.multi = false;
         let main_at = after.iter().find(|(m, _)| *m).map_or(after[0].1, |(_, p)| *p);
         self.selection = Selection::cursor(main_at);
         self.extra = after.iter().filter(|(m, _)| !*m).map(|(_, p)| Selection::cursor(*p)).collect();
-        let joins = typing
-            && self.undo.len() >= 2
-            && self.undo[self.undo.len() - 2].multi
-            && !self.undo[self.undo.len() - 2].sealed
-            && self.undo[self.undo.len() - 2].at.elapsed() < TYPING_GROUP;
-        if let Some(edit) = self.undo.last_mut() {
+        let selection = self.selection;
+        let n = self.undo.len();
+        for edit in &mut self.undo[made.min(n)..] {
             edit.before = main;
-            edit.after = self.selection;
-            edit.multi = typing;
-            edit.chain = joins;
+            edit.after = selection;
         }
         true
     }
@@ -642,11 +652,19 @@ impl Buffer {
         self.next_id += 1;
         edit.id = self.next_id;
         self.undo.push(edit);
-        if self.undo.len() > UNDO_LIMIT {
+        // The oldest steps go, each with the edits chained to it.
+        while self.undo.len() > UNDO_LIMIT && (self.undo.len() > UNDO_EDITS || self.undo.iter().filter(|e| !e.chain).count() > UNDO_LIMIT) {
             let dropped = self.undo.remove(0);
+            let mut ids = vec![dropped.id];
+            while self.undo.first().is_some_and(|next| next.chain) {
+                ids.push(self.undo.remove(0).id);
+            }
             // The saved text can't be reached by undoing any more: it never counts as clean again.
-            if self.saved_at == 0 || self.saved_at == dropped.id {
+            if self.saved_at == 0 || ids.contains(&self.saved_at) {
                 self.saved_at = u64::MAX;
+            }
+            if self.undo.is_empty() {
+                break;
             }
         }
     }
@@ -1312,15 +1330,41 @@ impl Buffer {
         let solid = |line: &str, col: usize| line[..col.min(line.len())].chars().filter(|c| !c.is_whitespace()).count();
         let count = |pos: Pos| (0..pos.line).map(|i| solid(self.line(i), usize::MAX)).sum::<usize>() + solid(self.line(pos.line), pos.col);
         // A cursor in a line's indentation goes before that line's first character, not after the
-        // last one of the line above.
-        let at = |pos: Pos| (count(pos), solid(self.line(pos.line), pos.col) == 0);
+        // last one of the line above; one on a blank line stays after as many blank lines.
+        let at = |pos: Pos| {
+            let line_start = solid(self.line(pos.line), pos.col) == 0;
+            let blanks = if line_start { (0..pos.line).rev().take_while(|&i| solid(self.line(i), usize::MAX) == 0).count() } else { 0 };
+            (count(pos), line_start, blanks)
+        };
         let (anchor, head) = (at(self.selection.anchor), at(self.selection.head));
         self.extra.clear();
         self.set_text(text);
-        let place = |(mut left, line_start): (usize, bool)| {
+        let place = |(mut left, line_start, blanks): (usize, bool, usize)| {
+            if line_start {
+                // The line after the one with the `left`-th character, past `blanks` blank lines.
+                let mut row = 0;
+                if left > 0 {
+                    row = self.lines.len() - 1;
+                    let mut seen = 0;
+                    for (i, line) in self.lines.iter().enumerate() {
+                        seen += solid(line, usize::MAX);
+                        if seen >= left {
+                            row = (i + 1).min(self.lines.len() - 1);
+                            break;
+                        }
+                    }
+                }
+                let mut skipped = 0;
+                while skipped < blanks && row + 1 < self.lines.len() && solid(&self.lines[row], usize::MAX) == 0 {
+                    row += 1;
+                    skipped += 1;
+                }
+                let line = &self.lines[row];
+                return Pos::new(row, line.len() - line.trim_start().len());
+            }
             for (row, line) in self.lines.iter().enumerate() {
                 let here = solid(line, usize::MAX);
-                if left > here || (line_start && left == here && row + 1 < self.lines.len()) {
+                if left > here {
                     left -= here;
                     continue;
                 }
@@ -1418,6 +1462,7 @@ impl Buffer {
         if text.is_empty() {
             return;
         }
+        let composed = self.undo.len();
         if !self.edit_all(true, |_, s| {
             if s == main {
                 (s.head, s.head, String::new())
@@ -1430,15 +1475,14 @@ impl Buffer {
         }
         // The main cursor's composed text and this are one keystroke, and they go on a run of
         // typing at every cursor.
-        let n = self.undo.len();
-        if n >= 2 {
-            let joins = n >= 3 && {
-                let before = &self.undo[n - 3];
+        if composed >= 1 && composed < self.undo.len() {
+            let joins = composed >= 2 && {
+                let before = &self.undo[composed - 2];
                 before.multi && !before.sealed && before.at.elapsed() < TYPING_GROUP
             };
-            self.undo[n - 2].multi = true;
-            self.undo[n - 2].chain = joins;
-            self.undo[n - 1].chain = true;
+            self.undo[composed - 1].multi = true;
+            self.undo[composed - 1].chain = joins;
+            self.undo[composed].chain = true;
         }
     }
 
@@ -1549,7 +1593,8 @@ impl Buffer {
         let pos = if target < 0 {
             Pos::default()
         } else if target as usize >= shown {
-            self.end()
+            let line = super::fold::line_of(hidden, shown.saturating_sub(1));
+            Pos::new(line, self.line(line).len())
         } else {
             let line = super::fold::line_of(hidden, target as usize);
             Pos::new(line, column_to_byte(self.line(line), goal))
@@ -1685,7 +1730,7 @@ fn opened_tag(text: &str) -> Option<String> {
 const MAX_CURSORS: usize = 1_000;
 
 /// Changes kept for [`Buffer::take_changes`] at most (a replace-all of thousands is everything).
-const MAX_CHANGES: usize = 256;
+const MAX_CHANGES: usize = 4096;
 
 /// One change to the text, by lines: the lines `from..=to` (as they are after it) replace the
 /// ones that were there, and the lines after them moved by `delta`.
@@ -1954,6 +1999,10 @@ mod tests {
         assert_eq!(b.cursor(), Pos::new(0, 1));
         b.vertical_in(10, false, &[(1, 2)]);
         assert_eq!(b.cursor(), Pos::new(4, 1));
+        // Folded to the end of the file: ↓ on its first line stays on it.
+        at(&mut b, 3, 0);
+        b.vertical_in(1, false, &[(4, 4)]);
+        assert_eq!(b.cursor(), Pos::new(3, 1));
     }
 
     #[test]
@@ -1970,6 +2019,37 @@ mod tests {
         assert_eq!(b.cursor(), Pos::new(1, 2));
         b.undo();
         assert_eq!(b.text(), "a\n      b");
+        // On a blank line, and after one: where it was.
+        let mut b = Buffer::new("a  \n\nb");
+        at(&mut b, 1, 0);
+        b.set_formatted("a\n\nb");
+        assert_eq!(b.cursor(), Pos::new(1, 0));
+        at(&mut b, 2, 0);
+        b.set_formatted("a\n\nb\n");
+        assert_eq!(b.cursor(), Pos::new(2, 0));
+        let mut b = Buffer::new("\nx");
+        b.set_formatted("\nx");
+        assert_eq!(b.cursor(), Pos::new(0, 0), "a blank first line");
+    }
+
+    #[test]
+    fn far_apart_cursors_change_only_their_places() {
+        let middle = "line\n".repeat(5000);
+        let mut b = Buffer::new(&format!("a\n{middle}b"));
+        at(&mut b, 0, 1);
+        b.toggle_cursor(Pos::new(5001, 1));
+        b.take_changes();
+        b.insert("!");
+        b.insert("?");
+        assert!(b.undo.iter().all(|e| e.removed.is_empty() && e.inserted.len() == 1), "no copy of the lines between");
+        assert_eq!(b.take_changes().map(|c| c.iter().all(|s| s.from == s.to && s.delta == 0)), Some(true));
+        assert_eq!((b.line(0), b.line(5001)), ("a!?", "b!?"));
+        assert_eq!(b.selections().len(), 2);
+        // One undo takes back the typing at both.
+        b.undo();
+        assert_eq!((b.line(0), b.line(5001)), ("a", "b"));
+        b.redo();
+        assert_eq!((b.line(0), b.line(5001)), ("a!?", "b!?"));
     }
 
     #[test]

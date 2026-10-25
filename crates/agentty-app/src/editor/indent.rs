@@ -11,6 +11,10 @@ const NEIGHBOURS: usize = 12;
 const NEIGHBOUR_BYTES: u64 = 256 * 1024;
 /// Folders looked through for `.editorconfig`, at most.
 const LEVELS: usize = 32;
+/// A section's glob is looked at only up to this long, and spelled out into this many patterns
+/// at most (`{a,b}{a,b}…` doubles them each time): a repository's `.editorconfig` is not trusted.
+const GLOB_BYTES: usize = 256;
+const GLOB_PATTERNS: usize = 64;
 
 pub fn for_file(path: &Path, project: &Path) -> Option<String> {
     from_editorconfig(path, project).or_else(|| from_neighbours(path))
@@ -90,7 +94,12 @@ fn parse(text: &str, relative: &str) -> Found {
 /// below, one with `/` the path from the `.editorconfig`'s folder.
 fn section_matches(glob: &str, relative: &str) -> bool {
     let glob = glob.trim_start_matches('/');
-    expand(glob).iter().any(|pattern| {
+    if glob.len() > GLOB_BYTES {
+        return false;
+    }
+    let mut patterns = Vec::new();
+    expand(glob, &mut patterns);
+    patterns.iter().any(|pattern| {
         if pattern.contains('/') {
             matches(pattern.as_bytes(), relative.as_bytes())
         } else {
@@ -100,9 +109,12 @@ fn section_matches(glob: &str, relative: &str) -> bool {
     })
 }
 
-/// `{a,b}` alternatives spelled out (nested ones too).
-fn expand(glob: &str) -> Vec<String> {
-    let Some(open) = glob.find('{') else { return vec![glob.to_string()] };
+/// `{a,b}` alternatives spelled out (nested ones too) into `out`, [`GLOB_PATTERNS`] at most.
+fn expand(glob: &str, out: &mut Vec<String>) {
+    if out.len() >= GLOB_PATTERNS {
+        return;
+    }
+    let Some(open) = glob.find('{') else { return out.push(glob.to_string()) };
     let mut depth = 0;
     let mut parts = Vec::new();
     let mut start = open + 1;
@@ -118,24 +130,49 @@ fn expand(glob: &str) -> Vec<String> {
                 if depth == 0 {
                     parts.push(&glob[start..i]);
                     let (head, tail) = (&glob[..open], &glob[i + 1..]);
-                    return parts.iter().flat_map(|part| expand(&format!("{head}{part}{tail}"))).collect();
+                    for part in parts {
+                        expand(&format!("{head}{part}{tail}"), out);
+                    }
+                    return;
                 }
             }
             _ => {}
         }
     }
-    vec![glob.to_string()]
+    out.push(glob.to_string());
 }
 
-/// `*` (not across `/`), `**` (across), `?`, everything else literally.
+/// `*` (not across `/`), `**` (across), `?`, everything else literally. Step by step over the
+/// pattern with the set of text positions reached, so no pattern backtracks without end.
 fn matches(pattern: &[u8], text: &[u8]) -> bool {
-    match pattern {
-        [] => text.is_empty(),
-        [b'*', b'*', rest @ ..] => (0..=text.len()).any(|i| matches(rest, &text[i..])),
-        [b'*', rest @ ..] => (0..=text.len()).take_while(|i| *i == 0 || text[i - 1] != b'/').any(|i| matches(rest, &text[i..])),
-        [b'?', rest @ ..] => text.first().is_some_and(|c| *c != b'/') && matches(rest, &text[1..]),
-        [c, rest @ ..] => text.first() == Some(c) && matches(rest, &text[1..]),
+    let mut reached = vec![false; text.len() + 1];
+    reached[0] = true;
+    let mut i = 0;
+    while i < pattern.len() {
+        let mut next = vec![false; text.len() + 1];
+        match pattern[i] {
+            b'*' => {
+                let across = pattern.get(i + 1) == Some(&b'*');
+                if across {
+                    i += 1;
+                }
+                let mut on = false;
+                for j in 0..=text.len() {
+                    // Carried on from an earlier reached position, unless a `/` stops a `*`.
+                    on = reached[j] || (on && (across || text[j - 1] != b'/'));
+                    next[j] = on;
+                }
+            }
+            c => {
+                for j in 0..text.len() {
+                    next[j + 1] = reached[j] && if c == b'?' { text[j] != b'/' } else { text[j] == c };
+                }
+            }
+        }
+        reached = next;
+        i += 1;
     }
+    reached[text.len()]
 }
 
 /// What the other files with the same extension in its folder (else the folder above) use.
@@ -147,7 +184,8 @@ fn from_neighbours(path: &Path) -> Option<String> {
             entries.flatten().map(|entry| entry.path()).filter(|other| other != path && other.extension() == Some(extension)).collect();
         names.sort();
         for other in names.into_iter().take(NEIGHBOURS) {
-            if std::fs::metadata(&other).map_or(true, |meta| !meta.is_file() || meta.len() > NEIGHBOUR_BYTES) {
+            // Not through a link: it may point anywhere.
+            if std::fs::symlink_metadata(&other).map_or(true, |meta| !meta.is_file() || meta.len() > NEIGHBOUR_BYTES) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&other) else { continue };
@@ -176,6 +214,17 @@ mod tests {
         assert_eq!(at("docs/a/b.md"), (true, Some("space".into()), Some(3)));
         assert_eq!(at("notes/b.md"), (true, Some("space".into()), Some(4)));
         assert!(section_matches("*.{js,{ts,tsx}}", "a/b.tsx") && !section_matches("src/*.ts", "src/a/b.ts"));
+        assert!(section_matches("src/**.ts", "src/a/b.ts") && section_matches("Make?ile", "Makefile") && !section_matches("a?b", "a/b"));
+    }
+
+    #[test]
+    fn a_hostile_editorconfig_glob_takes_no_time() {
+        let started = std::time::Instant::now();
+        let stars = "**a".repeat(80) + "b";
+        assert!(!section_matches(&stars, &"a".repeat(200)));
+        let braces = "{a,b}".repeat(50);
+        assert!(!section_matches(&braces, "c"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

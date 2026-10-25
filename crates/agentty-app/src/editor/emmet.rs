@@ -400,12 +400,23 @@ impl Writer {
         for (name, value) in attrs {
             self.out.push(' ');
             self.out.push_str(&attr_name(&name));
-            self.out.push_str("=\"");
             match value.filter(|v| !v.is_empty()) {
-                Some(value) => self.out.push_str(&value),
-                None => self.stop(),
+                // An expression in JSX: `onClick={save}`.
+                Some(value) if self.jsx && value.starts_with('{') && value.ends_with('}') => {
+                    self.out.push('=');
+                    self.out.push_str(&value);
+                }
+                Some(value) => {
+                    self.out.push_str("=\"");
+                    self.out.push_str(&value.replace('"', "&quot;"));
+                    self.out.push('"');
+                }
+                None => {
+                    self.out.push_str("=\"");
+                    self.stop();
+                    self.out.push('"');
+                }
             }
-            self.out.push('"');
         }
         if VOID.contains(&node.name.as_str()) {
             self.out.push_str(if self.jsx { " />" } else { ">" });
@@ -446,8 +457,9 @@ impl Writer {
 pub fn expand_at(line: &str, col: usize, jsx: bool) -> Option<Expansion> {
     let before = line.get(..col)?;
     let start = abbreviation_start(before)?;
-    let prefix = before[..start].trim_end();
-    if !(prefix.is_empty() || (prefix.ends_with('>') && !prefix.ends_with("=>"))) {
+    // At the start of the line, or right after a tag's `>`.
+    let prefix = &before[..start];
+    if !(prefix.trim().is_empty() || (prefix.ends_with('>') && !prefix.ends_with("=>") && prefix.contains('<'))) {
         return None;
     }
     let abbreviation = &before[start..];
@@ -484,18 +496,17 @@ fn all(nodes: &[Node], known: &impl Fn(&Node) -> bool) -> bool {
 }
 
 /// Where the abbreviation before the cursor starts: after the last space outside `[ ]` and
-/// `{ }`, the last `>` of a tag, or the start of the line.
+/// `{ }`, or after the `>` of the last tag before it if that is later. Inside a tag, nowhere.
 fn abbreviation_start(before: &str) -> Option<usize> {
     let mut depth = 0i32;
+    let mut start = 0;
     for (i, c) in before.char_indices().rev() {
         match c {
             ']' | '}' => depth += 1,
             '[' | '{' => depth -= 1,
-            c if depth == 0 && c.is_whitespace() => return Some(i + c.len_utf8()),
-            // A tag on the same line (`<div>` before it): the abbreviation starts after its `>`.
-            '<' if depth == 0 => {
-                let rest = &before[i..];
-                return rest.find('>').map(|close| i + close + 1);
+            c if depth == 0 && c.is_whitespace() => {
+                start = i + c.len_utf8();
+                break;
             }
             _ => {}
         }
@@ -503,7 +514,25 @@ fn abbreviation_start(before: &str) -> Option<usize> {
             return None;
         }
     }
-    Some(0)
+    if let Some(open) = before.rfind('<') {
+        let close = open + before[open..].find('>')?;
+        start = start.max(close + 1);
+    }
+    Some(start)
+}
+
+/// Whether the cursor is in a `<script>` or `<style>` element of an HTML file, from the text
+/// before it, last line first: no markup there.
+pub fn in_script_or_style<'a>(lines: impl Iterator<Item = &'a str>) -> bool {
+    for line in lines {
+        let lower = line.to_ascii_lowercase();
+        let open = lower.rfind("<script").max(lower.rfind("<style"));
+        let close = lower.rfind("</script").max(lower.rfind("</style"));
+        if open.is_some() || close.is_some() {
+            return open > close;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -556,5 +585,12 @@ mod tests {
         assert_eq!(expand_at("<input type=\"text\" p", 21, true), None);
         assert_eq!(expand_at("const f = () => p", 17, true), None);
         assert_eq!(expand_at("[1, 2]", 6, false), None);
+        assert_eq!(expand_at("a > p", 5, false), None, "a `>` in text is no tag");
+        assert_eq!(expand_at("<div class=\"x\">ul>li", 20, false).map(|e| e.start), Some(15), "after a tag with attributes");
+        // Values: quotes kept apart, an expression in JSX.
+        assert_eq!(expand("a[title='say \"hi\"']", false).unwrap().0, "<a title=\"say &quot;hi&quot;\" href=\"\"></a>");
+        assert_eq!(expand("button[onClick={save}]", true).unwrap().0, "<button onClick={save}></button>");
+        assert!(in_script_or_style(["  body", "<script>"].into_iter()));
+        assert!(!in_script_or_style(["  body", "</script>", "<script src=\"x\">"].into_iter()));
     }
 }
