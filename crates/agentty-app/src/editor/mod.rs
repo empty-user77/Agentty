@@ -2089,8 +2089,10 @@ impl CodeEditor {
         let shown = |text: String, tip: String| {
             div().id("editor-lsp").flex_shrink_0().child(text).tooltip(Tooltip::text(tip, None)).into_any_element()
         };
-        // A Maven project not trusted yet: the files' text only, and the way to read its build.
+        // A build not trusted yet: jdtls reads the files' text only, kotlin-lsp waits; and the
+        // way to read it.
         if let Some(root) = lsp::build_unread(&doc.project, doc.language, &doc.path) {
+            let tip = if doc.language == Language::Kotlin { "lsp.read_build_kotlin_tip" } else { "lsp.read_build_tip" };
             return Some(
                 div()
                     .id("editor-lsp")
@@ -2116,7 +2118,7 @@ impl CodeEditor {
                                 cx.notify();
                             })),
                     )
-                    .tooltip(Tooltip::text(t(cx, "lsp.read_build_tip"), None))
+                    .tooltip(Tooltip::text(t(cx, tip), None))
                     .into_any_element(),
             );
         }

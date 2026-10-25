@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- File editor: Kotlin uses JetBrains' own language server, `kotlin-lsp` (`brew install JetBrains/utils/kotlin-lsp`),
+  which reads current Kotlin. In a Gradle or Maven project it starts once you click **Read the build** in the status
+  bar, as Java's does, since reading the project runs its build.
 - File editor: the Markdown preview can show beside the text (**⌥⌘V**, or the button next to **Preview**), following
   the text as you scroll and type.
 - File editor: **⇧⌥⌘[** folds every region of the file, nested ones too, and **⇧⌥⌘]** unfolds them all.
