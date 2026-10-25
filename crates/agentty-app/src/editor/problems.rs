@@ -308,11 +308,21 @@ impl CodeEditor {
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         let since = text.revision;
         let (start, end) = (problem.start, problem.end);
+        let (asked, problem_text) = (path.clone(), problem.clone());
         cx.spawn(async move |this, cx| {
-            let found = cx.background_spawn(async move { lsp::actions(&project, language, &path, &text, start, end) }).await;
+            let (found, spelled) = cx
+                .background_spawn(async move {
+                    let found = lsp::actions(&project, language, &path, &text, start, end);
+                    (found, super::spell::suggestions(&problem_text, &text.text, &project, language))
+                })
+                .await;
             let _ = this.update(cx, |this, cx| {
                 if this.problem_hover.as_ref().is_some_and(|(p, _)| *p == problem) {
-                    let fixes: Vec<lsp::Action> = found.unwrap_or_default().into_iter().filter(|a| a.fixes).take(4).collect();
+                    // The server's fixes, then the names the editor finds spelled close.
+                    let mut fixes: Vec<lsp::Action> = found.unwrap_or_default().into_iter().filter(|a| a.fixes).collect();
+                    let own = super::spell::actions(&asked, spelled, &fixes, cx);
+                    fixes.extend(own);
+                    fixes.truncate(4);
                     this.hover_fixes = Some((problem, since, fixes));
                     cx.notify();
                 }

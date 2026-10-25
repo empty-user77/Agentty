@@ -194,7 +194,7 @@ fn indent_snippet(insert: &str, stops: &[(usize, usize)], indent: &str, unit: &s
 /// The words of `text` (names of at least [`WORD_MIN`] + 1 characters), each once.
 /// The word being typed (`typing`: its line and bytes) is left out there: only its other
 /// places count, so a word typed in full is one the file has.
-fn words(text: &str, language: super::language::Language, typing: Option<(usize, usize, usize)>) -> Vec<String> {
+pub(super) fn words(text: &str, language: super::language::Language, typing: Option<(usize, usize, usize)>) -> Vec<String> {
     let mut seen = std::collections::HashSet::<String>::new();
     let mut out = Vec::new();
     for (index, line) in text.lines().take(WORD_LINES).enumerate() {

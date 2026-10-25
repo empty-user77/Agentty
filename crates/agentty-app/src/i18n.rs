@@ -2952,6 +2952,7 @@ strings! {
     "editor.ask_keys" => ["↩ change it · ⌥↩ only answer · esc cancel", "↩ 수정 지시 · ⌥↩ 질문만 · esc 취소", "↩ 修正を指示 · ⌥↩ 質問だけ · esc キャンセル", "↩ 让它修改 · ⌥↩ 只回答 · esc 取消"],
     "editor.merged" => ["Merged the changes on disk with your unsaved edits", "디스크의 변경을 저장하지 않은 편집과 합쳤습니다", "ディスク上の変更を未保存の編集とマージしました", "已将磁盘上的改动与未保存的编辑合并"],
     "editor.close_file" => ["Close file", "파일 닫기", "ファイルを閉じる", "关闭文件"],
+    "editor.change_to" => ["Change to '{name}'", "'{name}'(으)로 바꾸기", "'{name}' に変更", "改为 '{name}'"],
     "editor.close_other_files" => ["Close other files", "다른 파일 닫기", "他のファイルを閉じる", "关闭其他文件"],
     "editor.copy" => ["Copy", "복사", "コピー", "复制"],
     "editor.position" => ["Ln {line}, Col {column}", "줄 {line}, 열 {column}", "{line} 行、{column} 列", "第 {line} 行，第 {column} 列"],

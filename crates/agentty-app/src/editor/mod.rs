@@ -28,6 +28,7 @@ mod quickfix;
 mod rename;
 pub mod review;
 mod signature;
+mod spell;
 mod sticky;
 pub mod symbols;
 
