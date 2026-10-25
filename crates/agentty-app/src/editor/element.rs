@@ -20,7 +20,7 @@ const SCROLLBAR_WIDTH: f32 = 10.;
 /// Characters of a problem's message written at the end of its line at most.
 const INLINE_PROBLEM_CHARS: usize = 160;
 /// Characters looked through for the bracket matching the one at the cursor.
-const BRACKET_SCAN: usize = 50_000;
+pub(super) const BRACKET_SCAN: usize = 50_000;
 const TEXT_PADDING: f32 = 8.;
 
 /// A line as shown: tabs expanded to spaces, with the way back to buffer offsets.

@@ -75,6 +75,12 @@ All notable changes to this project are documented here. The format follows
   comes with its parentheses, the cursor between them when it takes arguments.
 - File editor: without a language server, completion also offers the names the project defines (classes,
   functions, fields of other files), not only the words of the open file.
+- File editor: when the project's build file has an error (a `pom.xml` naming a version that does not exist), a row
+  above the code says so with the server's message and a button to its line; saving the fixed build file makes jdtls
+  read the project again.
+- File editor: ⌥⌘↑ / ⌥⌘↓ add a cursor on the line above or below, ⇧⌘\ goes to the matching bracket, and "Format the
+  file when saving" (Settings → Editor, off by default) formats before ⌘S saves. Formatting keeps the cursor by the
+  character it was next to.
 
 ### Fixed
 - File editor: the first file opened with ⌘P in a new window gets its language server too; a list that would stay

@@ -239,7 +239,8 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("editor.shortcut_delete_lines", "⇧⌘K"),
             ("editor.shortcut_select_line", "⌘L"),
             ("editor.shortcut_next_occurrence", "⌘D  /  ⇧⌘L"),
-            ("editor.shortcut_add_cursor", "⌥ Click"),
+            ("editor.shortcut_add_cursor", "⌥ Click  /  ⌥⌘↑  /  ⌥⌘↓"),
+            ("editor.shortcut_go_to_bracket", "⇧⌘\\"),
             ("editor.shortcut_indent_lines", "⌘]  /  ⌘["),
             ("editor.shortcut_insert_line", "⌘↩  /  ⇧⌘↩"),
             ("editor.shortcut_delete_to_start", "⌘⌫"),
@@ -1255,6 +1256,15 @@ impl Workbench {
                     .child(row(
                         t(cx, "editor.settings_hover_types"),
                         toggle("editor-hover-types", prefs.editor_hover_types, |s| s.editor_hover_types = !s.editor_hover_types, cx),
+                    ))
+                    .child(row(
+                        t(cx, "editor.settings_format_on_save"),
+                        toggle(
+                            "editor-format-on-save",
+                            prefs.editor_format_on_save,
+                            |s| s.editor_format_on_save = !s.editor_format_on_save,
+                            cx,
+                        ),
                     ))
                     .child(row(
                         t(cx, "editor.settings_sticky_scroll"),

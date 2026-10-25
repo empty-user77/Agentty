@@ -103,6 +103,9 @@ actions!(
         OutdentLines,
         SelectNextOccurrence,
         SelectAllOccurrences,
+        AddCursorAbove,
+        AddCursorBelow,
+        GoToBracket,
     ]
 );
 
@@ -167,6 +170,9 @@ pub fn bind_keys(cx: &mut App) {
         key("cmd-[", OutdentLines, c),
         key("cmd-d", SelectNextOccurrence, c),
         key("cmd-shift-l", SelectAllOccurrences, c),
+        key("cmd-alt-up", AddCursorAbove, c),
+        key("cmd-alt-down", AddCursorBelow, c),
+        key("cmd-shift-\\", GoToBracket, c),
     ]);
     find::bind_keys(cx);
     navigate::bind_keys(cx);
@@ -309,6 +315,8 @@ pub(crate) struct Document {
     autoscroll: bool,
     notice: Option<Notice>,
     formatting: bool,
+    /// Saved once the formatting under way is done (format on save): quietly, whatever it gives.
+    save_after_format: bool,
     /// Changed on disk while it had unsaved changes here (asked about in a notice).
     disk_changed: bool,
     /// Checking the disk is under way.
@@ -699,6 +707,9 @@ impl CodeEditor {
                         None => {
                             this.docs.push(document(&path, &project, opened));
                             this.active = this.docs.len() - 1;
+                            // What the servers reported already (a build file's error) is read
+                            // for it at the next tick.
+                            this.problems_generation = this.problems_generation.wrapping_sub(1);
                         }
                     }
                     if this.preview_next.take().as_deref() == Some(path.as_path()) {
@@ -903,6 +914,16 @@ impl CodeEditor {
         cx.notify();
     }
 
+    fn add_cursor_vertical(&mut self, up: bool, cx: &mut Context<Self>) {
+        self.completion = None;
+        self.signature = None;
+        let Some(doc) = self.doc() else { return };
+        doc.buffer.unmark();
+        doc.buffer.add_cursor_vertical(up);
+        doc.autoscroll = true;
+        cx.notify();
+    }
+
     /// `>` typed in markup or JSX: the tag it ends gets its closing tag.
     fn close_typed_tag(&mut self, cx: &mut Context<Self>) {
         let Some(language) = self.docs.get(self.active).map(|d| d.language) else { return };
@@ -968,6 +989,8 @@ impl CodeEditor {
                 doc.stamp = Stamp::of(&doc.target);
                 doc.disk_changed = false;
                 doc.notice = None;
+                let (project, path) = (doc.project.clone(), doc.path.clone());
+                cx.background_spawn(async move { lsp::saved(&project, &path) }).detach();
                 self.tabs_changed(cx);
                 cx.notify();
                 true
@@ -981,6 +1004,21 @@ impl CodeEditor {
                 false
             }
         }
+    }
+
+    /// ⌘S: with format on save on, formats the file first (when its language has a formatter),
+    /// then saves it.
+    fn save_formatted(&mut self, cx: &mut Context<Self>) {
+        let format = crate::settings::settings(cx).editor_format_on_save;
+        let Some(doc) = self.docs.get_mut(self.active) else { return };
+        if format && doc.editable() && doc.language.formatter().is_some() && matches!(doc.content, Content::Text) {
+            if !doc.formatting {
+                doc.save_after_format = true;
+                self.format(cx);
+            }
+            return;
+        }
+        self.save(false, cx);
     }
 
     /// Saves every file with unsaved changes; false when one of them could not be saved.
@@ -1077,6 +1115,17 @@ impl CodeEditor {
         };
         let doc = &mut self.docs[index];
         doc.formatting = false;
+        // Format on save: the formatting goes in when it can, no word about it, and the file is saved.
+        if std::mem::take(&mut doc.save_after_format) {
+            if let Some(formatted) = result.as_ref().ok().filter(|f| doc.buffer.text() == before && f.as_str() != before) {
+                doc.buffer.set_formatted(formatted);
+                doc.sync_highlights();
+            }
+            let active = std::mem::replace(&mut self.active, index);
+            self.save(false, cx);
+            self.active = active;
+            return cx.notify();
+        }
         match result {
             Ok(formatted) => {
                 if doc.buffer.text() != before {
@@ -1084,7 +1133,7 @@ impl CodeEditor {
                 } else if formatted == before {
                     doc.set_notice(messages.1, Tone::Success);
                 } else {
-                    doc.buffer.set_text(&formatted);
+                    doc.buffer.set_formatted(&formatted);
                     doc.sync_highlights();
                     doc.autoscroll = true;
                     doc.set_notice(messages.0, Tone::Success);
@@ -2034,6 +2083,7 @@ impl CodeEditor {
             "cursorLine": self.docs.get(self.active).map(|d| d.buffer.line(d.buffer.cursor().line).to_string()),
             "selected": self.docs.get(self.active).map(|d| d.buffer.selected_text()),
             "scrollY": self.docs.get(self.active).map(|d| d.scroll.y),
+            "buildError": self.docs.get(self.active).and_then(|d| d.checks.build.as_ref()).map(|e| format!("{}:{} {}", e.path.display(), e.line, e.message)),
             "head": self.docs.get(self.active).map(|d| (0..d.buffer.line_count().min(3)).map(|i| d.buffer.line(i).to_string()).collect::<Vec<_>>()),
             "changes": self.debug_changes(),
             "allChanges": self.changes.iter().map(|c| format!("{}:{}", c.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), c.hunk.start)).collect::<Vec<_>>(),
@@ -2095,6 +2145,13 @@ impl CodeEditor {
                     .and_then(|at| self.docs.get(self.active)?.checks.problems.iter().find(|p| p.start <= at && at <= p.end).cloned());
                 if let Some(problem) = problem {
                     self.fix_with_ai(&problem, cx);
+                }
+            }
+            // The build error row's button.
+            "open-build-error" => {
+                let found = self.docs.get(self.active).and_then(|d| Some((d.checks.build.clone()?, d.project.clone())));
+                if let Some((error, project)) = found {
+                    self.open_at(&error.path, &project, Some((error.line + 1, 1)), window, cx);
                 }
             }
             "replace-all" => self.debug_replace(argument, true, window, cx),
@@ -2258,6 +2315,7 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
         autoscroll: false,
         notice: None,
         formatting: false,
+        save_after_format: false,
         disk_changed: false,
         checking: false,
         preview: false,
@@ -2594,6 +2652,13 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &OutdentLines, _, cx| this.dismiss_and_edit(cx, |b| b.outdent())))
             .on_action(cx.listener(|this, _: &SelectNextOccurrence, _, cx| this.add_cursors(false, cx)))
             .on_action(cx.listener(|this, _: &SelectAllOccurrences, _, cx| this.add_cursors(true, cx)))
+            .on_action(cx.listener(|this, _: &AddCursorAbove, _, cx| this.add_cursor_vertical(true, cx)))
+            .on_action(cx.listener(|this, _: &AddCursorBelow, _, cx| this.add_cursor_vertical(false, cx)))
+            .on_action(cx.listener(|this, _: &GoToBracket, _, cx| {
+                this.motion(cx, |b| {
+                    b.go_to_bracket(element::BRACKET_SCAN);
+                })
+            }))
             .on_action(cx.listener(|this, _: &Newline, _, cx| {
                 if !this.completion_accept(cx) {
                     this.edit(cx, |b| b.newline())
@@ -2644,9 +2709,7 @@ impl Render for CodeEditor {
                     this.edit(cx, |b| b.paste(&text));
                 }
             }))
-            .on_action(cx.listener(|this, _: &Save, _, cx| {
-                this.save(false, cx);
-            }))
+            .on_action(cx.listener(|this, _: &Save, _, cx| this.save_formatted(cx)))
             .on_action(cx.listener(|this, _: &Format, _, cx| this.format(cx)))
             .on_action(cx.listener(|this, _: &CloseFile, _, cx| this.request_close(this.active, cx)))
             .on_action(cx.listener(|this, _: &TogglePreview, window, cx| this.toggle_preview(window, cx)))
@@ -2674,6 +2737,7 @@ impl Render for CodeEditor {
             }))
             .child(self.render_toolbar(doc, cx))
             .children(self.render_notice(doc, cx))
+            .children(self.render_build_error(doc, cx))
             .child(body)
             .child(self.render_status(doc, cx))
             .children(self.render_confirm(cx));

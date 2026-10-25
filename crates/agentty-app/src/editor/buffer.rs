@@ -398,6 +398,65 @@ impl Buffer {
         true
     }
 
+    /// ⌥⌘↑ / ⌥⌘↓: one more cursor on the line above the highest cursor (below the lowest), at the
+    /// display column the main one keeps; the new one leads. False at the first (last) line.
+    pub fn add_cursor_vertical(&mut self, up: bool) -> bool {
+        let all = self.selections();
+        let edge = if up { all.iter().map(|s| s.head).min() } else { all.iter().map(|s| s.head).max() }.unwrap_or_default();
+        let line = if up { edge.line.checked_sub(1) } else { Some(edge.line + 1).filter(|l| *l < self.lines.len()) };
+        let Some(line) = line else { return false };
+        let main = self.cursor();
+        let goal = self.goal_column.unwrap_or_else(|| display_column(self.line(main.line), main.col));
+        self.extra.push(self.selection);
+        self.selection = Selection::cursor(Pos::new(line, column_to_byte(self.line(line), goal)));
+        self.seal();
+        self.merge_cursors();
+        self.goal_column = Some(goal);
+        true
+    }
+
+    /// ⇧⌘\: to the bracket matching the one at the cursor, or else to the closing bracket of the
+    /// pair the cursor is in. Looks `limit` characters at most. False when there is none.
+    pub fn go_to_bracket(&mut self, limit: usize) -> bool {
+        if let Some((_, there)) = self.matching_bracket(limit) {
+            self.move_to(there, false);
+            return true;
+        }
+        // The opening bracket of the pair around the cursor, then its match.
+        let cursor = self.cursor();
+        let mut depth = 0usize;
+        let mut seen = 0usize;
+        for row in (0..=cursor.line).rev() {
+            let text = self.line(row);
+            let to = if row == cursor.line { cursor.col } else { text.len() };
+            for (i, ch) in text[..to].char_indices().rev() {
+                seen += 1;
+                if seen > limit {
+                    return false;
+                }
+                match ch {
+                    ')' | ']' | '}' => depth += 1,
+                    '(' | '[' | '{' if depth > 0 => depth -= 1,
+                    '(' | '[' | '{' => {
+                        self.move_to(Pos::new(row, i), false);
+                        return match self.matching_bracket(limit) {
+                            Some((_, there)) => {
+                                self.move_to(there, false);
+                                true
+                            }
+                            None => {
+                                self.move_to(cursor, false);
+                                false
+                            }
+                        };
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
     /// ⇧⌘L: a cursor on every place with the selected text (the word at the cursor first), the
     /// first [`MAX_CURSORS`] of them.
     pub fn select_all_occurrences(&mut self) {
@@ -1206,6 +1265,40 @@ impl Buffer {
         self.revision = next_revision();
     }
 
+    /// `text`, a formatting of this one, in its place: the cursor stays by the same character
+    /// (counted without the spaces and line breaks a formatter moves), one cursor only.
+    pub fn set_formatted(&mut self, text: &str) {
+        let solid = |line: &str, col: usize| line[..col.min(line.len())].chars().filter(|c| !c.is_whitespace()).count();
+        let count = |pos: Pos| (0..pos.line).map(|i| solid(self.line(i), usize::MAX)).sum::<usize>() + solid(self.line(pos.line), pos.col);
+        // A cursor in a line's indentation goes before that line's first character, not after the
+        // last one of the line above.
+        let at = |pos: Pos| (count(pos), solid(self.line(pos.line), pos.col) == 0);
+        let (anchor, head) = (at(self.selection.anchor), at(self.selection.head));
+        self.extra.clear();
+        self.set_text(text);
+        let place = |(mut left, line_start): (usize, bool)| {
+            for (row, line) in self.lines.iter().enumerate() {
+                let here = solid(line, usize::MAX);
+                if left > here || (line_start && left == here && row + 1 < self.lines.len()) {
+                    left -= here;
+                    continue;
+                }
+                // The place after the `left`-th character of the line that is not a space.
+                let col = if left == 0 {
+                    line.len() - line.trim_start().len()
+                } else {
+                    line.char_indices().filter(|(_, c)| !c.is_whitespace()).nth(left - 1).map_or(line.len(), |(i, c)| i + c.len_utf8())
+                };
+                return Pos::new(row, col);
+            }
+            self.end()
+        };
+        self.selection = Selection { anchor: place(anchor), head: place(head) };
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+    }
+
     // -- input methods ----------------------------------------------------------------------
 
     /// The text an input method is still composing.
@@ -1784,6 +1877,58 @@ mod tests {
         assert!(b.undo());
         assert_eq!(b.text(), "let num = 1;\nnum += 1;\nprint(num, renum);");
         assert!(b.extra.is_empty());
+    }
+
+    #[test]
+    fn formatting_keeps_the_cursor_by_its_character() {
+        let mut b = Buffer::new("class A {\n            int  x = 1;\n}");
+        at(&mut b, 1, 18);
+        assert_eq!(&b.line(1)[18..], " = 1;");
+        b.set_formatted("class A {\n    int x = 1;\n}");
+        assert_eq!(b.cursor(), Pos::new(1, 9), "still after the `x`");
+        // At a line start: before its first character.
+        let mut b = Buffer::new("a\n      b");
+        at(&mut b, 1, 6);
+        b.set_formatted("a\n  b");
+        assert_eq!(b.cursor(), Pos::new(1, 2));
+        b.undo();
+        assert_eq!(b.text(), "a\n      b");
+    }
+
+    #[test]
+    fn cursors_go_on_the_lines_above_and_below() {
+        let mut b = Buffer::new("let a = 1;\nb\nlet c = 3;\nlet d = 4;");
+        at(&mut b, 2, 6);
+        assert!(b.add_cursor_vertical(false));
+        // A short line on the way keeps the column for the next one.
+        assert!(b.add_cursor_vertical(true) && b.add_cursor_vertical(true));
+        let mut heads: Vec<Pos> = b.selections().iter().map(|s| s.head).collect();
+        heads.sort();
+        assert_eq!(heads, [Pos::new(0, 6), Pos::new(1, 1), Pos::new(2, 6), Pos::new(3, 6)]);
+        assert!(!b.add_cursor_vertical(true), "nothing above the first line");
+        b.insert("x");
+        assert_eq!(b.text(), "let a x= 1;\nbx\nlet c x= 3;\nlet d x= 4;");
+    }
+
+    #[test]
+    fn goes_to_the_matching_or_enclosing_bracket() {
+        let mut b = Buffer::new("fn f() {\n    call(a, [b]);\n}");
+        at(&mut b, 0, 7);
+        assert!(b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(2, 0));
+        assert!(b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(0, 7), "and back");
+        // Inside `call(…)`, next to no bracket: to its closing parenthesis.
+        at(&mut b, 1, 10);
+        assert!(b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(1, 15));
+        at(&mut b, 1, 12);
+        assert!(b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(1, 14));
+        let mut b = Buffer::new("plain");
+        at(&mut b, 0, 2);
+        assert!(!b.go_to_bracket(10_000));
+        assert_eq!(b.cursor(), Pos::new(0, 2));
     }
 
     #[test]

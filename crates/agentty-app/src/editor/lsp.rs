@@ -8,7 +8,7 @@ use super::language::Language;
 use super::project_index::{Location, Usage};
 use super::symbols::{self, Kind};
 use agentty_bridge::lsp::{self, Place, Status};
-pub use agentty_bridge::lsp::{Action, CompletionItem, FileEdit, Severity, Signature};
+pub use agentty_bridge::lsp::{Action, BuildError, CompletionItem, FileEdit, Severity, Signature};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -204,6 +204,21 @@ pub fn check(project: &Path, language: Language, path: &Path, text: &Snapshot) {
     let project = &root(project, path, language);
     if let Some(id) = id(language) {
         lsp::check(project, id, path, text.lsp(), CHECK_WAIT);
+    }
+}
+
+/// An error in a build file of the project `path` belongs to, as its server reported it (the
+/// project could not be read: `pom.xml` naming a version that does not exist).
+pub fn build_error(project: &Path, language: Language, path: &Path) -> Option<BuildError> {
+    // In the build file itself: the error of the Java server working from its folder.
+    let language = if lsp::is_build_file(path) { Language::Java } else { language };
+    lsp::build_error(&root(project, path, language), id(language)?)
+}
+
+/// `path` was saved: a build file makes its project's server read the project again.
+pub fn saved(project: &Path, path: &Path) {
+    if lsp::is_build_file(path) {
+        lsp::build_file_saved(&root(project, path, Language::Java), path);
     }
 }
 

@@ -2724,6 +2724,7 @@ strings! {
         "在下一个 / 所有相同内容处添加光标"
     ],
     "editor.shortcut_add_cursor" => ["Add a cursor", "커서 추가", "カーソルを追加", "添加光标"],
+    "editor.shortcut_go_to_bracket" => ["Go to the matching bracket", "짝 괄호로 이동", "対応する括弧へ移動", "转到匹配的括号"],
     "editor.shortcut_indent_lines" => ["Indent / outdent lines", "줄 들여쓰기 / 내어쓰기", "行のインデント / インデント解除", "缩进 / 取消缩进行"],
     "editor.shortcut_delete_to_start" => ["Delete to line start", "줄 처음까지 지우기", "行頭まで削除", "删除到行首"],
     "editor.shortcut_delete_word" => ["Delete word before / after", "앞 / 뒤 단어 지우기", "前 / 後ろの単語を削除", "删除前 / 后一个词"],
@@ -2776,6 +2777,7 @@ strings! {
         "显示指针下名称的类型"
     ],
     "editor.git_revert" => ["Revert", "되돌리기", "元に戻す", "还原"],
+    "editor.settings_format_on_save" => ["Format the file when saving", "저장할 때 파일 서식 맞추기", "保存時にファイルを整形", "保存时格式化文件"],
     "editor.settings_sticky_scroll" => [
         "Keep the line of the class or function you are in at the top",
         "보고 있는 클래스·함수의 첫 줄을 위에 고정",
@@ -2872,6 +2874,8 @@ strings! {
     "editor.save_failed" => ["Could not save: {error}", "저장하지 못했습니다: {error}", "保存できませんでした: {error}", "无法保存: {error}"],
     "editor.changed_on_disk" => ["This file was changed outside Agentty (by an agent, git or another editor) while you had unsaved changes.", "저장하지 않은 변경이 있는데 Agentty 밖(에이전트, git, 다른 편집기)에서 이 파일이 바뀌었습니다.", "未保存の変更がある間に、このファイルが Agentty の外（エージェント、git、別のエディタ）で変更されました。", "在你有未保存的更改时，此文件在 Agentty 之外（智能体、git 或其他编辑器）被修改了。"],
     "editor.deleted_on_disk" => ["This file was deleted on disk. Saving creates it again.", "이 파일이 디스크에서 삭제되었습니다. 저장하면 다시 만들어집니다.", "このファイルはディスクから削除されました。保存すると再作成されます。", "此文件已在磁盘上被删除。保存会重新创建它。"],
+    "editor.build_error" => ["{file} has an error, so the names its libraries bring are unknown in this file.", "{file}에 오류가 있어 이 파일에서 라이브러리의 이름을 알 수 없습니다.", "{file} にエラーがあるため、このファイルではライブラリの名前がわかりません。", "{file} 有错误，因此此文件中无法识别其依赖库的名称。"],
+    "editor.build_error_open" => ["Open {file}", "{file} 열기", "{file} を開く", "打开 {file}"],
     "editor.reload" => ["Load theirs", "디스크 내용 불러오기", "ディスクの内容を読み込む", "载入磁盘上的内容"],
     "editor.keep_mine" => ["Keep mine", "내 변경 유지", "自分の変更を残す", "保留我的更改"],
     "editor.close_dirty_title" => ["Save changes to {name}?", "{name}의 변경 내용을 저장할까요?", "{name} の変更を保存しますか？", "保存对 {name} 的更改吗？"],

@@ -353,6 +353,9 @@ pub struct Settings {
     /// The file editor pins the first lines of the definitions the top of the view is in.
     #[serde(default = "yes")]
     pub editor_sticky_scroll: bool,
+    /// ⌘S in the file editor formats the file first (as `editor.formatOnSave` in VS Code).
+    #[serde(default)]
+    pub editor_format_on_save: bool,
     /// Language servers the user turned off, by name (`rust-analyzer`, `jdtls`).
     #[serde(default)]
     pub lsp_disabled: Vec<String>,
@@ -968,6 +971,7 @@ impl Default for Settings {
             editor_complete_while_typing: true,
             editor_hover_types: true,
             editor_sticky_scroll: true,
+            editor_format_on_save: false,
             lsp_disabled: Vec::new(),
             browser: BrowserSettings::default(),
             favorite_sessions: Vec::new(),

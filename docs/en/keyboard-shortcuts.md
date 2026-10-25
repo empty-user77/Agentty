@@ -57,10 +57,11 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Comment out lines / move them / duplicate them / delete them (file editor) | ⌘/ / ⌥↑ ⌥↓ / ⇧⌥↑ ⇧⌥↓ / ⇧⌘K |
 | Select line / new line below or above / delete to line start / delete word before or after (file editor) | ⌘L / ⌘↩ ⇧⌘↩ / ⌘⌫ / ⌥⌫ ⌥⌦ |
 | Indent / outdent lines (file editor) | ⌘] / ⌘[ |
-| Add a cursor at the next match / at every match / where you click (file editor; Esc goes back to one) | ⌘D / ⇧⌘L / ⌥-click |
+| Add a cursor at the next match / at every match / where you click / on the line above or below (file editor; Esc goes back to one) | ⌘D / ⇧⌘L / ⌥-click / ⌥⌘↑ ⌥⌘↓ |
+| Go to the matching bracket (file editor) | ⇧⌘\ |
 | Mini mode | ⌃⌘M |
 
-While the file editor has focus, ⌘D, ⌘] / ⌘[ and ⇧⌘↩ work on the text as in VS Code; click a terminal to split, switch or zoom panes with them.
+While the file editor has focus, ⌘D, ⌘] / ⌘[, ⇧⌘↩ and ⌥⌘↑ / ⌥⌘↓ work on the text as in VS Code; click a terminal to split, switch or zoom panes or switch workspaces with them.
 
 ## Terminal and editor
 

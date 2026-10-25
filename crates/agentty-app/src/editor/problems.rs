@@ -8,9 +8,9 @@ use super::buffer::Pos;
 use super::lsp::{self, Problem, Severity};
 use super::{CodeEditor, Content};
 use crate::i18n::tf;
-use crate::theme::{hex, Chrome};
+use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::{icon, TypeScale};
-use gpui::{actions, div, prelude::*, px, AnyElement, ClickEvent, Context};
+use gpui::{actions, div, prelude::*, px, AnyElement, ClickEvent, Context, Window};
 use std::time::{Duration, Instant};
 
 actions!(code_editor, [NextProblem, PreviousProblem]);
@@ -44,6 +44,10 @@ pub(super) struct Checks {
     pub held: bool,
     /// When the text was last edited.
     pub edited_at: Option<Instant>,
+    /// An error in the project's build file (its libraries are unknown here because of it).
+    pub build: Option<lsp::BuildError>,
+    /// The build error the user closed (shown again once it changes).
+    pub build_closed: Option<lsp::BuildError>,
 }
 
 pub(super) fn color(severity: Severity) -> u32 {
@@ -96,6 +100,11 @@ impl CodeEditor {
             self.problems_generation = generation;
             let mut worst_changed = false;
             for doc in self.docs.iter_mut().filter(|d| matches!(d.content, Content::Text)) {
+                let build = lsp::build_error(&doc.project, doc.language, &doc.path);
+                if build != doc.checks.build {
+                    doc.checks.build = build;
+                    changed = true;
+                }
                 let found = lsp::problems(&doc.project, doc.language, &doc.path, &doc.buffer);
                 if found != doc.checks.problems {
                     let worst = |list: &[Problem]| list.iter().map(|p| p.severity).min();
@@ -157,6 +166,70 @@ impl CodeEditor {
         if changed {
             cx.notify();
         }
+    }
+
+    /// A row above the text while the project's build file has an error: the reason every library
+    /// name in the file is unknown, with the way to it.
+    pub(super) fn render_build_error(&self, doc: &super::Document, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let error = doc.checks.build.clone().filter(|e| doc.checks.build_closed.as_ref() != Some(e))?;
+        let file = error.path.file_name()?.to_string_lossy().into_owned();
+        let message: String = error.message.trim_start_matches("Project build error: ").chars().take(400).collect();
+        let (path, project, line) = (error.path.clone(), doc.project.clone(), error.line + 1);
+        let elsewhere = error.path != doc.path;
+        let open =
+            div()
+                .id("editor-build-error-open")
+                .flex_shrink_0()
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .t_small()
+                .cursor_pointer()
+                .bg(hex(Chrome::ACCENT))
+                .text_color(hex(Chrome::ON_ACCENT))
+                .hover(|s| s.opacity(0.85))
+                .child(tf(cx, "editor.build_error_open", &[("file", &file)]))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window: &mut Window, cx| {
+                    this.open_at(&path, &project, Some((line, 1)), window, cx)
+                }));
+        let close = crate::ui::icon_only_sized(
+            "editor-build-error-close",
+            "x",
+            20.,
+            crate::ui::IconSize::INLINE,
+            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if let Some(doc) = this.doc() {
+                    doc.checks.build_closed = doc.checks.build.clone();
+                }
+                cx.notify();
+            }),
+        );
+        Some(
+            div()
+                .flex_shrink_0()
+                .px_3()
+                .py_1p5()
+                .flex()
+                .items_start()
+                .gap_2()
+                .border_b_1()
+                .border_color(hex(Chrome::BORDER))
+                .bg(hex_alpha(Chrome::ERROR, 0.10))
+                .child(div().pt(px(2.)).child(icon("circle-x", crate::ui::IconSize::INLINE, hex(Chrome::ERROR))))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(tf(cx, "editor.build_error", &[("file", &file)])))
+                        .child(div().t_small().text_color(hex(Chrome::MUTED)).child(message)),
+                )
+                .when(elsewhere, |d| d.child(open))
+                .child(close)
+                .into_any_element(),
+        )
     }
 
     /// The pointer over the text (`None`: off it, or ⌘ held for a link): the message of the

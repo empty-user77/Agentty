@@ -145,6 +145,22 @@ pub struct Diagnostic {
     pub code: Option<String>,
 }
 
+/// An error the server found in a build file of the project (`pom.xml`, `build.gradle`): the
+/// project could not be read, so the names of its libraries are unknown in every file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildError {
+    pub path: PathBuf,
+    pub line: usize,
+    pub message: String,
+}
+
+/// Files that say how a project is built: an error in one is the project's, not the file's.
+const BUILD_FILES: &[&str] = &["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"];
+
+pub fn is_build_file(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| BUILD_FILES.contains(&n))
+}
+
 /// A problem as the server sent it: columns in its own units.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Reported {
@@ -321,6 +337,38 @@ pub fn diagnostics<'a>(root: &Path, language: &str, path: &Path, line: impl Fn(u
         .collect();
     out.sort_by_key(|d| (d.start, d.severity));
     out
+}
+
+/// The first error the server of `language` reported in a build file of the project, if any.
+pub fn build_error(root: &Path, language: &str) -> Option<BuildError> {
+    let client = spec_for(language).and_then(|spec| ready_client(root, spec))?;
+    let paths = client.build_files.lock().ok()?.clone();
+    let found = client.diagnostics.lock().ok()?;
+    first_build_error(&paths, &found)
+}
+
+/// The first error in the build files `paths` (by their key) among the problems `found`.
+fn first_build_error(paths: &HashMap<String, PathBuf>, found: &HashMap<String, Vec<Reported>>) -> Option<BuildError> {
+    let mut errors: Vec<BuildError> = paths
+        .iter()
+        .filter_map(|(key, path)| {
+            let first = found.get(key)?.iter().filter(|r| r.severity == Severity::Error).min_by_key(|r| r.start)?;
+            Some(BuildError { path: path.clone(), line: first.start.0, message: first.message.clone() })
+        })
+        .collect();
+    // The project's own build file before a module's.
+    errors.sort_by_key(|e| (e.path.components().count(), e.path.clone()));
+    errors.into_iter().next()
+}
+
+/// `path`, a build file of the project at `root`, was saved: jdtls reads the project again (it
+/// is started with its own rereading off, see [`launches`]), so a fixed `pom.xml` takes effect.
+pub fn build_file_saved(root: &Path, path: &Path) {
+    if !is_build_file(path) {
+        return;
+    }
+    let (Some(client), Some(uri)) = (spec_for("java").and_then(|spec| ready_client(root, spec)), file_uri(path)) else { return };
+    client.notify("java/projectConfigurationUpdate", json!({ "uri": uri }));
 }
 
 /// A fix or refactoring a server offers for some text (`textDocument/codeAction`).
@@ -1159,6 +1207,8 @@ struct Client {
     started: Instant,
     /// The problems reported per file ([`diagnostics_key`]).
     diagnostics: Mutex<HashMap<String, Vec<Reported>>>,
+    /// The build files among them, by their key, as the server named them.
+    build_files: Mutex<HashMap<String, PathBuf>>,
     /// The server is asked for a file's problems (`textDocument/diagnostic`) instead of telling.
     pull: AtomicBool,
     /// The server fills in an action's edit only when asked (`codeAction/resolve`).
@@ -1207,6 +1257,7 @@ impl Client {
             settings: launch.settings.clone(),
             started: Instant::now(),
             diagnostics: Mutex::new(HashMap::new()),
+            build_files: Mutex::new(HashMap::new()),
             pull: AtomicBool::new(false),
             resolve: AtomicBool::new(false),
             resolve_completion: AtomicBool::new(false),
@@ -1400,7 +1451,8 @@ impl Client {
 
     fn close(&self, path: &Path) {
         let Some(uri) = file_uri(path) else { return };
-        if let Ok(mut found) = self.diagnostics.lock() {
+        // A build file's errors are the project's: the server says them again only on a change.
+        if let (false, Ok(mut found)) = (is_build_file(path), self.diagnostics.lock()) {
             found.remove(&diagnostics_key(path));
         }
         if self.open.lock().ok().and_then(|mut o| o.remove(&uri)).is_some() {
@@ -1418,6 +1470,11 @@ impl Client {
 
     fn report(&self, path: &Path, items: Vec<Reported>) {
         let key = diagnostics_key(path);
+        if is_build_file(path) {
+            if let Ok(mut paths) = self.build_files.lock() {
+                paths.insert(key.clone(), path.to_path_buf());
+            }
+        }
         let Ok(mut found) = self.diagnostics.lock() else { return };
         if found.get(&key) == Some(&items) {
             return;
@@ -1917,6 +1974,33 @@ mod tests {
         assert_eq!(spec_for("python").map(|s| s.name), Some("pyright"));
         assert!(spec_for("markdown").is_none());
         assert_eq!(status(Path::new("/nowhere"), "markdown"), Status::Missing);
+    }
+
+    #[test]
+    fn a_build_file_error_is_the_projects() {
+        assert!(is_build_file(Path::new("/p/api/pom.xml")) && is_build_file(Path::new("/p/build.gradle.kts")));
+        assert!(!is_build_file(Path::new("/p/src/Pom.java")));
+        let problem = |line: usize, severity: Severity| Reported {
+            start: (line, 0),
+            end: (line, 1),
+            severity,
+            message: format!("line {line}"),
+            source: None,
+            code: None,
+            raw: Value::Null,
+        };
+        let (root, module) = (PathBuf::from("/p/pom.xml"), PathBuf::from("/p/core/pom.xml"));
+        let paths = HashMap::from([("/p/pom.xml".to_string(), root.clone()), ("/p/core/pom.xml".to_string(), module.clone())]);
+        let mut found = HashMap::from([("/p/core/pom.xml".to_string(), vec![problem(9, Severity::Error)])]);
+        assert_eq!(first_build_error(&paths, &found).map(|e| (e.path, e.line)), Some((module, 9)));
+        // The project's own build file first; a warning in it does not count, its first error does.
+        found.insert(
+            "/p/pom.xml".to_string(),
+            vec![problem(2, Severity::Warning), problem(7, Severity::Error), problem(4, Severity::Error)],
+        );
+        assert_eq!(first_build_error(&paths, &found).map(|e| (e.path, e.line, e.message)), Some((root, 4, "line 4".to_string())));
+        found.clear();
+        assert_eq!(first_build_error(&paths, &found), None);
     }
 
     #[test]
