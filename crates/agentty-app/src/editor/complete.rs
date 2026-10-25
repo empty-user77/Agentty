@@ -4,7 +4,9 @@
 //! Typing on filters the list; a server that said its list was partial is asked again.
 
 use super::buffer::Pos;
+use super::language::Language;
 use super::lsp;
+use super::project_index;
 use super::symbols;
 use super::{CodeEditor, Content};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -27,6 +29,8 @@ const ROWS: usize = 10;
 const MAX_SHOWN: usize = 200;
 /// A word of the file is offered once this much of it is typed.
 const WORD_MIN: usize = 2;
+/// Names of the project offered without a server at most.
+const PROJECT_NAMES: usize = 5_000;
 /// How long the server gets to answer.
 const WAIT: Duration = Duration::from_millis(1500);
 /// How long a chosen item may take to bring its import.
@@ -121,6 +125,16 @@ fn words(text: &str, language: super::language::Language) -> Vec<String> {
     out
 }
 
+/// Whether a completion's label and detail (`findById(long id) : Optional<Product>`,
+/// `fn(&self, id: u64)`, `func(id int64) error`) show parameters to fill in (a method's own
+/// `self` does not count).
+fn takes_arguments(signature: &str) -> bool {
+    let Some(open) = signature.find('(') else { return false };
+    let inside = signature[open + 1..].split(')').next().unwrap_or("");
+    let rest = inside.trim().trim_start_matches("&mut self").trim_start_matches("&self").trim_start_matches("self");
+    !rest.trim_start_matches(',').trim().is_empty()
+}
+
 /// The byte offset of `pos` in `text` (lines joined with `\n`).
 fn offset_of(text: &str, pos: Pos) -> usize {
     let start: usize = text.split('\n').take(pos.line).map(|l| l.len() + 1).sum();
@@ -162,7 +176,8 @@ impl CodeEditor {
             _ => false,
         };
         self.completion = None;
-        if trigger && lsp::id(doc.language).is_some() {
+        // After `.` only a server knows the members (the file's words would be any word).
+        if trigger && lsp::id(doc.language).is_some() && lsp::status(&doc.project, doc.language, &doc.path) == "ready" {
             self.request_completion(Some(c), cx);
         }
         cx.notify();
@@ -226,22 +241,29 @@ impl CodeEditor {
                                 .collect::<Vec<_>>(),
                             complete,
                         ),
-                        // No server (or none answering): the words of the file, never after `.`.
-                        None if trigger.is_none() => (
-                            words(&text, language)
+                        // No server (or none answering): the names the project defines and the
+                        // words of the file, never after `.`.
+                        None if trigger.is_none() => {
+                            let mut seen = std::collections::HashSet::new();
+                            let defined = project_index::names(&project, language, PROJECT_NAMES)
                                 .into_iter()
-                                .map(|word| Entry {
+                                .filter(|(name, _)| name.chars().count() > WORD_MIN)
+                                .map(|(name, kind)| (name, kind.tag()));
+                            let entries = defined
+                                .chain(words(&text, language).into_iter().map(|word| (word, "abc")))
+                                .filter(|(name, _)| seen.insert(name.clone()))
+                                .map(|(word, tag)| Entry {
                                     label: word.clone(),
                                     detail: None,
-                                    tag: "abc",
+                                    tag,
                                     filter: word.clone(),
                                     sort: word,
                                     preferred: false,
                                     source: Source::Word,
                                 })
-                                .collect(),
-                            true,
-                        ),
+                                .collect();
+                            (entries, true)
+                        }
                         None => (Vec::new(), true),
                     }
                 })
@@ -249,6 +271,11 @@ impl CodeEditor {
             let _ = this.update(cx, |this, cx| {
                 let Some(open) = this.completion.as_mut().filter(|c| c.asking == asking) else { return };
                 (open.entries, open.complete) = found;
+                // Nothing to offer: no list left open that typing would only filter.
+                if open.entries.is_empty() {
+                    this.completion = None;
+                    return cx.notify();
+                }
                 this.completion_filter(false, cx);
             });
         })
@@ -351,10 +378,35 @@ impl CodeEditor {
                         let text = doc.buffer.text();
                         let edit = lsp::completion_edit(&path, &text, &item, ((start.line, start.col), (cursor.line, cursor.col)));
                         this.put_completion(&path, &edit, cx);
+                        this.call_parens(&path, language, &item, cx);
                     });
                 })
                 .detach();
             }
+        }
+        cx.notify();
+    }
+
+    /// A method or function chosen in Java, Kotlin, Rust or Go comes with its parentheses (as VS
+    /// Code puts them there), the cursor between them when it takes arguments; TypeScript, Python
+    /// and the others leave the name alone, as a function is often passed rather than called.
+    fn call_parens(&mut self, path: &std::path::Path, language: Language, item: &lsp::CompletionItem, cx: &mut Context<Self>) {
+        let callable = matches!(item.kind, Some(2..=4));
+        let adds = matches!(language, Language::Java | Language::Kotlin | Language::Rust | Language::Go);
+        let Some(doc) = self.docs.iter_mut().find(|d| d.path == path) else { return };
+        let cursor = doc.buffer.cursor();
+        let after = doc.buffer.line(cursor.line)[cursor.col..].chars().next();
+        if !callable || !adds || item.insert.contains('(') || matches!(after, Some('(' | '<')) {
+            return;
+        }
+        let arguments = takes_arguments(&format!("{} {}", item.label, item.detail.as_deref().unwrap_or("")));
+        doc.buffer.insert("()");
+        if arguments {
+            doc.buffer.left(false, false);
+        }
+        doc.sync_highlights();
+        if arguments {
+            self.signature_typed("(", cx);
         }
         cx.notify();
     }
@@ -478,7 +530,16 @@ impl CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::language::Language;
+
+    #[test]
+    fn a_call_takes_arguments_when_its_signature_shows_them() {
+        assert!(takes_arguments("findById(long id) : Optional<Product>"));
+        assert!(!takes_arguments("findAll() : List<Product>"));
+        assert!(!takes_arguments("len fn(&self) -> usize"));
+        assert!(takes_arguments("push fn(&mut self, value: T)"));
+        assert!(takes_arguments("Save func(ctx context.Context) error"));
+        assert!(!takes_arguments("count"));
+    }
 
     #[test]
     fn matches_prefixes_first_then_in_order() {

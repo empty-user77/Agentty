@@ -182,6 +182,8 @@ fn all_symbols(root: &Path) -> Vec<(String, Arc<Vec<Symbol>>)> {
 }
 
 /// Where `name` is defined in the project, best first for a reader in `from` (relative path).
+/// Definitions in the reader's family of languages only, when there are any: in a repository
+/// with a front end and a back end, a Kotlin `Order` is not the TypeScript `Order`.
 pub fn definitions(root: &Path, name: &str, from: &str) -> Vec<Location> {
     let all = all_symbols(root);
     // An `impl` names a type, it does not define it.
@@ -189,8 +191,33 @@ pub fn definitions(root: &Path, name: &str, from: &str) -> Vec<Location> {
         .iter()
         .flat_map(|(rel, list)| list.iter().filter(|s| s.name == name && s.kind != Kind::Impl).map(move |s| (rel.as_str(), s)))
         .collect();
+    let reader = Language::detect(Path::new(from));
+    if found.iter().any(|(rel, _)| same_family(reader, Language::detect(Path::new(rel)))) {
+        found.retain(|(rel, _)| same_family(reader, Language::detect(Path::new(rel))));
+    }
     symbols::rank(&mut found, from);
     found.into_iter().map(|(rel, s)| location(root, rel, s)).collect()
+}
+
+/// The names defined in the project's files of `language`'s family (classes, functions, fields,
+/// …), each once with its kind, at most `limit`: what a file can use without a server to ask.
+pub fn names(root: &Path, language: Language, limit: usize) -> Vec<(String, Kind)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (rel, list) in all_symbols(root) {
+        if !same_family(language, Language::detect(Path::new(&rel))) {
+            continue;
+        }
+        for symbol in list.iter().filter(|s| s.kind != Kind::Impl) {
+            if out.len() >= limit {
+                return out;
+            }
+            if seen.insert(symbol.name.clone()) {
+                out.push((symbol.name.clone(), symbol.kind));
+            }
+        }
+    }
+    out
 }
 
 /// Symbols of the whole project whose name matches `query` (fuzzy), best first, at most `limit`.
@@ -216,18 +243,21 @@ fn location(root: &Path, rel: &str, symbol: &Symbol) -> Location {
     }
 }
 
+/// Languages whose files use each other's names: the web's (markup, styles, scripts) and the
+/// JVM's (Java and Kotlin call each other).
+fn same_family(a: Language, b: Language) -> bool {
+    use Language::*;
+    let web = |l: Language| matches!(l, Html | Css | Scss | Less | JavaScript | Jsx | TypeScript | Tsx);
+    let jvm = |l: Language| matches!(l, Java | Kotlin);
+    a == b || (web(a) && web(b)) || (jvm(a) && jvm(b))
+}
+
 /// Every place `name` is written as a whole name, in files of the same family of languages as
 /// `language` (a CSS class is looked for in markup and scripts too).
 pub fn usages(root: &Path, name: &str, language: Language) -> Vec<Usage> {
-    let family = |other: Language| -> bool {
-        use Language::*;
-        let web = |l: Language| matches!(l, Html | Css | Scss | Less | JavaScript | Jsx | TypeScript | Tsx);
-        let jvm = |l: Language| matches!(l, Java | Kotlin);
-        other == language || (web(language) && web(other)) || (jvm(language) && jvm(other))
-    };
     let mut found = Vec::new();
     for (rel, other) in code_files(root) {
-        if !family(other) {
+        if !same_family(language, other) {
             continue;
         }
         let path = root.join(&rel);
@@ -264,6 +294,9 @@ mod tests {
             .unwrap();
         std::fs::write(root.join("src/app.ts"), "import { User } from './model/user';\nconst u: User = makeUser();\n").unwrap();
         std::fs::write(root.join("node_modules/lib/user.ts"), "export class User {}\n").unwrap();
+        std::fs::create_dir_all(root.join("api/src")).unwrap();
+        std::fs::write(root.join("api/src/User.kt"), "data class User(val id: Long)\n").unwrap();
+        std::fs::write(root.join("api/src/Repo.java"), "class Repo { User find() { return null; } }\n").unwrap();
         let found = definitions(&root, "User", "src/app.ts");
         assert_eq!(found.len(), 1, "dependencies are not the project: {found:?}");
         assert_eq!((found[0].rel.as_str(), found[0].line, found[0].kind), ("src/model/user.ts", 0, Kind::Class));
@@ -278,6 +311,15 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(root.join("src/model/user.ts"), "\n\nexport class User {}\n").unwrap();
         assert_eq!(definitions(&root, "User", "src/app.ts")[0].line, 2);
+
+        // The back end beside it: each side finds its own `User`, Java and Kotlin each other's.
+        let rels = |from: &str| definitions(&root, "User", from).into_iter().map(|l| l.rel).collect::<Vec<_>>();
+        assert_eq!(rels("src/app.ts"), ["src/model/user.ts"]);
+        assert_eq!(rels("api/src/Repo.java"), ["api/src/User.kt"]);
+        // Nothing of its own family: the others still come.
+        assert_eq!(rels("styles/main.py").len(), 2);
+        let jvm: Vec<String> = names(&root, Language::Kotlin, 100).into_iter().map(|(n, _)| n).collect();
+        assert!(jvm.contains(&"User".to_string()) && jvm.contains(&"Repo".to_string()) && !jvm.contains(&"makeUser".to_string()));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

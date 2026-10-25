@@ -162,7 +162,11 @@ pub struct History {
 
 impl CodeEditor {
     pub(super) fn project_root(&self) -> Option<PathBuf> {
-        self.docs.get(self.active).map(|d| d.project.clone()).or_else(|| self.picker.as_ref().map(|p| p.project.clone()))
+        self.docs
+            .get(self.active)
+            .map(|d| d.project.clone())
+            .or_else(|| self.picker.as_ref().map(|p| p.project.clone()))
+            .or_else(|| self.picked_project.clone())
     }
 
     /// Opens the go-to box with `prefix` typed (`""` files, `@` file symbols, `#` project symbols,
@@ -374,6 +378,7 @@ impl CodeEditor {
     fn picker_confirm(&mut self, index: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(picker) = self.picker.as_ref() else { return };
         let Some(row) = picker.rows.get(index.unwrap_or(picker.selected)).cloned() else { return };
+        self.picked_project = Some(picker.project.clone());
         self.picker = None;
         window.focus(&self.focus_handle);
         match row.target {

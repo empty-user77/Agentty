@@ -70,7 +70,17 @@ All notable changes to this project are documented here. The format follows
   indented line lines up with its opening line. While the editor has focus, ⌘D, ⌘] / ⌘[ and ⇧⌘↩ work on the text
   instead of splitting, switching or zooming panes.
 
+- File editor: typing the `>` of an opening tag in HTML, JSX or TSX puts its closing tag after the cursor, and Enter
+  between the two tags opens an indented line; a method chosen from the completion list in Java, Kotlin, Rust or Go
+  comes with its parentheses, the cursor between them when it takes arguments.
+- File editor: without a language server, completion also offers the names the project defines (classes,
+  functions, fields of other files), not only the words of the open file.
+
 ### Fixed
+- File editor: the first file opened with ⌘P in a new window gets its language server too; a list that would stay
+  empty after `.` in a file without a server no longer blocks the next ones; go-to-definition without a server
+  prefers the file's own language family (a Kotlin `Order` over a TypeScript one in the same repository); Java shows
+  "indexing" while jdtls still imports the project; a quick fix offered twice is listed once.
 - File editor: typing no longer makes the code below flicker uncolored for a moment, and problem underlines and
   change marks move with their lines while the server catches up.
 - File editor: a problem's or a type's message stays open while the pointer moves onto it, so its fixes can be

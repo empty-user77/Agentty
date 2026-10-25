@@ -468,6 +468,9 @@ pub struct CodeEditor {
     find: Option<find::FindBar>,
     /// The go-to box (⌘P and the lists of definitions and usages), while open.
     picker: Option<navigate::Picker>,
+    /// The project the last go-to box searched: a file picked in it while nothing was open yet
+    /// belongs to it (its language server, change marks and names come from there).
+    picked_project: Option<PathBuf>,
     history: navigate::History,
     /// A place to show once its file is open: (path, position, bytes to select).
     pending_goto: Option<(PathBuf, Pos, usize, Option<String>)>,
@@ -619,6 +622,7 @@ impl CodeEditor {
             preview_replies,
             find: None,
             picker: None,
+            picked_project: None,
             history: Default::default(),
             pending_goto: None,
             pending_column: None,
@@ -897,6 +901,17 @@ impl CodeEditor {
         }
         doc.autoscroll = true;
         cx.notify();
+    }
+
+    /// `>` typed in markup or JSX: the tag it ends gets its closing tag.
+    fn close_typed_tag(&mut self, cx: &mut Context<Self>) {
+        let Some(language) = self.docs.get(self.active).map(|d| d.language) else { return };
+        let html = matches!(language, Language::Html);
+        if html || matches!(language, Language::Tsx | Language::Jsx) {
+            self.edit(cx, |b| {
+                b.close_tag(html);
+            });
+        }
     }
 
     /// An edit that is not typing (moving lines): the completion list and the parameter hint,
@@ -2047,6 +2062,9 @@ impl CodeEditor {
                             b.insert(&c.to_string())
                         }
                     });
+                    if c == '>' {
+                        self.close_typed_tag(cx);
+                    }
                     if c != '\n' {
                         self.completion_typed(&c.to_string(), cx);
                         self.signature_typed(&c.to_string(), cx);
@@ -2328,6 +2346,9 @@ impl gpui::EntityInputHandler for CodeEditor {
             };
             buffer.commit(start, end, text);
         });
+        if text == ">" {
+            self.close_typed_tag(cx);
+        }
         if self.docs.get(self.active).is_some_and(|d| d.buffer.marked().is_none()) {
             self.completion_typed(text, cx);
             self.signature_typed(text, cx);

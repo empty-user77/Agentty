@@ -391,6 +391,9 @@ pub fn actions(
     let value = client.request("textDocument/codeAction", params, wait)?;
     let mut found: Vec<Action> = value.as_array().map(|items| items.iter().filter_map(action).collect()).unwrap_or_default();
     found.sort_by_key(|a| (!a.fixes, !a.preferred));
+    // One row a title: jdtls offers "Add all missing imports" both as a fix and as a source action.
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|a| seen.insert(a.title.clone()));
     Some(found)
 }
 
@@ -1146,6 +1149,9 @@ struct Client {
     alive: AtomicBool,
     /// Work the server reported as begun and not yet ended (`$/progress`).
     busy: AtomicU64,
+    /// jdtls is still importing the project (its own `language/status`, from `Starting` until
+    /// `ServiceReady`): until then it answers, but knows nothing of the project's classes.
+    importing: AtomicBool,
     /// The server counts columns in bytes (`utf-8`) rather than UTF-16 units.
     utf8: AtomicBool,
     /// What the server is told when it asks for its settings (`workspace/configuration`).
@@ -1196,6 +1202,7 @@ impl Client {
             syncing: Mutex::new(()),
             alive: AtomicBool::new(true),
             busy: AtomicU64::new(0),
+            importing: AtomicBool::new(false),
             utf8: AtomicBool::new(false),
             settings: launch.settings.clone(),
             started: Instant::now(),
@@ -1241,7 +1248,7 @@ impl Client {
     }
 
     fn indexing(&self) -> bool {
-        self.busy.load(Ordering::SeqCst) > 0
+        self.busy.load(Ordering::SeqCst) > 0 || self.importing.load(Ordering::SeqCst)
     }
 
     fn stop(&self) {
@@ -1349,6 +1356,11 @@ impl Client {
                 Some("end") => {
                     let _ = self.busy.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
                 }
+                _ => {}
+            },
+            (None, Some("language/status")) => match message.pointer("/params/type").and_then(Value::as_str) {
+                Some("Starting") => self.importing.store(true, Ordering::SeqCst),
+                Some("ServiceReady" | "Started" | "Error") => self.importing.store(false, Ordering::SeqCst),
                 _ => {}
             },
             _ => {}

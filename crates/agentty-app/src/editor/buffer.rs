@@ -743,6 +743,44 @@ impl Buffer {
         self.newline();
     }
 
+    /// After the `>` of an opening tag just typed (`<section className="cart">`), its closing tag
+    /// goes after the cursor, as editors do for markup and JSX. Not after a self-closing tag, a
+    /// generic (`useState<T>`), an arrow (`=>`) or a comparison, nor for the void elements of HTML
+    /// (`html`: `<br>`, `<img>`, …). True when it was put in.
+    pub fn close_tag(&mut self, html: bool) -> bool {
+        if !self.extra.is_empty() || !self.selection.is_empty() {
+            return false;
+        }
+        let cursor = self.cursor();
+        let line = self.line(cursor.line);
+        if !line[..cursor.col].ends_with('>') {
+            return false;
+        }
+        // The opening tag may start a few lines up (attributes on lines of their own).
+        let first = cursor.line.saturating_sub(TAG_LINES);
+        let mut text = String::new();
+        for i in first..cursor.line {
+            text.push_str(self.line(i));
+            text.push('\n');
+        }
+        text.push_str(&line[..cursor.col]);
+        let Some(name) = opened_tag(&text) else { return false };
+        const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
+        if html && VOID.contains(&name.to_ascii_lowercase().as_str()) {
+            return false;
+        }
+        let closing = format!("</{name}>");
+        if line[cursor.col..].starts_with(&closing) {
+            return false;
+        }
+        self.replace(cursor, cursor, &closing, EditKind::Other);
+        self.selection = Selection::cursor(cursor);
+        if let Some(edit) = self.undo.last_mut() {
+            edit.after = self.selection;
+        }
+        true
+    }
+
     /// Typing a closing bracket on a line that is only indentation so far takes one step of
     /// indentation away (the bracket lines up with the line that opened it).
     fn outdent_closing(&mut self) {
@@ -787,7 +825,9 @@ impl Buffer {
         let after = self.line(end.line)[end.col..].trim_start();
         let opens = before.ends_with(['{', '[', '(']) || (before.ends_with(':') && self.indent != "\t" && !before.contains("//"));
         let opens = opens && !before.ends_with("::");
-        let closes = after.starts_with(['}', ']', ')']);
+        // `<div>|</div>`: the tags open and close like brackets.
+        let tags = before.ends_with('>') && !before.ends_with("/>") && after.starts_with("</");
+        let (opens, closes) = (opens || tags, after.starts_with(['}', ']', ')']) || tags);
         if opens && closes {
             let inner = format!("\n{indent}{}", self.indent);
             let text = format!("{inner}\n{indent}");
@@ -1460,6 +1500,51 @@ impl Buffer {
     }
 }
 
+/// Lines above the cursor looked through for the start of a tag being closed.
+const TAG_LINES: usize = 12;
+
+/// The name of the tag that `text` (up to a `>` just typed) ends opening, if it does:
+/// `<a href="x">` → `a`, `<List onPick={(p) => pick(p)}>` → `List`. `None` for `<br/>`, `</a>`,
+/// `useState<T>`, `a => b`, `x > y` and the like.
+fn opened_tag(text: &str) -> Option<String> {
+    let body = text.strip_suffix('>')?;
+    if body.ends_with('/') || body.ends_with('=') || body.ends_with('-') {
+        return None;
+    }
+    // From each `<` (the last first), the tag must run to the end at depth 0 of braces and
+    // outside quotes, with no other `>` of its own.
+    for (start, _) in body.match_indices('<').collect::<Vec<_>>().into_iter().rev() {
+        let before = body[..start].chars().next_back();
+        // `useState<T>`, `Array<string>`: a generic, not a tag.
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+            continue;
+        }
+        let rest = &body[start + 1..];
+        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || matches!(c, '.' | ':' | '-' | '_')).collect();
+        if name.is_empty() || !name.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            return None;
+        }
+        let attributes = &rest[name.len()..];
+        if !attributes.is_empty() && !attributes.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let (mut depth, mut quote) = (0i32, None::<char>);
+        for c in attributes.chars() {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), _) => {}
+                (None, '"' | '\'' | '`') => quote = Some(c),
+                (None, '{') => depth += 1,
+                (None, '}') => depth -= 1,
+                (None, '>' | '<') if depth == 0 => return None,
+                _ => {}
+            }
+        }
+        return (depth == 0 && quote.is_none()).then_some(name);
+    }
+    None
+}
+
 /// Cursors ⇧⌘L makes at most.
 const MAX_CURSORS: usize = 1_000;
 
@@ -1699,6 +1784,28 @@ mod tests {
         assert!(b.undo());
         assert_eq!(b.text(), "let num = 1;\nnum += 1;\nprint(num, renum);");
         assert!(b.extra.is_empty());
+    }
+
+    #[test]
+    fn an_opening_tag_gets_its_closing_tag() {
+        assert_eq!(opened_tag("      <section className=\"cart\">").as_deref(), Some("section"));
+        assert_eq!(opened_tag("<ProductList onPick={(p) => setCart([...cart, p])}>").as_deref(), Some("ProductList"));
+        assert_eq!(opened_tag("<Foo.Bar>").as_deref(), Some("Foo.Bar"));
+        assert_eq!(opened_tag("<div\n  className=\"a\"\n>").as_deref(), Some("div"));
+        for text in ["<br/>", "</div>", "useState<Product[]>", "const f = (a) =>", "if (a > b) {x >", "a < b >", "x->", "<a href=\"x>"] {
+            assert_eq!(opened_tag(text), None, "{text}");
+        }
+        let mut b = Buffer::new("  <ul>");
+        at(&mut b, 0, 6);
+        assert!(b.close_tag(false));
+        assert_eq!((b.text().as_str(), b.cursor()), ("  <ul></ul>", Pos::new(0, 6)));
+        // Enter between the tags: the cursor on a line of its own, one step (two spaces here) in.
+        b.newline();
+        assert_eq!(b.text(), "  <ul>\n    \n  </ul>");
+        let mut b = Buffer::new("<br>");
+        at(&mut b, 0, 4);
+        assert!(!b.close_tag(true), "a void element of HTML");
+        assert!(b.close_tag(false), "JSX closes every tag");
     }
 
     #[test]
