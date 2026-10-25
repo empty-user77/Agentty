@@ -192,13 +192,24 @@ fn indent_snippet(insert: &str, stops: &[(usize, usize)], indent: &str, unit: &s
 }
 
 /// The words of `text` (names of at least [`WORD_MIN`] + 1 characters), each once.
-fn words(text: &str, language: super::language::Language) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
+/// The word being typed (`typing`: its line and bytes) is left out there: only its other
+/// places count, so a word typed in full is one the file has.
+fn words(text: &str, language: super::language::Language, typing: Option<(usize, usize, usize)>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::<String>::new();
     let mut out = Vec::new();
-    for line in text.lines().take(WORD_LINES) {
+    for (index, line) in text.lines().take(WORD_LINES).enumerate() {
+        let blanked;
+        let line = match typing.filter(|(at, start, end)| *at == index && start <= end && line.is_char_boundary(*end)) {
+            Some((_, start, end)) if line.is_char_boundary(start) => {
+                blanked = format!("{}{}{}", &line[..start], " ".repeat(end - start), &line[end..]);
+                blanked.as_str()
+            }
+            _ => line,
+        };
         for word in line.split(|c: char| !symbols::is_name_char(c, language)) {
             let word = word.trim_start_matches(|c: char| c.is_ascii_digit());
-            if word.chars().count() > WORD_MIN && seen.insert(word) {
+            if word.chars().count() > WORD_MIN && !seen.contains(word) {
+                seen.insert(word.to_string());
                 out.push(word.to_string());
             }
         }
@@ -284,7 +295,9 @@ impl CodeEditor {
         let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable()) else { return };
         let cursor = doc.buffer.cursor();
         let line = doc.buffer.line(cursor.line);
-        let start = symbols::name_at(line, cursor.col, doc.language).map_or(cursor.col, |(s, _)| s.min(cursor.col));
+        let word = symbols::name_at(line, cursor.col, doc.language);
+        let start = word.map_or(cursor.col, |(s, _)| s.min(cursor.col));
+        let typing = Some((cursor.line, start, word.map_or(cursor.col, |(_, e)| e.max(cursor.col))));
         self.completion_seq += 1;
         let asking = self.completion_seq;
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
@@ -338,7 +351,7 @@ impl CodeEditor {
                                 .filter(|(name, _)| name.chars().count() > WORD_MIN)
                                 .map(|(name, kind)| (name, kind.tag()));
                             let entries = defined
-                                .chain(words(&text, language).into_iter().map(|word| (word, "abc")))
+                                .chain(words(&text, language, typing).into_iter().map(|word| (word, "abc")))
                                 .filter(|(name, _)| seen.insert(name.clone()))
                                 .map(|(word, tag)| Entry {
                                     label: word.clone(),
@@ -397,16 +410,23 @@ impl CodeEditor {
         open.entries.retain(|e| !is_emmet(e));
         open.entries.extend(emmet);
         let words_only = open.entries.iter().filter(|e| !is_emmet(e)).all(|e| matches!(e.source, Source::Word));
+        // A name typed in full, as the file has it: Enter is a new line, not a look-alike (`PAID`
+        // for `paid`), so the list goes.
+        if words_only && open.entries.iter().any(|e| e.label == query) {
+            self.completion = None;
+            return cx.notify();
+        }
         let mut scored: Vec<(u8, usize)> = open
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| is_emmet(e) || !words_only || (query.chars().count() >= WORD_MIN && e.label != query))
+            .filter(|(_, e)| is_emmet(e) || !words_only || query.chars().count() >= WORD_MIN)
             .filter_map(|(i, e)| if is_emmet(e) { Some((0, i)) } else { matches(&e.filter, &query).map(|score| (score, i)) })
             .collect();
         let entries = &open.entries;
-        // A server's snippet (rust-analyzer's `arc` for `s.ar`) after the names it matches as well.
-        let snippet = |e: &Entry| matches!(&e.source, Source::Server(item) if item.kind == Some(15));
+        // A server's snippet (rust-analyzer's `arc` for `s.ar`) after the names it matches as well,
+        // and without a server, a word of the file after the names the project defines.
+        let snippet = |e: &Entry| matches!(&e.source, Source::Server(item) if item.kind == Some(15)) || e.tag == "abc";
         scored.sort_by(|a, b| {
             let (x, y) = (&entries[a.1], &entries[b.1]);
             (!is_emmet(x), a.0, !x.preferred, snippet(x), &x.sort, &x.label).cmp(&(
@@ -895,8 +915,11 @@ mod tests {
 
     #[test]
     fn words_of_the_file_once() {
-        let found = words("let total = 1;\nlet totals = total + 2 + x1;\n", Language::JavaScript);
+        let found = words("let total = 1;\nlet totals = total + 2 + x1;\n", Language::JavaScript, None);
         assert_eq!(found, ["let", "total", "totals"]);
+        // The word being typed counts only where else it is.
+        assert_eq!(words("let tot\nok", Language::JavaScript, Some((0, 4, 7))), ["let"]);
+        assert_eq!(words("let tot\ntot", Language::JavaScript, Some((0, 4, 7))), ["let", "tot"]);
         assert_eq!(offset_of("ab\ncd", Pos::new(1, 1)), 4);
     }
 }

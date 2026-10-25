@@ -924,6 +924,12 @@ impl Buffer {
         let (start, end) = self.selection.range();
         let line = self.line(start.line);
         let indent = self.indent_from(start.line);
+        // A line of indentation only, left by Enter: the new line takes it and this one is left
+        // empty, with no spaces at its end (VS Code's `trimAutoWhitespace`).
+        if start == end && !line.is_empty() && line.trim().is_empty() && start.col == line.len() {
+            self.replace(Pos::new(start.line, 0), start, &format!("\n{indent}"), EditKind::Other);
+            return;
+        }
         let before = line[..start.col].trim_end();
         let after = self.line(end.line)[end.col..].trim_start();
         let opens = before.ends_with(['{', '[', '(']) || (before.ends_with(':') && self.indent != "\t" && !before.contains("//"));
@@ -2058,11 +2064,14 @@ mod tests {
         at(&mut b, 4, 0);
         b.insert_line_below();
         assert_eq!(b.line(5), "  ", "as the line with text above it");
-        // A line of spaces keeps its own.
+        // A line of spaces: the new line takes them, that one is left empty.
         let mut b = Buffer::new("x {\n    ");
         at(&mut b, 1, 4);
         b.newline();
-        assert_eq!(b.line(2), "    ");
+        assert_eq!((b.line(1), b.line(2)), ("", "    "));
+        assert_eq!(b.cursor(), Pos::new(2, 4));
+        b.undo();
+        assert_eq!(b.text(), "x {\n    ");
     }
 
     #[test]
