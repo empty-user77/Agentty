@@ -1,5 +1,6 @@
 //! Find in file (⌘F): a small bar over the editor that finds a query in the file in front (any
-//! case, or as typed with **Aa**; anywhere, or whole names only with **ab**), highlights every
+//! case, or as typed with **Aa**; anywhere, or whole names only with **ab**; as a regular
+//! expression with **.\***, `$1` in the replacement for its groups), highlights every
 //! match (`element.rs` paints them) and selects one at a time; Enter / ↓ / ⌘G next, ⇧Enter / ↑ /
 //! ⇧⌘G previous, Esc closes. ⌥⌘F (or the bar's arrow) adds a replace row: Enter replaces the
 //! selected match and goes to the next, ⌘Enter replaces them all as one undo step. The bar sits
@@ -15,7 +16,7 @@ use crate::theme::{hex, Chrome};
 use crate::ui::{icon_only, TypeScale};
 use gpui::{actions, div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Subscription, Window};
 
-actions!(code_editor, [FindNext, FindPrevious, FindReplace, ToggleCase, ToggleWord, ReplaceAll]);
+actions!(code_editor, [FindNext, FindPrevious, FindReplace, ToggleCase, ToggleWord, ToggleRegex, ReplaceAll]);
 
 /// The bar's own key context: steps work while typing in it, and the editor's keys don't.
 const CONTEXT: &str = "EditorFind";
@@ -39,6 +40,7 @@ pub fn bind_keys(cx: &mut gpui::App) {
         key("cmd-alt-f", FindReplace, Some(CONTEXT)),
         key("cmd-alt-c", ToggleCase, Some(CONTEXT)),
         key("cmd-alt-w", ToggleWord, Some(CONTEXT)),
+        key("cmd-alt-r", ToggleRegex, Some(CONTEXT)),
         key("cmd-enter", ReplaceAll, Some(CONTEXT)),
     ]);
 }
@@ -62,6 +64,27 @@ pub struct Options {
     pub case: bool,
     /// Whole names only (ab): not inside a longer one.
     pub word: bool,
+    /// A regular expression (.*), matched within a line.
+    pub regex: bool,
+}
+
+/// One of the bar's options.
+#[derive(Clone, Copy)]
+enum Toggle {
+    Case,
+    Word,
+    Regex,
+}
+
+/// Regular expressions longer than this, or compiling to more, are not searched for.
+const REGEX_LEN: usize = 1000;
+const REGEX_SIZE: usize = 1 << 20;
+
+fn regex_for(query: &str, options: Options) -> Option<regex::Regex> {
+    if query.len() > REGEX_LEN {
+        return None;
+    }
+    regex::RegexBuilder::new(query).case_insensitive(!options.case).size_limit(REGEX_SIZE).build().ok()
 }
 
 impl CodeEditor {
@@ -72,8 +95,19 @@ impl CodeEditor {
         if !matches!(doc.content, Content::Text) || doc.previewing() {
             return;
         }
+        // The selected text, or else the name at the cursor (as VS Code does).
         let selected = doc.buffer.selected_text();
-        let seed = (!selected.is_empty() && !selected.contains('\n')).then_some(selected);
+        let cursor = doc.buffer.cursor();
+        let line = doc.buffer.line(cursor.line);
+        let name = super::symbols::name_at(line, cursor.col, doc.language).filter(|(s, e)| s < e);
+        let word = name.map(|(s, e)| line[s..e].to_string());
+        let seed = if selected.is_empty() { word } else { (!selected.contains('\n')).then_some(selected) };
+        // Found from the name's start, so the name the cursor is on is the one selected.
+        if let (true, Some((start, _))) = (doc.buffer.selection.is_empty(), name) {
+            if let Some(doc) = self.docs.get_mut(self.active) {
+                doc.buffer.move_to(Pos::new(cursor.line, start), false);
+            }
+        }
         if let Some(bar) = self.find.as_ref() {
             let input = bar.input.clone();
             input.update(cx, |input, cx| {
@@ -193,14 +227,33 @@ impl CodeEditor {
         }
     }
 
-    fn toggle_option(&mut self, case: bool, cx: &mut Context<Self>) {
+    fn toggle_option(&mut self, which: Toggle, cx: &mut Context<Self>) {
         let Some(bar) = self.find.as_mut() else { return };
-        if case {
-            bar.options.case = !bar.options.case;
-        } else {
-            bar.options.word = !bar.options.word;
-        }
+        let option = match which {
+            Toggle::Case => &mut bar.options.case,
+            Toggle::Word => &mut bar.options.word,
+            Toggle::Regex => &mut bar.options.regex,
+        };
+        *option = !*option;
         self.find_query_changed(cx);
+    }
+
+    /// What replaces the match `start..end`: `with`, or for a regular expression `with` with
+    /// `$1` / `${name}` taken from its groups.
+    fn replacement_for(&self, start: Pos, end: Pos, with: &str) -> String {
+        let Some(bar) = self.find.as_ref().filter(|bar| bar.options.regex) else { return with.to_string() };
+        let Some(doc) = self.docs.get(self.active) else { return with.to_string() };
+        let line = doc.buffer.line(start.line);
+        match regex_for(&bar.query, bar.options).and_then(|re| {
+            re.captures_at(line, start.col).filter(|c| c.get(0).is_some_and(|m| m.start() == start.col && m.end() == end.col))
+        }) {
+            Some(captures) => {
+                let mut out = String::new();
+                captures.expand(with, &mut out);
+                out
+            }
+            None => with.to_string(),
+        }
     }
 
     fn replacement(&self, cx: &gpui::App) -> Option<String> {
@@ -213,6 +266,7 @@ impl CodeEditor {
         self.refresh_find();
         let current = self.find_matches().and_then(|(matches, current)| current.map(|i| matches[i]));
         if let Some((start, end)) = current {
+            let with = self.replacement_for(start, end, &with);
             self.edit(cx, |b| {
                 b.move_to(start, false);
                 b.move_to(end, true);
@@ -231,7 +285,8 @@ impl CodeEditor {
             return;
         }
         let Some(doc) = self.docs.get(self.active) else { return };
-        let (new, count) = replaced(&doc.buffer, &bar.matches, &with);
+        let regex = bar.options.regex.then(|| regex_for(&bar.query, bar.options)).flatten();
+        let (new, count) = replaced(&doc.buffer, &bar.matches, &with, regex.as_ref());
         if self.replace_text(self.active, &new, cx) {
             self.flash(crate::i18n::tf(cx, "find.replaced", &[("n", &count.to_string())]), cx);
         }
@@ -252,9 +307,14 @@ impl CodeEditor {
         }
     }
 
-    /// Debug driver: the options, by name (`case`, `word`).
+    /// Debug driver: the options, by name (`case`, `word`, `regex`).
     pub(super) fn debug_find_option(&mut self, name: &str, cx: &mut Context<Self>) {
-        self.toggle_option(name == "case", cx);
+        let which = match name {
+            "case" => Toggle::Case,
+            "regex" => Toggle::Regex,
+            _ => Toggle::Word,
+        };
+        self.toggle_option(which, cx);
     }
 
     fn select_match(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
@@ -313,11 +373,15 @@ impl CodeEditor {
             .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::BRIGHT)).child(input))
             .child(
                 toggle("editor-find-case", "Aa", options.case, t(cx, "find.match_case").to_string(), "⌥⌘C")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_option(true, cx))),
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_option(Toggle::Case, cx))),
             )
             .child(
                 toggle("editor-find-word", "ab", options.word, t(cx, "find.whole_word").to_string(), "⌥⌘W")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_option(false, cx))),
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_option(Toggle::Word, cx))),
+            )
+            .child(
+                toggle("editor-find-regex", ".*", options.regex, t(cx, "find.regex").to_string(), "⌥⌘R")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_option(Toggle::Regex, cx))),
             )
             .child(div().flex_shrink_0().t_caption().text_color(hex(Chrome::MUTED)).child(count))
             .child(
@@ -386,8 +450,9 @@ impl CodeEditor {
                 .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
                 .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
                 .on_action(cx.listener(|this, _: &FindReplace, window, cx| this.toggle_replace(window, cx)))
-                .on_action(cx.listener(|this, _: &ToggleCase, _, cx| this.toggle_option(true, cx)))
-                .on_action(cx.listener(|this, _: &ToggleWord, _, cx| this.toggle_option(false, cx)))
+                .on_action(cx.listener(|this, _: &ToggleCase, _, cx| this.toggle_option(Toggle::Case, cx)))
+                .on_action(cx.listener(|this, _: &ToggleWord, _, cx| this.toggle_option(Toggle::Word, cx)))
+                .on_action(cx.listener(|this, _: &ToggleRegex, _, cx| this.toggle_option(Toggle::Regex, cx)))
                 .on_action(cx.listener(|this, _: &ReplaceAll, _, cx| this.replace_all(cx)))
                 // ⇧Enter is the field's own (a new line in a multi-line field): taken before it.
                 .capture_action(cx.listener(|this, _: &crate::text_input::NewLine, _, cx| {
@@ -408,6 +473,9 @@ pub fn find_all(buffer: &Buffer, query: &str, options: Options, language: Langua
     if query.is_empty() || query.contains('\n') {
         return Vec::new();
     }
+    if options.regex {
+        return find_regex(buffer, query, options, language);
+    }
     let needle: Vec<char> = if options.case { query.chars().collect() } else { query.chars().flat_map(char::to_lowercase).collect() };
     let name = |c: char| super::symbols::is_name_char(c, language);
     let mut found = Vec::new();
@@ -419,6 +487,28 @@ pub fn find_all(buffer: &Buffer, query: &str, options: Options, language: Langua
                 continue;
             }
             found.push((Pos::new(index, start), Pos::new(index, end)));
+            if found.len() >= MAX_MATCHES {
+                return found;
+            }
+        }
+    }
+    found
+}
+
+/// [`find_all`] for a regular expression: its matches within each line (an empty one is no
+/// match), none at all while it does not compile.
+fn find_regex(buffer: &Buffer, query: &str, options: Options, language: Language) -> Vec<(Pos, Pos)> {
+    let Some(re) = regex_for(query, options) else { return Vec::new() };
+    let name = |c: char| super::symbols::is_name_char(c, language);
+    let mut found = Vec::new();
+    for index in 0..buffer.line_count() {
+        let line = buffer.line(index);
+        for m in re.find_iter(line).filter(|m| !m.is_empty()) {
+            let whole = !line[..m.start()].chars().next_back().is_some_and(name) && !line[m.end()..].chars().next().is_some_and(name);
+            if options.word && !whole {
+                continue;
+            }
+            found.push((Pos::new(index, m.start()), Pos::new(index, m.end())));
             if found.len() >= MAX_MATCHES {
                 return found;
             }
@@ -460,10 +550,19 @@ fn find_in_line(line: &str, needle: &[char], case: bool) -> Vec<(usize, usize)> 
 
 /// The buffer's text with every match (in document order, one line each) made `with`, and how
 /// many there were.
-fn replaced(buffer: &Buffer, matches: &[(Pos, Pos)], with: &str) -> (String, usize) {
+/// With `regex`, `$1` / `${name}` in `with` are its groups at each match.
+fn replaced(buffer: &Buffer, matches: &[(Pos, Pos)], with: &str, regex: Option<&regex::Regex>) -> (String, usize) {
     let mut lines: Vec<String> = (0..buffer.line_count()).map(|i| buffer.line(i).to_string()).collect();
     for (start, end) in matches.iter().rev() {
-        lines[start.line].replace_range(start.col..end.col, with);
+        let text = match regex.and_then(|re| re.captures_at(buffer.line(start.line), start.col)) {
+            Some(captures) => {
+                let mut out = String::new();
+                captures.expand(with, &mut out);
+                out
+            }
+            None => with.to_string(),
+        };
+        lines[start.line].replace_range(start.col..end.col, &text);
     }
     (lines.join("\n"), matches.len())
 }
@@ -516,7 +615,7 @@ mod tests {
     fn options_and_replacing() {
         let buffer = Buffer::new("total Total totals\nsub_total total");
         let find = |case, word| {
-            find_all(&buffer, "total", Options { case, word }, Language::JavaScript)
+            find_all(&buffer, "total", Options { case, word, regex: false }, Language::JavaScript)
                 .into_iter()
                 .map(|(s, _)| (s.line, s.col))
                 .collect::<Vec<_>>()
@@ -525,8 +624,26 @@ mod tests {
         assert_eq!(find(true, false), [(0, 0), (0, 12), (1, 4), (1, 10)]);
         assert_eq!(find(false, true), [(0, 0), (0, 6), (1, 10)]);
         assert_eq!(find(true, true), [(0, 0), (1, 10)]);
-        let matches = find_all(&buffer, "total", Options { case: true, word: true }, Language::JavaScript);
-        assert_eq!(replaced(&buffer, &matches, "sum"), ("sum Total totals\nsub_total sum".to_string(), 2));
+        let matches = find_all(&buffer, "total", Options { case: true, word: true, regex: false }, Language::JavaScript);
+        assert_eq!(replaced(&buffer, &matches, "sum", None), ("sum Total totals\nsub_total sum".to_string(), 2));
+    }
+
+    #[test]
+    fn regular_expressions_with_groups() {
+        let buffer = Buffer::new("const a = useState(1);\nconst bb = useState(22);\nlet c = 3;");
+        let regex = Options { regex: true, ..Options::default() };
+        let matches = find_all(&buffer, r"const (\w+) = useState\((\d+)\)", regex, Language::JavaScript);
+        assert_eq!(matches.len(), 2);
+        let re = regex_for(r"const (\w+) = useState\((\d+)\)", regex).unwrap();
+        assert_eq!(
+            replaced(&buffer, &matches, "const [$1, set] = useState($2)", Some(&re)).0,
+            "const [a, set] = useState(1);\nconst [bb, set] = useState(22);\nlet c = 3;"
+        );
+        // Case, an empty match, a broken expression.
+        assert_eq!(find_all(&buffer, "CONST", regex, Language::JavaScript).len(), 2);
+        assert!(find_all(&buffer, "CONST", Options { case: true, ..regex }, Language::JavaScript).is_empty());
+        assert!(find_all(&buffer, "x*", regex, Language::JavaScript).is_empty());
+        assert!(find_all(&buffer, "(unclosed", regex, Language::JavaScript).is_empty());
     }
 
     #[test]

@@ -1361,6 +1361,7 @@ strings! {
     "find.replace_placeholder" => ["Replace with", "바꿀 내용", "置換後の文字列", "替换为"],
     "find.match_case" => ["Match case", "대소문자 구분", "大文字と小文字を区別", "区分大小写"],
     "find.whole_word" => ["Whole word", "단어 단위", "単語単位", "全字匹配"],
+    "find.regex" => ["Regular expression", "정규식", "正規表現", "正则表达式"],
     "find.replaced" => ["Replaced {n}", "{n}개 바꿈", "{n} 件を置換", "已替换 {n} 处"],
     "shortcuts.browser" => ["In-app browser", "인앱 브라우저", "アプリ内ブラウザ", "内置浏览器"],
     "shortcuts.find" => ["Find in terminal", "터미널에서 찾기", "ターミナル内を検索", "在终端中查找"],

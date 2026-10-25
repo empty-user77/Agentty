@@ -53,7 +53,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Quick fix (file editor) | ⌘. |
 | Rename everywhere (file editor) | F2 |
 | Completions (file editor) | ⌃Space |
-| Replace in the file (file editor) | ⌥⌘F (↩ one, ⌘↩ all; ⌥⌘C match case, ⌥⌘W whole word) |
+| Replace in the file (file editor) | ⌥⌘F (↩ one, ⌘↩ all; ⌥⌘C match case, ⌥⌘W whole word, ⌥⌘R regular expression with `$1` for its groups) |
 | Comment out lines / move them / duplicate them / delete them (file editor) | ⌘/ / ⌥↑ ⌥↓ / ⇧⌥↑ ⇧⌥↓ / ⇧⌘K |
 | Select line / new line below or above / delete to line start / delete word before or after (file editor) | ⌘L / ⌘↩ ⇧⌘↩ / ⌘⌫ / ⌥⌫ ⌥⌦ |
 | Indent / outdent lines (file editor) | ⌘] / ⌘[ |
