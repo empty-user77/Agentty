@@ -92,6 +92,9 @@ All notable changes to this project are documented here. The format follows
   installed (the status bar and Settings → Project → Language servers offer it): properties, values, tags and
   attributes as you type, unknown properties and other problems underlined, formatting. Choosing a CSS property
   opens the list of its values.
+- File editor: a right click on a file's tab offers closing it or the other files, copying its path, showing it in the
+  file manager and opening it in another editor; that last one left the header, where it took room on every file.
+  Closing the file in front goes back to the one shown before it, as in VS Code.
 - File editor: find and replace takes regular expressions (**.\***, ⌥⌘R), with `$1` in the replacement for their
   groups, and ⌘F with nothing selected starts from the name at the cursor, as in VS Code.
 - File editor: jdtls reads a Maven project's build only after **Read the build** in the status bar is clicked for

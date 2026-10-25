@@ -529,6 +529,8 @@ pub struct Workbench {
     mini_generation: u64,
     pub updates: update::Updates,
     tab_menu: Option<tab_menu::TabMenu>,
+    /// A file tab's right-click menu: which tab, and where.
+    file_tab_menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
     /// The TODO list of the active workspace, open below its button.
     todo_menu: Option<gpui::Point<Pixels>>,
     /// Right-click menu on a split pane's header.
@@ -929,6 +931,7 @@ impl Workbench {
             mini_generation: 0,
             updates: update::Updates::default(),
             tab_menu: None,
+            file_tab_menu: None,
             todo_menu: None,
             pane_menu: None,
             about_open: false,
@@ -3751,6 +3754,7 @@ impl Render for Workbench {
             .when_some(self.picker.as_ref().map(|_| ()), |d, _| d.child(self.render_picker(cx)))
             .when_some(self.palette.as_ref().map(|_| ()), |d, _| d.child(self.render_palette(cx)))
             .children(self.render_tab_menu(window, cx))
+            .children(self.render_file_tab_menu(window, cx))
             .children(self.render_todo_menu(window, cx))
             .children(self.render_pane_menu(cx))
             .children(self.render_run_menu(window, cx))

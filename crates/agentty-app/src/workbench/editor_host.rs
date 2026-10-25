@@ -227,6 +227,59 @@ impl Workbench {
         asking
     }
 
+    /// Right click on a file's tab: close it or the others, its path, its folder, another editor.
+    pub(super) fn render_file_tab_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        use super::workspace_menu::{row, rule};
+        let (index, position) = self.file_tab_menu?;
+        let editor = self.editor.clone()?;
+        let path = editor.read(cx).tabs().get(index)?.path.clone();
+        let count = editor.read(cx).tabs().len();
+        let done = |this: &mut Self, cx: &mut Context<Self>| {
+            this.file_tab_menu = None;
+            cx.notify();
+        };
+        let (copy, reveal) = (path.clone(), path.clone());
+        let list = crate::ui::popover()
+            .w(px(240.))
+            .on_mouse_down_out(cx.listener(move |this, _, _, cx| done(this, cx)))
+            .child(row("file-tab-menu-close", "x", t(cx, "editor.close_file"), false).on_click(cx.listener(
+                move |this, _: &ClickEvent, window, cx| {
+                    done(this, cx);
+                    this.close_file_tab(index, window, cx);
+                },
+            )))
+            .when(count > 1, |d| {
+                let editor = editor.clone();
+                d.child(row("file-tab-menu-others", "minus", t(cx, "editor.close_other_files"), false).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        done(this, cx);
+                        editor.update(cx, |editor, cx| editor.close_others(index, cx));
+                    },
+                )))
+            })
+            .child(rule())
+            .child(row("file-tab-menu-copy", "copy", t(cx, "files.menu.copy_path"), false).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    done(this, cx);
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.to_string_lossy().into_owned()));
+                },
+            )))
+            .child(row("file-tab-menu-reveal", "folder", t(cx, "files.reveal"), false).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    done(this, cx);
+                    crate::platform::reveal(&reveal);
+                },
+            )))
+            .child(row("file-tab-menu-external", "code", t(cx, "editor.open_external"), false).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    done(this, cx);
+                    editor.update(cx, |editor, cx| editor.open_tab_externally(index, cx));
+                },
+            )));
+        let list = crate::ui::fit_to_window(list, "file-tab-menu", window);
+        Some(gpui::deferred(gpui::anchored().position(position).snap_to_window_with_margin(px(8.)).child(list)).with_priority(1))
+    }
+
     /// Tabs of the open files, after the terminal tabs.
     pub(super) fn render_file_tabs(&self, cx: &mut Context<Self>) -> Vec<Stateful<gpui::Div>> {
         let Some(editor) = self.editor.as_ref() else { return Vec::new() };
@@ -260,8 +313,17 @@ impl Workbench {
                         None if active => hex(Chrome::BRIGHT),
                         None => hex(Chrome::MUTED),
                     })
-                    .tooltip(crate::ui::Tooltip::text(tooltip, None))
+                    // Not over the tab's own menu.
+                    .when(self.file_tab_menu.is_none(), |d| d.tooltip(crate::ui::Tooltip::text(tooltip, None)))
                     .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| this.close_file_tab(index, window, cx)))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.file_tab_menu = Some((index, event.position));
+                            cx.notify();
+                        }),
+                    )
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show_file_tab(index, window, cx)))
                     .child(icon("file-text", IconSize::INLINE, hex(if active { Chrome::BLUE } else { Chrome::MUTED })))
                     // An agent's changes here wait for review.

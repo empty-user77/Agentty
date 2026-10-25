@@ -115,6 +115,8 @@ actions!(
 );
 
 pub const CONTEXT: &str = "CodeEditor";
+/// Files remembered in the order they were in front, at most.
+const RECENT_TABS: usize = 64;
 /// How often open files are checked for changes made by others (agents, git, other editors).
 const DISK_CHECK: Duration = Duration::from_secs(2);
 /// How often the markdown preview catches up with edits and looks for clicked links.
@@ -540,6 +542,9 @@ pub struct CodeEditor {
     /// The servers turned off in Settings, as last handed to `agentty_bridge::lsp`.
     lsp_disabled: Option<Vec<String>>,
     lsp_trusted: Option<Vec<String>>,
+    /// The files shown in front, the last first: closing the one in front goes back to the one
+    /// before it, as VS Code does.
+    recent_tabs: Vec<PathBuf>,
     /// The problem under the pointer, and whether its message shows yet.
     problem_hover: Option<(lsp::Problem, bool)>,
     /// The fixes of that problem, once the server said.
@@ -673,6 +678,7 @@ impl CodeEditor {
             problems_front: None,
             lsp_disabled: None,
             lsp_trusted: None,
+            recent_tabs: Vec::new(),
             problem_hover: None,
             hover_fixes: None,
             fixes: None,
@@ -838,17 +844,47 @@ impl CodeEditor {
         self.close(index, cx);
     }
 
+    /// Closes every file but tab `keep`'s; an unsaved one is asked about (the first, then the
+    /// others stay open).
+    pub fn close_others(&mut self, keep: usize, cx: &mut Context<Self>) {
+        let Some(kept) = self.docs.get(keep).map(|d| d.path.clone()) else { return };
+        let mut index = self.docs.len();
+        while index > 0 {
+            index -= 1;
+            if self.docs[index].path != kept && !self.docs[index].is_dirty() {
+                self.close(index, cx);
+            }
+        }
+        match self.docs.iter().position(|d| d.path != kept) {
+            Some(dirty) => self.request_close(dirty, cx),
+            None => {
+                self.active = 0;
+                self.tabs_changed(cx);
+                cx.notify();
+            }
+        }
+    }
+
     fn close(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.docs.len() {
             return;
         }
+        let was_active = index == self.active;
         let closed = self.docs.remove(index);
         let (project, language, path) = (closed.project.clone(), closed.language, closed.path.clone());
         cx.background_spawn(async move { lsp::close(&project, language, &path) }).detach();
         self.changes.retain(|c| c.path != closed.path);
         self.presence.retain(|p| p.path != closed.path || p.pending);
+        self.recent_tabs.retain(|p| *p != closed.path);
         if self.active > index || self.active >= self.docs.len() {
             self.active = self.active.saturating_sub(1);
+        }
+        // The file in front closed: the one shown before it comes back.
+        if was_active {
+            let before = self.recent_tabs.iter().find_map(|p| self.docs.iter().position(|d| d.path == *p));
+            if let Some(before) = before {
+                self.active = before;
+            }
         }
         self.layout = None;
         self.tabs_changed(cx);
@@ -1215,8 +1251,13 @@ impl CodeEditor {
     // -- other editors ----------------------------------------------------------------------
 
     fn open_externally(&mut self, cx: &mut Context<Self>) {
+        self.open_tab_externally(self.active, cx);
+    }
+
+    /// The file of tab `index` in VS Code, Cursor or the system's editor (the file tab's menu).
+    pub fn open_tab_externally(&mut self, index: usize, cx: &mut Context<Self>) {
         let preference = crate::settings::settings(cx).external_editor;
-        let Some(doc) = self.docs.get(self.active) else { return };
+        let Some(doc) = self.docs.get(index) else { return };
         let cursor = doc.buffer.cursor();
         let column = buffer::display_column(doc.buffer.line(cursor.line), cursor.col) + 1;
         let result = external::open(&doc.path, cursor.line + 1, column, preference, &doc.project);
@@ -1748,10 +1789,6 @@ impl CodeEditor {
                     .tooltip(Tooltip::text(t(cx, "editor.open_browser"), None)),
                 )
             })
-            .child(
-                crate::ui::icon_only("editor-external", "code", cx.listener(|this, _: &ClickEvent, _, cx| this.open_externally(cx)))
-                    .tooltip(Tooltip::text(t(cx, "editor.open_external"), None)),
-            )
     }
 
     fn render_notice(&self, doc: &Document, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -2591,6 +2628,13 @@ impl gpui::EntityInputHandler for CodeEditor {
 
 impl Render for CodeEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(path) = self.docs.get(self.active).map(|d| d.path.clone()) {
+            if self.recent_tabs.first() != Some(&path) {
+                self.recent_tabs.retain(|p| *p != path);
+                self.recent_tabs.insert(0, path);
+                self.recent_tabs.truncate(RECENT_TABS);
+            }
+        }
         let previewing = self.docs.get(self.active).is_some_and(Document::previewing);
         if !previewing {
             self.preview.hide();
