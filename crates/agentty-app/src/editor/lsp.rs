@@ -54,6 +54,7 @@ pub fn id(language: Language) -> Option<&'static str> {
         Language::Scss => "scss",
         Language::Less => "less",
         Language::Html => "html",
+        Language::Json => "json",
         _ => return None,
     })
 }
@@ -260,6 +261,11 @@ pub fn actions(project: &Path, language: Language, path: &Path, text: &Snapshot,
     let project = &root(project, path, language);
     let id = id(language)?;
     lsp::actions(project, id, path, text.lsp(), (start.line, start.col), (end.line, end.col), patience(project, id))
+}
+
+/// A fix the editor makes itself, as a server's would be.
+pub fn local_fix(title: &str, path: &Path, start: (usize, usize), end: (usize, usize), text: &str) -> Option<Action> {
+    lsp::local_fix(title, path, start, end, text)
 }
 
 /// The server's "organize imports" for `path` (`None`: no server offers it).

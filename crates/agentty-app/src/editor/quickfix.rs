@@ -99,12 +99,30 @@ impl CodeEditor {
         self.problem_hover = None;
         let has_problem = problem.is_some();
         let revision = doc.buffer.revision();
+        let spelling = problem.clone();
         self.fixes = Some(FixMenu { path: doc.path.clone(), at: start, actions: None, problem, revision, selected: 0, focus });
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         let asked = path.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let found = cx.background_spawn(async move { lsp::actions(&project, language, &path, &text, start, end) }).await;
+            let (found, spelled) = cx
+                .background_spawn(async move {
+                    let found = lsp::actions(&project, language, &path, &text, start, end);
+                    let spelled = spelling.and_then(|p| super::spell::suggestions(&p, &text.text, &project, language));
+                    (found, spelled)
+                })
+                .await;
             let _ = this.update_in(cx, |this, window, cx| {
+                // The names the editor finds spelled close come after the server's fixes.
+                let found = match (found, spelled) {
+                    (found, None) => found,
+                    (found, spelled) => {
+                        let mut found = found.unwrap_or_default();
+                        let own = super::spell::actions(&asked, spelled, &found, cx);
+                        let first_other = found.iter().position(|a| !a.fixes).unwrap_or(found.len());
+                        found.splice(first_other..first_other, own);
+                        Some(found)
+                    }
+                };
                 let Some(menu) = this.fixes.as_mut().filter(|m| m.path == asked && m.actions.is_none()) else { return };
                 match found.filter(|f| !f.is_empty() || has_problem) {
                     Some(mut found) => {
@@ -281,13 +299,19 @@ impl CodeEditor {
         }
         self.bulb_asking = true;
         let (start, end) = (problem.start, problem.end);
+        let spelling = problem.clone();
         let (project, language, path, text) = (doc.project.clone(), doc.language, doc.path.clone(), lsp::Snapshot::of(&doc.buffer));
         cx.spawn(async move |this, cx| {
             let asked = path.clone();
-            let found = cx.background_spawn(async move { lsp::actions(&project, language, &path, &text, start, end) }).await;
+            let (found, spelled) = cx
+                .background_spawn(async move {
+                    let found = lsp::actions(&project, language, &path, &text, start, end);
+                    (found, super::spell::suggestions(&spelling, &text.text, &project, language).is_some())
+                })
+                .await;
             let _ = this.update(cx, |this, cx| {
                 this.bulb_asking = false;
-                let has = found.is_some_and(|f| f.iter().any(|a| a.fixes));
+                let has = spelled || found.is_some_and(|f| f.iter().any(|a| a.fixes));
                 this.bulb = Some((asked, line, revision, has));
                 cx.notify();
             });

@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- File editor: a name the language server does not know (`undefined: Totl`) offers **Change to 'Total'** for the
+  names of the file and the project spelled closest to it, made at once without AI, next to the server's own fixes.
+- File editor: JSON files get VS Code's JSON server from `vscode-langservers-extracted` (syntax errors, formatting);
+  `tsconfig.json`, `.vscode/*.json` and the other files VS Code reads as JSON with comments may have comments.
 - File editor: code navigation for Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included), Rust
   and Go. **⌘P** goes to a file (`@` symbols of the file, `#` symbols of the project, `:` a line), **F12** or
   ⌘-click to a definition (an import's path opens that file), **⇧F12** lists the usages, **⌃-** / **⌃⇧-** go back
@@ -105,6 +109,7 @@ All notable changes to this project are documented here. The format follows
   `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.
 
 ### Fixed
+- File editor: VS Code's CSS fixes (**Rename to 'color'** for `colr`) now change the text; they did nothing.
 - File editor: TypeScript and JavaScript completions now offer a component's props in JSX; a server's snippet (such
   as rust-analyzer's `arc` for `s.ar`) is listed after the names that match as well; ⌘/ on markup in a `.tsx` or
   `.jsx` file comments it as `{/* … */}` (`//` there showed on the page).

@@ -75,14 +75,41 @@ const SPECS: &[Spec] = &[
         commands: &[("vscode-css-language-server", &["--stdio"])],
     },
     Spec { name: "vscode-html-language-server", languages: &["html"], commands: &[("vscode-html-language-server", &["--stdio"])] },
+    Spec { name: "vscode-json-language-server", languages: &["json"], commands: &[("vscode-json-language-server", &["--stdio"])] },
 ];
+
+/// JSON files that allow comments (JSONC), as VS Code's own associations have them: the server
+/// is told so, and does not mark their comments as errors.
+fn is_jsonc(path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let in_vscode = path.parent().and_then(Path::file_name).is_some_and(|dir| dir == ".vscode");
+    let config = |stem: &str| name == format!("{stem}.json") || (name.starts_with(&format!("{stem}.")) && name.ends_with(".json"));
+    in_vscode
+        || config("tsconfig")
+        || config("jsconfig")
+        || name.ends_with(".jsonc")
+        || name.ends_with(".json5")
+        || name.ends_with(".code-workspace")
+        || matches!(
+            name.as_str(),
+            ".eslintrc.json"
+                | ".devcontainer.json"
+                | "devcontainer.json"
+                | ".babelrc"
+                | ".swcrc"
+                | "api-extractor.json"
+                | "tslint.json"
+                | "language-configuration.json"
+                | "typedoc.json"
+        )
+}
 
 impl Spec {
     /// What gets installed and runs for these languages, as the user sees it.
     pub fn program(&self) -> &'static str {
         match self.name {
             "typescript-language-server" => "typescript",
-            "vscode-css-language-server" | "vscode-html-language-server" => "vscode-langservers-extracted",
+            "vscode-css-language-server" | "vscode-html-language-server" | "vscode-json-language-server" => "vscode-langservers-extracted",
             name => name,
         }
     }
@@ -557,6 +584,10 @@ pub fn organize_imports(root: &Path, language: &str, path: &Path, text: Text, wa
 /// and those the server applies while running its command (`workspace/applyEdit`). `None` when
 /// the server could not be asked or answered with something this editor cannot apply.
 pub fn apply(root: &Path, language: &str, action: &Action, wait: Duration) -> Option<Vec<FileEdit>> {
+    // One the editor made itself: its edit, in bytes, no server asked.
+    if action.value.get(LOCAL).is_some() {
+        return file_edits(action.value.get("edit")?, true);
+    }
     let client = ready_client(root, spec_for(language)?)?;
     let utf8 = client.utf8.load(Ordering::SeqCst);
     let mut value = action.value.clone();
@@ -569,6 +600,16 @@ pub fn apply(root: &Path, language: &str, action: &Action, wait: Duration) -> Op
         None => Vec::new(),
     };
     let command = if is_command { Some(&value) } else { value.get("command").filter(|c| c.is_object()) };
+    // VS Code's CSS fixes ("Rename to 'color'") are a command VS Code runs itself, with the
+    // file, its version and the edits as arguments: the edits are made here, as VS Code does.
+    if let Some(edits) = command
+        .filter(|c| c.get("command").and_then(Value::as_str).is_some_and(|name| name.ends_with(".applyCodeAction")))
+        .and_then(|c| Some((c.pointer("/arguments/0")?.as_str()?.to_string(), c.pointer("/arguments/2")?.clone())))
+    {
+        let (uri, edits) = edits;
+        out.extend(file_edits(&json!({ "changes": { uri: edits } }), utf8)?);
+        return Some(out);
+    }
     if let Some(command) = command {
         if let Ok(mut applied) = client.applied.lock() {
             applied.clear();
@@ -581,6 +622,23 @@ pub fn apply(root: &Path, language: &str, action: &Action, wait: Duration) -> Op
         }
     }
     Some(out)
+}
+
+/// Marks a fix the editor made itself ([`local_fix`]).
+const LOCAL: &str = "agenttyLocal";
+
+/// A fix the editor offers by itself (a name spelled like one the project has), in the shape of
+/// a server's: `path` from `start` to `end` (line, byte column) becomes `text`.
+pub fn local_fix(title: &str, path: &Path, start: (usize, usize), end: (usize, usize), text: &str) -> Option<Action> {
+    let uri = file_uri(path)?;
+    let range = json!({ "start": { "line": start.0, "character": start.1 }, "end": { "line": end.0, "character": end.1 } });
+    Some(Action {
+        title: title.to_string(),
+        kind: Some("quickfix".into()),
+        preferred: false,
+        fixes: true,
+        value: json!({ "title": title, LOCAL: true, "edit": { "changes": { uri: [{ "range": range, "newText": text }] } } }),
+    })
 }
 
 /// What renaming the name at `line`/`col` (bytes) of `path` to `new_name` changes, in every file
@@ -1183,7 +1241,7 @@ fn install_command(spec: &'static Spec, path: &std::ffi::OsStr) -> (Option<Strin
         "pyright" => pick(has("npm").then_some("npm install -g pyright"), "Node.js"),
         "jdtls" => pick(brew.then_some("brew install jdtls"), "Homebrew"),
         "kotlin-language-server" => pick(brew.then_some("brew install kotlin-language-server"), "Homebrew"),
-        "vscode-css-language-server" | "vscode-html-language-server" => {
+        "vscode-css-language-server" | "vscode-html-language-server" | "vscode-json-language-server" => {
             pick(has("npm").then_some("npm install -g vscode-langservers-extracted"), "Node.js")
         }
         _ => (None, None),
@@ -1200,6 +1258,7 @@ fn shown_languages(spec: &'static Spec) -> &'static str {
         "kotlin-language-server" => "Kotlin",
         "vscode-css-language-server" => "CSS, SCSS, Less",
         "vscode-html-language-server" => "HTML",
+        "vscode-json-language-server" => "JSON",
         _ => "",
     }
 }
@@ -1212,7 +1271,9 @@ fn site(spec: &'static Spec) -> &'static str {
         "pyright" => "https://microsoft.github.io/pyright/#/installation",
         "jdtls" => "https://github.com/eclipse-jdtls/eclipse.jdt.ls",
         "kotlin-language-server" => "https://github.com/fwcd/kotlin-language-server",
-        "vscode-css-language-server" | "vscode-html-language-server" => "https://github.com/hrsh7th/vscode-langservers-extracted",
+        "vscode-css-language-server" | "vscode-html-language-server" | "vscode-json-language-server" => {
+            "https://github.com/hrsh7th/vscode-langservers-extracted"
+        }
         _ => "",
     }
 }
@@ -1622,7 +1683,7 @@ impl Client {
                 drop(open);
                 self.notify(
                     "textDocument/didOpen",
-                    json!({ "textDocument": { "uri": uri, "languageId": language, "version": 1, "text": text.text } }),
+                    json!({ "textDocument": { "uri": uri, "languageId": if language == "json" && is_jsonc(path) { "jsonc" } else { language }, "version": 1, "text": text.text } }),
                 );
             }
         }
@@ -1753,12 +1814,18 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
         })),
         // They format only when told they may and check only when their settings say so (VS Code
         // sends its defaults); HTML serves the CSS and JavaScript in `<style>` and `<script>` too.
-        "vscode-css-language-server" | "vscode-html-language-server" => {
+        // No schemas are named, so none is fetched from the web (a file's own `$schema` that is a
+        // path in the project still applies).
+        "vscode-css-language-server" | "vscode-html-language-server" | "vscode-json-language-server" => {
             for (name, args) in spec.commands {
                 let (options, settings) = match spec.name {
                     "vscode-html-language-server" => (
                         json!({ "provideFormatter": true, "embeddedLanguages": { "css": true, "javascript": true } }),
                         json!({ "validate": { "scripts": true, "styles": true } }),
+                    ),
+                    "vscode-json-language-server" => (
+                        json!({ "provideFormatter": true, "handledSchemaProtocols": ["file"] }),
+                        json!({ "validate": { "enable": true }, "format": { "enable": true } }),
                     ),
                     _ => (json!({ "provideFormatter": true }), json!({ "validate": true })),
                 };
@@ -2186,6 +2253,18 @@ mod tests {
         assert_eq!(spec_for("python").map(|s| s.name), Some("pyright"));
         assert!(spec_for("markdown").is_none());
         assert_eq!(status(Path::new("/nowhere"), "markdown"), Status::Missing);
+    }
+
+    #[test]
+    fn json_with_comments_by_name() {
+        for name in
+            ["/p/tsconfig.json", "/p/tsconfig.app.json", "/p/jsconfig.json", "/p/.vscode/settings.json", "/p/a.jsonc", "/p/.eslintrc.json"]
+        {
+            assert!(is_jsonc(Path::new(name)), "{name}");
+        }
+        for name in ["/p/package.json", "/p/tsconfig-old.txt", "/p/data.json", "/p/vscode/settings.json"] {
+            assert!(!is_jsonc(Path::new(name)), "{name}");
+        }
     }
 
     #[test]
