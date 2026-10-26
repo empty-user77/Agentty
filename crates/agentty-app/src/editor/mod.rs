@@ -2470,6 +2470,7 @@ impl CodeEditor {
                 self.open_picker(argument, None, window, cx);
             }
             "pick" => self.debug_pick(argument.parse().unwrap_or(0), window, cx),
+            "find-in-files" => self.find_in_files(window, cx),
             "close-box" => self.close_picker(window, cx),
             // As if ⌘ were held over line:column.
             "hover" => {
@@ -3051,6 +3052,7 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &navigate::GoToFileSymbol, window, cx| this.open_picker("@", None, window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToSymbol, window, cx| this.open_picker("#", None, window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToLine, window, cx| this.open_picker(":", None, window, cx)))
+            .on_action(cx.listener(|this, _: &navigate::FindInFiles, window, cx| this.find_in_files(window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToDefinition, window, cx| this.go_to_definition(window, cx)))
             .on_action(cx.listener(|this, _: &navigate::GoToImplementation, window, cx| this.go_to_implementation(window, cx)))
             .on_action(cx.listener(|this, _: &problems::NextProblem, _, cx| this.step_problem(true, cx)))

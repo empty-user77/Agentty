@@ -83,7 +83,8 @@ For Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included),
 
 | | |
 |---|---|
-| **⌘P** | Go to a file by name. Type `@` for the symbols of this file, `#` for the symbols of the project, `:` for a line |
+| **⌘P** | Go to a file by name. Type `@` for the symbols of this file, `#` for the symbols of the project, `:` for a line, `%` for text in the project's files |
+| **⇧⌘F** | Text in every file of the project (`%` in the box above), seeded with the selection or the name at the cursor. Case counts once a capital is typed; files open with unsaved changes are searched as they are on screen |
 | **F12** or **⌘-click** | Go to where the name under the cursor is defined (hold **⌘** over a name to see its definition without leaving). On an import's path, open that file. On a definition itself, list its usages |
 | **⇧F12** or **⌥F7** | Every place the name is used in the project |
 | **⌘F12** | Its implementations: the classes implementing an interface, the methods overriding one (with a language server) |
