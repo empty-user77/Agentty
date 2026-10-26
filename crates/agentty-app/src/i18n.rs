@@ -39,9 +39,7 @@ fn platform_row(_key: &str) -> Option<[&'static str; 5]> {
 fn platform_row(key: &str) -> Option<[&'static str; 5]> {
     Some(match key {
         "ext.open_folder" | "plugins.reveal" => ["Show in file manager", "파일 관리자에서 보기", "ファイルマネージャーで表示", "在文件管理器中显示", "Im Dateimanager zeigen"],
-        "terminal.retry" => ["Try again", "다시 시도", "再試行", "重试", "Erneut versuchen"],
-    "terminal.open_file" => ["⌘-click to open in the editor", "⌘+클릭으로 편집기에서 열기", "⌘ クリックでエディタで開く", "⌘ 点击在编辑器中打开", "⌘-Klick zum Öffnen im Editor"],
-    "terminal.reveal_file" => ["⌘-click to show in the file manager", "⌘+클릭으로 파일 관리자에서 보기", "⌘ クリックでファイルマネージャーに表示", "⌘ 点击在文件管理器中显示", "⌘-Klick zum Anzeigen im Dateimanager"],
+        "terminal.reveal_file" => ["⌘-click to show in the file manager", "⌘+클릭으로 파일 관리자에서 보기", "⌘ クリックでファイルマネージャーに表示", "⌘ 点击在文件管理器中显示", "⌘-Klick zum Anzeigen im Dateimanager"],
         "ext.mcp_secret_warning" => ["Values entered here are saved by the agent in its config file as plain text. For API keys, use API connectors (system credential store).", "여기 입력한 값은 에이전트 설정 파일에 평문으로 저장됩니다. API 키는 API 커넥터(시스템 자격 증명 저장소)를 사용하세요.", "ここに入力した値はエージェントの設定ファイルに平文で保存されます。API キーには API コネクタ（システムの資格情報ストア）を使ってください。", "此处输入的值会以明文保存在智能体配置中。API 密钥请使用 API 连接器（系统凭据存储）。", "Hier eingegebene Werte speichert der Agent als Klartext in seiner Konfigurationsdatei. Verwende für API-Schlüssel API-Connectors (System-Anmeldedatenspeicher)."],
         "ext.conn_secret" => ["API key (stored in the system credential store)", "API 키 (시스템 자격 증명 저장소에 저장)", "API キー (システムの資格情報ストアに保存)", "API 密钥（保存在系统凭据存储中）", "API-Schlüssel (im System-Anmeldedatenspeicher gespeichert)"],
         "ext.conn_security" => ["Keys are kept in the system credential store (Windows Credential Manager / Secret Service) and never written to agent config files.", "키는 시스템 자격 증명 저장소(Windows 자격 증명 관리자 / Secret Service)에 저장되며 에이전트 설정 파일에 기록되지 않습니다.", "キーはシステムの資格情報ストア（Windows 資格情報マネージャー / Secret Service）に保存され、エージェントの設定ファイルには書き込まれません。", "密钥保存在系统凭据存储（Windows 凭据管理器 / Secret Service）中，不会写入智能体配置文件。", "Schlüssel werden im System-Anmeldedatenspeicher (Windows Credential Manager / Secret Service) aufbewahrt und nie in Konfigurationsdateien von Agenten geschrieben."],
@@ -1608,6 +1606,8 @@ strings! {
     "tooltip.open_remote" => ["Open on the web", "웹에서 열기", "Web で開く", "在网页中打开", "Im Web öffnen"],
     "shortcuts.new_tab_here" => ["New tab (in the terminal view)", "새 탭 (터미널 화면에서)", "新しいタブ（ターミナル画面で）", "新建标签页（终端视图中）", "Neuer Tab (in der Terminalansicht)"],
     "shortcuts.new_workspace_sidebar" => ["New workspace (in the workspace list)", "새 작업공간 (작업공간 목록에서)", "新しいワークスペース（一覧で）", "新建工作区（工作区列表中）", "Neuer Arbeitsbereich (in der Arbeitsbereichsliste)"],
+    "terminal.retry" => ["Try again", "다시 시도", "再試行", "重试", "Erneut versuchen"],
+    "terminal.open_file" => ["⌘-click to open in the editor", "⌘+클릭으로 편집기에서 열기", "⌘ クリックでエディタで開く", "⌘ 点击在编辑器中打开", "⌘-Klick zum Öffnen im Editor"],
     "terminal.open_link" => ["⌘-click to open link", "⌘+클릭으로 링크 열기", "⌘ クリックでリンクを開く", "⌘ 点击打开链接", "⌘-Klick zum Öffnen des Links"],
     "terminal.open_folder" => ["⌘-click to open folder", "⌘+클릭으로 폴더 열기", "⌘ クリックでフォルダを開く", "⌘ 点击打开文件夹", "⌘-Klick zum Öffnen des Ordners"],
     "terminal.reveal_file" => ["⌘-click to show in Finder", "⌘+클릭으로 Finder에서 보기", "⌘ クリックで Finder に表示", "⌘ 点击在访达中显示", "⌘-Klick zum Zeigen im Finder"],
@@ -3490,6 +3490,31 @@ strings! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key the code asks for by name is in the shared table: a key only in the Windows and
+    /// Linux table showed as itself on macOS ("terminal.open_file" in a terminal's link tooltip).
+    #[test]
+    fn every_key_used_in_the_code_is_translated() {
+        let call = regex::Regex::new(r#"\btf?\(\s*(?:cx|&\*?cx|app|window|this)?[^,()]*,\s*"([a-z0-9_]+(?:\.[a-z0-9_]+)+)""#).unwrap();
+        let mut missing = Vec::new();
+        let mut dirs = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("i18n.rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for key in call.captures_iter(&text).map(|c| c[1].to_string()) {
+                        if lookup(&key).is_none() {
+                            missing.push(format!("{} in {}", key, path.display()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "keys missing from the shared table:\n{}", missing.join("\n"));
+    }
 
     #[test]
     fn every_key_has_all_languages() {
