@@ -147,6 +147,8 @@ impl Workbench {
             div()
                 .id("page-tab-todo")
                 .h(px(super::chrome::TAB_CARD_HEIGHT))
+                // Not a card: on the strip's middle line, with the tabs' labels.
+                .my_auto()
                 .flex()
                 .flex_shrink_0()
                 .items_center()

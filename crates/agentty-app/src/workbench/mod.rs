@@ -3940,6 +3940,18 @@ impl Workbench {
         cx.notify();
     }
 
+    /// A side panel's item clicked in the activity bar: the panel shows, or, when it is already
+    /// what shows, the sidebar folds away (and the next click opens it again), as in VS Code.
+    fn toggle_panel(&mut self, panel: SidePanel, cx: &mut Context<Self>) {
+        let showing = self.page.is_none() && self.front_plugin_workspace(cx).is_none() && self.sidebar_open && self.panel == panel;
+        if showing {
+            self.sidebar_open = false;
+            cx.notify();
+        } else {
+            self.show_panel(panel, cx);
+        }
+    }
+
     /// Pages next to which the workspace list stays useful.
     pub(super) fn page_keeps_sidebar(page: Page) -> bool {
         matches!(page, Page::Flow | Page::Git | Page::Board)

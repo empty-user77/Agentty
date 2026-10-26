@@ -740,6 +740,9 @@ impl CodeEditor {
     }
 
     fn grid_mouse_down(&mut self, at: At, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The grid around the cell would take the keyboard back on the same press, from the field
+        // a double-click opens: the field would get the typing but show no caret.
+        cx.stop_propagation();
         self.commit_cell(cx);
         self.grid_menu = None;
         window.focus(&self.grid_focus);
