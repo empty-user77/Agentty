@@ -56,18 +56,27 @@ pub fn run() -> i32 {
     let cwd = json["workspace"]["current_dir"].as_str().or(json["cwd"].as_str()).map(PathBuf::from);
     let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| crate::launch::home_dir().join(".claude"));
     let Some(command) = user_command(cwd.as_deref(), &config_dir) else { return 0 };
-    // The user's command is POSIX shell syntax (Claude Code runs it with Git Bash on Windows).
-    let shell = if cfg!(windows) { agentty_bridge::process::which("sh").or_else(|| agentty_bridge::process::which("bash")) } else { None };
-    let shell = shell.map_or_else(|| "sh".into(), |p| p.into_os_string());
-    // Without a console of its own: Agentty is a GUI program, so Windows would give the shell a
-    // new console, which Windows Terminal (as the default terminal) shows on every refresh.
-    let mut child = Command::new(shell);
-    child.args(["-c", &command]).stdin(Stdio::piped());
-    let Ok(mut child) = agentty_bridge::process::hide_window(&mut child).spawn() else { return 0 };
+    let Ok(mut child) = chained(shell(), &command).spawn() else { return 0 };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(&input);
     }
     child.wait().ok().and_then(|s| s.code()).unwrap_or(0)
+}
+
+/// The user's command is POSIX shell syntax (Claude Code runs it with Git Bash on Windows).
+fn shell() -> std::ffi::OsString {
+    let shell = if cfg!(windows) { agentty_bridge::process::which("sh").or_else(|| agentty_bridge::process::which("bash")) } else { None };
+    shell.map_or_else(|| "sh".into(), |p| p.into_os_string())
+}
+
+/// The user's status line command, given Claude Code's input on stdin. Without a console window:
+/// Agentty is a GUI program, so Windows would give the shell a new console, which Windows Terminal
+/// (as the default terminal) shows on every refresh.
+fn chained(shell: std::ffi::OsString, command: &str) -> Command {
+    let mut child = Command::new(shell);
+    child.args(["-c", command]).stdin(Stdio::piped());
+    agentty_bridge::process::hide_window(&mut child);
+    child
 }
 
 #[cfg(test)]
@@ -94,5 +103,25 @@ mod tests {
         assert_eq!(user_command(Some(&project), &config).as_deref(), Some("project-line"));
         assert_eq!(user_command(None, &root.join("missing")), None);
         std::fs::remove_dir_all(root).ok();
+    }
+
+    /// The chained command reads Claude Code's input and its output reaches Claude Code.
+    #[test]
+    fn chained_command_gets_the_input_and_prints() {
+        let mut child = chained(shell(), "read line; echo \"line: $line\"");
+        let mut child = child.stdout(Stdio::piped()).spawn().expect("a shell");
+        child.stdin.take().unwrap().write_all(b"{\"model\":\"opus\"}\n").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"line: {"model":"opus"}"#);
+    }
+
+    /// On Windows itself: the shell runs without a console window of its own.
+    #[cfg(windows)]
+    #[test]
+    fn chained_command_has_no_console_window() {
+        let script = "Add-Type -Namespace Probe -Name Console -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow();'; Write-Output ('window=' + [Probe.Console]::GetConsoleWindow())";
+        let mut child = chained("powershell.exe".into(), script);
+        let output = child.stdin(Stdio::null()).output().expect("PowerShell");
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "window=0", "{}", String::from_utf8_lossy(&output.stderr));
     }
 }
