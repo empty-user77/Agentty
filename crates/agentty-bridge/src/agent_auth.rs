@@ -496,10 +496,18 @@ fn link_dir(source: &Path, link: &Path) -> Result<()> {
 #[cfg(windows)]
 fn link_dir(source: &Path, link: &Path) -> Result<()> {
     // Symbolic links need Developer Mode; directory junctions work for every user.
-    if std::os::windows::fs::symlink_dir(source, link).is_ok() {
-        return Ok(());
+    if std::os::windows::fs::symlink_dir(source, link).is_err() {
+        create_junction(source, link)?;
     }
-    create_junction(source, link)
+    // Windows may refuse to follow a link a user made ("the path contains an untrusted mount
+    // point", error 448; seen on Windows 11 26200 after its October 2026 updates). Codex would
+    // then write sessions nowhere: no link, and it keeps them in the private home, where Agentty
+    // reads them too.
+    if let Err(err) = std::fs::read_dir(link) {
+        let _ = std::fs::remove_dir(link);
+        bail!("Windows does not follow the link: {err}");
+    }
+    Ok(())
 }
 
 /// A directory junction made with the file system call itself: no `cmd /C mklink /J` (cmd.exe
@@ -1007,8 +1015,10 @@ mod tests {
         prepare_codex_home(&home).unwrap();
         std::env::remove_var("CODEX_HOME");
         let sessions = home.join("sessions");
+        // Where Windows refuses to follow a link a user made, there is none, never a dead one.
+        let refused = cfg!(windows) && std::fs::symlink_metadata(&sessions).is_err();
         assert!(
-            sessions.join("2026").is_dir(),
+            sessions.join("2026").is_dir() || refused,
             "sessions: {:?} → {:?}, opening it: {:?}",
             std::fs::symlink_metadata(&sessions).map(|m| m.file_type()),
             std::fs::read_link(&sessions),

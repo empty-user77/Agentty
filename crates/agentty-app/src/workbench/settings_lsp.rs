@@ -122,9 +122,11 @@ impl Workbench {
                     }),
                 )
                 .into_any_element()
-            } else {
-                let needs = server.needs.unwrap_or_default();
+            } else if let Some(needs) = server.needs {
                 div().t_small().text_color(hex(Chrome::MUTED)).child(tf(cx, "lsp.needs", &[("tool", needs)])).into_any_element()
+            } else {
+                // Installed from its own page (the link beside it), with nothing this machine lacks.
+                div().into_any_element()
             };
             card = card.child(
                 div()

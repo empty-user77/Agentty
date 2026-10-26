@@ -885,6 +885,24 @@ mod windows {
         script.contains("function ").then_some(script)
     }
 
+    /// A command line that starts with npm, npx, pnpm or yarn, run through its `.cmd`: PowerShell
+    /// picks the `.ps1` next to it first, a script that Windows PowerShell's default `Restricted`
+    /// policy refuses ("running scripts is disabled"), so `npm install -g …` from Settings or a
+    /// run configuration's `npm run dev` failed where PowerShell 7 isn't installed.
+    pub(super) fn node_shim(line: &str) -> String {
+        let trimmed = line.trim_start();
+        let program = trimmed.split_whitespace().next().unwrap_or_default();
+        // A `.cmd` runs through cmd.exe, which reads `&`, `|`, `<`, `>`, `^`, `%` and `!` in its
+        // arguments even inside PowerShell's quotes (a script name from a cloned `package.json`):
+        // such a line keeps the `.ps1`.
+        let cmd_special = trimmed[program.len()..].contains(['&', '|', '<', '>', '^', '%', '!', '"']);
+        if matches!(program, "npm" | "npx" | "pnpm" | "pnpx" | "yarn") && !cmd_special {
+            format!("{program}.cmd{}", &trimmed[program.len()..])
+        } else {
+            line.to_string()
+        }
+    }
+
     fn encoded(program: String, script: &str) -> (String, Vec<String>) {
         (program, vec!["-NoLogo".into(), "-NoExit".into(), "-EncodedCommand".into(), encode_powershell(script)])
     }
@@ -895,9 +913,10 @@ mod windows {
         let profile = profile_line();
         if let Start::Command(line) = &spec.start {
             // User-defined command lines are PowerShell syntax on Windows.
+            let line = node_shim(line);
             let script = match &profile {
                 Some(profile) => format!("{profile}\n{line}"),
-                None => line.clone(),
+                None => line,
             };
             return encoded(powershell, &script);
         }
@@ -1465,5 +1484,22 @@ pub(crate) mod tests {
     fn encodes_powershell_commands() {
         // "ls" in UTF-16LE is 6C 00 73 00.
         assert_eq!(encode_powershell("ls"), "bABzAA==");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn node_package_managers_run_their_cmd() {
+        use super::windows::node_shim;
+        assert_eq!(node_shim("npm install -g typescript@latest"), "npm.cmd install -g typescript@latest");
+        assert_eq!(node_shim("  npx vite"), "npx.cmd vite");
+        assert_eq!(node_shim("pnpm dev"), "pnpm.cmd dev");
+        assert_eq!(node_shim("npm"), "npm.cmd");
+        // Anything else as it was, including a name that only starts like one.
+        assert_eq!(node_shim("npmx run"), "npmx run");
+        // cmd.exe would read these as its own: left to the `.ps1`.
+        assert_eq!(node_shim("npm run 'dev&calc'"), "npm run 'dev&calc'");
+        assert_eq!(node_shim("npm run '%PATH%'"), "npm run '%PATH%'");
+        assert_eq!(node_shim("cargo run"), "cargo run");
+        assert_eq!(node_shim("irm https://claude.ai/install.ps1 | iex"), "irm https://claude.ai/install.ps1 | iex");
     }
 }

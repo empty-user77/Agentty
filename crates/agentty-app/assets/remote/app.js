@@ -1559,12 +1559,17 @@ function runNode(run) {
 }
 
 // A file path with an extension the viewer shows: `src/app.ts`, `./shots/a.png`, `~/notes.md`,
-// `/Users/me/x.pdf`. A path inside a URL (`https://…/a.png`) is left alone.
+// `/Users/me/x.pdf`, and Windows' `src\app.ts`, `C:\proj\a.png`. A path inside a URL
+// (`https://…/a.png`) is left alone.
 const FILE_EXT =
   "png|jpe?g|gif|webp|svg|bmp|ico|avif|pdf|md|markdown|mdx|txt|log|jsonl?|ya?ml|toml|csv|tsv|xml|html?|s?css|[cm]?[jt]sx?|" +
   "rs|py|rb|go|java|kts?|swift|c|h|cc|cpp|hpp|cs|php|sh|sql|vue|svelte|diff|patch|lua|dart";
 const NAME = "[\\p{L}\\p{N}_@%+~-][\\p{L}\\p{N}_.@%+~-]*";
-const FILE_PATH = new RegExp(`(?:~\\/|\\.{1,2}\\/|\\/)?(?:${NAME}\\/)*${NAME}\\.(?:${FILE_EXT})(?![\\p{L}\\p{N}_])`, "giu");
+const SEP = "[\\/\\\\]";
+const FILE_PATH = new RegExp(
+  `(?:[A-Za-z]:${SEP}|~${SEP}|\\.{1,2}${SEP}|${SEP})?(?:${NAME}${SEP})*${NAME}\\.(?:${FILE_EXT})(?![\\p{L}\\p{N}_])`,
+  "giu",
+);
 
 /// `text` into `parent` as text, with each file path in it a link the viewer opens (see
 /// `openFile`; the terminal or chat it is in is found from the page, not from the link).

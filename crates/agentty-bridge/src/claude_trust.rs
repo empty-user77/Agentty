@@ -16,7 +16,20 @@ pub fn inherit_trust(project: &Path, tree: &Path) -> Result<bool> {
 }
 
 fn trusted(config: &Value, path: &Path) -> bool {
-    path.ancestors().any(|dir| config["projects"][dir.to_string_lossy().as_ref()]["hasTrustDialogAccepted"].as_bool() == Some(true))
+    path.ancestors().any(|dir| {
+        let raw = dir.to_string_lossy();
+        [raw.to_string(), project_key(dir)].iter().any(|k| config["projects"][k.as_str()]["hasTrustDialogAccepted"].as_bool() == Some(true))
+    })
+}
+
+/// A folder as Claude Code names it in `projects`: on Windows with `/` (`C:/Users/me/proj`).
+pub(crate) fn project_key(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    }
 }
 
 fn inherit_trust_in(config_path: &Path, project: &Path, tree: &Path) -> Result<bool> {
@@ -26,7 +39,7 @@ fn inherit_trust_in(config_path: &Path, project: &Path, tree: &Path) -> Result<b
         return Ok(false);
     }
     let Some(projects) = config.get_mut("projects").and_then(Value::as_object_mut) else { return Ok(false) };
-    let entry = projects.entry(tree.to_string_lossy().to_string()).or_insert_with(|| Value::Object(Default::default()));
+    let entry = projects.entry(project_key(tree)).or_insert_with(|| Value::Object(Default::default()));
     let Some(entry) = entry.as_object_mut() else { return Ok(false) };
     entry.insert("hasTrustDialogAccepted".into(), Value::Bool(true));
     replace_keeping_mode(config_path, &serde_json::to_vec_pretty(&config)?)?;
@@ -108,6 +121,26 @@ mod tests {
         // No config at all: nothing is created.
         assert!(!inherit_trust_in(&dir.join("missing.json"), project, tree).unwrap());
         assert!(!dir.join("missing.json").exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Claude Code on Windows names folders with `/` (`C:/work/app`).
+    #[cfg(windows)]
+    #[test]
+    fn windows_folders_are_named_with_slashes() {
+        let dir = std::env::temp_dir().join(format!("agentty-claude-trust-win-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join(".claude.json");
+        std::fs::write(&config, serde_json::json!({ "projects": { "C:/work/app": { "hasTrustDialogAccepted": true } } }).to_string())
+            .unwrap();
+        let tree = Path::new(r"C:\data\worktrees\app-1\claude-1");
+        assert!(inherit_trust_in(&config, Path::new(r"C:\work\app"), tree).unwrap());
+        let written: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        assert_eq!(written["projects"]["C:/data/worktrees/app-1/claude-1"]["hasTrustDialogAccepted"], true);
+        assert!(written["projects"].get(r"C:\data\worktrees\app-1\claude-1").is_none());
+        // An entry an older Agentty wrote with `\` still counts.
+        std::fs::write(&config, serde_json::json!({ "projects": { r"C:\work": { "hasTrustDialogAccepted": true } } }).to_string()).unwrap();
+        assert!(inherit_trust_in(&config, Path::new(r"C:\work\app"), tree).unwrap());
         std::fs::remove_dir_all(dir).ok();
     }
 }

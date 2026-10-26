@@ -65,6 +65,9 @@ pub fn bind_keys(cx: &mut gpui::App) {
         key("ctrl-g", GoToLine, c),
         // VS Code's and IntelliJ's: in the editor it wins over the app's Flow page.
         key("cmd-shift-f", FindInFiles, c),
+        // Find in the file. The app's ⌘F becomes Ctrl+Shift+F off the Mac (Ctrl+F stays with the
+        // terminals), which the line above takes in the editor: an editor takes Ctrl+F itself.
+        key("cmd-f", crate::workbench::FindInTerminal, c),
         key("f12", GoToDefinition, c),
         key("cmd-f12", GoToImplementation, c),
         key("shift-f12", FindUsages, c),

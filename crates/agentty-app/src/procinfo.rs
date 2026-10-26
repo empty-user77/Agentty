@@ -134,7 +134,10 @@ pub fn executable_path(_pid: u32) -> Option<PathBuf> {
 fn program_name(path: &str) -> String {
     let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
     let lower = file.to_ascii_lowercase();
-    match lower.strip_suffix(".exe") {
+    // A program that updated itself while it ran keeps running from its renamed old file on
+    // Windows: Claude Code's `claude.exe.old.<time>.<pid>`.
+    let stem = lower.split_once(".exe.old.").map(|(stem, _)| stem).or_else(|| lower.strip_suffix(".exe"));
+    match stem {
         Some(stem) => stem.to_string(),
         None => file.to_string(),
     }
@@ -1038,6 +1041,9 @@ mod windows_tests {
     fn recognizes_windows_agent_processes() {
         let native = Path::new(r"C:\Users\me\.local\bin\claude.exe");
         assert_eq!(tool_for_process(native, &[]), Some("claude"));
+        // Still running after it updated itself, from the file it renamed.
+        let updated = Path::new(r"C:\Users\me\.local\bin\claude.exe.old.1792997002763.7684");
+        assert_eq!(tool_for_process(updated, &[]), Some("claude"));
         let codex = Path::new(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\vendor\x86_64-pc-windows-msvc\codex\codex.exe");
         assert_eq!(tool_for_process(codex, &[]), Some("codex"));
         let node = Path::new(r"C:\Program Files\nodejs\node.exe");

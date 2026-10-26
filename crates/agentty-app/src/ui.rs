@@ -660,7 +660,8 @@ pub fn tilde(path: &Path) -> String {
     match path.strip_prefix(&home) {
         // The home folder itself reads better in full than as a lone "~".
         Ok(rest) if rest.as_os_str().is_empty() => home.display().to_string(),
-        Ok(rest) => format!("~/{}", rest.display()),
+        // The platform's own separator after `~`: no `~/Agentty\Agentty` on Windows.
+        Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
         Err(_) => path.display().to_string(),
     }
 }

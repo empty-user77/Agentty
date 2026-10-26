@@ -170,7 +170,8 @@ pub fn resolve(requested: &str, dir: &Path, roots: &[PathBuf], home: &Path) -> R
     if requested.is_empty() || requested.len() > MAX_PATH || requested.contains('\0') {
         return Err(FileError::Refused);
     }
-    let path = match requested.strip_prefix("~/") {
+    let home_relative = requested.strip_prefix("~/").or_else(|| if cfg!(windows) { requested.strip_prefix("~\\") } else { None });
+    let path = match home_relative {
         Some(rest) => home.join(rest),
         None => dir.join(requested),
     };

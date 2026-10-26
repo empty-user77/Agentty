@@ -1356,6 +1356,15 @@ impl TerminalView {
         // the logo it reads as two icons, so the mark goes.
         let title = strip_agent_mark(title);
         let title = program_of_command_line(title).unwrap_or(title);
+        // A Windows console program that sets no title of its own shows its image path
+        // (`C:\Program Files\…\pwsh.exe`): a shell is named by its folder, anything else by its name.
+        if let Some(program) = console_image_title(title) {
+            if !matches!(program.as_str(), "pwsh" | "powershell" | "cmd" | "bash" | "wsl") {
+                return program;
+            }
+            let dir = self.display_cwd();
+            return dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string());
+        }
         if title.is_empty() {
             self.spec.title.clone()
         } else if title == "~" {
@@ -3054,7 +3063,7 @@ fn restore_selection<T>(term: &mut alacritty_terminal::Term<T>, kept: &mut Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{is_symbol_glyph, is_web_link, program_of_command_line};
+    use super::{console_image_title, is_symbol_glyph, is_web_link, program_of_command_line};
 
     #[test]
     fn a_selection_survives_a_redraw_of_the_same_text() {
@@ -3117,6 +3126,13 @@ mod tests {
         assert_eq!(program_of_command_line("vim main.rs"), None);
         assert_eq!(program_of_command_line("~/code"), None);
         assert_eq!(program_of_command_line("cd  &&"), Some("cd"));
+        assert_eq!(
+            console_image_title(r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.7.0_x64__8wekyb3d8bbwe\pwsh.exe").as_deref(),
+            Some("pwsh")
+        );
+        assert_eq!(console_image_title(r"C:\Program Files\nodejs\node.exe").as_deref(), Some("node"));
+        assert_eq!(console_image_title("vim main.rs"), None);
+        assert_eq!(console_image_title("setup.exe"), None, "not a path");
     }
 
     #[test]
@@ -3206,6 +3222,15 @@ pub fn program_of_command_line(title: &str) -> Option<&str> {
     let program = last.split_whitespace().find(|word| !word.contains('=') && !matches!(*word, "sudo" | "env" | "exec" | "command"))?;
     let name = program.rsplit('/').next().unwrap_or(program);
     (!name.is_empty()).then_some(name)
+}
+
+/// The program of a title that is a Windows executable's path (`C:\…\pwsh.exe` → `pwsh`), the
+/// title a console gets from the program it started until that program sets one.
+pub fn console_image_title(title: &str) -> Option<String> {
+    let lower = title.to_ascii_lowercase();
+    let path_like = lower.as_bytes().get(1..3) == Some(b":\\") || lower.starts_with(r"\\");
+    let file = lower.strip_suffix(".exe").filter(|_| path_like)?.rsplit('\\').next()?;
+    (!file.is_empty()).then(|| file.to_string())
 }
 
 /// Drops a decorative glyph an agent CLI puts in front of its window title (`✳`, `✶`, `●` …).

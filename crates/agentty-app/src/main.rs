@@ -26,8 +26,9 @@ mod editor;
 mod extensions_view;
 mod tasks_cli;
 mod worktree_guard;
-// AppKit / WebKit on macOS; the same API from `platform/fallback/` on Windows and Linux.
-#[cfg_attr(not(target_os = "macos"), path = "platform/fallback/file_drop.rs")]
+// AppKit / WebKit on macOS, Win32 on Windows; the same API from `platform/fallback/` on Linux.
+#[cfg_attr(windows, path = "platform/windows/file_drop.rs")]
+#[cfg_attr(not(any(target_os = "macos", windows)), path = "platform/fallback/file_drop.rs")]
 mod file_drop;
 mod git_view;
 mod html_recorder;

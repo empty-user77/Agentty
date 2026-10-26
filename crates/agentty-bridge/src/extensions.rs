@@ -544,7 +544,7 @@ fn claude_mcp(project: Option<&Path>) -> Vec<Extension> {
     let config: Value = std::fs::read(&config_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     push(&config["mcpServers"], Scope::User, config_path.clone());
     if let Some(project) = project {
-        let key = project.to_string_lossy().to_string();
+        let key = crate::claude_trust::project_key(project);
         push(&config["projects"][&key]["mcpServers"], Scope::Project, config_path);
         let project_file = project.join(".mcp.json");
         let shared: Value = std::fs::read(&project_file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();

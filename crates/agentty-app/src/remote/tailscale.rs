@@ -60,7 +60,9 @@ fn run_with(args: &[&str], timeout: Duration, keep_out: bool) -> Option<Output> 
         return None;
     }
     let stdout = if keep_out { Stdio::piped() } else { Stdio::null() };
-    let mut child = Command::new(binary()?).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().ok()?;
+    // Without a console window: on Windows one would flash up on every status check.
+    let mut child =
+        agentty_bridge::process::command(binary()?).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().ok()?;
     let stdout = child.stdout.take();
     let mut stderr = child.stderr.take()?;
     let out = std::thread::spawn(move || {
@@ -625,7 +627,7 @@ pub fn reachable(url: &str) -> Option<bool> {
     let curl = if cfg!(target_os = "macos") { "/usr/bin/curl" } else { "curl" };
     let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
     for attempt in 0..3 {
-        let output = Command::new(curl)
+        let output = agentty_bridge::process::command(curl)
             .args(["--silent", "--output", null, "--write-out", "%{http_code}", "--max-time", "8", "--noproxy", "*", url])
             .stdin(Stdio::null())
             .output()

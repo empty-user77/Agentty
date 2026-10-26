@@ -1168,6 +1168,28 @@ pub fn shutdown_all() {
     }
 }
 
+/// Stops the servers of projects in `dir` (a working tree about to be removed): Windows refuses
+/// to remove a folder a running process works in, and a server reading a folder that is gone
+/// would only report errors.
+pub fn stop_under(dir: &Path) {
+    let under = |root: &Path| {
+        let (root, dir) = (diagnostics_key(root), diagnostics_key(dir));
+        root == dir || root.strip_prefix(&dir).is_some_and(|rest| rest.starts_with(['/', '\\']))
+    };
+    let slots: Vec<Arc<Slot>> = match registry().lock() {
+        Ok(mut registry) => {
+            let keys: Vec<_> = registry.keys().filter(|(root, _)| under(root)).cloned().collect();
+            keys.iter().filter_map(|key| registry.remove(key)).collect()
+        }
+        Err(_) => return,
+    };
+    for slot in slots {
+        if let Ok(State::Ready(client)) = slot.state.lock().map(|s| s.clone()) {
+            client.stop();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Installing servers (Settings → Project and the editor's status bar run the command in a
 // terminal tab, where the user sees it work).
@@ -1258,6 +1280,8 @@ fn install_command(spec: &'static Spec, path: &std::ffi::OsStr) -> (Option<Strin
         "gopls" => pick(has("go").then_some("go install golang.org/x/tools/gopls@latest"), "Go"),
         "typescript-language-server" => pick(has("npm").then_some("npm install -g typescript@latest"), "Node.js"),
         "pyright" => pick(has("npm").then_some("npm install -g pyright"), "Node.js"),
+        // Homebrew's elsewhere than on Windows; there only their download page (`site`).
+        "jdtls" | "kotlin-lsp" if cfg!(windows) => (None, None),
         "jdtls" => pick(brew.then_some("brew install jdtls"), "Homebrew"),
         "kotlin-lsp" => pick(brew.then_some("brew install JetBrains/utils/kotlin-lsp"), "Homebrew"),
         "vscode-css-language-server" | "vscode-html-language-server" | "vscode-json-language-server" => {
@@ -1887,7 +1911,11 @@ fn launches(root: &Path, spec: &'static Spec, path: &std::ffi::OsStr) -> Vec<Lau
 /// The major version of the TypeScript a `tsc` link belongs to.
 fn typescript_major(tsc: &Path) -> Option<u64> {
     let real = std::fs::canonicalize(tsc).ok()?;
-    let package = real.ancestors().find(|dir| dir.file_name().is_some_and(|n| n == "typescript"))?.join("package.json");
+    let package = match real.ancestors().find(|dir| dir.file_name().is_some_and(|n| n == "typescript")) {
+        Some(dir) => dir.join("package.json"),
+        // A Windows `.cmd` shim stands outside the package it starts.
+        None => node_modules_of(tsc).into_iter().map(|dir| dir.join("typescript").join("package.json")).find(|p| p.is_file())?,
+    };
     let manifest: Value = serde_json::from_str(&std::fs::read_to_string(package).ok()?).ok()?;
     manifest.get("version")?.as_str()?.split('.').next()?.parse().ok()
 }
@@ -1956,11 +1984,23 @@ fn initialize_params(root: &Path, options: Value) -> Value {
 /// The `tsserver.js` of a TypeScript (before 7) installed beside `program` (in a `node_modules`
 /// above where its link points), when the project has no TypeScript of its own.
 fn typescript_beside(program: &Path) -> Option<PathBuf> {
-    let real = std::fs::canonicalize(program).ok()?;
-    real.ancestors()
-        .filter(|dir| dir.file_name().is_some_and(|n| n == "node_modules"))
+    node_modules_of(program)
+        .into_iter()
         .map(|dir| dir.join("typescript").join("lib").join("tsserver.js"))
         .find(|tsserver| tsserver.is_file())
+}
+
+/// The `node_modules` folders an npm-installed program belongs to: those above where its link
+/// points, and on Windows the one beside it, as npm puts its `.cmd` shims next to the folder
+/// rather than linking into it (`%APPDATA%\npm\tsc.cmd` and `%APPDATA%\npm\node_modules`).
+fn node_modules_of(program: &Path) -> Vec<PathBuf> {
+    let Ok(real) = std::fs::canonicalize(program) else { return Vec::new() };
+    let mut dirs: Vec<PathBuf> =
+        real.ancestors().filter(|dir| dir.file_name().is_some_and(|n| n == "node_modules")).map(Path::to_path_buf).collect();
+    if cfg!(windows) {
+        dirs.extend(real.parent().map(|dir| dir.join("node_modules")));
+    }
+    dirs
 }
 
 /// Whether the project's own TypeScript (`node_modules/typescript`) may run: one the user's
@@ -2043,10 +2083,13 @@ fn uri_path(uri: &str) -> Option<PathBuf> {
 }
 
 /// The key of a file's problems: its path, without case where the file system ignores it (a
-/// server may send `/users/…` for `/Users/…`).
+/// server may send `/users/…` for `/Users/…`), and on Windows with one kind of separator (a path
+/// joined with `/` names the same file the server names with `\`).
 fn diagnostics_key(path: &Path) -> String {
     let text = path.to_string_lossy();
-    if cfg!(any(target_os = "macos", windows)) {
+    if cfg!(windows) {
+        text.replace('/', "\\").to_lowercase()
+    } else if cfg!(target_os = "macos") {
         text.to_lowercase()
     } else {
         text.into_owned()
@@ -2269,6 +2312,30 @@ mod tests {
         std::fs::write(package.join("package.json"), r#"{ "version": "5.9.3" }"#).unwrap();
         assert!(typescript().is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// npm on Windows: `.cmd` shims beside the global `node_modules`, and in a project's
+    /// `node_modules\.bin`, none of them links into the package.
+    #[cfg(windows)]
+    #[test]
+    fn typescript_is_found_from_npm_shims() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let npm = std::env::temp_dir().join(format!("agentty-lsp-npm-{}-{nanos}", std::process::id()));
+        let package = npm.join("node_modules").join("typescript");
+        std::fs::create_dir_all(package.join("lib")).unwrap();
+        std::fs::write(package.join("lib").join("tsserver.js"), "").unwrap();
+        std::fs::write(package.join("package.json"), r#"{ "version": "7.0.2" }"#).unwrap();
+        std::fs::write(npm.join("typescript-language-server.cmd"), "").unwrap();
+        std::fs::write(npm.join("tsc.cmd"), "").unwrap();
+        let found = typescript_beside(&npm.join("typescript-language-server.cmd")).unwrap();
+        assert!(found.ends_with(r"node_modules\typescript\lib\tsserver.js"), "{}", found.display());
+        assert_eq!(typescript_major(&npm.join("tsc.cmd")), Some(7));
+        // A project's own: `node_modules\.bin\tsc.cmd`.
+        let bin = npm.join("node_modules").join(".bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("tsc.cmd"), "").unwrap();
+        assert_eq!(typescript_major(&bin.join("tsc.cmd")), Some(7));
+        let _ = std::fs::remove_dir_all(&npm);
     }
 
     #[test]
@@ -2508,9 +2575,11 @@ mod tests {
         for spec in SPECS {
             assert!(site(spec).starts_with("https://"), "{}", spec.name);
             assert!(!shown_languages(spec).is_empty(), "{}", spec.name);
-            // Nothing on PATH: no command, but the tool it needs is named.
+            // Nothing on PATH: no command, but the tool it needs is named (on Windows, Java's and
+            // Kotlin's come from their page alone: no Homebrew there).
             let (command, needs) = install_command(spec, empty);
-            assert!(command.is_none() && needs.is_some(), "{}", spec.name);
+            let page_only = cfg!(windows) && matches!(spec.name, "jdtls" | "kotlin-lsp");
+            assert!(command.is_none() && needs.is_some() != page_only, "{}", spec.name);
             assert!(!installed(spec, empty), "{}", spec.name);
         }
     }
