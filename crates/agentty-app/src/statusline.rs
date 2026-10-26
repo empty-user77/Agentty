@@ -59,7 +59,11 @@ pub fn run() -> i32 {
     // The user's command is POSIX shell syntax (Claude Code runs it with Git Bash on Windows).
     let shell = if cfg!(windows) { agentty_bridge::process::which("sh").or_else(|| agentty_bridge::process::which("bash")) } else { None };
     let shell = shell.map_or_else(|| "sh".into(), |p| p.into_os_string());
-    let Ok(mut child) = Command::new(shell).args(["-c", &command]).stdin(Stdio::piped()).spawn() else { return 0 };
+    // Without a console of its own: Agentty is a GUI program, so Windows would give the shell a
+    // new console, which Windows Terminal (as the default terminal) shows on every refresh.
+    let mut child = Command::new(shell);
+    child.args(["-c", &command]).stdin(Stdio::piped());
+    let Ok(mut child) = agentty_bridge::process::hide_window(&mut child).spawn() else { return 0 };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(&input);
     }
