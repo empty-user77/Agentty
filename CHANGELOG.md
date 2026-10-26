@@ -5,31 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
 ### Added
-- File editor: CSV and TSV files open as a table — edit cells in place, select and paste ranges as spreadsheets copy
-  them, filter rows (**⌘F**), sort and resize columns, insert and delete rows and columns. The delimiter is detected
-  and can be changed, and the toolbar switches back to the text. Saving rewrites only the cells you changed.
-- File editor: Excel workbooks (`.xlsx`, `.xlsm`) open as tables with their sheets, and cell edits, pasting and new
-  rows are saved into the workbook, keeping its formatting; `.xls`, `.xlsb` and `.ods` are shown read-only.
-- File editor: Word documents (`.docx`) show as a page with headings, lists and tables. Click a paragraph to edit it;
-  only the paragraphs you change are rewritten.
-- Agentty can open CSV, TSV, Excel and Word files from Finder, and offers once to become their default app
-  (also in **Settings → System**).
-- German: the app speaks Deutsch (**Settings → Language**, and it is picked by itself on a German system), and so do
-  the remote page and the bundled plugins (Launch, Cosmica, UI Gallery). The documentation stays in English for now.
-- File editor: **⇧⌘F** finds text in every file of the project (`%` in the ⌘P box), starting from the selection or
-  the name at the cursor, with each place shown beside the list. Case counts once a capital is typed, and files with
-  unsaved changes are searched as they are on screen.
-- File editor: Kotlin uses JetBrains' own language server, `kotlin-lsp` (`brew install JetBrains/utils/kotlin-lsp`),
-  which reads current Kotlin. In a Gradle or Maven project it starts once you click **Read the build** in the status
-  bar, as Java's does, since reading the project runs its build.
-- File editor: the Markdown preview can show beside the text (**⌥⌘V**, or the button next to **Preview**), following
-  the text as you scroll and type.
-- File editor: **⇧⌥⌘[** folds every region of the file, nested ones too, and **⇧⌥⌘]** unfolds them all.
-- File editor: a name the language server does not know (`undefined: Totl`) offers **Change to 'Total'** for the
-  names of the file and the project spelled closest to it, made at once without AI, next to the server's own fixes.
-- File editor: JSON files get VS Code's JSON server from `vscode-langservers-extracted` (syntax errors, formatting);
-  `tsconfig.json`, `.vscode/*.json` and the other files VS Code reads as JSON with comments may have comments.
 - File editor: code navigation for Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included), Rust
   and Go. **⌘P** goes to a file (`@` symbols of the file, `#` symbols of the project, `:` a line), **F12** or
   ⌘-click to a definition (an import's path opens that file), **⇧F12** lists the usages, **⌃-** / **⌃⇧-** go back
@@ -41,37 +19,89 @@ All notable changes to this project are documented here. The format follows
   works from the folder of the file's project (`backend/Cargo.toml` in a larger repository). A missing server can be installed
   from the editor's status bar or **Settings → Project → Language servers** (its official install command runs
   in a new terminal tab).
-- File editor: problems from the language server as you type — red wavy lines under errors, yellow under warnings,
-  the message when the pointer rests on one, colored line numbers and scrollbar ticks, the counts in the status bar,
-  and **F8** / **⇧F8** to step through them.
-- File editor: quick fixes from the language server (**Add import …** and the like). A light bulb in the gutter
-  shows when the cursor's line has one, the problem's message lists them, and **⌘.** lists every fix and refactoring
-  at the cursor. A fix is one undo step.
-- File editor: **F2** renames a name everywhere it is used, through the language server (in this file only
-  without one). Resting the pointer on a name shows its type or signature, and the status bar's error count lists
-  every problem in the open files.
-- File editor: completions as you type (and with **⌃Space**): the language server's, with the import a name from
-  another file needs, or the words of the file without one. While a call is typed, its signature shows above the
-  line with the parameter being typed highlighted.
-- File editor: brackets and quotes typed in pairs (typed over at the end, removed together when empty), the matching
-  bracket boxed, **⌘/** to comment lines out and back in, **⌥↑** / **⌥↓** to move lines, **⇧⌥↑** / **⇧⌥↓** to duplicate
-  them and **⇧⌘K** to delete them.
-- File editor: replace in the find bar (**⌥⌘F**): one at a time or all as one undo step, with match case (**Aa**)
-  and whole word (**ab**).
-- File editor: **Fix with AI** under a problem's message and in the **⌘.** list sends the problem, where it is and
-  what the language server said, to the connected session; the sparkle beside the status bar's error count sends
-  every error of the open files at once.
-- File editor: errors and warnings write their message at the end of their line (Settings → Project → File editor),
-  and a file's tab takes the color of its worst one.
-- File editor: **⇧⌥F** formats with the language server when the formatter is not installed.
+- File editor: **⇧⌘F** finds text in every file of the project (`%` in the ⌘P box), starting from the selection or
+  the name at the cursor, with each place shown beside the list. Case counts once a capital is typed, and files with
+  unsaved changes are searched as they are on screen.
 - File editor: **⌘F12** goes to the implementations of an interface or method (with a language server).
-- ⌘-click on `file:line:column` in a terminal (compiler or agent output) opens the file at that place.
-- File editor: lines changed since the last commit are marked in the gutter (added, changed, taken away); a click
-  shows the lines as committed, with **Revert**.
+- File editor: a breadcrumb shows where the cursor is (`ApiClient › save`), lists of definitions and usages show the
+  code around the selected place, the name under the cursor is marked wherever it appears, and ⌘P lists recent
+  files first.
 - File editor: sticky scroll — deep in a long class or function, its first line stays pinned at the top.
+- File editor: CSS, SCSS, Less and HTML get VS Code's own language servers when `vscode-langservers-extracted` is
+  installed (the status bar and Settings → Project → Language servers offer it): properties, values, tags and
+  attributes as you type, unknown properties and other problems underlined, formatting. Choosing a CSS property
+  opens the list of its values.
+- File editor: JSON files get VS Code's JSON server from `vscode-langservers-extracted` (syntax errors, formatting);
+  `tsconfig.json`, `.vscode/*.json` and the other files VS Code reads as JSON with comments may have comments.
+- File editor: Kotlin uses JetBrains' own language server, `kotlin-lsp` (`brew install JetBrains/utils/kotlin-lsp`),
+  which reads current Kotlin. In a Gradle or Maven project it starts once you click **Read the build** in the status
+  bar, as Java's does, since reading the project runs its build.
+- File editor: jdtls reads a Maven project's build only after **Read the build** in the status bar is clicked for
+  that project, since reading it runs the plugins and extensions its `pom.xml` names; until then it reads the files'
+  own text and shows syntax errors. Settings → Project → Language servers forgets the projects allowed.
+- File editor: when the project's build file has an error (a `pom.xml` naming a version that does not exist), a row
+  above the code says so with the server's message and a button to its line; saving the fixed `pom.xml` makes jdtls
+  read the project again.
 - File editor: **⇧⌥O** organizes imports through the language server; Settings → Project → File editor turns
   completions while typing and the type under the pointer off, and Settings → Project → Language servers turns each
   installed server off or on.
+- File editor: completions as you type (and with **⌃Space**): the language server's, with the import a name from
+  another file needs, or the words of the file without one. While a call is typed, its signature shows above the
+  line with the parameter being typed highlighted.
+- File editor: without a language server, completion also offers the names the project defines (classes,
+  functions, fields of other files), not only the words of the open file.
+- File editor: completions that fill in a template, as in VS Code: a JSX prop goes in as `onSearch={}` with the
+  cursor inside, a Java or Rust call as `reserve(id, quantity)` with its first argument selected, and `foreach` as a
+  whole loop; ⇥ goes on to the next placeholder and then past the end, Esc (twice with a list open) stops. A new,
+  empty file takes its indentation from `.editorconfig` or from the files of its kind beside it.
+- File editor: typing the `>` of an opening tag in HTML, JSX or TSX puts its closing tag after the cursor, and Enter
+  between the two tags opens an indented line; a method chosen from the completion list in Java, Kotlin, Rust or Go
+  comes with its parentheses, the cursor between them when it takes arguments.
+- File editor: Emmet in HTML and in the markup of `.tsx` / `.jsx` files, as VS Code has it built in: an abbreviation
+  such as `section.cart>h2+ul>li.item*2` is the first completion and expands to its tags (`className`, `htmlFor` and
+  `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.
+- File editor: brackets and quotes typed in pairs (typed over at the end, removed together when empty), the matching
+  bracket boxed, **⌘/** to comment lines out and back in, **⌥↑** / **⌥↓** to move lines, **⇧⌥↑** / **⇧⌥↓** to duplicate
+  them and **⇧⌘K** to delete them.
+- File editor: several cursors as in VS Code — **⌘D** adds one at the next match of the selection, **⇧⌘L** at every
+  match, **⌥-click** where you click; typing (input methods included), deleting, Enter, Tab and pasting happen at
+  each, and **Esc** goes back to one.
+- File editor: ⌥⌘↑ / ⌥⌘↓ add a cursor on the line above or below, ⇧⌘\ goes to the matching bracket, and "Format the
+  file when saving" (Settings → Editor, off by default) formats before ⌘S saves. Formatting keeps the cursor by the
+  character it was next to.
+- File editor: **⌘L** selects the line, **⌘↩** / **⇧⌘↩** start a new line below / above, **⌘]** / **⌘[** indent and
+  outdent lines, **⌘⌫** deletes to the line's start, **⌥⌦** deletes the next word, and a closing bracket typed on an
+  indented line lines up with its opening line. While the editor has focus, ⌘D, ⌘] / ⌘[ and ⇧⌘↩ work on the text
+  instead of splitting, switching or zooming panes.
+- File editor: code folding. An arrow beside the line number (shown while the pointer is over the gutter, always on a
+  folded line) or ⌥⌘[ / ⌥⌘] folds and unfolds a block by its indentation, in every language; a folded line ends with
+  `⋯`, which unfolds it on a click, ↑ / ↓ step over the hidden lines, and a jump or a find into them opens them.
+- File editor: **⇧⌥⌘[** folds every region of the file, nested ones too, and **⇧⌥⌘]** unfolds them all.
+- File editor: replace in the find bar (**⌥⌘F**): one at a time or all as one undo step, with match case (**Aa**)
+  and whole word (**ab**).
+- File editor: find and replace takes regular expressions (**.\***, ⌥⌘R), with `$1` in the replacement for their
+  groups, and ⌘F with nothing selected starts from the name at the cursor, as in VS Code.
+- File editor: **⇧⌥F** formats with the language server when the formatter is not installed.
+- File editor: the Markdown preview can show beside the text (**⌥⌘V**, or the button next to **Preview**), following
+  the text as you scroll and type.
+- File editor: problems from the language server as you type — red wavy lines under errors, yellow under warnings,
+  the message when the pointer rests on one, colored line numbers and scrollbar ticks, the counts in the status bar,
+  and **F8** / **⇧F8** to step through them.
+- File editor: errors and warnings write their message at the end of their line (Settings → Project → File editor),
+  and a file's tab takes the color of its worst one.
+- File editor: quick fixes from the language server (**Add import …** and the like). A light bulb in the gutter
+  shows when the cursor's line has one, the problem's message lists them, and **⌘.** lists every fix and refactoring
+  at the cursor. A fix is one undo step.
+- File editor: a name the language server does not know (`undefined: Totl`) offers **Change to 'Total'** for the
+  names of the file and the project spelled closest to it, made at once without AI, next to the server's own fixes.
+- File editor: **F2** renames a name everywhere it is used, through the language server (in this file only
+  without one). Resting the pointer on a name shows its type or signature, and the status bar's error count lists
+  every problem in the open files.
+- File editor: lines changed since the last commit are marked in the gutter (added, changed, taken away); a click
+  shows the lines as committed, with **Revert**.
+- File editor: a right click on a file's tab offers closing it or the other files, copying its path, showing it in the
+  file manager and opening it in another editor; that last one left the header, where it took room on every file.
+  Closing the file in front goes back to the one shown before it, as in VS Code.
 - File editor: **Connect session** shows an agent's terminal beside the code. Select code for **Ask AI** (or **⌘K**)
   to send an instruction about those lines to it, plus Copy, Definition and Usages.
 - File editor: agents are seen at work. Changed lines light up with the agent's name (`Claude-3f9a`) at its caret;
@@ -80,53 +110,24 @@ All notable changes to this project are documented here. The format follows
 - File editor: agents' changes stay marked in the gutter and on the file's tab until reviewed; a bar steps through
   them with **Undo** (back to the text before the agent, saved) and **Keep**. An agent's write to a file with unsaved
   edits on other lines is merged instead of asking, and the cursor stays on its code when lines are added above.
-- File editor: a breadcrumb shows where the cursor is (`ApiClient › save`), lists of definitions and usages show the
-  code around the selected place, the name under the cursor is marked wherever it appears, and ⌘P lists recent
-  files first.
 - File editor: **Compare** shows an agent's change as it was and as it is, **⌥F5** / **⇧⌥F5** step through changes,
   holding **⌘** over a name shows its definition, the session chip says when the agent waits for you, and
   **N changes** lists every change to review across open files.
-- File editor: several cursors as in VS Code — **⌘D** adds one at the next match of the selection, **⇧⌘L** at every
-  match, **⌥-click** where you click; typing (input methods included), deleting, Enter, Tab and pasting happen at
-  each, and **Esc** goes back to one.
-- File editor: **⌘L** selects the line, **⌘↩** / **⇧⌘↩** start a new line below / above, **⌘]** / **⌘[** indent and
-  outdent lines, **⌘⌫** deletes to the line's start, **⌥⌦** deletes the next word, and a closing bracket typed on an
-  indented line lines up with its opening line. While the editor has focus, ⌘D, ⌘] / ⌘[ and ⇧⌘↩ work on the text
-  instead of splitting, switching or zooming panes.
-
-- File editor: typing the `>` of an opening tag in HTML, JSX or TSX puts its closing tag after the cursor, and Enter
-  between the two tags opens an indented line; a method chosen from the completion list in Java, Kotlin, Rust or Go
-  comes with its parentheses, the cursor between them when it takes arguments.
-- File editor: without a language server, completion also offers the names the project defines (classes,
-  functions, fields of other files), not only the words of the open file.
-- File editor: when the project's build file has an error (a `pom.xml` naming a version that does not exist), a row
-  above the code says so with the server's message and a button to its line; saving the fixed `pom.xml` makes jdtls
-  read the project again.
-- File editor: ⌥⌘↑ / ⌥⌘↓ add a cursor on the line above or below, ⇧⌘\ goes to the matching bracket, and "Format the
-  file when saving" (Settings → Editor, off by default) formats before ⌘S saves. Formatting keeps the cursor by the
-  character it was next to.
-- File editor: code folding. An arrow beside the line number (shown while the pointer is over the gutter, always on a
-  folded line) or ⌥⌘[ / ⌥⌘] folds and unfolds a block by its indentation, in every language; a folded line ends with
-  `⋯`, which unfolds it on a click, ↑ / ↓ step over the hidden lines, and a jump or a find into them opens them.
-- File editor: completions that fill in a template, as in VS Code: a JSX prop goes in as `onSearch={}` with the
-  cursor inside, a Java or Rust call as `reserve(id, quantity)` with its first argument selected, and `foreach` as a
-  whole loop; ⇥ goes on to the next placeholder and then past the end, Esc (twice with a list open) stops. A new,
-  empty file takes its indentation from `.editorconfig` or from the files of its kind beside it.
-- File editor: CSS, SCSS, Less and HTML get VS Code's own language servers when `vscode-langservers-extracted` is
-  installed (the status bar and Settings → Project → Language servers offer it): properties, values, tags and
-  attributes as you type, unknown properties and other problems underlined, formatting. Choosing a CSS property
-  opens the list of its values.
-- File editor: a right click on a file's tab offers closing it or the other files, copying its path, showing it in the
-  file manager and opening it in another editor; that last one left the header, where it took room on every file.
-  Closing the file in front goes back to the one shown before it, as in VS Code.
-- File editor: find and replace takes regular expressions (**.\***, ⌥⌘R), with `$1` in the replacement for their
-  groups, and ⌘F with nothing selected starts from the name at the cursor, as in VS Code.
-- File editor: jdtls reads a Maven project's build only after **Read the build** in the status bar is clicked for
-  that project, since reading it runs the plugins and extensions its `pom.xml` names; until then it reads the files'
-  own text and shows syntax errors. Settings → Project → Language servers forgets the projects allowed.
-- File editor: Emmet in HTML and in the markup of `.tsx` / `.jsx` files, as VS Code has it built in: an abbreviation
-  such as `section.cart>h2+ul>li.item*2` is the first completion and expands to its tags (`className`, `htmlFor` and
-  `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.
+- File editor: **Fix with AI** under a problem's message and in the **⌘.** list sends the problem, where it is and
+  what the language server said, to the connected session; the sparkle beside the status bar's error count sends
+  every error of the open files at once.
+- ⌘-click on `file:line:column` in a terminal (compiler or agent output) opens the file at that place.
+- File editor: CSV and TSV files open as a table — edit cells in place, select and paste ranges as spreadsheets copy
+  them, filter rows (**⌘F**), sort and resize columns, insert and delete rows and columns. The delimiter is detected
+  and can be changed, and the toolbar switches back to the text. Saving rewrites only the cells you changed.
+- File editor: Excel workbooks (`.xlsx`, `.xlsm`) open as tables with their sheets, and cell edits, pasting and new
+  rows are saved into the workbook, keeping its formatting; `.xls`, `.xlsb` and `.ods` are shown read-only.
+- File editor: Word documents (`.docx`) show as a page with headings, lists and tables. Click a paragraph to edit it;
+  only the paragraphs you change are rewritten.
+- Agentty can open CSV, TSV, Excel and Word files from Finder, and offers once to become their default app
+  (also in **Settings → System**).
+- German: the app speaks Deutsch (**Settings → Language**, and it is picked by itself on a German system), and so do
+  the remote page and the bundled plugins (Launch, Cosmica, UI Gallery). The documentation stays in English for now.
 
 ### Changed
 - Tabs look like VS Code's: the active tab is a card joined to its content, and with the tabs in the title bar
@@ -136,10 +137,14 @@ All notable changes to this project are documented here. The format follows
 - Clicking the sidebar item of the panel already shown folds the sidebar; the next click brings it back.
 
 ### Fixed
-- The tooltip on a file name in a terminal and the terminal's retry button showed their raw keys on macOS.
-- A double-clicked table cell shows its caret, and an input method's caret no longer lands inside a character.
+- Windows: characters typed with AltGr on a digit key (`@` and `#` on Swiss and German keyboards) now reach Claude Code
+  and Codex.
 - Windows: **Ctrl+V** in a terminal pastes a copied screenshot or image (saved as a PNG, its path pasted, so Claude
   Code attaches it) and copied files as their paths, as on the Mac.
+- Windows: a status line of your own in Claude Code's settings no longer flashes console windows on every refresh
+  while Claude Code runs in Agentty.
+- Windows: remote access no longer flashes console windows, file paths with `\` and drive letters are links on the
+  remote page, and options that do nothing on Windows are no longer shown.
 - Windows: a Claude Code that updated itself while running is still recognized, so the "continue a session" bar no
   longer shows over it.
 - Windows: the Markdown preview shows the document instead of an empty page.
@@ -151,13 +156,11 @@ All notable changes to this project are documented here. The format follows
 - Windows: a `C:\…` path typed in the folder picker is opened, tabs of a shell are named after their folder rather than
   `pwsh.exe`'s path, and paths read `~\…` without mixed separators.
 - Windows: worktrees inherit Claude Code's folder trust from their project, and a project's own MCP servers are listed.
-- Windows: remote access no longer flashes console windows, file paths with `\` and drive letters are links on the
-  remote page, and options that do nothing on Windows are no longer shown.
 - Windows: Codex signed in through Agentty keeps its sessions where Windows refuses to follow a folder link.
-- Windows: characters typed with AltGr on a digit key (`@` and `#` on Swiss and German keyboards) now reach Claude Code
-  and Codex.
-- Windows: a status line of your own in Claude Code's settings no longer flashes console windows on every refresh
-  while Claude Code runs in Agentty.
+- The tooltip on a file name in a terminal and the terminal's retry button showed their raw keys on macOS.
+- A double-clicked table cell shows its caret, and an input method's caret no longer lands inside a character.
+- File editor: typing no longer makes the code below flicker uncolored for a moment, and problem underlines and
+  change marks move with their lines while the server catches up.
 - File editor: VS Code's CSS fixes (**Rename to 'color'** for `colr`) now change the text; they did nothing.
 - File editor: TypeScript and JavaScript completions now offer a component's props in JSX; a server's snippet (such
   as rust-analyzer's `arc` for `s.ar`) is listed after the names that match as well; ⌘/ on markup in a `.tsx` or
@@ -166,8 +169,6 @@ All notable changes to this project are documented here. The format follows
   empty after `.` in a file without a server no longer blocks the next ones; go-to-definition without a server
   prefers the file's own language family (a Kotlin `Order` over a TypeScript one in the same repository); Java shows
   "indexing" while jdtls still imports the project; a quick fix offered twice is listed once.
-- File editor: typing no longer makes the code below flicker uncolored for a moment, and problem underlines and
-  change marks move with their lines while the server catches up.
 - File editor: a problem's or a type's message stays open while the pointer moves onto it, so its fixes can be
   clicked.
 
