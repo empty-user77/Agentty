@@ -196,7 +196,7 @@ fn startup_file(shell: &str) -> Option<PathBuf> {
 fn tilde(path: &Path) -> String {
     let home = agentty_bridge::fsutil::home();
     match path.strip_prefix(&home) {
-        Ok(rest) => format!("~/{}", rest.display()),
+        Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
         Err(_) => path.display().to_string(),
     }
 }

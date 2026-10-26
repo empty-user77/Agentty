@@ -1456,18 +1456,22 @@ impl Workbench {
             .child(step("4", t(cx, "remote.howto_password").to_string()));
 
         // ── Options ──────────────────────────────────────────────────────────────────────
+        // Keeping the Mac awake is done with `caffeinate`: elsewhere there is no such option (Settings →
+        // General's Prevent sleep covers it).
         let options = card("CFG.OPTIONS", t(cx, "remote.options"))
-            .child(row_with_hint(
-                t(cx, "remote.keep_awake"),
-                t(cx, "remote.keep_awake_hint"),
-                switch("remote-keep-awake", prefs.keep_awake, move |_, _, cx| {
-                    update_settings(cx, |s| s.remote.keep_awake = !s.remote.keep_awake);
-                    // Takes effect now: restarting re-reads it (and keeps the password, not the sessions).
-                    if settings(cx).remote.enabled {
-                        remote::start(cx);
-                    }
-                }),
-            ))
+            .when(cfg!(target_os = "macos"), |card| {
+                card.child(row_with_hint(
+                    t(cx, "remote.keep_awake"),
+                    t(cx, "remote.keep_awake_hint"),
+                    switch("remote-keep-awake", prefs.keep_awake, move |_, _, cx| {
+                        update_settings(cx, |s| s.remote.keep_awake = !s.remote.keep_awake);
+                        // Takes effect now: restarting re-reads it (and keeps the password, not the sessions).
+                        if settings(cx).remote.enabled {
+                            remote::start(cx);
+                        }
+                    }),
+                ))
+            })
             .child(row_with_hint(
                 t(cx, "remote.folder"),
                 &tf(cx, "remote.folder_hint", &[("path", &format!("~/{}", remote::folders::ROOT_NAME))]),

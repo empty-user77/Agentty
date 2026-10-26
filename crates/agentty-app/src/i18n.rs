@@ -46,6 +46,37 @@ fn platform_row(key: &str) -> Option<[&'static str; 5]> {
         "ext.conn_secret" => ["API key (stored in the system credential store)", "API 키 (시스템 자격 증명 저장소에 저장)", "API キー (システムの資格情報ストアに保存)", "API 密钥（保存在系统凭据存储中）", "API-Schlüssel (im System-Anmeldedatenspeicher gespeichert)"],
         "ext.conn_security" => ["Keys are kept in the system credential store (Windows Credential Manager / Secret Service) and never written to agent config files.", "키는 시스템 자격 증명 저장소(Windows 자격 증명 관리자 / Secret Service)에 저장되며 에이전트 설정 파일에 기록되지 않습니다.", "キーはシステムの資格情報ストア（Windows 資格情報マネージャー / Secret Service）に保存され、エージェントの設定ファイルには書き込まれません。", "密钥保存在系统凭据存储（Windows 凭据管理器 / Secret Service）中，不会写入智能体配置文件。", "Schlüssel werden im System-Anmeldedatenspeicher (Windows Credential Manager / Secret Service) aufbewahrt und nie in Konfigurationsdateien von Agenten geschrieben."],
         "settings.system_notifications" => ["Show desktop notifications when an agent finishes or needs input", "에이전트가 작업을 끝내거나 입력을 기다리면 데스크톱 알림 표시", "エージェントの完了や入力待ちをデスクトップ通知で表示", "智能体完成或等待输入时显示桌面通知", "Desktop-Mitteilungen zeigen, wenn ein Agent fertig ist oder eine Eingabe braucht"],
+        "onboarding.agents_body" => [
+            "Agentty works with the AI coding CLIs on your computer. Claude Code and Codex show their status, sessions and context; the others open in tabs of their own.",
+            "Agentty는 이 컴퓨터에 설치된 AI 코딩 CLI와 함께 일합니다. Claude Code와 Codex는 상태 · 세션 · 컨텍스트까지 보여 주고, 다른 에이전트는 각자의 탭에서 열립니다.",
+            "Agentty はこのコンピューターの AI コーディング CLI と連携します。Claude Code と Codex は状態・セッション・コンテキストまで表示し、その他のエージェントはそれぞれのタブで開きます。",
+            "Agentty 与这台电脑上的 AI 编程 CLI 协同工作。Claude Code 和 Codex 会显示状态、会话和上下文，其他智能体在各自的标签页中打开。",
+            "Agentty arbeitet mit den KI-Coding-CLIs auf deinem Computer. Claude Code und Codex zeigen Status, Sitzungen und Kontext; die anderen öffnen sich in eigenen Tabs.",
+        ],
+        "onboarding.agents_found" => ["Found on this computer  {n}", "이 컴퓨터에서 찾음  {n}", "このコンピューターで検出  {n}", "在这台电脑上找到  {n}", "Auf diesem Computer gefunden  {n}"],
+        "onboarding.appearance_body" => [
+            "How Agentty itself looks. System follows your system's setting as it switches; you can change it any time in Settings.",
+            "Agentty 화면을 어떻게 볼지 고르세요. 시스템을 고르면 운영체제 설정을 따라 바뀝니다. 언제든 설정에서 바꿀 수 있습니다.",
+            "Agentty 自体の見た目を選んでください。システムにすると OS の設定に合わせて切り替わります。設定からいつでも変更できます。",
+            "选择 Agentty 本身的外观。跟随系统会随系统设置切换；随时可以在设置中更改。",
+            "So sieht Agentty selbst aus. „System“ folgt der Einstellung deines Systems, wenn sie umschaltet; du kannst es jederzeit in den Einstellungen ändern.",
+        ],
+        "remote.sec.local" => ["Listens on this computer only", "이 컴퓨터 안에서만 대기", "このコンピューター内でのみ待ち受け", "仅在本机监听", "Lauscht nur auf diesem Computer"],
+        "remote.howto_account" => [
+            "Sign in to Tailscale there with the same account as this computer ({login}) and connect.",
+            "그 기기의 Tailscale에 이 컴퓨터와 같은 계정({login})으로 로그인하고 연결합니다.",
+            "その端末の Tailscale に、このコンピューターと同じアカウント（{login}）でサインインして接続します。",
+            "在该设备的 Tailscale 中使用与这台电脑相同的账号（{login}）登录并连接。",
+            "Melde dich dort in Tailscale mit demselben Konto wie auf diesem Computer an ({login}) und verbinde dich.",
+        ],
+        "remote.warning" => [
+            "Only a device signed in to this computer's own Tailscale account ({login}) can open the page, and it still needs the web password; any other Tailscale account is refused, even inside your tailnet. Whoever gets past both can type into these terminals, which means running commands on this computer: keep the web password to yourself and turn remote access off when you don't need it.",
+            "이 컴퓨터의 Tailscale 계정({login})으로 로그인한 기기만 페이지를 열 수 있으며 웹 비밀번호도 맞혀야 합니다. 다른 Tailscale 계정은 같은 tailnet 안에 있어도 거부됩니다. 둘 다 통과한 사람은 이 터미널에 입력할 수 있고, 곧 이 컴퓨터에서 명령을 실행할 수 있다는 뜻입니다. 웹 비밀번호는 혼자만 알고 필요 없을 때는 원격 접속을 꺼 두세요.",
+            "このコンピューターにサインインしている本人の Tailscale アカウント（{login}）でつながった端末だけがページを開け、さらに Web パスワードが必要です。ほかの Tailscale アカウントは同じ tailnet 内でも拒否されます。両方を通った人はターミナルに入力でき、このコンピューターでコマンドを実行できるので、Web パスワードは誰とも共有せず、不要なときはオフにしてください。",
+            "只有登录了这台电脑本人 Tailscale 账号（{login}）的设备才能打开页面，而且还要输入网页密码；其他 Tailscale 账号即使在同一个 tailnet 中也会被拒绝。同时通过这两道验证的人可以在终端中输入，也就是能在这台电脑上执行命令，所以请不要与他人共享网页密码，不需要时请关闭。",
+            "Nur ein Gerät, das im eigenen Tailscale-Konto dieses Computers ({login}) angemeldet ist, kann die Seite öffnen, und es braucht trotzdem das Web-Passwort; jedes andere Tailscale-Konto wird abgelehnt, auch innerhalb deines Tailnets. Wer beides überwindet, kann in diese Terminals tippen und damit Befehle auf diesem Computer ausführen: Behalte das Web-Passwort für dich und schalte den Fernzugriff aus, wenn du ihn nicht brauchst.",
+        ],
+        "plugins.requires_found" => ["{name} app found on this computer", "{name} 앱이 이 컴퓨터에 있음", "{name} アプリを検出", "已在本机找到 {name} 应用", "App „{name}“ auf diesem Computer gefunden"],
         _ => return None,
     })
 }

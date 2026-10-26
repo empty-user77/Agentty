@@ -1750,11 +1750,20 @@ impl Workbench {
                             t(cx, "settings.confirm_close"),
                             toggle("confirm-close", prefs.confirm_close, |s| s.confirm_close = !s.confirm_close, cx),
                         ))
-                        .child(row_with_hint(
-                            t(cx, "settings.stop_servers"),
-                            t(cx, "settings.stop_servers_hint"),
-                            toggle("stop-servers", prefs.stop_servers_on_close, |s| s.stop_servers_on_close = !s.stop_servers_on_close, cx),
-                        )),
+                        // On Windows a pane's console closes with it, and what runs there with it:
+                        // nothing to choose.
+                        .when(!cfg!(windows), |group| {
+                            group.child(row_with_hint(
+                                t(cx, "settings.stop_servers"),
+                                t(cx, "settings.stop_servers_hint"),
+                                toggle(
+                                    "stop-servers",
+                                    prefs.stop_servers_on_close,
+                                    |s| s.stop_servers_on_close = !s.stop_servers_on_close,
+                                    cx,
+                                ),
+                            ))
+                        }),
                 )
                 .child(
                     section(t(cx, "settings.group.system"))

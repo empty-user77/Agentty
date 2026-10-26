@@ -120,6 +120,22 @@ All notable changes to this project are documented here. The format follows
   `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.
 
 ### Fixed
+- Windows: **Ctrl+V** in a terminal pastes a copied screenshot or image (saved as a PNG, its path pasted, so Claude
+  Code attaches it) and copied files as their paths, as on the Mac.
+- Windows: a Claude Code that updated itself while running is still recognized, so the "continue a session" bar no
+  longer shows over it.
+- Windows: the Markdown preview shows the document instead of an empty page.
+- Windows: TypeScript's language server is found where npm installs it, and **Install** in Settings and the editor
+  works without PowerShell 7 (as do run configurations that start with `npm`, `npx`, `pnpm` or `yarn`).
+- Windows: **Ctrl+F** finds in the file in the editor; **F3** / **⇧F3** go to the next and previous match.
+- Windows: problems reported by a language server always show, and a worktree whose language server is running can be
+  deleted.
+- Windows: a `C:\…` path typed in the folder picker is opened, tabs of a shell are named after their folder rather than
+  `pwsh.exe`'s path, and paths read `~\…` without mixed separators.
+- Windows: worktrees inherit Claude Code's folder trust from their project, and a project's own MCP servers are listed.
+- Windows: remote access no longer flashes console windows, file paths with `\` and drive letters are links on the
+  remote page, and options that do nothing on Windows are no longer shown.
+- Windows: Codex signed in through Agentty keeps its sessions where Windows refuses to follow a folder link.
 - Windows: characters typed with AltGr on a digit key (`@` and `#` on Swiss and German keyboards) now reach Claude Code
   and Codex.
 - Windows: a status line of your own in Claude Code's settings no longer flashes console windows on every refresh

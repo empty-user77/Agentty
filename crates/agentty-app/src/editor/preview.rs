@@ -28,7 +28,9 @@ const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The page: styles and scripts inline, each script allowed by its hash and nothing else.
 pub fn page_html() -> String {
-    let scripts = [MARKDOWN_IT, HIGHLIGHT_JS, PURIFY, PREVIEW_JS];
+    // The HTML parser turns `\r\n` into `\n` before a script's hash is checked: hashed and inlined
+    // with `\n` only, or a Windows checkout's line endings would block every script.
+    let scripts = [MARKDOWN_IT, HIGHLIGHT_JS, PURIFY, PREVIEW_JS].map(|script| script.replace("\r\n", "\n"));
     let hashes: Vec<String> = scripts.iter().map(|script| format!("'sha256-{}'", base64_of(&Sha256::digest(script.as_bytes())))).collect();
     let csp = format!(
         "default-src 'none'; script-src {}; style-src 'unsafe-inline'; img-src https: data:; media-src https:; font-src data:",
@@ -42,7 +44,7 @@ pub fn page_html() -> String {
         html.push_str(style);
         html.push_str("\n</style>\n");
     }
-    for script in scripts {
+    for script in &scripts {
         html.push_str("<script>");
         html.push_str(script);
         html.push_str("</script>\n");
@@ -199,6 +201,11 @@ mod tests {
         assert!(!csp.contains("script-src 'unsafe"));
         assert_eq!(csp.matches("'sha256-").count(), 4);
         assert!(!csp.contains("file:"));
+        // Hashed as the page parses them: with `\n` line endings, whatever the checkout has.
+        for script in html.split("<script>").skip(1).filter_map(|s| s.split("</script>").next()) {
+            assert!(!script.contains('\r'));
+            assert!(csp.contains(&format!("'sha256-{}'", base64_of(&Sha256::digest(script.as_bytes())))));
+        }
     }
 
     #[test]

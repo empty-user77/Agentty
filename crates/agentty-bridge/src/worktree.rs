@@ -392,6 +392,7 @@ pub fn remove_linked(repo: &Path, tree: &Path, delete_branch: bool, delete_remot
     let branch = entry.branch.clone();
     // Asked while the tree is still there: the remote it tracks is unreachable once it is gone.
     let remote = branch.as_deref().filter(|_| delete_branch && delete_remote).and_then(|b| remote_branch(&main, b));
+    crate::lsp::stop_under(&entry.path);
     git(&main, &["worktree", "remove", &tree.to_string_lossy()])?;
     let Some(branch) = branch.filter(|b| delete_branch || b.starts_with(BRANCH_PREFIX)) else { return Ok(Removal::default()) };
     // `-D` once the check passed: `-d` knows only `HEAD` and the branch's upstream, not `origin/HEAD`.

@@ -46,14 +46,19 @@ fn expand(input: &str) -> Option<PathBuf> {
         return None;
     }
     Some(match input.strip_prefix('~') {
-        Some(rest) => home_dir().join(rest.trim_start_matches('/')),
+        Some(rest) => home_dir().join(rest.trim_start_matches(['/', '\\'])),
         None => PathBuf::from(input),
     })
 }
 
+/// A typed path rather than a filter: `/…`, `~…`, and on Windows `C:\…`, `C:/…` and `\\server\…`.
 fn looks_like_path(input: &str) -> bool {
     let input = input.trim();
-    input.starts_with('/') || input.starts_with('~')
+    let drive = |s: &str| {
+        let mut chars = s.chars();
+        matches!((chars.next(), chars.next(), chars.next()), (Some(letter), Some(':'), None | Some('\\' | '/')) if letter.is_ascii_alphabetic())
+    };
+    input.starts_with('/') || input.starts_with('~') || (cfg!(windows) && (drive(input) || input.starts_with(r"\\")))
 }
 
 /// Visible subfolders, sorted case-insensitively (hidden folders excluded).
@@ -591,6 +596,18 @@ mod tests {
         assert_eq!(expand("~/code"), Some(home_dir().join("code")));
         assert_eq!(expand("/tmp"), Some(PathBuf::from("/tmp")));
         assert_eq!(expand("  "), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_are_typed_paths() {
+        for path in [r"C:\Users\me\proj", "c:/work", "D:", r"\\server\share"] {
+            assert!(looks_like_path(path), "{path}");
+        }
+        for filter in ["proj", "C", "Code:x"] {
+            assert!(!looks_like_path(filter), "{filter}");
+        }
+        assert_eq!(expand(r"~\code"), Some(home_dir().join("code")));
     }
 
     #[test]
