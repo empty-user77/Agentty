@@ -17,6 +17,24 @@ impl Workbench {
         self.open_in_editor_at(path, project, None, window, cx);
     }
 
+    /// A file the system asked Agentty to open (Finder, Agentty as its default app): shown in the
+    /// editor, in the files panel's folder when it is in it, else in its own folder.
+    pub fn open_file_from_system(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let project = self.project_of_file(path);
+        self.open_in_editor(path, &project, window, cx);
+        window.activate_window();
+    }
+
+    /// The folder a file opened from outside belongs to: the files panel's, when it holds it.
+    fn project_of_file(&self, path: &Path) -> std::path::PathBuf {
+        self.files_panel
+            .as_ref()
+            .map(|p| p.root().to_path_buf())
+            .filter(|root| path.starts_with(root))
+            .or_else(|| path.parent().map(Path::to_path_buf))
+            .unwrap_or_default()
+    }
+
     /// [`Self::open_in_editor`] with the cursor at `line:column` (from 1).
     fn open_in_editor_at(
         &mut self,
@@ -281,7 +299,7 @@ impl Workbench {
     }
 
     /// Tabs of the open files, after the terminal tabs.
-    pub(super) fn render_file_tabs(&self, cx: &mut Context<Self>) -> Vec<Stateful<gpui::Div>> {
+    pub(super) fn render_file_tabs(&self, run: &mut super::chrome::TabRun, cx: &mut Context<Self>) -> Vec<Stateful<gpui::Div>> {
         let Some(editor) = self.editor.as_ref() else { return Vec::new() };
         let shown = self.editor_visible(cx);
         let tabs = editor.read(cx).tabs();
@@ -290,22 +308,15 @@ impl Workbench {
             .map(|(index, tab)| {
                 let active = shown && tab.active;
                 let tooltip = crate::ui::tilde(&tab.path);
-                div()
-                    .id(("file-tab", index))
+                self.tab_card(div().id(("file-tab", index)), SharedString::from(format!("file-tab-{index}")), active, run, cx)
                     .group("file-tab")
-                    .h_full()
                     .flex()
                     .items_center()
                     .gap_1p5()
                     .pl_3()
                     .pr_1()
                     .max_w(px(220.))
-                    .flex_shrink_0()
                     .cursor_pointer()
-                    .border_r_1()
-                    .border_color(hex(Chrome::BORDER))
-                    .bg(if active { hex(Chrome::EDITOR) } else { hex(Chrome::TAB_INACTIVE) })
-                    .when(active, |d| d.border_t_1().border_color(hex(Chrome::ACCENT)))
                     .t_body()
                     // A file with errors (warnings) has its name in their color, as in VS Code.
                     .text_color(match tab.problem {
@@ -338,7 +349,7 @@ impl Workbench {
                             .items_center()
                             .justify_center()
                             .rounded_sm()
-                            .hover(|s| s.bg(hex_alpha(0xffffff, 0.1)))
+                            .hover(|s| s.bg(hex_alpha(Chrome::BRIGHT, 0.1)))
                             .tooltip(crate::ui::Tooltip::text(
                                 crate::editor::with_shortcut(t(cx, "editor.close_file").to_string(), "⌘W"),
                                 None,
@@ -376,13 +387,7 @@ impl Workbench {
     pub(super) fn debug_editor(&mut self, command: &str, argument: &str, window: &mut Window, cx: &mut Context<Self>) {
         if command == "edit" {
             let path = PathBuf::from(argument);
-            let project = self
-                .files_panel
-                .as_ref()
-                .map(|p| p.root().to_path_buf())
-                .filter(|root| path.starts_with(root))
-                .or_else(|| path.parent().map(Path::to_path_buf))
-                .unwrap_or_default();
+            let project = self.project_of_file(&path);
             return self.open_in_editor(&path, &project, window, cx);
         }
         // As a terminal ⌘-click on `path:line:column` would (the text must name an existing file).

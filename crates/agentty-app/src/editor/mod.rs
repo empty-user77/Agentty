@@ -7,6 +7,9 @@
 pub mod agent;
 pub mod buffer;
 mod complete;
+mod default_offer;
+mod doc_view;
+mod docx;
 mod element;
 mod emmet;
 pub mod external;
@@ -21,6 +24,7 @@ mod indent;
 pub mod language;
 mod lsp;
 pub mod navigate;
+mod ooxml;
 mod preview;
 mod problems;
 pub mod project_index;
@@ -31,6 +35,9 @@ mod signature;
 mod spell;
 mod sticky;
 pub mod symbols;
+pub mod table;
+mod table_view;
+mod xlsx;
 
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -200,6 +207,7 @@ pub fn bind_keys(cx: &mut App) {
     quickfix::bind_keys(cx);
     rename::bind_keys(cx);
     complete::bind_keys(cx);
+    table_view::bind_keys(cx);
     // Moving by word and to the ends of lines and of the file: macOS and PC conventions differ.
     if cfg!(target_os = "macos") {
         cx.bind_keys([
@@ -307,6 +315,10 @@ enum Content {
     Text,
     /// A picture, shown fitted to the editor (never larger than it is).
     Image(std::sync::Arc<gpui::Image>),
+    /// A spreadsheet's sheets, shown in the grid.
+    Sheets(xlsx::Workbook),
+    /// A Word document, shown as a page.
+    Docx(doc_view::DocFile),
     Binary,
     TooLarge(u64),
     Failed(String),
@@ -358,6 +370,10 @@ pub(crate) struct Document {
     git: gitmarks::GitMarks,
     /// Regions folded away.
     folds: fold::Folds,
+    /// A CSV file or a spreadsheet shown as rows and columns.
+    grid: table_view::Grid,
+    /// Whether to offer making Agentty the app for this file's type (`None`: not asked yet).
+    default_offer: Option<bool>,
 }
 
 impl Document {
@@ -387,12 +403,20 @@ impl Document {
     }
 
     fn editable(&self) -> bool {
-        matches!(self.content, Content::Text)
-            && (self.read_only.is_none() || (self.allow_outside && self.read_only == Some(ReadOnly::OutsideProject)))
+        match &self.content {
+            Content::Text => self.read_only.is_none() || (self.allow_outside && self.read_only == Some(ReadOnly::OutsideProject)),
+            Content::Sheets(workbook) => workbook.writable,
+            Content::Docx(file) => file.writable,
+            _ => false,
+        }
     }
 
     fn is_dirty(&self) -> bool {
-        self.buffer.is_dirty()
+        match &self.content {
+            Content::Sheets(workbook) => workbook.is_dirty(),
+            Content::Docx(file) => file.doc.is_dirty(),
+            _ => self.buffer.is_dirty(),
+        }
     }
 
     /// Markdown text, which the preview can show rendered (on platforms with a web view).
@@ -403,6 +427,11 @@ impl Document {
     /// The text is out of sight: the page shows instead.
     fn previewing(&self) -> bool {
         self.preview && self.can_preview()
+    }
+
+    /// Something else shows in the text's place (the rendered page, the grid).
+    fn text_hidden(&self) -> bool {
+        self.previewing() || self.showing_grid()
     }
 
     /// The page shows beside the text.
@@ -453,6 +482,16 @@ impl Document {
                 self.read_only = file.read_only;
             }
             Opened::Image(image) => self.content = Content::Image(image),
+            Opened::Docx(file) => {
+                self.content = Content::Docx(doc_view::DocFile::new(file.doc, file.writable));
+                self.stamp = file.stamp;
+                self.target = file.target;
+            }
+            Opened::Sheets(file) => {
+                self.content = Content::Sheets(xlsx::Workbook::new(file.sheets, file.writable));
+                self.stamp = file.stamp;
+                self.target = file.target;
+            }
             Opened::Binary => self.content = Content::Binary,
             Opened::TooLarge(size) => self.content = Content::TooLarge(size),
             Opened::Failed(error) => self.content = Content::Failed(error),
@@ -500,6 +539,22 @@ pub struct CodeEditor {
     preview_next: Option<PathBuf>,
     /// Where the preview's page answers arrive.
     preview_replies: futures::channel::mpsc::UnboundedSender<PageReply>,
+    /// The grid's keyboard (a CSV file or a spreadsheet shown as a table).
+    grid_focus: FocusHandle,
+    /// The grid's row filter.
+    grid_filter: Option<(gpui::Entity<crate::text_input::TextInput>, gpui::Subscription)>,
+    /// The grid's cell being typed into.
+    cell_edit: Option<table_view::CellEdit>,
+    /// Where typing on the grid arrives (made with the first grid shown).
+    grid_ime: Option<gpui::Entity<table_view::GridIme>>,
+    /// The grid's right-click menu.
+    grid_menu: Option<table_view::GridMenu>,
+    /// The grid's delimiter list, open where it was clicked.
+    delimiter_menu: Option<Point<Pixels>>,
+    /// A Word document's paragraph being typed into.
+    paragraph_edit: Option<doc_view::ParagraphEdit>,
+    /// A Word document's paragraph menu.
+    paragraph_menu: Option<doc_view::ParagraphMenu>,
     /// Blinking of the caret while the editor has focus.
     blink: crate::caret_blink::CaretBlink,
     /// The find bar (⌘F), while open.
@@ -662,6 +717,14 @@ impl CodeEditor {
             scrollbar_drag: None,
             shown_tabs: Vec::new(),
             preview: Preview::new(),
+            grid_focus: cx.focus_handle(),
+            grid_filter: None,
+            cell_edit: None,
+            grid_ime: None,
+            grid_menu: None,
+            delimiter_menu: None,
+            paragraph_edit: None,
+            paragraph_menu: None,
             blink: Default::default(),
             preview_next: None,
             preview_replies,
@@ -955,7 +1018,7 @@ impl CodeEditor {
     fn edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Buffer)) {
         let Some(doc) = self.docs.get_mut(self.active) else { return };
         // The text is out of sight while the preview shows: keys must not change it unseen.
-        if !doc.editable() || doc.previewing() {
+        if !doc.editable() || doc.previewing() || !matches!(doc.content, Content::Text) {
             return;
         }
         let was_dirty = doc.is_dirty();
@@ -1130,14 +1193,31 @@ impl CodeEditor {
             cx.notify();
             return false;
         }
-        let bytes = doc.format.encode(&doc.buffer.text());
-        match file::save_atomic(&doc.target, &bytes) {
-            Ok(()) => {
+        let bytes = match &doc.content {
+            // A spreadsheet is written as it is on disk with the changed cells put in.
+            Content::Sheets(workbook) => std::fs::read(&doc.target).map_err(anyhow::Error::from).and_then(|bytes| workbook.render(&bytes)),
+            Content::Docx(file) => std::fs::read(&doc.target).map_err(anyhow::Error::from).and_then(|bytes| file.doc.render(&bytes)),
+            _ => Ok(doc.format.encode(&doc.buffer.text())),
+        };
+        match bytes.and_then(|bytes| file::save_atomic(&doc.target, &bytes).map_err(anyhow::Error::from).map(|()| bytes)) {
+            Ok(written) => {
+                let reread = match &mut doc.content {
+                    Content::Sheets(workbook) => {
+                        workbook.mark_saved();
+                        Ok(())
+                    }
+                    // Read again from what was written: the paragraphs now point into the new text.
+                    Content::Docx(file) => file.doc.mark_saved(&written),
+                    _ => Ok(()),
+                };
                 doc.buffer.mark_saved();
                 doc.base = doc.buffer.text();
                 doc.stamp = Stamp::of(&doc.target);
                 doc.disk_changed = false;
                 doc.notice = None;
+                if let Err(err) = reread {
+                    doc.set_notice(err.to_string(), Tone::Error);
+                }
                 let (project, path) = (doc.project.clone(), doc.path.clone());
                 cx.background_spawn(async move { lsp::saved(&project, &path) }).detach();
                 self.tabs_changed(cx);
@@ -1325,7 +1405,7 @@ impl CodeEditor {
     fn check_disk(&mut self, cx: &mut Context<Self>) {
         for index in 0..self.docs.len() {
             let doc = &mut self.docs[index];
-            if doc.checking || doc.formatting || !matches!(doc.content, Content::Text) {
+            if doc.checking || doc.formatting || !matches!(doc.content, Content::Text | Content::Sheets(_) | Content::Docx(_)) {
                 continue;
             }
             doc.checking = true;
@@ -1807,7 +1887,7 @@ impl CodeEditor {
                     .child(div().flex_shrink_0().text_color(hex(Chrome::BRIGHT)).font_weight(FontWeight::MEDIUM).child(doc.name()))
                     .children(self.render_breadcrumb(doc, cx))
                     .when(doc.is_dirty(), |d| d.child(div().flex_shrink_0().size(px(7.)).rounded_full().bg(hex(Chrome::BRIGHT))))
-                    .when(!doc.editable() && matches!(doc.content, Content::Text), |d| {
+                    .when(!doc.editable() && matches!(doc.content, Content::Text | Content::Sheets(_) | Content::Docx(_)), |d| {
                         d.child(
                             div()
                                 .flex_shrink_0()
@@ -1825,6 +1905,7 @@ impl CodeEditor {
                         )
                     }),
             )
+            .children(self.render_grid_switch(doc, cx))
             .when(doc.can_preview(), |d| {
                 // Rendered as VS Code's preview renders it, or back to the text.
                 let (glyph, label) = if doc.preview { ("pencil", t(cx, "editor.edit_text")) } else { ("eye", t(cx, "editor.preview")) };
@@ -2059,7 +2140,7 @@ impl CodeEditor {
             Content::Binary => t(cx, "editor.binary").to_string(),
             Content::TooLarge(size) => tf(cx, "editor.too_large", &[("size", &format!("{:.1} MB", *size as f64 / 1_048_576.))]),
             Content::Failed(error) => tf(cx, "editor.open_failed", &[("error", error)]),
-            Content::Text | Content::Image(_) => String::new(),
+            Content::Text | Content::Image(_) | Content::Sheets(_) | Content::Docx(_) => String::new(),
         };
         div()
             .flex_1()
@@ -2187,12 +2268,20 @@ impl CodeEditor {
             .bg(hex(Chrome::EDITOR))
             .t_caption()
             .text_color(hex(Chrome::MUTED))
-            .when(matches!(doc.content, Content::Text), |d| {
+            .when(doc.showing_grid(), |d| d.child(self.render_grid_status(doc, cx)))
+            .when(matches!(doc.content, Content::Text) && !doc.showing_grid(), |d| {
                 d.child(item(tf(cx, "editor.position", &[("line", &(cursor.line + 1).to_string()), ("column", &column.to_string())])))
             })
-            .when(selected > 0, |d| d.child(item(tf(cx, "editor.selected", &[("n", &selected.to_string())]))))
-            .child(div().flex_1())
-            .when(matches!(doc.content, Content::Text), |d| {
+            .when(selected > 0 && !doc.showing_grid(), |d| d.child(item(tf(cx, "editor.selected", &[("n", &selected.to_string())]))))
+            .when(!doc.showing_grid(), |d| d.child(div().flex_1()))
+            .when(matches!(doc.content, Content::Text) && doc.showing_grid(), |d| {
+                d.child(item(if doc.format.bom { "UTF-8 BOM".into() } else { "UTF-8".into() })).child(item(if doc.format.crlf {
+                    "CRLF".into()
+                } else {
+                    "LF".into()
+                }))
+            })
+            .when(matches!(doc.content, Content::Text) && !doc.showing_grid(), |d| {
                 d.child(item(indent))
                     .child(item(if doc.format.bom { "UTF-8 BOM".into() } else { "UTF-8".into() }))
                     .child(item(if doc.format.crlf { "CRLF".into() } else { "LF".into() }))
@@ -2616,6 +2705,9 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
         checks: Default::default(),
         git: Default::default(),
         folds: Default::default(),
+        // A CSV file opens as its table, as a spreadsheet app opens it.
+        grid: table_view::Grid::new(table::is_delimited(path)),
+        default_offer: None,
     };
     match opened {
         Opened::Text(file) => {
@@ -2634,6 +2726,16 @@ fn document(path: &Path, project: &Path, opened: Opened) -> Document {
             doc.stamp = file.stamp;
         }
         Opened::Image(image) => doc.content = Content::Image(image),
+        Opened::Docx(file) => {
+            doc.content = Content::Docx(doc_view::DocFile::new(file.doc, file.writable));
+            doc.stamp = file.stamp;
+            doc.target = file.target;
+        }
+        Opened::Sheets(file) => {
+            doc.content = Content::Sheets(xlsx::Workbook::new(file.sheets, file.writable));
+            doc.stamp = file.stamp;
+            doc.target = file.target;
+        }
         Opened::Binary => doc.content = Content::Binary,
         Opened::TooLarge(size) => doc.content = Content::TooLarge(size),
         Opened::Failed(error) => doc.content = Content::Failed(error),
@@ -2829,7 +2931,16 @@ impl Render for CodeEditor {
         let git_peek = self.render_git_peek(cx);
         let sticky = self.render_sticky(cx);
         let presence_labels =
-            if self.docs.get(self.active).is_some_and(|d| !d.previewing()) { self.render_presence_labels(cx) } else { Vec::new() };
+            if self.docs.get(self.active).is_some_and(|d| !d.text_hidden()) { self.render_presence_labels(cx) } else { Vec::new() };
+        self.check_default_offer(cx);
+        let default_offer = self.render_default_offer(cx);
+        let grid = if self.docs.get(self.active).is_some_and(Document::showing_grid) {
+            Some(self.render_grid(window, cx))
+        } else if self.docs.get(self.active).is_some_and(|d| matches!(d.content, Content::Docx(_))) {
+            Some(self.render_docx(cx))
+        } else {
+            None
+        };
         let Some(doc) = self.docs.get(self.active) else {
             // Nothing open yet: only the go-to box (⌘P from the terminals).
             return div()
@@ -2839,7 +2950,9 @@ impl Render for CodeEditor {
                 .child(div().id("code-editor").size_full().bg(hex(Chrome::EDITOR)))
                 .children(picker);
         };
-        let body = if previewing {
+        let body = if let Some(grid) = grid {
+            grid
+        } else if previewing {
             self.render_page("editor-preview", None).flex_1().min_h_0().into_any_element()
         } else if matches!(doc.content, Content::Text) {
             let text = div()
@@ -3005,7 +3118,16 @@ impl Render for CodeEditor {
             .on_action(cx.listener(|this, _: &complete::TriggerCompletion, _, cx| this.trigger_completion(cx)))
             .on_action(cx.listener(|this, _: &complete::Dismiss, _, cx| this.dismiss(cx)))
             .on_action(cx.listener(|this, _: &Outdent, _, cx| this.edit(cx, |b| b.outdent())))
-            .on_action(cx.listener(|this, _: &Undo, _, cx| {
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                // Typing in a cell: undo leaves the cell as it was.
+                if this.cell_edit.take().is_some() {
+                    window.focus(&this.grid_focus);
+                    cx.notify();
+                    return;
+                }
+                if this.document_step(true, cx) {
+                    return;
+                }
                 this.completion = None;
                 this.snippet = None;
                 this.signature = None;
@@ -3014,6 +3136,9 @@ impl Render for CodeEditor {
                 })
             }))
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
+                if this.document_step(false, cx) {
+                    return;
+                }
                 this.completion = None;
                 this.signature = None;
                 this.edit(cx, |b| {
@@ -3043,7 +3168,11 @@ impl Render for CodeEditor {
                     this.edit(cx, |b| b.paste(&text));
                 }
             }))
-            .on_action(cx.listener(|this, _: &Save, _, cx| this.save_formatted(cx)))
+            .on_action(cx.listener(|this, _: &Save, _, cx| {
+                this.commit_cell(cx);
+                this.commit_paragraph(cx);
+                this.save_formatted(cx)
+            }))
             .on_action(cx.listener(|this, _: &Format, _, cx| this.format(cx)))
             .on_action(cx.listener(|this, _: &CloseFile, _, cx| this.request_close(this.active, cx)))
             .on_action(cx.listener(|this, _: &TogglePreview, window, cx| this.toggle_preview(window, cx)))
@@ -3072,6 +3201,7 @@ impl Render for CodeEditor {
                 this.hover_link(hovered, cx);
             }))
             .child(self.render_toolbar(doc, cx))
+            .children(default_offer)
             .children(self.render_notice(doc, cx))
             .children(self.render_build_error(doc, cx))
             .child(body)

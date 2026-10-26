@@ -48,7 +48,8 @@ fn renamed_locally(text: &str, old: &str, new: &str, language: super::language::
 
 impl CodeEditor {
     pub(super) fn open_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable() && !d.previewing()) else {
+        let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && d.editable() && !d.text_hidden())
+        else {
             return;
         };
         let cursor = doc.buffer.cursor();

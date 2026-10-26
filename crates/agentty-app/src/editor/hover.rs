@@ -29,7 +29,7 @@ impl CodeEditor {
     pub(super) fn hover_type(&mut self, pos: Option<Pos>, cx: &mut Context<Self>) {
         let pos = pos.filter(|_| crate::settings::settings(cx).editor_hover_types);
         let target = pos.and_then(|pos| {
-            let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && !d.previewing())?;
+            let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && !d.text_hidden())?;
             if lsp::status(&doc.project, doc.language, &doc.path) != "ready" {
                 return None;
             }

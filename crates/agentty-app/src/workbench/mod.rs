@@ -531,6 +531,8 @@ pub struct Workbench {
     tab_menu: Option<tab_menu::TabMenu>,
     /// A file tab's right-click menu: which tab, and where.
     file_tab_menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
+    /// The tab under the pointer (no line beside it in the strip).
+    tab_hover: Option<SharedString>,
     /// The TODO list of the active workspace, open below its button.
     todo_menu: Option<gpui::Point<Pixels>>,
     /// Right-click menu on a split pane's header.
@@ -932,6 +934,7 @@ impl Workbench {
             updates: update::Updates::default(),
             tab_menu: None,
             file_tab_menu: None,
+            tab_hover: None,
             todo_menu: None,
             pane_menu: None,
             about_open: false,

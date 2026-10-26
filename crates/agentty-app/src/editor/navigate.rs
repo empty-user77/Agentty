@@ -774,7 +774,7 @@ impl CodeEditor {
     /// Where the cursor is in the file's structure (`Store › load`), each part a way back to its
     /// definition.
     pub(super) fn render_breadcrumb(&self, doc: &super::Document, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        if !matches!(doc.content, Content::Text) || doc.previewing() {
+        if !matches!(doc.content, Content::Text) || doc.text_hidden() {
             return Vec::new();
         }
         let outline = doc.outline();

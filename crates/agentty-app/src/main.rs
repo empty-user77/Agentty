@@ -21,6 +21,7 @@ mod caret_blink;
 mod crash_log;
 mod db_cli;
 mod debug;
+mod default_app;
 mod diagnostics;
 mod editor;
 mod extensions_view;
@@ -657,6 +658,11 @@ fn main() {
         if let Ok(mut queue) = OPENED_FOLDERS.lock() {
             queue.extend(folders);
         }
+        // Spreadsheets, CSV files and Word documents opened with Agentty from Finder.
+        let files = urls.iter().filter_map(|url| file_url_path(url)).filter(|path| opens_as_file(path));
+        if let Ok(mut queue) = OPENED_FILES.lock() {
+            queue.extend(files);
+        }
         // `agentty://…` links from other apps (e.g. Cosmica's "Continue in Agentty").
         let links = urls.iter().filter(|url| url.starts_with("agentty://")).cloned();
         if let Ok(mut queue) = OPENED_LINKS.lock() {
@@ -753,6 +759,15 @@ fn main() {
                     if let Some(target) = active.or(windows.first().copied()) {
                         let _ = target.update(cx, |workbench, window, cx| workbench.open_folder(folder, window, cx));
                     }
+                }
+                // Kept until a window is there to show them in (a cold launch by opening a file).
+                let files = if active_workbench(cx).is_some() {
+                    OPENED_FILES.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                for file in files {
+                    with_active_workbench(cx, |workbench, window, cx| workbench.open_file_from_system(&file, window, cx));
                 }
                 let links = OPENED_LINKS.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default();
                 for link in links {
@@ -938,12 +953,17 @@ fn main() {
 
 /// Folders macOS asked us to open (Dock recent list, Finder "Open With"), handled by the app loop.
 static OPENED_FOLDERS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+/// Files macOS asked us to open (Finder "Open With", Agentty as their default app), shown in the editor.
+static OPENED_FILES: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 /// `agentty://` links opened by other apps, handled by the app loop.
 static OPENED_LINKS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// Links and folders among the launch arguments, queued like macOS open events.
 fn queue_launch_arguments(arguments: &[String]) {
-    let (links, folders) = launch_arguments(arguments);
+    let (links, folders, files) = launch_arguments(arguments);
+    if let Ok(mut queue) = OPENED_FILES.lock() {
+        queue.extend(files);
+    }
     if let Ok(mut queue) = OPENED_LINKS.lock() {
         queue.extend(links);
     }
@@ -952,21 +972,30 @@ fn queue_launch_arguments(arguments: &[String]) {
     }
 }
 
-/// `agentty://` links and existing folders (given as paths or `file://` URLs); anything else is
-/// ignored, so stray arguments can't make Agentty open arbitrary things.
-fn launch_arguments(arguments: &[String]) -> (Vec<String>, Vec<std::path::PathBuf>) {
+/// `agentty://` links, existing folders and files of the types Agentty opens (given as paths or
+/// `file://` URLs); anything else is ignored, so stray arguments can't make Agentty open arbitrary
+/// things.
+fn launch_arguments(arguments: &[String]) -> (Vec<String>, Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
     let mut links = Vec::new();
     let mut folders = Vec::new();
+    let mut files = Vec::new();
     for argument in arguments {
         if argument.starts_with("agentty://") {
             links.push(argument.clone());
         } else if let Some(path) = file_url_path(argument).or_else(|| Some(std::path::PathBuf::from(argument))) {
             if path.is_absolute() && path.is_dir() {
                 folders.push(path);
+            } else if path.is_absolute() && opens_as_file(&path) {
+                files.push(path);
             }
         }
     }
-    (links, folders)
+    (links, folders, files)
+}
+
+/// An existing file of a type Agentty offers to open (it is shown in the editor, never run).
+fn opens_as_file(path: &std::path::Path) -> bool {
+    path.is_file() && default_app::supported(path)
 }
 
 /// `file:///Users/me/My%20Project/` → `/Users/me/My Project`.
@@ -1231,9 +1260,24 @@ mod tests {
             "--flag".to_string(),
             folder.join("agentty-missing-dir").display().to_string(),
         ];
-        let (links, folders) = super::launch_arguments(&args);
+        let (links, folders, files) = super::launch_arguments(&args);
         assert_eq!(links, vec!["agentty://prompt?text=hi".to_string()]);
         assert_eq!(folders, vec![folder]);
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn reads_files_agentty_opens_from_arguments() {
+        let dir = std::env::temp_dir().join(format!("agentty-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (sheet, script) = (dir.join("report.csv"), dir.join("run.sh"));
+        std::fs::write(&sheet, "a,b\n").unwrap();
+        std::fs::write(&script, "echo\n").unwrap();
+        let args = vec![sheet.display().to_string(), script.display().to_string(), "report.csv".to_string()];
+        let (_, folders, files) = super::launch_arguments(&args);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(folders.is_empty());
+        assert_eq!(files, vec![sheet]);
     }
 
     #[test]

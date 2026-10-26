@@ -23,7 +23,7 @@ impl CodeEditor {
     /// The definitions the top of the view sits in whose first line has scrolled away, outermost
     /// first: (line, its text).
     pub(super) fn sticky_lines(&self) -> Vec<(usize, usize, String)> {
-        let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && !d.previewing()) else {
+        let Some(doc) = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && !d.text_hidden()) else {
             return Vec::new();
         };
         let Some((first, _)) = self.layout.as_ref().and_then(|l| l.shown_lines()) else { return Vec::new() };

@@ -59,6 +59,12 @@ uuid = { version = "1.26.1", features = ["v4"] }
 # Agentty keeps its hardened runtime without a JIT exception. `validate` is what refuses a
 # malformed module before it runs; the text format (`wat`) is deliberately left out.
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "stable", "validate", "auto-dispatch"] }
+# Excel and OpenDocument spreadsheets read for the editor's table view (pure Rust, no default features).
+calamine = { version = "0.37.0", default-features = false }
+# Writing edited cells and paragraphs back into .xlsx / .docx: the parts are XML in a zip. Both are
+# already in the build through calamine (same versions and features), so nothing new is fetched.
+quick-xml = { version = "0.42", default-features = false }
+zip = { version = "9.1", default-features = false, features = ["deflate"] }
 
 # Linux needs GPUI's X11 and Wayland backends (off with default features); Windows its app manifest.
 [target.'cfg(target_os = "linux")'.dependencies]
