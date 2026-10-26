@@ -28,12 +28,20 @@ pub const ACTIVITY_BAR_WIDTH: f32 = 48.;
 const TAB_HEIGHT: f32 = 35.;
 /// A tab is shorter than the strip: the one in front stands on the content below it as a card.
 pub(super) const TAB_CARD_HEIGHT: f32 = 29.;
+/// The same in the title bar: taller, its label lifted by [`TITLE_TAB_LIFT`], so the labels sit on
+/// the bar's middle line with the window buttons and the sidebar toggle.
+const TITLE_TAB_CARD_HEIGHT: f32 = 33.;
+/// A card standing on the bar's bottom edge has its middle line below the bar's by half the room above
+/// it: lifting the label by all of that room puts it back on the bar's.
+const TITLE_TAB_LIFT: f32 = TITLE_BAR_HEIGHT - TITLE_TAB_CARD_HEIGHT;
 
 /// The strip's tabs in order, for the thin line between two that are not in front.
 #[derive(Default)]
 pub(super) struct TabRun {
     /// The tab before is neither in front nor under the pointer.
     plain_before: bool,
+    /// The strip is in the title bar (its labels line up with the window buttons).
+    in_title_bar: bool,
 }
 pub const STATUS_BAR_HEIGHT: f32 = 26.;
 /// The pull request on a card opens on ⌘-click only; a plain click belongs to the card.
@@ -317,9 +325,10 @@ impl Workbench {
                     // The onboarding tour points here.
                     .when(target == Some(id), |d| d.relative().child(crate::ui::pulse_ring(id, false)))
             };
-        // One active item at a time: an open page wins over the side panel's item.
+        // One active item at a time: an open page wins over the side panel's item. A folded sidebar
+        // still has its panel: the item stays lit, and a click on it unfolds it.
         let in_plugin = self.front_plugin_workspace(cx).is_some();
-        let sidebar = |panel| self.page.is_none() && !in_plugin && self.sidebar_open && self.panel == panel;
+        let sidebar = |panel| self.page.is_none() && !in_plugin && self.panel == panel;
         div()
             .w(px(ACTIVITY_BAR_WIDTH))
             .flex_shrink_0()
@@ -344,7 +353,7 @@ impl Workbench {
                         "layout-panel-left",
                         sidebar(SidePanel::Workspaces),
                         "panel.workspaces",
-                        Box::new(|this, cx| this.show_panel(SidePanel::Workspaces, cx)),
+                        Box::new(|this, cx| this.toggle_panel(SidePanel::Workspaces, cx)),
                         cx,
                     ))
                     .child(item(
@@ -352,7 +361,7 @@ impl Workbench {
                         "history",
                         sidebar(SidePanel::Sessions),
                         "panel.sessions",
-                        Box::new(|this, cx| this.show_panel(SidePanel::Sessions, cx)),
+                        Box::new(|this, cx| this.toggle_panel(SidePanel::Sessions, cx)),
                         cx,
                     ))
                     .child(item(
@@ -1967,7 +1976,7 @@ impl Workbench {
         // The start page is always the first tab, whatever else is open: it is how everything else
         // is reached, and hunting for it depended on which screen you happened to be on.
         let home_active = self.welcome && self.page.is_none();
-        let mut run = TabRun::default();
+        let mut run = TabRun { in_title_bar, ..TabRun::default() };
         tabs = tabs.child(
             self.tab_card(div().id("page-tab-home"), "home", home_active, &mut run, cx)
                 .flex()
@@ -3222,7 +3231,8 @@ impl Workbench {
         let separator = plain && run.plain_before;
         run.plain_before = plain;
         tab.relative()
-            .h(px(TAB_CARD_HEIGHT))
+            .h(px(if run.in_title_bar { TITLE_TAB_CARD_HEIGHT } else { TAB_CARD_HEIGHT }))
+            .when(run.in_title_bar, |d| d.pb(px(TITLE_TAB_LIFT)))
             .flex_shrink_0()
             .map(|d| {
                 if active {

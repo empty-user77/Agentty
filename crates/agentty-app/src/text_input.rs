@@ -689,9 +689,11 @@ impl EntityInputHandler for TextInput {
             range_utf16.as_ref().map(|r| self.range_from_utf16(r)).or(self.marked_range.clone()).unwrap_or(self.selected_range.clone());
         self.content = (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
         self.marked_range = (!new_text.is_empty()).then(|| range.start..range.start + new_text.len());
+        // The selection inside the composition counts in UTF-16 units of the new text, not of the
+        // whole field (counted from the field's start it could land inside a character).
         self.selected_range = new_selected_range_utf16
             .as_ref()
-            .map(|r| self.range_from_utf16(r))
+            .map(|r| utf16_to_byte(new_text, r.start)..utf16_to_byte(new_text, r.end))
             .map(|new_range| new_range.start + range.start..new_range.end + range.start)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
         // A syllable still being composed (Korean, Japanese) is text in the field too: whoever
@@ -1251,8 +1253,30 @@ impl Render for TextInput {
     }
 }
 
+/// Byte offset in `text` of its `units`-th UTF-16 unit (its end when it has fewer).
+fn utf16_to_byte(text: &str, units: usize) -> usize {
+    let mut count = 0;
+    for (byte, c) in text.char_indices() {
+        if count >= units {
+            return byte;
+        }
+        count += c.len_utf16();
+    }
+    text.len()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn composition_selection_counts_in_the_new_text() {
+        // "한" is one UTF-16 unit and three bytes; "a" one of each.
+        assert_eq!(super::utf16_to_byte("한", 1), 3);
+        assert_eq!(super::utf16_to_byte("a한", 1), 1);
+        assert_eq!(super::utf16_to_byte("a한", 2), 4);
+        assert_eq!(super::utf16_to_byte("한", 5), 3);
+        assert_eq!(super::utf16_to_byte("", 0), 0);
+    }
+
     use super::*;
 
     const TEXT: &str = "one\ntwo\n\nfour";
