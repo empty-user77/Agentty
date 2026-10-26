@@ -213,7 +213,7 @@ workflow wrench x zap git-fork file lock graduation-cap x-twitter
 | `AGENTTY_PLUGIN_DIR` | 插件文件夹 |
 | `AGENTTY_PLUGIN_DATA` | 存放设置与缓存的私有文件夹 |
 | `AGENTTY_VERSION` | Agentty 版本 |
-| `AGENTTY_LANGUAGE` | 用户语言（`en`、`ko`、`ja`、`zh`） |
+| `AGENTTY_LANGUAGE` | 用户语言（`en`、`ko`、`ja`、`zh`、`de`） |
 | `AGENTTY_BIN` | `agentty` 命令行工具的路径 |
 
 需要持久化的内容请放在 `AGENTTY_PLUGIN_DATA` 里，或者放进两种插件都适用的 `storage/*`。

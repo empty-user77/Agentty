@@ -15,10 +15,11 @@ pub enum Language {
     Ko,
     Ja,
     Zh,
+    De,
 }
 
 impl Language {
-    pub const ALL: [Language; 5] = [Language::System, Language::En, Language::Ko, Language::Ja, Language::Zh];
+    pub const ALL: [Language; 6] = [Language::System, Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De];
 
     /// The concrete language to show: `System` resolves to the macOS setting (read once).
     pub fn resolved(self) -> Language {
@@ -29,13 +30,14 @@ impl Language {
         }
     }
 
-    /// `en`, `ko`, `ja` or `zh` for the language shown.
+    /// `en`, `ko`, `ja`, `zh` or `de` for the language shown.
     pub fn code(self) -> &'static str {
         match self.resolved() {
             Language::System | Language::En => "en",
             Language::Ko => "ko",
             Language::Ja => "ja",
             Language::Zh => "zh",
+            Language::De => "de",
         }
     }
 
@@ -46,6 +48,7 @@ impl Language {
             Language::Ko => "한국어",
             Language::Ja => "日本語",
             Language::Zh => "中文",
+            Language::De => "Deutsch",
         }
     }
 
@@ -61,6 +64,7 @@ impl Language {
             Some("ko") => Language::Ko,
             Some("ja") => Language::Ja,
             Some("zh") => Language::Zh,
+            Some("de") => Language::De,
             _ => Language::En,
         }
     }
@@ -1533,6 +1537,7 @@ mod browser_settings_tests {
         assert_eq!(Language::from_code("ko-KR"), Language::Ko);
         assert_eq!(Language::from_code("ja"), Language::Ja);
         assert_eq!(Language::from_code("zh-Hans-CN"), Language::Zh);
+        assert_eq!(Language::from_code("de-CH"), Language::De);
         assert_eq!(Language::from_code("fr-FR"), Language::En);
         assert_eq!(Language::from_code(""), Language::En);
         let parsed: Settings = serde_json::from_str("{}").unwrap();

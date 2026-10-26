@@ -213,7 +213,7 @@ A plugin that runs as a program (`node`, `python`, `executable`) gets these envi
 | `AGENTTY_PLUGIN_DIR` | The plugin folder |
 | `AGENTTY_PLUGIN_DATA` | A private folder for settings and caches |
 | `AGENTTY_VERSION` | The Agentty version |
-| `AGENTTY_LANGUAGE` | The user's language (`en`, `ko`, `ja`, `zh`) |
+| `AGENTTY_LANGUAGE` | The user's language (`en`, `ko`, `ja`, `zh`, `de`) |
 | `AGENTTY_BIN` | Path to the `agentty` command line helper |
 
 Keep everything you persist inside `AGENTTY_PLUGIN_DATA`, or in `storage/*`, which works for both kinds.

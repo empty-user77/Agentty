@@ -47,7 +47,7 @@ Agentty はすべてを `~/.agentty/` に保存します。ほとんどは**設�
 
 | キー | 値 |
 |---|---|
-| `language` | `en`、`ko`、`ja`、`zh` |
+| `language` | `en`、`ko`、`ja`、`zh`、`de` |
 | `theme` | 内蔵テーマ名、または読み込んだ `.itermcolors` の拡張子なしのファイル名 |
 | `fontFamily`、`fontSize`、`lineHeight`、`padding` | 外観 |
 | `cursorShape` | `block`、`beam`、`underline`。`cursorBlink` で点滅 |
