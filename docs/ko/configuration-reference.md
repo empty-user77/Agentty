@@ -47,7 +47,7 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 
 | 키 | 값 |
 |---|---|
-| `language` | `en`, `ko`, `ja`, `zh` |
+| `language` | `en`, `ko`, `ja`, `zh`, `de` |
 | `theme` | 기본 테마 이름, 또는 가져온 `.itermcolors`의 확장자 없는 파일 이름 |
 | `fontFamily`, `fontSize`, `lineHeight`, `padding` | 모양 |
 | `cursorShape` | `block`, `beam`, `underline`. `cursorBlink`는 깜박임 |

@@ -49,6 +49,17 @@ const STRINGS = {
     recipesIntro: '可以直接作为插件起点的完整界面。复制一个，再改掉文字即可。',
     clicked: '已点击 {id}',
   },
+  de: {
+    intro: 'Alle Elemente, die ein Plug-in-Bereich zeigen kann. Probier es aus: Die Beispiele sind live.',
+    showCode: 'Code anzeigen',
+    layout: 'Layout',
+    data: 'Daten',
+    inputs: 'Eingaben',
+    feedback: 'Feedback',
+    recipes: 'Vorlagen',
+    recipesIntro: 'Ganze Ansichten als Startpunkt für ein Plug-in. Kopiere eine und ändere dann die Texte.',
+    clicked: '{id} angeklickt',
+  },
 };
 
 function tr(key, args = {}) {

@@ -213,7 +213,7 @@ workflow wrench x zap git-fork file lock graduation-cap x-twitter
 | `AGENTTY_PLUGIN_DIR` | 플러그인 폴더 |
 | `AGENTTY_PLUGIN_DATA` | 설정과 캐시를 위한 전용 폴더 |
 | `AGENTTY_VERSION` | Agentty 버전 |
-| `AGENTTY_LANGUAGE` | 이용자 언어 (`en`, `ko`, `ja`, `zh`) |
+| `AGENTTY_LANGUAGE` | 이용자 언어 (`en`, `ko`, `ja`, `zh`, `de`) |
 | `AGENTTY_BIN` | `agentty` 명령줄 도구 경로 |
 
 저장할 것은 모두 `AGENTTY_PLUGIN_DATA`에 두거나, 두 종류 모두에서 동작하는 `storage/*`를 쓰세요.

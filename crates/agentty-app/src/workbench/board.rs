@@ -556,7 +556,7 @@ impl Workbench {
     pub(super) fn drop_empty_board_group(&mut self, group: Option<u64>) {
         let Some(group) = group else { return };
         use crate::settings::Language;
-        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh].map(|l| crate::i18n::tr(l, "group.board"));
+        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De].map(|l| crate::i18n::tr(l, "group.board"));
         let is_board = self.groups.iter().any(|g| g.id == group && names.contains(&g.name.as_str()));
         if is_board && !self.workspaces.iter().any(|w| w.group == Some(group)) {
             self.groups.retain(|g| g.id != group);
@@ -605,7 +605,7 @@ impl Workbench {
     /// like the plugins' group).
     fn board_group(&mut self, cx: &gpui::App) -> u64 {
         use crate::settings::Language;
-        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh].map(|l| crate::i18n::tr(l, "group.board"));
+        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De].map(|l| crate::i18n::tr(l, "group.board"));
         if let Some(group) = self.groups.iter_mut().find(|g| names.contains(&g.name.as_str())) {
             group.collapsed = false;
             return group.id;
@@ -1293,7 +1293,7 @@ impl Workbench {
     /// Project folders a ticket can be for: those of the open workspaces and those tickets already use.
     fn board_projects(&mut self) -> Vec<PathBuf> {
         use crate::settings::Language;
-        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh].map(|l| crate::i18n::tr(l, "group.board"));
+        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De].map(|l| crate::i18n::tr(l, "group.board"));
         let board_group = self.groups.iter().find(|g| names.contains(&g.name.as_str())).map(|g| g.id);
         let mut projects: Vec<PathBuf> = Vec::new();
         let from_workspaces: Vec<PathBuf> = self

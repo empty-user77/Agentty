@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- German: the app speaks Deutsch (**Settings → Language**, and it is picked by itself on a German system), and so do
+  the remote page and the bundled plugins (Launch, Cosmica, UI Gallery). The documentation stays in English for now.
+- File editor: **⇧⌘F** finds text in every file of the project (`%` in the ⌘P box), starting from the selection or
+  the name at the cursor, with each place shown beside the list. Case counts once a capital is typed, and files with
+  unsaved changes are searched as they are on screen.
 - File editor: Kotlin uses JetBrains' own language server, `kotlin-lsp` (`brew install JetBrains/utils/kotlin-lsp`),
   which reads current Kotlin. In a Gradle or Maven project it starts once you click **Read the build** in the status
   bar, as Java's does, since reading the project runs its build.
@@ -117,6 +122,8 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - Windows: characters typed with AltGr on a digit key (`@` and `#` on Swiss and German keyboards) now reach Claude Code
   and Codex.
+- Windows: a status line of your own in Claude Code's settings no longer flashes console windows on every refresh
+  while Claude Code runs in Agentty.
 - File editor: VS Code's CSS fixes (**Rename to 'color'** for `colr`) now change the text; they did nothing.
 - File editor: TypeScript and JavaScript completions now offer a component's props in JSX; a server's snippet (such
   as rust-analyzer's `arc` for `s.ar`) is listed after the names that match as well; ⌘/ on markup in a `.tsx` or

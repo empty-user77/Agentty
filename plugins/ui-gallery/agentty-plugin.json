@@ -1,7 +1,7 @@
 {
   "id": "ui-gallery",
   "name": "UI Gallery",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "Agentty",
   "description": "Every element a plugin panel can show, live, with the code that draws it — and ready-made screens to start a plugin from.",
   "icon": "blocks",

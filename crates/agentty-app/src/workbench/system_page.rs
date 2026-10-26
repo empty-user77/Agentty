@@ -31,10 +31,13 @@ impl Workbench {
                 }
                 this.system_check = Some(tools);
                 this.system_checking = false;
-                // The first-run tour waits until the environment is ready to use.
+                // The first-run tour waits until the environment is ready to use (unless it was
+                // skipped meanwhile).
                 if ready && this.onboarding_waits_for_setup && this.onboarding.is_none() {
                     this.onboarding_waits_for_setup = false;
-                    this.open_onboarding(cx);
+                    if !crate::settings::settings(cx).onboarding_done {
+                        this.open_onboarding(cx);
+                    }
                 }
                 cx.notify();
             });

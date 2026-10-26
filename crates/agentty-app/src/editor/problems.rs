@@ -390,6 +390,7 @@ impl CodeEditor {
                         pos: p.start,
                         len: if p.end.line == p.start.line { p.end.col.saturating_sub(p.start.col) } else { 0 },
                     },
+                    mark: None,
                 });
             }
         }

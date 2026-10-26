@@ -1,13 +1,14 @@
 //! What the editor knows about a project as a whole: its files (git's list when it is a
 //! repository, so `.gitignore` is respected; otherwise a walk that leaves out dependency and build
-//! folders) and the symbols defined in them (`symbols.rs`), kept per file and re-read only when a
-//! file changed. Everything here reads files and runs `git ls-files`; it is called off the UI
-//! thread.
+//! folders), the symbols defined in them (`symbols.rs`), kept per file and re-read only when a
+//! file changed, and the text in them (⌘⇧F). Everything here reads files and runs `git ls-files`;
+//! it is called off the UI thread.
 
 use super::language::Language;
 use super::symbols::{self, Kind, Symbol};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -20,6 +21,11 @@ const MAX_PARSE_BYTES: u64 = 768 * 1024;
 const LIST_FRESH: Duration = Duration::from_secs(8);
 /// Usages found at most.
 pub const MAX_USAGES: usize = 2_000;
+/// The largest file a text search reads (past this it is data or a bundle, not something written).
+const MAX_SEARCH_BYTES: u64 = 2 * 1024 * 1024;
+/// Characters of a found line shown, and how many of them before the match when the line is long.
+const SHOWN_CHARS: usize = 160;
+const SHOWN_BEFORE: usize = 40;
 /// Folders never walked into when the project is not a repository.
 const SKIPPED: &[&str] = &[
     "node_modules",
@@ -280,9 +286,126 @@ pub fn usages(root: &Path, name: &str, language: Language) -> Vec<Usage> {
     found
 }
 
+/// A place a text search found: the line as shown, and where the match is in what is shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextMatch {
+    pub usage: Usage,
+    /// The match's length in bytes, at `usage.col` of the line.
+    pub len: usize,
+    /// The match in `usage.text`, when it is in what is shown.
+    pub mark: Option<(usize, usize)>,
+}
+
+/// Every place `query` is written in the project's files (any file, not only code), at most
+/// `limit`; case is ignored unless the query has a capital letter. Text of files open with
+/// unsaved changes comes from `open` instead of the disk. Binary and very large files are left
+/// out. `None` when `cancelled` was set before the search finished.
+pub fn search_text(root: &Path, query: &str, open: &[(PathBuf, String)], limit: usize, cancelled: &AtomicBool) -> Option<Vec<TextMatch>> {
+    let any_case = !query.chars().any(char::is_uppercase);
+    let pattern = regex::RegexBuilder::new(&regex::escape(query)).case_insensitive(any_case).build().ok()?;
+    let mut found = Vec::new();
+    for rel in files(root).iter() {
+        if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        let path = root.join(rel);
+        let text = match open.iter().find(|(open, _)| *open == path) {
+            Some((_, text)) => text.clone(),
+            None => {
+                if stamp(&path).is_none_or(|(_, len)| len > MAX_SEARCH_BYTES) {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(&path) else { continue };
+                if bytes[..bytes.len().min(8192)].contains(&0) {
+                    continue;
+                }
+                match String::from_utf8(bytes) {
+                    Ok(text) => text,
+                    Err(_) => continue,
+                }
+            }
+        };
+        if !pattern.is_match(&text) {
+            continue;
+        }
+        for (line, content) in text.lines().enumerate() {
+            for m in pattern.find_iter(content) {
+                let (text, mark) = shown_line(content, m.start(), m.end());
+                let usage = Usage { path: path.clone(), rel: rel.clone(), line, col: m.start(), text };
+                found.push(TextMatch { usage, len: m.len(), mark });
+                if found.len() >= limit {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    Some(found)
+}
+
+/// A found line as a list shows it, trimmed and cut short around the match (from a long line, the
+/// part with the match, after `…`), with where the match is in it.
+fn shown_line(line: &str, start: usize, end: usize) -> (String, Option<(usize, usize)>) {
+    let trimmed = line.trim_start();
+    let mut from = line.len() - trimmed.len();
+    let mut lead = "";
+    if start < from {
+        from = start;
+    } else if line[from..start].chars().count() > SHOWN_CHARS - SHOWN_BEFORE {
+        from = line[..start].char_indices().rev().nth(SHOWN_BEFORE - 1).map_or(from, |(i, _)| i);
+        lead = "…";
+    }
+    let shown: String = line[from..].trim_end().chars().take(SHOWN_CHARS).collect();
+    let mark = (end - from <= shown.len()).then_some((lead.len() + start - from, lead.len() + end - from));
+    (format!("{lead}{shown}"), mark)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_text_in_any_file() {
+        let root = std::env::temp_dir().join(format!("agentty-text-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/lib")).unwrap();
+        std::fs::write(root.join("src/api.ts"), "const BASE = '/api/products';\n  fetch(`/API/products/${id}`);\n").unwrap();
+        std::fs::write(root.join("README.md"), "Calls /api/products and /api/products/:id.\n").unwrap();
+        std::fs::write(root.join("logo.png"), b"\x89PNG\0\0/api/products").unwrap();
+        std::fs::write(root.join("node_modules/lib/x.js"), "'/api/products'\n").unwrap();
+        let never = AtomicBool::new(false);
+        let places = |query: &str, open: &[(PathBuf, String)]| {
+            search_text(&root, query, open, 100, &never)
+                .unwrap()
+                .into_iter()
+                .map(|m| (m.usage.rel, m.usage.line, m.usage.col))
+                .collect::<Vec<_>>()
+        };
+        // Lower case finds any case; dependencies and binary files are left out.
+        assert_eq!(
+            places("/api/products", &[]),
+            [("README.md".into(), 0, 6), ("README.md".into(), 0, 24), ("src/api.ts".into(), 0, 14), ("src/api.ts".into(), 1, 9)]
+        );
+        // A capital letter: case matters.
+        assert_eq!(places("/API", &[]), [("src/api.ts".to_string(), 1, 9)]);
+        // An open file's unsaved text is what is searched.
+        let open = [(root.join("src/api.ts"), "\n\nconst BASE = '/api/products';\n".to_string())];
+        assert_eq!(places("BASE", &open), [("src/api.ts".to_string(), 2, 6)]);
+        assert!(search_text(&root, "api", &[], 100, &AtomicBool::new(true)).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_found_line_shows_its_match() {
+        assert_eq!(shown_line("    let total = 3;", 8, 13), ("let total = 3;".into(), Some((4, 9))));
+        let long = format!("{}needle{}", "x".repeat(300), "y".repeat(300));
+        let (text, mark) = shown_line(&long, 300, 306);
+        let (start, end) = mark.unwrap();
+        assert!(text.starts_with('…') && text.chars().count() == 161);
+        assert_eq!(&text[start..end], "needle");
+        // A match longer than what is shown: the line without a mark.
+        assert_eq!(shown_line(&"z".repeat(200), 0, 200), ("z".repeat(160), None));
+    }
 
     #[test]
     fn finds_definitions_and_usages_across_files() {

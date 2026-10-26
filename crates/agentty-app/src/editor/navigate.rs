@@ -1,5 +1,6 @@
 //! Finding your way around the code without another IDE: go to a file (⌘P), to a symbol of the
-//! file (`@` in that box, ⇧⌘O) or of the project (`#`, ⌥⌘O), to a line (`:`, ⌃G), to where the
+//! file (`@` in that box, ⇧⌘O) or of the project (`#`, ⌥⌘O), to a line (`:`, ⌃G), to text in any
+//! file of the project (`%`, ⇧⌘F), to where the
 //! name under the cursor is defined (F12, ⌘-click — an import's path opens that file) and to
 //! every place it is used (⇧F12, ⌥F7), with back and forward through the places visited (⌃-, ⌃⇧-).
 //!
@@ -20,6 +21,7 @@ use gpui::{
     actions, div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, ScrollHandle, SharedString, Subscription, Window,
 };
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 actions!(
@@ -29,6 +31,7 @@ actions!(
         GoToSymbol,
         GoToFileSymbol,
         GoToLine,
+        FindInFiles,
         GoToDefinition,
         GoToImplementation,
         FindUsages,
@@ -45,6 +48,10 @@ const PICKER: &str = "EditorPicker";
 const MAX_ROWS: usize = 200;
 /// Places remembered for going back.
 const MAX_HISTORY: usize = 100;
+/// Places a text search lists at most.
+const MAX_TEXT_MATCHES: usize = 1_000;
+/// A text search waits this long for the next key before reading the project.
+const TEXT_PAUSE: std::time::Duration = std::time::Duration::from_millis(120);
 /// How long a short note under the cursor stays.
 const FLASH: std::time::Duration = std::time::Duration::from_millis(2600);
 
@@ -56,6 +63,8 @@ pub fn bind_keys(cx: &mut gpui::App) {
         key("cmd-shift-o", GoToFileSymbol, c),
         key("cmd-alt-o", GoToSymbol, c),
         key("ctrl-g", GoToLine, c),
+        // VS Code's and IntelliJ's: in the editor it wins over the app's Flow page.
+        key("cmd-shift-f", FindInFiles, c),
         key("f12", GoToDefinition, c),
         key("cmd-f12", GoToImplementation, c),
         key("shift-f12", FindUsages, c),
@@ -86,6 +95,8 @@ pub struct Row {
     /// Where it is (path and line), right of the label.
     pub detail: SharedString,
     pub target: Target,
+    /// What the query matched in the label (bytes), marked.
+    pub mark: Option<(usize, usize)>,
 }
 
 /// Lists filled from the query as it is typed, by its first character.
@@ -99,6 +110,8 @@ pub enum Mode {
     Symbols,
     /// `:`: a line number.
     Line,
+    /// `%`: text in the project's files.
+    Text,
     /// A list the editor found (definitions of a name, its usages); the query filters it.
     Found,
 }
@@ -109,6 +122,7 @@ impl Mode {
             Some('@') => (Self::FileSymbols, &query[1..]),
             Some('#') => (Self::Symbols, &query[1..]),
             Some(':') => (Self::Line, &query[1..]),
+            Some('%') => (Self::Text, &query[1..]),
             _ => (Self::Files, query),
         }
     }
@@ -123,13 +137,25 @@ pub struct Picker {
     selected: usize,
     /// The project's files, once listed.
     files: Option<Arc<Vec<String>>>,
-    /// Counts symbol searches, so only the latest one's answer is shown.
+    /// Counts symbol and text searches, so only the latest one's answer is shown.
     generation: u64,
     loading: bool,
+    /// Set to call off the text search that runs.
+    cancel: Option<Arc<AtomicBool>>,
+    /// What the last text search found: places, files, and whether it stopped at the most.
+    found_text: Option<(usize, usize, bool)>,
     scroll: ScrollHandle,
     /// The code around the selected row's place: (its file and line, the lines from `first`).
     preview: Option<Preview>,
     _subscription: Subscription,
+}
+
+impl Picker {
+    fn call_off_search(&self) {
+        if let Some(cancel) = &self.cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Lines of a file around a place, shown beside a list of places.
@@ -196,12 +222,33 @@ impl CodeEditor {
             files: None,
             generation: 0,
             loading: false,
+            cancel: None,
+            found_text: None,
             scroll: ScrollHandle::new(),
             preview: None,
             _subscription: subscription,
         });
         self.picker_query_changed(cx);
         cx.notify();
+    }
+
+    /// ⇧⌘F: the go-to box searching the project's text, for the selected text or else the name
+    /// at the cursor.
+    pub fn find_in_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let seed = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text)).and_then(|doc| {
+            let selected = doc.buffer.selected_text();
+            if !selected.is_empty() {
+                return (!selected.contains('\n')).then_some(selected);
+            }
+            let cursor = doc.buffer.cursor();
+            let line = doc.buffer.line(cursor.line);
+            symbols::name_at(line, cursor.col, doc.language).filter(|(s, e)| s < e).map(|(s, e)| line[s..e].to_string())
+        });
+        self.open_picker(&format!("%{}", seed.unwrap_or_default()), None, window, cx);
+        // Typing replaces the seed, and stays a text search.
+        if let Some(picker) = self.picker.as_ref() {
+            picker.input.update(cx, |input, cx| input.select_from(1, cx));
+        }
     }
 
     /// Shows a list the editor found (definitions, usages) to pick from.
@@ -239,7 +286,8 @@ impl CodeEditor {
     }
 
     pub fn close_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.picker.take().is_some() {
+        if let Some(picker) = self.picker.take() {
+            picker.call_off_search();
             window.focus(&self.focus_handle);
             if self.docs.is_empty() {
                 cx.emit(EditorEvent::Empty);
@@ -264,6 +312,8 @@ impl CodeEditor {
         let query = picker.input.read(cx).text().to_string();
         picker.selected = 0;
         picker.scroll.scroll_to_item(0);
+        picker.call_off_search();
+        picker.found_text = None;
         if let Some((_, rows)) = &picker.found {
             picker.loading = false;
             let query = query.trim();
@@ -321,6 +371,7 @@ impl CodeEditor {
                             label: tf(cx, "nav.go_to_line", &[("line", &n.to_string())]).into(),
                             detail: SharedString::default(),
                             target: Target::Line(n - 1),
+                            mark: None,
                         }]
                     })
                     .unwrap_or_default();
@@ -341,6 +392,46 @@ impl CodeEditor {
                     let _ = this.update(cx, |this, cx| {
                         let Some(picker) = this.picker.as_mut().filter(|p| p.generation == generation) else { return };
                         picker.rows = found.iter().map(location_row).collect();
+                        picker.loading = false;
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            Mode::Text => {
+                picker.generation += 1;
+                let generation = picker.generation;
+                if rest.chars().count() < 2 {
+                    picker.rows.clear();
+                    picker.loading = false;
+                    return cx.notify();
+                }
+                picker.loading = true;
+                let cancel = Arc::new(AtomicBool::new(false));
+                picker.cancel = Some(cancel.clone());
+                let project = picker.project.clone();
+                // Unsaved text is what the user sees: it is searched instead of the file.
+                let open: Vec<(PathBuf, String)> = self
+                    .docs
+                    .iter()
+                    .filter(|d| d.is_dirty() && matches!(d.content, Content::Text) && d.path.starts_with(&project))
+                    .map(|d| (d.path.clone(), d.buffer.text()))
+                    .collect();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(TEXT_PAUSE).await;
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let found = cx
+                        .background_spawn(async move { project_index::search_text(&project, &rest, &open, MAX_TEXT_MATCHES, &cancel) })
+                        .await;
+                    let Some(found) = found else { return };
+                    let _ = this.update(cx, |this, cx| {
+                        let Some(picker) = this.picker.as_mut().filter(|p| p.generation == generation) else { return };
+                        let mut files: Vec<&Path> = found.iter().map(|m| m.usage.path.as_path()).collect();
+                        files.dedup();
+                        picker.found_text = Some((found.len(), files.len(), found.len() >= MAX_TEXT_MATCHES));
+                        picker.rows = found.iter().take(MAX_ROWS).map(text_row).collect();
                         picker.loading = false;
                         cx.notify();
                     });
@@ -371,6 +462,7 @@ impl CodeEditor {
                 label: s.name.clone().into(),
                 detail: format!(":{}", s.line + 1).into(),
                 target: Target::At { path: doc.path.clone(), pos: Pos::new(s.line, s.col), len: s.name.len() },
+                mark: None,
             })
             .collect()
     }
@@ -378,6 +470,7 @@ impl CodeEditor {
     fn picker_confirm(&mut self, index: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(picker) = self.picker.as_ref() else { return };
         let Some(row) = picker.rows.get(index.unwrap_or(picker.selected)).cloned() else { return };
+        picker.call_off_search();
         self.picked_project = Some(picker.project.clone());
         self.picker = None;
         window.focus(&self.focus_handle);
@@ -857,7 +950,9 @@ impl CodeEditor {
     fn refresh_preview(&mut self, cx: &mut Context<Self>) {
         let Some(picker) = self.picker.as_ref() else { return };
         let wanted = match picker.rows.get(picker.selected).map(|r| &r.target) {
-            Some(Target::At { path, pos, .. }) if picker.found.is_some() || Mode::of(picker.input.read(cx).text()).0 == Mode::Symbols => {
+            Some(Target::At { path, pos, .. })
+                if picker.found.is_some() || matches!(Mode::of(picker.input.read(cx).text()).0, Mode::Symbols | Mode::Text) =>
+            {
                 Some((path.clone(), pos.line))
             }
             _ => None,
@@ -907,12 +1002,22 @@ impl CodeEditor {
             Mode::FileSymbols => t(cx, "nav.hint_file_symbols"),
             Mode::Symbols => t(cx, "nav.hint_symbols"),
             Mode::Line => t(cx, "nav.hint_line"),
+            Mode::Text => t(cx, "nav.hint_text"),
             Mode::Found => "",
+        };
+        let hint: SharedString = match picker.found_text {
+            Some((places, files, more)) if mode == Mode::Text && places > 0 => {
+                let places = format!("{places}{}", if more { "+" } else { "" });
+                tf(cx, "nav.text_found", &[("n", &places), ("files", &files.to_string())]).into()
+            }
+            _ => hint.into(),
         };
         let empty = if picker.loading {
             t(cx, "nav.loading")
         } else if mode == Mode::Symbols && query.len() <= 1 {
             t(cx, "nav.type_symbol")
+        } else if mode == Mode::Text && query.chars().count() <= 2 {
+            t(cx, "nav.type_text")
         } else {
             t(cx, "find.none")
         };
@@ -952,7 +1057,7 @@ impl CodeEditor {
                             .truncate()
                             .t_body()
                             .text_color(hex(Chrome::BRIGHT))
-                            .child(row.label.clone()),
+                            .child(marked(row)),
                     )
                     .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::MUTED)).child(row.detail.clone())),
             );
@@ -1074,6 +1179,7 @@ fn file_rows(project: &Path, files: &[String], query: &str, recent: &[String]) -
                 label: name.to_string().into(),
                 detail: dir.to_string().into(),
                 target: Target::At { path: project.join(rel), pos: Pos::default(), len: 0 },
+                mark: None,
             }
         })
         .collect()
@@ -1085,12 +1191,40 @@ pub(super) fn note_lines(note: &str) -> Vec<String> {
     note.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).take(4).map(|l| l.chars().take(160).collect()).collect()
 }
 
+/// A row's label, with what the query matched in it marked.
+fn marked(row: &Row) -> gpui::StyledText {
+    let text = gpui::StyledText::new(row.label.clone());
+    match row.mark.filter(|&(start, end)| start < end && end <= row.label.len()) {
+        Some((start, end)) => text.with_highlights([(
+            start..end,
+            gpui::HighlightStyle {
+                background_color: Some(hex_alpha(Chrome::WARNING, 0.3)),
+                font_weight: Some(crate::theme::EMPHASIS),
+                ..Default::default()
+            },
+        )]),
+        None => text,
+    }
+}
+
+fn text_row(found: &project_index::TextMatch) -> Row {
+    let usage = &found.usage;
+    Row {
+        tag: None,
+        label: usage.text.clone().into(),
+        detail: format!("{}:{}", usage.rel, usage.line + 1).into(),
+        target: Target::At { path: usage.path.clone(), pos: Pos::new(usage.line, usage.col), len: found.len },
+        mark: found.mark,
+    }
+}
+
 fn location_row(location: &Location) -> Row {
     Row {
         tag: Some(location.kind.tag()),
         label: location.name.clone().into(),
         detail: format!("{}:{}", location.rel, location.line + 1).into(),
         target: Target::At { path: location.path.clone(), pos: Pos::new(location.line, location.col), len: location.name.len() },
+        mark: None,
     }
 }
 
@@ -1100,6 +1234,7 @@ fn usage_row(usage: &Usage, len: usize) -> Row {
         label: usage.text.clone().into(),
         detail: format!("{}:{}", usage.rel, usage.line + 1).into(),
         target: Target::At { path: usage.path.clone(), pos: Pos::new(usage.line, usage.col), len },
+        mark: None,
     }
 }
 
@@ -1122,6 +1257,7 @@ mod tests {
         assert_eq!(Mode::of("@load"), (Mode::FileSymbols, "load"));
         assert_eq!(Mode::of("#User"), (Mode::Symbols, "User"));
         assert_eq!(Mode::of(":42"), (Mode::Line, "42"));
+        assert_eq!(Mode::of("%/api/products"), (Mode::Text, "/api/products"));
     }
 
     #[test]
