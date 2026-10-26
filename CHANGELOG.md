@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- German: the app speaks Deutsch (**Settings → Language**, and it is picked by itself on a German system), and so do
+  the remote page and the bundled plugins (Launch, Cosmica, UI Gallery). The documentation stays in English for now.
 - File editor: **⇧⌘F** finds text in every file of the project (`%` in the ⌘P box), starting from the selection or
   the name at the cursor, with each place shown beside the list. Case counts once a capital is typed, and files with
   unsaved changes are searched as they are on screen.

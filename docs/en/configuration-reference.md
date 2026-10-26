@@ -47,7 +47,7 @@ Secrets are never in these files. They live in the operating system's credential
 
 | Key | Values |
 |---|---|
-| `language` | `en`, `ko`, `ja`, `zh` |
+| `language` | `en`, `ko`, `ja`, `zh`, `de` |
 | `theme` | A built-in theme name, or an imported `.itermcolors` file name without the extension |
 | `fontFamily`, `fontSize`, `lineHeight`, `padding` | Appearance |
 | `cursorShape` | `block`, `beam`, `underline`; `cursorBlink` toggles blinking |

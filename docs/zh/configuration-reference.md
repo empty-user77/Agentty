@@ -47,7 +47,7 @@ Agentty 把所有东西都放在 `~/.agentty/`。其中大部分在**设置**（
 
 | 键 | 取值 |
 |---|---|
-| `language` | `en`、`ko`、`ja`、`zh` |
+| `language` | `en`、`ko`、`ja`、`zh`、`de` |
 | `theme` | 内置主题名，或导入的 `.itermcolors` 去掉扩展名的文件名 |
 | `fontFamily`、`fontSize`、`lineHeight`、`padding` | 外观 |
 | `cursorShape` | `block`、`beam`、`underline`；`cursorBlink` 控制闪烁 |

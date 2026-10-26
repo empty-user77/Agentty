@@ -132,7 +132,7 @@ impl Workbench {
     /// the user named "Plugins" is taken for it).
     fn plugin_group(&mut self, cx: &gpui::App) -> u64 {
         use crate::settings::Language;
-        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh].map(|l| crate::i18n::tr(l, "group.plugins"));
+        let names = [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De].map(|l| crate::i18n::tr(l, "group.plugins"));
         if let Some(group) = self.groups.iter().find(|g| names.contains(&g.name.as_str())) {
             return group.id;
         }

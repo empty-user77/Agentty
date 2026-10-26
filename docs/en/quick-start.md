@@ -81,7 +81,7 @@ Click a file in the files panel to open it in the editor next to your terminals 
 - **⇧⌘O** — search local sessions by title, content or path.
 - **⇧⌘B** — an in-app browser next to your terminals. Dev servers appear as `:port` chips and open there as soon as they answer.
 - **⇧⌘X** — extensions: skills, subagents, commands, plugins and MCP servers in one place.
-- **⌘,** — settings: language (English, 한국어, 日本語, 中文), themes, fonts, and the behavior of everything above.
+- **⌘,** — settings: language (English, 한국어, 日本語, 中文, Deutsch), themes, fonts, and the behavior of everything above.
 
 ## Next
 

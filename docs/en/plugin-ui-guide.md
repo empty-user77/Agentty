@@ -33,7 +33,7 @@ A plugin never draws: it sends a tree of elements and Agentty draws them, in the
 5. **Show that work is happening.** A `spinner` or a `progress` the moment something starts — a panel that does not change after a click looks broken.
 6. **Short words, sentence case.** "Open in a tab", not "OPEN IN NEW TAB". Put the detail in a subtitle or `detail`, not the title.
 7. **The panel is narrow.** It starts at 360 px: two columns in a `grid` is plenty, a `table` wants three or four columns at most, and a `row` shares its width between text and fields, with buttons at their own size.
-8. **Speak the user's language.** `context.language` is `en`, `ko`, `ja` or `zh`; keep the strings in a table.
+8. **Speak the user's language.** `context.language` is `en`, `ko`, `ja`, `zh` or `de`; keep the strings in a table.
 
 ## Recipes
 

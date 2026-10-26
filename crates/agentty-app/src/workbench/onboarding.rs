@@ -736,7 +736,7 @@ mod tests {
             }
             // Every text of the card exists, in every language (a missing key would show as the key).
             for key in keys {
-                for language in [Language::En, Language::Ko, Language::Ja, Language::Zh] {
+                for language in [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De] {
                     assert_ne!(crate::i18n::tr(language, key), key, "{key} is not translated");
                 }
             }

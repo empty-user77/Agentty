@@ -212,13 +212,14 @@ pub fn build_prompt(language: &str, title: &str) -> String {
     PROMPT.replace("{title}", title).replace("{language}", language_name(language))
 }
 
-/// English name of a UI language code (`en`, `ko`, `ja`, `zh`), for the "Talk to me in …" line of
+/// English name of a UI language code (`en`, `ko`, `ja`, `zh`, `de`), for the "Talk to me in …" line of
 /// a prompt.
 pub fn language_name(code: &str) -> &'static str {
     match code {
         "ko" => "Korean",
         "ja" => "Japanese",
         "zh" => "Simplified Chinese",
+        "de" => "German",
         _ => "English",
     }
 }
