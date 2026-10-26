@@ -115,6 +115,8 @@ All notable changes to this project are documented here. The format follows
   `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.
 
 ### Fixed
+- Windows: characters typed with AltGr on a digit key (`@` and `#` on Swiss and German keyboards) now reach Claude Code
+  and Codex.
 - File editor: VS Code's CSS fixes (**Rename to 'color'** for `colr`) now change the text; they did nothing.
 - File editor: TypeScript and JavaScript completions now offer a component's props in JSX; a server's snippet (such
   as rust-analyzer's `arc` for `s.ar`) is listed after the names that match as well; ⌘/ on markup in a `.tsx` or

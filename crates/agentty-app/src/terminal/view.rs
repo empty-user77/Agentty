@@ -2336,6 +2336,12 @@ impl EntityInputHandler for TerminalView {
         // A finished syllable can come with the next one already begun (한 + ㄴ): that one stays
         // marked, so it is shown and keys wait for it (see `platform::ime`).
         self.marked_text = crate::platform::ime::pending_composition(window);
+        // An agent's prompt reads keys, not text: AltGr's characters go as AltGr key presses.
+        #[cfg(windows)]
+        if let Some(bytes) = keys::altgr_text(text).filter(|_| self.live_agent.is_some()) {
+            self.write_user_input(bytes);
+            return cx.notify();
+        }
         self.write_user_input(text.as_bytes().to_vec());
         cx.notify();
     }
