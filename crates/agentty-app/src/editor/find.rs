@@ -92,6 +92,11 @@ impl CodeEditor {
     /// selected.
     pub fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(doc) = self.docs.get(self.active) else { return };
+        // The grid's filter is its find: rows with the text in them.
+        if doc.showing_grid() {
+            self.focus_grid_filter(window, cx);
+            return;
+        }
         if !matches!(doc.content, Content::Text) || doc.previewing() {
             return;
         }

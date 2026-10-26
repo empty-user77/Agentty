@@ -51,11 +51,33 @@ pub enum Opened {
     Text(TextFile),
     /// A picture (PNG, JPEG, GIF or WebP): shown, never edited.
     Image(std::sync::Arc<gpui::Image>),
+    /// A spreadsheet (Excel, OpenDocument): its sheets, shown as tables.
+    Sheets(SheetFile),
+    /// A Word document, shown as a page.
+    Docx(DocxFile),
     /// Contains NUL bytes: an archive, a compiled file…
     Binary,
     /// Bigger than [`OPEN_LIMIT`] (its size).
     TooLarge(u64),
     Failed(String),
+}
+
+#[derive(Debug)]
+pub struct SheetFile {
+    pub sheets: Vec<(String, std::sync::Arc<super::table::Table>)>,
+    /// Its cells can be written back (an `.xlsx` in the project the file system lets us write).
+    pub writable: bool,
+    pub target: PathBuf,
+    pub stamp: Option<Stamp>,
+}
+
+#[derive(Debug)]
+pub struct DocxFile {
+    pub doc: super::docx::Document,
+    /// It can be written back (in the project, writable on disk).
+    pub writable: bool,
+    pub target: PathBuf,
+    pub stamp: Option<Stamp>,
 }
 
 #[derive(Debug)]
@@ -120,6 +142,26 @@ pub fn open(path: &Path, project: &Path) -> Opened {
     let picture = crate::workbench::file_is_raster(&target);
     if meta.len() > if picture { IMAGE_LIMIT } else { OPEN_LIMIT } {
         return Opened::TooLarge(meta.len());
+    }
+    if super::docx::is_docx(path) {
+        let read = std::fs::read(&target).map_err(anyhow::Error::from).and_then(|bytes| super::docx::read(&bytes));
+        return match read {
+            Ok(doc) => {
+                Opened::Docx(DocxFile { doc, writable: !outside && !meta.permissions().readonly(), stamp: Stamp::of(&target), target })
+            }
+            Err(error) => Opened::Failed(error.to_string()),
+        };
+    }
+    if super::table::is_spreadsheet(path) {
+        return match super::table::read_workbook(&target) {
+            Ok(sheets) => Opened::Sheets(SheetFile {
+                sheets: sheets.into_iter().map(|(name, table)| (name, std::sync::Arc::new(table))).collect(),
+                writable: super::xlsx::is_writable(path) && !outside && !meta.permissions().readonly(),
+                stamp: Stamp::of(&target),
+                target,
+            }),
+            Err(error) => Opened::Failed(error),
+        };
     }
     let bytes = match std::fs::read(&target) {
         Ok(bytes) => bytes,

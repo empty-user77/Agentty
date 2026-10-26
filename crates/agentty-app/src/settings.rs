@@ -467,6 +467,9 @@ pub struct Settings {
     pub update_later_version: String,
     #[serde(default)]
     pub update_later_until: u64,
+    /// File types (extensions) the user said not to be asked about making Agentty their default app.
+    #[serde(default)]
+    pub default_app_dismissed: Vec<String>,
 }
 
 /// Speech recognition for voice prompts.
@@ -1020,6 +1023,7 @@ impl Default for Settings {
             onboarding_done: false,
             update_later_version: String::new(),
             update_later_until: 0,
+            default_app_dismissed: Vec::new(),
         }
     }
 }

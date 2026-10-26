@@ -618,7 +618,7 @@ impl CodeEditor {
 
     /// Lines the selection covers, when there is one worth asking about.
     fn selected_lines(&self) -> Option<(usize, usize)> {
-        let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && !d.previewing())?;
+        let doc = self.docs.get(self.active).filter(|d| matches!(d.content, Content::Text) && !d.text_hidden())?;
         if doc.buffer.selection.is_empty() {
             return None;
         }

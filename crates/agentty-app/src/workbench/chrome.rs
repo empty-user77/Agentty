@@ -26,6 +26,15 @@ pub(super) const CODEX_INSTALL_URL: &str = "https://learn.chatgpt.com/docs/codex
 const COPYRIGHT_YEAR: &str = "2026";
 pub const ACTIVITY_BAR_WIDTH: f32 = 48.;
 const TAB_HEIGHT: f32 = 35.;
+/// A tab is shorter than the strip: the one in front stands on the content below it as a card.
+pub(super) const TAB_CARD_HEIGHT: f32 = 29.;
+
+/// The strip's tabs in order, for the thin line between two that are not in front.
+#[derive(Default)]
+pub(super) struct TabRun {
+    /// The tab before is neither in front nor under the pointer.
+    plain_before: bool,
+}
 pub const STATUS_BAR_HEIGHT: f32 = 26.;
 /// The pull request on a card opens on ⌘-click only; a plain click belongs to the card.
 const PR_LINK_HINT: &str = "⌘ click → open";
@@ -162,8 +171,9 @@ impl Workbench {
             .when(!unified, |bar| bar.justify_center())
             .relative()
             .bg(hex(if unified { Chrome::TAB_INACTIVE } else { Chrome::ACTIVITY_BAR }))
-            .border_b_1()
-            .border_color(hex(Chrome::BORDER))
+            // With the tabs up here the edge is drawn under them (the tab in front covers it).
+            .when(!unified, |bar| bar.border_b_1().border_color(hex(Chrome::BORDER)))
+            .when(unified, |bar| bar.child(bottom_edge()))
             .t_small()
             .text_color(hex(Chrome::MUTED))
             .on_mouse_down(
@@ -1947,28 +1957,23 @@ impl Workbench {
         let mut tabs = div()
             .id("tabs")
             .flex()
+            .items_end()
             .flex_shrink()
             .min_w_0()
             .h_full()
+            .px_1()
             .overflow_x_scroll()
             .when(in_title_bar, |d| d.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()));
         // The start page is always the first tab, whatever else is open: it is how everything else
         // is reached, and hunting for it depended on which screen you happened to be on.
         let home_active = self.welcome && self.page.is_none();
+        let mut run = TabRun::default();
         tabs = tabs.child(
-            div()
-                .id("page-tab-home")
-                .h_full()
+            self.tab_card(div().id("page-tab-home"), "home", home_active, &mut run, cx)
                 .flex()
-                .flex_shrink_0()
                 .items_center()
                 .px_3()
-                .border_t_1()
-                .border_r_1()
-                .border_color(hex(Chrome::BORDER))
-                .bg(hex(if home_active { Chrome::EDITOR } else { Chrome::TAB_INACTIVE }))
                 .cursor_pointer()
-                .hover(|s| s.bg(hex(Chrome::EDITOR)))
                 .tooltip(crate::ui::Tooltip::text(t(cx, "welcome.open"), None))
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_welcome(window, cx)))
                 .child(icon("house", IconSize::INLINE, hex(if home_active { Chrome::BRIGHT } else { Chrome::MUTED }))),
@@ -2011,32 +2016,26 @@ impl Workbench {
             };
             for (tab_page, tab_category, label) in pages {
                 let active = tab_page == page && tab_category.is_none_or(|c| c == category);
+                let key = SharedString::from(format!("page-tab-{label}"));
                 tabs = tabs.child(
-                    div()
-                        .id(SharedString::from(format!("page-tab-{label}")))
-                        .h_full()
+                    self.tab_card(div().id(key.clone()), key, active, &mut run, cx)
                         .flex()
                         .items_center()
                         .gap_2()
                         .pl_3()
                         .pr(if active { px(8.) } else { px(12.) })
-                        .border_t_1()
-                        .border_r_1()
-                        .border_color(hex(Chrome::BORDER))
                         .t_body()
-                        .when(active, |d| d.bg(hex(Chrome::EDITOR)).text_color(hex(Chrome::BRIGHT)))
+                        .when(active, |d| d.text_color(hex(Chrome::BRIGHT)))
                         .when(!active, |d| {
-                            d.bg(hex(Chrome::TAB_INACTIVE))
-                                .text_color(hex(Chrome::MUTED))
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(hex(Chrome::BRIGHT)))
-                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| match tab_category {
+                            d.text_color(hex(Chrome::MUTED)).cursor_pointer().hover(|s| s.text_color(hex(Chrome::BRIGHT))).on_click(
+                                cx.listener(move |this, _: &ClickEvent, window, cx| match tab_category {
                                     Some(category) => this.open_extensions(category, window, cx),
                                     None => {
                                         this.page = Some(tab_page);
                                         cx.notify();
                                     }
-                                }))
+                                }),
+                            )
                         })
                         .child(label.to_string())
                         .when(active, |d| {
@@ -2056,8 +2055,9 @@ impl Workbench {
             // While a file is shown in the editor, its tab is the active one.
             let editing = self.editor_visible(cx);
             for (index, tab) in ws.tabs.iter().enumerate() {
-                let view = tab.active.read(cx);
                 let active = index == ws.active_tab && !editing;
+                let card = self.tab_card(div().id(("tab", index)), SharedString::from(format!("tab-{index}")), active, &mut run, cx);
+                let view = tab.active.read(cx);
                 let leaves = tab.root.leaves();
                 let attention = leaves.iter().any(|p| p.read(cx).attention);
                 // Session links in this tab (from the Session Flow), shown as a link mark.
@@ -2074,22 +2074,14 @@ impl Workbench {
                 };
                 let working = view.status.in_turn() || plugin_work.is_some();
                 tabs = tabs.child(
-                    div()
-                        .id(("tab", index))
-                        .group("tab")
-                        .h_full()
+                    card.group("tab")
                         .flex()
                         .items_center()
                         .gap_2()
                         .pl_3()
                         .pr_1()
                         .max_w(px(if plugin_work.as_ref().is_some_and(|t| !t.is_empty()) { 360. } else { 240. }))
-                        .flex_shrink_0()
                         .cursor_pointer()
-                        .border_r_1()
-                        .border_color(hex(Chrome::BORDER))
-                        .bg(if active { hex(Chrome::EDITOR) } else { hex(Chrome::TAB_INACTIVE) })
-                        .when(active, |d| d.border_t_1().border_color(hex(Chrome::ACCENT)))
                         .t_body()
                         .text_color(if active { hex(Chrome::BRIGHT) } else { hex(Chrome::MUTED) })
                         .on_mouse_down(
@@ -2170,7 +2162,7 @@ impl Workbench {
                                 .justify_center()
                                 .rounded_sm()
                                 .when(!active, |d| d.invisible().group_hover("tab", |s| s.visible()))
-                                .hover(|s| s.bg(hex_alpha(0xffffff, 0.1)))
+                                .hover(|s| s.bg(hex_alpha(Chrome::BRIGHT, 0.1)))
                                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                     cx.stop_propagation();
                                     this.request_close_tabs(&[index], window, cx);
@@ -2183,7 +2175,7 @@ impl Workbench {
 
         // Files open in the editor, after the terminals.
         if self.page.is_none() {
-            tabs = tabs.children(self.render_file_tabs(cx));
+            tabs = tabs.children(self.render_file_tabs(&mut run, cx));
         }
 
         let _header_button =
@@ -2218,13 +2210,17 @@ impl Workbench {
 
         div()
             .id("tab-strip")
-            .map(|d| if in_title_bar { d.h_full() } else { d.h(px(TAB_HEIGHT)).border_b_1().border_color(hex(Chrome::BORDER)) })
+            .map(|d| if in_title_bar { d.h_full() } else { d.h(px(TAB_HEIGHT)) })
+            .relative()
             .flex_shrink_0()
             .flex()
             .items_center()
             .pr_1()
             .gap_0p5()
             .bg(hex(Chrome::TAB_INACTIVE))
+            // The strip's bottom edge, under the tabs: the tab in front covers it, so the tab and
+            // what it shows read as one surface.
+            .child(bottom_edge())
             .child(tabs)
             // New tab / agent / workspace: right after the last tab, and pinned at the end of the
             // strip once the tabs scroll.
@@ -3201,5 +3197,50 @@ fn closed_tab_label(node: &super::persist::NodeSnapshot) -> (String, usize) {
             let title = parts.first().map(|(t, _)| t.clone()).unwrap_or_default();
             (title, parts.iter().map(|(_, n)| n).sum())
         }
+    }
+}
+
+/// A strip's bottom edge, drawn as its first child so the tab in front can paint over it.
+fn bottom_edge() -> gpui::Div {
+    div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(hex(Chrome::BORDER))
+}
+
+impl Workbench {
+    /// The look every tab of the strip shares. The tab in front is a card with rounded top
+    /// corners standing on the content below it; the others are text that lights up under the
+    /// pointer, with a thin line between two of them.
+    pub(super) fn tab_card(
+        &self,
+        tab: gpui::Stateful<gpui::Div>,
+        key: impl Into<SharedString>,
+        active: bool,
+        run: &mut TabRun,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let key: SharedString = key.into();
+        let plain = !active && self.tab_hover.as_ref() != Some(&key);
+        let separator = plain && run.plain_before;
+        run.plain_before = plain;
+        tab.relative()
+            .h(px(TAB_CARD_HEIGHT))
+            .flex_shrink_0()
+            .map(|d| {
+                if active {
+                    d.bg(hex(Chrome::EDITOR)).rounded_t(px(8.)).border_t_1().border_l_1().border_r_1().border_color(hex(Chrome::BORDER))
+                } else {
+                    d.rounded_md().hover(|s| s.bg(hex_alpha(Chrome::BRIGHT, 0.06)))
+                }
+            })
+            .when(separator, |d| d.child(div().absolute().left(px(-2.)).top(px(7.)).h(px(15.)).w(px(1.)).bg(hex(Chrome::BORDER))))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.tab_hover = Some(key.clone());
+                } else if this.tab_hover.as_ref() == Some(&key) {
+                    this.tab_hover = None;
+                } else {
+                    return;
+                }
+                cx.notify();
+            }))
     }
 }

@@ -1773,6 +1773,7 @@ impl Workbench {
                         .when(prefs.prevent_sleep, |d| {
                             d.child(row(t(cx, "settings.prevent_sleep_for"), prevent_sleep_duration(prefs.prevent_sleep_hours, cx)))
                         })
+                        .children(self.render_default_apps(cx))
                         .child(row_with_hint(
                             t(cx, "settings.analytics"),
                             t(cx, "settings.analytics_hint"),
@@ -2048,6 +2049,32 @@ impl Workbench {
         }
         self.settings_ui.index = Some((language, hits.clone()));
         hits
+    }
+
+    /// The file types Finder can open with Agentty, each made the default app with a click (only
+    /// when running from the app bundle: a development build can't be anyone's default app).
+    fn render_default_apps(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let states: Vec<(&str, bool)> = crate::default_app::TYPES
+            .iter()
+            .map(|(extension, _)| Some((*extension, crate::default_app::is_default(std::path::Path::new(&format!("file.{extension}")))?)))
+            .collect::<Option<_>>()?;
+        let chips = div().flex().flex_wrap().gap_1p5().children(states.into_iter().enumerate().map(|(i, (extension, default))| {
+            crate::ui::chip(
+                ("default-app", i),
+                extension.to_uppercase(),
+                default,
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if default {
+                        return;
+                    }
+                    if let Err(err) = crate::default_app::make_default(std::path::Path::new(&format!("file.{extension}"))) {
+                        this.show_toast(tf(cx, "default_app.failed", &[("error", &err.to_string())]), cx);
+                    }
+                    cx.notify();
+                }),
+            )
+        }));
+        Some(row(t(cx, "default_app.setting"), chips))
     }
 
     fn render_settings_nav(&mut self, section_id: SettingsSection, window: &mut Window, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
