@@ -2151,11 +2151,14 @@ impl CodeEditor {
             .gap_3()
             .child(icon("file", 32., hex(Chrome::MUTED)))
             .child(div().max_w(px(420.)).text_center().t_body().text_color(hex(Chrome::FOREGROUND)).child(text))
-            .child(crate::ui::action_button(
-                "editor-placeholder-external",
-                t(cx, "editor.open_external"),
-                cx.listener(|this, _: &ClickEvent, _, cx| this.open_externally(cx)),
-            ))
+            // What the editor cannot show is usually meant for another app: its folder is where to
+            // take it from (in Finder, the file selected).
+            .child({
+                let path = doc.path.clone();
+                crate::ui::action_button("editor-placeholder-folder", t(cx, "editor.open_folder"), move |_: &ClickEvent, _, _| {
+                    crate::platform::reveal(&path)
+                })
+            })
     }
 
     /// The language server of the file in front, in the status bar: its name while it runs, and

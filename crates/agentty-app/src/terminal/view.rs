@@ -282,8 +282,6 @@ pub struct TerminalView {
     /// A mouse press was reported to the program; its drag and release go there too.
     mouse_reporting: bool,
     last_mouse_cell: Option<(usize, usize)>,
-    /// Cell of a plain mouse press, to open a link on release without a drag.
-    press_cell: Option<GridPoint>,
     /// Link under the pointer: (grid line, start column, end column).
     hover_link: Option<(i32, usize, usize)>,
     /// What the underlined link opens, for the hint shown next to it.
@@ -460,7 +458,6 @@ impl TerminalView {
             search: None,
             mouse_reporting: false,
             last_mouse_cell: None,
-            press_cell: None,
             hover_link: None,
             hover_target: None,
             cursor_visible: true,
@@ -2032,7 +2029,6 @@ impl TerminalView {
                 return;
             }
         }
-        self.press_cell = self.grid_point(event.position).map(|(point, _)| point).filter(|_| event.click_count == 1);
         if self.mouse_captured(event.modifiers.shift) {
             if let Some(cell) = self.viewport_cell(event.position) {
                 self.mouse_reporting = true;
@@ -2163,15 +2159,6 @@ impl TerminalView {
             self.kept_selection = None;
         } else {
             self.remember_selection();
-        }
-        // A plain click (no drag) on a link opens it too.
-        let released = self.grid_point(event.position).map(|(point, _)| point);
-        if let (Some(pressed), true) = (self.press_cell.take(), empty_selection) {
-            if released == Some(pressed) {
-                if let Some(target) = self.link_at(pressed) {
-                    self.open_target(target, cx);
-                }
-            }
         }
         cx.notify();
     }
