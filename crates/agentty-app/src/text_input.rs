@@ -370,6 +370,14 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Selects from byte `start` to the end: what typing replaces, the text before it kept.
+    pub fn select_from(&mut self, start: usize, cx: &mut Context<Self>) {
+        if self.content.is_char_boundary(start.min(self.content.len())) {
+            self.selected_range = start.min(self.content.len())..self.content.len();
+            cx.notify();
+        }
+    }
+
     /// Changes the hint shown while the field is empty (a plugin may reword it).
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
         let placeholder = placeholder.into();

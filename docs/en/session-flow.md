@@ -3,7 +3,7 @@ title: Session Flow
 description: Share context between two running agents by drawing a line from one to the other.
 ---
 
-**⇧⌘F** opens Session Flow: every agent session you have open, as nodes you can connect.
+**⇧⌘F** opens Session Flow: every agent session you have open, as nodes you can connect. (In the file editor, ⇧⌘F searches the project's files instead; Session Flow is also in the **View** menu.)
 
 Drag a line from one session to another and the target receives the source's context — what it is working on, what it has decided, where it is. It works across Claude Code and Codex.
 

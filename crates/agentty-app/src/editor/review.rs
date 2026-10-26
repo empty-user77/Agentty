@@ -502,6 +502,7 @@ impl CodeEditor {
                     label: format!("+{added} −{removed}  {first}").into(),
                     detail: format!("{} · {rel}:{}", c.label, at + 1).into(),
                     target: super::navigate::Target::At { path: c.path.clone(), pos: Pos::new(at, 0), len: 0 },
+                    mark: None,
                 })
             })
             .collect();

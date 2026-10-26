@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- File editor: **⇧⌘F** finds text in every file of the project (`%` in the ⌘P box), starting from the selection or
+  the name at the cursor, with each place shown beside the list. Case counts once a capital is typed, and files with
+  unsaved changes are searched as they are on screen.
 - File editor: Kotlin uses JetBrains' own language server, `kotlin-lsp` (`brew install JetBrains/utils/kotlin-lsp`),
   which reads current Kotlin. In a Gradle or Maven project it starts once you click **Read the build** in the status
   bar, as Java's does, since reading the project runs its build.
