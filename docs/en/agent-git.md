@@ -77,6 +77,16 @@ Click a file in the files panel to open it next to your terminals: syntax colors
 
 Pictures (PNG, JPEG, GIF, WebP) open as a preview, scaled down to fit. Files an agent changes reload by themselves. **Open in editor**, in the menu a right click on a file's tab opens (with closing the other files, copying its path and showing it in the file manager), hands the file to VS Code, Cursor or your system editor. Files are only ever read and written, never run. In a git repository, lines changed since the last commit are marked in the gutter: green added, blue changed, a red notch where lines were taken away. Click a mark to see the lines as committed, and **Revert** to put them back. Deep in a long class or function, its first line stays pinned at the top of the view (sticky scroll). **⌘-click** a path in a terminal to open it here — at the line and column when the output gives them (`src/app.ts:42:7` from a compiler or an agent).
 
+### Tables and documents
+
+CSV and TSV files open as a table. Double-click a cell, press Enter or just start typing to edit it; drag to select a range and copy or paste it in the form spreadsheets use. **⌘F** filters the rows, and the arrow on a column's header sorts by it (again for the other way, a third time for the file's own order); both change only what is shown. Drag a header's edge to resize the column. A right click inserts or deletes rows and columns. The delimiter is detected and can be changed, the first row can be the header or not, and the toolbar switches to the plain text. Saving rewrites only the cells you changed, so undo and an agent's edits work as in any text file.
+
+Excel workbooks (`.xlsx`, `.xlsm`) open the same way, one tab per sheet. Cell edits, pasting and new rows are saved into the workbook, keeping each cell's formatting, and Excel recalculates the formulas when it opens the file. A cell holding a shared or array formula can't be changed here, and rows and columns aren't inserted or deleted in a workbook, since that would break the references in its formulas. `.xls`, `.xlsb` and `.ods` are shown read-only.
+
+Word documents (`.docx`) show as a page with their headings, bold and italic text, lists and tables. Click a paragraph to edit it: **Enter** starts the next one, **⇧Enter** breaks the line, and **⌘S** saves. Only the paragraphs you change are rewritten; paragraphs with pictures, links, fields or tracked changes are shown but can't be edited.
+
+Agentty can open these files from Finder too. The first time you open one while another app is its default, a bar offers to make Agentty the default for that kind of file; **Settings → System** has the same choice for each kind.
+
 ### Finding your way around the code
 
 For Kotlin, Java, JavaScript, TypeScript, Python, HTML, CSS (Tailwind included), Rust and Go:

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- File editor: CSV and TSV files open as a table — edit cells in place, select and paste ranges as spreadsheets copy
+  them, filter rows (**⌘F**), sort and resize columns, insert and delete rows and columns. The delimiter is detected
+  and can be changed, and the toolbar switches back to the text. Saving rewrites only the cells you changed.
+- File editor: Excel workbooks (`.xlsx`, `.xlsm`) open as tables with their sheets, and cell edits, pasting and new
+  rows are saved into the workbook, keeping its formatting; `.xls`, `.xlsb` and `.ods` are shown read-only.
+- File editor: Word documents (`.docx`) show as a page with headings, lists and tables. Click a paragraph to edit it;
+  only the paragraphs you change are rewritten.
+- Agentty can open CSV, TSV, Excel and Word files from Finder, and offers once to become their default app
+  (also in **Settings → System**).
 - German: the app speaks Deutsch (**Settings → Language**, and it is picked by itself on a German system), and so do
   the remote page and the bundled plugins (Launch, Cosmica, UI Gallery). The documentation stays in English for now.
 - File editor: **⇧⌘F** finds text in every file of the project (`%` in the ⌘P box), starting from the selection or
@@ -119,7 +128,16 @@ All notable changes to this project are documented here. The format follows
   such as `section.cart>h2+ul>li.item*2` is the first completion and expands to its tags (`className`, `htmlFor` and
   `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.
 
+### Changed
+- Tabs look like VS Code's: the active tab is a card joined to its content, and with the tabs in the title bar
+  their labels sit on the same line as the window buttons.
+- A file name or link in a terminal opens with **⌘-click** (**Ctrl-click** on Windows and Linux) instead of a plain
+  click, as everywhere else in the app. A file the editor cannot show offers **Open folder**.
+- Clicking the sidebar item of the panel already shown folds the sidebar; the next click brings it back.
+
 ### Fixed
+- The tooltip on a file name in a terminal and the terminal's retry button showed their raw keys on macOS.
+- A double-clicked table cell shows its caret, and an input method's caret no longer lands inside a character.
 - Windows: **Ctrl+V** in a terminal pastes a copied screenshot or image (saved as a PNG, its path pasted, so Claude
   Code attaches it) and copied files as their paths, as on the Mac.
 - Windows: a Claude Code that updated itself while running is still recognized, so the "continue a session" bar no
