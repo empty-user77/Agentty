@@ -59,12 +59,9 @@ impl CodeEditor {
                         for doc in this.docs.iter_mut().filter(|d| d.path.extension() == make.extension()) {
                             doc.default_offer = Some(false);
                         }
+                        // macOS asks the user to confirm the change itself: nothing to announce here.
                         match result {
-                            Ok(()) => {
-                                let kind = make.extension().map(|e| e.to_string_lossy().to_ascii_uppercase()).unwrap_or_default();
-                                let note = tf(cx, "default_app.done", &[("kind", &kind)]);
-                                this.flash(note, cx);
-                            }
+                            Ok(()) => {}
                             Err(err) => {
                                 let text = tf(cx, "default_app.failed", &[("error", &err.to_string())]);
                                 if let Some(doc) = this.docs.get_mut(this.active) {

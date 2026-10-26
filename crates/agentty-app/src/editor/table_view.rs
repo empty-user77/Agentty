@@ -165,6 +165,12 @@ impl Grid {
         ((a.0.min(b.0), a.1.min(b.1)), (a.0.max(b.0), a.1.max(b.1)))
     }
 
+    /// The table's first row names its columns: asked for, and the row holds something (an empty
+    /// sheet starts with its first row as data).
+    fn names(&self, table: &Table) -> bool {
+        self.header && table.rows.first().is_some_and(|r| r.cells.iter().any(|c| !c.value.trim().is_empty()))
+    }
+
     fn selected(&self, at: At) -> bool {
         let ((r0, c0), (r1, c1)) = self.range();
         (r0..=r1).contains(&at.0) && (c0..=c1).contains(&at.1)
@@ -180,6 +186,102 @@ pub(crate) struct CellEdit {
     col: usize,
     input: Entity<TextInput>,
     _events: Subscription,
+}
+
+/// Typing on the grid, as the system hands it over (input methods included): it starts editing the
+/// cursor's cell with what was typed, and goes on to that cell's field while it is being edited, so a
+/// Korean or Japanese composition begun on the grid carries on in the cell.
+pub(crate) struct GridIme {
+    editor: gpui::WeakEntity<CodeEditor>,
+}
+
+impl GridIme {
+    /// The field of the cell being edited.
+    fn field(&self, cx: &App) -> Option<Entity<TextInput>> {
+        self.editor.upgrade()?.read(cx).cell_edit.as_ref().map(|e| e.input.clone())
+    }
+
+    /// The cell's field, the cell being opened first when none is.
+    fn open_field(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<TextInput>> {
+        if let Some(field) = self.field(cx) {
+            return Some(field);
+        }
+        let editor = self.editor.upgrade()?;
+        editor.update(cx, |editor, cx| editor.begin_cell(Some(String::new()), window, cx));
+        self.field(cx)
+    }
+}
+
+impl gpui::EntityInputHandler for GridIme {
+    fn text_for_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        adjusted: &mut Option<std::ops::Range<usize>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        match self.field(cx) {
+            Some(field) => field.update(cx, |field, cx| field.text_for_range(range, adjusted, window, cx)),
+            None => {
+                adjusted.replace(0..0);
+                Some(String::new())
+            }
+        }
+    }
+
+    fn selected_text_range(&mut self, ignore_disabled: bool, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui::UTF16Selection> {
+        match self.field(cx) {
+            Some(field) => field.update(cx, |field, cx| field.selected_text_range(ignore_disabled, window, cx)),
+            None => Some(gpui::UTF16Selection { range: 0..0, reversed: false }),
+        }
+    }
+
+    fn marked_text_range(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<std::ops::Range<usize>> {
+        self.field(cx)?.update(cx, |field, cx| field.marked_text_range(window, cx))
+    }
+
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(field) = self.field(cx) {
+            field.update(cx, |field, cx| field.unmark_text(window, cx));
+        }
+    }
+
+    fn replace_text_in_range(&mut self, range: Option<std::ops::Range<usize>>, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // A control character (Enter, Tab) is a key the grid's own bindings handle, not text.
+        if self.field(cx).is_none() && text.chars().any(char::is_control) {
+            return;
+        }
+        if let Some(field) = self.open_field(window, cx) {
+            field.update(cx, |field, cx| field.replace_text_in_range(range, text, window, cx));
+        }
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<std::ops::Range<usize>>,
+        text: &str,
+        selected: Option<std::ops::Range<usize>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(field) = self.open_field(window, cx) {
+            field.update(cx, |field, cx| field.replace_and_mark_text_in_range(range, text, selected, window, cx));
+        }
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        bounds: gpui::Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Bounds<Pixels>> {
+        self.field(cx)?.update(cx, |field, cx| field.bounds_for_range(range, bounds, window, cx))
+    }
+
+    fn character_index_for_point(&mut self, point: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
+        self.field(cx)?.update(cx, |field, cx| field.character_index_for_point(point, window, cx))
+    }
 }
 
 /// The right-click menu of the grid, where it was opened.
@@ -228,11 +330,11 @@ impl Document {
     /// The table's rows the grid shows, in the order it shows them (the header row left out).
     fn grid_shown(&self, table: &Arc<Table>) -> Arc<Vec<usize>> {
         let grid = &self.grid;
-        let key = ShownKey { table: Arc::as_ptr(table) as usize, header: grid.header, sort: grid.sort, filter: grid.filter.clone() };
+        let key = ShownKey { table: Arc::as_ptr(table) as usize, header: grid.names(table), sort: grid.sort, filter: grid.filter.clone() };
         if let Some((_, rows)) = grid.shown.borrow().as_ref().filter(|(k, _)| *k == key) {
             return rows.clone();
         }
-        let first = usize::from(grid.header && !table.rows.is_empty());
+        let first = usize::from(grid.names(table));
         let needle = grid.filter.trim().to_lowercase();
         let mut rows: Vec<usize> = (first..table.rows.len())
             .filter(|&r| needle.is_empty() || table.rows[r].cells.iter().any(|c| c.value.to_lowercase().contains(&needle)))
@@ -260,19 +362,22 @@ impl Document {
             .measured
             .borrow()
             .as_ref()
-            .filter(|(p, h, _)| *p == ptr && *h == self.grid.header)
+            .filter(|(p, h, _)| *p == ptr && *h == self.grid.names(table))
             .map(|(_, _, widths)| widths.clone());
         let measured = measured.unwrap_or_else(|| {
-            let widths: Vec<f32> = (0..table.width.max(1))
+            // One empty column past the last, as a spreadsheet goes on to the right: typing there
+            // adds a column.
+            let columns = if self.editable() { table.width + 1 } else { table.width.max(1) };
+            let widths: Vec<f32> = (0..columns)
                 .map(|col| {
-                    let name = if self.grid.header { 0 } else { column_name(col).len() };
+                    let name = if self.grid.names(table) { 0 } else { column_name(col).len() };
                     let longest =
                         table.rows.iter().take(MEASURED_ROWS).map(|r| text_width(r.cells.get(col).map_or("", |c| &c.value))).max();
                     ((longest.unwrap_or(0).max(name) as f32) * CHAR_WIDTH + 24.).clamp(COLUMN_MIN, COLUMN_MAX)
                 })
                 .collect();
             let widths = Rc::new(widths);
-            *self.grid.measured.borrow_mut() = Some((ptr, self.grid.header, widths.clone()));
+            *self.grid.measured.borrow_mut() = Some((ptr, self.grid.names(table), widths.clone()));
             widths
         });
         if self.grid.widths.is_empty() {
@@ -379,7 +484,8 @@ impl CodeEditor {
 
     fn grid_move(&mut self, rows: isize, cols: isize, select: bool, cx: &mut Context<Self>) {
         let Some((table, shown)) = self.grid_state() else { return };
-        let (last_row, last_col) = (shown.len().saturating_sub(1), table.width.saturating_sub(1));
+        let columns = self.grid_doc().map_or(table.width, |d| d.grid_widths(&table).len());
+        let (last_row, last_col) = (shown.len().saturating_sub(1), columns.saturating_sub(1));
         let Some(doc) = self.grid_doc_mut() else { return };
         let (row, col) = doc.grid.cursor;
         let to = ((row as isize + rows).clamp(0, last_row as isize) as usize, (col as isize + cols).clamp(0, last_col as isize) as usize);
@@ -444,7 +550,8 @@ impl CodeEditor {
                 window.focus(&this.grid_focus);
                 cx.notify();
             }
-            TextInputEvent::Blurred => this.commit_cell(cx),
+            // Not when the window only went to the background: the cell stays open for its return.
+            TextInputEvent::Blurred if window.is_window_active() => this.commit_cell(cx),
             _ => {}
         });
         let path = doc.path.clone();
@@ -678,6 +785,7 @@ impl CodeEditor {
     fn grid_select_line(&mut self, row: Option<usize>, col: Option<usize>, extend: bool, cx: &mut Context<Self>) {
         let Some((table, shown)) = self.grid_state() else { return };
         let Some(doc) = self.grid_doc_mut() else { return };
+        // The table's own columns: the empty one past them is not part of a row.
         let (last_row, last_col) = (shown.len().saturating_sub(1), table.width.saturating_sub(1));
         match (row, col) {
             (Some(r), _) => {
@@ -734,6 +842,9 @@ impl CodeEditor {
 
     pub(super) fn render_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let filter = self.grid_filter_input(window, cx);
+        let editor = cx.weak_entity();
+        let ime = self.grid_ime.get_or_insert_with(|| cx.new(|_| GridIme { editor })).clone();
+        let focus = self.grid_focus.clone();
         // The field follows the file in front: each file keeps its own filter.
         if let Some(doc) = self.grid_doc() {
             if filter.read(cx).text() != doc.grid.filter {
@@ -741,8 +852,9 @@ impl CodeEditor {
                 filter.update(cx, |input, cx| input.set_text(text, cx));
             }
         }
-        // The editor itself was given the keyboard (its tab chosen): the grid takes it.
-        if self.focus_handle.is_focused(window) {
+        // The editor itself was given the keyboard (its tab chosen), or nothing has it (the field
+        // that had it went with another file): the grid takes it.
+        if self.focus_handle.is_focused(window) || window.focused(cx).is_none() {
             window.focus(&self.grid_focus);
         }
         let Some(doc) = self.grid_doc() else { return div().into_any_element() };
@@ -807,17 +919,6 @@ impl CodeEditor {
             .relative()
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.grid_mouse_up(cx)))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.grid_mouse_up(cx)))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                let m = &event.keystroke.modifiers;
-                if m.platform || m.control || m.function || this.cell_edit.is_some() {
-                    return;
-                }
-                // Typing on a cell replaces it, as in a spreadsheet.
-                if let Some(typed) = event.keystroke.key_char.clone().filter(|c| !c.chars().any(char::is_control)) {
-                    cx.stop_propagation();
-                    this.begin_cell(Some(typed), window, cx);
-                }
-            }))
             .on_action(cx.listener(|this, _: &GridUp, _, cx| this.grid_move(-1, 0, false, cx)))
             .on_action(cx.listener(|this, _: &GridDown, _, cx| this.grid_move(1, 0, false, cx)))
             .on_action(cx.listener(|this, _: &GridLeft, _, cx| this.grid_move(0, -1, false, cx)))
@@ -864,7 +965,16 @@ impl CodeEditor {
             )
             .group(crate::ui::SCROLL_GROUP)
             .child(crate::ui::scrollbar(base))
-            .child(crate::ui::scrollbar_h(hscroll));
+            .child(crate::ui::scrollbar_h(hscroll))
+            // What is typed on a cell (an input method's composition too) reaches the grid here.
+            .child(
+                gpui::canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, cx| window.handle_input(&focus, gpui::ElementInputHandler::new(bounds, ime), cx),
+                )
+                .absolute()
+                .size_full(),
+            );
         div()
             .flex_1()
             .min_h_0()
@@ -910,7 +1020,7 @@ impl CodeEditor {
         let Some(doc) = self.grid_doc() else { return div() };
         let before: f32 = widths[..columns.start].iter().sum();
         let after: f32 = widths[columns.end..].iter().sum();
-        let (sort, header, cursor_col) = (doc.grid.sort, doc.grid.header, doc.grid.cursor.1);
+        let (sort, header, cursor_col) = (doc.grid.sort, doc.grid.names(table), doc.grid.cursor.1);
         let ((_, c0), (_, c1)) = doc.grid.range();
         div()
             .h(px(ROW_HEIGHT + 2.))
@@ -1056,7 +1166,9 @@ impl CodeEditor {
         let editing = self.cell_edit.as_ref().map(|e| (e.row, e.col, e.input.clone()));
         range
             .map(|view_row| {
-                let Some(&row) = shown.get(view_row) else {
+                // A row typed into before it exists (an empty sheet's first) shows where it will be.
+                let new_row = editing.as_ref().map(|(r, _, _)| *r).filter(|r| *r >= table.rows.len());
+                let Some(row) = shown.get(view_row).copied().or(new_row.filter(|_| view_row == shown.len())) else {
                     // The last line adds a row, as a spreadsheet's empty row below the data does.
                     return div()
                         .id(("table-add", view_row))
@@ -1082,7 +1194,7 @@ impl CodeEditor {
                         }))
                         .into_any_element();
                 };
-                let number = (row + usize::from(!grid.header)).to_string();
+                let number = (row + usize::from(!grid.names(&table))).to_string();
                 div()
                     .id(("table-row", view_row))
                     .h(px(ROW_HEIGHT))
@@ -1312,10 +1424,11 @@ impl CodeEditor {
         let shown = doc.grid_shown(&table);
         let grid = &doc.grid;
         let ((r0, c0), (r1, c1)) = grid.range();
-        let row_number = |view_row: usize| shown.get(view_row).map_or(view_row + 1, |r| r + usize::from(!grid.header));
+        let names = grid.names(&table);
+        let row_number = |view_row: usize| shown.get(view_row).map_or(view_row + 1, |r| r + usize::from(!names));
         let cell = |at: At| format!("{}{}", column_name(at.1), row_number(at.0));
         let place = if (r0, c0) == (r1, c1) { cell((r0, c0)) } else { format!("{}:{}", cell((r0, c0)), cell((r1, c1))) };
-        let data_rows = table.rows.len() - usize::from(grid.header && !table.rows.is_empty());
+        let data_rows = table.rows.len() - usize::from(names);
         let item = |text: String| div().flex_shrink_0().child(text);
         let chip = |id: &'static str, text: String| {
             div()
@@ -1422,6 +1535,17 @@ mod tests {
         assert_eq!(column_name(27), "AB");
         assert_eq!(column_name(701), "ZZ");
         assert_eq!(column_name(702), "AAA");
+    }
+
+    #[test]
+    fn an_empty_first_row_is_data_not_names() {
+        let grid = Grid::new(true);
+        assert!(!grid.names(&Table::from_values(vec![vec![String::new(), " ".into()], vec!["x".into()]])));
+        assert!(!grid.names(&Table::from_values(Vec::new())));
+        assert!(grid.names(&Table::from_values(vec![vec![String::new(), "name".into()]])));
+        let mut plain = Grid::new(true);
+        plain.header = false;
+        assert!(!plain.names(&Table::from_values(vec![vec!["name".into()]])));
     }
 
     #[test]

@@ -94,8 +94,12 @@ impl CodeEditor {
                 window.focus(&this.focus_handle);
                 cx.notify();
             }
-            // Only this field's own edit: Enter has already moved on to the next paragraph's.
-            TextInputEvent::Blurred if this.paragraph_edit.as_ref().is_some_and(|e| e.input == *field) => this.commit_paragraph(cx),
+            // Only this field's own edit: Enter has already moved on to the next paragraph's. The
+            // window going to the background takes the keyboard too: the edit stays open for when
+            // it comes back.
+            TextInputEvent::Blurred if window.is_window_active() && this.paragraph_edit.as_ref().is_some_and(|e| e.input == *field) => {
+                this.commit_paragraph(cx)
+            }
             _ => {}
         });
         self.paragraph_edit = Some(ParagraphEdit { path, index, input, _events: events });
@@ -302,7 +306,8 @@ impl CodeEditor {
                 d.cursor(gpui::CursorStyle::IBeam)
                     .hover(|s| s.bg(hex_alpha(Chrome::BRIGHT, 0.04)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        if this.paragraph_edit.as_ref().is_some_and(|e| e.index == index) {
+                        let path = this.docs.get(this.active).map(|d| d.path.clone());
+                        if this.paragraph_edit.as_ref().is_some_and(|e| e.index == index && Some(&e.path) == path.as_ref()) {
                             return;
                         }
                         this.paragraph_menu = None;

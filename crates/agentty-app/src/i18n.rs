@@ -3453,7 +3453,6 @@ strings! {
     "default_app.ask" => ["Always open {kind} files with Agentty?", "{kind} 파일을 항상 Agentty로 열까요?", "{kind} ファイルを常に Agentty で開きますか？", "始终用 Agentty 打开 {kind} 文件？", "{kind}-Dateien immer mit Agentty öffnen?"],
     "default_app.make_default" => ["Make default", "기본 앱으로 지정", "既定にする", "设为默认", "Als Standard festlegen"],
     "default_app.not_now" => ["Not now", "나중에", "今はしない", "以后再说", "Nicht jetzt"],
-    "default_app.done" => ["Agentty now opens {kind} files.", "이제 {kind} 파일은 Agentty로 열립니다.", "{kind} ファイルは Agentty で開くようになりました。", "现在 {kind} 文件会用 Agentty 打开。", "{kind}-Dateien öffnen sich jetzt mit Agentty."],
 }
 
 #[cfg(test)]

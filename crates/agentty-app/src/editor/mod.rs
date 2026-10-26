@@ -545,6 +545,8 @@ pub struct CodeEditor {
     grid_filter: Option<(gpui::Entity<crate::text_input::TextInput>, gpui::Subscription)>,
     /// The grid's cell being typed into.
     cell_edit: Option<table_view::CellEdit>,
+    /// Where typing on the grid arrives (made with the first grid shown).
+    grid_ime: Option<gpui::Entity<table_view::GridIme>>,
     /// The grid's right-click menu.
     grid_menu: Option<table_view::GridMenu>,
     /// The grid's delimiter list, open where it was clicked.
@@ -718,6 +720,7 @@ impl CodeEditor {
             grid_focus: cx.focus_handle(),
             grid_filter: None,
             cell_edit: None,
+            grid_ime: None,
             grid_menu: None,
             delimiter_menu: None,
             paragraph_edit: None,
