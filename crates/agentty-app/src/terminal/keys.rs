@@ -224,6 +224,65 @@ mod tests {
         assert_eq!(win32_key_press(0x32, 3, '@' as u16, true), b"\x1b[50;3;64;1;25;1_\x1b[50;3;64;0;25;1_".to_vec());
     }
 
+    /// On Windows itself: Swiss German types `@` and `#` with AltGr on the digit keys.
+    #[cfg(windows)]
+    #[test]
+    fn swiss_german_digits_take_altgr() {
+        use windows::core::w;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{LoadKeyboardLayoutW, VkKeyScanExW, KLF_NOTELLSHELL};
+        // SAFETY: loads a layout for lookups only; nothing is activated for the user.
+        let swiss = unsafe { LoadKeyboardLayoutW(w!("00000807"), KLF_NOTELLSHELL) }.expect("the Swiss German layout");
+        let key = |ch: char| altgr_key(unsafe { VkKeyScanExW(ch as u16, swiss) });
+        assert_eq!(key('@'), Some((0x32, false)));
+        assert_eq!(key('#'), Some((0x33, false)));
+        assert!(key('[').is_some(), "AltGr+ü");
+        assert_eq!(key('2'), None);
+        assert_eq!(key('a'), None);
+    }
+
+    /// On Windows itself: a console program behind ConPTY reads the key press as AltGr+2 typing
+    /// `@`, as it does from Windows Terminal.
+    #[cfg(windows)]
+    #[test]
+    fn conpty_reads_an_altgr_key_press() {
+        use alacritty_terminal::event::WindowSize;
+        use alacritty_terminal::tty::{self, EventedReadWrite};
+        use std::io::{Read, Write};
+        use std::time::{Duration, Instant};
+        // No spaces in what it prints: ConPTY may draw them as cursor moves.
+        let script =
+            "$k = [Console]::ReadKey($true); Write-Host ('key=' + [int]$k.KeyChar + '|mods=' + ($k.Modifiers -replace ' ', '') + '|end')";
+        let args = ["-NoProfile", "-NonInteractive", "-Command", script].map(String::from).to_vec();
+        let options = tty::Options {
+            shell: Some(tty::Shell::new("powershell.exe".into(), args)),
+            working_directory: None,
+            drain_on_exit: true,
+            env: Default::default(),
+            escape_args: true,
+        };
+        let size = WindowSize { num_lines: 24, num_cols: 120, cell_width: 8, cell_height: 16 };
+        let mut pty = tty::new(&options, size, 0).expect("a ConPTY");
+        // The screen's text: no escape sequences, and no window title (it holds the command line).
+        let escapes = regex::Regex::new(r"\x1b(\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][0-9A-B])").unwrap();
+        let printed = |seen: &str| escapes.replace_all(seen, "").into_owned();
+        let started = Instant::now();
+        let (mut seen, mut sent) = (String::new(), false);
+        while started.elapsed() < Duration::from_secs(60) && !printed(&seen).contains("|end") {
+            if !sent && started.elapsed() > Duration::from_secs(3) {
+                // AltGr+2 on a Swiss German keyboard: the 2 key, scan code 3, `@`.
+                pty.writer().write_all(&win32_key_press(0x32, 3, '@' as u16, false)).unwrap();
+                pty.writer().flush().unwrap();
+                sent = true;
+            }
+            let mut buf = [0u8; 4096];
+            let n = pty.reader().read(&mut buf).unwrap_or(0);
+            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let text = printed(&seen);
+        assert!(text.contains("key=64|mods=Alt,Control|end"), "what the program read: {text:?}");
+    }
+
     #[test]
     fn option_edits_words() {
         assert_eq!(to_escape(&ks("alt-backspace"), TermMode::empty(), false, false), Some(b"\x1b\x7f".to_vec()));
