@@ -118,6 +118,49 @@ pub fn to_escape(keystroke: &Keystroke, mode: TermMode, option_as_meta: bool, ag
     Some(bytes)
 }
 
+/// Windows: a character typed with AltGr (`@` is AltGr+2 on a Swiss or German keyboard), as
+/// ConPTY's win32-input-mode key presses with Right Alt and Left Ctrl held, the way Windows
+/// Terminal sends it. Written as plain text, ConPTY makes the key event up from the layout with
+/// Ctrl and Alt and no AltGr, and the agents' prompts read AltGr+2 as Ctrl+Alt+2 and drop it.
+/// `None` when the character is not typed with AltGr or AltGr is not held now.
+#[cfg(windows)]
+pub fn altgr_text(text: &str) -> Option<Vec<u8>> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, MapVirtualKeyW, VkKeyScanW, MAPVK_VK_TO_VSC, VK_LCONTROL, VK_RMENU};
+    let mut chars = text.chars();
+    let (ch, None) = (chars.next()?, chars.next()) else { return None };
+    let unit = u16::try_from(u32::from(ch)).ok()?;
+    // SAFETY: keyboard state and layout queries on the thread that received the text.
+    let held = |vk: u16| unsafe { GetKeyState(vk as i32) } < 0;
+    if !(held(VK_RMENU.0) && held(VK_LCONTROL.0)) {
+        return None;
+    }
+    let (vk, shift) = altgr_key(unsafe { VkKeyScanW(unit) })?;
+    let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as u16;
+    Some(win32_key_press(vk, scan, unit, shift))
+}
+
+/// The key of a `VkKeyScanW` answer and whether Shift is part of it, when the character takes
+/// Ctrl+Alt (AltGr) on the layout.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn altgr_key(scan: i16) -> Option<(u16, bool)> {
+    if scan == -1 {
+        return None;
+    }
+    let (vk, shifts) = ((scan as u16) & 0xff, ((scan as u16) >> 8) & 0xff);
+    // Shift 1, Ctrl 2, Alt 4.
+    (shifts & 6 == 6).then_some((vk, shifts & 1 == 1))
+}
+
+/// A key pressed and released in win32-input-mode (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`), with AltGr held.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn win32_key_press(vk: u16, scan: u16, unit: u16, shift: bool) -> Vec<u8> {
+    const RIGHT_ALT_PRESSED: u32 = 0x0001;
+    const LEFT_CTRL_PRESSED: u32 = 0x0008;
+    const SHIFT_PRESSED: u32 = 0x0010;
+    let state = RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED | if shift { SHIFT_PRESSED } else { 0 };
+    format!("\x1b[{vk};{scan};{unit};1;{state};1_\x1b[{vk};{scan};{unit};0;{state};1_").into_bytes()
+}
+
 fn csi_ss3(final_byte: char, modifier_param: u8) -> Vec<u8> {
     if modifier_param > 1 {
         format!("\x1b[1;{modifier_param}{final_byte}").into_bytes()
@@ -167,6 +210,77 @@ mod tests {
         assert_eq!(to_escape(&ks("enter"), TermMode::empty(), false, false), Some(b"\r".to_vec()));
         assert_eq!(to_escape(&ks("shift-enter"), TermMode::empty(), false, false), Some(b"\x1b\r".to_vec()));
         assert_eq!(to_escape(&ks("alt-enter"), TermMode::empty(), false, false), Some(b"\x1b\r".to_vec()));
+    }
+
+    #[test]
+    fn altgr_characters_go_as_win32_key_presses() {
+        // `VkKeyScanW('@')` on Swiss German: the 2 key (0x32) with Ctrl+Alt; `{` on US: Shift+[.
+        assert_eq!(altgr_key(0x0632), Some((0x32, false)));
+        assert_eq!(altgr_key(0x0732), Some((0x32, true)));
+        assert_eq!(altgr_key(0x01db), None);
+        assert_eq!(altgr_key(-1), None);
+        // Down and up, Right Alt and Left Ctrl held, as Windows Terminal sends them.
+        assert_eq!(win32_key_press(0x32, 3, '@' as u16, false), b"\x1b[50;3;64;1;9;1_\x1b[50;3;64;0;9;1_".to_vec());
+        assert_eq!(win32_key_press(0x32, 3, '@' as u16, true), b"\x1b[50;3;64;1;25;1_\x1b[50;3;64;0;25;1_".to_vec());
+    }
+
+    /// On Windows itself: Swiss German types `@` and `#` with AltGr on the digit keys.
+    #[cfg(windows)]
+    #[test]
+    fn swiss_german_digits_take_altgr() {
+        use windows::core::w;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{LoadKeyboardLayoutW, VkKeyScanExW, KLF_NOTELLSHELL};
+        // SAFETY: loads a layout for lookups only; nothing is activated for the user.
+        let swiss = unsafe { LoadKeyboardLayoutW(w!("00000807"), KLF_NOTELLSHELL) }.expect("the Swiss German layout");
+        let key = |ch: char| altgr_key(unsafe { VkKeyScanExW(ch as u16, swiss) });
+        assert_eq!(key('@'), Some((0x32, false)));
+        assert_eq!(key('#'), Some((0x33, false)));
+        assert!(key('[').is_some(), "AltGr+ü");
+        assert_eq!(key('2'), None);
+        assert_eq!(key('a'), None);
+    }
+
+    /// On Windows itself: a console program behind ConPTY reads the key press as AltGr+2 typing
+    /// `@`, as it does from Windows Terminal.
+    #[cfg(windows)]
+    #[test]
+    fn conpty_reads_an_altgr_key_press() {
+        use alacritty_terminal::event::WindowSize;
+        use alacritty_terminal::tty::{self, EventedReadWrite};
+        use std::io::{Read, Write};
+        use std::time::{Duration, Instant};
+        // No spaces in what it prints: ConPTY may draw them as cursor moves.
+        let script =
+            "$k = [Console]::ReadKey($true); Write-Host ('key=' + [int]$k.KeyChar + '|mods=' + ($k.Modifiers -replace ' ', '') + '|end')";
+        let args = ["-NoProfile", "-NonInteractive", "-Command", script].map(String::from).to_vec();
+        let options = tty::Options {
+            shell: Some(tty::Shell::new("powershell.exe".into(), args)),
+            working_directory: None,
+            drain_on_exit: true,
+            env: Default::default(),
+            escape_args: true,
+        };
+        let size = WindowSize { num_lines: 24, num_cols: 120, cell_width: 8, cell_height: 16 };
+        let mut pty = tty::new(&options, size, 0).expect("a ConPTY");
+        // The screen's text: no escape sequences, and no window title (it holds the command line).
+        let escapes = regex::Regex::new(r"\x1b(\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][0-9A-B])").unwrap();
+        let printed = |seen: &str| escapes.replace_all(seen, "").into_owned();
+        let started = Instant::now();
+        let (mut seen, mut sent) = (String::new(), false);
+        while started.elapsed() < Duration::from_secs(60) && !printed(&seen).contains("|end") {
+            if !sent && started.elapsed() > Duration::from_secs(3) {
+                // AltGr+2 on a Swiss German keyboard: the 2 key, scan code 3, `@`.
+                pty.writer().write_all(&win32_key_press(0x32, 3, '@' as u16, false)).unwrap();
+                pty.writer().flush().unwrap();
+                sent = true;
+            }
+            let mut buf = [0u8; 4096];
+            let n = pty.reader().read(&mut buf).unwrap_or(0);
+            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let text = printed(&seen);
+        assert!(text.contains("key=64|mods=Alt,Control|end"), "what the program read: {text:?}");
     }
 
     #[test]

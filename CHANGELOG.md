@@ -120,6 +120,8 @@ All notable changes to this project are documented here. The format follows
   `<img />` in JSX), indented like the file; ⇥ goes through the places left empty.
 
 ### Fixed
+- Windows: characters typed with AltGr on a digit key (`@` and `#` on Swiss and German keyboards) now reach Claude Code
+  and Codex.
 - Windows: a status line of your own in Claude Code's settings no longer flashes console windows on every refresh
   while Claude Code runs in Agentty.
 - File editor: VS Code's CSS fixes (**Rename to 'color'** for `colr`) now change the text; they did nothing.
