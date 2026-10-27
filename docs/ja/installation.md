@@ -76,7 +76,7 @@ Rust 1.98（`rust-toolchain.toml` で固定）と各プラットフォームの�
 | `~/.agentty/settings.json` | 設定 |
 | `~/.agentty/workspaces.json` | ワークスペース、タブ、分割、グループ |
 | `~/.agentty/plugins/` | インストール済みプラグイン |
-| `~/.agentty/handoffs/` | Session Flow と会話移行が作るコンテキスト文書 |
+| `~/.agentty/handoffs/` | オーケストレーター (セッション連携) と会話移行が作るコンテキスト文書 |
 | `~/.agentty/connectors.json` | API コネクタの定義（秘密の値は OS の資格情報ストアに保管） |
 
 全体の一覧は[設定リファレンス](/docs/configuration-reference)にあります。

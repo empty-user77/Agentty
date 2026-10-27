@@ -76,7 +76,7 @@ cargo run --release -p agentty-app
 | `~/.agentty/settings.json` | 偏好设置 |
 | `~/.agentty/workspaces.json` | 工作区、标签页、分屏和分组 |
 | `~/.agentty/plugins/` | 已安装的插件 |
-| `~/.agentty/handoffs/` | Session Flow 与对话迁移生成的上下文文档 |
+| `~/.agentty/handoffs/` | 编排器 (会话连接) 与对话迁移生成的上下文文档 |
 | `~/.agentty/connectors.json` | API 连接器定义（密钥存放在系统凭据存储中） |
 
 完整清单见[配置参考](/docs/configuration-reference)。

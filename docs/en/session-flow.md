@@ -1,9 +1,22 @@
 ---
-title: Session Flow
-description: Share context between two running agents by drawing a line from one to the other.
+title: Orchestrator
+description: Watch an agent hand work to its subagents in waves, and link sessions so they share context.
 ---
 
-**⇧⌘F** opens Session Flow: every agent session you have open, as nodes you can connect. (In the file editor, ⇧⌘F searches the project's files instead; Session Flow is also in the **View** menu.)
+**⇧⌘F** opens the Orchestrator. (In the file editor, ⇧⌘F searches the project's files instead; the Orchestrator is also in the **View** menu.) It has two tabs: **Workflow** shows how the work of a session is split up and how far it got, **Session links** connects sessions so they share context.
+
+## Workflow
+
+On the left are the threads: every agent session running in Agentty, with a dot in its state's colour, and the parallel runs agents started with `agentty tasks`. Pick one to see its workflow:
+
+- At the top, what you last asked it (`$ …`) and the session's name.
+- The orchestrator's line: the main agent's state, how many waves, how many subagents are done, and how many models are at work. **Open** goes to its pane, **Message** sends it a line as if typed there, and **Interrupt** stops its current turn (as Esc does in its pane).
+- The graph: the orchestrator first, then its subagents in waves. Subagents started together form a wave; the wave at work is underlined. Each card says whether it is running, completed or pending and for how long, what kind of agent it is and on which model, and its current step or its last word. Lines into a running wave move. Click a card to open that subagent's log.
+- At the bottom, the latest steps of its subagents as they happen.
+
+A parallel run shows its tasks as one wave, each with its branch (or folder) and its pane's state; click one to go to its pane.
+
+## Session links
 
 Drag a line from one session to another and the target receives the source's context — what it is working on, what it has decided, where it is. It works across Claude Code and Codex.
 
@@ -11,7 +24,7 @@ Between two Claude Code sessions the link is direct, whether you draw it here or
 
 With many sessions, move around the chart: scroll, or drag the empty space, to move the view; **⌘** + scroll zooms around the pointer. The buttons at the bottom right zoom out and in, go back to 100%, and fit every session in view.
 
-## Link modes
+### Link modes
 
 | Mode | Behavior |
 |---|---|
@@ -21,11 +34,11 @@ With many sessions, move around the chart: scroll, or drag the empty space, to m
 
 A live link keeps a second agent informed without you copying anything. A two-way link lets two agents work on halves of the same problem while each knows what the other just did.
 
-## What is sent
+### What is sent
 
 A summary of the conversation, written to `~/.agentty/handoffs/` and handed to the target agent as a file. Prompts and responses are not replayed turn by turn.
 
-## When to use which
+### When to use which
 
 - **Once** — you are starting a second agent on related work and want it to begin informed.
 - **Live** — one agent implements while another reviews, writes docs or watches tests.

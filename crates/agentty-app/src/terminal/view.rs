@@ -319,6 +319,8 @@ pub struct TerminalView {
     pub ask_request: Option<(String, Option<String>)>,
     /// Subagents of the current session, newest last.
     pub subagents: Vec<SubagentRun>,
+    /// What the user last asked the agent (from its `UserPromptSubmit` hook).
+    pub last_prompt: Option<String>,
     /// The to-do list the agent keeps, as its hooks reported it.
     pub plan: Vec<crate::session_plan::PlanItem>,
     /// Cron jobs and the loop wake-up the agent has scheduled in this run (they die with it).
@@ -489,6 +491,7 @@ impl TerminalView {
             ask_serial: 0,
             ask_request: None,
             subagents: Vec::new(),
+            last_prompt: None,
             plan: Vec::new(),
             schedules: Vec::new(),
             stopping_subagents: Default::default(),
@@ -1489,6 +1492,9 @@ impl TerminalView {
                 // next request is a new one. A subagent's tool call says nothing about that.
                 if detail.subagent.is_none() {
                     self.ask_gate.resume();
+                    if let Some(prompt) = detail.prompt.clone() {
+                        self.last_prompt = Some(prompt);
+                    }
                 }
                 if let Some((id, _)) = &detail.subagent {
                     // Tool calls inside a subagent keep the main turn working.

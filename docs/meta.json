@@ -102,10 +102,10 @@
         {
           "slug": "session-flow",
           "title": {
-            "en": "Session Flow",
-            "ko": "Session Flow",
-            "ja": "Session Flow",
-            "zh": "Session Flow"
+            "en": "Orchestrator",
+            "ko": "오케스트레이터",
+            "ja": "オーケストレーター",
+            "zh": "编排器"
           }
         },
         {

@@ -68,6 +68,7 @@ pub mod resume_hint;
 mod run_panel;
 mod servers;
 mod service_status;
+mod session_board;
 mod session_card;
 mod session_viewer;
 mod settings_agents;
@@ -561,6 +562,8 @@ pub struct Workbench {
     native_title: String,
     /// Spend and limit resets per agent, for the menu bar.
     account_usage: Vec<account_usage::AccountUsage>,
+    /// The session page's Agents and Workflows views (and which one is on screen).
+    session_board: session_board::SessionBoard,
     /// Tokens and spend of each session, by session id (from the same scan).
     session_usage: std::collections::HashMap<String, account_usage::SessionTotals>,
     /// When a finished turn last asked for the totals again.
@@ -960,6 +963,7 @@ impl Workbench {
             toast_seq: 0,
             native_title: String::new(),
             account_usage: Vec::new(),
+            session_board: Default::default(),
             session_usage: Default::default(),
             usage_refreshed: None,
             card_plans_open: HashSet::new(),

@@ -13,7 +13,7 @@ Agentty 把所有东西都放在 `~/.agentty/`。其中大部分在**设置**（
 | `~/.agentty/workspaces.json` | 工作区、标签页、分屏和分组 |
 | `~/.agentty/themes/*.itermcolors` | 导入的配色主题 |
 | `~/.agentty/pricing.json` | 非 Claude 模型的价格 |
-| `~/.agentty/handoffs/` | Session Flow 与智能体迁移产生的上下文文档 |
+| `~/.agentty/handoffs/` | 编排器 (会话连接) 与智能体迁移产生的上下文文档 |
 | `~/.agentty/connectors.json` | API 连接器定义（不含密钥） |
 | `~/.agentty/agent-auth.json` | 新智能体标签页的登录方式（不含密钥） |
 | `~/.agentty/codex-home/` | 用 API 密钥登录时的专用 Codex 主目录 |

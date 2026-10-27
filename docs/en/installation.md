@@ -76,7 +76,7 @@ You need Rust 1.98 (pinned in `rust-toolchain.toml`) and your platform's build t
 | `~/.agentty/settings.json` | Preferences |
 | `~/.agentty/workspaces.json` | Workspaces, tabs, splits and groups |
 | `~/.agentty/plugins/` | Installed plugins |
-| `~/.agentty/handoffs/` | Context documents from Session Flow and migrations |
+| `~/.agentty/handoffs/` | Context documents from Orchestrator (session links) and migrations |
 | `~/.agentty/connectors.json` | API connector definitions (secrets live in the OS credential store) |
 
 The full list is in the [configuration reference](/docs/configuration-reference).

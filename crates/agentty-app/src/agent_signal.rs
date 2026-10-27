@@ -226,6 +226,8 @@ pub struct SignalDetail {
     pub session: Option<String>,
     /// A file the tool writes (Claude Code's Edit, MultiEdit, Write), for the editor to show where.
     pub edit: Option<FileEdit>,
+    /// What the user just asked (`UserPromptSubmit`), clipped.
+    pub prompt: Option<String>,
     /// A change to the to-do list the agent keeps (Claude Code's TodoWrite / TaskCreate / TaskUpdate).
     pub plan: Option<Box<crate::session_plan::PlanEvent>>,
     /// A cron job or loop wake-up the agent just scheduled or cancelled (Claude Code).
@@ -476,6 +478,10 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
             .find_map(|k| text(k))
             .filter(|id| id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')),
         edit,
+        prompt: (text("hook_event_name").as_deref() == Some("UserPromptSubmit"))
+            .then(|| text("prompt"))
+            .flatten()
+            .map(|p| p.chars().take(500).collect()),
         plan: crate::session_plan::PlanEvent::from_hook(text("hook_event_name").as_deref(), text("tool_name").as_deref(), &payload)
             .map(Box::new),
         schedule: crate::agent_schedule::ScheduleEvent::from_hook(
