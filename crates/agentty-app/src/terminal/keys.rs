@@ -118,6 +118,22 @@ pub fn to_escape(keystroke: &Keystroke, mode: TermMode, option_as_meta: bool, ag
     Some(bytes)
 }
 
+/// A keystroke that types a character with AltGr: Windows reports AltGr as Ctrl+Alt on a layout
+/// GPUI does not list as an AltGr layout (Swiss German, for one), and the character it produces
+/// differs from the key (`@` from the 2 key). A Ctrl+Alt chord that types nothing new, such as
+/// Ctrl+Alt+2 on a US layout, is not one.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn is_altgr_text(keystroke: &Keystroke) -> bool {
+    let m = keystroke.modifiers;
+    m.control
+        && m.alt
+        && !m.platform
+        && keystroke
+            .key_char
+            .as_deref()
+            .is_some_and(|text| text != keystroke.key && !text.chars().any(|ch| ch.is_control() || ch.is_whitespace()))
+}
+
 /// Windows: a character typed with AltGr (`@` is AltGr+2 on a Swiss or German keyboard), as
 /// ConPTY's win32-input-mode key presses with Right Alt and Left Ctrl held, the way Windows
 /// Terminal sends it. Written as plain text, ConPTY makes the key event up from the layout with
@@ -187,6 +203,8 @@ fn control_byte(ch: char) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use gpui::Modifiers;
+
     use super::*;
 
     fn ks(s: &str) -> Keystroke {
@@ -210,6 +228,26 @@ mod tests {
         assert_eq!(to_escape(&ks("enter"), TermMode::empty(), false, false), Some(b"\r".to_vec()));
         assert_eq!(to_escape(&ks("shift-enter"), TermMode::empty(), false, false), Some(b"\x1b\r".to_vec()));
         assert_eq!(to_escape(&ks("alt-enter"), TermMode::empty(), false, false), Some(b"\x1b\r".to_vec()));
+    }
+
+    #[test]
+    fn altgr_keystrokes_are_recognised_by_their_character() {
+        let typed = |key: &str, key_char: Option<&str>, control: bool, alt: bool| Keystroke {
+            modifiers: Modifiers { control, alt, ..Modifiers::default() },
+            key: key.to_string(),
+            key_char: key_char.map(str::to_string),
+        };
+        // Swiss German AltGr+2 and AltGr+3: Ctrl+Alt reported, `@` and `#` typed.
+        assert!(is_altgr_text(&typed("2", Some("@"), true, true)));
+        assert!(is_altgr_text(&typed("3", Some("#"), true, true)));
+        // A Ctrl+Alt chord that types the key itself, and a plain Ctrl+Alt letter with no character.
+        assert!(!is_altgr_text(&typed("2", Some("2"), true, true)));
+        assert!(!is_altgr_text(&typed("c", None, true, true)));
+        assert!(!is_altgr_text(&typed("c", Some("\u{3}"), true, true)));
+        // Ctrl+Alt+Space is still the NUL that `to_escape` sends, not a typed space.
+        assert!(!is_altgr_text(&typed("space", Some(" "), true, true)));
+        // Not Ctrl+Alt: the German layout already reports AltGr as nothing, and plain text is text.
+        assert!(!is_altgr_text(&typed("2", Some("@"), false, false)));
     }
 
     #[test]

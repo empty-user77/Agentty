@@ -1882,6 +1882,12 @@ impl TerminalView {
             }
         }
         self.note_key(keystroke, cx);
+        // Windows reports AltGr as Ctrl+Alt on Swiss German: the character is typed, so it goes on
+        // to the text input (`replace_text_in_range`) rather than being read as a Ctrl+Alt chord.
+        #[cfg(windows)]
+        if keys::is_altgr_text(keystroke) {
+            return;
+        }
         if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta, self.live_agent.is_some()) {
             // This key went to the program rather than to the input method, so whatever was being
             // composed is not what the program has. Drawing it on would put it over the text the
