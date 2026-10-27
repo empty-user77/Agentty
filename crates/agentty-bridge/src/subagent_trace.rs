@@ -420,7 +420,10 @@ impl TraceReader {
         let message = &v["message"];
         self.count_tokens(message);
         self.trace.interrupted = false;
-        self.trace.finished = message["stop_reason"] == "end_turn";
+        // A final answer ends it, and so does a turn the API ended with an error (a refusal by
+        // the model's safeguards, say): Claude Code writes that as the agent's last message.
+        self.trace.finished = matches!(message["stop_reason"].as_str(), Some("end_turn" | "refusal" | "stop_sequence"))
+            || v["isApiErrorMessage"].as_bool() == Some(true);
         let Some(blocks) = message["content"].as_array() else { return false };
         let mut changed = false;
         for block in blocks {
@@ -784,6 +787,18 @@ mod tests {
         assert!(reader.trace.current().is_none());
         reader.ingest(&serde_json::json!({"type": "user", "message": {"content": "The coordinator sent a message: fix it"}}));
         assert!(!reader.trace.finished);
+    }
+
+    #[test]
+    fn a_turn_the_api_ended_with_an_error_ends_it() {
+        let mut reader = TraceReader::new(PathBuf::new());
+        reader.ingest(&serde_json::json!({"type": "user", "message": {"content": "Review fib.py"}}));
+        reader.ingest(&serde_json::json!({"type": "assistant", "message": {"stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": "cat fib.py"}}]}}));
+        assert!(!reader.trace.ended());
+        reader.ingest(&serde_json::json!({"type": "assistant", "isApiErrorMessage": true, "message": {"stop_reason": "refusal",
+            "content": [{"type": "text", "text": "API Error: the safeguards flagged this message"}]}}));
+        assert!(reader.trace.finished);
     }
 
     #[test]
