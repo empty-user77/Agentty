@@ -94,9 +94,37 @@ impl Workbench {
         let now = now_ms();
         let traces = panel.traces.lock().unwrap_or_else(|e| e.into_inner());
         let trace_of = |id: &str| traces.get(id).map(|r| &r.trace);
-        let running = agents.iter().filter(|a| trace_of(&a.id).is_some_and(|t| !t.finished)).count();
-        let keys: Vec<(bool, u64)> =
-            agents.iter().map(|a| trace_of(&a.id).map_or((false, 0), |t| (!t.finished, t.last_ms.or(t.started_ms).unwrap_or(0)))).collect();
+        // Finished ones the user sent away stay out of both views.
+        let dismissed = self
+            .all_panes()
+            .into_iter()
+            .find(|p| p.entity_id() == panel.pane)
+            .map(|p| p.read(cx).dismissed_subagents.clone())
+            .unwrap_or_default();
+        let agents: Vec<SubagentFile> = agents.iter().filter(|a| !dismissed.contains(&a.id)).cloned().collect();
+        let agents = agents.as_slice();
+        // Claude Code's `SubagentStop` can come before the transcript shows the end.
+        let ended: std::collections::HashSet<String> = self
+            .all_panes()
+            .into_iter()
+            .find(|p| p.entity_id() == panel.pane)
+            .map(|p| p.read(cx).subagents.iter().filter(|r| r.finished.is_some()).map(|r| r.id.clone()).collect())
+            .unwrap_or_default();
+        let running = agents
+            .iter()
+            .filter(|a| trace_of(&a.id).is_some() && !super::agent_speech::finished(trace_of(&a.id), ended.contains(&a.id), now))
+            .count();
+        // Running ones by when they started, not by their last step: rows that swap places with
+        // every step would move a stop button out from under the pointer.
+        let keys: Vec<(bool, u64)> = agents
+            .iter()
+            .map(|a| {
+                trace_of(&a.id).map_or((false, 0), |t| {
+                    let at = if t.finished { t.last_ms.or(t.started_ms) } else { t.started_ms };
+                    (!t.finished, at.unwrap_or(0))
+                })
+            })
+            .collect();
         let agents: Vec<&SubagentFile> = recent_first(&keys).into_iter().map(|i| &agents[i]).collect();
         let agents = agents.as_slice();
 
@@ -115,7 +143,9 @@ impl Workbench {
                 cx,
                 "collab.agents_count",
                 &[("running", &running.to_string()), ("total", &agents.len().to_string())],
-            )));
+            )))
+            .child(div().flex_1())
+            .child(self.view_switch(cx));
         let header = self.agent_window_bar(header, cx);
 
         let list = self.render_trace_list(panel, agents, &trace_of, now, cx);
@@ -126,6 +156,28 @@ impl Workbench {
             },
             None => crate::ui::hint(t(cx, "collab.pick_agent")).into_any_element(),
         };
+        if self.agent_window.office {
+            let office = self.render_office(panel, agents, &trace_of, now, cx);
+            let open = agents.iter().any(|a| panel.selected.as_deref() == Some(a.id.as_str()));
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(header)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .child(div().flex_1().min_w_0().h_full().child(office))
+                        // Whoever was clicked: their log beside the office.
+                        .when(open, |d| {
+                            d.child(div().w(px(1.)).bg(hex(Chrome::OVERLAY_BORDER)))
+                                .child(div().w(px(420.)).flex_shrink_0().h_full().child(detail))
+                        }),
+                )
+                .into_any_element();
+        }
         div()
             .size_full()
             .flex()
@@ -311,6 +363,8 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut list = div().id("subagent-list").w(px(270.)).flex_shrink_0().h_full().overflow_y_scroll().flex().flex_col().gap_0p5().p_1();
+        let pane = self.all_panes().into_iter().find(|p| p.entity_id() == panel.pane);
+        let stopping = pane.as_ref().map(|p| p.read(cx).stopping_subagents.clone()).unwrap_or_default();
         for (index, agent) in agents.iter().enumerate() {
             let trace = trace_of(&agent.id);
             let finished = trace.is_some_and(|t| t.finished);
@@ -393,7 +447,12 @@ impl Workbench {
                             )
                             .children(agent.model.clone().map(|m| div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child(m)))
                             .child(div().flex_1())
-                            .child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child(elapsed)),
+                            .child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child(elapsed))
+                            .children(
+                                pane.clone()
+                                    .filter(|_| trace.is_some() && !finished)
+                                    .map(|pane| self.stop_subagent_button(&pane, &agent.id, stopping.contains(&agent.id), cx)),
+                            ),
                     )
                     .child(div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(agent.description.clone()))
                     .children(now_line)
@@ -475,7 +534,7 @@ impl Workbench {
                         .t_small()
                         .text_color(hex(Chrome::FOREGROUND))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_step(TASK_KEY, cx)))
-                        .child(text_lines(task, if open { usize::MAX } else { 3 })),
+                        .child(super::agent_speech::markdown(task, if open { usize::MAX } else { 3 })),
                 ),
             );
         }
@@ -613,7 +672,7 @@ impl Workbench {
                             )
                         })
                         // Closed, the report shows its first lines and a passing remark its first one.
-                        .child(text_lines(
+                        .child(super::agent_speech::markdown(
                             &step.target,
                             if open {
                                 usize::MAX
@@ -641,8 +700,10 @@ impl Workbench {
             .t_caption()
             .child(status_icon(step.status, finished))
             .child(icon(kind_icon(kind), 11., hex(kind_color(kind))))
-            .child(div().flex_shrink_0().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(tool))
-            .child(div().flex_1().min_w_0().truncate().font_family(MONO).text_color(hex(Chrome::FOREGROUND)).child(step.target.clone()))
+            // What it did, in words; the call itself on the line below.
+            .child(
+                div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::BRIGHT)).child(super::agent_speech::narrate(step, cx)),
+            )
             .when(step.added + step.removed > 0, |d| {
                 d.child(div().flex_shrink_0().text_color(hex(Chrome::SUCCESS)).child(format!("+{}", step.added)))
                     .child(div().flex_shrink_0().text_color(hex(Chrome::ERROR)).child(format!("−{}", step.removed)))
@@ -702,9 +763,11 @@ impl Workbench {
             .when(failed, |d| d.bg(hex_alpha(Chrome::ERROR, 0.08)))
             .when(has_body, |d| d.cursor_pointer().hover(|s| s.bg(hex(Chrome::HOVER))).on_click(toggle))
             .child(row)
-            .children(
-                step.detail.clone().map(|detail| div().ml(px(30.)).t_caption().truncate().text_color(hex(Chrome::MUTED)).child(detail)),
-            )
+            .child(div().ml(px(30.)).t_caption().truncate().font_family(MONO).text_color(hex(Chrome::MUTED)).child(match &step.detail {
+                // A Bash call's description is already the line above.
+                Some(detail) if !matches!(tool.as_str(), "Bash" | "PowerShell") => format!("{tool} · {} · {detail}", step.target),
+                _ => format!("{tool} · {}", step.target),
+            }))
             // A failure shows its last line without opening it.
             .when(failed && !open, |d| {
                 d.children(
@@ -714,6 +777,44 @@ impl Workbench {
                 )
             })
             .children(body)
+            .into_any_element()
+    }
+
+    /// Office or timeline: two ways to look at the same subagents.
+    fn view_switch(&self, cx: &mut Context<Self>) -> AnyElement {
+        let office = self.agent_window.office;
+        let option = |id: &'static str, label: &'static str, glyph: &'static str, on: bool, value: bool, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .t_caption()
+                .when(on, |d| d.bg(hex(Chrome::SELECTED)).text_color(hex(Chrome::BRIGHT)))
+                .when(!on, |d| d.text_color(hex(Chrome::MUTED)).hover(|s| s.bg(hex(Chrome::HOVER))))
+                .child(icon(glyph, 11., hex(if on { Chrome::BRIGHT } else { Chrome::MUTED })))
+                .child(label)
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.agent_window.office = value;
+                    if value {
+                        this.animate_office(cx);
+                    }
+                    cx.notify();
+                }))
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_0p5()
+            .p_0p5()
+            .rounded_md()
+            .bg(hex_alpha(Chrome::MUTED, 0.12))
+            .child(option("view-office", t(cx, "office.view"), "users", office, true, cx))
+            .child(option("view-timeline", t(cx, "office.timeline"), "list", !office, false, cx))
             .into_any_element()
     }
 
@@ -745,26 +846,6 @@ fn section(title: impl Into<SharedString>) -> gpui::Div {
         .flex_col()
         .gap_1()
         .child(div().t_caption().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::MUTED)).child(title.into()))
-}
-
-/// The first `keep` lines of a text, each wrapping on its own (`line_clamp` counts the rows of one
-/// paragraph, so it cannot shorten text with line breaks); `…` when some were left out.
-fn text_lines(text: &str, keep: usize) -> gpui::Div {
-    let lines: Vec<&str> =
-        if keep == usize::MAX { text.lines().collect() } else { text.lines().filter(|l| !l.trim().is_empty()).collect() };
-    // A clamped line needs a width to wrap in: without one it lays out empty and very tall.
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .min_w_0()
-        .children(
-            lines
-                .iter()
-                .take(keep)
-                .map(|l| div().when(keep == 1, |d| d.line_clamp(2)).child(if l.is_empty() { " ".to_string() } else { l.to_string() })),
-        )
-        .when(lines.len() > keep, |d| d.child(div().text_color(hex(Chrome::MUTED)).child("…")))
 }
 
 fn more_lines(n: usize, cx: &gpui::App) -> gpui::Div {

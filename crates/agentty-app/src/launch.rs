@@ -575,6 +575,18 @@ fn claude_hook_settings() -> String {
             "matcher": "Edit|Write|MultiEdit|NotebookEdit",
             "hooks": [{ "type": "command", "command": format!("{} worktree-guard", shell_quote(&hook_exe())) }],
         }));
+        // A subagent the user stopped is turned down at its next tool call. The guard only starts
+        // while the pane has a list of them, so other tool calls cost a file test.
+        let stops = shell_quote(&crate::subagent_stop::dir().display().to_string().replace('\\', "/"));
+        list.push(serde_json::json!({
+            "hooks": [{
+                "type": "command",
+                "command": format!(
+                    "[ -s {stops}/\"$AGENTTY_PANE_ID\" ] && exec {} subagent-guard {stops}; exit 0",
+                    shell_quote(&hook_exe())
+                ),
+            }],
+        }));
     }
     serde_json::json!({
         "hooks": {
