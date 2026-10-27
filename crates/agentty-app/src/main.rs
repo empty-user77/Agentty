@@ -53,6 +53,7 @@ mod plugins_mcp;
 mod procinfo;
 mod remote;
 mod run_log;
+mod session_plan;
 mod settings;
 mod setup_check;
 mod shell_integration;

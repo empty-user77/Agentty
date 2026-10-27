@@ -68,6 +68,7 @@ pub mod resume_hint;
 mod run_panel;
 mod servers;
 mod service_status;
+mod session_card;
 mod session_viewer;
 mod settings_agents;
 mod settings_lsp;
@@ -560,6 +561,14 @@ pub struct Workbench {
     native_title: String,
     /// Spend and limit resets per agent, for the menu bar.
     account_usage: Vec<account_usage::AccountUsage>,
+    /// Tokens and spend of each session, by session id (from the same scan).
+    session_usage: std::collections::HashMap<String, account_usage::SessionTotals>,
+    /// When a finished turn last asked for the totals again.
+    usage_refreshed: Option<std::time::Instant>,
+    /// The pane a side chat was asked for, while its dialog explains what that does.
+    side_chat_confirm: Option<Pane>,
+    /// Workspace cards whose to-do list is open.
+    card_plans_open: HashSet<u64>,
     /// Incremental transcript scanner behind `account_usage`, shared with the refresh button.
     usage_scanner: std::sync::Arc<std::sync::Mutex<agentty_bridge::usage::UsageScanner>>,
     /// Subagents / session links popover of a pane.
@@ -951,6 +960,10 @@ impl Workbench {
             toast_seq: 0,
             native_title: String::new(),
             account_usage: Vec::new(),
+            session_usage: Default::default(),
+            usage_refreshed: None,
+            card_plans_open: HashSet::new(),
+            side_chat_confirm: None,
             usage_scanner: Default::default(),
             agent_panel: None,
             agent_window: Default::default(),
@@ -1483,6 +1496,13 @@ impl Workbench {
 
     pub fn apply_signal(&mut self, signal: AgentSignal, cx: &mut Context<Self>) {
         self.editor_signal(&signal, cx);
+        // A turn ended: what it used shows on its card now rather than at the next poll.
+        if signal.kind == crate::agent_signal::SignalKind::Stop
+            && self.usage_refreshed.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(15))
+        {
+            self.usage_refreshed = Some(std::time::Instant::now());
+            self.refresh_account_usage(cx);
+        }
         if let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == signal.pane_id) {
             pane.update(cx, |view, cx| view.apply_signal(signal, cx));
         }
@@ -3458,6 +3478,27 @@ impl Render for Workbench {
                 if this.close_confirm_key(event, window, cx) {
                     return cx.stop_propagation();
                 }
+                // So does the side chat's: Enter opens it, Esc does not.
+                if let Some(pane) = this.side_chat_confirm.clone() {
+                    let m = &event.keystroke.modifiers;
+                    if !(m.platform || m.control) {
+                        if !event.is_held {
+                            match event.keystroke.key.as_str() {
+                                "enter" => {
+                                    this.side_chat_confirm = None;
+                                    this.open_side_chat(&pane, window, cx);
+                                }
+                                "escape" => {
+                                    this.side_chat_confirm = None;
+                                    this.focus_active(window, cx);
+                                    cx.notify();
+                                }
+                                _ => {}
+                            }
+                        }
+                        return cx.stop_propagation();
+                    }
+                }
                 // While the mic records, Enter sends what was said and Esc drops it — before the
                 // terminal sees either key.
                 if this.voice_key(event, window, cx) {
@@ -3772,6 +3813,7 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_webview_setup_dialog(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_side_chat_confirm(cx))
             .children(self.render_parent_picker(cx))
             .children(self.render_remote_password_dialog(window, cx))
             .children(self.render_tree_remove_confirm(cx))

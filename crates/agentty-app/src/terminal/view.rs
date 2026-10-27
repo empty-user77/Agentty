@@ -170,6 +170,16 @@ pub struct SubagentRun {
     pub last_tool: Option<(String, Option<String>)>,
     /// First line of its final answer.
     pub result: Option<String>,
+    /// Its latest tool call. Claude Code reports background subagents as stopped while they
+    /// still work; a call after that report says it is still at it.
+    pub last_active: Instant,
+}
+
+impl SubagentRun {
+    /// Still working: not reported stopped, or busy again since.
+    pub fn running(&self) -> bool {
+        self.finished.is_none_or(|finished| self.last_active > finished)
+    }
 }
 
 /// What an agent's TUI shows right now, read from the bottom of the screen.
@@ -290,7 +300,7 @@ pub struct TerminalView {
     /// Agent detected in the foreground (also when started by hand in a shell pane).
     pub live_agent: Option<PaneKind>,
     /// When that agent was first seen. A shell pane can be much older than the agent typed into it.
-    agent_since_ms: Option<u64>,
+    pub agent_since_ms: Option<u64>,
     /// Any known agent CLI in the foreground, by brand id (`claude`, `gemini`, `agy`, …).
     pub live_tool: Option<&'static str>,
     /// The process running `live_tool` (on Windows the only way to reach the agent itself).
@@ -309,6 +319,8 @@ pub struct TerminalView {
     pub ask_request: Option<(String, Option<String>)>,
     /// Subagents of the current session, newest last.
     pub subagents: Vec<SubagentRun>,
+    /// The to-do list the agent keeps, as its hooks reported it.
+    pub plan: Vec<crate::session_plan::PlanItem>,
     /// Cron jobs and the loop wake-up the agent has scheduled in this run (they die with it).
     pub schedules: Vec<crate::agent_schedule::AgentSchedule>,
     /// Subagents the user stopped in this session (see `subagent_stop`).
@@ -477,6 +489,7 @@ impl TerminalView {
             ask_serial: 0,
             ask_request: None,
             subagents: Vec::new(),
+            plan: Vec::new(),
             schedules: Vec::new(),
             stopping_subagents: Default::default(),
             dismissed_subagents: Default::default(),
@@ -749,6 +762,7 @@ impl TerminalView {
         self.ask_gate.resume();
         self.last_tool = None;
         self.subagents.clear();
+        self.plan.clear();
         self.schedules.clear();
         self.dismissed_subagents.clear();
         if !self.stopping_subagents.is_empty() {
@@ -1480,8 +1494,12 @@ impl TerminalView {
                     // Tool calls inside a subagent keep the main turn working.
                     if let (Some(run), Some(tool)) = (self.subagents.iter_mut().find(|r| &r.id == id), detail.tool.clone()) {
                         run.last_tool = Some((tool, detail.target.clone()));
+                        run.last_active = Instant::now();
                     }
                 } else if let Some(tool) = detail.tool.clone() {
+                    if let Some(event) = detail.plan.as_deref().cloned() {
+                        crate::session_plan::apply(&mut self.plan, event);
+                    }
                     if let Some(event) = detail.schedule.as_deref().cloned() {
                         crate::agent_schedule::apply(&mut self.schedules, event, chrono::Utc::now().timestamp_millis());
                     }
@@ -1562,6 +1580,7 @@ impl TerminalView {
                         finished: None,
                         last_tool: None,
                         result: None,
+                        last_active: Instant::now(),
                     });
                     // Keep the list bounded for long sessions.
                     if self.subagents.len() > 40 {
@@ -1585,15 +1604,19 @@ impl TerminalView {
                             run.finished = Some(Instant::now());
                             run.result = message.clone();
                         }
-                        None => self.subagents.push(SubagentRun {
-                            id,
-                            kind: agent_type,
-                            task: None,
-                            started: Instant::now(),
-                            finished: Some(Instant::now()),
-                            last_tool: None,
-                            result: message.clone(),
-                        }),
+                        None => {
+                            let now = Instant::now();
+                            self.subagents.push(SubagentRun {
+                                id,
+                                kind: agent_type,
+                                task: None,
+                                started: now,
+                                finished: Some(now),
+                                last_tool: None,
+                                result: message.clone(),
+                                last_active: now,
+                            })
+                        }
                     }
                 }
             }

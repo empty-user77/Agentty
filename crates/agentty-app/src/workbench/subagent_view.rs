@@ -108,7 +108,7 @@ impl Workbench {
             .all_panes()
             .into_iter()
             .find(|p| p.entity_id() == panel.pane)
-            .map(|p| p.read(cx).subagents.iter().filter(|r| r.finished.is_some()).map(|r| r.id.clone()).collect())
+            .map(|p| p.read(cx).subagents.iter().filter(|r| !r.running()).map(|r| r.id.clone()).collect())
             .unwrap_or_default();
         let running = agents
             .iter()

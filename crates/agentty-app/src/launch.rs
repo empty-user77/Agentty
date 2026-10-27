@@ -61,6 +61,9 @@ pub enum Start {
     New,
     /// Resume an existing agent session by id.
     Resume(String),
+    /// A new session that starts with a copy of this one's conversation (Claude Code's
+    /// `--fork-session`): a side chat that leaves the original as it is.
+    Fork(String),
     /// Fresh agent session seeded with an initial prompt (handoffs).
     Prompt(String),
     /// A shell pane that runs a command line first (custom commands); the shell stays afterwards.
@@ -272,6 +275,7 @@ impl LaunchSpec {
                 args.push(crate::agent_bins::program("claude"));
                 match &self.start {
                     Start::Resume(id) => args.extend(["--resume".into(), id.clone()]),
+                    Start::Fork(id) => args.extend(["--resume".into(), id.clone(), "--fork-session".into()]),
                     _ => {
                         if let Some(id) = &self.session_id {
                             args.extend(["--session-id".into(), id.clone()]);
