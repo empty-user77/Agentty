@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows
   around the group.
 
 ### Fixed
+- Windows: `@` and `#` typed with AltGr on Swiss German keyboards now reach Claude Code and Codex in an Agentty tab.
 - A server started in a terminal opened in the in-app browser when it only answered with a line of text (an API's
   "Hello World!") or redirected to another site. Only servers that answer with a web page open by themselves now.
 
