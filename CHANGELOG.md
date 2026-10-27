@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Sidebar: a group's colour shows as a bar down its left edge over a faint wash of the colour, instead of a frame
+  around the group.
+
 ### Fixed
 - A server started in a terminal opened in the in-app browser when it only answered with a line of text (an API's
   "Hello World!") or redirected to another site. Only servers that answer with a web page open by themselves now.
