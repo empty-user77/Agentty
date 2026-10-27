@@ -79,9 +79,17 @@ impl Workbench {
         let mut lines = div().pl(indent).pt_0p5().flex().flex_col().gap_0p5().t_caption();
 
         // State · how long · what it used.
-        let (label, color) = {
-            let view = lead.read(cx);
-            super::status_label_sized(view, true, cx)
+        // An orchestrator's card says how far the orchestration got, as its strip and page do.
+        let (label, color) = match self.record_of_pane(&lead, cx).cloned() {
+            Some(record) => {
+                let team = self.team_of(&record.session, Some(&lead), cx);
+                let (_, color) = self.stage_words(record.stage, team, cx);
+                (crate::i18n::t(cx, super::orchestration::stage_key(record.stage)).to_string(), color)
+            }
+            None => {
+                let view = lead.read(cx);
+                super::status_label_sized(view, true, cx)
+            }
         };
         let now_ms = crate::ui::now_ms();
         let since = agents.iter().filter_map(|p| p.read(cx).agent_since_ms).min();
@@ -185,23 +193,35 @@ impl Workbench {
             }
         }
 
-        // Subagents: the running ones with what each is doing, the finished ones counted.
-        let mut running: Vec<(Pane, crate::terminal::SubagentRun)> = Vec::new();
+        // Subagents: the running ones with what each is doing, the finished ones counted — from
+        // their transcripts when those are followed (as the chip and the subagents window count),
+        // else as the hooks reported them.
+        let mut running: Vec<(Pane, String, Option<String>, u64)> = Vec::new();
         let mut finished = 0;
+        let now_ms = crate::ui::now_ms();
         for pane in &agents {
-            for run in &pane.read(cx).subagents {
-                if run.running() {
-                    running.push((pane.clone(), run.clone()));
-                } else {
-                    finished += 1;
+            match self.subagent_rows(pane, cx) {
+                Some((rows, over)) => {
+                    finished += over;
+                    running.extend(rows.into_iter().map(|(name, doing, started)| (pane.clone(), name, doing, started)));
+                }
+                None => {
+                    for run in &pane.read(cx).subagents {
+                        if run.running() {
+                            let doing = run.last_tool.as_ref().map(|(tool, target)| crate::terminal::tool_label(tool, target.as_deref()));
+                            let name = run.task.clone().unwrap_or_else(|| run.kind.clone());
+                            let started = now_ms.saturating_sub(Instant::now().duration_since(run.started).as_millis() as u64);
+                            running.push((pane.clone(), name, doing, started));
+                        } else {
+                            finished += 1;
+                        }
+                    }
                 }
             }
         }
-        running.sort_by_key(|(_, run)| run.started);
-        let now = Instant::now();
-        for (index, (pane, run)) in running.iter().take(SUBAGENT_ROWS).enumerate() {
-            let doing = run.last_tool.as_ref().map(|(tool, target)| crate::terminal::tool_label(tool, target.as_deref()));
-            let name = run.task.clone().unwrap_or_else(|| run.kind.clone());
+        running.sort_by_key(|(_, _, _, started)| *started);
+        for (index, (pane, name, doing, started)) in running.iter().take(SUBAGENT_ROWS).enumerate() {
+            let (name, doing) = (name.clone(), doing.clone());
             let target = pane.clone();
             lines = lines.child(
                 div()
@@ -225,7 +245,7 @@ impl Workbench {
                     .child(div().flex_shrink_0().max_w(px(110.)).truncate().text_color(tone(Chrome::FOREGROUND, 1.)).child(name))
                     .children(doing.map(|doing| div().min_w_0().truncate().text_color(muted).child(doing)))
                     .child(div().flex_1())
-                    .child(div().flex_shrink_0().text_color(muted).child(span(now.duration_since(run.started).as_secs()))),
+                    .child(div().flex_shrink_0().text_color(muted).child(span(now_ms.saturating_sub(*started) / 1000))),
             );
         }
         let more = running.len().saturating_sub(SUBAGENT_ROWS);

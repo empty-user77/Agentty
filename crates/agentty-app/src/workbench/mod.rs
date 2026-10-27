@@ -5164,6 +5164,47 @@ impl Workbench {
                 let (dx, dy) = (parts.next().unwrap_or(0.), parts.next().unwrap_or(0.));
                 self.session_board.pan += gpui::point(gpui::px(dx), gpui::px(dy));
             }
+            // Every orchestration as each place shows it: its stage, the strip's and the page's words,
+            // its team, and its pane's subagent chip — to check they agree.
+            "orch-state" => {
+                let records = self.session_board.records.clone();
+                for record in records {
+                    let pane = self.pane_of_record(&record, cx);
+                    let team = self.team_of(&record.session, pane.as_ref(), cx);
+                    let (words, _) = self.stage_words(record.stage, team, cx);
+                    let chip = pane.as_ref().map(|p| self.subagent_chip_counts(p, cx));
+                    let status = pane.as_ref().map(|p| format!("{:?}", p.read(cx).status));
+                    eprintln!(
+                        "orch-state: id={} stage={:?} team={}/{} running={} cut={} chip={:?} pane={} status={:?} words={words}",
+                        record.id,
+                        record.stage,
+                        team.done,
+                        team.all,
+                        team.running,
+                        team.cut_off,
+                        chip,
+                        pane.is_some(),
+                        status,
+                    );
+                }
+            }
+            // What the strip's and the page's buttons do, on the newest orchestration.
+            "orch-do" => {
+                if let Some(id) = self.session_board.records.iter().map(|r| r.id).max() {
+                    match argument {
+                        "start" => self.start_orchestration(id, cx),
+                        "resume" => self.resume_orchestration(id, window, cx),
+                        "stop" => self.stop_orchestration(id, cx),
+                        _ => {}
+                    }
+                }
+            }
+            // The folder of the new-orchestration dialog.
+            "orch-folder" => {
+                if let Some(dialog) = &mut self.orchestrator_dialog {
+                    dialog.folder = std::path::PathBuf::from(argument);
+                }
+            }
             // The goal box of the new-orchestration dialog.
             "orch-goal" => {
                 if let Some(dialog) = &self.orchestrator_dialog {

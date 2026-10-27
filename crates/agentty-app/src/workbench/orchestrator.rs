@@ -170,7 +170,7 @@ pub struct OrchestratorDialog {
     pub goal: Entity<TextInput>,
     _goal_events: Subscription,
     profile: Profile,
-    folder: PathBuf,
+    pub folder: PathBuf,
     place: Place,
     /// Other agents installed here, by binary, and whether this team uses them.
     helpers: Vec<(&'static str, bool)>,

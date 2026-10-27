@@ -287,7 +287,7 @@ impl Workbench {
                             .items_center()
                             .gap_1()
                             .t_caption()
-                            .child(if trace.stopped {
+                            .child(if trace.stopped || trace.interrupted {
                                 icon("circle-x", 11., hex(Chrome::MUTED)).into_any_element()
                             } else if trace.ended() {
                                 icon("circle-check", 11., hex(Chrome::SUCCESS)).into_any_element()
@@ -434,7 +434,7 @@ impl Workbench {
                             .items_center()
                             .gap_1p5()
                             .t_small()
-                            .child(if trace.is_some_and(|t| t.stopped) {
+                            .child(if trace.is_some_and(|t| t.stopped || t.interrupted) {
                                 icon("circle-x", IconSize::INLINE, hex(Chrome::MUTED)).into_any_element()
                             } else if finished || trace.is_none() {
                                 icon("circle-check", IconSize::INLINE, hex(if finished { Chrome::SUCCESS } else { Chrome::MUTED }))
