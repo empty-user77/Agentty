@@ -87,7 +87,7 @@ pub const HELPERS: &[Helper] = &[
         binary: "agy",
         name: "Antigravity CLI",
         strength: "a second, independent take from another model family, on building or on reviewing",
-        run: "`{cmd} -p \"<task>\" < /dev/null` (add `--mode accept-edits` when it has to change files in this folder)",
+        run: "`{cmd} -p \"<task>\" < /dev/null` (`--mode plan` to only read and review, `--mode accept-edits` when it has to change files in this folder)",
     },
 ];
 

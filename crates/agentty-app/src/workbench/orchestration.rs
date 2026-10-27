@@ -127,6 +127,10 @@ pub fn next_stage(stage: Stage, seen_since: Option<u64>, seen: &Seen) -> (Stage,
         } else {
             Stage::Done
         }
+    } else if stage == Stage::Running && team.all > 0 && team.cut_off == 0 {
+        // Resting in the same process with its whole team done (the last agent's report came in
+        // after its turn, so the pane says idle rather than finished): done.
+        Stage::Done
     } else if team.cut_off > 0 && unfinished {
         // Cut off while it ran; a finished one keeps its result.
         Stage::Interrupted
@@ -686,6 +690,14 @@ mod tests {
         // A finished one opened again later (a new process, resting) stays done.
         let reopened = Seen { since: Some(900), ..seen(false, false, (0, 4, 3, 7)) };
         assert_eq!(next_stage(Stage::Done, Some(100), &reopened).0, Stage::Done);
+    }
+
+    #[test]
+    fn resting_after_its_report_with_the_team_done_is_done() {
+        // Not in a turn, not "finished" (an agent's report came in last), nothing running.
+        assert_eq!(next_stage(Stage::Running, Some(100), &seen(false, false, (0, 4, 0, 4))).0, Stage::Done);
+        // Still running agents: running.
+        assert_eq!(next_stage(Stage::Running, Some(100), &seen(false, false, (1, 3, 0, 4))).0, Stage::Running);
     }
 
     #[test]
