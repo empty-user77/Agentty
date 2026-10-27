@@ -825,16 +825,19 @@ impl Workbench {
                     .gap_3()
                     .child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(said_color)))
                     .child(div().min_w_0().truncate().text_color(hex(Chrome::FOREGROUND)).child(said))
-                    .child(div().min_w_0().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(tf(
-                        cx,
-                        "sessions.summary",
-                        &[
-                            ("waves", &(waves.len() - 1).to_string()),
-                            ("done", &done.to_string()),
-                            ("all", &all.to_string()),
-                            ("models", &models.to_string()),
-                        ],
-                    ))),
+                    // No subagent yet: "wave 0 · 0/0 done" would say nothing.
+                    .when(all > 0, |d| {
+                        d.child(div().min_w_0().truncate().t_caption().text_color(hex(Chrome::MUTED)).child(tf(
+                            cx,
+                            "sessions.summary",
+                            &[
+                                ("waves", &(waves.len() - 1).to_string()),
+                                ("done", &done.to_string()),
+                                ("all", &all.to_string()),
+                                ("models", &models.to_string()),
+                            ],
+                        )))
+                    }),
             )
             .when_some(record.as_ref().filter(|r| r.stage != Stage::Ready), |d, r| {
                 d.children(self.stage_buttons(r.id, r.stage, "page", cx))
