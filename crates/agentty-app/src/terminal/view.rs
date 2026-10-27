@@ -290,7 +290,7 @@ pub struct TerminalView {
     /// Agent detected in the foreground (also when started by hand in a shell pane).
     pub live_agent: Option<PaneKind>,
     /// When that agent was first seen. A shell pane can be much older than the agent typed into it.
-    agent_since_ms: Option<u64>,
+    pub agent_since_ms: Option<u64>,
     /// Any known agent CLI in the foreground, by brand id (`claude`, `gemini`, `agy`, …).
     pub live_tool: Option<&'static str>,
     /// The process running `live_tool` (on Windows the only way to reach the agent itself).
@@ -309,6 +309,8 @@ pub struct TerminalView {
     pub ask_request: Option<(String, Option<String>)>,
     /// Subagents of the current session, newest last.
     pub subagents: Vec<SubagentRun>,
+    /// What the user last asked the agent (from its `UserPromptSubmit` hook).
+    pub last_prompt: Option<String>,
     /// Descriptions of Agent tool calls whose subagent has not reported `SubagentStart` yet.
     pending_subagent_tasks: std::collections::VecDeque<Option<String>>,
     /// Session id of the agent in the foreground (launched with it, or found from its transcript).
@@ -471,6 +473,7 @@ impl TerminalView {
             ask_serial: 0,
             ask_request: None,
             subagents: Vec::new(),
+            last_prompt: None,
             pending_subagent_tasks: Default::default(),
             last_tool: None,
             session_id_live: None,
@@ -1460,6 +1463,9 @@ impl TerminalView {
                 // next request is a new one. A subagent's tool call says nothing about that.
                 if detail.subagent.is_none() {
                     self.ask_gate.resume();
+                    if let Some(prompt) = detail.prompt.clone() {
+                        self.last_prompt = Some(prompt);
+                    }
                 }
                 if let Some((id, _)) = &detail.subagent {
                     // Tool calls inside a subagent keep the main turn working.

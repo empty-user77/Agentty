@@ -40,7 +40,7 @@ Text fields and the file editor use plain Ctrl (Ctrl+C / V / X / A / Z, Ctrl+S, 
 | Toggle sidebar | ⌘B |
 | Workspaces / Local sessions | ⇧⌘E / ⇧⌘S |
 | Git / Extensions | ⇧⌘G / ⇧⌘X |
-| Session Flow / Monitoring / Settings | ⇧⌘F / ⌥⌘U / ⌘, |
+| Orchestrator / Monitoring / Settings | ⇧⌘F / ⌥⌘U / ⌘, |
 | In-app browser / Files panel | ⇧⌘B / ⌥⌘B |
 | Command palette / Jump to unread | ⇧⌘P / ⇧⌘U |
 | Voice input (record · ⏎ send · Esc cancel) | ⇧⌘M |

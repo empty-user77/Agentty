@@ -61,7 +61,7 @@ Today, plugins already add panels and automation workspaces, drive the in-app br
 |---|---|
 | **Agent awareness** | Live status per workspace, lit borders for panes that need an answer, notifications, a notification center, jump to the latest unread |
 | **Sessions** | Browse and resume `~/.claude` and `~/.codex` sessions, search them by title or content, migrate a conversation from Claude to Codex and back |
-| **Session Flow** | Drag a line from one agent to another to share its context; mark it live to forward every turn |
+| **Orchestrator** | Watch an agent's subagents work in waves; drag a line from one agent to another to share its context, and mark it live to forward every turn |
 | **Git** | Switch repositories and branches, fetch, pull, push, review diffs, commit selected files, browse history, merge |
 | **Working trees** | A worktree per session, a panel that shows every tree, who works in it and what changed |
 | **Files & editor** | Project tree, a file editor with syntax colors and formatters, "Open in editor" for VS Code or Cursor |

@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Orchestrator (what was Session Flow, **⇧⌘F**): a Workflow tab laid out like omo's. Threads on the left — every
+  agent session and every parallel run started with `agentty tasks`; for the one picked, what you last asked it, the
+  orchestrator's state, and its subagents as waves (those started together), each card saying running / completed,
+  for how long, the kind of agent and its model, and its current step or last word, with moving lines into the wave
+  at work and a feed of the latest steps below. Sessions can be opened, sent a message or interrupted from there.
+  The connection map is the Session links tab, unchanged.
+
 ### Changed
 - Sidebar: a group's colour shows as a bar down its left edge over a faint wash of the colour, instead of a frame
   around the group.

@@ -226,6 +226,8 @@ pub struct SignalDetail {
     pub session: Option<String>,
     /// A file the tool writes (Claude Code's Edit, MultiEdit, Write), for the editor to show where.
     pub edit: Option<FileEdit>,
+    /// What the user just asked (`UserPromptSubmit`), clipped.
+    pub prompt: Option<String>,
 }
 
 /// A file an agent's tool is about to change (or just changed).
@@ -472,6 +474,10 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
             .find_map(|k| text(k))
             .filter(|id| id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')),
         edit,
+        prompt: (text("hook_event_name").as_deref() == Some("UserPromptSubmit"))
+            .then(|| text("prompt"))
+            .flatten()
+            .map(|p| p.chars().take(500).collect()),
     };
     Some(AgentSignal { pane_id, kind, message, detail })
 }

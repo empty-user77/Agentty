@@ -101,6 +101,7 @@ impl Workbench {
             return cx.notify();
         };
         let handle = window.window_handle();
+        let run = self.record_task_run(&caller, cx);
         let (cwd, tasks) = (request.cwd.clone(), request.tasks.clone());
         let as_tabs = opens_as_tabs(tasks.len());
         cx.spawn(async move |this, cx| {
@@ -150,7 +151,16 @@ impl Workbench {
                     .flatten();
                 match opened {
                     Some(pane) => {
-                        let _ = this.update(cx, |this, cx| this.board_adopt(&pane, cx));
+                        let _ = this.update(cx, |this, cx| {
+                            this.board_adopt(&pane, cx);
+                            let task = super::session_board::RunTask {
+                                title: task.title.clone(),
+                                branch: branch.clone(),
+                                folder: folder.clone(),
+                                pane: pane.read(cx).pane_id,
+                            };
+                            this.record_run_task(run, task, cx);
+                        });
                         previous = Some(pane);
                         started.push(serde_json::json!({ "title": task.title, "branch": branch, "folder": folder }));
                         if tree.is_none() {

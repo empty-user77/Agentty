@@ -991,17 +991,24 @@ impl Workbench {
                     .gap_3()
                     .border_b_1()
                     .border_color(hex(Chrome::BORDER))
+                    // The tabs say where you are; no title above them.
+                    .child(self.render_session_tabs(cx))
+                    // The map's own hint, only where the map is.
                     .child(
                         div()
-                            .flex_shrink_0()
-                            .t_large()
-                            .font_weight(crate::theme::EMPHASIS)
-                            .text_color(hex(Chrome::BRIGHT))
-                            .child(t(cx, "page.flow")),
-                    )
-                    .child(div().flex_1().min_w_0().t_small().text_color(hex(Chrome::MUTED)).child(t(cx, "flow.hint"))),
+                            .flex_1()
+                            .min_w_0()
+                            .t_small()
+                            .text_color(hex(Chrome::MUTED))
+                            .when(self.session_board.tab == super::session_board::SessionTab::Links, |d| d.child(t(cx, "flow.hint"))),
+                    ),
             )
-            .child(area)
+            .child(match self.session_board.tab {
+                super::session_board::SessionTab::Workflow => {
+                    div().flex_1().min_h_0().child(self.render_workflow_view(cx)).into_any_element()
+                }
+                super::session_board::SessionTab::Links => area.into_any_element(),
+            })
     }
 
     /// − 100% + and fit, at the bottom right corner (as the other diagrams have).

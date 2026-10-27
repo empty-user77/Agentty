@@ -13,7 +13,7 @@ Agentty stores everything in `~/.agentty/`. Most of it is easier to change in **
 | `~/.agentty/workspaces.json` | Workspaces, tabs, splits and groups |
 | `~/.agentty/themes/*.itermcolors` | Imported color themes |
 | `~/.agentty/pricing.json` | Prices for non-Claude models |
-| `~/.agentty/handoffs/` | Context documents from Session Flow and agent migration |
+| `~/.agentty/handoffs/` | Context documents from Orchestrator (session links) and agent migration |
 | `~/.agentty/connectors.json` | API connector definitions (no secrets) |
 | `~/.agentty/agent-auth.json` | Sign-in method for new agent tabs (no secrets) |
 | `~/.agentty/codex-home/` | Private Codex home for API-key sign-in |

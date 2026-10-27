@@ -66,6 +66,7 @@ pub mod resume_hint;
 mod run_panel;
 mod servers;
 mod service_status;
+mod session_board;
 mod session_viewer;
 mod settings_agents;
 mod settings_lsp;
@@ -558,6 +559,8 @@ pub struct Workbench {
     native_title: String,
     /// Spend and limit resets per agent, for the menu bar.
     account_usage: Vec<account_usage::AccountUsage>,
+    /// The session page's Agents and Workflows views (and which one is on screen).
+    session_board: session_board::SessionBoard,
     /// Incremental transcript scanner behind `account_usage`, shared with the refresh button.
     usage_scanner: std::sync::Arc<std::sync::Mutex<agentty_bridge::usage::UsageScanner>>,
     /// Subagents / session links popover of a pane.
@@ -949,6 +952,7 @@ impl Workbench {
             toast_seq: 0,
             native_title: String::new(),
             account_usage: Vec::new(),
+            session_board: Default::default(),
             usage_scanner: Default::default(),
             agent_panel: None,
             agent_window: Default::default(),

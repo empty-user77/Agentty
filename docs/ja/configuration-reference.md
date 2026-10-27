@@ -13,7 +13,7 @@ Agentty はすべてを `~/.agentty/` に保存します。ほとんどは**設�
 | `~/.agentty/workspaces.json` | ワークスペース、タブ、分割、グループ |
 | `~/.agentty/themes/*.itermcolors` | 読み込んだカラーテーマ |
 | `~/.agentty/pricing.json` | Claude 以外のモデルの価格 |
-| `~/.agentty/handoffs/` | Session Flow とエージェント移行が作るコンテキスト文書 |
+| `~/.agentty/handoffs/` | オーケストレーター (セッション連携) とエージェント移行が作るコンテキスト文書 |
 | `~/.agentty/connectors.json` | API コネクタの定義（秘密の値なし） |
 | `~/.agentty/agent-auth.json` | 新しいエージェントタブのサインイン方法（秘密の値なし） |
 | `~/.agentty/codex-home/` | API キーでサインインするための専用 Codex ホーム |
