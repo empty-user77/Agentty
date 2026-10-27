@@ -322,6 +322,9 @@ impl Workbench {
             }
             Stage::Running if team.all == 0 => (t(cx, "orch.stage_running_short").to_string(), RUNNING),
             Stage::Running => (tf(cx, "orch.stage_running_lead", &[("done", &done), ("all", &all)]), RUNNING),
+            // Nothing known of its team (its terminal is closed): the stage alone.
+            Stage::Done if team.all == 0 => (t(cx, "orch.stage_done_short").to_string(), DONE),
+            Stage::Stopped if team.all == 0 => (t(cx, "orch.stage_stopped_short").to_string(), Chrome::MUTED),
             // Done: agents a crash cut off were run again, so they are not the team's any more.
             Stage::Done => (tf(cx, "orch.stage_done", &[("done", &done), ("all", &(team.all - team.cut_off).to_string())]), DONE),
             Stage::Interrupted if team.cut_off > 0 => {
