@@ -783,16 +783,17 @@ impl Workbench {
                     .collect(),
                 cx,
             );
-            // A group with a colour is drawn inside a frame of it, header included, so it reads as
-            // one block; the header keeps its own rounded top.
+            // A group with a colour gets a rail of it down its left edge, header to last row, over a
+            // faint wash of the same colour, as tab groups in a vertical tab strip do. The rail sits
+            // in the rows' left padding, so a coloured group lines up with the others.
             let accent = super::accent_color(group.color);
-            // The space above a group goes outside the frame, not between it and the header.
-            let mut block = div().flex().flex_col().gap_px().map(|d| match accent {
-                Some(color) => d.mt_1p5().rounded_md().border_1().border_color(hex_alpha(color, 0.55)).p_px(),
-                None => d,
+            let mut block = div().relative().mt_1p5().flex().flex_col().gap_px().when_some(accent, |d, color| {
+                d.rounded_md()
+                    .bg(hex_alpha(color, 0.07))
+                    .child(div().absolute().left_0().top_0().bottom_0().w(px(3.)).rounded_full().bg(hex(color)))
             });
             let header = self.render_group_header(Some(group.id), group.name.clone(), group.collapsed, members.len(), window, cx);
-            block = block.child(header.when(accent.is_none(), |d| d.mt_1p5()));
+            block = block.child(header);
             if group.collapsed {
                 list = list.child(block);
                 continue;

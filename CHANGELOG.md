@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Sidebar: a group's colour shows as a bar down its left edge over a faint wash of the colour, instead of a frame
+  around the group.
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
