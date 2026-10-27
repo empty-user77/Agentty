@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-28
+
 ### Added
 - Orchestration: write a goal and an orchestrator agent plans a team of agents for it, shows the plan, runs it in
   waves and has the result reviewed. Start one from the home page, a tab's right-click menu, a new workspace's start
