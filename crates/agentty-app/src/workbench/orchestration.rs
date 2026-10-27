@@ -120,14 +120,20 @@ pub fn next_stage(stage: Stage, seen_since: Option<u64>, seen: &Seen) -> (Stage,
         }
     } else if team.running > 0 {
         Stage::Running
-    } else if team.cut_off > 0 {
-        Stage::Interrupted
     } else if seen.turn_over {
+        // Its turn is over with nothing running: whatever was cut off before, it has dealt with.
         if team.all == 0 {
             Stage::Ready
         } else {
             Stage::Done
         }
+    } else if stage == Stage::Running && team.all > 0 && team.cut_off == 0 {
+        // Resting in the same process with its whole team done (the last agent's report came in
+        // after its turn, so the pane says idle rather than finished): done.
+        Stage::Done
+    } else if team.cut_off > 0 && unfinished {
+        // Cut off while it ran; a finished one keeps its result.
+        Stage::Interrupted
     } else {
         // Resting with nothing new to tell (after a restart, say): as it was.
         stage
@@ -314,8 +320,13 @@ impl Workbench {
             Stage::Running if team.running > 0 => {
                 (tf(cx, "orch.stage_running", &[("running", &team.running.to_string()), ("done", &done), ("all", &all)]), RUNNING)
             }
+            Stage::Running if team.all == 0 => (t(cx, "orch.stage_running_short").to_string(), RUNNING),
             Stage::Running => (tf(cx, "orch.stage_running_lead", &[("done", &done), ("all", &all)]), RUNNING),
-            Stage::Done => (tf(cx, "orch.stage_done", &[("done", &done), ("all", &all)]), DONE),
+            // Nothing known of its team (its terminal is closed): the stage alone.
+            Stage::Done if team.all == 0 => (t(cx, "orch.stage_done_short").to_string(), DONE),
+            Stage::Stopped if team.all == 0 => (t(cx, "orch.stage_stopped_short").to_string(), Chrome::MUTED),
+            // Done: agents a crash cut off were run again, so they are not the team's any more.
+            Stage::Done => (tf(cx, "orch.stage_done", &[("done", &done), ("all", &(team.all - team.cut_off).to_string())]), DONE),
             Stage::Interrupted if team.cut_off > 0 => {
                 (tf(cx, "orch.stage_interrupted", &[("cut", &team.cut_off.to_string()), ("done", &done), ("all", &all)]), CUT)
             }
@@ -670,6 +681,26 @@ mod tests {
         assert_eq!(next_stage(Stage::Running, Some(100), &told(Seen::default())), (Stage::Running, Some(100)));
         let resumed = Seen { since: Some(900), ..told(seen(true, false, (0, 1, 2, 3))) };
         assert_eq!(next_stage(Stage::Running, Some(100), &resumed), (Stage::Running, Some(900)));
+    }
+
+    #[test]
+    fn agents_cut_off_before_a_resume_do_not_keep_it_interrupted() {
+        // Three cut off by a crash; after Resume the orchestrator reran them and finished its turn.
+        let resumed = seen(false, true, (0, 3, 3, 6));
+        assert_eq!(next_stage(Stage::Running, Some(100), &resumed).0, Stage::Done);
+        // Right after the restart, resting, nothing done since: interrupted.
+        assert_eq!(next_stage(Stage::Interrupted, Some(100), &seen(false, false, (0, 0, 3, 3))).0, Stage::Interrupted);
+        // A finished one opened again later (a new process, resting) stays done.
+        let reopened = Seen { since: Some(900), ..seen(false, false, (0, 4, 3, 7)) };
+        assert_eq!(next_stage(Stage::Done, Some(100), &reopened).0, Stage::Done);
+    }
+
+    #[test]
+    fn resting_after_its_report_with_the_team_done_is_done() {
+        // Not in a turn, not "finished" (an agent's report came in last), nothing running.
+        assert_eq!(next_stage(Stage::Running, Some(100), &seen(false, false, (0, 4, 0, 4))).0, Stage::Done);
+        // Still running agents: running.
+        assert_eq!(next_stage(Stage::Running, Some(100), &seen(false, false, (1, 3, 0, 4))).0, Stage::Running);
     }
 
     #[test]

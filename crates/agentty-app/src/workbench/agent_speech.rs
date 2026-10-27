@@ -5,7 +5,7 @@
 use crate::i18n::{t, tf};
 use crate::theme::{hex, hex_alpha, Chrome};
 use crate::ui::TypeScale;
-use agentty_bridge::subagent_trace::{Step, Trace};
+use agentty_bridge::subagent_trace::{Step, StepStatus, Trace};
 use gpui::{div, prelude::*, px, FontStyle, FontWeight, HighlightStyle, SharedString, StyledText};
 use std::ops::Range;
 
@@ -25,34 +25,39 @@ fn clip(text: &str, max: usize) -> String {
     out
 }
 
-/// A tool call as a sentence.
+/// A tool call as a sentence: what it is doing while the call runs, what it did once it is over.
 pub fn narrate(step: &Step, cx: &gpui::App) -> String {
     let Some(tool) = step.tool.as_deref() else { return plain(&step.target, 140) };
     let target = step.target.as_str();
-    let say = |key: &'static str, args: &[(&str, &str)]| tf(cx, key, args);
+    let done = step.status != StepStatus::Running;
+    let say = |(doing, did): (&'static str, &'static str), args: &[(&str, &str)]| tf(cx, if done { did } else { doing }, args);
     match tool {
-        "Read" => say("narrate.read", &[("file", file_name(target))]),
-        "Edit" | "MultiEdit" | "NotebookEdit" => say("narrate.edit", &[("file", file_name(target))]),
-        "Write" => say("narrate.write", &[("file", file_name(target))]),
+        "Read" => say(("narrate.read", "narrate.read_done"), &[("file", file_name(target))]),
+        "Edit" | "MultiEdit" | "NotebookEdit" => say(("narrate.edit", "narrate.edit_done"), &[("file", file_name(target))]),
+        "Write" => say(("narrate.write", "narrate.write_done"), &[("file", file_name(target))]),
         "Grep" => match target.split_once("  in ") {
-            Some((what, dir)) => say("narrate.search_in", &[("what", &clip(what, 40)), ("dir", file_name(dir))]),
-            None => say("narrate.search", &[("what", &clip(target, 40))]),
+            Some((what, dir)) => {
+                say(("narrate.search_in", "narrate.search_in_done"), &[("what", &clip(what, 40)), ("dir", file_name(dir))])
+            }
+            None => say(("narrate.search", "narrate.search_done"), &[("what", &clip(target, 40))]),
         },
-        "Glob" => say("narrate.find_files", &[("what", &clip(target, 40))]),
+        "Glob" => say(("narrate.find_files", "narrate.find_files_done"), &[("what", &clip(target, 40))]),
         // The agent says why it runs a command; that reads better than the command.
         "Bash" | "PowerShell" => match &step.detail {
             Some(why) => clip(why, 120),
-            None => say("narrate.run", &[("command", &clip(target, 48))]),
+            None => say(("narrate.run", "narrate.run_done"), &[("command", &clip(target, 48))]),
         },
-        "WebFetch" => say("narrate.fetch", &[("site", &site(target))]),
-        "WebSearch" => say("narrate.web_search", &[("what", &clip(target, 48))]),
-        "Agent" | "Task" => say("narrate.delegate", &[("what", &clip(target, 60))]),
-        "TodoWrite" | "TaskCreate" | "TaskUpdate" => t(cx, "narrate.plan").to_string(),
-        "Skill" => say("narrate.skill", &[("what", &clip(target, 40))]),
+        "WebFetch" => say(("narrate.fetch", "narrate.fetch_done"), &[("site", &site(target))]),
+        "WebSearch" => say(("narrate.web_search", "narrate.web_search_done"), &[("what", &clip(target, 48))]),
+        "Agent" | "Task" => say(("narrate.delegate", "narrate.delegate_done"), &[("what", &clip(target, 60))]),
+        "TodoWrite" | "TaskCreate" | "TaskUpdate" => say(("narrate.plan", "narrate.plan_done"), &[]),
+        "Skill" => say(("narrate.skill", "narrate.skill_done"), &[("what", &clip(target, 40))]),
+        // A background agent's report on its way to the agent that started it.
+        "SubagentHandback" => say(("narrate.handback", "narrate.handback_done"), &[]),
         _ => {
             // `mcp__server__tool` → `server tool`.
             let name = tool.strip_prefix("mcp__").map(|rest| rest.replace("__", " ")).unwrap_or_else(|| tool.to_string());
-            say("narrate.tool", &[("tool", &name)])
+            say(("narrate.tool", "narrate.tool_done"), &[("tool", &name)])
         }
     }
 }

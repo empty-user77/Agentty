@@ -69,6 +69,9 @@ pub struct Installed {
     pub claude_models: Vec<(String, String)>,
     /// CLI versions by binary (`claude`, `codex`), e.g. "2.1.274".
     pub versions: BTreeMap<String, String>,
+    /// Where each binary was found on the login shell's PATH: an agent's own shell may not have
+    /// that PATH (a folder only `.zshrc` adds), so a command for it names the whole path.
+    pub paths: BTreeMap<String, String>,
 }
 
 impl Installed {
@@ -178,7 +181,7 @@ fn probe_script() -> String {
     let (claude, codex) = (shell_quote(&crate::agent_bins::program("claude")), shell_quote(&crate::agent_bins::program("codex")));
     // Shims living inside other apps' bundles (e.g. cmux's `grok`) are not real installs.
     format!(
-        "for b in {list}; do p=$(command -v \"$b\" 2>/dev/null) || continue; case \"$p\" in *.app/Contents/*) ;; *) echo \"bin:$b\";; esac; done; command -v {claude} >/dev/null 2>&1 && echo \"version:claude:$({claude} --version 2>/dev/null </dev/null | head -n 1)\"; command -v {codex} >/dev/null 2>&1 && echo \"version:codex:$({codex} --version 2>/dev/null </dev/null | head -n 1)\"; command -v {claude} >/dev/null 2>&1 && {claude} --help 2>/dev/null </dev/null | grep -q '\"auto\"' && echo \"{CLAUDE_AUTO_MODE_LINE}\"; command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | sed 's/^/ollama:/'; true"
+        "for b in {list}; do p=$(command -v \"$b\" 2>/dev/null) || continue; case \"$p\" in *.app/Contents/*) ;; *) echo \"bin:$b\"; echo \"path:$b:$p\";; esac; done; command -v {claude} >/dev/null 2>&1 && echo \"version:claude:$({claude} --version 2>/dev/null </dev/null | head -n 1)\"; command -v {codex} >/dev/null 2>&1 && echo \"version:codex:$({codex} --version 2>/dev/null </dev/null | head -n 1)\"; command -v {claude} >/dev/null 2>&1 && {claude} --help 2>/dev/null </dev/null | grep -q '\"auto\"' && echo \"{CLAUDE_AUTO_MODE_LINE}\"; command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | sed 's/^/ollama:/'; true"
     )
 }
 
@@ -209,6 +212,16 @@ pub fn parse_probe(output: &str) -> (BTreeSet<String>, Vec<String>, BTreeMap<Str
         }
     }
     (binaries, models, versions)
+}
+
+/// `path:<binary>:<where>` lines of the probe.
+pub fn parse_paths(output: &str) -> BTreeMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| line.strip_prefix("path:")?.split_once(':'))
+        .filter(|(_, path)| path.starts_with('/'))
+        .map(|(bin, path)| (bin.to_string(), path.trim().to_string()))
+        .collect()
 }
 
 /// Model names from Codex's config (`model = "…"`) first, then from recent rollouts.
@@ -265,12 +278,13 @@ pub fn detect() -> Installed {
     crate::agent_bins::ensure_refreshed();
     let output = probe();
     let (mut binaries, ollama_models, versions) = parse_probe(&output);
+    let paths = parse_paths(&output);
     // A copy found outside `PATH` (in an installer's folder) still starts: it is installed.
     binaries.extend(crate::agent_bins::AGENTS.iter().filter(|name| crate::agent_bins::chosen(name).is_some()).map(|name| name.to_string()));
     remember_auto_mode(output.lines().any(|line| line.trim() == CLAUDE_AUTO_MODE_LINE));
     let codex_models = if binaries.contains("codex") { codex_models() } else { Vec::new() };
     let claude_models = if binaries.contains("claude") { claude_models() } else { Vec::new() };
-    Installed { binaries, ollama_models, codex_models, claude_models, versions }
+    Installed { binaries, ollama_models, codex_models, claude_models, versions, paths }
 }
 
 #[cfg(test)]
@@ -288,6 +302,14 @@ mod tests {
         // A CLI from the list counts, anything else on PATH does not.
         assert_eq!(with(&["claude", "gemini"]).agent_count(), 2);
         assert_eq!(with(&["claude", "git", "node"]).agent_count(), 1);
+    }
+
+    #[test]
+    fn paths_of_the_binaries_found() {
+        let out = "bin:agy\npath:agy:/Users/example/.local/bin/agy\npath:odd:relative\n";
+        let paths = parse_paths(out);
+        assert_eq!(paths.get("agy").map(String::as_str), Some("/Users/example/.local/bin/agy"));
+        assert!(!paths.contains_key("odd"));
     }
 
     #[test]

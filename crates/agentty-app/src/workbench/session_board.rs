@@ -175,6 +175,9 @@ struct Node {
     open: Open,
 }
 
+/// A running subagent on a workspace card: its name, what it does now, when it started (ms).
+pub type SubagentRow = (String, Option<String>, u64);
+
 /// One line of the feed: when, who, on which model, what it did, and where that agent is.
 type FeedLine = (u64, String, Option<String>, String, NodeState);
 
@@ -257,7 +260,7 @@ fn sub_state(trace: Option<&agentty_bridge::subagent_trace::Trace>, reported_sto
     let quiet = trace.last_ms.is_none_or(|at| now_ms.saturating_sub(at) > QUIET_MS);
     if trace.finished || (reported_stopped && quiet) {
         NodeState::Done
-    } else if trace.stopped {
+    } else if trace.stopped || trace.interrupted {
         NodeState::Stopped
     } else {
         NodeState::Running
@@ -463,7 +466,8 @@ impl Workbench {
             let team = self.team_of(&record.session, pane.as_ref(), cx);
             let (_, color) = self.stage_words(record.stage, team, cx);
             let stage = t(cx, super::orchestration::stage_key(record.stage));
-            let sub = if team.all > 0 { format!("{stage} · {}/{}", team.done, team.all) } else { stage.to_string() };
+            let all = if record.stage == super::orchestration::Stage::Done { team.all - team.cut_off } else { team.all };
+            let sub = if all > 0 { format!("{stage} · {}/{all}", team.done) } else { stage.to_string() };
             list = list.child(
                 row(
                     SharedString::from(format!("thread-orch-{id}")),
@@ -1294,13 +1298,43 @@ impl Workbench {
     /// is on screen: the strip on its pane and the page tell the same thing.
     pub(super) fn keep_orchestrations(&mut self, cx: &mut Context<Self>) {
         let on = crate::settings::settings(cx).orchestration;
-        if !on {
-            return;
+        if on {
+            self.sync_orchestrations(cx);
         }
-        self.sync_orchestrations(cx);
-        if !self.session_board.shown(on).is_empty() {
+        // An agent with subagents is followed as well: its chip and its card count as its window does.
+        let with_subagents = self.all_panes().iter().any(|p| {
+            let view = p.read(cx);
+            view.is_agent() && view.live_agent.is_some() && (!view.subagents.is_empty() || view.subagent_files.0 > 0)
+        });
+        if !self.session_board.shown(on).is_empty() || with_subagents {
             self.follow_session_board(cx);
         }
+    }
+
+    /// A followed session's subagents for a card: (name, what it does now, when it started) of the
+    /// running ones, and how many are done (not those cut off). `None` while its transcripts are not followed.
+    pub(super) fn subagent_rows(&self, pane: &Pane, cx: &gpui::App) -> Option<(Vec<SubagentRow>, usize)> {
+        let view = pane.read(cx);
+        let session = view.current_session()?;
+        let followed = self.session_board.watched.get(&session).filter(|f| !f.files.is_empty())?;
+        let traces = followed.traces.lock().unwrap_or_else(|e| e.into_inner());
+        let now = crate::ui::now_ms();
+        let mut running = Vec::new();
+        let mut over = 0;
+        for file in &followed.files {
+            let trace = traces.get(&file.id).map(|r| &r.trace);
+            let reported = view.subagents.iter().any(|r| r.id == file.id && !r.running());
+            let state = sub_state(trace, reported, now);
+            if state == NodeState::Running {
+                let name = if file.description.is_empty() { file.agent_type.clone() } else { file.description.clone() };
+                let doing = trace.and_then(|t| t.current().or_else(|| t.steps.iter().rev().find(|s| s.tool.is_some()))).map(step_words);
+                running.push((name, doing, trace.and_then(|t| t.started_ms).unwrap_or(now)));
+            } else if state == NodeState::Done {
+                over += 1;
+            }
+        }
+        running.sort_by_key(|(_, _, started)| *started);
+        Some((running, over))
     }
 
     /// Whether `session`'s subagent transcripts are being read (so its team counts are exact).
@@ -1558,6 +1592,19 @@ impl Workbench {
                 if let Some(session) = pane.read(cx).current_session() {
                     wanted.push((session, since_of(&pane)));
                 }
+            }
+        }
+        // Every running agent with subagents: its chip and its card count from the transcripts too.
+        for pane in self.all_panes() {
+            let view = pane.read(cx);
+            if wanted.len() >= 16 || !view.is_agent() || view.live_agent.is_none() {
+                continue;
+            }
+            if view.subagents.is_empty() && view.subagent_files.0 == 0 {
+                continue;
+            }
+            if let Some(session) = view.current_session().filter(|s| !wanted.iter().any(|(w, _)| w == s)) {
+                wanted.push((session, since_of(&pane)));
             }
         }
         for record in self.session_board.shown(on) {

@@ -246,22 +246,26 @@ impl Workbench {
         .detach();
     }
 
+    /// (all, running) subagents for a pane's chip. A session whose transcripts are followed (an
+    /// orchestration's) counts as its strip and page do; another from its hooks and its files.
+    pub(super) fn subagent_chip_counts(&self, pane: &Pane, cx: &gpui::App) -> (usize, usize) {
+        let view = pane.read(cx);
+        if let Some(session) = view.current_session().filter(|s| self.watches_session(s)) {
+            let team = self.team_of(&session, Some(pane), cx);
+            return (team.all, team.running);
+        }
+        let (hook_total, hook_running) = (view.subagents.len(), view.subagents.iter().filter(|r| r.running()).count());
+        let (file_total, file_active) = view.subagent_files;
+        (hook_total.max(file_total), hook_running.max(file_active))
+    }
+
     /// `[⛓ 2] [👥 1/3]` chips for a pane header: session links and subagents, when there are any.
     pub(super) fn render_collab_chips(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
         let view = pane.read(cx);
         let pane_id = view.pane_id;
         let links = self.flow.edges().iter().filter(|e| e.from == pane_id || e.to == pane_id).count();
         let live = self.flow.edges().iter().any(|e| (e.from == pane_id || e.to == pane_id) && e.live);
-        let (hook_total, hook_running) = (view.subagents.len(), view.subagents.iter().filter(|r| r.running()).count());
-        let (file_total, file_active) = view.subagent_files;
-        // A session whose transcripts are followed (an orchestration's) counts as its strip and page do.
-        let (total, running) = match view.current_session().filter(|s| self.watches_session(s)) {
-            Some(session) => {
-                let team = self.team_of(&session, Some(pane), cx);
-                (team.all, team.running)
-            }
-            None => (hook_total.max(file_total), hook_running.max(file_active)),
-        };
+        let (total, running) = self.subagent_chip_counts(pane, cx);
         let now = chrono::Utc::now().timestamp_millis();
         let schedules = view.schedules.iter().filter(|s| s.next_run(now).is_some()).count();
         // The link chip is also the way to *make* a link, so it shows whenever there is another agent.
@@ -307,10 +311,13 @@ impl Workbench {
                     },
                     open == Some(PanelTab::Links),
                 )
-                .tooltip(if links > 0 {
-                    crate::ui::Tooltip::text(t(cx, "collab.links"), Some(LINKS_PICK_HINT))
-                } else {
-                    crate::ui::Tooltip::text(t(cx, "collab.pick"), Some(LINKS_PANEL_HINT))
+                // Its tooltip would sit over the panel it opened.
+                .when(open != Some(PanelTab::Links), |d| {
+                    d.tooltip(if links > 0 {
+                        crate::ui::Tooltip::text(t(cx, "collab.links"), Some(LINKS_PICK_HINT))
+                    } else {
+                        crate::ui::Tooltip::text(t(cx, "collab.pick"), Some(LINKS_PANEL_HINT))
+                    })
                 })
                 // With nothing linked yet the chip has one job — make the first link — so it goes
                 // straight to picking a terminal. Once there are links it opens the panel that
@@ -336,7 +343,7 @@ impl Workbench {
                     if running > 0 { Chrome::ORANGE } else { Chrome::MUTED },
                     open == Some(PanelTab::Agents),
                 )
-                .tooltip(crate::ui::Tooltip::text(t(cx, "collab.agents"), None))
+                .when(open != Some(PanelTab::Agents), |d| d.tooltip(crate::ui::Tooltip::text(t(cx, "collab.agents"), None)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.toggle_agent_panel(&target, PanelTab::Agents, cx);
@@ -374,14 +381,19 @@ impl Workbench {
                     Chrome::PURPLE,
                     open == Some(PanelTab::Schedules),
                 )
-                .tooltip(crate::ui::Tooltip::text(t(cx, "schedules.title"), None))
+                .when(open != Some(PanelTab::Schedules), |d| d.tooltip(crate::ui::Tooltip::text(t(cx, "schedules.title"), None)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.toggle_agent_panel(&target, PanelTab::Schedules, cx);
                 })),
             );
         }
-        let panel = self.agent_panel.as_ref().filter(|p| p.pane == pane.entity_id()).map(|panel| self.render_agent_panel(pane, panel, cx));
+        // The schedules list goes with its chip once nothing is scheduled any more.
+        let panel = self
+            .agent_panel
+            .as_ref()
+            .filter(|p| p.pane == pane.entity_id() && !(p.tab == PanelTab::Schedules && schedules == 0))
+            .map(|panel| self.render_agent_panel(pane, panel, cx));
         Some(div().relative().child(row).children(panel).into_any_element())
     }
 
