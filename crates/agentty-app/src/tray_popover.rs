@@ -490,7 +490,7 @@ impl TrayPopover {
                     .cursor_pointer()
                     .hover(|s| s.bg(hex(Chrome::HOVER)))
                     .on_click(Self::run(TrayAction::Focus(pane_id)))
-                    .child(div().relative().child(crate::brand::avatar(agent.tool, 24.)).when(agent.working || agent.needs_user, |d| {
+                    .child(div().relative().child(agent.mark(24.)).when(agent.working || agent.needs_user, |d| {
                         d.child(
                             div()
                                 .absolute()

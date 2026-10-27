@@ -67,7 +67,7 @@ fn duration(ms: u64) -> String {
 /// (start, end) of a run; a running one ends now.
 fn span(trace: &Trace, now: u64) -> Option<(u64, u64)> {
     let start = trace.started_ms?;
-    let end = if trace.finished { trace.last_ms.unwrap_or(start) } else { now.max(trace.last_ms.unwrap_or(start)) };
+    let end = if trace.ended() { trace.last_ms.unwrap_or(start) } else { now.max(trace.last_ms.unwrap_or(start)) };
     Some((start, end.max(start + 1)))
 }
 
@@ -94,9 +94,9 @@ impl Workbench {
         let now = now_ms();
         let traces = panel.traces.lock().unwrap_or_else(|e| e.into_inner());
         let trace_of = |id: &str| traces.get(id).map(|r| &r.trace);
-        let running = agents.iter().filter(|a| trace_of(&a.id).is_some_and(|t| !t.finished)).count();
+        let running = agents.iter().filter(|a| trace_of(&a.id).is_some_and(|t| !t.ended())).count();
         let keys: Vec<(bool, u64)> =
-            agents.iter().map(|a| trace_of(&a.id).map_or((false, 0), |t| (!t.finished, t.last_ms.or(t.started_ms).unwrap_or(0)))).collect();
+            agents.iter().map(|a| trace_of(&a.id).map_or((false, 0), |t| (!t.ended(), t.last_ms.or(t.started_ms).unwrap_or(0)))).collect();
         let agents: Vec<&SubagentFile> = recent_first(&keys).into_iter().map(|i| &agents[i]).collect();
         let agents = agents.as_slice();
 
@@ -170,7 +170,7 @@ impl Workbench {
             let mut cells: Vec<Option<(ToolKind, bool)>> = vec![None; TIMELINE_CELLS];
             for step in trace.tool_steps() {
                 let Some(kind) = step.kind() else { continue };
-                let step_end = step.end_ms.unwrap_or(if trace.finished { step.start_ms } else { now });
+                let step_end = step.end_ms.unwrap_or(if trace.ended() { step.start_ms } else { now });
                 let first = (at(step.start_ms) * TIMELINE_CELLS as f32) as usize;
                 let last = ((at(step_end) * TIMELINE_CELLS as f32).ceil() as usize).max(first + 1);
                 for cell in cells.iter_mut().take(last.min(TIMELINE_CELLS)).skip(first.min(TIMELINE_CELLS - 1)) {
@@ -210,7 +210,7 @@ impl Workbench {
                 );
                 cell += run;
             }
-            if !trace.finished {
+            if !trace.ended() {
                 track = track.child(div().absolute().top_0().h(px(12.)).w(px(2.)).left(relative(at(end))).bg(hex(Chrome::ORANGE)));
             }
             let id = agent.id.clone();
@@ -235,7 +235,9 @@ impl Workbench {
                             .items_center()
                             .gap_1()
                             .t_caption()
-                            .child(if trace.finished {
+                            .child(if trace.stopped {
+                                icon("circle-x", 11., hex(Chrome::MUTED)).into_any_element()
+                            } else if trace.ended() {
                                 icon("circle-check", 11., hex(Chrome::SUCCESS)).into_any_element()
                             } else {
                                 crate::ui::spinner(11., hex(Chrome::ORANGE)).into_any_element()
@@ -313,7 +315,7 @@ impl Workbench {
         let mut list = div().id("subagent-list").w(px(270.)).flex_shrink_0().h_full().overflow_y_scroll().flex().flex_col().gap_0p5().p_1();
         for (index, agent) in agents.iter().enumerate() {
             let trace = trace_of(&agent.id);
-            let finished = trace.is_some_and(|t| t.finished);
+            let finished = trace.is_some_and(|t| t.ended());
             let selected = panel.selected.as_deref() == Some(agent.id.as_str());
             let id = agent.id.clone();
             let elapsed = trace.and_then(|t| span(t, now)).map(|(s, e)| duration(e - s)).unwrap_or_default();
@@ -334,7 +336,7 @@ impl Workbench {
                         .child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child(duration(now.saturating_sub(step.start_ms))))
                         .into_any_element()
                 }
-                None if !trace.finished => div()
+                None if !trace.ended() => div()
                     .flex()
                     .items_center()
                     .gap_1()
@@ -378,7 +380,9 @@ impl Workbench {
                             .items_center()
                             .gap_1p5()
                             .t_small()
-                            .child(if finished || trace.is_none() {
+                            .child(if trace.is_some_and(|t| t.stopped) {
+                                icon("circle-x", IconSize::INLINE, hex(Chrome::MUTED)).into_any_element()
+                            } else if finished || trace.is_none() {
                                 icon("circle-check", IconSize::INLINE, hex(if finished { Chrome::SUCCESS } else { Chrome::MUTED }))
                                     .into_any_element()
                             } else {
@@ -547,10 +551,10 @@ impl Workbench {
         }
         let last = trace.steps.len().saturating_sub(1);
         for (index, step) in trace.steps.iter().enumerate().skip(skip) {
-            let final_answer = trace.finished && index == last && step.tool.is_none();
-            steps = steps.child(self.render_step(index, step, trace.finished, final_answer, panel.expanded.contains(&index), now, cx));
+            let final_answer = trace.ended() && index == last && step.tool.is_none();
+            steps = steps.child(self.render_step(index, step, trace.ended(), final_answer, panel.expanded.contains(&index), now, cx));
         }
-        if !trace.finished && trace.current().is_none() {
+        if !trace.ended() && trace.current().is_none() {
             steps = steps.child(
                 div()
                     .flex()

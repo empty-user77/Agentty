@@ -40,6 +40,11 @@ Agentty はすべてを `~/.agentty/` に保存します。ほとんどは**設�
   "askDirectory": true,
   "autoWorktree": true,
   "agentTasks": true,
+  "orchestration": true,
+  "orchestrationProfile": "balanced",
+  "orchestrationHelpersOff": [],
+  "orchestrationConfirmPlan": true,
+  "orchestrationInTab": false,
   "analytics": true,
   "agentBarPosition": "top"
 }
@@ -59,6 +64,11 @@ Agentty はすべてを `~/.agentty/` に保存します。ほとんどは**設�
 | `resumeBar` | 以前のセッションがあるフォルダに入ったら再開を提案 |
 | `autoWorktree` | 作業中のプロジェクトの 2 つ目のセッションに専用ワークツリー |
 | `agentTasks` | エージェントが並列タスクの開始を要求できるようにし、毎回確認 |
+| `orchestration` | オーケストレーションを使う。オフで開始メニューと表示をすべて隠す |
+| `orchestrationProfile` | 新しいオーケストレーションの既定モデル: `balanced`、`quality`、`economy` |
+| `orchestrationHelpersOff` | 新しいオーケストレーションが既定で外す他のエージェント（`codex`、`gemini`、`agy`） |
+| `orchestrationConfirmPlan` | オーケストレーターが計画を見せて開始を待つ |
+| `orchestrationInTab` | 新しいオーケストレーションを前面のワークスペースの新しいタブで開く |
 | `agentGuide` | ここで起動したエージェントに Agentty のコマンド案内を渡す |
 | `stopServersOnClose` | ペインを閉じたら、そこで起動したサーバーを終了 |
 | `confirmClose` | 使用したものを閉じる前に確認 |

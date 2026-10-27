@@ -204,9 +204,11 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                     mouse_counted(2, x, y, modifiers, 2);
                 }
             }
-            // `scroll x y lines` (negative lines scroll up); drags come in as press/drag-to/release.
+            // `scroll x y lines [sideways]` (negative lines scroll up, negative sideways to the left);
+            // drags come in as press/drag-to/release.
             ("scroll", (Some(x), Some(y))) => {
                 let lines: i32 = argument.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(-5);
+                let sideways: i32 = argument.split_whitespace().nth(3).and_then(|v| v.parse().ok()).unwrap_or(0);
                 mouse(5, x, y, 0);
                 let content_origin: NSPoint = msg_send![ns_window, convertPointToScreen: NSPoint::new(x, frame.size.height - y)];
                 let screen_height = core_graphics::display::CGDisplay::main().bounds().size.height;
@@ -225,7 +227,7 @@ pub fn synthetic_input(ns_window: crate::native::Id, command: &str, argument: &s
                 }
                 // Units: 0 = pixels (a trackpad's small steps, `px`), 1 = lines.
                 let units = if argument.contains("px") { 0 } else { 1 };
-                let event = CGEventCreateScrollWheelEvent2(std::ptr::null(), units, 1, lines, 0, 0);
+                let event = CGEventCreateScrollWheelEvent2(std::ptr::null(), units, if sideways == 0 { 1 } else { 2 }, lines, sideways, 0);
                 if !event.is_null() {
                     CGEventSetLocation(event, core_graphics::geometry::CGPoint::new(content_origin.x, screen_height - content_origin.y));
                     let ns: id = msg_send![class!(NSEvent), eventWithCGEvent: event];

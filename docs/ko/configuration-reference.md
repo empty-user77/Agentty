@@ -40,6 +40,11 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
   "askDirectory": true,
   "autoWorktree": true,
   "agentTasks": true,
+  "orchestration": true,
+  "orchestrationProfile": "balanced",
+  "orchestrationHelpersOff": [],
+  "orchestrationConfirmPlan": true,
+  "orchestrationInTab": false,
   "analytics": true,
   "agentBarPosition": "top"
 }
@@ -59,6 +64,11 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 | `resumeBar` | 예전 세션이 있는 폴더에 들어가면 이어가기를 제안 |
 | `autoWorktree` | 작업 중인 프로젝트의 두 번째 세션에 전용 워크트리 제공 |
 | `agentTasks` | 에이전트가 병렬 작업 시작을 요청할 수 있게 하되 매번 확인 |
+| `orchestration` | 오케스트레이션 사용. 끄면 시작 메뉴와 오케스트레이션 표시가 모두 숨겨짐 |
+| `orchestrationProfile` | 새 오케스트레이션의 기본 모델: `balanced`, `quality`, `economy` |
+| `orchestrationHelpersOff` | 새 오케스트레이션이 기본으로 빼는 다른 에이전트(`codex`, `gemini`, `agy`) |
+| `orchestrationConfirmPlan` | 오케스트레이터가 계획을 보여 주고 시작을 기다림 |
+| `orchestrationInTab` | 새 오케스트레이션을 앞에 있는 작업공간의 새 탭으로 엶 |
 | `agentGuide` | 여기서 시작한 에이전트에게 Agentty 명령 안내를 전달 |
 | `stopServersOnClose` | 페인을 닫으면 거기서 시작한 서버를 종료 |
 | `confirmClose` | 사용한 것을 닫기 전에 확인 |

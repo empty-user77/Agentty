@@ -16,14 +16,8 @@ use agentty_bridge::plugins::{PromptRequest, PromptTarget};
 use gpui::{div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, SharedString, Subscription, Window};
 use std::path::PathBuf;
 
-/// Which models the team runs on.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum Profile {
-    #[default]
-    Balanced,
-    Quality,
-    Economy,
-}
+/// Which models the team runs on (kept in the settings as the default for new ones).
+pub use crate::settings::OrchestrationProfile as Profile;
 
 impl Profile {
     /// (role, model) for the plan: Claude Code's Agent tool takes `haiku`, `sonnet` and `opus`.
@@ -49,7 +43,7 @@ impl Profile {
         (self == Profile::Quality).then(|| "opus".to_string())
     }
 
-    fn label_key(self) -> &'static str {
+    pub(super) fn label_key(self) -> &'static str {
         match self {
             Profile::Balanced => "orch.profile_balanced",
             Profile::Quality => "orch.profile_quality",
@@ -57,7 +51,7 @@ impl Profile {
         }
     }
 
-    fn hint_key(self) -> &'static str {
+    pub(super) fn hint_key(self) -> &'static str {
         match self {
             Profile::Balanced => "orch.profile_balanced_hint",
             Profile::Quality => "orch.profile_quality_hint",
@@ -66,10 +60,66 @@ impl Profile {
     }
 }
 
+/// Another AI coding agent the team can bring in: its command, its name, what it is good at, and
+/// how it runs without a window of its own.
+pub struct Helper {
+    pub binary: &'static str,
+    pub name: &'static str,
+    strength: &'static str,
+    run: &'static str,
+}
+
+/// The agents an orchestration can use besides Claude Code, when they are installed.
+pub const HELPERS: &[Helper] = &[
+    Helper {
+        binary: "codex",
+        name: "Codex",
+        strength: "precise code changes, debugging and fixing failing tests, and an independent review of a diff",
+        run: "`codex exec --skip-git-repo-check \"<task>\" < /dev/null` (add `--sandbox workspace-write` when it has to write files in this folder)",
+    },
+    Helper {
+        binary: "gemini",
+        name: "Gemini CLI",
+        strength: "reading very large inputs at once (a whole codebase, long documents) and research grounded in Google Search",
+        run: "`gemini -p \"<task>\"`",
+    },
+    Helper {
+        binary: "agy",
+        name: "Antigravity CLI",
+        strength: "a second, independent take from another model family, on building or on reviewing",
+        run: "its non-interactive mode (see `agy --help`)",
+    },
+];
+
 /// The first message: the goal, then how to orchestrate it. English whatever the app's language;
-/// the last line says which language to talk in.
-pub fn prompt(goal: &str, profile: Profile, language: &str) -> String {
+/// the last line says which language to talk in. `helpers` are the other agents the team may use.
+pub fn prompt(goal: &str, profile: Profile, helpers: &[&Helper], confirm_plan: bool, language: &str) -> String {
+    let go = if confirm_plan {
+        "End with \"Start?\" and wait for the user's answer; change the plan if they ask."
+    } else {
+        "Then start it right away, without waiting for an answer."
+    };
     let models = profile.models().iter().map(|(role, model)| format!("- {role}: `{model}`")).collect::<Vec<_>>().join("\n");
+    let helpers = if helpers.is_empty() {
+        String::new()
+    } else {
+        let list = helpers
+            .iter()
+            .map(|h| format!("- {} (`{}`): {}. Run: {}.", h.name, h.binary, h.strength, h.run))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "Other AI agents on this machine. Give them the parts their strength fits, and say so in the plan (an `agent` \
+column: claude, or one of these):
+{list}
+Run one from a subagent's Bash (or your own), in this folder, with everything it needs in its prompt; read what it \
+produces and have it checked like any other agent's work. A change that should land as its own branch in a git \
+repository can go to a Codex session instead: `\"agent\": \"codex\"` in that task of `agentty tasks --plan`. Never \
+turn off their permission or sandbox checks (no `--yolo`, no `--dangerously-…` flags).
+
+"
+        )
+    };
     format!(
         "Goal: {goal}
 
@@ -81,7 +131,7 @@ and combine; you do not do the agents' work yourself.
 Then reply with the plan as a table, one row per agent: name (short and kebab-case, e.g. `market-scan-1`), role, \
 model, wave, depends on, and what it hands over. Use as many agents as the work needs and no more: independent work \
 side by side in one wave, work that needs another's result in a later wave, and a reviewer in the last wave who \
-checks the result against the goal. End with \"Start?\" and wait for the user's answer; change the plan if they ask.
+checks the result against the goal. {go}
 
 2. Run it wave by wave. Start every agent of a wave in ONE message (one Agent tool call each, so they run in \
 parallel), with its name as the description, the model from the plan, and a prompt that says exactly what to do, \
@@ -97,7 +147,7 @@ what is not, with what to fix, at most twice.
 4. Finish with a short report: the conclusion, what each agent produced (files with their paths), what the reviewer \
 confirmed, and what is left open.
 
-Models by role (the Agent tool's `model`):
+{helpers}Models by role (the Agent tool's `model`):
 {models}
 
 Talk to me in {language}."
@@ -117,11 +167,13 @@ pub enum Place {
 }
 
 pub struct OrchestratorDialog {
-    goal: Entity<TextInput>,
+    pub goal: Entity<TextInput>,
     _goal_events: Subscription,
     profile: Profile,
     folder: PathBuf,
     place: Place,
+    /// Other agents installed here, by binary, and whether this team uses them.
+    helpers: Vec<(&'static str, bool)>,
 }
 
 impl Workbench {
@@ -137,7 +189,20 @@ impl Workbench {
         });
         goal.update(cx, |input, cx| input.focus_and_select_all(window, cx));
         let folder = self.default_cwd(cx);
-        self.orchestrator_dialog = Some(OrchestratorDialog { goal, _goal_events: events, profile: Profile::default(), folder, place });
+        let prefs = crate::settings::settings(cx);
+        let off = &prefs.orchestration_helpers_off;
+        let helpers = HELPERS
+            .iter()
+            .filter(|h| self.installed.as_ref().is_some_and(|i| i.has(h.binary)))
+            .map(|h| (h.binary, !off.iter().any(|o| o == h.binary)))
+            .collect();
+        let profile = prefs.orchestration_profile;
+        // From the home page or the page: a tab of the workspace in front, when that is the setting.
+        let place = match place {
+            Place::NewWorkspace { group: None } if prefs.orchestration_in_tab && !self.workspaces.is_empty() => Place::NewTab,
+            place => place,
+        };
+        self.orchestrator_dialog = Some(OrchestratorDialog { goal, _goal_events: events, profile, folder, place, helpers });
         self.tab_menu = None;
         cx.notify();
     }
@@ -167,17 +232,19 @@ impl Workbench {
             return self.show_toast(t(cx, "orch.goal_empty"), cx);
         }
         let (profile, folder, place) = (dialog.profile, dialog.folder.clone(), dialog.place);
+        let helpers: Vec<&Helper> =
+            dialog.helpers.iter().filter(|(_, on)| *on).filter_map(|(binary, _)| HELPERS.iter().find(|h| h.binary == *binary)).collect();
         let language = agentty_bridge::idea::language_name(crate::settings::settings(cx).language.code());
         let title: String = goal.lines().next().unwrap_or("").chars().take(40).collect();
         let request = PromptRequest {
-            text: prompt(&goal, profile, language),
+            text: prompt(&goal, profile, &helpers, crate::settings::settings(cx).orchestration_confirm_plan, language),
             title: Some(title),
             target: match place {
                 Place::NewWorkspace { .. } => PromptTarget::NewWorkspace,
                 Place::NewTab => PromptTarget::NewTab,
             },
             agent: Some("claude".into()),
-            cwd: Some(folder),
+            cwd: Some(folder.clone()),
             submit: true,
             model: profile.lead_model(),
             ..Default::default()
@@ -192,10 +259,11 @@ impl Workbench {
                     }
                     self.persist(cx);
                 }
-                self.session_board_follow(pane_id);
-                // Where its work shows: the Orchestration page, at its workflow.
-                self.session_board.tab = super::session_board::SessionTab::Workflow;
-                self.open_page(super::Page::Flow, cx);
+                // Kept on disk, so it is found again after a restart; its work shows on the
+                // Orchestration page.
+                if let Some(id) = self.add_orchestration(pane_id, goal, folder, cx) {
+                    self.open_orchestration(id, cx);
+                }
                 self.show_toast_for(t(cx, "orch.started"), 6000, cx);
             }
             Err(err) => self.show_toast(err, cx),
@@ -205,7 +273,7 @@ impl Workbench {
 
     /// The group orchestrators' workspaces go in, made on first use (found by name in any language,
     /// like the board's: a group the user renamed is theirs, and the next orchestrator makes a new one).
-    fn orchestration_group(&mut self, cx: &gpui::App) -> u64 {
+    pub(super) fn orchestration_group(&mut self, cx: &gpui::App) -> u64 {
         use crate::settings::Language;
         let names =
             [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De].map(|l| crate::i18n::tr(l, "group.orchestration"));
@@ -260,7 +328,7 @@ impl Workbench {
                     cx.notify();
                 }))
         }));
-        let profiles = div().flex().gap_1().children([Profile::Balanced, Profile::Quality, Profile::Economy].into_iter().map(|profile| {
+        let profiles = div().flex().gap_1().children(Profile::ALL.into_iter().map(|profile| {
             let on = dialog.profile == profile;
             div()
                 .id(SharedString::from(format!("orch-profile-{profile:?}")))
@@ -287,6 +355,46 @@ impl Workbench {
                     cx.notify();
                 }))
         }));
+        // Claude Code always; the others installed here, each switched on or off.
+        let helpers = (!dialog.helpers.is_empty()).then(|| {
+            let chip = |id: SharedString, logo: &'static str, name: &'static str, on: bool| {
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hex(if on { Chrome::ACCENT } else { Chrome::BORDER }))
+                    .when(on, |d| d.bg(hex_alpha(Chrome::ACCENT, 0.12)))
+                    .when(!on, |d| d.opacity(0.55))
+                    .t_small()
+                    .text_color(hex(Chrome::BRIGHT))
+                    .child(crate::brand::avatar(logo, 14.))
+                    .child(name)
+            };
+            div().flex().flex_wrap().gap_1p5().child(chip("orch-helper-claude".into(), "claude", "Claude Code", true)).children(
+                dialog.helpers.iter().filter_map(|(binary, on)| {
+                    let helper = HELPERS.iter().find(|h| h.binary == *binary)?;
+                    let binary = *binary;
+                    Some(
+                        chip(SharedString::from(format!("orch-helper-{binary}")), binary, helper.name, *on)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hex(Chrome::HOVER)))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                if let Some(dialog) = &mut this.orchestrator_dialog {
+                                    if let Some(entry) = dialog.helpers.iter_mut().find(|(b, _)| *b == binary) {
+                                        entry.1 = !entry.1;
+                                    }
+                                }
+                                cx.notify();
+                            })),
+                    )
+                }),
+            )
+        });
         let place = match dialog.place {
             Place::NewWorkspace { group: Some(id) } => {
                 let name = self.groups.iter().find(|g| g.id == id).map(|g| g.name.clone()).unwrap_or_default();
@@ -319,7 +427,7 @@ impl Workbench {
                         .border_1()
                         .border_color(hex(Chrome::OVERLAY_BORDER))
                         .shadow_lg()
-                        .child(div().flex().items_center().gap_2().child(icon("workflow", 16., hex(Chrome::BRIGHT))).child(
+                        .child(div().flex().items_center().gap_2().child(icon("orbit", 16., hex(Chrome::BRIGHT))).child(
                             div().t_title().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "orch.title")),
                         ))
                         .child(div().t_small().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "orch.intro")))
@@ -338,6 +446,7 @@ impl Workbench {
                         .child(examples)
                         .child(section(t(cx, "orch.profile")))
                         .child(profiles)
+                        .when_some(helpers, |d, helpers| d.child(section(t(cx, "orch.helpers"))).child(helpers))
                         .child(section(t(cx, "orch.folder")))
                         .child(
                             div()
@@ -409,7 +518,7 @@ mod tests {
 
     #[test]
     fn the_first_message_carries_the_goal_the_models_and_the_language() {
-        let text = prompt("Compare AI coding agents", Profile::Economy, "Korean");
+        let text = prompt("Compare AI coding agents", Profile::Economy, &[], true, "Korean");
         assert!(text.starts_with("Goal: Compare AI coding agents\n"));
         assert!(text.contains("- research, building, writing: `haiku`"));
         assert!(text.contains("- review: `sonnet`"));
@@ -417,5 +526,21 @@ mod tests {
         assert!(text.ends_with("Talk to me in Korean."));
         assert_eq!(Profile::Quality.lead_model().as_deref(), Some("opus"));
         assert_eq!(Profile::Balanced.lead_model(), None);
+        assert!(!text.contains("Other AI agents"));
+    }
+
+    #[test]
+    fn other_agents_come_with_their_strength_and_how_to_run_them() {
+        let codex = HELPERS.iter().find(|h| h.binary == "codex").unwrap();
+        let text = prompt("Fix the failing tests", Profile::Balanced, &[codex], true, "English");
+        assert!(text.contains("\"Start?\""));
+        let straight = prompt("Fix the failing tests", Profile::Balanced, &[], false, "English");
+        assert!(!straight.contains("\"Start?\""));
+        assert!(straight.contains("start it right away"));
+        assert!(text.contains("- Codex (`codex`): precise code changes"));
+        assert!(text.contains("`codex exec"));
+        assert!(text.contains("an `agent`"));
+        assert!(text.contains("no `--yolo`"));
+        assert!(text.ends_with("Talk to me in English."));
     }
 }

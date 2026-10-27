@@ -40,6 +40,11 @@ Secrets are never in these files. They live in the operating system's credential
   "askDirectory": true,
   "autoWorktree": true,
   "agentTasks": true,
+  "orchestration": true,
+  "orchestrationProfile": "balanced",
+  "orchestrationHelpersOff": [],
+  "orchestrationConfirmPlan": true,
+  "orchestrationInTab": false,
   "analytics": true,
   "agentBarPosition": "top"
 }
@@ -59,6 +64,11 @@ Secrets are never in these files. They live in the operating system's credential
 | `resumeBar` | Offer earlier sessions when a terminal enters their folder |
 | `autoWorktree` | A second session in a busy project gets its own worktree |
 | `agentTasks` | Agents may ask to start parallel tasks; you confirm each one |
+| `orchestration` | Use orchestration: off hides every way to start one and the orchestration marks |
+| `orchestrationProfile` | Models a new orchestration starts with: `balanced`, `quality` or `economy` |
+| `orchestrationHelpersOff` | Other agents installed (`codex`, `gemini`, `agy`) a new orchestration leaves out |
+| `orchestrationConfirmPlan` | The orchestrator shows its plan and waits for Start |
+| `orchestrationInTab` | New orchestrations open as a tab of the workspace in front |
 | `agentGuide` | Agents started here get a short guide to Agentty's commands |
 | `stopServersOnClose` | Closing a pane stops the servers started in it |
 | `confirmClose` | Ask before closing something that was used |

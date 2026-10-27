@@ -10,8 +10,18 @@ All notable changes to this project are documented here. The format follows
   waves and has the result reviewed. Start one from the home page, a tab's right-click menu, a new workspace's start
   page or the Orchestration page; pick an example goal, a model profile (balanced, best quality, economical) and a
   folder. New ones go in an Orchestration group (made on first use, movable like any other). The page opens at its
-  workflow, a bar offers Start / View plan / Ask for changes once the plan is ready, and the orchestrator's pane has a
-  button back to its workflow.
+  workflow, a bar offers Start / View plan / Ask for changes once the plan is ready, and a strip across the
+  orchestrator's pane shows the same stage as the page, with Open workflow and Start / Resume / Stop all.
+- Orchestrations are kept across restarts: one cut off by quitting or a crash shows as interrupted, and Resume has
+  the orchestrator run only what is left. Stop all ends the orchestrator's turn and every agent still running; Delete
+  takes an orchestration off the list and can close its terminal. Its workspace carries the orchestration mark in the
+  sidebar and the menu bar.
+- Orchestrations can bring in the other AI agents installed (Codex, Gemini CLI, Antigravity CLI), each switched on or
+  off in the start dialog; the plan gives each part to the agent whose strength fits.
+- Settings → AI → Orchestration: turn orchestration on or off, and choose what a new one starts with — its models,
+  the other AI agents it uses, whether the plan waits for Start, and whether it opens as a workspace or a tab.
+- The orchestration graph moves and zooms like the connection map: drag the empty space or use the wheel, zoom with
+  ⌘/Ctrl and the wheel or the buttons, and Fit to view.
 - Orchestration page (what was Session Flow, **⇧⌘F**): a Workflow tab laid out like omo's. Threads on the left — every
   agent session and every parallel run started with `agentty tasks`; for the one picked, what you last asked it, the
   orchestrator's state, and its subagents as waves (those started together), each card saying running / completed,
@@ -24,6 +34,8 @@ All notable changes to this project are documented here. The format follows
   around the group.
 
 ### Fixed
+- Subagents that handed their report back to the agent that started them no longer show as running in the
+  subagents window, and those cut off when their agent quit show as stopped.
 - A server started in a terminal opened in the in-app browser when it only answered with a line of text (an API's
   "Hello World!") or redirected to another site. Only servers that answer with a web page open by themselves now.
 

@@ -44,6 +44,12 @@ mod notices;
 mod notify_settings;
 mod onboarding;
 mod onboarding_setup;
+mod orchestration;
+
+/// The orchestration mark's colour (outside the workbench: the menu bar, the mini window).
+pub fn orchestration_color() -> u32 {
+    orchestration::RUNNING
+}
 mod orchestrator;
 mod palette;
 pub mod panes;
@@ -3322,6 +3328,7 @@ impl Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.keep_orchestrations(cx);
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);
@@ -5106,6 +5113,19 @@ impl Workbench {
             // `chat <folder>` opens a chat workspace; `chat send:<text>` sends from the composer of
             // the chat in front, `chat terminal` flips its view, `chat state` prints it.
             "chat" => self.debug_chat(argument, window, cx),
+            // Moves the orchestration chart by `dx dy` (what a drag on it does).
+            "board-pan" => {
+                let mut parts = argument.split_whitespace().filter_map(|v| v.parse::<f32>().ok());
+                let (dx, dy) = (parts.next().unwrap_or(0.), parts.next().unwrap_or(0.));
+                self.session_board.pan += gpui::point(gpui::px(dx), gpui::px(dy));
+            }
+            // The goal box of the new-orchestration dialog.
+            "orch-goal" => {
+                if let Some(dialog) = &self.orchestrator_dialog {
+                    let text = argument.to_string();
+                    dialog.goal.update(cx, |input, cx| input.set_text(text, cx));
+                }
+            }
             "type" => {
                 if let Some(pane) = self.active_pane() {
                     let bytes = crate::debug::unescape(argument).into_bytes();

@@ -1500,6 +1500,7 @@ impl Workbench {
                         toggle("advisor-status", prefs.advisor_status, |s| s.advisor_status = !s.advisor_status, cx),
                     )),
             )
+            .child(self.render_orchestration_settings(&prefs, cx))
             .child(
                 section_with_hint(t(cx, "settings.group.agents"), t(cx, "ai.sessions_hint"))
                     .child(row_with_hint(
@@ -1525,6 +1526,74 @@ impl Workbench {
                     .child(self.settings_link_row("ai-link-accounts", SettingsSection::Accounts, "ai.link_accounts_hint", cx))
                     .child(self.settings_link_row("ai-link-voice", SettingsSection::Voice, "ai.link_voice_hint", cx)),
             )
+    }
+
+    /// Orchestration: on or off, and what a new one starts with.
+    fn render_orchestration_settings(&self, prefs: &Settings, cx: &mut Context<Self>) -> Div {
+        use super::orchestrator::{Profile, HELPERS};
+        let mut section = section_with_hint(t(cx, "orch.settings"), t(cx, "orch.settings_hint")).child(row_with_hint(
+            t(cx, "orch.setting_on"),
+            t(cx, "orch.setting_on_hint"),
+            toggle("orch-on", prefs.orchestration, |s| s.orchestration = !s.orchestration, cx),
+        ));
+        if !prefs.orchestration {
+            return section;
+        }
+        let mut profiles = chip_row();
+        for profile in Profile::ALL {
+            profiles = profiles.child(chip(
+                SharedString::from(format!("orch-default-{profile:?}")),
+                t(cx, profile.label_key()),
+                prefs.orchestration_profile == profile,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.orchestration_profile = profile)),
+            ));
+        }
+        section = section.child(row_with_hint(t(cx, "orch.setting_profile"), t(cx, "orch.setting_profile_hint"), profiles));
+        // The other agents installed here, each on or off by default.
+        let installed: Vec<_> = HELPERS.iter().filter(|h| self.installed.as_ref().is_some_and(|i| i.has(h.binary))).collect();
+        if !installed.is_empty() {
+            let mut helpers = chip_row();
+            for helper in installed {
+                let binary = helper.binary;
+                let on = !prefs.orchestration_helpers_off.iter().any(|b| b == binary);
+                helpers = helpers.child(chip(
+                    SharedString::from(format!("orch-default-helper-{binary}")),
+                    helper.name,
+                    on,
+                    cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        update_settings(cx, move |s| {
+                            if on {
+                                s.orchestration_helpers_off.push(binary.to_string());
+                            } else {
+                                s.orchestration_helpers_off.retain(|b| b != binary);
+                            }
+                        })
+                    }),
+                ));
+            }
+            section = section.child(row_with_hint(t(cx, "orch.helpers"), t(cx, "orch.setting_helpers_hint"), helpers));
+        }
+        let mut places = chip_row();
+        for (in_tab, key) in [(false, "orch.setting_place_workspace"), (true, "orch.setting_place_tab")] {
+            places = places.child(chip(
+                SharedString::from(format!("orch-place-{in_tab}")),
+                t(cx, key),
+                prefs.orchestration_in_tab == in_tab,
+                cx.listener(move |_, _: &ClickEvent, _, cx| update_settings(cx, move |s| s.orchestration_in_tab = in_tab)),
+            ));
+        }
+        section
+            .child(row_with_hint(
+                t(cx, "orch.setting_confirm_plan"),
+                t(cx, "orch.setting_confirm_plan_hint"),
+                toggle(
+                    "orch-confirm-plan",
+                    prefs.orchestration_confirm_plan,
+                    |s| s.orchestration_confirm_plan = !s.orchestration_confirm_plan,
+                    cx,
+                ),
+            ))
+            .child(row_with_hint(t(cx, "orch.setting_place"), t(cx, "orch.setting_place_hint"), places))
     }
 
     /// A row that opens another section of the settings.

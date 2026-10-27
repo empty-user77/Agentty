@@ -40,6 +40,11 @@ Agentty 把所有东西都放在 `~/.agentty/`。其中大部分在**设置**（
   "askDirectory": true,
   "autoWorktree": true,
   "agentTasks": true,
+  "orchestration": true,
+  "orchestrationProfile": "balanced",
+  "orchestrationHelpersOff": [],
+  "orchestrationConfirmPlan": true,
+  "orchestrationInTab": false,
   "analytics": true,
   "agentBarPosition": "top"
 }
@@ -59,6 +64,11 @@ Agentty 把所有东西都放在 `~/.agentty/`。其中大部分在**设置**（
 | `resumeBar` | 终端进入含有早先会话的文件夹时提示恢复 |
 | `autoWorktree` | 繁忙项目中的第二个会话获得独立工作树 |
 | `agentTasks` | 允许智能体请求开始并行任务，每次都要确认 |
+| `orchestration` | 使用编排；关闭后隐藏所有启动入口和编排标记 |
+| `orchestrationProfile` | 新编排的默认模型：`balanced`、`quality` 或 `economy` |
+| `orchestrationHelpersOff` | 新编排默认不使用的其他智能体（`codex`、`gemini`、`agy`） |
+| `orchestrationConfirmPlan` | 编排者展示计划后等待开始 |
+| `orchestrationInTab` | 新编排在当前工作区的新标签页中打开 |
 | `agentGuide` | 从这里启动的智能体会收到 Agentty 命令的简短说明 |
 | `stopServersOnClose` | 关闭窗格时停止其中启动的服务器 |
 | `confirmClose` | 关闭用过的东西前先确认 |

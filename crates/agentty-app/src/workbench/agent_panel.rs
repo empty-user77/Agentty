@@ -153,11 +153,11 @@ impl Workbench {
         let Some(mine) = self.subagents_shown().map(|p| p.traces.clone()) else { return };
         let ours = move |panel: &&mut AgentPanel| panel.pane == id && Arc::ptr_eq(&panel.traces, &mine);
         cx.spawn(async move |this, cx| loop {
-            let Ok(Some((session_id, traces))) = this.update(cx, |this, cx| {
+            let Ok(Some((session_id, since, traces))) = this.update(cx, |this, cx| {
                 let panel = this.subagents_shown().filter(&ours)?;
                 let traces = panel.traces.clone();
                 let pane = this.all_panes().into_iter().find(|p| p.entity_id() == id)?;
-                Some((pane.read(cx).session_id_live.clone(), traces))
+                Some((pane.read(cx).session_id_live.clone(), pane.read(cx).agent_since_ms, traces))
             }) else {
                 break;
             };
@@ -183,6 +183,10 @@ impl Workbench {
                             changed.push(agent.id.clone());
                         }
                     }
+                    // Those the agent process took with it when it ended (the app was closed, say).
+                    for reader in traces.lock().unwrap_or_else(|e| e.into_inner()).values_mut() {
+                        reader.mark_stopped_before(since);
+                    }
                     (agents, changed)
                 })
                 .await;
@@ -191,7 +195,7 @@ impl Workbench {
                 if panel.selected.is_none() {
                     // Start with the running one (or the latest).
                     let traces = panel.traces.lock().unwrap_or_else(|e| e.into_inner());
-                    let running = agents.iter().rev().find(|a| traces.get(&a.id).is_some_and(|r| !r.trace.finished));
+                    let running = agents.iter().rev().find(|a| traces.get(&a.id).is_some_and(|r| !r.trace.ended()));
                     let selected = running.or(agents.last()).map(|a| a.id.clone());
                     drop(traces);
                     panel.selected = selected;
@@ -224,7 +228,14 @@ impl Workbench {
         let live = self.flow.edges().iter().any(|e| (e.from == pane_id || e.to == pane_id) && e.live);
         let (hook_total, hook_running) = (view.subagents.len(), view.subagents.iter().filter(|r| r.finished.is_none()).count());
         let (file_total, file_active) = view.subagent_files;
-        let (total, running) = (hook_total.max(file_total), hook_running.max(file_active));
+        // A session whose transcripts are followed (an orchestration's) counts as its strip and page do.
+        let (total, running) = match view.current_session().filter(|s| self.watches_session(s)) {
+            Some(session) => {
+                let team = self.team_of(&session, Some(pane), cx);
+                (team.all, team.running)
+            }
+            None => (hook_total.max(file_total), hook_running.max(file_active)),
+        };
         // The link chip is also the way to *make* a link, so it shows whenever there is another agent.
         let connectable = view.is_agent() && view.is_running() && !self.connectable_panes(pane_id, cx).is_empty();
         if links == 0 && total == 0 && !connectable {

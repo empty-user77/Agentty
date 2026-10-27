@@ -366,7 +366,7 @@ impl Workbench {
                     ))
                     .child(item(
                         "activity-flow",
-                        "workflow",
+                        "orbit",
                         self.page == Some(Page::Flow),
                         "page.flow",
                         Box::new(|this, cx| this.open_page(Page::Flow, cx)),
@@ -1234,7 +1234,13 @@ impl Workbench {
         if chat {
             plugin_mark = Some(crate::ui::icon("message-square", 16., hex(ink)).into_any_element());
         }
-        let indent = px(if show_logo || chat { 24. } else { 2. });
+        // An orchestration's workspace carries the orchestration mark, in the colour of its stage.
+        let orchestration = self.orchestration_mark(index, cx);
+        if let Some(color) = orchestration {
+            plugin_mark = Some(crate::ui::icon("orbit", 16., hex(if ws_colored { ink } else { color })).into_any_element());
+        }
+        let marked = chat || orchestration.is_some();
+        let indent = px(if show_logo || marked { 24. } else { 2. });
         let compact = settings(cx).compact_workspaces;
 
         // A bar down the left edge, for the one thing a colour cannot say: a pane in here is
@@ -1338,7 +1344,7 @@ impl Workbench {
                     // One logo: which agent it is, without a pile of icons down the sidebar. It
                     // breathes while a turn is running.
                     .map(|d| {
-                        if let Some(mark) = plugin_mark.take().filter(|_| show_logo || chat) {
+                        if let Some(mark) = plugin_mark.take().filter(|_| show_logo || marked) {
                             // A turn running in there still shows, beside the mark.
                             d.child(mark)
                                 .when(working, |d| d.child(crate::ui::dot_spinner(("card-working", id as usize), 14., hex_alpha(ink, 0.9))))
@@ -2725,11 +2731,11 @@ impl Workbench {
             ));
         }
         // An orchestrator: Claude Code leading a team of agents for one goal.
-        if self.offers_agent("claude", cx) {
+        if self.offers_agent("claude", cx) && settings(cx).orchestration {
             let group = self.new_workspace_group;
             let body = t(cx, "orch.card_body").to_string();
             cards = cards.child(
-                tile("welcome-orchestrator".into(), glyph_tile("workflow", Chrome::BLUE), t(cx, "orch.card").into(), body).on_click(
+                tile("welcome-orchestrator".into(), glyph_tile("orbit", Chrome::BLUE), t(cx, "orch.card").into(), body).on_click(
                     cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.open_orchestrator_dialog(super::orchestrator::Place::NewWorkspace { group }, window, cx)
                     }),
@@ -2998,7 +3004,7 @@ impl Workbench {
                 .child(row("welcome-launch", "rocket", Chrome::ORANGE, launch.0, launch.1, Box::new(|this, cx| this.open_launch(cx)), cx))
                 .child(row(
                     "welcome-flow",
-                    "network",
+                    "orbit",
                     Chrome::PURPLE,
                     flow.0,
                     flow.1,

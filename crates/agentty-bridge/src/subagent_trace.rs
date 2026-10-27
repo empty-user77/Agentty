@@ -145,8 +145,12 @@ pub struct Trace {
     pub task: Option<String>,
     pub started_ms: Option<u64>,
     pub last_ms: Option<u64>,
-    /// The transcript ends with a final answer (`end_turn`).
+    /// The subagent is done: its transcript ends with a final answer (`end_turn`), or — for a
+    /// background agent — with a `SubagentHandback` that reached its caller.
     pub finished: bool,
+    /// It was cut off: the agent process it ran in has gone (set by whoever knows when that
+    /// process started; see [`TraceReader::mark_stopped_before`]).
+    pub stopped: bool,
     pub steps: Vec<Step>,
     pub plan: Vec<PlanItem>,
     pub files: Vec<FileChange>,
@@ -187,9 +191,14 @@ impl Trace {
         counts
     }
 
+    /// It does nothing more: done, or cut off.
+    pub fn ended(&self) -> bool {
+        self.finished || self.stopped
+    }
+
     /// The call it is waiting on now, if any.
     pub fn current(&self) -> Option<&Step> {
-        if self.finished {
+        if self.ended() {
             return None;
         }
         self.steps.iter().rev().find(|s| s.tool.is_some() && s.status == StepStatus::Running)
@@ -254,6 +263,14 @@ impl TraceReader {
         Ok(changed)
     }
 
+    /// Marks the trace cut off when it is not finished and did its last thing before `since` — when
+    /// the agent process that would run it now started (`None`: no agent runs any more). Background
+    /// subagents die with the process that started them, and their transcripts just stop.
+    pub fn mark_stopped_before(&mut self, since: Option<u64>) {
+        let last = self.trace.last_ms.or(self.trace.started_ms).unwrap_or(0);
+        self.trace.stopped = !self.trace.finished && since.is_none_or(|since| last < since);
+    }
+
     /// Parses a whole transcript from text (tests, one-off reads).
     pub fn from_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> Trace {
         let mut reader = Self::new(PathBuf::new());
@@ -293,7 +310,10 @@ impl TraceReader {
                 self.trace.task = Some(text.trim().to_string());
                 return true;
             }
-            return false;
+            // A message from its caller after it handed back sets it to work again.
+            let was = self.trace.finished;
+            self.trace.finished = false;
+            return was;
         }
         let Some(blocks) = content.as_array() else { return false };
         let results: Vec<&Value> = blocks.iter().filter(|b| b["type"] == "tool_result").collect();
@@ -305,7 +325,9 @@ impl TraceReader {
                     return true;
                 }
             }
-            return false;
+            let was = self.trace.finished;
+            self.trace.finished = false;
+            return was;
         }
         self.trace.finished = false;
         // The structured result belongs to the line's only tool result.
@@ -325,6 +347,10 @@ impl TraceReader {
             let tool = step.tool.clone().unwrap_or_default();
             if let Some(structured) = structured {
                 self.apply_result(index, &tool, structured, failed);
+            }
+            // A background agent's report reaching its caller is its end.
+            if tool == "SubagentHandback" && !failed {
+                self.trace.finished = true;
             }
         }
         true
@@ -724,6 +750,26 @@ mod tests {
         ];
         let trace = TraceReader::from_lines(lines.iter().map(String::as_str));
         assert_eq!(trace.plan, vec![PlanItem { id: Some("7".into()), text: "Scaffold".into(), status: PlanStatus::Done }]);
+    }
+
+    #[test]
+    fn a_handback_that_reached_its_caller_ends_it_until_the_caller_writes_again() {
+        let lines = vec![
+            line(serde_json::json!({"type": "user", "message": {"content": "Compare the notes"}})),
+            line(serde_json::json!({"type": "assistant", "message": {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "h", "name": "SubagentHandback", "input": {"message": "Report"}}]}})),
+        ];
+        let mut reader = TraceReader::new(PathBuf::new());
+        for l in &lines {
+            reader.ingest(&serde_json::from_str(l).unwrap());
+        }
+        assert!(!reader.trace.finished);
+        reader.ingest(&serde_json::json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "h", "content": "{\"success\":true}"}]}}));
+        assert!(reader.trace.finished);
+        assert!(reader.trace.current().is_none());
+        reader.ingest(&serde_json::json!({"type": "user", "message": {"content": "The coordinator sent a message: fix it"}}));
+        assert!(!reader.trace.finished);
     }
 
     #[test]
