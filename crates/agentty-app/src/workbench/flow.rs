@@ -991,7 +991,14 @@ impl Workbench {
                     .gap_3()
                     .border_b_1()
                     .border_color(hex(Chrome::BORDER))
-                    // The tabs say where you are; no title above them.
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .t_body()
+                            .font_weight(crate::theme::EMPHASIS)
+                            .text_color(hex(Chrome::BRIGHT))
+                            .child(t(cx, "orch.page_title")),
+                    )
                     .child(self.render_session_tabs(cx))
                     // The map's own hint, only where the map is.
                     .child(
@@ -1001,11 +1008,12 @@ impl Workbench {
                             .t_small()
                             .text_color(hex(Chrome::MUTED))
                             .when(self.session_board.tab == super::session_board::SessionTab::Links, |d| d.child(t(cx, "flow.hint"))),
-                    ),
+                    )
+                    .child(self.render_new_orchestrator_button(cx)),
             )
             .child(match self.session_board.tab {
                 super::session_board::SessionTab::Workflow => {
-                    div().flex_1().min_h_0().child(self.render_workflow_view(cx)).into_any_element()
+                    div().flex_1().min_h_0().min_w_0().overflow_hidden().child(self.render_workflow_view(cx)).into_any_element()
                 }
                 super::session_board::SessionTab::Links => area.into_any_element(),
             })

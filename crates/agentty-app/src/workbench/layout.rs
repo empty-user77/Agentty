@@ -363,6 +363,8 @@ impl Workbench {
             // The pane's bar: above the terminal, or under it (Settings → Appearance).
             .when(!bars_below, |d| d.children(header.take()).children(agent_bar.take()))
             .children(resume_hint)
+            // An orchestrator's pane says so across its top, with the way to its workflow.
+            .children(self.render_orchestration_strip(pane, cx))
             // Cached: the grid is only re-laid out when this terminal notifies (output, cursor,
             // focus), not when unrelated parts of the window re-render (e.g. sidebar scrolling).
             .child(

@@ -90,7 +90,8 @@ pub fn speech(trace: &Trace, done: bool, cx: &gpui::App) -> String {
 /// subagents as stopped while they still work, so a transcript that keeps moving wins.
 pub fn finished(trace: Option<&Trace>, reported_stopped: bool, now_ms: u64) -> bool {
     match trace {
-        Some(trace) if trace.finished => true,
+        // Done, or cut off when its agent process ended.
+        Some(trace) if trace.ended() => true,
         _ if !reported_stopped => false,
         None => true,
         Some(trace) => trace.last_ms.or(trace.started_ms).is_none_or(|at| now_ms.saturating_sub(at) > 20_000),

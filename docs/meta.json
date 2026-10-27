@@ -102,10 +102,10 @@
         {
           "slug": "session-flow",
           "title": {
-            "en": "Orchestrator",
-            "ko": "오케스트레이터",
-            "ja": "オーケストレーター",
-            "zh": "编排器"
+            "en": "Orchestration",
+            "ko": "오케스트레이션",
+            "ja": "オーケストレーション",
+            "zh": "编排"
           }
         },
         {

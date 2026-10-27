@@ -140,7 +140,7 @@ impl Task {
                 ],
             },
             Task::Flow => Guide {
-                glyph: "workflow",
+                glyph: "orbit",
                 title: "onboarding.flow",
                 what: "onboarding.flow_what",
                 steps: vec![

@@ -1,9 +1,30 @@
 ---
-title: Orchestrator
+title: Orchestration
 description: Watch an agent hand work to its subagents in waves, and link sessions so they share context.
 ---
 
-**⇧⌘F** opens the Orchestrator. (In the file editor, ⇧⌘F searches the project's files instead; the Orchestrator is also in the **View** menu.) It has two tabs: **Workflow** shows how the work of a session is split up and how far it got, **Session links** connects sessions so they share context.
+**⇧⌘F** opens the Orchestration page. (In the file editor, ⇧⌘F searches the project's files instead; the page is also in the **View** menu.) It has two tabs: **Workflow** shows how the work of a session is split up and how far it got, **Session links** connects sessions so they share context.
+
+## Starting an orchestration
+
+Write a goal and an orchestrator agent does the rest: it plans a team of agents for it, shows you the plan, runs it in waves and has the result checked.
+
+Start one from the home page (**Orchestration**), from a tab's right-click menu (**New orchestration tab**), from a new workspace's start page, or with **New orchestration** at the top right of this page. In the dialog:
+
+- **Goal** — what the team should get done. The examples under it fill it in: market research, a tutorial from using a web app, building a feature with review, fixing failing tests.
+- **Models** — Balanced (Sonnet works, Opus reviews), Best quality (Opus throughout) or Economical (Haiku works, Sonnet reviews). The plan names a model for every agent.
+- **Folder** — where the team works.
+- **AI on the team** — Claude Code always, and the other agents installed here (Codex, Gemini CLI, Antigravity CLI), each on or off. The plan gives each part to the agent whose strength fits — Codex for precise code changes and review, Gemini for very large inputs — and they never run with their permission checks off.
+
+A new workspace goes in the **Orchestration** group, made the first time; move it to any group you like. The page then shows its workflow. When the plan is ready, a bar says so: **View plan** opens the orchestrator's pane, **Ask for changes** sends it a message, and **Start** runs it. Agents that need their own branches go to parallel sessions (`agentty tasks`); a reviewer checks the result against the goal at the end, and the orchestrator finishes with a report.
+
+## Following, resuming and stopping
+
+The orchestrator's pane has a strip across its top with the same words as this page: planning, the plan ready (with **Start**), running with how many agents are at work and how many are done, done, interrupted or stopped. **Open workflow** comes here; the sidebar and the menu bar mark its workspace with the orchestration icon, in the colour of its stage.
+
+Orchestrations are kept across restarts. If Agentty quits (or crashes) while one runs, its agents stop with it: the strip and this page say **Interrupted**, and **Resume** opens the session again if needed and has the orchestrator check what is already done and run only what is left. **Stop all** (after a confirmation) ends the orchestrator's turn and every agent still running; **Resume** carries on later. **Delete** takes an orchestration off the list (stopping it first if it runs), and can close its terminal too; the files it made stay.
+
+Its settings are under **Settings → AI → Orchestration**: on or off, the models a new one starts with, the other AI agents it uses by default, whether the plan waits for **Start**, and whether a new one opens as a workspace or a tab.
 
 ## Workflow
 
@@ -15,6 +36,8 @@ On the left are the threads: every agent session running in Agentty, with a dot 
 - At the bottom, the latest steps of its subagents as they happen.
 
 A parallel run shows its tasks as one wave, each with its branch (or folder) and its pane's state; click one to go to its pane.
+
+Drag the empty space of the graph (or use the wheel) to move it; ⌘ or Ctrl with the wheel, or the buttons at the bottom right, zoom, and **Fit to view** shows it whole.
 
 ## Session links
 

@@ -129,6 +129,15 @@ impl Workbench {
                 this.tab_menu = None;
                 cx.notify();
             }))
+            // New tabs first: an orchestrator for a goal, beside this tab.
+            .when(crate::settings::settings(cx).orchestration, |d| {
+                d.child(row("tab-menu-orchestrator", "orbit", t(cx, "orch.new_tab"), false).on_hover(Self::fold_tab_flyout(cx)).on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.open_orchestrator_dialog(super::orchestrator::Place::NewTab, window, cx)
+                    }),
+                ))
+                .child(rule())
+            })
             .child(
                 row("tab-menu-close", "x", t(cx, "tab.close"), false)
                     .on_hover(Self::fold_tab_flyout(cx))

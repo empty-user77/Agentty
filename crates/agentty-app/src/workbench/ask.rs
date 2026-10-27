@@ -32,6 +32,10 @@ pub enum AskAction {
     ContinueSynced(Box<super::sync::SyncedSession>),
     /// Delete Agentty window `slot` and the workspaces in it (Settings → Workspaces).
     DeleteWindow(usize),
+    /// Stop orchestration `0` and its whole team.
+    StopOrchestration(u64),
+    /// Take orchestration `id` off the list; `close` closes its terminal too.
+    DeleteOrchestration { id: u64, close: bool },
 }
 
 #[derive(Clone)]
@@ -105,6 +109,8 @@ impl Workbench {
             AskAction::OpenTree(tree) => self.open_tree_tab(None, tree, window, cx),
             AskAction::SwitchTree { pane, tree } => self.switch_pane_to_tree(pane, tree, window, cx),
             AskAction::DeleteWindow(slot) => self.delete_window(slot, window, cx),
+            AskAction::StopOrchestration(id) => self.stop_orchestration(id, cx),
+            AskAction::DeleteOrchestration { id, close } => self.delete_orchestration(id, close, window, cx),
         }
         cx.notify();
     }

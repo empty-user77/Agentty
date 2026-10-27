@@ -122,6 +122,7 @@ pub const ICONS: &[&str] = &[
     "external-link",
     "square-terminal",
     "network",
+    "orbit",
     "list-tree",
     "circle-check",
     "circle-x",

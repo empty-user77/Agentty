@@ -228,6 +228,20 @@ pub fn terminal_font(cx: &App) -> String {
 /// cannot be used: GPUI skips fonts without an `m` glyph.)
 pub const SYMBOLS_FONT: &str = "JetBrainsMono Nerd Font Mono";
 
+/// Which models an orchestration's team runs on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OrchestrationProfile {
+    #[default]
+    Balanced,
+    Quality,
+    Economy,
+}
+
+impl OrchestrationProfile {
+    pub const ALL: [Self; 3] = [Self::Balanced, Self::Quality, Self::Economy];
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -390,6 +404,19 @@ pub struct Settings {
     /// Agents may ask (`agentty tasks`) to start parallel tasks in split panes; the user still
     /// confirms every request.
     pub agent_tasks: bool,
+    /// Orchestration: a goal handed to an orchestrator agent that plans and runs a team. Off hides
+    /// every way to start one, the strips on panes and the marks on workspaces, and stops following
+    /// them (the Orchestration page still shows sessions and their links).
+    pub orchestration: bool,
+    /// The model profile a new orchestration starts with.
+    pub orchestration_profile: OrchestrationProfile,
+    /// Other agents (by command) a new orchestration leaves out unless switched on in its dialog.
+    pub orchestration_helpers_off: Vec<String>,
+    /// The orchestrator shows its plan and waits for the go; off, it starts right after showing it.
+    pub orchestration_confirm_plan: bool,
+    /// New orchestrations (from the home page or the Orchestration page) open as a tab of the
+    /// workspace in front instead of a workspace of their own.
+    pub orchestration_in_tab: bool,
     /// Agents started by Agentty get a short guide to what Agentty offers them (and Claude Code its
     /// Agentty skills).
     pub agent_guide: bool,
@@ -998,6 +1025,11 @@ impl Default for Settings {
             ask_remove_trees: true,
             auto_worktree: true,
             agent_tasks: true,
+            orchestration: true,
+            orchestration_profile: OrchestrationProfile::default(),
+            orchestration_helpers_off: Vec::new(),
+            orchestration_confirm_plan: true,
+            orchestration_in_tab: false,
             agent_guide: true,
             always_bypass: false,
             stop_servers_on_close: true,

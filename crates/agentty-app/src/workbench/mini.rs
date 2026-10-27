@@ -57,9 +57,21 @@ pub struct AgentSummary {
     pub elapsed: Option<u64>,
     /// Started by a plugin in its workspace (an agent writing for an automation), not by the user.
     pub in_plugin: bool,
+    /// It leads an orchestration: drawn with the orchestration mark instead of its agent's logo.
+    pub orchestration: bool,
 }
 
 impl AgentSummary {
+    /// Its logo, or the orchestration mark when it leads one.
+    pub fn mark(&self, size: f32) -> gpui::AnyElement {
+        use gpui::IntoElement;
+        if self.orchestration {
+            crate::ui::icon("orbit", size * 0.8, crate::theme::hex(crate::workbench::orchestration_color())).into_any_element()
+        } else {
+            crate::brand::avatar(self.tool, size).into_any_element()
+        }
+    }
+
     /// The row's first line: the workspace, named as its sidebar card names it, so a session is
     /// found under the same name in the sidebar, mini mode, the menu bar and notifications.
     pub fn heading(&self) -> &str {
@@ -437,7 +449,7 @@ impl Render for MiniView {
                     .child(
                         div()
                             .relative()
-                            .child(crate::brand::avatar(agent.tool, 22.))
+                            .child(agent.mark(22.))
                             // Busy ring: working (orange) or waiting for the user (attention).
                             .when(agent.working || agent.needs_user, |d| {
                                 d.child(
@@ -569,6 +581,7 @@ impl Workbench {
                         waiting: view.attention,
                         elapsed: view.working_since.map(|t| t.elapsed().as_secs()),
                         in_plugin: ws.plugin.is_some(),
+                        orchestration: self.record_of_pane(&pane, cx).is_some(),
                     });
                 }
             }
@@ -934,6 +947,7 @@ mod tests {
             waiting: false,
             elapsed: None,
             in_plugin: false,
+            orchestration: false,
         };
         let named = agent("Fix the timer", "CosmicaDesktop");
         assert_eq!((named.heading(), named.detail()), ("CosmicaDesktop", "Fix the timer"));
@@ -959,6 +973,7 @@ mod tests {
             waiting: false,
             elapsed: None,
             in_plugin: false,
+            orchestration: false,
         };
         let agents = (1..=9).map(|i| agent(i, i == 7, i == 3, i * 10)).collect();
         let (shown, hidden) = MiniView::arrange(agents, false);

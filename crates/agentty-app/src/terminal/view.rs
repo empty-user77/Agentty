@@ -1334,6 +1334,11 @@ impl TerminalView {
         true
     }
 
+    /// Its agent ran and has quit: the pane is back at its shell.
+    pub fn agent_quit(&self) -> bool {
+        self.agent_exited
+    }
+
     pub fn is_running(&self) -> bool {
         self.backend.is_some() || (!self.spawned && self.error.is_none())
     }

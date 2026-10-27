@@ -46,6 +46,13 @@ mod notify_settings;
 mod office;
 mod onboarding;
 mod onboarding_setup;
+mod orchestration;
+
+/// The orchestration mark's colour (outside the workbench: the menu bar, the mini window).
+pub fn orchestration_color() -> u32 {
+    orchestration::RUNNING
+}
+mod orchestrator;
 mod palette;
 pub mod panes;
 mod persist;
@@ -453,6 +460,8 @@ pub struct Workbench {
     palette: Option<palette::Palette>,
     rename: Option<Rename>,
     sessions: Vec<SessionInfo>,
+    /// The "new orchestrator" dialog, while it is open.
+    orchestrator_dialog: Option<orchestrator::OrchestratorDialog>,
     sessions_loading: bool,
     session_filter: SessionFilter,
     status: Option<SharedString>,
@@ -964,6 +973,7 @@ impl Workbench {
             native_title: String::new(),
             account_usage: Vec::new(),
             session_board: Default::default(),
+            orchestrator_dialog: None,
             session_usage: Default::default(),
             usage_refreshed: None,
             card_plans_open: HashSet::new(),
@@ -3340,6 +3350,7 @@ impl Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.keep_orchestrations(cx);
         self.agent_window.viewport = window.viewport_size();
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
@@ -3817,6 +3828,7 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_webview_setup_dialog(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_orchestrator_dialog(cx))
             .children(self.render_side_chat_confirm(cx))
             .children(self.render_parent_picker(cx))
             .children(self.render_remote_password_dialog(window, cx))
@@ -5146,6 +5158,19 @@ impl Workbench {
             // `chat <folder>` opens a chat workspace; `chat send:<text>` sends from the composer of
             // the chat in front, `chat terminal` flips its view, `chat state` prints it.
             "chat" => self.debug_chat(argument, window, cx),
+            // Moves the orchestration chart by `dx dy` (what a drag on it does).
+            "board-pan" => {
+                let mut parts = argument.split_whitespace().filter_map(|v| v.parse::<f32>().ok());
+                let (dx, dy) = (parts.next().unwrap_or(0.), parts.next().unwrap_or(0.));
+                self.session_board.pan += gpui::point(gpui::px(dx), gpui::px(dy));
+            }
+            // The goal box of the new-orchestration dialog.
+            "orch-goal" => {
+                if let Some(dialog) = &self.orchestrator_dialog {
+                    let text = argument.to_string();
+                    dialog.goal.update(cx, |input, cx| input.set_text(text, cx));
+                }
+            }
             "type" => {
                 if let Some(pane) = self.active_pane() {
                     let bytes = crate::debug::unescape(argument).into_bytes();
