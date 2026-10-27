@@ -222,12 +222,16 @@ impl Workbench {
         let pane_id = view.pane_id;
         let links = self.flow.edges().iter().filter(|e| e.from == pane_id || e.to == pane_id).count();
         let live = self.flow.edges().iter().any(|e| (e.from == pane_id || e.to == pane_id) && e.live);
-        let (hook_total, hook_running) = (view.subagents.len(), view.subagents.iter().filter(|r| r.finished.is_none()).count());
+        let (hook_total, hook_running) = (view.subagents.len(), view.subagents.iter().filter(|r| r.running()).count());
         let (file_total, file_active) = view.subagent_files;
         let (total, running) = (hook_total.max(file_total), hook_running.max(file_active));
         // The link chip is also the way to *make* a link, so it shows whenever there is another agent.
         let connectable = view.is_agent() && view.is_running() && !self.connectable_panes(pane_id, cx).is_empty();
-        if links == 0 && total == 0 && !connectable {
+        // A side chat forks a Claude Code session, so it needs one to fork.
+        let side_chat = view.agent_kind() == Some(crate::launch::PaneKind::Claude)
+            && view.is_running()
+            && view.session_id_live.as_ref().or(view.spec.session_id.as_ref()).is_some();
+        if links == 0 && total == 0 && !connectable && !side_chat {
             return None;
         }
         let open = self.agent_panel.as_ref().filter(|p| p.pane == pane.entity_id()).map(|p| p.tab);
@@ -300,8 +304,146 @@ impl Workbench {
                 })),
             );
         }
+        if side_chat {
+            let target = pane.clone();
+            row = row.child(
+                chip(SharedString::from(format!("collab-side-chat-{pane_id}")), "git-fork", String::new(), Chrome::MUTED, false)
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "side_chat.open"), Some(t(cx, "side_chat.hint"))))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        // A session that has said nothing yet has nothing to copy.
+                        let view = target.read(cx);
+                        let session = view.session_id_live.clone().or_else(|| view.spec.session_id.clone());
+                        if !session.is_some_and(|id| agentty_bridge::claude::exists(&id)) {
+                            return this.show_toast(t(cx, "side_chat.empty"), cx);
+                        }
+                        // What it does is said first; the copy is made on "Open".
+                        this.side_chat_confirm = Some(target.clone());
+                        window.focus(&this.focus_handle);
+                        cx.notify();
+                    })),
+            );
+        }
         let panel = self.agent_panel.as_ref().filter(|p| p.pane == pane.entity_id()).map(|panel| self.render_agent_panel(pane, panel, cx));
         Some(div().relative().child(row).children(panel).into_any_element())
+    }
+
+    /// "Open a side chat?": what it is, before the session is copied.
+    pub(super) fn render_side_chat_confirm(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane = self.side_chat_confirm.clone()?;
+        let button = |id: &'static str, label: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .t_body()
+                .cursor_pointer()
+                .bg(if primary { hex(Chrome::ACCENT) } else { hex(0x2d2d30) })
+                .when(!primary && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if primary { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
+                .hover(|s| s.opacity(0.85))
+                .child(label)
+        };
+        let point = |text: &'static str| {
+            div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .t_small()
+                .text_color(hex(Chrome::FOREGROUND))
+                .child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child("•"))
+                .child(div().flex_1().min_w_0().child(text))
+        };
+        Some(
+            div()
+                .id("side-chat-confirm-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hex_alpha(0x000000, 0.45))
+                .occlude()
+                .child(
+                    div()
+                        .w(px(420.))
+                        .p_5()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .rounded_xl()
+                        .bg(hex(Chrome::OVERLAY))
+                        .border_1()
+                        .border_color(hex(Chrome::OVERLAY_BORDER))
+                        .shadow_lg()
+                        .child(
+                            div().flex().items_center().gap_2().child(icon("git-fork", 16., hex(Chrome::BRIGHT))).child(
+                                div()
+                                    .t_title()
+                                    .font_weight(crate::theme::EMPHASIS)
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .child(t(cx, "side_chat.confirm_title")),
+                            ),
+                        )
+                        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "side_chat.confirm_body")))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(point(t(cx, "side_chat.point_original")))
+                                .child(point(t(cx, "side_chat.point_context")))
+                                .child(point(t(cx, "side_chat.point_files"))),
+                        )
+                        .child(
+                            div()
+                                .pt_1()
+                                .flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(button("side-chat-cancel", t(cx, "confirm.cancel"), false).on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.side_chat_confirm = None;
+                                        cx.notify();
+                                    },
+                                )))
+                                .child(button("side-chat-open", t(cx, "side_chat.confirm_open"), true).on_click(cx.listener(
+                                    move |this, _: &ClickEvent, window, cx| {
+                                        this.side_chat_confirm = None;
+                                        this.open_side_chat(&pane, window, cx);
+                                    },
+                                ))),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// A side chat beside `pane`: a fork of its session, which starts with the whole conversation
+    /// so far and goes its own way, while the original carries on with its work untouched.
+    pub(super) fn open_side_chat(&mut self, pane: &Pane, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let view = pane.read(cx);
+        let Some(session) = view.session_id_live.clone().or_else(|| view.spec.session_id.clone()) else { return };
+        let cwd = view.current_dir();
+        let mut spec =
+            crate::launch::LaunchSpec::resume(agentty_bridge::model::Agent::Claude, session.clone(), t(cx, "side_chat.title").into(), cwd);
+        spec.start = crate::launch::Start::Fork(session);
+        spec.session_id = None;
+        spec.model = view.spec.model.clone();
+        // Beside the pane it came from, whichever pane was in front.
+        if let Some((workspace, tab)) = self.locate(pane) {
+            if workspace != self.active_workspace {
+                self.activate_workspace(workspace, window, cx);
+            }
+            if let Some(ws) = self.workspaces.get_mut(workspace) {
+                ws.active_tab = tab;
+                if let Some(tab) = ws.tabs.get_mut(tab) {
+                    tab.active = pane.clone();
+                }
+            }
+        }
+        self.split_with(spec, super::panes::Axis::Horizontal, window, cx);
     }
 
     fn render_agent_panel(&self, pane: &Pane, panel: &AgentPanel, cx: &mut Context<Self>) -> AnyElement {
@@ -512,9 +654,10 @@ impl Workbench {
             let mut list = div().flex().flex_col().gap_0p5().p_1().w_full();
             // The order the timeline uses: running first, then the one that started last.
             let mut order: Vec<usize> = (0..runs.len()).collect();
-            order.sort_by_key(|&i| (runs[i].finished.is_some(), std::cmp::Reverse(runs[i].started)));
+            order.sort_by_key(|&i| (!runs[i].running(), std::cmp::Reverse(runs[i].started)));
             for (index, run) in order.into_iter().map(|i| (i, &runs[i])) {
-                let seconds = run.finished.unwrap_or_else(std::time::Instant::now).duration_since(run.started).as_secs();
+                let seconds =
+                    run.finished.filter(|_| !run.running()).unwrap_or_else(std::time::Instant::now).duration_since(run.started).as_secs();
                 list = list.child(
                     div()
                         .id(("subagent-run", index))
@@ -529,7 +672,7 @@ impl Workbench {
                                 .items_center()
                                 .gap_1p5()
                                 .t_small()
-                                .child(if run.finished.is_some() {
+                                .child(if !run.running() {
                                     icon("circle-check", IconSize::INLINE, hex(Chrome::SUCCESS)).into_any_element()
                                 } else {
                                     crate::ui::spinner(IconSize::INLINE, hex(Chrome::ORANGE)).into_any_element()
@@ -541,7 +684,7 @@ impl Workbench {
                         .children(run.task.clone().map(|task| div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(task)))
                         // Finished: what it answered; running: what it is doing now.
                         .children(match (&run.result, &run.last_tool) {
-                            (Some(result), _) if run.finished.is_some() => Some(
+                            (Some(result), _) if !run.running() => Some(
                                 div()
                                     .flex()
                                     .items_start()

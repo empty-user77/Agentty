@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Workspace cards say what their agents are doing: the state in the same words and colours as the pane header,
+  how long the agent has run and the tokens its session used, the to-do list it keeps (when its version has one,
+  "4/9", click to open), and each running subagent with its current step; a click on one opens the subagents window.
+- Side chat: a button in a Claude Code pane's header opens a copy of its conversation beside it, after a short
+  explanation, so you can ask something while the original keeps working.
+
+### Fixed
+- Background subagents counted as finished while they still worked (Claude Code reports them stopped early).
+
 ### Changed
 - Sidebar: a group's colour shows as a bar down its left edge over a faint wash of the colour, instead of a frame
   around the group.
