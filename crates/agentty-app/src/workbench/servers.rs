@@ -212,56 +212,119 @@ fn serves_page(port: u16) -> Option<bool> {
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
     let addresses = [SocketAddr::from((Ipv4Addr::LOCALHOST, port)), SocketAddr::from((Ipv6Addr::LOCALHOST, port))];
-    let mut stream = addresses.iter().find_map(|a| TcpStream::connect_timeout(a, Duration::from_millis(400)).ok())?;
-    stream.set_read_timeout(Some(Duration::from_secs(4))).ok()?;
-    stream.set_write_timeout(Some(Duration::from_secs(1))).ok()?;
-    let request = format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\nAccept: text/html\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).ok()?;
-    let mut head = Vec::with_capacity(2048);
-    let mut buffer = [0u8; 1024];
-    while head.len() < 8 * 1024 && !head.windows(4).any(|w| w == b"\r\n\r\n") {
-        match stream.read(&mut buffer) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => head.extend_from_slice(&buffer[..n]),
+    let mut path = String::from("/");
+    // A few redirects on the same server (`/` → `/en` → `/en/home`), as a browser would follow them.
+    for _ in 0..4 {
+        let mut stream = addresses.iter().find_map(|a| TcpStream::connect_timeout(a, Duration::from_millis(400)).ok())?;
+        stream.set_read_timeout(Some(Duration::from_secs(4))).ok()?;
+        stream.set_write_timeout(Some(Duration::from_secs(1))).ok()?;
+        let request = format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nAccept: text/html\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).ok()?;
+        // The head and the start of the body: enough to tell a document from a line of text.
+        let mut response = Vec::with_capacity(4096);
+        let mut buffer = [0u8; 4096];
+        while response.len() < 16 * 1024 {
+            match stream.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => response.extend_from_slice(&buffer[..n]),
+            }
+        }
+        if response.is_empty() {
+            return None;
+        }
+        match classify(&String::from_utf8_lossy(&response), port) {
+            Answer::Page => return Some(true),
+            Answer::NotPage => return Some(false),
+            Answer::Redirect(next) => path = next,
         }
     }
-    if head.is_empty() {
-        return None;
-    }
-    Some(is_web_page(&String::from_utf8_lossy(&head)))
+    Some(false)
 }
 
-/// A response head that a browser would show as a page: HTML, or a redirect on the way to one.
-fn is_web_page(head: &str) -> bool {
+#[derive(Debug, PartialEq)]
+enum Answer {
+    /// A document a browser would show.
+    Page,
+    /// On to another path of the same server.
+    Redirect(String),
+    NotPage,
+}
+
+/// What a response to `GET /` is. Only an HTML document counts: asked with `Accept: text/html`, an
+/// API answers `Hello World!` or `OK` as `text/html` too, and a redirect to another site (a sign-in
+/// provider, a docs page) says nothing about this server.
+fn classify(response: &str, port: u16) -> Answer {
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or((response, ""));
     let mut lines = head.lines();
     let status =
         lines.next().and_then(|l| l.strip_prefix("HTTP/")).and_then(|l| l.split_whitespace().nth(1)).and_then(|s| s.parse::<u16>().ok());
-    let Some(status) = status else { return false };
+    let Some(status) = status else { return Answer::NotPage };
     let header = |name: &str| {
-        head.lines().skip(1).take_while(|l| !l.is_empty()).find_map(|l| {
+        head.lines().skip(1).find_map(|l| {
             let (key, value) = l.split_once(':')?;
-            key.trim().eq_ignore_ascii_case(name).then(|| value.trim().to_ascii_lowercase())
+            key.trim().eq_ignore_ascii_case(name).then(|| value.trim().to_string())
         })
     };
     match status {
-        200..=299 => header("content-type").is_some_and(|t| t.starts_with("text/html") || t.starts_with("application/xhtml")),
-        300..=399 => header("location").is_some(),
-        _ => false,
+        200..=299 => {
+            let html = header("content-type").is_some_and(|t| {
+                let t = t.to_ascii_lowercase();
+                t.starts_with("text/html") || t.starts_with("application/xhtml")
+            });
+            let body = body.to_ascii_lowercase();
+            let document = ["<!doctype html", "<html", "<head", "<body"].iter().any(|tag| body.contains(tag));
+            if html && document {
+                Answer::Page
+            } else {
+                Answer::NotPage
+            }
+        }
+        300..=399 => header("location").and_then(|l| same_server_path(&l, port)).map_or(Answer::NotPage, Answer::Redirect),
+        _ => Answer::NotPage,
     }
+}
+
+/// The path a redirect leads to when it stays on this server (`/en`, `http://localhost:3000/en`).
+fn same_server_path(location: &str, port: u16) -> Option<String> {
+    if location.starts_with('/') {
+        return (!location.starts_with("//")).then(|| location.to_string());
+    }
+    let rest = location.strip_prefix("http://").or_else(|| location.strip_prefix("https://"))?;
+    let (host, path) = rest.split_once('/').map_or((rest, ""), |(host, path)| (host, path));
+    let local = ["localhost", "127.0.0.1", "[::1]"].iter().any(|name| host.eq_ignore_ascii_case(&format!("{name}:{port}")));
+    local.then(|| format!("/{path}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_web_page;
+    use super::{classify, Answer};
 
     #[test]
     fn only_pages_open_by_themselves() {
-        assert!(is_web_page("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<!doctype html>"));
-        assert!(is_web_page("HTTP/1.1 307 Temporary Redirect\r\nlocation: /en\r\n\r\n"));
+        let page = |r: &str| classify(r, 3000) == Answer::Page;
+        assert!(page("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<!doctype html><html>"));
+        assert!(page("HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ntransfer-encoding: chunked\r\n\r\n1a2\r\n<!DOCTYPE html>"));
+        assert!(page("HTTP/1.1 200 OK\r\ncontent-type: text/html\r\n\r\n\n  <html lang=\"en\"><head>"));
         // An API, a 404 from a server without an index, a debugger, something that is not HTTP.
-        assert!(!is_web_page("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{}"));
-        assert!(!is_web_page("HTTP/1.1 404 Not Found\r\ncontent-type: text/html\r\n\r\n"));
-        assert!(!is_web_page("HTTP/1.1 200 OK\r\n\r\n"));
-        assert!(!is_web_page("\u{0}\u{0}\u{1}binary"));
+        assert!(!page("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{}"));
+        assert!(!page("HTTP/1.1 404 Not Found\r\ncontent-type: text/html\r\n\r\n<!doctype html>"));
+        assert!(!page("HTTP/1.1 200 OK\r\n\r\n"));
+        assert!(!page("\u{0}\u{0}\u{1}binary"));
+        // An API's greeting, sent as text/html because the request asked for it (Spring, NestJS, Express).
+        assert!(!page("HTTP/1.1 200 OK\r\nContent-Type: text/html;charset=UTF-8\r\n\r\nHello World!"));
+        assert!(!page("HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\n\r\nOK"));
+    }
+
+    #[test]
+    fn redirects_are_followed_only_on_the_same_server() {
+        let redirect = |location: &str| classify(&format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\n\r\n"), 3000);
+        assert_eq!(redirect("/en"), Answer::Redirect("/en".into()));
+        assert_eq!(redirect("http://localhost:3000/login?next=%2F"), Answer::Redirect("/login?next=%2F".into()));
+        assert_eq!(redirect("http://127.0.0.1:3000"), Answer::Redirect("/".into()));
+        // Elsewhere: a sign-in provider, another port, a protocol-relative address.
+        assert_eq!(redirect("https://accounts.example.com/auth"), Answer::NotPage);
+        assert_eq!(redirect("http://localhost:8080/"), Answer::NotPage);
+        assert_eq!(redirect("//example.com/"), Answer::NotPage);
+        assert_eq!(classify("HTTP/1.1 301 Moved\r\n\r\n", 3000), Answer::NotPage);
     }
 }

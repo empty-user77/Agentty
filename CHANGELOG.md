@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A server started in a terminal opened in the in-app browser when it only answered with a line of text (an API's
+  "Hello World!") or redirected to another site. Only servers that answer with a web page open by themselves now.
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
