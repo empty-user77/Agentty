@@ -592,8 +592,8 @@ impl Workbench {
             )
         });
         // An orchestrator that planned and waits for the go: say so, and let it start from here.
-        let awaiting = self.session_board.orchestrators.contains(&pane_id) && all == 0 && !main_running && !waiting_on_user;
-        let plan_bar = awaiting.then(|| self.render_plan_bar(pane, cx));
+        let _ = waiting_on_user;
+        let plan_bar = (all == 0 && !main_running && self.awaits_go(pane, cx)).then(|| self.render_plan_bar(pane, cx));
         div()
             .size_full()
             .flex()
@@ -863,6 +863,84 @@ impl Workbench {
     }
 
     /// "The plan is ready": Start, View plan (its pane), Ask for changes (the message box).
+    /// An orchestrator that has shown its plan and waits for the go: its first turn is over and no
+    /// agent has been started yet.
+    pub(super) fn awaits_go(&self, pane: &Pane, cx: &gpui::App) -> bool {
+        let view = pane.read(cx);
+        self.known_orchestrator(pane, cx) && view.subagents.is_empty() && matches!(view.status, crate::terminal::AgentStatus::Finished(_))
+    }
+
+    /// The strip across the top of an orchestrator's pane: what it is and how far it got, the way
+    /// to its workflow, and — once the plan is ready — Start.
+    pub(super) fn render_orchestration_strip(&self, pane: &Pane, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.is_orchestrator(pane, cx) {
+            return None;
+        }
+        let view = pane.read(cx);
+        let pane_id = view.pane_id;
+        let ready = self.awaits_go(pane, cx);
+        let (state, color) = super::status_label_sized(view, true, cx);
+        let (done, all) = (view.subagents.iter().filter(|r| r.finished.is_some()).count(), view.subagents.len());
+        let said = if ready {
+            t(cx, "orch.plan_ready_hint_pane").to_string()
+        } else if all > 0 {
+            tf(cx, "orch.strip_progress", &[("state", &state), ("done", &done.to_string()), ("all", &all.to_string())])
+        } else {
+            state
+        };
+        let start = pane.clone();
+        let button = |id: String, label: &'static str, primary: bool| {
+            div()
+                .id(SharedString::from(id))
+                .flex_shrink_0()
+                .px_2p5()
+                .py_0p5()
+                .rounded_md()
+                .cursor_pointer()
+                .t_small()
+                .when(primary, |d| d.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::ON_ACCENT)))
+                .when(!primary, |d| d.border_1().border_color(hex_alpha(RUNNING, 0.5)).text_color(hex(Chrome::BRIGHT)))
+                .hover(|s| s.opacity(0.85))
+                .child(label)
+        };
+        Some(
+            div()
+                .flex_shrink_0()
+                .px_3()
+                .py_1p5()
+                .flex()
+                .items_center()
+                .gap_3()
+                .border_b_1()
+                .border_color(hex_alpha(RUNNING, 0.45))
+                .bg(hex_alpha(RUNNING, if ready { 0.14 } else { 0.07 }))
+                .child(icon("workflow", 14., hex(RUNNING)))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .t_small()
+                        .font_weight(crate::theme::EMPHASIS)
+                        .text_color(hex(Chrome::BRIGHT))
+                        .child(t(cx, if ready { "orch.plan_ready" } else { "orch.card" })),
+                )
+                .when(!ready, |d| d.child(div().flex_shrink_0().size(px(6.)).rounded_full().bg(hex(color))))
+                .child(div().flex_1().min_w_0().truncate().t_small().text_color(hex(Chrome::FOREGROUND)).child(said))
+                .child(
+                    button(format!("strip-workflow-{pane_id}"), t(cx, "orch.open_page"), false)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_orchestration_of(pane_id, cx))),
+                )
+                .when(ready, |d| {
+                    d.child(button(format!("strip-start-{pane_id}"), t(cx, "orch.plan_start"), true).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            start.update(cx, |view, cx| view.submit_prompt("Start.".to_string(), cx));
+                            this.show_toast(t(cx, "orch.plan_started"), cx);
+                        },
+                    )))
+                })
+                .into_any_element(),
+        )
+    }
+
     fn render_plan_bar(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
         let pane_id = pane.read(cx).pane_id;
         let (start, view, change) = (pane.clone(), pane.clone(), pane.clone());
@@ -1087,9 +1165,34 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Whether a pane's session is an orchestrator: started as one here, or (after a restart) told
-    /// it is one by its first message.
-    pub(super) fn is_orchestrator(&self, view: &crate::terminal::TerminalView) -> bool {
+    /// Whether a pane's session is an orchestrator: started as one here, told it is one by its first
+    /// message, or (after a restart, when neither is known any more) an agent in a workspace of the
+    /// Orchestration group.
+    pub(super) fn is_orchestrator(&self, pane: &Pane, cx: &gpui::App) -> bool {
+        if self.known_orchestrator(pane, cx) {
+            return true;
+        }
+        if !pane.read(cx).is_agent() {
+            return false;
+        }
+        // Where an orchestration opens: the first pane of its workspace's first tab. Another tab in
+        // that workspace is just an agent.
+        use crate::settings::Language;
+        let names =
+            [Language::En, Language::Ko, Language::Ja, Language::Zh, Language::De].map(|l| crate::i18n::tr(l, "group.orchestration"));
+        let Some((w, tab)) = self.locate(pane) else { return false };
+        let ws = &self.workspaces[w];
+        let first = tab == 0 && ws.tabs.first().and_then(|t| t.root.leaves().into_iter().next()).is_some_and(|p| p == *pane);
+        first
+            && ws
+                .group
+                .and_then(|group| self.groups.iter().find(|g| g.id == group))
+                .is_some_and(|group| names.contains(&group.name.as_str()))
+    }
+
+    /// An orchestrator for sure: started as one in this run, or told it is one by its first message.
+    fn known_orchestrator(&self, pane: &Pane, cx: &gpui::App) -> bool {
+        let view = pane.read(cx);
         self.session_board.orchestrators.contains(&view.pane_id)
             || view
                 .last_prompt
@@ -1099,7 +1202,6 @@ impl Workbench {
 
     /// The Orchestration page, at this session's workflow.
     pub(super) fn open_orchestration_of(&mut self, pane_id: u64, cx: &mut Context<Self>) {
-        self.session_board.orchestrators.insert(pane_id);
         self.session_board.selected = Some(Thread::Session(pane_id));
         self.session_board.tab = SessionTab::Workflow;
         self.open_page(super::Page::Flow, cx);

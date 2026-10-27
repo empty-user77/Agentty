@@ -227,9 +227,7 @@ impl Workbench {
         let (total, running) = (hook_total.max(file_total), hook_running.max(file_active));
         // The link chip is also the way to *make* a link, so it shows whenever there is another agent.
         let connectable = view.is_agent() && view.is_running() && !self.connectable_panes(pane_id, cx).is_empty();
-        // An orchestrator's pane leads to its workflow on the Orchestration page.
-        let orchestrator = self.is_orchestrator(view);
-        if links == 0 && total == 0 && !connectable && !orchestrator {
+        if links == 0 && total == 0 && !connectable {
             return None;
         }
         let open = self.agent_panel.as_ref().filter(|p| p.pane == pane.entity_id()).map(|p| p.tab);
@@ -299,22 +297,6 @@ impl Workbench {
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.toggle_agent_panel(&target, PanelTab::Agents, cx);
-                })),
-            );
-        }
-        if orchestrator {
-            row = row.child(
-                chip(
-                    SharedString::from(format!("collab-orchestration-{pane_id}")),
-                    "workflow",
-                    t(cx, "orch.card").to_string(),
-                    Chrome::BLUE,
-                    false,
-                )
-                .tooltip(crate::ui::Tooltip::text(t(cx, "orch.open_workflow"), None))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.open_orchestration_of(pane_id, cx);
                 })),
             );
         }
