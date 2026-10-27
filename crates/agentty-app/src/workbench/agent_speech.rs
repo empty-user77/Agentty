@@ -85,6 +85,18 @@ pub fn speech(trace: &Trace, done: bool, cx: &gpui::App) -> String {
     }
 }
 
+/// Whether a subagent is done: its transcript says so, or Claude Code reported it stopped
+/// (`SubagentStop`) and its transcript has gone quiet. Claude Code also reports background
+/// subagents as stopped while they still work, so a transcript that keeps moving wins.
+pub fn finished(trace: Option<&Trace>, reported_stopped: bool, now_ms: u64) -> bool {
+    match trace {
+        Some(trace) if trace.finished => true,
+        _ if !reported_stopped => false,
+        None => true,
+        Some(trace) => trace.last_ms.or(trace.started_ms).is_none_or(|at| now_ms.saturating_sub(at) > 20_000),
+    }
+}
+
 /// The first sentence of some Markdown, without its marks, at most `max` characters.
 pub fn plain(text: &str, max: usize) -> String {
     let line = strip_wrappers(text).lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with("```")).unwrap_or("").to_string();
@@ -309,6 +321,20 @@ mod tests {
         assert_eq!(&text[marks[0].0.clone()], "cargo test");
         // A lone star or backtick stays as it is.
         assert_eq!(inline("2 * 3 = 6, a ` b").0, "2 * 3 = 6, a ` b");
+    }
+
+    #[test]
+    fn a_reported_stop_counts_once_the_transcript_is_quiet() {
+        let mut trace = Trace::default();
+        trace.started_ms = Some(1_000);
+        trace.last_ms = Some(50_000);
+        assert!(!finished(Some(&trace), false, 100_000));
+        // Reported stopped, but it did something 5 s ago: still at work.
+        assert!(!finished(Some(&trace), true, 55_000));
+        assert!(finished(Some(&trace), true, 80_000));
+        assert!(finished(None, true, 0));
+        trace.finished = true;
+        assert!(finished(Some(&trace), false, 0));
     }
 
     #[test]

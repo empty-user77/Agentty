@@ -110,7 +110,10 @@ impl Workbench {
             .find(|p| p.entity_id() == panel.pane)
             .map(|p| p.read(cx).subagents.iter().filter(|r| r.finished.is_some()).map(|r| r.id.clone()).collect())
             .unwrap_or_default();
-        let running = agents.iter().filter(|a| !ended.contains(&a.id) && trace_of(&a.id).is_some_and(|t| !t.finished)).count();
+        let running = agents
+            .iter()
+            .filter(|a| trace_of(&a.id).is_some() && !super::agent_speech::finished(trace_of(&a.id), ended.contains(&a.id), now))
+            .count();
         // Running ones by when they started, not by their last step: rows that swap places with
         // every step would move a stop button out from under the pointer.
         let keys: Vec<(bool, u64)> = agents

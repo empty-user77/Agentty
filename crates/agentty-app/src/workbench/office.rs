@@ -457,7 +457,7 @@ impl Workbench {
             .iter()
             .map(|file| {
                 let trace = trace_of(&file.id);
-                Worker { file, trace, done: trace.is_some_and(|t| t.finished) || ended.contains(&file.id) }
+                Worker { file, trace, done: super::agent_speech::finished(trace, ended.contains(&file.id), now) }
             })
             .collect();
         // At a desk while it runs (and while its log is still being read); in the break room once done.
