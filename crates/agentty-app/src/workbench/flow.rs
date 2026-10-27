@@ -1001,7 +1001,8 @@ impl Workbench {
                             .t_small()
                             .text_color(hex(Chrome::MUTED))
                             .when(self.session_board.tab == super::session_board::SessionTab::Links, |d| d.child(t(cx, "flow.hint"))),
-                    ),
+                    )
+                    .child(self.render_new_orchestrator_button(cx)),
             )
             .child(match self.session_board.tab {
                 super::session_board::SessionTab::Workflow => {

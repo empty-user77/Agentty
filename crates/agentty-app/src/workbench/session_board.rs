@@ -90,6 +90,8 @@ pub struct SessionBoard {
     ticking: bool,
     /// The message box under the picked session.
     message: Option<(u64, Entity<TextInput>, Subscription)>,
+    /// Sessions started as orchestrators (marked in the thread list).
+    orchestrators: std::collections::HashSet<u64>,
     /// A line on screen is running: the page is redrawn often enough for it to move smoothly.
     animating: std::cell::Cell<bool>,
 }
@@ -225,6 +227,30 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// "New orchestrator", at the right of the page's header.
+    pub(super) fn render_new_orchestrator_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("orch-new")
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .px_2p5()
+            .py_1()
+            .rounded_md()
+            .cursor_pointer()
+            .bg(hex(Chrome::ACCENT))
+            .text_color(hex(Chrome::ON_ACCENT))
+            .t_small()
+            .hover(|s| s.opacity(0.85))
+            .child(icon("plus", 12., hex(Chrome::ON_ACCENT)))
+            .child(t(cx, "orch.new"))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.open_orchestrator_dialog(super::orchestrator::Place::NewWorkspace { group: None }, window, cx)
+            }))
+            .into_any_element()
+    }
+
     /// Threads on the left, the picked one's workflow on the right.
     pub(super) fn render_workflow_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let sessions: Vec<Pane> = self.all_panes().into_iter().filter(|p| p.read(cx).is_agent() && p.read(cx).is_running()).collect();
@@ -250,7 +276,15 @@ impl Workbench {
                 None => div().into_any_element(),
             },
             Some(Thread::Run(id)) => self.render_run_workflow(id, cx),
-            None => div().p_6().child(hint(t(cx, "sessions.no_agents"))).into_any_element(),
+            None => div()
+                .p_6()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap_3()
+                .child(hint(t(cx, "sessions.no_agents")))
+                .child(self.render_new_orchestrator_button(cx))
+                .into_any_element(),
         };
         div()
             .size_full()
@@ -315,18 +349,15 @@ impl Workbench {
                 (Some(place), n) => Some(format!("{place} · {}", tf(cx, "sessions.subagents_running", &[("n", &n.to_string())]))),
                 (None, _) => None,
             };
+            let title =
+                if self.session_board.orchestrators.contains(&id) { format!("◆ {}", view.display_title()) } else { view.display_title() };
             list = list.child(
-                row(
-                    SharedString::from(format!("thread-session-{id}")),
-                    view.display_title(),
-                    sub,
-                    color,
-                    selected == Some(Thread::Session(id)),
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.session_board.selected = Some(Thread::Session(id));
-                    cx.notify();
-                })),
+                row(SharedString::from(format!("thread-session-{id}")), title, sub, color, selected == Some(Thread::Session(id))).on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.session_board.selected = Some(Thread::Session(id));
+                        cx.notify();
+                    }),
+                ),
             );
         }
         if !self.session_board.runs.is_empty() {
@@ -417,6 +448,7 @@ impl Workbench {
         // The orchestrator first, then the waves.
         let (state_label, state_color_main) = super::status_label_sized(view, true, cx);
         let main_running = view.status.in_turn();
+        let waiting_on_user = view.status.needs_user();
         let orchestrator = Node {
             name: "orchestrator".into(),
             state: if main_running { NodeState::Running } else { NodeState::Done },
@@ -481,7 +513,7 @@ impl Workbench {
         let feed: Vec<_> = feed.into_iter().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect();
         drop(traces);
 
-        let asked = view.last_prompt.clone().map(|p| first_line(&p, 120));
+        let asked = view.last_prompt.clone().map(|p| first_line(p.strip_prefix("Goal: ").unwrap_or(&p), 120));
         let title = view.display_title();
         let (open_pane, message_pane, stop_pane) = (pane.clone(), pane.clone(), pane.clone());
         let top = div()
@@ -559,12 +591,16 @@ impl Workbench {
                 div().flex_1().min_w_0().px_2().py_1().rounded_md().border_1().border_color(hex(Chrome::BORDER)).child(input.clone()),
             )
         });
+        // An orchestrator that planned and waits for the go: say so, and let it start from here.
+        let awaiting = self.session_board.orchestrators.contains(&pane_id) && all == 0 && !main_running && !waiting_on_user;
+        let plan_bar = awaiting.then(|| self.render_plan_bar(pane, cx));
         div()
             .size_full()
             .flex()
             .flex_col()
             .child(top)
             .child(status)
+            .children(plan_bar)
             .children(message)
             .child(self.render_waves(waves, cx))
             .child(self.render_feed(feed))
@@ -826,6 +862,66 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// "The plan is ready": Start, View plan (its pane), Ask for changes (the message box).
+    fn render_plan_bar(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
+        let pane_id = pane.read(cx).pane_id;
+        let (start, view, change) = (pane.clone(), pane.clone(), pane.clone());
+        let button = |id: String, label: &'static str, primary: bool| {
+            div()
+                .id(SharedString::from(id))
+                .flex_shrink_0()
+                .px_2p5()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .t_small()
+                .when(primary, |d| d.bg(hex(Chrome::ACCENT)).text_color(hex(Chrome::ON_ACCENT)))
+                .when(!primary, |d| d.border_1().border_color(hex(Chrome::BORDER)).text_color(hex(Chrome::FOREGROUND)))
+                .hover(|s| s.opacity(0.85))
+                .child(label)
+        };
+        div()
+            .mx_5()
+            .mb_2()
+            .px_3()
+            .py_2()
+            .flex()
+            .items_center()
+            .gap_3()
+            .rounded_md()
+            .border_1()
+            .border_color(hex_alpha(RUNNING, 0.6))
+            .bg(hex_alpha(RUNNING, 0.08))
+            .child(icon("list-todo", 14., hex(RUNNING)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div().t_small().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(t(cx, "orch.plan_ready")),
+                    )
+                    .child(div().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "orch.plan_ready_hint"))),
+            )
+            .child(
+                button(format!("plan-view-{pane_id}"), t(cx, "orch.plan_view"), false)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.go_to_pane(&view, window, cx))),
+            )
+            .child(
+                button(format!("plan-change-{pane_id}"), t(cx, "orch.plan_change"), false)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_session_message(&change, window, cx))),
+            )
+            .child(button(format!("plan-start-{pane_id}"), t(cx, "orch.plan_start"), true).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    // The go it asked for, typed into its session.
+                    start.update(cx, |view, cx| view.submit_prompt("Start.".to_string(), cx));
+                    this.show_toast(t(cx, "orch.plan_started"), cx);
+                },
+            )))
+            .into_any_element()
+    }
+
     /// The latest steps, oldest first: "● name · model — what it did".
     fn render_feed(&self, feed: Vec<(u64, String, Option<String>, String, bool)>) -> AnyElement {
         if feed.is_empty() {
@@ -989,6 +1085,31 @@ impl Workbench {
         input.update(cx, |input, cx| input.focus_and_select_all(window, cx));
         self.session_board.message = Some((pane_id, input, subscription));
         cx.notify();
+    }
+
+    /// Whether a pane's session is an orchestrator: started as one here, or (after a restart) told
+    /// it is one by its first message.
+    pub(super) fn is_orchestrator(&self, view: &crate::terminal::TerminalView) -> bool {
+        self.session_board.orchestrators.contains(&view.pane_id)
+            || view
+                .last_prompt
+                .as_deref()
+                .is_some_and(|p| p.starts_with("Goal: ") && p.contains("You are the orchestrator of a team of agents"))
+    }
+
+    /// The Orchestration page, at this session's workflow.
+    pub(super) fn open_orchestration_of(&mut self, pane_id: u64, cx: &mut Context<Self>) {
+        self.session_board.orchestrators.insert(pane_id);
+        self.session_board.selected = Some(Thread::Session(pane_id));
+        self.session_board.tab = SessionTab::Workflow;
+        self.open_page(super::Page::Flow, cx);
+        cx.notify();
+    }
+
+    /// A session started as an orchestrator: marked, and the one the page shows.
+    pub(super) fn session_board_follow(&mut self, pane_id: u64) {
+        self.session_board.orchestrators.insert(pane_id);
+        self.session_board.selected = Some(Thread::Session(pane_id));
     }
 
     /// A parallel run was let start: kept for the workflow view, its tasks added as each opens.

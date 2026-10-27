@@ -1,9 +1,21 @@
 ---
-title: Orchestrator
+title: Orchestration
 description: Watch an agent hand work to its subagents in waves, and link sessions so they share context.
 ---
 
-**⇧⌘F** opens the Orchestrator. (In the file editor, ⇧⌘F searches the project's files instead; the Orchestrator is also in the **View** menu.) It has two tabs: **Workflow** shows how the work of a session is split up and how far it got, **Session links** connects sessions so they share context.
+**⇧⌘F** opens the Orchestration page. (In the file editor, ⇧⌘F searches the project's files instead; the page is also in the **View** menu.) It has two tabs: **Workflow** shows how the work of a session is split up and how far it got, **Session links** connects sessions so they share context.
+
+## Starting an orchestration
+
+Write a goal and an orchestrator agent does the rest: it plans a team of agents for it, shows you the plan, runs it in waves and has the result checked.
+
+Start one from the home page (**Orchestration**), from a tab's right-click menu (**New orchestration tab**), from a new workspace's start page, or with **New orchestration** at the top right of this page. In the dialog:
+
+- **Goal** — what the team should get done. The examples under it fill it in: market research, a tutorial from using a web app, building a feature with review, fixing failing tests.
+- **Models** — Balanced (Sonnet works, Opus reviews), Best quality (Opus throughout) or Economical (Haiku works, Sonnet reviews). The plan names a model for every agent.
+- **Folder** — where the team works.
+
+A new workspace goes in the **Orchestration** group, made the first time; move it to any group you like. The page then shows its workflow. When the plan is ready, a bar says so: **View plan** opens the orchestrator's pane, **Ask for changes** sends it a message, and **Start** runs it. Agents that need their own branches go to parallel sessions (`agentty tasks`); a reviewer checks the result against the goal at the end, and the orchestrator finishes with a report.
 
 ## Workflow
 

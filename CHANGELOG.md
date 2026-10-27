@@ -6,7 +6,13 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Orchestrator (what was Session Flow, **⇧⌘F**): a Workflow tab laid out like omo's. Threads on the left — every
+- Orchestration: write a goal and an orchestrator agent plans a team of agents for it, shows the plan, runs it in
+  waves and has the result reviewed. Start one from the home page, a tab's right-click menu, a new workspace's start
+  page or the Orchestration page; pick an example goal, a model profile (balanced, best quality, economical) and a
+  folder. New ones go in an Orchestration group (made on first use, movable like any other). The page opens at its
+  workflow, a bar offers Start / View plan / Ask for changes once the plan is ready, and the orchestrator's pane has a
+  button back to its workflow.
+- Orchestration page (what was Session Flow, **⇧⌘F**): a Workflow tab laid out like omo's. Threads on the left — every
   agent session and every parallel run started with `agentty tasks`; for the one picked, what you last asked it, the
   orchestrator's state, and its subagents as waves (those started together), each card saying running / completed,
   for how long, the kind of agent and its model, and its current step or last word, with moving lines into the wave

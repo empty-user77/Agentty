@@ -44,6 +44,7 @@ mod notices;
 mod notify_settings;
 mod onboarding;
 mod onboarding_setup;
+mod orchestrator;
 mod palette;
 pub mod panes;
 mod persist;
@@ -450,6 +451,8 @@ pub struct Workbench {
     palette: Option<palette::Palette>,
     rename: Option<Rename>,
     sessions: Vec<SessionInfo>,
+    /// The "new orchestrator" dialog, while it is open.
+    orchestrator_dialog: Option<orchestrator::OrchestratorDialog>,
     sessions_loading: bool,
     session_filter: SessionFilter,
     status: Option<SharedString>,
@@ -953,6 +956,7 @@ impl Workbench {
             native_title: String::new(),
             account_usage: Vec::new(),
             session_board: Default::default(),
+            orchestrator_dialog: None,
             usage_scanner: Default::default(),
             agent_panel: None,
             agent_window: Default::default(),
@@ -3773,6 +3777,7 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_webview_setup_dialog(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_orchestrator_dialog(cx))
             .children(self.render_parent_picker(cx))
             .children(self.render_remote_password_dialog(window, cx))
             .children(self.render_tree_remove_confirm(cx))

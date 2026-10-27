@@ -2724,6 +2724,18 @@ impl Workbench {
                 cx,
             ));
         }
+        // An orchestrator: Claude Code leading a team of agents for one goal.
+        if self.offers_agent("claude", cx) {
+            let group = self.new_workspace_group;
+            let body = t(cx, "orch.card_body").to_string();
+            cards = cards.child(
+                tile("welcome-orchestrator".into(), glyph_tile("workflow", Chrome::BLUE), t(cx, "orch.card").into(), body).on_click(
+                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.open_orchestrator_dialog(super::orchestrator::Place::NewWorkspace { group }, window, cx)
+                    }),
+                ),
+            );
+        }
         // A chat runs Claude Code as its lead, but gets its own icon and color so the two cards don't look alike.
         if self.offers_agent("claude", cx) {
             let body = t(cx, "welcome.chat_body").to_string();

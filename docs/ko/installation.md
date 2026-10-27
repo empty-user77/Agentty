@@ -76,7 +76,7 @@ Rust 1.98(`rust-toolchain.toml`에 고정)과 플랫폼별 빌드 도구가 필�
 | `~/.agentty/settings.json` | 환경설정 |
 | `~/.agentty/workspaces.json` | 워크스페이스, 탭, 분할, 그룹 |
 | `~/.agentty/plugins/` | 설치된 플러그인 |
-| `~/.agentty/handoffs/` | 오케스트레이터 (세션 연결)와 대화 이전이 만든 컨텍스트 문서 |
+| `~/.agentty/handoffs/` | 오케스트레이션 (세션 연결)과 대화 이전이 만든 컨텍스트 문서 |
 | `~/.agentty/connectors.json` | API 커넥터 정의 (비밀 값은 OS 자격 증명 저장소에 보관) |
 
 전체 목록은 [설정 레퍼런스](/docs/configuration-reference)에 있습니다.

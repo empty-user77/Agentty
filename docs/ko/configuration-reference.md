@@ -13,7 +13,7 @@ Agentty는 모든 것을 `~/.agentty/`에 저장합니다. 대부분은 **설정
 | `~/.agentty/workspaces.json` | 워크스페이스, 탭, 분할, 그룹 |
 | `~/.agentty/themes/*.itermcolors` | 가져온 색 테마 |
 | `~/.agentty/pricing.json` | Claude 외 모델의 가격 |
-| `~/.agentty/handoffs/` | 오케스트레이터 (세션 연결)와 에이전트 이전이 만든 컨텍스트 문서 |
+| `~/.agentty/handoffs/` | 오케스트레이션 (세션 연결)과 에이전트 이전이 만든 컨텍스트 문서 |
 | `~/.agentty/connectors.json` | API 커넥터 정의(비밀 값 없음) |
 | `~/.agentty/agent-auth.json` | 새 에이전트 탭의 로그인 방식(비밀 값 없음) |
 | `~/.agentty/codex-home/` | API 키 로그인용 전용 Codex 홈 |
