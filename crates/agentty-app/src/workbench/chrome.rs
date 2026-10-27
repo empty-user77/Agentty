@@ -1493,6 +1493,8 @@ impl Workbench {
                     .child(icon("git-pull-request", 10., color))
                     .child(div().min_w_0().truncate().child(label))
             }))
+            // What its agents are up to: state, time and tokens, to-dos, subagents.
+            .children((!compact).then(|| self.render_session_lines(ws, fill.map(|_| ink), indent, cx)).flatten())
             .children((!compact).then(|| self.render_port_chips(ws, fill, active, indent, cx)).flatten());
 
         let menu_open = self.workspace_menu == Some(id);
