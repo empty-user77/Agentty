@@ -453,6 +453,9 @@ pub struct Settings {
     /// Thin workspace rows: title, colour and state only, for a sidebar with many workspaces.
     #[serde(default)]
     pub compact_workspaces: bool,
+    /// A detailed card lists its agents' running subagents. On by default.
+    #[serde(default = "yes")]
+    pub card_subagents: bool,
     /// A workspace whose agent just finished jumps to the top of its group (or the ungrouped
     /// list). Off by default: a fixed order is what most people expect from a sidebar they
     /// arranged themselves, and the card already shows the result without moving.
@@ -1043,6 +1046,7 @@ impl Default for Settings {
             board: BoardSettings::default(),
             analytics: true,
             compact_workspaces: false,
+            card_subagents: true,
             sort_finished_to_top: false,
             workspace_search_bar: true,
             workspace_list: WorkspaceListOptions::default(),

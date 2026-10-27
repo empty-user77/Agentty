@@ -31,6 +31,7 @@ All notable changes to this project are documented here. The format follows
 - Workspace cards say what their agents are doing: the state in the same words and colours as the pane header,
   how long the agent has run and the tokens its session used, the to-do list it keeps (when its version has one,
   "4/9", click to open), and each running subagent with its current step; a click on one opens the subagents window.
+  Up to five are listed, the rest as "+N"; Workspace Options → Show subagents on cards turns the list off.
 - Side chat: a button in a Claude Code pane's header opens a copy of its conversation beside it, after a short
   explanation, so you can ask something while the original keeps working.
 - Claude Code panes show what the session has scheduled for itself: a clock beside the subagents in the pane's
@@ -54,6 +55,7 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - Subagents that handed their report back to the agent that started them no longer show as running in the
   subagents window, and those cut off when their agent quit show as stopped.
+- A subagent whose turn the API ended with an error (a refusal, say) no longer shows as running for good.
 - Background subagents counted as finished while they still worked (Claude Code reports them stopped early).
 - Windows: `@` and `#` typed with AltGr on Swiss German keyboards now reach Claude Code and Codex in an Agentty tab.
 - A server started in a terminal opened in the in-app browser when it only answered with a line of text (an API's

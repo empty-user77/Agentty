@@ -196,6 +196,13 @@ impl Workbench {
                 |s, v| s.compact_workspaces = v,
                 cx,
             ))
+            .when(!prefs.compact_workspaces, |d| {
+                d.child(switch_row(
+                    "bot",
+                    t(cx, "workspace_options.card_subagents"),
+                    toggle("wo-card-subagents", prefs.card_subagents, |s| s.card_subagents = !s.card_subagents, cx),
+                ))
+            })
             .child(section_title(t(cx, "workspace_options.group_by")))
             .child(segmented(
                 "wo-group",
