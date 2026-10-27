@@ -59,9 +59,14 @@ pub fn clear(pane_id: u64) {
     }
 }
 
-/// What the hook answers for a tool call of `agent_id` (none from the main agent), if it is to stop.
-fn verdict(listed: &[String], agent_id: Option<&str>) -> Option<serde_json::Value> {
+/// What the hook answers for a call of `tool` by `agent_id` (none from the main agent), if it is to
+/// stop. Its report back to the agent that started it goes through: that is how it says where it
+/// stopped.
+fn verdict(listed: &[String], agent_id: Option<&str>, tool: Option<&str>) -> Option<serde_json::Value> {
     let agent_id = agent_id?;
+    if tool == Some("SubagentHandback") {
+        return None;
+    }
     listed.iter().any(|id| id == agent_id).then(|| {
         serde_json::json!({
             "hookSpecificOutput": {
@@ -87,7 +92,7 @@ pub fn run(dir: &Path) -> i32 {
         return 0;
     }
     let Ok(event) = serde_json::from_str::<serde_json::Value>(&input) else { return 0 };
-    if let Some(answer) = verdict(&listed, event["agent_id"].as_str()) {
+    if let Some(answer) = verdict(&listed, event["agent_id"].as_str(), event["tool_name"].as_str()) {
         println!("{answer}");
     }
     0
@@ -100,11 +105,13 @@ mod tests {
     #[test]
     fn only_the_listed_subagent_is_turned_down() {
         let listed = vec!["a1".to_string()];
-        assert!(verdict(&listed, Some("a1")).is_some());
-        assert!(verdict(&listed, Some("b2")).is_none());
+        assert!(verdict(&listed, Some("a1"), Some("Read")).is_some());
+        assert!(verdict(&listed, Some("b2"), Some("Read")).is_none());
         // The main agent's own calls carry no agent id.
-        assert!(verdict(&listed, None).is_none());
-        let answer = verdict(&listed, Some("a1")).unwrap();
+        assert!(verdict(&listed, None, Some("Read")).is_none());
+        // Its report of where it stopped reaches its caller.
+        assert!(verdict(&listed, Some("a1"), Some("SubagentHandback")).is_none());
+        let answer = verdict(&listed, Some("a1"), Some("Edit")).unwrap();
         assert_eq!(answer["hookSpecificOutput"]["permissionDecision"], "deny");
     }
 
