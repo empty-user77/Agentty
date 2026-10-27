@@ -228,6 +228,8 @@ pub struct SignalDetail {
     pub edit: Option<FileEdit>,
     /// A change to the to-do list the agent keeps (Claude Code's TodoWrite / TaskCreate / TaskUpdate).
     pub plan: Option<Box<crate::session_plan::PlanEvent>>,
+    /// A cron job or loop wake-up the agent just scheduled or cancelled (Claude Code).
+    pub schedule: Option<Box<crate::agent_schedule::ScheduleEvent>>,
 }
 
 /// A file an agent's tool is about to change (or just changed).
@@ -476,6 +478,12 @@ pub fn parse_line(line: &str) -> Option<AgentSignal> {
         edit,
         plan: crate::session_plan::PlanEvent::from_hook(text("hook_event_name").as_deref(), text("tool_name").as_deref(), &payload)
             .map(Box::new),
+        schedule: crate::agent_schedule::ScheduleEvent::from_hook(
+            text("hook_event_name").as_deref(),
+            text("tool_name").as_deref(),
+            &payload,
+        )
+        .map(Box::new),
     };
     Some(AgentSignal { pane_id, kind, message, detail })
 }

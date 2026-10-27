@@ -3,6 +3,7 @@
 mod account_usage;
 mod accounts_page;
 mod agent_panel;
+mod agent_speech;
 pub mod ai_resolve;
 mod ask;
 mod backup;
@@ -42,6 +43,7 @@ pub(crate) mod log_panel;
 pub mod mini;
 mod notices;
 mod notify_settings;
+mod office;
 mod onboarding;
 mod onboarding_setup;
 mod palette;
@@ -3334,6 +3336,7 @@ impl Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.agent_window.viewport = window.viewport_size();
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);

@@ -321,6 +321,12 @@ pub struct TerminalView {
     pub subagents: Vec<SubagentRun>,
     /// The to-do list the agent keeps, as its hooks reported it.
     pub plan: Vec<crate::session_plan::PlanItem>,
+    /// Cron jobs and the loop wake-up the agent has scheduled in this run (they die with it).
+    pub schedules: Vec<crate::agent_schedule::AgentSchedule>,
+    /// Subagents the user stopped in this session (see `subagent_stop`).
+    pub stopping_subagents: std::collections::HashSet<String>,
+    /// Finished subagents the user sent away from the subagents view.
+    pub dismissed_subagents: std::collections::HashSet<String>,
     /// Descriptions of Agent tool calls whose subagent has not reported `SubagentStart` yet.
     pending_subagent_tasks: std::collections::VecDeque<Option<String>>,
     /// Session id of the agent in the foreground (launched with it, or found from its transcript).
@@ -484,6 +490,9 @@ impl TerminalView {
             ask_request: None,
             subagents: Vec::new(),
             plan: Vec::new(),
+            schedules: Vec::new(),
+            stopping_subagents: Default::default(),
+            dismissed_subagents: Default::default(),
             pending_subagent_tasks: Default::default(),
             last_tool: None,
             session_id_live: None,
@@ -754,6 +763,12 @@ impl TerminalView {
         self.last_tool = None;
         self.subagents.clear();
         self.plan.clear();
+        self.schedules.clear();
+        self.dismissed_subagents.clear();
+        if !self.stopping_subagents.is_empty() {
+            self.stopping_subagents.clear();
+            crate::subagent_stop::clear(self.pane_id);
+        }
         self.pending_subagent_tasks.clear();
     }
 
@@ -1485,6 +1500,9 @@ impl TerminalView {
                     if let Some(event) = detail.plan.as_deref().cloned() {
                         crate::session_plan::apply(&mut self.plan, event);
                     }
+                    if let Some(event) = detail.schedule.as_deref().cloned() {
+                        crate::agent_schedule::apply(&mut self.schedules, event, chrono::Utc::now().timestamp_millis());
+                    }
                     if matches!(tool.as_str(), "Agent" | "Task") {
                         // Subagents start in call order; SubagentStart does not repeat the task.
                         self.pending_subagent_tasks.push_back(detail.target.clone());
@@ -1573,6 +1591,13 @@ impl TerminalView {
                 self.working_since.get_or_insert_with(Instant::now);
             }
             SignalKind::SubagentStop => {
+                // Its list entry goes; the id stays marked until the agent's state is cleared, so
+                // the row reads "stopping" until its transcript says it finished.
+                if let Some((id, _)) = &detail.subagent {
+                    if self.stopping_subagents.contains(id) {
+                        crate::subagent_stop::forget(self.pane_id, id);
+                    }
+                }
                 if let Some((id, agent_type)) = detail.subagent.filter(|(_, kind)| !kind.is_empty()) {
                     match self.subagents.iter_mut().find(|r| r.id == id) {
                         Some(run) => {
@@ -1880,6 +1905,12 @@ impl TerminalView {
             }
         }
         self.note_key(keystroke, cx);
+        // Windows reports AltGr as Ctrl+Alt on Swiss German: the character is typed, so it goes on
+        // to the text input (`replace_text_in_range`) rather than being read as a Ctrl+Alt chord.
+        #[cfg(windows)]
+        if keys::is_altgr_text(keystroke) {
+            return;
+        }
         if let Some(bytes) = keys::to_escape(keystroke, self.mode(), settings(cx).option_as_meta, self.live_agent.is_some()) {
             // This key went to the program rather than to the input method, so whatever was being
             // composed is not what the program has. Drawing it on would put it over the text the

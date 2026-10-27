@@ -6,6 +6,7 @@
 
 mod agent_bins;
 mod agent_guide;
+mod agent_schedule;
 mod agent_signal;
 mod agents;
 mod ai_processes;
@@ -60,6 +61,7 @@ mod single_instance;
 #[cfg_attr(not(target_os = "macos"), path = "platform/fallback/status_item.rs")]
 mod status_item;
 mod statusline;
+mod subagent_stop;
 mod system_load;
 mod terminal;
 mod text_input;
@@ -548,6 +550,12 @@ fn main() {
         std::process::exit(worktree_guard::run());
     }
 
+    // `agentty subagent-guard <dir>`: Claude Code hook — ends a subagent the user stopped.
+    if args.get(1).map(String::as_str) == Some("subagent-guard") {
+        let dir = args.get(2).map(std::path::PathBuf::from).unwrap_or_else(subagent_stop::dir);
+        std::process::exit(subagent_stop::run(&dir));
+    }
+
     if args.get(1).map(String::as_str) == Some("hang-dump") {
         std::process::exit(crash_log::hang_dump(&args));
     }
@@ -646,6 +654,8 @@ fn main() {
     // Servers the run log started before the last crash or kill: ended now, before anything
     // starts them again on the same ports. Only after the lock: one Agentty per data folder.
     std::thread::spawn(run_log::reap_orphans);
+    // Lists of subagents to stop belong to sessions of an earlier run (also only after the lock).
+    let _ = std::fs::remove_dir_all(subagent_stop::dir());
     // Windows: the keys the IME needs that gpui does not pass on (한/영, 한자, …).
     platform::ime::install();
     // Before any terminal is opened: a Dock-launched app starts with only 256 descriptors.
