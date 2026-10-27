@@ -3,6 +3,7 @@
 mod account_usage;
 mod accounts_page;
 mod agent_panel;
+mod agent_speech;
 pub mod ai_resolve;
 mod ask;
 mod backup;
@@ -42,6 +43,7 @@ pub(crate) mod log_panel;
 pub mod mini;
 mod notices;
 mod notify_settings;
+mod office;
 mod onboarding;
 mod onboarding_setup;
 mod palette;
@@ -67,6 +69,7 @@ mod run_panel;
 mod servers;
 mod service_status;
 mod session_board;
+mod session_card;
 mod session_viewer;
 mod settings_agents;
 mod settings_lsp;
@@ -561,6 +564,14 @@ pub struct Workbench {
     account_usage: Vec<account_usage::AccountUsage>,
     /// The session page's Agents and Workflows views (and which one is on screen).
     session_board: session_board::SessionBoard,
+    /// Tokens and spend of each session, by session id (from the same scan).
+    session_usage: std::collections::HashMap<String, account_usage::SessionTotals>,
+    /// When a finished turn last asked for the totals again.
+    usage_refreshed: Option<std::time::Instant>,
+    /// The pane a side chat was asked for, while its dialog explains what that does.
+    side_chat_confirm: Option<Pane>,
+    /// Workspace cards whose to-do list is open.
+    card_plans_open: HashSet<u64>,
     /// Incremental transcript scanner behind `account_usage`, shared with the refresh button.
     usage_scanner: std::sync::Arc<std::sync::Mutex<agentty_bridge::usage::UsageScanner>>,
     /// Subagents / session links popover of a pane.
@@ -953,6 +964,10 @@ impl Workbench {
             native_title: String::new(),
             account_usage: Vec::new(),
             session_board: Default::default(),
+            session_usage: Default::default(),
+            usage_refreshed: None,
+            card_plans_open: HashSet::new(),
+            side_chat_confirm: None,
             usage_scanner: Default::default(),
             agent_panel: None,
             agent_window: Default::default(),
@@ -1485,6 +1500,13 @@ impl Workbench {
 
     pub fn apply_signal(&mut self, signal: AgentSignal, cx: &mut Context<Self>) {
         self.editor_signal(&signal, cx);
+        // A turn ended: what it used shows on its card now rather than at the next poll.
+        if signal.kind == crate::agent_signal::SignalKind::Stop
+            && self.usage_refreshed.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(15))
+        {
+            self.usage_refreshed = Some(std::time::Instant::now());
+            self.refresh_account_usage(cx);
+        }
         if let Some(pane) = self.all_panes().into_iter().find(|p| p.read(cx).pane_id == signal.pane_id) {
             pane.update(cx, |view, cx| view.apply_signal(signal, cx));
         }
@@ -3318,6 +3340,7 @@ impl Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.agent_window.viewport = window.viewport_size();
         // Whatever changed what is in front (a tab, the home tab, a page, a workspace), a plugin's
         // workspace shows or steps aside to match; nothing happens when it already does.
         self.sync_plugin_workspace(cx);
@@ -3458,6 +3481,27 @@ impl Render for Workbench {
                 // A close confirmation owns the keyboard.
                 if this.close_confirm_key(event, window, cx) {
                     return cx.stop_propagation();
+                }
+                // So does the side chat's: Enter opens it, Esc does not.
+                if let Some(pane) = this.side_chat_confirm.clone() {
+                    let m = &event.keystroke.modifiers;
+                    if !(m.platform || m.control) {
+                        if !event.is_held {
+                            match event.keystroke.key.as_str() {
+                                "enter" => {
+                                    this.side_chat_confirm = None;
+                                    this.open_side_chat(&pane, window, cx);
+                                }
+                                "escape" => {
+                                    this.side_chat_confirm = None;
+                                    this.focus_active(window, cx);
+                                    cx.notify();
+                                }
+                                _ => {}
+                            }
+                        }
+                        return cx.stop_propagation();
+                    }
                 }
                 // While the mic records, Enter sends what was said and Esc drops it — before the
                 // terminal sees either key.
@@ -3773,6 +3817,7 @@ impl Render for Workbench {
             .children(self.render_install_hint(cx))
             .children(self.render_webview_setup_dialog(cx))
             .children(self.render_close_confirm(cx))
+            .children(self.render_side_chat_confirm(cx))
             .children(self.render_parent_picker(cx))
             .children(self.render_remote_password_dialog(window, cx))
             .children(self.render_tree_remove_confirm(cx))

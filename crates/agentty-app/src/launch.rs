@@ -61,6 +61,9 @@ pub enum Start {
     New,
     /// Resume an existing agent session by id.
     Resume(String),
+    /// A new session that starts with a copy of this one's conversation (Claude Code's
+    /// `--fork-session`): a side chat that leaves the original as it is.
+    Fork(String),
     /// Fresh agent session seeded with an initial prompt (handoffs).
     Prompt(String),
     /// A shell pane that runs a command line first (custom commands); the shell stays afterwards.
@@ -272,6 +275,7 @@ impl LaunchSpec {
                 args.push(crate::agent_bins::program("claude"));
                 match &self.start {
                     Start::Resume(id) => args.extend(["--resume".into(), id.clone()]),
+                    Start::Fork(id) => args.extend(["--resume".into(), id.clone(), "--fork-session".into()]),
                     _ => {
                         if let Some(id) = &self.session_id {
                             args.extend(["--session-id".into(), id.clone()]);
@@ -574,6 +578,18 @@ fn claude_hook_settings() -> String {
         list.push(serde_json::json!({
             "matcher": "Edit|Write|MultiEdit|NotebookEdit",
             "hooks": [{ "type": "command", "command": format!("{} worktree-guard", shell_quote(&hook_exe())) }],
+        }));
+        // A subagent the user stopped is turned down at its next tool call. The guard only starts
+        // while the pane has a list of them, so other tool calls cost a file test.
+        let stops = shell_quote(&crate::subagent_stop::dir().display().to_string().replace('\\', "/"));
+        list.push(serde_json::json!({
+            "hooks": [{
+                "type": "command",
+                "command": format!(
+                    "[ -s {stops}/\"$AGENTTY_PANE_ID\" ] && exec {} subagent-guard {stops}; exit 0",
+                    shell_quote(&hook_exe())
+                ),
+            }],
         }));
     }
     serde_json::json!({

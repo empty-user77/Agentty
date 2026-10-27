@@ -24,6 +24,7 @@ use std::time::Duration;
 pub enum PanelTab {
     Agents,
     Links,
+    Schedules,
 }
 
 pub struct AgentPanel {
@@ -89,11 +90,31 @@ pub struct AgentWindow {
     placed: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The pointer and the window when a move or resize started.
     drag: Option<(WindowDrag, Point<Pixels>, Bounds<Pixels>)>,
+    /// Subagents drawn as an office (people at desks) instead of the timeline.
+    pub office: bool,
+    /// The office's animation is running (one loop at a time).
+    pub ticking: bool,
+    /// The app window's size at the last frame: the office opens as large as fits in it.
+    pub viewport: Size<Pixels>,
+    /// The user resized this window: their size wins over the office's.
+    resized: bool,
+    /// How tall the office drew last (its whole building): the window is no taller than that.
+    pub office_height: Rc<Cell<f32>>,
 }
 
 impl Default for AgentWindow {
     fn default() -> Self {
-        Self { origin: None, size: gpui::size(px(980.), px(640.)), placed: Rc::default(), drag: None }
+        Self {
+            origin: None,
+            size: gpui::size(px(980.), px(640.)),
+            placed: Rc::default(),
+            drag: None,
+            office: true,
+            ticking: false,
+            viewport: Size::default(),
+            resized: false,
+            office_height: Rc::default(),
+        }
     }
 }
 
@@ -135,6 +156,9 @@ impl Workbench {
         self.agent_panel = Some(AgentPanel::new(id, tab));
         if tab == PanelTab::Agents {
             self.follow_subagents(id, cx);
+            if self.agent_window.office {
+                self.animate_office(cx);
+            }
         }
         cx.notify();
     }
@@ -187,8 +211,10 @@ impl Workbench {
                 })
                 .await;
             let alive = this.update(cx, |this, cx| {
+                // The office opens a log when someone is clicked; the timeline starts with one open.
+                let office = this.agent_window.office;
                 let Some(panel) = this.subagents_shown().filter(&ours) else { return false };
-                if panel.selected.is_none() {
+                if panel.selected.is_none() && !office {
                     // Start with the running one (or the latest).
                     let traces = panel.traces.lock().unwrap_or_else(|e| e.into_inner());
                     let running = agents.iter().rev().find(|a| traces.get(&a.id).is_some_and(|r| !r.trace.finished));
@@ -222,12 +248,18 @@ impl Workbench {
         let pane_id = view.pane_id;
         let links = self.flow.edges().iter().filter(|e| e.from == pane_id || e.to == pane_id).count();
         let live = self.flow.edges().iter().any(|e| (e.from == pane_id || e.to == pane_id) && e.live);
-        let (hook_total, hook_running) = (view.subagents.len(), view.subagents.iter().filter(|r| r.finished.is_none()).count());
+        let (hook_total, hook_running) = (view.subagents.len(), view.subagents.iter().filter(|r| r.running()).count());
         let (file_total, file_active) = view.subagent_files;
         let (total, running) = (hook_total.max(file_total), hook_running.max(file_active));
+        let now = chrono::Utc::now().timestamp_millis();
+        let schedules = view.schedules.iter().filter(|s| s.next_run(now).is_some()).count();
         // The link chip is also the way to *make* a link, so it shows whenever there is another agent.
         let connectable = view.is_agent() && view.is_running() && !self.connectable_panes(pane_id, cx).is_empty();
-        if links == 0 && total == 0 && !connectable {
+        // A side chat forks a Claude Code session, so it needs one to fork.
+        let side_chat = view.agent_kind() == Some(crate::launch::PaneKind::Claude)
+            && view.is_running()
+            && view.session_id_live.as_ref().or(view.spec.session_id.as_ref()).is_some();
+        if links == 0 && total == 0 && schedules == 0 && !connectable && !side_chat {
             return None;
         }
         let open = self.agent_panel.as_ref().filter(|p| p.pane == pane.entity_id()).map(|p| p.tab);
@@ -300,14 +332,171 @@ impl Workbench {
                 })),
             );
         }
+        if side_chat {
+            let target = pane.clone();
+            row = row.child(
+                chip(SharedString::from(format!("collab-side-chat-{pane_id}")), "git-fork", String::new(), Chrome::MUTED, false)
+                    .tooltip(crate::ui::Tooltip::text(t(cx, "side_chat.open"), Some(t(cx, "side_chat.hint"))))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        // A session that has said nothing yet has nothing to copy.
+                        let view = target.read(cx);
+                        let session = view.session_id_live.clone().or_else(|| view.spec.session_id.clone());
+                        if !session.is_some_and(|id| agentty_bridge::claude::exists(&id)) {
+                            return this.show_toast(t(cx, "side_chat.empty"), cx);
+                        }
+                        // What it does is said first; the copy is made on "Open".
+                        this.side_chat_confirm = Some(target.clone());
+                        window.focus(&this.focus_handle);
+                        cx.notify();
+                    })),
+            );
+        }
+        // Only while the session has something scheduled: the jobs live in its process.
+        if schedules > 0 {
+            let target = pane.clone();
+            row = row.child(
+                chip(
+                    SharedString::from(format!("collab-schedules-{pane_id}")),
+                    "clock",
+                    schedules.to_string(),
+                    Chrome::PURPLE,
+                    open == Some(PanelTab::Schedules),
+                )
+                .tooltip(crate::ui::Tooltip::text(t(cx, "schedules.title"), None))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_agent_panel(&target, PanelTab::Schedules, cx);
+                })),
+            );
+        }
         let panel = self.agent_panel.as_ref().filter(|p| p.pane == pane.entity_id()).map(|panel| self.render_agent_panel(pane, panel, cx));
         Some(div().relative().child(row).children(panel).into_any_element())
+    }
+
+    /// "Open a side chat?": what it is, before the session is copied.
+    pub(super) fn render_side_chat_confirm(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane = self.side_chat_confirm.clone()?;
+        let button = |id: &'static str, label: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1p5()
+                .rounded_md()
+                .t_body()
+                .cursor_pointer()
+                .bg(if primary { hex(Chrome::ACCENT) } else { hex(0x2d2d30) })
+                .when(!primary && crate::theme::is_light(), crate::ui::outlined)
+                .text_color(hex(if primary { Chrome::ON_ACCENT } else { Chrome::BRIGHT }))
+                .hover(|s| s.opacity(0.85))
+                .child(label)
+        };
+        let point = |text: &'static str| {
+            div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .t_small()
+                .text_color(hex(Chrome::FOREGROUND))
+                .child(div().flex_shrink_0().text_color(hex(Chrome::MUTED)).child("•"))
+                .child(div().flex_1().min_w_0().child(text))
+        };
+        Some(
+            div()
+                .id("side-chat-confirm-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hex_alpha(0x000000, 0.45))
+                .occlude()
+                .child(
+                    div()
+                        .w(px(420.))
+                        .p_5()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .rounded_xl()
+                        .bg(hex(Chrome::OVERLAY))
+                        .border_1()
+                        .border_color(hex(Chrome::OVERLAY_BORDER))
+                        .shadow_lg()
+                        .child(
+                            div().flex().items_center().gap_2().child(icon("git-fork", 16., hex(Chrome::BRIGHT))).child(
+                                div()
+                                    .t_title()
+                                    .font_weight(crate::theme::EMPHASIS)
+                                    .text_color(hex(Chrome::BRIGHT))
+                                    .child(t(cx, "side_chat.confirm_title")),
+                            ),
+                        )
+                        .child(div().t_body().text_color(hex(Chrome::FOREGROUND)).child(t(cx, "side_chat.confirm_body")))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(point(t(cx, "side_chat.point_original")))
+                                .child(point(t(cx, "side_chat.point_context")))
+                                .child(point(t(cx, "side_chat.point_files"))),
+                        )
+                        .child(
+                            div()
+                                .pt_1()
+                                .flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(button("side-chat-cancel", t(cx, "confirm.cancel"), false).on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.side_chat_confirm = None;
+                                        cx.notify();
+                                    },
+                                )))
+                                .child(button("side-chat-open", t(cx, "side_chat.confirm_open"), true).on_click(cx.listener(
+                                    move |this, _: &ClickEvent, window, cx| {
+                                        this.side_chat_confirm = None;
+                                        this.open_side_chat(&pane, window, cx);
+                                    },
+                                ))),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// A side chat beside `pane`: a fork of its session, which starts with the whole conversation
+    /// so far and goes its own way, while the original carries on with its work untouched.
+    pub(super) fn open_side_chat(&mut self, pane: &Pane, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let view = pane.read(cx);
+        let Some(session) = view.session_id_live.clone().or_else(|| view.spec.session_id.clone()) else { return };
+        let cwd = view.current_dir();
+        let mut spec =
+            crate::launch::LaunchSpec::resume(agentty_bridge::model::Agent::Claude, session.clone(), t(cx, "side_chat.title").into(), cwd);
+        spec.start = crate::launch::Start::Fork(session);
+        spec.session_id = None;
+        spec.model = view.spec.model.clone();
+        // Beside the pane it came from, whichever pane was in front.
+        if let Some((workspace, tab)) = self.locate(pane) {
+            if workspace != self.active_workspace {
+                self.activate_workspace(workspace, window, cx);
+            }
+            if let Some(ws) = self.workspaces.get_mut(workspace) {
+                ws.active_tab = tab;
+                if let Some(tab) = ws.tabs.get_mut(tab) {
+                    tab.active = pane.clone();
+                }
+            }
+        }
+        self.split_with(spec, super::panes::Axis::Horizontal, window, cx);
     }
 
     fn render_agent_panel(&self, pane: &Pane, panel: &AgentPanel, cx: &mut Context<Self>) -> AnyElement {
         let body = match panel.tab {
             PanelTab::Agents => self.render_subagents(pane, panel, cx),
             PanelTab::Links => self.render_links(pane, cx),
+            PanelTab::Schedules => self.render_schedules(pane, cx),
         };
         if panel.tab == PanelTab::Agents && panel.subagents.as_ref().is_some_and(|a| !a.is_empty()) {
             return self.render_agent_window(body, cx);
@@ -316,7 +505,7 @@ impl Workbench {
             .id("agent-panel")
             .w(px(match panel.tab {
                 // The hook-reported runs are a short list.
-                PanelTab::Agents => 380.,
+                PanelTab::Agents | PanelTab::Schedules => 380.,
                 PanelTab::Links => 520.,
             }))
             .occlude()
@@ -348,16 +537,29 @@ impl Workbench {
                 cx.listener(|this, event: &gpui::MouseDownEvent, _, _| this.start_window_drag(WindowDrag::Resize, event.position)),
             )
             .on_drag(WindowDrag::Resize, |drag, _, _, cx| cx.new(|_| *drag));
+        // The office shows the whole building where it can: nearly all of the app window, unless
+        // the user sized this window themselves.
+        let viewport = (f32::from(window.viewport.width), f32::from(window.viewport.height));
+        let fit = window.office && !window.resized && viewport.0 > 0.;
+        let size = if fit {
+            // Its title bar and borders on top of the building, once the building was measured.
+            let content = window.office_height.get();
+            let tall = if content > 0. { content + 46. } else { viewport.1 - 110. };
+            gpui::size(px((viewport.0 - 48.).clamp(MIN_WINDOW.0, 1360.)), px(tall.min(viewport.1 - 110.).max(MIN_WINDOW.1)))
+        } else {
+            window.size
+        };
+        let origin = window.origin.or_else(|| fit.then(|| gpui::point(px((viewport.0 - f32::from(size.width)) / 2.), px(64.))));
         let popover = crate::ui::popover()
             .id("agent-panel")
             .relative()
-            .w(window.size.width)
-            .h(window.size.height)
+            .w(size.width)
+            .h(size.height)
             .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<WindowDrag>, _, cx| this.drag_window(event.event.position, cx)))
             .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| placed.set(Some(bounds))).absolute().size_full())
             .child(div().flex_1().min_h_0().child(body))
             .child(corner);
-        match window.origin {
+        match origin {
             Some(origin) => div()
                 .child(gpui::deferred(gpui::anchored().position(origin).snap_to_window_with_margin(px(8.)).child(popover)).with_priority(3))
                 .into_any_element(),
@@ -491,6 +693,7 @@ impl Workbench {
         match mode {
             WindowDrag::Move => window.origin = Some(start.origin + moved),
             WindowDrag::Resize => {
+                window.resized = true;
                 window.origin = Some(start.origin);
                 window.size =
                     gpui::size((start.size.width + moved.x).max(px(MIN_WINDOW.0)), (start.size.height + moved.y).max(px(MIN_WINDOW.1)));
@@ -512,9 +715,10 @@ impl Workbench {
             let mut list = div().flex().flex_col().gap_0p5().p_1().w_full();
             // The order the timeline uses: running first, then the one that started last.
             let mut order: Vec<usize> = (0..runs.len()).collect();
-            order.sort_by_key(|&i| (runs[i].finished.is_some(), std::cmp::Reverse(runs[i].started)));
+            order.sort_by_key(|&i| (!runs[i].running(), std::cmp::Reverse(runs[i].started)));
             for (index, run) in order.into_iter().map(|i| (i, &runs[i])) {
-                let seconds = run.finished.unwrap_or_else(std::time::Instant::now).duration_since(run.started).as_secs();
+                let seconds =
+                    run.finished.filter(|_| !run.running()).unwrap_or_else(std::time::Instant::now).duration_since(run.started).as_secs();
                 list = list.child(
                     div()
                         .id(("subagent-run", index))
@@ -529,19 +733,23 @@ impl Workbench {
                                 .items_center()
                                 .gap_1p5()
                                 .t_small()
-                                .child(if run.finished.is_some() {
+                                .child(if !run.running() {
                                     icon("circle-check", IconSize::INLINE, hex(Chrome::SUCCESS)).into_any_element()
                                 } else {
                                     crate::ui::spinner(IconSize::INLINE, hex(Chrome::ORANGE)).into_any_element()
                                 })
                                 .child(div().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(run.kind.clone()))
                                 .child(div().flex_1())
-                                .child(div().text_color(hex(Chrome::MUTED)).child(super::layout::format_elapsed(seconds))),
+                                .child(div().text_color(hex(Chrome::MUTED)).child(super::layout::format_elapsed(seconds)))
+                                .children(run.running().then(|| {
+                                    let stopping = pane.read(cx).stopping_subagents.contains(&run.id);
+                                    self.stop_subagent_button(pane, &run.id, stopping, cx)
+                                })),
                         )
                         .children(run.task.clone().map(|task| div().t_small().truncate().text_color(hex(Chrome::FOREGROUND)).child(task)))
                         // Finished: what it answered; running: what it is doing now.
                         .children(match (&run.result, &run.last_tool) {
-                            (Some(result), _) if run.finished.is_some() => Some(
+                            (Some(result), _) if !run.running() => Some(
                                 div()
                                     .flex()
                                     .items_start()
@@ -573,6 +781,152 @@ impl Workbench {
                 .into_any_element();
         }
         self.render_subagent_traces(panel, agents, cx)
+    }
+
+    /// What the session has scheduled, soonest first: when each runs next and what it runs.
+    /// Nothing to act on here: a job is cancelled from its session.
+    fn render_schedules(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
+        use crate::agent_schedule::ScheduleKind;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut schedules: Vec<_> = pane.read(cx).schedules.iter().filter_map(|s| Some((s.next_run(now)?, s.clone()))).collect();
+        if schedules.is_empty() {
+            return crate::ui::hint(t(cx, "schedules.none")).into_any_element();
+        }
+        schedules.sort_by_key(|(next, _)| *next);
+        let clock = |ms: i64| {
+            use chrono::TimeZone;
+            // To the nearest minute, as Claude Code itself tells the time.
+            chrono::Local.timestamp_millis_opt((ms + 30_000) / 60_000 * 60_000).single().map(|at| {
+                let today = chrono::Local::now().date_naive() == at.date_naive();
+                if today {
+                    at.format("%H:%M").to_string()
+                } else {
+                    at.format("%m-%d %H:%M").to_string()
+                }
+            })
+        };
+        let mut list = div().flex().flex_col().gap_0p5().p_1().w_full();
+        for (index, (next, schedule)) in schedules.into_iter().enumerate() {
+            let wait = ((next - now) / 1000).max(0) as u64;
+            let when = if next <= now { t(cx, "schedules.due").to_string() } else { tf(cx, "schedules.in", &[("time", &until(wait))]) };
+            let (kind, rule) = match &schedule.kind {
+                ScheduleKind::Cron { cron, recurring: true } => (t(cx, "schedules.recurring"), Some(cron.clone())),
+                ScheduleKind::Cron { cron, recurring: false } => (t(cx, "schedules.once"), Some(cron.clone())),
+                ScheduleKind::Wakeup => (t(cx, "schedules.loop"), None),
+            };
+            let expires = schedule.expires_ms().and_then(clock).map(|at| tf(cx, "schedules.expires", &[("time", &at)]));
+            list = list.child(
+                div()
+                    .id(("schedule", index))
+                    .p_2()
+                    .rounded_md()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .t_small()
+                            .child(icon(
+                                if schedule.kind == ScheduleKind::Wakeup { "rotate-cw" } else { "clock" },
+                                IconSize::INLINE,
+                                hex(Chrome::PURPLE),
+                            ))
+                            .child(div().font_weight(crate::theme::EMPHASIS).text_color(hex(Chrome::BRIGHT)).child(kind))
+                            .children(rule.map(|rule| div().font_family("monospace").text_color(hex(Chrome::MUTED)).child(rule)))
+                            .child(div().flex_1())
+                            .child(div().text_color(hex(Chrome::PURPLE)).child(when))
+                            .children(clock(next).map(|at| div().text_color(hex(Chrome::MUTED)).child(at)))
+                            // Asked to cancel: the session does it on its next turn.
+                            .child(if schedule.cancelling {
+                                div()
+                                    .size(px(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(crate::ui::spinner(IconSize::INLINE, hex(Chrome::MUTED)))
+                                    .into_any_element()
+                            } else {
+                                let (target, wanted) = (pane.clone(), schedule.clone());
+                                crate::ui::icon_only_sized(
+                                    ("schedule-cancel", index),
+                                    "trash-2",
+                                    20.,
+                                    12.,
+                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        this.cancel_schedule(&target, &wanted, cx);
+                                    }),
+                                )
+                                .tooltip(crate::ui::Tooltip::text(t(cx, "schedules.cancel"), None))
+                                .into_any_element()
+                            }),
+                    )
+                    .children(
+                        (!schedule.prompt.is_empty())
+                            .then(|| div().t_small().line_clamp(2).text_color(hex(Chrome::FOREGROUND)).child(schedule.prompt.clone())),
+                    )
+                    .children(expires.map(|text| div().t_caption().text_color(hex(Chrome::MUTED)).child(text))),
+            );
+        }
+        list.into_any_element()
+    }
+
+    /// Stops one running subagent at its next tool call; the session and its other subagents go on.
+    pub(super) fn stop_subagent(&mut self, pane: &Pane, agent_id: &str, cx: &mut Context<Self>) {
+        let agent_id = agent_id.to_string();
+        pane.update(cx, |view, _| {
+            crate::subagent_stop::request(view.pane_id, &agent_id);
+            view.stopping_subagents.insert(agent_id);
+        });
+        cx.notify();
+    }
+
+    /// The stop button of a running subagent, or what it shows once stopped and not yet ended.
+    pub(super) fn stop_subagent_button(&self, pane: &Pane, agent_id: &str, stopping: bool, cx: &mut Context<Self>) -> AnyElement {
+        if stopping {
+            return div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap_1()
+                .t_caption()
+                .text_color(hex(Chrome::MUTED))
+                .child(crate::ui::spinner(11., hex(Chrome::MUTED)))
+                .child(t(cx, "collab.stopping"))
+                .into_any_element();
+        }
+        let (target, id) = (pane.clone(), agent_id.to_string());
+        crate::ui::icon_only_sized(
+            SharedString::from(format!("subagent-stop-{agent_id}")),
+            "circle-x",
+            20.,
+            12.,
+            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                this.stop_subagent(&target, &id, cx);
+            }),
+        )
+        .tooltip(crate::ui::Tooltip::text(t(cx, "collab.stop"), None))
+        .into_any_element()
+    }
+
+    /// Asks the session to cancel `schedule`: the job lives in its process, so only it can. A
+    /// message typed while it waits for an answer would answer that prompt instead.
+    fn cancel_schedule(&mut self, pane: &Pane, schedule: &crate::agent_schedule::AgentSchedule, cx: &mut Context<Self>) {
+        if pane.read(cx).status.needs_user() {
+            return self.show_toast(t(cx, "schedules.cancel_waiting"), cx);
+        }
+        let prompt = crate::agent_schedule::cancel_prompt(schedule);
+        pane.update(cx, |view, cx| {
+            if let Some(found) = view.schedules.iter_mut().find(|s| s.id == schedule.id && s.kind == schedule.kind) {
+                found.cancelling = true;
+            }
+            view.submit_prompt(prompt, cx);
+        });
+        cx.notify();
     }
 
     fn render_links(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
@@ -957,5 +1311,15 @@ impl Workbench {
             .child(list)
             .child(connect)
             .into_any_element()
+    }
+}
+
+/// How long until a schedule runs, to the minute: `45s`, `12m`, `3h 05m`, `2d 4h`.
+fn until(seconds: u64) -> String {
+    match seconds {
+        0..=59 => format!("{seconds}s"),
+        60..=3599 => format!("{}m", seconds.div_ceil(60)),
+        3600..=86_399 => format!("{}h {:02}m", seconds / 3600, (seconds % 3600) / 60),
+        _ => format!("{}d {}h", seconds / 86_400, (seconds % 86_400) / 3600),
     }
 }

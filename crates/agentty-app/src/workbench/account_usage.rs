@@ -15,6 +15,14 @@ const REFRESH: Duration = Duration::from_secs(120);
 /// while they work, so a fresh login can leave the last known window hours behind.
 const STALE_MS: u64 = 3 * 3_600_000;
 
+/// What one session has used so far, its subagents included (their transcripts name the session).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SessionTotals {
+    pub tokens: u64,
+    /// `None` when no request had a known price.
+    pub cost: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountUsage {
     pub agent: Agent,
@@ -99,13 +107,23 @@ impl Limit {
     }
 }
 
-fn compute(scanner: &Mutex<UsageScanner>, now_ms: u64) -> Vec<AccountUsage> {
+type Totals = std::collections::HashMap<String, SessionTotals>;
+
+fn compute(scanner: &Mutex<UsageScanner>, now_ms: u64) -> (Vec<AccountUsage>, Totals) {
     let since = now_ms as i64 - DAYS * 86_400_000;
-    [Agent::Claude, Agent::Codex]
+    let mut totals = Totals::new();
+    let accounts = [Agent::Claude, Agent::Codex]
         .into_iter()
         .filter(|agent| agentty_bridge::usage::root_dir(*agent).is_dir())
         .map(|agent| {
             let usage = scanner.lock().map(|mut s| s.scan(agent)).unwrap_or_default();
+            for request in &usage.requests {
+                let total = totals.entry(request.session_id.clone()).or_default();
+                total.tokens += request.input + request.output + request.cache_read + request.cache_write;
+                if let Some(cost) = request.cost {
+                    total.cost = Some(total.cost.unwrap_or(0.) + cost);
+                }
+            }
             let recent: Vec<_> = usage.requests.iter().filter(|r| r.timestamp_ms >= since).collect();
             let priced: Vec<f64> = recent.iter().filter_map(|r| r.cost).collect();
             let cost = (!priced.is_empty()).then(|| priced.iter().sum());
@@ -113,7 +131,8 @@ fn compute(scanner: &Mutex<UsageScanner>, now_ms: u64) -> Vec<AccountUsage> {
             AccountUsage { agent, cost, tokens, limits: agentty_bridge::limits::latest(agent, now_ms) }
         })
         .filter(AccountUsage::worth_showing)
-        .collect()
+        .collect();
+    (accounts, totals)
 }
 
 impl Workbench {
@@ -121,11 +140,12 @@ impl Workbench {
         let scanner = self.usage_scanner.clone();
         cx.spawn(async move |this, cx| loop {
             let scanner = scanner.clone();
-            let usage = cx.background_spawn(async move { compute(&scanner, crate::ui::now_ms()) }).await;
+            let (usage, totals) = cx.background_spawn(async move { compute(&scanner, crate::ui::now_ms()) }).await;
             if this
                 .update(cx, |this, cx| {
-                    if this.account_usage != usage {
+                    if this.account_usage != usage || this.session_usage != totals {
                         this.account_usage = usage;
+                        this.session_usage = totals;
                         cx.notify();
                     }
                 })
@@ -143,9 +163,10 @@ impl Workbench {
     pub fn refresh_account_usage(&mut self, cx: &mut Context<Self>) {
         let scanner = self.usage_scanner.clone();
         cx.spawn(async move |this, cx| {
-            let usage = cx.background_spawn(async move { compute(&scanner, crate::ui::now_ms()) }).await;
+            let (usage, totals) = cx.background_spawn(async move { compute(&scanner, crate::ui::now_ms()) }).await;
             let _ = this.update(cx, |this, cx| {
                 this.account_usage = usage;
+                this.session_usage = totals;
                 cx.notify();
             });
         })

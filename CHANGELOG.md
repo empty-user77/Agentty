@@ -12,12 +12,32 @@ All notable changes to this project are documented here. The format follows
   for how long, the kind of agent and its model, and its current step or last word, with moving lines into the wave
   at work and a feed of the latest steps below. Sessions can be opened, sent a message or interrupted from there.
   The connection map is the Session links tab, unchanged.
+- Workspace cards say what their agents are doing: the state in the same words and colours as the pane header,
+  how long the agent has run and the tokens its session used, the to-do list it keeps (when its version has one,
+  "4/9", click to open), and each running subagent with its current step; a click on one opens the subagents window.
+- Side chat: a button in a Claude Code pane's header opens a copy of its conversation beside it, after a short
+  explanation, so you can ask something while the original keeps working.
+- Claude Code panes show what the session has scheduled for itself: a clock beside the subagents in the pane's
+  header counts its cron jobs (`/loop 5m`, reminders) and the next turn of a self-paced `/loop`, and lists when each
+  runs next and what it runs. The clock is only there while something is scheduled, and the bin beside a schedule asks
+  the session to cancel it. Codex has no schedules in its CLI (they belong to the Codex desktop app), so its panes
+  show none.
+- Subagents: an office view beside the timeline. Each running subagent works at a desk and says in a speech bubble
+  what it is doing ("Reading page.tsx", or what it said itself); finished ones wait in the break room with the first
+  line of their report and can be sent home; the session's own agent sits at the console. More subagents than fit on
+  a floor go up to more floors. Clicking someone opens their log.
+- Subagents: the log reads as plain words. Each step says what was done, with the call itself in small print below,
+  and reports, remarks and tasks show their Markdown as formatted text.
+- Subagents: a running subagent can be stopped from the subagents view. It ends at its next tool call and reports how
+  far it got; the session and its other subagents carry on. A command it is already running finishes first.
 
 ### Changed
 - Sidebar: a group's colour shows as a bar down its left edge over a faint wash of the colour, instead of a frame
   around the group.
 
 ### Fixed
+- Background subagents counted as finished while they still worked (Claude Code reports them stopped early).
+- Windows: `@` and `#` typed with AltGr on Swiss German keyboards now reach Claude Code and Codex in an Agentty tab.
 - A server started in a terminal opened in the in-app browser when it only answered with a line of text (an API's
   "Hello World!") or redirected to another site. Only servers that answer with a web page open by themselves now.
 
