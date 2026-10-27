@@ -309,6 +309,12 @@ pub struct TerminalView {
     pub ask_request: Option<(String, Option<String>)>,
     /// Subagents of the current session, newest last.
     pub subagents: Vec<SubagentRun>,
+    /// Cron jobs and the loop wake-up the agent has scheduled in this run (they die with it).
+    pub schedules: Vec<crate::agent_schedule::AgentSchedule>,
+    /// Subagents the user stopped in this session (see `subagent_stop`).
+    pub stopping_subagents: std::collections::HashSet<String>,
+    /// Finished subagents the user sent away from the subagents view.
+    pub dismissed_subagents: std::collections::HashSet<String>,
     /// Descriptions of Agent tool calls whose subagent has not reported `SubagentStart` yet.
     pending_subagent_tasks: std::collections::VecDeque<Option<String>>,
     /// Session id of the agent in the foreground (launched with it, or found from its transcript).
@@ -471,6 +477,9 @@ impl TerminalView {
             ask_serial: 0,
             ask_request: None,
             subagents: Vec::new(),
+            schedules: Vec::new(),
+            stopping_subagents: Default::default(),
+            dismissed_subagents: Default::default(),
             pending_subagent_tasks: Default::default(),
             last_tool: None,
             session_id_live: None,
@@ -740,6 +749,12 @@ impl TerminalView {
         self.ask_gate.resume();
         self.last_tool = None;
         self.subagents.clear();
+        self.schedules.clear();
+        self.dismissed_subagents.clear();
+        if !self.stopping_subagents.is_empty() {
+            self.stopping_subagents.clear();
+            crate::subagent_stop::clear(self.pane_id);
+        }
         self.pending_subagent_tasks.clear();
     }
 
@@ -1467,6 +1482,9 @@ impl TerminalView {
                         run.last_tool = Some((tool, detail.target.clone()));
                     }
                 } else if let Some(tool) = detail.tool.clone() {
+                    if let Some(event) = detail.schedule.as_deref().cloned() {
+                        crate::agent_schedule::apply(&mut self.schedules, event, chrono::Utc::now().timestamp_millis());
+                    }
                     if matches!(tool.as_str(), "Agent" | "Task") {
                         // Subagents start in call order; SubagentStart does not repeat the task.
                         self.pending_subagent_tasks.push_back(detail.target.clone());
@@ -1554,6 +1572,13 @@ impl TerminalView {
                 self.working_since.get_or_insert_with(Instant::now);
             }
             SignalKind::SubagentStop => {
+                // Its list entry goes; the id stays marked until the agent's state is cleared, so
+                // the row reads "stopping" until its transcript says it finished.
+                if let Some((id, _)) = &detail.subagent {
+                    if self.stopping_subagents.contains(id) {
+                        crate::subagent_stop::forget(self.pane_id, id);
+                    }
+                }
                 if let Some((id, agent_type)) = detail.subagent.filter(|(_, kind)| !kind.is_empty()) {
                     match self.subagents.iter_mut().find(|r| r.id == id) {
                         Some(run) => {
