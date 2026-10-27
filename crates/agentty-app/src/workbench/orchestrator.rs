@@ -75,25 +75,27 @@ pub const HELPERS: &[Helper] = &[
         binary: "codex",
         name: "Codex",
         strength: "precise code changes, debugging and fixing failing tests, and an independent review of a diff",
-        run: "`codex exec --skip-git-repo-check \"<task>\" < /dev/null` (add `--sandbox workspace-write` when it has to write files in this folder)",
+        run: "`{cmd} exec --skip-git-repo-check \"<task>\" < /dev/null` (add `--sandbox workspace-write` when it has to write files in this folder)",
     },
     Helper {
         binary: "gemini",
         name: "Gemini CLI",
         strength: "reading very large inputs at once (a whole codebase, long documents) and research grounded in Google Search",
-        run: "`gemini -p \"<task>\"`",
+        run: "`{cmd} -p \"<task>\" < /dev/null`",
     },
     Helper {
         binary: "agy",
         name: "Antigravity CLI",
         strength: "a second, independent take from another model family, on building or on reviewing",
-        run: "its non-interactive mode (see `agy --help`)",
+        run: "`{cmd} -p \"<task>\" < /dev/null` (add `--mode accept-edits` when it has to change files in this folder)",
     },
 ];
 
 /// The first message: the goal, then how to orchestrate it. English whatever the app's language;
 /// the last line says which language to talk in. `helpers` are the other agents the team may use.
-pub fn prompt(goal: &str, profile: Profile, helpers: &[&Helper], confirm_plan: bool, language: &str) -> String {
+/// `helpers`: the other agents the team may use, each with the command that runs it (its whole path
+/// when known).
+pub fn prompt(goal: &str, profile: Profile, helpers: &[(&Helper, String)], confirm_plan: bool, language: &str) -> String {
     let go = if confirm_plan {
         "End with \"Start?\" and wait for the user's answer; change the plan if they ask."
     } else {
@@ -105,7 +107,7 @@ pub fn prompt(goal: &str, profile: Profile, helpers: &[&Helper], confirm_plan: b
     } else {
         let list = helpers
             .iter()
-            .map(|h| format!("- {} (`{}`): {}. Run: {}.", h.name, h.binary, h.strength, h.run))
+            .map(|(h, cmd)| format!("- {} (`{cmd}`): {}. Run: {}.", h.name, h.strength, h.run.replace("{cmd}", cmd)))
             .collect::<Vec<_>>()
             .join("\n");
         format!(
@@ -232,8 +234,14 @@ impl Workbench {
             return self.show_toast(t(cx, "orch.goal_empty"), cx);
         }
         let (profile, folder, place) = (dialog.profile, dialog.folder.clone(), dialog.place);
-        let helpers: Vec<&Helper> =
-            dialog.helpers.iter().filter(|(_, on)| *on).filter_map(|(binary, _)| HELPERS.iter().find(|h| h.binary == *binary)).collect();
+        let paths = self.installed.as_ref().map(|i| i.paths.clone()).unwrap_or_default();
+        let helpers: Vec<(&Helper, String)> = dialog
+            .helpers
+            .iter()
+            .filter(|(_, on)| *on)
+            .filter_map(|(binary, _)| HELPERS.iter().find(|h| h.binary == *binary))
+            .map(|h| (h, paths.get(h.binary).cloned().unwrap_or_else(|| h.binary.to_string())))
+            .collect();
         let language = agentty_bridge::idea::language_name(crate::settings::settings(cx).language.code());
         let title: String = goal.lines().next().unwrap_or("").chars().take(40).collect();
         let request = PromptRequest {
@@ -532,13 +540,14 @@ mod tests {
     #[test]
     fn other_agents_come_with_their_strength_and_how_to_run_them() {
         let codex = HELPERS.iter().find(|h| h.binary == "codex").unwrap();
-        let text = prompt("Fix the failing tests", Profile::Balanced, &[codex], true, "English");
+        let text = prompt("Fix the failing tests", Profile::Balanced, &[(codex, "/opt/example/bin/codex".into())], true, "English");
         assert!(text.contains("\"Start?\""));
         let straight = prompt("Fix the failing tests", Profile::Balanced, &[], false, "English");
         assert!(!straight.contains("\"Start?\""));
         assert!(straight.contains("start it right away"));
-        assert!(text.contains("- Codex (`codex`): precise code changes"));
-        assert!(text.contains("`codex exec"));
+        assert!(text.contains("- Codex (`/opt/example/bin/codex`): precise code changes"));
+        assert!(text.contains("`/opt/example/bin/codex exec --skip-git-repo-check"));
+        assert!(!text.contains("{cmd}"));
         assert!(text.contains("an `agent`"));
         assert!(text.contains("no `--yolo`"));
         assert!(text.ends_with("Talk to me in English."));
