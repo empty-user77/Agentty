@@ -14,7 +14,7 @@ use gpui::{div, prelude::*, px, relative, AnyElement, ClickEvent, Context, Hsla,
 use std::time::Instant;
 
 /// Running subagents listed on a card at most; the rest are counted.
-const SUBAGENT_ROWS: usize = 4;
+const SUBAGENT_ROWS: usize = 5;
 /// To-do items listed when the list is open.
 const PLAN_ROWS: usize = 12;
 
@@ -199,7 +199,8 @@ impl Workbench {
         let mut running: Vec<(Pane, String, Option<String>, u64)> = Vec::new();
         let mut finished = 0;
         let now_ms = crate::ui::now_ms();
-        for pane in &agents {
+        let show_subagents = crate::settings::settings(cx).card_subagents;
+        for pane in agents.iter().filter(|_| show_subagents) {
             match self.subagent_rows(pane, cx) {
                 Some((rows, over)) => {
                     finished += over;
