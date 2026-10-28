@@ -4,7 +4,7 @@
 //! credentials. A repository without `gh`, without a GitHub remote or without a pull request
 //! simply has none, and the UI shows nothing.
 
-use crate::process;
+use crate::sync::repo::gh_command;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Stdio;
@@ -36,13 +36,9 @@ pub fn pull_request(repo: &Path, branch: &str) -> Option<PullRequest> {
     if branch.is_empty() || branch.starts_with('-') || !repo.is_dir() {
         return None;
     }
-    let output = process::command("gh")
+    let output = gh_command()
         .current_dir(repo)
         .args(["pr", "view", branch, "--json", "number,state,title,url"])
-        // Never wait on a login prompt, and keep the CLI from paging.
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .output()
         .ok()?;
@@ -70,12 +66,9 @@ pub fn pull_requests(repo: &Path) -> Option<Vec<BranchPullRequest>> {
     if !repo.is_dir() {
         return None;
     }
-    let output = process::command("gh")
+    let output = gh_command()
         .current_dir(repo)
         .args(["pr", "list", "--state", "all", "--limit", "200", "--json", "number,state,title,url,headRefName,headRefOid"])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .output()
         .ok()?;

@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The GitHub CLI installed with Homebrew showed as not installed in Settings → Integrations when Agentty was opened
+  from the Finder or the Dock, and cloning from GitHub and the pull requests of branches did not work. `gh` is now
+  found where the login shell and Homebrew put it.
+
 ## [0.3.3] - 2026-10-28
 
 ### Changed
