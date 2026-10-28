@@ -1755,6 +1755,15 @@ impl TerminalView {
         }
     }
 
+    /// Whether the program takes typed input yet, and a fingerprint of its screen: an agent's or a
+    /// shell's prompt turns bracketed paste on, and the screen stops changing once it is drawn.
+    pub fn input_state(&self) -> (bool, u64) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.screen_lines(200).hash(&mut hasher);
+        (self.mode().contains(TermMode::BRACKETED_PASTE), hasher.finish())
+    }
+
     pub fn insert_text(&mut self, text: &str) {
         let bytes = paste_payload(text, self.mode().contains(TermMode::BRACKETED_PASTE));
         self.write_user_input(bytes);

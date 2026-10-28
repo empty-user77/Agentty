@@ -3,7 +3,7 @@ title: Chat workspace
 description: Talk to one lead agent in a chat while it hands work to up to four workers and reviewers you can watch below.
 ---
 
-A chat workspace puts a conversation on top and a team of agents below it. You talk to one **lead agent** (Claude Code) in the chat. It plans the work and hands pieces of it to **workers**, and can have their work checked by **reviewers**. Each of them runs in its own terminal in a grid under the chat, so you can watch the whole team at once.
+A chat workspace puts a conversation on top and a team of agents below it. You talk to one **lead agent** (Claude Code, or Codex when Claude Code is not installed) in the chat. It plans the work and hands pieces of it to **workers**, and can have their work checked by **reviewers**. Each of them runs in its own terminal in a grid under the chat, so you can watch the whole team at once.
 
 ## Opening one
 
@@ -44,7 +44,7 @@ Your choices are saved with the chat.
 
 ## The lead's terminal
 
-The chat is a view over a real Claude Code session. **Terminal** in the chat's bar shows the lead's terminal; **Chat** goes back. The terminal also comes up by itself when only it can answer:
+The chat is a view over a real session of the lead. **Terminal** in the chat's bar shows the lead's terminal; **Chat** goes back. The terminal also comes up by itself when only it can answer:
 
 - the first-run question about trusting the folder, or a sign-in,
 - a tool approval or a question from the lead.

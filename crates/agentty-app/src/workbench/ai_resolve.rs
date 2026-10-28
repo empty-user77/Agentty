@@ -1,14 +1,13 @@
 //! "Resolve with AI": a merge or pull that stopped on conflicts (or a repository left mid-merge)
 //! opens a terminal tab in the repository with an agent told what happened and what to do. The
-//! agent is the first one installed of Claude Code, Codex, then the others in the launcher's order.
+//! agent is the first one installed and turned on of Claude Code, Codex, then the others in the
+//! launcher's order ([`Workbench::pick_agent`]).
 
 use super::Workbench;
 use crate::i18n::{t, tf};
 use crate::launch::LaunchSpec;
-use agentty_bridge::model::Agent;
 use gpui::{AppContext, Context, Window};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// What went wrong in the repository, as the agent is told about it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,28 +49,6 @@ pub fn prompt(repo: &Path, trouble: &GitTrouble, language: &str) -> String {
     format!("{body}\n\nTalk to me in {language}.")
 }
 
-/// Which agent resolves: the first installed of Claude Code, Codex, then the other agents in the
-/// launcher's order.
-#[derive(Debug, PartialEq, Eq)]
-enum Resolver {
-    Claude,
-    Codex,
-    Other(&'static str),
-    None,
-}
-
-/// `installed` is `None` while it is still being detected (just after start): Claude Code, the likeliest.
-fn pick_resolver(installed: Option<&crate::agents::Installed>) -> Resolver {
-    let Some(installed) = installed else { return Resolver::Claude };
-    if installed.has("claude") {
-        Resolver::Claude
-    } else if installed.has("codex") {
-        Resolver::Codex
-    } else {
-        installed.other_agents().next().map_or(Resolver::None, |agent| Resolver::Other(agent.binary))
-    }
-}
-
 impl Workbench {
     /// Opens a terminal tab in `repo` with the preferred agent, told how to resolve `trouble`.
     pub(super) fn resolve_with_ai(&mut self, repo: PathBuf, trouble: GitTrouble, window: &mut Window, cx: &mut Context<Self>) {
@@ -88,27 +65,16 @@ impl Workbench {
         .detach();
     }
 
-    /// Claude Code, else Codex (both take the prompt as their first message), else the first other
-    /// agent installed (started, then the prompt is typed into it), else a terminal and a note.
+    /// The agent [`Workbench::pick_agent`] gives (Claude Code, Codex or another one installed),
+    /// else a terminal and a note.
     fn start_resolver(&mut self, repo: PathBuf, prompt: String, window: &mut Window, cx: &mut Context<Self>) {
         let title = t(cx, "git.ai_resolve_title").to_string();
         self.page = None;
         // Straight into a tab of the repository, never the "a new worktree?" question: the
         // conflicts are in this folder, and only here can they be resolved.
-        match pick_resolver(self.installed.as_ref()) {
-            Resolver::Claude => self.open_tab(LaunchSpec::with_prompt(Agent::Claude, prompt, title, repo), window, cx),
-            Resolver::Codex => self.open_tab(LaunchSpec::with_prompt(Agent::Codex, prompt, title, repo), window, cx),
-            Resolver::Other(binary) => {
-                self.open_tab(LaunchSpec::shell_command(binary.to_string(), title, repo), window, cx);
-                let Some(pane) = self.active_pane() else { return };
-                cx.spawn(async move |_, cx| {
-                    // Give the agent's TUI time to start before typing, as for other typed prompts.
-                    cx.background_executor().timer(Duration::from_secs(4)).await;
-                    let _ = pane.update(cx, |view, cx| view.submit_prompt(prompt, cx));
-                })
-                .detach();
-            }
-            Resolver::None => {
+        match self.pick_agent(None, false, cx) {
+            Some(pick) => self.open_agent_tab(pick, prompt, title, repo, window, cx),
+            None => {
                 self.open_tab(LaunchSpec::new(crate::launch::PaneKind::Shell, repo), window, cx);
                 self.show_toast(t(cx, "git.ai_none").to_string(), cx);
             }
@@ -128,20 +94,6 @@ pub fn trouble_text(trouble: &GitTrouble, cx: &gpui::App) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn claude_then_codex_then_the_others() {
-        let with = |binaries: &[&str]| crate::agents::Installed {
-            binaries: binaries.iter().map(|b| b.to_string()).collect(),
-            ..Default::default()
-        };
-        assert_eq!(pick_resolver(Some(&with(&["codex", "claude", "gemini"]))), Resolver::Claude);
-        assert_eq!(pick_resolver(Some(&with(&["codex", "gemini"]))), Resolver::Codex);
-        assert_eq!(pick_resolver(Some(&with(&["amp", "gemini"]))), Resolver::Other("gemini"));
-        assert_eq!(pick_resolver(Some(&with(&["amp"]))), Resolver::Other("amp"));
-        assert_eq!(pick_resolver(Some(&with(&[]))), Resolver::None);
-        assert_eq!(pick_resolver(None), Resolver::Claude);
-    }
 
     #[test]
     fn prompts_say_what_to_do_and_in_which_language() {

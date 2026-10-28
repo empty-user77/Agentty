@@ -4,6 +4,7 @@ mod account_usage;
 mod accounts_page;
 mod agent_panel;
 mod agent_speech;
+mod agent_start;
 pub mod ai_resolve;
 mod ask;
 mod backup;
@@ -1248,6 +1249,22 @@ impl Workbench {
     /// the launcher, the start page and the palette offer it.
     pub(super) fn offers_agent(&self, id: &str, cx: &gpui::App) -> bool {
         self.is_installed(id) && crate::settings::settings(cx).agent_enabled(id)
+    }
+
+    /// The agent a feature starts ([`crate::agents::pick_agent`]): `wanted` (an id) when it is
+    /// installed and turned on, else the first that is. `None`: no agent can run here.
+    pub(super) fn pick_agent(&self, wanted: Option<&str>, first_class_only: bool, cx: &gpui::App) -> Option<crate::agents::AgentPick> {
+        let wanted = wanted.and_then(crate::agents::AgentPick::from_id);
+        crate::agents::pick_agent(wanted, first_class_only, |pick| {
+            self.is_installed(pick.binary()) && crate::settings::settings(cx).agent_enabled(pick.id())
+        })
+    }
+
+    /// The agents installed and turned on, in the launcher's order.
+    pub(super) fn usable_agents(&self, cx: &gpui::App) -> Vec<crate::agents::AgentPick> {
+        crate::agents::AgentPick::all()
+            .filter(|pick| self.is_installed(pick.binary()) && crate::settings::settings(cx).agent_enabled(pick.id()))
+            .collect()
     }
 
     /// Whether `binary` is installed; optimistic until detection finishes.
@@ -3528,12 +3545,8 @@ impl Render for Workbench {
                     None => this.request_launch(PaneKind::Shell, LaunchTarget::NewTab, window, cx),
                 }
             }))
-            .on_action(
-                cx.listener(|this, _: &NewClaudeTab, window, cx| this.request_launch(PaneKind::Claude, LaunchTarget::NewTab, window, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &NewCodexTab, window, cx| this.request_launch(PaneKind::Codex, LaunchTarget::NewTab, window, cx)),
-            )
+            .on_action(cx.listener(|this, _: &NewClaudeTab, window, cx| this.launch_agent_tab("claude", window, cx)))
+            .on_action(cx.listener(|this, _: &NewCodexTab, window, cx| this.launch_agent_tab("codex", window, cx)))
             .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| this.open_new_workspace_page(window, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if this.page.take().is_some() {
@@ -4777,6 +4790,7 @@ impl Workbench {
                 }
             }
             "plugin-install" => self.install_builtin_plugin(argument.to_string(), window, cx),
+            "plugin-create" => self.debug_create_plugin(argument, window, cx),
             // `plugin-market refresh|install <id>|update-all|uninstall <id>`: the marketplace's
             // own buttons, so its paths can be driven without the mouse.
             "plugin-market" => self.debug_market(argument, window, cx),
@@ -4869,7 +4883,7 @@ impl Workbench {
             // `prompt-agent claude|codex|shell` picks the agent in the open "Send to…" dialog.
             "prompt-agent" => {
                 if let Some(dialog) = self.prompt_dialog.as_mut() {
-                    dialog.kind = kind(argument);
+                    dialog.agent = crate::agents::AgentPick::from_id(argument);
                 }
             }
             // `harness` opens the harness dialog for the active pane; `harness-start` starts it.
@@ -4908,7 +4922,7 @@ impl Workbench {
                 let dialog = self.prompt_dialog.as_ref().map(|d| {
                     format!(
                         "kind={:?} cwd={} title={:?} text={:?}",
-                        d.kind,
+                        d.agent.map(crate::agents::AgentPick::id),
                         d.cwd.display(),
                         d.request.title,
                         d.request.text.chars().take(160).collect::<String>()
@@ -5144,6 +5158,10 @@ impl Workbench {
                     _ => LaunchTarget::NewTab,
                 };
                 self.launch(kind(name).into(), target, dir, window, cx)
+            }
+            // A chat workspace in a folder (its lead: Claude Code, else Codex).
+            "launch-chat" => {
+                self.launch(crate::launch::LaunchChoice::Chat, LaunchTarget::NewWorkspace, PathBuf::from(argument), window, cx)
             }
             "picker" => self.open_picker(kind(argument).into(), LaunchTarget::NewTab, window, cx),
             "split" => self.split(if argument == "down" { Axis::Vertical } else { Axis::Horizontal }, window, cx),

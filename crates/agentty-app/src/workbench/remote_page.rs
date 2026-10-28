@@ -171,8 +171,8 @@ impl Workbench {
     pub fn remote_apply(&mut self, command: &Command, cx: &mut Context<Self>) -> bool {
         match command {
             Command::Wake { workspace } => return self.remote_wake(*workspace, cx),
-            Command::NewTab { workspace, kind } => return self.remote_new_tab(*workspace, *kind, cx),
-            Command::OpenFolder { folder, kind } => return self.remote_open_folder(folder.clone(), *kind, cx),
+            Command::NewTab { workspace, kind } => return self.remote_new_tab(*workspace, self.kind_here(*kind, cx), cx),
+            Command::OpenFolder { folder, kind } => return self.remote_open_folder(folder.clone(), self.kind_here(*kind, cx), cx),
             // To a chat's lead the page may reach (in a workspace it is allowed in).
             Command::Chat { pane, text } => {
                 if !self.remote_panes().any(|(_, p)| p.read(cx).pane_id == *pane) {
@@ -234,6 +234,12 @@ impl Workbench {
     /// A new tab in a workspace, started where the workspace is (a sleeping one wakes first), added
     /// as its last tab. It becomes the active tab only of a workspace the desktop is not showing:
     /// whoever sits at the Mac keeps the tab they are looking at.
+    /// The page offers Claude Code and Codex: the one asked for when it runs here, else the other.
+    fn kind_here(&self, kind: crate::launch::PaneKind, cx: &gpui::App) -> crate::launch::PaneKind {
+        let Some(agent) = kind.agent() else { return kind };
+        self.pick_agent(Some(agent.id()), true, cx).and_then(crate::agents::AgentPick::first_class).map_or(kind, Into::into)
+    }
+
     fn remote_new_tab(&mut self, id: u64, kind: crate::launch::PaneKind, cx: &mut Context<Self>) -> bool {
         let Some(index) = self.remote_workspace(id) else { return false };
         let cwd = {

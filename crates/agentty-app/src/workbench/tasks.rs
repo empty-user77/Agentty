@@ -2,13 +2,14 @@
 //! dialog. Then every task gets a working tree of its own (a new branch from the project's default
 //! branch, like a second session of a project) and a pane split off the asking agent's — from three
 //! tasks on a tab of its own, so the asking agent keeps its room — where Claude Code or Codex starts
-//! with the task's prompt. The asking agent hears which tasks started and where.
+//! with the task's prompt (without either, another agent CLI, the prompt typed in). The asking agent hears which tasks started and where.
 //!
 //! Requests from several agents wait in line; one dialog shows all the tasks of one request.
 
 use super::panes::Axis;
 use super::{Pane, Workbench};
 use crate::agent_signal::{browser_reply, TasksRequest};
+use crate::agents::AgentPick;
 use crate::i18n::{t, tf};
 use crate::launch::LaunchSpec;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -17,11 +18,22 @@ use agentty_bridge::model::Agent;
 use gpui::{div, prelude::*, px, AnyElement, AppContext, ClickEvent, Context, SharedString, Window};
 use std::path::PathBuf;
 
-pub(super) fn agent_of(name: Option<&str>) -> Agent {
-    if name == Some("codex") {
-        Agent::Codex
-    } else {
-        Agent::Claude
+impl Workbench {
+    /// The agent a task runs as: the one it names, else the asking agent's own, when it is installed
+    /// and turned on; else Claude Code or Codex, whichever is. Tasks are watched, told and asked for
+    /// their results, which only these two report. `None`: neither runs here.
+    pub(super) fn task_agent(&self, named: Option<&str>, caller: Option<&Pane>, cx: &gpui::App) -> Option<Agent> {
+        let asker = caller.and_then(|p| p.read(cx).spec.kind.agent()).map(Agent::id);
+        self.pick_agent(named.or(asker), true, cx).and_then(AgentPick::first_class)
+    }
+
+    /// What a task from `agentty tasks` starts: [`Workbench::task_agent`], else (neither Claude Code
+    /// nor Codex runs here) another agent CLI, which gets the prompt typed in.
+    fn task_pick(&self, named: Option<&str>, caller: Option<&Pane>, cx: &gpui::App) -> Option<AgentPick> {
+        match self.task_agent(named, caller, cx) {
+            Some(agent) => AgentPick::from_id(agent.id()),
+            None => self.pick_agent(None, false, cx),
+        }
     }
 }
 
@@ -103,12 +115,17 @@ impl Workbench {
         let handle = window.window_handle();
         let run = self.record_task_run(&caller, cx);
         let (cwd, tasks) = (request.cwd.clone(), request.tasks.clone());
+        let agents: Vec<Option<AgentPick>> = tasks.iter().map(|task| self.task_pick(task.agent.as_deref(), Some(&caller), cx)).collect();
         let as_tabs = opens_as_tabs(tasks.len());
         cx.spawn(async move |this, cx| {
             let mut started: Vec<serde_json::Value> = Vec::new();
             let mut problems: Vec<String> = Vec::new();
             let mut previous: Option<Pane> = None;
-            for task in tasks {
+            for (task, agent) in tasks.into_iter().zip(agents) {
+                let Some(agent) = agent else {
+                    problems.push(format!("{}: no agent is installed and turned on", task.title));
+                    continue;
+                };
                 // A folder outside git has no working trees: the task starts there, next to the asking agent.
                 let in_git = agentty_bridge::worktree::tree_root(&cwd).is_some();
                 let (source, label, base) = (cwd.clone(), task.title.clone(), base.clone());
@@ -131,8 +148,7 @@ impl Workbench {
                 };
                 let folder: PathBuf = tree.as_ref().map(|t| t.path.clone()).unwrap_or_else(|| cwd.clone());
                 let branch = tree.as_ref().and_then(|t| t.branch.clone());
-                let spec =
-                    LaunchSpec::with_prompt(agent_of(task.agent.as_deref()), task.prompt.clone(), task.title.clone(), folder.clone());
+                let (spec, typed) = super::agent_start::prompt_spec(agent, task.prompt.clone(), task.title.clone(), folder.clone());
                 let anchor = previous.clone().unwrap_or_else(|| caller.clone());
                 let axis = if previous.is_some() { Axis::Vertical } else { Axis::Horizontal };
                 let opened = cx
@@ -152,6 +168,7 @@ impl Workbench {
                 match opened {
                     Some(pane) => {
                         let _ = this.update(cx, |this, cx| {
+                            super::agent_start::type_first_message_in(pane.clone(), typed, cx);
                             this.board_adopt(&pane, cx);
                             let task = super::session_board::RunTask {
                                 title: task.title.clone(),
@@ -235,7 +252,7 @@ impl Workbench {
         let in_git = agentty_bridge::worktree::tree_root(&request.cwd).is_some();
         let mut list = div().id("tasks-dialog-list").max_h(px(340.)).overflow_y_scroll().flex().flex_col().gap_2();
         for (index, task) in request.tasks.iter().enumerate() {
-            let agent = if task.agent.as_deref() == Some("codex") { "Codex" } else { "Claude Code" };
+            let agent = self.task_pick(task.agent.as_deref(), caller.as_ref(), cx).map_or("—", AgentPick::name);
             // The whole prompt, not a preview: what is approved here runs as a new agent session, and
             // an instruction below the first few lines must be as visible as the ones above it.
             let preview: String = task.prompt.lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n");

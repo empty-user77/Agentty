@@ -34,6 +34,8 @@ pub struct IdeaView {
     agent: PaneKind,
     /// Which agents can be picked (Claude Code, Codex).
     available: (bool, bool),
+    /// Another agent CLI that builds the project when neither Claude Code nor Codex is installed.
+    other: Option<&'static str>,
     root: PathBuf,
     error: Option<String>,
     /// Waiting for the project folder: a second click must not create another one.
@@ -78,6 +80,7 @@ impl IdeaView {
             attachments: Vec::new(),
             agent: PaneKind::Claude,
             available: (true, true),
+            other: None,
             root: agentty_bridge::idea::default_root(),
             error: None,
             starting: false,
@@ -87,11 +90,12 @@ impl IdeaView {
     }
 
     /// Installed agents; picks one that is there.
-    pub fn set_agents(&mut self, claude: bool, codex: bool, cx: &mut Context<Self>) {
-        if self.available == (claude, codex) {
+    pub fn set_agents(&mut self, claude: bool, codex: bool, other: Option<&'static str>, cx: &mut Context<Self>) {
+        if self.available == (claude, codex) && self.other == other {
             return;
         }
         self.available = (claude, codex);
+        self.other = other;
         if self.agent == PaneKind::Claude && !claude && codex {
             self.agent = PaneKind::Codex;
         } else if self.agent == PaneKind::Codex && !codex && claude {
@@ -460,6 +464,10 @@ impl IdeaView {
         };
         let (claude, codex) = self.available;
         let mut agents = div().flex().gap_1();
+        // Neither Claude Code nor Codex: the other agent installed builds it (started as a command).
+        if let (false, false, Some(name)) = (claude, codex, self.other) {
+            agents = agents.child(chip(SharedString::from("idea-agent-other"), name, true, cx.listener(|_, _: &ClickEvent, _, _| {})));
+        }
         for (kind, name, installed) in [(PaneKind::Claude, "Claude Code", claude), (PaneKind::Codex, "Codex", codex)] {
             if installed {
                 agents = agents.child(chip(
@@ -526,7 +534,7 @@ impl IdeaView {
 impl Render for IdeaView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ready = self.can_start(cx) && !self.starting;
-        let no_agent = self.available == (false, false);
+        let no_agent = self.available == (false, false) && self.other.is_none();
         let page = div()
             .w_full()
             .max_w(px(760.))

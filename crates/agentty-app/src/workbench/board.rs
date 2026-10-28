@@ -844,7 +844,7 @@ impl Workbench {
             text: ticket_prompt(&ticket, branch.as_deref(), crate::settings::settings(cx).board.split != crate::settings::BoardSplit::Off),
             title: Some(ticket.title.clone()),
             target: PromptTarget::NewWorkspace,
-            agent: Some(ticket.agent.clone()),
+            agent: Some(self.ticket_agent(&ticket.agent, cx)),
             cwd: Some(folder.clone()),
             submit: true,
             ..Default::default()
@@ -897,6 +897,13 @@ impl Workbench {
 
     // -- dialogs -------------------------------------------------------------------------------
 
+    /// The agent a ticket runs as: its own when installed and turned on, else Claude Code or Codex,
+    /// whichever is (the board follows a ticket's agent by its status). Its own when neither runs here:
+    /// starting it then takes any agent there is.
+    fn ticket_agent(&self, named: &str, cx: &gpui::App) -> String {
+        self.pick_agent(Some(named), true, cx).map_or_else(|| named.to_string(), |pick| pick.id().to_string())
+    }
+
     fn open_ticket_editor(&mut self, id: Option<u64>, window: &mut Window, cx: &mut Context<Self>) {
         let ticket = id.and_then(|id| self.board_file().tickets.iter().find(|t| t.id == id).cloned());
         let project = ticket
@@ -904,11 +911,10 @@ impl Workbench {
             .and_then(|t| t.project.clone())
             .or_else(|| self.board.filter.clone())
             .or_else(|| self.workspaces.get(self.active_workspace).filter(|ws| ws.plugin.is_none()).map(|ws| ws.cwd.clone()));
-        let agent = ticket.as_ref().map(|t| t.agent.clone()).unwrap_or_else(|| {
-            let preferred = crate::settings::settings(cx).board.agent.id();
-            let other = if preferred == "claude" { "codex" } else { "claude" };
-            if !self.is_installed(preferred) && self.is_installed(other) { other } else { preferred }.into()
-        });
+        let agent = ticket
+            .as_ref()
+            .map(|t| t.agent.clone())
+            .unwrap_or_else(|| self.ticket_agent(crate::settings::settings(cx).board.agent.id(), cx));
         let title = cx.new(|cx| {
             let mut input = TextInput::localized("", "board.title_placeholder", window, cx);
             input.set_text(ticket.as_ref().map(|t| t.title.clone()).unwrap_or_default(), cx);
@@ -1264,7 +1270,7 @@ impl Workbench {
                     title: Some(ticket.title.clone()),
                     target: PromptTarget::Workspace,
                     workspace_id: ticket.workspace,
-                    agent: Some(ticket.agent.clone()),
+                    agent: Some(self.ticket_agent(&ticket.agent, cx)),
                     cwd: ticket.folder.clone(),
                     submit: true,
                     ..Default::default()

@@ -12,9 +12,11 @@ Write a goal and an orchestrator agent does the rest: it plans a team of agents 
 Start one from the home page (**Orchestration**), from a tab's right-click menu (**New orchestration tab**), from a new workspace's start page, or with **New orchestration** at the top right of this page. In the dialog:
 
 - **Goal** — what the team should get done. The examples under it fill it in: market research, a tutorial from using a web app, building a feature with review, fixing failing tests.
-- **Models** — Balanced (Sonnet works, Opus reviews), Best quality (Opus throughout) or Economical (Haiku works, Sonnet reviews). The plan names a model for every agent.
+- **Models** — Balanced (Sonnet works, Opus reviews), Best quality (Opus throughout) or Economical (Haiku works, Sonnet reviews). The plan names a model for every agent. Shown when Claude Code leads; with Codex every CLI uses its own default.
 - **Folder** — where the team works.
-- **AI on the team** — Claude Code always, and the other agents installed here (Codex, Gemini CLI, Antigravity CLI), each on or off. The plan gives each part to the agent whose strength fits — Codex for precise code changes and review, Gemini for very large inputs — and they never run with their permission checks off.
+- **AI on the team** — the lead always, and the other agents installed here (Claude Code, Codex, Gemini CLI, Antigravity CLI), each on or off. Claude Code leads when it is installed, Codex when it is not; without either, the orchestration can't start. The plan gives each part to the agent whose strength fits — Codex for precise code changes and review, Gemini for very large inputs — and they never run with their permission checks off.
+
+A Codex lead has no subagents: it runs every agent of a wave as a process of an agent CLI and tells Agentty when each starts and finishes (`agentty plan --start` / `--done`), so the page follows it the same way. Codex asks before running those commands outside its sandbox.
 
 A new workspace goes in the **Orchestration** group, made the first time; move it to any group you like. The page then shows its workflow. When the plan is ready, a bar says so: **View plan** opens the orchestrator's pane, **Ask for changes** sends it a message, and **Start** runs it. Agents that need their own branches go to parallel sessions (`agentty tasks`); a reviewer checks the result against the goal at the end, and the orchestrator finishes with a report.
 

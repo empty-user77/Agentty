@@ -1,9 +1,9 @@
-//! Chat workspaces: the user talks to one lead agent (Claude Code) in a chat; the lead plans the
+//! Chat workspaces: the user talks to one lead agent (Claude Code or Codex) in a chat; the lead plans the
 //! work and hands pieces to workers with `agentty tasks`. The workers run in their own terminals,
 //! laid out in a grid below the chat, each in its own git worktree, so the user sees the whole team
 //! at work while the conversation stays in one place.
 //!
-//! The chat is a view over a real Claude Code session: the lead runs in an ordinary terminal pane
+//! The chat is a view over a real agent session: the lead runs in an ordinary terminal pane
 //! (the tab's first pane), what is written in the chat is typed into it, and the conversation is
 //! read back from its transcript. Its terminal is one click away, and comes up by itself while the
 //! lead waits on something only its screen can answer (a tool approval, a question, first-run setup).
@@ -434,10 +434,23 @@ fn splice_list(list: &ListState, old: &[ChatItem], new: &[ChatItem]) {
     list.splice(common..old.len(), new.len() - common);
 }
 
-/// A first-run screen of Claude Code that only its terminal can answer.
-fn is_setup_screen(lines: &[String]) -> bool {
-    let screen = lines.join("\n").to_lowercase();
-    ["trust the files", "trust this folder", "select login method", "choose the text style"].iter().any(|s| screen.contains(s))
+/// A first-run screen of the lead's agent that only its terminal can answer: Claude Code's
+/// questions, and Codex's (trusting a folder, an update to install). Codex leaves the answered one
+/// on the screen above its prompt, so a question with the agent's prompt below it is over.
+pub(super) fn is_setup_screen(lines: &[String]) -> bool {
+    const QUESTIONS: [&str; 7] = [
+        "trust the files",
+        "trust this folder",
+        "select login method",
+        "choose the text style",
+        "do you trust",
+        "allow codex to work",
+        "update available",
+    ];
+    const PROMPT: [&str; 3] = ["for shortcuts", "ask codex to do anything", "context left"];
+    let lines: Vec<String> = lines.iter().map(|l| l.to_lowercase()).collect();
+    let Some(asked) = lines.iter().rposition(|l| QUESTIONS.iter().any(|q| l.contains(q))) else { return false };
+    !lines[asked..].iter().any(|l| PROMPT.iter().any(|p| l.contains(p)))
 }
 
 /// Whether `view` waits on the user: its status says so, or its screen shows a selection (an
@@ -450,8 +463,12 @@ fn waits_on_user(view: &crate::terminal::TerminalView) -> bool {
     }
     let lines = view.screen_lines(40);
     let screen = crate::terminal::classify_screen(&lines);
-    screen.permission.is_some() || screen.question || is_setup_screen(&lines)
+    screen.permission.is_some() || screen.question || is_setup_screen(&view.screen_lines(WHOLE_SCREEN))
 }
+
+/// Rows read for a first-run screen: all of them. Codex draws its update notice at the top of a
+/// tall terminal, far above the last rows where a prompt sits.
+pub(super) const WHOLE_SCREEN: usize = 500;
 
 fn status_word(status: &AgentStatus, running: bool) -> &'static str {
     if !running {
@@ -489,14 +506,20 @@ impl Workbench {
         if tree.is_some() {
             self.refresh_files_panel(cx);
         }
-        self.create_workspace(LaunchChoice::Chat.spec(folder), window, cx);
+        // The lead: Claude Code or Codex, whichever runs here (Claude Code when both do).
+        let Some(lead_agent) = self.pick_agent(None, true, cx).and_then(crate::agents::AgentPick::first_class) else {
+            return self.show_toast(t(cx, "agent.none_installed"), cx);
+        };
+        let mut spec = LaunchChoice::Chat.spec(folder);
+        spec.kind = lead_agent.into();
+        self.create_workspace(spec, window, cx);
         // The workspace is the project's, wherever its lead works.
         if let Some(ws) = self.workspaces.last_mut() {
             ws.cwd = cwd;
         }
         let lead = self.workspaces.last().and_then(|ws| ws.tabs.first()).map(|tab| tab.active.clone());
         if let Some(lead) = lead {
-            self.register_chat(&lead, ChatRoles::default(), cx);
+            self.register_chat(&lead, ChatRoles::led_by(RoleAgent::of(lead_agent).unwrap_or_default()), cx);
             // The composer is made at the next frame; the keyboard goes there then.
             self.refocus = true;
         }
@@ -558,10 +581,10 @@ impl Workbench {
         self.chats.get(&lead.entity_id()).map(|state| state.roles)
     }
 
-    fn set_chat_roles(&mut self, id: EntityId, change: impl FnOnce(ChatRoles, bool) -> ChatRoles, cx: &mut Context<Self>) {
-        let codex = self.is_installed("codex");
+    fn set_chat_roles(&mut self, id: EntityId, change: impl FnOnce(ChatRoles, (bool, bool)) -> ChatRoles, cx: &mut Context<Self>) {
+        let have = (self.offers_agent("claude", cx), self.offers_agent("codex", cx));
         let Some(state) = self.chats.get_mut(&id) else { return };
-        state.roles = change(state.roles, codex);
+        state.roles = change(state.roles, have);
         self.persist(cx);
         cx.notify();
     }
@@ -636,17 +659,17 @@ impl Workbench {
         }
     }
 
-    /// The agents a chat runs on: Claude Code (its lead), and Codex when its workers or reviewers do.
+    /// The agents a chat runs on: its lead's, and those its workers and reviewers run as.
     fn chat_agents(&self, id: EntityId, cx: &App) -> Vec<RoleAgent> {
         let Some(state) = self.chats.get(&id) else { return Vec::new() };
-        let codex = state.roles.worker == RoleAgent::Codex
-            || state.roles.reviewer == Some(RoleAgent::Codex)
-            || self.chat_workers(&state.lead).iter().any(|p| p.read(cx).spec.kind == PaneKind::Codex);
-        if codex {
-            vec![RoleAgent::Claude, RoleAgent::Codex]
-        } else {
-            vec![RoleAgent::Claude]
-        }
+        let lead = chat_lead_agent(&state.lead, cx);
+        let uses = |role: RoleAgent| {
+            RoleAgent::of(lead) == Some(role)
+                || state.roles.worker == role
+                || state.roles.reviewer == Some(role)
+                || self.chat_workers(&state.lead).iter().any(|p| p.read(cx).spec.kind == PaneKind::from(role.agent()))
+        };
+        [RoleAgent::Claude, RoleAgent::Codex].into_iter().filter(|r| uses(*r)).collect()
     }
 
     /// Reads the plan usage of the chat's agents again, in the background, at most every
@@ -715,7 +738,7 @@ impl Workbench {
         let Some(state) = self.chats.get_mut(&id) else { return false };
         let view = state.lead.read(cx);
         // Until the lead has its instructions, its first-run screens may be in the way.
-        let setup = !state.briefed && is_setup_screen(&view.screen_lines(40));
+        let setup = !state.briefed && is_setup_screen(&view.screen_lines(WHOLE_SCREEN));
         let session = view.current_session();
         if setup != state.setup_screen {
             state.setup_screen = setup;
@@ -725,19 +748,24 @@ impl Workbench {
             return true;
         }
         let Some(session) = session else { return true };
+        let agent = chat_lead_agent(&state.lead, cx);
         let known = state.transcript.as_ref().filter(|(s, _)| *s == session).map(|(_, path)| path.clone());
         let seen = if known.is_some() { state.seen_len } else { u64::MAX };
         state.loading = true;
         let task = cx.background_spawn(async move {
             let path = match known {
                 Some(path) => path,
-                None => agentty_bridge::claude::find(&session).ok()?,
+                None => agentty_bridge::transcript_path(agent, &session)?,
             };
             let len = std::fs::metadata(&path).ok()?.len();
             if len == seen {
                 return Some((session, path, len, None));
             }
-            let turns = agentty_bridge::claude::transcript(&path).ok().map(|(_, turns)| turns);
+            let turns = match agent {
+                agentty_bridge::model::Agent::Codex => agentty_bridge::codex::transcript(&path),
+                _ => agentty_bridge::claude::transcript(&path),
+            };
+            let turns = turns.ok().map(|(_, turns)| turns);
             Some((session, path, len, turns))
         });
         cx.spawn(async move |this, cx| {
@@ -1016,8 +1044,11 @@ impl Workbench {
                 };
                 let folder = tree.as_ref().map(|t| t.path.clone()).unwrap_or_else(|| cwd.clone());
                 let branch = tree.as_ref().and_then(|t| t.branch.clone());
-                let agent = task.agent.as_deref().and_then(RoleAgent::from_label).unwrap_or(roles.worker);
-                let spec = LaunchSpec::with_prompt(agent.agent(), task.prompt.clone(), task.title.clone(), folder.clone());
+                // The agent named (or the chat's worker choice) when it runs here, else the other one.
+                let named = task.agent.as_deref().and_then(RoleAgent::from_label).unwrap_or(roles.worker);
+                let agent =
+                    this.update(cx, |this, cx| this.task_agent(Some(named.label()), None, cx)).ok().flatten().unwrap_or(named.agent());
+                let spec = LaunchSpec::with_prompt(agent, task.prompt.clone(), task.title.clone(), folder.clone());
                 match this.update(cx, |this, cx| this.add_chat_worker(id, spec, None, cx)) {
                     Ok(Ok(replaced)) => {
                         started.push(serde_json::json!({ "title": task.title, "branch": branch, "folder": folder, "replaced": replaced }));
@@ -1210,7 +1241,8 @@ impl Workbench {
                 }
                 let roles = self.chat_roles(&lead).unwrap_or_default();
                 // Asked for by name, a review runs even with reviews off: the choice decides the agent.
-                let agent = request.ctl.agent.as_deref().and_then(RoleAgent::from_label).or(roles.reviewer).unwrap_or_default();
+                let named = request.ctl.agent.as_deref().and_then(RoleAgent::from_label).or(roles.reviewer).unwrap_or_default();
+                let agent = RoleAgent::of(self.task_agent(Some(named.label()), None, cx).unwrap_or(named.agent())).unwrap_or(named);
                 let view = worker.read(cx);
                 let (folder, branch) = (view.display_cwd(), view.git_branch.clone());
                 let base = match Self::lead_branch(&lead, cx) {
@@ -1487,8 +1519,9 @@ impl Workbench {
                 .into_any_element()
         } else {
             let items = state.shown.clone();
+            let lead = chat_lead_agent(&state.lead, cx).id();
             let rows = list(state.list.clone(), move |index, _, cx| match items.get(index) {
-                Some(item) => div().w_full().px_4().pt_3().child(render_item(index, item, cx)).into_any_element(),
+                Some(item) => div().w_full().px_4().pt_3().child(render_item(index, item, lead, cx)).into_any_element(),
                 None => div().into_any_element(),
             })
             .size_full()
@@ -1658,7 +1691,12 @@ impl Workbench {
 }
 
 /// One entry of the chat.
-fn render_item(index: usize, item: &ChatItem, cx: &App) -> AnyElement {
+/// The agent a chat's lead runs as (Claude Code for a chat made before a lead could be Codex).
+fn chat_lead_agent(lead: &Pane, cx: &App) -> agentty_bridge::model::Agent {
+    lead.read(cx).spec.kind.agent().unwrap_or(agentty_bridge::model::Agent::Claude)
+}
+
+fn render_item(index: usize, item: &ChatItem, lead: &'static str, cx: &App) -> AnyElement {
     let row = div().id(SharedString::from(format!("chat-item-{index}"))).w_full().flex();
     match item {
         ChatItem::User(text) => row
@@ -1677,7 +1715,7 @@ fn render_item(index: usize, item: &ChatItem, cx: &App) -> AnyElement {
             .into_any_element(),
         ChatItem::Lead(text) => row
             .gap_2()
-            .child(crate::brand::avatar("claude", 20.))
+            .child(crate::brand::avatar(lead, 20.))
             .child(div().flex_1().min_w_0().pt_0p5().child(lead_block(text, cx)))
             .into_any_element(),
         ChatItem::Report(text) => {
@@ -1908,6 +1946,14 @@ mod tests {
     fn first_run_screens_need_the_terminal() {
         assert!(is_setup_screen(&["Do you trust the files in this folder?".into()]));
         assert!(is_setup_screen(&["Trust this folder? Codex can read, edit, and run files here".into()]));
+        assert!(is_setup_screen(&["  Update available · 0.163.0 → 0.165.0".into(), "  enter continue · esc skip".into()]));
+        // Skipped: Codex leaves the notice above its prompt.
+        assert!(!is_setup_screen(&[
+            "  Update available · 0.163.0 → 0.165.0".into(),
+            "  enter continue · esc skip".into(),
+            "› Ask Codex to do anything".into(),
+            "  ? for shortcuts".into(),
+        ]));
         assert!(!is_setup_screen(&["> what should we build".into()]));
     }
 

@@ -2,6 +2,7 @@
 //! an open workspace — and with which agent. Nothing is sent until the user confirms.
 
 use super::{status_label, Workbench};
+use crate::agents::AgentPick;
 use crate::i18n::{t, tf};
 use crate::launch::PaneKind;
 use crate::theme::{hex, hex_alpha, Chrome};
@@ -21,7 +22,8 @@ pub enum Destination {
 
 pub struct PromptDialog {
     pub request: PromptRequest,
-    pub kind: PaneKind,
+    /// The agent it starts; `None`: typed into a terminal.
+    pub agent: Option<AgentPick>,
     pub cwd: PathBuf,
     pub destination: Destination,
     pub submit: bool,
@@ -39,10 +41,10 @@ impl Workbench {
             self.prompt_queue.push_back(request);
             return cx.notify();
         }
-        let kind = match request.agent.as_deref() {
-            Some("codex") => PaneKind::Codex,
-            Some("shell" | "terminal") => PaneKind::Shell,
-            _ => PaneKind::Claude,
+        // The agent asked for when it runs here, else the first one that does (a terminal without any).
+        let agent = match request.agent.as_deref() {
+            Some("shell" | "terminal") => None,
+            wanted => self.pick_agent(wanted, request.restricted(), cx),
         };
         let cwd = request.cwd.clone().filter(|p| p.is_dir()).unwrap_or_else(|| self.default_cwd(cx));
         let destination = match (request.target, request.workspace_id) {
@@ -52,7 +54,8 @@ impl Workbench {
             _ => Destination::NewWorkspace,
         };
         let submit = request.submit;
-        self.prompt_dialog = Some(PromptDialog { request, kind, cwd, destination, submit, error: None, scroll: gpui::ScrollHandle::new() });
+        self.prompt_dialog =
+            Some(PromptDialog { request, agent, cwd, destination, submit, error: None, scroll: gpui::ScrollHandle::new() });
         self.launcher_open = false;
         self.notices_open = false;
         cx.notify();
@@ -69,7 +72,7 @@ impl Workbench {
     pub(super) fn confirm_prompt_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.prompt_dialog.as_ref() else { return };
         let mut request = dialog.request.clone();
-        request.agent = Some(crate::brand::kind_id(dialog.kind).to_string());
+        request.agent = Some(dialog.agent.map_or("shell", AgentPick::id).to_string());
         request.submit = dialog.submit;
         request.cwd = Some(dialog.cwd.clone());
         match dialog.destination {
@@ -218,12 +221,17 @@ impl Workbench {
                 div().pt_2().pb_1().px_1().t_caption().text_color(hex(Chrome::MUTED)).child(t(cx, "prompt.open_workspaces").to_uppercase()),
             );
         }
+        // Only Claude Code, Codex and a terminal are told apart in a running pane.
+        let kind = match dialog.agent {
+            None => Some(PaneKind::Shell),
+            Some(pick) => pick.first_class().map(PaneKind::from),
+        };
         for ws in &self.workspaces {
             let panes: Vec<_> = ws.tabs.iter().flat_map(|t| t.root.leaves()).collect();
             // Say what picking it does: typed into a waiting agent there, or a new tab (never a split).
             let idle = panes.iter().find(|p| {
                 let view = p.read(cx);
-                view.agent_kind() == Some(dialog.kind) && view.is_running() && !view.is_busy()
+                kind.is_some() && view.agent_kind() == kind && view.is_running() && !view.is_busy()
             });
             let detail = match idle {
                 Some(pane) => {
@@ -243,22 +251,23 @@ impl Workbench {
             ));
         }
 
-        let mut agents = div().flex().gap_1();
-        for (kind, label) in [(PaneKind::Claude, "Claude Code"), (PaneKind::Codex, "Codex"), (PaneKind::Shell, t(cx, "welcome.terminal"))] {
+        let mut agents = div().flex().flex_wrap().gap_1();
+        let choices = self.usable_agents(cx).into_iter().map(|pick| (Some(pick), pick.name().to_string()));
+        for (agent, label) in choices.chain([(None, t(cx, "welcome.terminal").to_string())]) {
             agents = agents.child(chip(
                 SharedString::from(format!("prompt-agent-{label}")),
-                label.to_string(),
-                dialog.kind == kind,
+                label,
+                dialog.agent == agent,
                 cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if let Some(dialog) = this.prompt_dialog.as_mut() {
-                        dialog.kind = kind;
+                        dialog.agent = agent;
                     }
                     cx.notify();
                 }),
             ));
         }
         let submit = dialog.submit;
-        let is_shell = dialog.kind == PaneKind::Shell;
+        let is_shell = dialog.agent.is_none();
         let button = |id: &'static str, label: &str, primary: bool| {
             div()
                 .id(id)

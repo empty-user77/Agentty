@@ -90,12 +90,27 @@ fn pane_json(pane: &Pane, scope: ContextScope, cx: &gpui::App) -> Value {
     value
 }
 
-/// `claude`, `codex`, `shell`/`terminal` → pane kind (Claude Code by default).
-fn kind_named(name: Option<&str>) -> PaneKind {
-    match name {
-        Some("codex") => PaneKind::Codex,
-        Some("shell" | "terminal") => PaneKind::Shell,
-        _ => PaneKind::Claude,
+/// What a prompt starts: a terminal it is typed into, or an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Starter {
+    Shell,
+    Agent(crate::agents::AgentPick),
+}
+
+impl Starter {
+    fn kind(self) -> PaneKind {
+        match self {
+            Starter::Shell => PaneKind::Shell,
+            Starter::Agent(pick) => pick.first_class().map_or(PaneKind::Shell, PaneKind::from),
+        }
+    }
+
+    /// Another agent CLI: started as a command, its prompt typed in.
+    fn command(self) -> Option<&'static str> {
+        match self {
+            Starter::Agent(pick) if pick.first_class().is_none() => Some(pick.binary()),
+            _ => None,
+        }
     }
 }
 
@@ -599,9 +614,16 @@ impl Workbench {
         if text.trim().is_empty() {
             return Err("the prompt is empty".into());
         }
-        let kind = kind_named(request.agent.as_deref());
         let restricted = request.restricted();
-        let model = request.model();
+        // The agent asked for when it runs here, else one that does: no feature needs Claude Code
+        // in particular. A files-only job takes Claude Code or Codex, which can be held to its folder.
+        let starter = match request.agent.as_deref() {
+            Some("shell" | "terminal") => Starter::Shell,
+            wanted => Starter::Agent(self.pick_agent(wanted, restricted, cx).ok_or_else(|| t(cx, "agent.none_installed").to_string())?),
+        };
+        let kind = starter.kind();
+        // A model belongs to the agent it was named for.
+        let model = request.model().filter(|_| matches!(starter, Starter::Agent(pick) if request.agent.as_deref() == Some(pick.id())));
         if restricted {
             // Files only means the plugin's own files: a folder elsewhere (the home folder, say)
             // would put everything in it within the agent's reach.
@@ -637,12 +659,12 @@ impl Workbench {
                     PromptTarget::Split => LaunchTarget::SplitRight,
                     _ => LaunchTarget::NewWorkspace,
                 };
-                self.launch_with_prompt(kind, text, request.title.clone(), cwd, request.submit, (restricted, model), target, window, cx)?
+                self.launch_with_prompt(starter, text, request.title.clone(), cwd, request.submit, (restricted, model), target, window, cx)?
             }
             PromptTarget::Own if request.instance.is_some() => {
                 let plugin = request.plugin.clone().ok_or("only a plugin has a workspace of its own")?;
                 let instance = request.instance.clone().unwrap_or_default();
-                let (spec, later) = self.prompt_spec(kind, text, request.cwd.clone(), request.submit, (restricted, model), cx);
+                let (spec, later) = self.prompt_spec(starter, text, request.cwd.clone(), request.submit, (restricted, model), cx);
                 let pane = self.open_in_instance(&plugin, &instance, spec, cx)?;
                 type_later(&pane, later, cx);
                 // The job opens beside the automation's terminals; the user stays where they are.
@@ -665,7 +687,7 @@ impl Workbench {
                 }
                 let cwd = request.cwd.clone().filter(|p| p.is_dir()).unwrap_or_else(|| self.workspaces[index].cwd.clone());
                 self.launch_with_prompt(
-                    kind,
+                    starter,
                     text,
                     request.title.clone(),
                     cwd,
@@ -688,7 +710,7 @@ impl Workbench {
                     view.agent_kind() == Some(kind) && view.is_running() && !view.is_busy()
                 });
                 match idle {
-                    Some(pane) if kind != PaneKind::Shell => {
+                    Some(pane) if starter.command().is_none() && kind != PaneKind::Shell => {
                         type_into(&pane, text, request.submit, false, cx);
                         self.mark_active(&pane, cx);
                         pane
@@ -696,7 +718,7 @@ impl Workbench {
                     _ => {
                         let cwd = self.workspaces[index].cwd.clone();
                         self.launch_with_prompt(
-                            kind,
+                            starter,
                             text,
                             request.title.clone(),
                             cwd,
@@ -721,31 +743,21 @@ impl Workbench {
     /// once ready (never with Enter in a shell).
     pub(super) fn prompt_spec(
         &mut self,
-        kind: PaneKind,
+        starter: Starter,
         text: String,
         cwd: Option<PathBuf>,
         submit: bool,
         (restricted, model): (bool, Option<String>),
         cx: &mut Context<Self>,
-    ) -> (LaunchSpec, Option<(String, u64)>) {
+    ) -> (LaunchSpec, Later) {
         let cwd = cwd.filter(|p| p.is_dir()).unwrap_or_else(|| self.default_cwd(cx));
-        let (mut spec, later) = match (kind.agent(), submit) {
-            (Some(agent), true) => {
-                let mut spec = LaunchSpec::with_prompt(agent, text, String::new(), cwd);
-                spec.title = LaunchSpec::new(kind, PathBuf::new()).title;
-                (spec, None)
-            }
-            (agent, _) => (LaunchSpec::new(kind, cwd), Some((text, if agent.is_some() { 4000 } else { 1200 }))),
-        };
-        spec.restricted = restricted;
-        spec.model = model.filter(|_| kind.agent().is_some());
-        (spec, later)
+        starting_spec(starter, text, cwd, submit, (restricted, model))
     }
 
     #[allow(clippy::too_many_arguments)]
     fn launch_with_prompt(
         &mut self,
-        kind: PaneKind,
+        starter: Starter,
         text: String,
         title: Option<String>,
         cwd: PathBuf,
@@ -755,22 +767,11 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Pane, String> {
+        let kind = starter.kind();
         // A new agent in a project another agent works in gets a working tree of its own, like one
         // opened from the + menu.
         let cwd = if kind.agent().is_some() { self.own_tree_now(kind, &cwd, cx).unwrap_or(cwd) } else { cwd };
-        let (spec, later) = match (kind.agent(), submit) {
-            // The agent starts with the prompt as its first message.
-            (Some(agent), true) => {
-                let mut spec = LaunchSpec::with_prompt(agent, text, String::new(), cwd);
-                spec.title = LaunchSpec::new(kind, PathBuf::new()).title;
-                (spec, None)
-            }
-            // Typed once the program is ready, without pressing Enter (never Enter in a shell).
-            (agent, _) => (LaunchSpec::new(kind, cwd), Some((text, if agent.is_some() { 4000 } else { 1200 }))),
-        };
-        let mut spec = spec;
-        spec.restricted = restricted;
-        spec.model = model.filter(|_| kind.agent().is_some());
+        let (spec, later) = starting_spec(starter, text, cwd, submit, (restricted, model));
         match target {
             LaunchTarget::NewWorkspace => {
                 self.create_workspace(spec, window, cx);
@@ -784,14 +785,7 @@ impl Workbench {
             LaunchTarget::SplitDown => self.split_with(spec, super::Axis::Vertical, window, cx),
         }
         let pane = self.active_pane().ok_or("could not open a terminal")?;
-        if let Some((text, delay)) = later {
-            let typed = pane.clone();
-            cx.spawn(async move |_, cx| {
-                cx.background_executor().timer(Duration::from_millis(delay)).await;
-                let _ = cx.update(|cx| typed.update(cx, |view, _| view.insert_text(&text)));
-            })
-            .detach();
-        }
+        type_later(&pane, later, cx);
         Ok(pane)
     }
 
@@ -864,15 +858,39 @@ impl Workbench {
     }
 }
 
-/// Types a prompt into a pane that has just started, once its program is ready.
-fn type_later(pane: &Pane, later: Option<(String, u64)>, cx: &mut Context<Workbench>) {
-    let Some((text, delay)) = later else { return };
-    let typed = pane.clone();
-    cx.spawn(async move |_, cx| {
-        cx.background_executor().timer(Duration::from_millis(delay)).await;
-        let _ = cx.update(|cx| typed.update(cx, |view, _| view.insert_text(&text)));
-    })
-    .detach();
+/// Text typed into a pane once its program is up: (text, milliseconds to wait at least, press Enter).
+pub(super) type Later = Option<(String, u64, bool)>;
+
+/// How a prompt starts: Claude Code or Codex with it as the first message; another agent CLI as a
+/// command, the prompt typed in (and sent) once it is up; a program it is typed into once ready,
+/// never with Enter in a shell.
+fn starting_spec(
+    starter: Starter,
+    text: String,
+    cwd: PathBuf,
+    submit: bool,
+    (restricted, model): (bool, Option<String>),
+) -> (LaunchSpec, Later) {
+    let kind = starter.kind();
+    let (mut spec, later) = match (starter, kind.agent(), submit) {
+        (Starter::Agent(pick), None, _) => {
+            (LaunchSpec::shell_command(pick.binary().to_string(), pick.name().to_string(), cwd), Some((text, 2000, submit)))
+        }
+        (_, Some(agent), true) => {
+            let mut spec = LaunchSpec::with_prompt(agent, text, String::new(), cwd);
+            spec.title = LaunchSpec::new(kind, PathBuf::new()).title;
+            (spec, None)
+        }
+        (_, agent, _) => (LaunchSpec::new(kind, cwd), Some((text, if agent.is_some() { 2000 } else { 600 }, false))),
+    };
+    spec.restricted = restricted;
+    spec.model = model.filter(|_| kind.agent().is_some());
+    (spec, later)
+}
+
+fn type_later(pane: &Pane, later: Later, cx: &mut Context<Workbench>) {
+    let Some((text, delay, submit)) = later else { return };
+    super::agent_start::type_when_ready(pane.clone(), text, Duration::from_millis(delay), submit, cx);
 }
 
 /// Types into a pane: agents get Enter after the paste when `submit`; shells only when the plugin
