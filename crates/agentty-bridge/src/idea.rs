@@ -234,6 +234,29 @@ const PROMPT: &str = r#"Build a working demo of my idea "{title}". I'm not a dev
 
 Talk to me in {language}."#;
 
+/// The goal of an orchestration that builds the idea with a team of agents (the orchestrator's
+/// first message wraps it with how to plan, run and check a team). English, like every prompt.
+pub fn team_goal(title: &str) -> String {
+    TEAM_GOAL.replace("{title}", title)
+}
+
+const TEAM_GOAL: &str = r#"Build my idea "{title}" into a working product demo, as polished as a real product. I'm not a developer: you lead it as the senior engineer and product designer, with a team of agents that goes from the idea to the code one stage at a time.
+
+The idea is in docs/idea/IDEA.md and docs/idea/attachments/; docs/idea/BUILD_GUIDE.md says how this project is built (stack, live preview, quality bar, hand-off). Read all of it first.
+
+Run it as these stages, in order. Each stage is one wave of the plan with several agents side by side, each writing its own part, so the stages pass the work on in sequence while the work inside a stage runs in parallel. When a document stage's wave is done, you combine its parts into the stage's document in docs/design/, which the next stage reads; send a part back once if it is thin or contradicts what came before.
+1. Idea analysis: `analysis-users` (who has the problem, their jobs and pains), `analysis-market` (how they solve it today, alternatives and competitors), `analysis-feasibility` (constraints, risks, what is hard to build), each in docs/design/1-analysis/; combined into docs/design/1-analysis.md with the open questions and the answer assumed for each.
+2. Idea derivation: `ideation-value`, `ideation-different` and `ideation-simple`, each proposing a concept from its angle (the most value for the users, what makes it stand out, the smallest demo that proves it) in docs/design/2-concept/; combined into docs/design/2-concept.md: the concept chosen, the features ranked by value for effort, and the demo's scope (the core flow end to end beats many half-finished features).
+3. Product requirements: `prd-stories` (user stories, each with acceptance criteria), `prd-flows` (screens, flows, content, empty and error states) and `prd-goals` (goals, non-goals, how success is judged); combined into docs/design/3-prd.md.
+4. High-level design: `hld-architecture` (stack, per BUILD_GUIDE.md section 2 unless the PRD needs another, modules and how they talk, deployment on Vercel), `hld-data` (data model, and Supabase only if the PRD needs data that is kept or logins) and `hld-ux` (page map, routes, the design system's direction); combined into docs/design/4-hld.md.
+5. Low-level design: one agent per module of the HLD (`lld-<module>`), each with its files, components, types and interfaces, data access, state and error handling; combined into docs/design/5-lld.md with the work broken into build units, each with the files it owns, what it depends on and how to check it is done.
+6. Team composition (you, not an agent): do section 0 of BUILD_GUIDE.md now that the stack is known (the harness: agents and skills that fit it), turn the LLD's build units into the development waves, hand the whole plan to Agentty again (`agentty plan`), each developer with the harness agents and skills that fit its part, and write PLAN.md with the checklist of build units.
+7. Development: a `foundation` wave first (scaffold, design system, shared layout and components, data model with realistic sample data, the dev server running with the first screen open in Agentty's browser); then the build units, as many side by side as the LLD's dependencies allow, each agent owning its files and building on the foundation instead of changing it; then a quality wave: `qa-desktop` and `qa-mobile` check the product in the browser (`npm run build`, no console errors, desktop, then phone and tablet sizes, empty and error states) and fix what they find, and `review` checks it against every acceptance criterion of the PRD. Send what is not done back to the agent that owns it.
+
+In the first plan, list stages 1 to 5 with their agents, and for stage 7 placeholders (`foundation`, `build`, `qa`, `review`) that you replace with the real agents at stage 6. Don't ask me questions unless something essential is impossible to guess: the analysis records what it assumed.
+
+Keep the preview open in Agentty's browser and reload it as each wave lands, so I watch the product take shape. When it is done, do the hand-off of section 6 of BUILD_GUIDE.md: tell me in plain words what was built, how to try it, where the design documents are, and that I can publish it with the 🚀 Launch button."#;
+
 /// The ECC commit idea projects install their harness from. What an agent in auto mode reads as
 /// instructions must not change under a user without a release of Agentty: review the new commit's
 /// `agents/`, `skills/` and `rules/`, then move this forward.
@@ -454,6 +477,25 @@ mod tests {
         assert!(create_project(&root, &input, "en", "x").is_err());
         assert!(std::fs::read_dir(&root).unwrap().next().is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_team_builds_from_the_same_project_files() {
+        let goal = team_goal("할 일");
+        assert!(goal.starts_with("Build my idea \"할 일\""));
+        // From the idea to the code, a stage at a time, each leaving its document for the next.
+        let stages = ["1-analysis.md", "2-concept.md", "3-prd.md", "4-hld.md", "5-lld.md", "Team composition", "Development"];
+        let at: Vec<usize> = stages.iter().map(|s| goal.find(s).unwrap_or_else(|| panic!("{s}"))).collect();
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{at:?}");
+        // Inside a stage the agents work side by side.
+        for part in ["analysis-users", "analysis-market", "ideation-simple", "prd-stories", "hld-data", "lld-<module>", "qa-mobile"] {
+            assert!(goal.contains(part), "{part}");
+        }
+        for part in ["docs/idea/IDEA.md", "section 0", "agentty plan", "PLAN.md", "acceptance criterion", "🚀 Launch"] {
+            assert!(goal.contains(part), "{part}");
+        }
+        // The orchestrator's message says which language to talk in, not the goal.
+        assert!(!goal.contains("Talk to me in"));
     }
 
     #[test]
