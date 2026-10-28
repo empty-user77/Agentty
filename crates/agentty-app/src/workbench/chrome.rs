@@ -44,8 +44,8 @@ pub(super) struct TabRun {
     in_title_bar: bool,
 }
 pub const STATUS_BAR_HEIGHT: f32 = 26.;
-/// The pull request on a card opens on ⌘-click only; a plain click belongs to the card.
-const PR_LINK_HINT: &str = "⌘ click → open";
+/// The pull request and the subagents on a card open on ⌘-click only; a plain click belongs to the card.
+pub(super) const PR_LINK_HINT: &str = "⌘ click → open";
 /// How close to the sidebar's edge a dragged card has to come for the list to scroll, and how far
 /// it scrolls per tick at the very edge.
 const DRAG_EDGE: f32 = 44.;

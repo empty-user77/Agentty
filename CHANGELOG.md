@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Workspace Options → Show agent state, time and usage on cards: the line under a detailed card's path (state,
+  agents, time, tokens, cost) can be turned off.
+
+### Changed
+- A card's subagent lines open the subagents window on ⌘-click (Ctrl-click on Windows and Linux) only, like its pull
+  request: a plain click selects the workspace.
+- Workspace cards show the cost in whole dollars, from $1, and their agent lines in the tone of the branch and path
+  lines.
+
+### Fixed
+- Clicking a card's subagent summary ("11 subagents done") opened the subagents window of another split of that
+  workspace, which said it had none. It opens the pane last picked in the workspace when that one has subagents,
+  else the one that has them.
+
 ## [0.3.1] - 2026-10-28
 
 ### Added
