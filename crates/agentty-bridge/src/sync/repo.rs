@@ -172,11 +172,13 @@ fn login_shell_path() -> Option<String> {
 }
 
 /// `name` on [`tool_path`].
-fn find_tool(name: &str) -> Option<PathBuf> {
+pub fn find_tool(name: &str) -> Option<PathBuf> {
     process::which_in(name, &tool_path())
 }
 
-fn gh_command() -> Command {
+/// `gh`, found on [`tool_path`] and run with it: an app opened from the Finder or the Dock gets
+/// only the system's `PATH`, without Homebrew's folder or anything the login shell adds.
+pub fn gh_command() -> Command {
     let mut command = process::command(find_tool("gh").unwrap_or_else(|| PathBuf::from("gh")));
     command.env("PATH", tool_path());
     // Never wait on a login prompt, and keep the CLI from paging or colouring.

@@ -6,6 +6,7 @@
 //! helper) and `gh` its own login. Every command runs without a prompt it could hang on.
 
 use crate::process;
+use crate::sync::repo::{find_tool, gh_command};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -156,7 +157,7 @@ pub fn clone(dir: &Path, source: &Source) -> Result<PathBuf> {
             command
         }
         Source::GitHub(full_name) => {
-            let mut command = process::command("gh");
+            let mut command = gh_command();
             command.args(["repo", "clone", full_name, &name]);
             command
         }
@@ -182,14 +183,7 @@ pub fn clone(dir: &Path, source: &Source) -> Result<PathBuf> {
 }
 
 fn gh(args: &[&str]) -> Option<Vec<u8>> {
-    let output = process::command("gh")
-        .args(args)
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+    let output = gh_command().args(args).stdin(Stdio::null()).output().ok()?;
     output.status.success().then_some(output.stdout)
 }
 
@@ -204,7 +198,7 @@ pub enum GhStatus {
 
 /// Asks `gh` whether it is installed and signed in, and as whom (runs it: off the UI thread).
 pub fn gh_status() -> GhStatus {
-    if process::which("gh").is_none() {
+    if find_tool("gh").is_none() {
         return GhStatus::Missing;
     }
     if gh(&["auth", "status"]).is_none() {
@@ -217,7 +211,7 @@ pub fn gh_status() -> GhStatus {
 
 /// Whether `gh` is installed and signed in.
 pub fn gh_ready() -> bool {
-    process::which("gh").is_some() && gh(&["auth", "status"]).is_some()
+    find_tool("gh").is_some() && gh(&["auth", "status"]).is_some()
 }
 
 #[derive(Deserialize)]
